@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
-    alias: HashMap<String, String>,
+    pub alias: HashMap<String, String>,
 }
 
 fn default_vec_str() -> Vec<String> {

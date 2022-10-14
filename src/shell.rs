@@ -22,6 +22,7 @@ use log::{debug, warn};
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::sys::termios::{tcgetattr, Termios};
 use nix::unistd::{getpid, setpgid, tcsetpgrp, Pid};
+use pest::iterators::Pair;
 use pest::Parser;
 use std::io::Write;
 use std::time::Duration;
@@ -431,6 +432,25 @@ impl Shell {
         Ok(())
     }
 
+    fn get_command_argv(&self, pair: Pair<Rule>) -> Vec<String> {
+        let mut argv = get_argv(pair);
+        let cmd = argv[0].as_str();
+        let mut new_argv: Vec<String> = vec![];
+        // check alias
+        if let Some(alias) = self.config.alias.get(cmd) {
+            for s in alias.split_ascii_whitespace() {
+                new_argv.push(s.to_string());
+            }
+            argv.remove(0);
+            for s in argv {
+                new_argv.push(s);
+            }
+            new_argv
+        } else {
+            argv
+        }
+    }
+
     fn get_command(&self, input: String) -> Result<Option<Job>> {
         // TODO tests
 
@@ -447,7 +467,7 @@ impl Shell {
                         debug!("{:?} {:?}", inner_pair.as_rule(), inner_pair.as_str());
                         match inner_pair.as_rule() {
                             Rule::simple_command => {
-                                let argv = get_argv(inner_pair);
+                                let argv = self.get_command_argv(inner_pair);
                                 let cmd = argv[0].as_str();
 
                                 if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get(cmd) {
@@ -474,7 +494,7 @@ impl Shell {
                                 for inner_pair in inner_pair.into_inner() {
                                     match inner_pair.as_rule() {
                                         Rule::simple_command => {
-                                            let argv = get_argv(inner_pair);
+                                            let argv = self.get_command_argv(inner_pair);
                                             let cmd = argv[0].as_str();
 
                                             if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get(cmd)
@@ -512,7 +532,7 @@ impl Shell {
                                     match inner_pair.as_rule() {
                                         Rule::simple_command => {
                                             // simple_command
-                                            let argv = get_argv(inner_pair);
+                                            let argv = self.get_command_argv(inner_pair);
                                             let cmd = argv[0].as_str();
 
                                             if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get(cmd)

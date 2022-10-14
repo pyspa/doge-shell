@@ -107,7 +107,7 @@ fn search_pos_word(pair: Pair<Rule>, input: &str, pos: usize) -> Option<(Rule, S
         }
         _ => {
             // TODO
-            println!("{:?} {:?}", pair.as_rule(), pair.as_str());
+            // println!("{:?} {:?}", pair.as_rule(), pair.as_str());
         }
     }
     None
@@ -125,7 +125,7 @@ fn search_inner_word(pair: Pair<Rule>, pos: usize) -> Option<String> {
         }
         _ => {
             // TODO
-            println!("{:?} {:?}", pair.as_rule(), pair.as_str());
+            // println!("{:?} {:?}", pair.as_rule(), pair.as_str());
         }
     }
     None

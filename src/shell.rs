@@ -1,5 +1,6 @@
 use crate::builtin;
 use crate::completion;
+use crate::config::Config;
 use crate::dirs;
 use crate::environment::Environment;
 use crate::history::FrecencyHistory;
@@ -53,6 +54,7 @@ pub struct Shell {
     tmode: Option<Termios>,
     history_search: Option<String>,
     start_completion: bool,
+    config: Config,
 }
 
 impl Drop for Shell {
@@ -68,7 +70,7 @@ impl Shell {
 
         let cmd_history = FrecencyHistory::from_file("dsh_cmd_history").unwrap();
         let path_history = FrecencyHistory::from_file("dsh_path_history").unwrap();
-
+        let config = Config::from_file("config.toml");
         Shell {
             environment,
             input: Input::new(),
@@ -82,6 +84,7 @@ impl Shell {
             tmode: None,
             history_search: None,
             start_completion: false,
+            config,
         }
     }
 

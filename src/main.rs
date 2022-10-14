@@ -8,6 +8,7 @@ use std::io::stdout;
 
 mod builtin;
 mod completion;
+mod config;
 mod dirs;
 mod environment;
 mod frecency;

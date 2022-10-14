@@ -9,7 +9,7 @@ pub fn print_preprompt() {
     let path = if git { get_cwd(false) } else { get_cwd(true) };
 
     print!("{}", "\r".reset());
-    print!("{}", path.cyan());
+    print!("{}", path.white());
     if git {
         print!(" {} ", "on".reset());
         print!("{}", format!("{} {}", BRANCH_MARK, branch).magenta());

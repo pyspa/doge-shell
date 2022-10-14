@@ -1,0 +1,37 @@
+sp = _{ " " | "\t" | "\r" }
+word_char = _{
+    !("|" | "&" | ";" | " " | "\t" | "\r" | "\n" | "`" | "{" | "}" | "<" | ">" | "(" | ")" | "$" | "\"" | "'" | "*" | "?")
+    ~ ANY
+}
+
+word = { word_char+ }
+
+s_quoted = { "\'" ~ s_quoted_inner* ~ "\'" }
+s_quoted_inner = _{
+    literal_s_quoted
+}
+
+literal_s_quoted = ${ ( "\\'"  | !("\'") ~ ANY | sp)+ }
+
+d_quoted = { "\"" ~ d_quoted_inner* ~ "\"" }
+d_quoted_inner = _{
+    literal_d_quoted
+}
+literal_d_quoted = ${
+    (
+        !("\"" | "\\" | "`" | "$") ~ ANY
+        | "\\" ~ ANY
+        | sp
+    )+
+}
+
+quoted = _{ d_quoted|s_quoted }
+span = { quoted|word }
+argv0 = { span }
+args = { (sp* ~ span)+ }
+background = _{ "&" }
+pipeline = _{ "|" }
+simple_command = { sp* ~ argv0 ~ args* }
+simple_command_bg = { simple_command ~ sp* ~ background}
+pipe_command = { pipeline ~ sp* ~ (simple_command_bg|simple_command) ~ sp* }
+command = { (sp* ~ simple_command_bg|simple_command)* ~ sp* ~ pipe_command* }

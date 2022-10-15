@@ -22,6 +22,12 @@ fn copy_fd(src: RawFd, dst: RawFd) {
     }
 }
 
+#[derive(Debug)]
+pub struct WaitJob {
+    pub pid: Pid,
+    pub cmd: String,
+}
+
 pub struct Context {
     pub shell_pid: Pid,
     pub shell_pgid: Pid,
@@ -480,6 +486,13 @@ impl Job {
         }
 
         process.set_pid(Some(pid));
+        if !ctx.foreground {
+            // background
+            shell.wait_jobs.push(WaitJob {
+                pid,
+                cmd: self.cmd.clone(),
+            });
+        }
 
         self.show_job_status();
 

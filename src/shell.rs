@@ -6,7 +6,7 @@ use crate::environment::Environment;
 use crate::history::FrecencyHistory;
 use crate::input::Input;
 use crate::parser::{get_argv, Rule, ShellParser};
-use crate::process::{self, Context, ExitStatus, Job, JobProcess};
+use crate::process::{self, Context, ExitStatus, Job, JobProcess, WaitJob};
 use crate::prompt::print_preprompt;
 use anyhow::Context as _;
 use anyhow::{anyhow, Result};
@@ -56,6 +56,7 @@ pub struct Shell {
     history_search: Option<String>,
     start_completion: bool,
     config: Config,
+    pub wait_jobs: Vec<WaitJob>,
 }
 
 impl Drop for Shell {
@@ -86,6 +87,7 @@ impl Shell {
             history_search: None,
             start_completion: false,
             config,
+            wait_jobs: Vec::new(),
         }
     }
 

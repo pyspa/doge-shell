@@ -6,10 +6,10 @@ use crate::builtin::BuiltinCommand;
 use crate::shell::{Shell, SHELL_TERMINAL};
 use anyhow::Context as _;
 use anyhow::Result;
-use libc::{c_int, STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
-use log::{debug, error, info};
+use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
+use log::{debug, error};
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
-use nix::sys::termios::{tcgetattr, Termios};
+use nix::sys::termios::Termios;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{close, dup2, execv, fork, getpid, pipe, setpgid, tcsetpgrp, ForkResult, Pid};
 use std::ffi::CString;
@@ -24,6 +24,7 @@ fn copy_fd(src: RawFd, dst: RawFd) {
 
 #[derive(Debug)]
 pub struct WaitJob {
+    pub job_id: usize,
     pub pid: Pid,
     pub cmd: String,
 }
@@ -487,8 +488,19 @@ impl Job {
 
         process.set_pid(Some(pid));
         if !ctx.foreground {
+            let job_id = if shell.wait_jobs.is_empty() {
+                1
+            } else {
+                if let Some(wait) = shell.wait_jobs.last() {
+                    wait.job_id + 1
+                } else {
+                    1
+                }
+            };
+
             // background
             shell.wait_jobs.push(WaitJob {
+                job_id,
                 pid,
                 cmd: self.cmd.clone(),
             });
@@ -609,6 +621,28 @@ impl Job {
             set_process_state(process, pid, state)
         }
     }
+}
+
+pub fn wait_any_job(no_block: bool) -> Option<(Pid, ProcessState)> {
+    let options = if no_block {
+        WaitPidFlag::WUNTRACED | WaitPidFlag::WNOHANG
+    } else {
+        WaitPidFlag::WUNTRACED
+    };
+
+    let result = waitpid(None, Some(options));
+    let res = match result {
+        Ok(WaitStatus::Exited(pid, status)) => (pid, ProcessState::Completed(status)),
+        Ok(WaitStatus::Signaled(pid, _signal, _)) => (pid, ProcessState::Completed(-1)),
+        Ok(WaitStatus::Stopped(pid, _signal)) => (pid, ProcessState::Stopped(pid)),
+        Err(nix::errno::Errno::ECHILD) | Ok(WaitStatus::StillAlive) => {
+            return None;
+        }
+        status => {
+            panic!("unexpected waitpid event: {:?}", status);
+        }
+    };
+    Some(res)
 }
 
 fn set_process_state(process: &mut JobProcess, pid: Pid, state: ProcessState) {

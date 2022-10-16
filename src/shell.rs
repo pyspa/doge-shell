@@ -100,7 +100,7 @@ impl Shell {
 
     fn get_prompt(&self) -> &str {
         //"$"
-        "🐶 < "
+        "🐕< "
     }
 
     fn set_signals(&mut self) {

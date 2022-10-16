@@ -6,7 +6,7 @@ use crate::environment::Environment;
 use crate::history::FrecencyHistory;
 use crate::input::Input;
 use crate::parser::{get_argv, Rule, ShellParser};
-use crate::process::{self, Context, ExitStatus, Job, JobProcess, WaitJob};
+use crate::process::{self, wait_any_job, Context, ExitStatus, Job, JobProcess, WaitJob};
 use crate::prompt::print_preprompt;
 use anyhow::Context as _;
 use anyhow::{anyhow, Result};
@@ -114,6 +114,19 @@ impl Shell {
         }
     }
 
+    fn check_background_jobs(&mut self) {
+        if let Some((pid, _state)) = wait_any_job(true) {
+            if let Some(index) = self.wait_jobs.iter().position(|job| job.pid == pid) {
+                if let Some(job) = self.wait_jobs.get(index) {
+                    // TODO fix message format
+                    print!("\r\n[{:?}] done '{}' \r\n\r", job.job_id, job.cmd);
+                    self.wait_jobs.remove(index);
+                    let _ = self.print_prompt();
+                }
+            }
+        }
+    }
+
     fn save_history(&mut self) {
         if let Some(ref mut history) = self.cmd_history {
             let _ = history.save();
@@ -139,11 +152,14 @@ impl Shell {
 
         loop {
             let mut save_history_delay = Delay::new(Duration::from_millis(10_000)).fuse();
+            let mut check_background_delay = Delay::new(Duration::from_millis(1_000)).fuse();
             let mut event = reader.next().fuse();
 
             select! {
+                _ = check_background_delay => {
+                    self.check_background_jobs();
+                },
                 _ = save_history_delay => {
-                    // TODO periodic checks
                     self.save_history();
                 },
                 maybe_event = event => {

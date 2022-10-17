@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, PartialEq, PartialOrd, Eq, Ord)]
 pub enum Candidate {
-    Path(PathBuf),
+    Path(String),
 }
 
 pub fn path_completion_first(input: &str) -> Result<Option<String>> {
@@ -41,23 +41,16 @@ pub fn path_completion_first(input: &str) -> Result<Option<String>> {
     for cand in paths.iter() {
         match cand {
             Candidate::Path(ref path) => {
-                if path.display().to_string().starts_with(&search) {
-                    let is_dir = is_dir(path)?;
-                    let mut file = path.display().to_string();
-                    if is_dir {
-                        file = file + "/";
-                    }
-                    return Ok(Some(file));
+                let path_str = path.to_string();
+                if path.starts_with(&search) {
+                    return Ok(Some(path_str));
                 }
-                match path.strip_prefix("./") {
-                    Ok(ref path) => {
-                        if path.display().to_string().starts_with(&search) {
-                            let is_dir = is_dir(&path.to_path_buf())?;
-                            let mut file = path.display().to_string();
-                            if is_dir {
-                                file = file + "/";
-                            }
-                            return Ok(Some(file));
+
+                match PathBuf::from(path).strip_prefix("./") {
+                    Ok(ref striped) => {
+                        let striped_str = striped.display().to_string();
+                        if striped_str.starts_with(&search) {
+                            return Ok(Some(path_str[2..].to_string()));
                         }
                     }
                     Err(_) => {}
@@ -90,12 +83,38 @@ pub fn path_completion() -> Result<Vec<Candidate>> {
 }
 
 pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
+    let path_str = path.display().to_string();
+    let exp_str = shellexpand::tilde(&path_str).to_string();
+    let expand = path_str != exp_str;
+
+    let home = dirs::home_dir().unwrap();
+    let path = PathBuf::from(exp_str);
+
     let dir = read_dir(&path)?;
     let mut files: Vec<Candidate> = Vec::new();
 
     for entry in dir.into_iter() {
         if let Ok(entry) = entry {
-            files.push(Candidate::Path(entry.path()));
+            let entry_path = entry.path();
+            let is_dir = is_dir(&entry_path)?;
+            if expand {
+                if let Ok(part) = entry_path.strip_prefix(&home) {
+                    let mut pb = PathBuf::new();
+                    pb.push("~/");
+                    pb.push(part);
+                    let mut path = pb.display().to_string();
+                    if is_dir {
+                        path = path + "/";
+                    }
+                    files.push(Candidate::Path(path));
+                }
+            } else {
+                let mut path = entry_path.display().to_string();
+                if is_dir {
+                    path = path + "/";
+                }
+                files.push(Candidate::Path(path));
+            }
         }
     }
     files.sort();
@@ -123,9 +142,6 @@ mod test {
         let p = path_completion_first("sr")?;
         assert_eq!(Some("src/".to_string()), p);
 
-        let p = path_completion_first("./sr")?;
-        assert_eq!(Some("./src/".to_string()), p);
-
         let p = path_completion_first("src/b")?;
         assert_eq!(Some("src/builtin/".to_string()), p);
 
@@ -137,6 +153,12 @@ mod test {
 
         let p = path_completion_first("/usr/b")?;
         assert_eq!(Some("/usr/bin/".to_string()), p);
+
+        let p = path_completion_first("~/.lo")?;
+        assert_eq!(Some("~/.local/".to_string()), p);
+
+        let p = path_completion_first("~/.config/gi")?;
+        assert_eq!(Some("~/.config/git/".to_string()), p);
 
         Ok(())
     }

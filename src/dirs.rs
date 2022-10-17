@@ -38,5 +38,5 @@ fn is_executable(entry: &DirEntry) -> bool {
 }
 
 pub fn is_dir(input: &str) -> bool {
-    path::Path::new(input).is_dir()
+    path::Path::new(&shellexpand::tilde(input).to_string()).is_dir()
 }

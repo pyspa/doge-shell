@@ -11,6 +11,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, shell: &mut Shell) -> ExitStatu
 
     let dir = match argv.get(1).map(|s| s.as_str()) {
         Some(dir) if dir.starts_with('/') => dir.to_string(),
+        Some(dir) if dir.starts_with('~') => shellexpand::tilde(dir).to_string(),
         Some(dir) => Path::new(&current_dir)
             .join(dir.to_string())
             .canonicalize()
@@ -46,6 +47,8 @@ pub fn move_dir(dir: &str, shell: &mut Shell) -> ExitStatus {
     let current_dir = std::env::current_dir().expect("failed to getcwd()");
     let dir = if dir.starts_with('/') {
         dir.to_string()
+    } else if dir.starts_with("~") {
+        shellexpand::tilde(dir).to_string()
     } else if dir == "" {
         if let Some(home_dir) = dirs::home_dir() {
             home_dir.to_string_lossy().into_owned()

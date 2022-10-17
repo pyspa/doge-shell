@@ -703,6 +703,7 @@ pub fn is_job_completed(job: &Job) -> bool {
 #[cfg(test)]
 mod test {
 
+    use nix::sys::termios::tcgetattr;
     use nix::unistd::getpgrp;
 
     use super::*;

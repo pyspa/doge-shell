@@ -334,7 +334,9 @@ impl Shell {
             if let Some(ref mut history) = self.cmd_history {
                 if let Some(hist) = history.search_first(&input) {
                     self.input.completion = Some(hist.clone());
-                    comp = Some(hist[input.len()..].to_string());
+                    if hist.len() >= input.len() {
+                        comp = Some(hist[input.len()..].to_string());
+                    }
                 }
             }
 
@@ -347,14 +349,18 @@ impl Shell {
                                 fg_color = Color::Blue;
                             } else {
                                 if let Some(file) = self.environment.search(word) {
-                                    comp = Some(file[input.len()..].to_string());
+                                    if file.len() >= input.len() {
+                                        comp = Some(file[input.len()..].to_string());
+                                    }
                                     self.input.completion = Some(file.clone());
                                 } else {
                                     // first path completion
                                     if let Some(ref dir) = completion::path_completion_first(&word)?
                                     {
                                         if dirs::is_dir(dir) {
-                                            comp = Some(dir[input.len()..].to_string());
+                                            if dir.len() >= input.len() {
+                                                comp = Some(dir[input.len()..].to_string());
+                                            }
                                             self.input.completion = Some(dir.clone());
                                         }
                                     }
@@ -365,9 +371,11 @@ impl Shell {
                             if word.len() > 1 {
                                 if let Some(ref dir) = completion::path_completion_first(&word)? {
                                     if dirs::is_dir(dir) {
-                                        let part = dir[word.len()..].to_string();
-                                        comp = Some(dir[word.len()..].to_string());
-                                        self.input.completion = Some(input.to_string() + &part);
+                                        if dir.len() >= word.len() {
+                                            let part = dir[word.len()..].to_string();
+                                            comp = Some(dir[word.len()..].to_string());
+                                            self.input.completion = Some(input.to_string() + &part);
+                                        }
                                     }
                                 }
                             }

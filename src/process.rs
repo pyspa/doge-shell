@@ -96,18 +96,6 @@ impl JobProcess {
         }
     }
 
-    pub fn launch(&mut self, ctx: &mut Context, shell: &mut Shell) -> Result<()> {
-        match self {
-            JobProcess::Builtin(jprocess) => {
-                //
-            }
-            JobProcess::Command(jprocess) => {
-                //
-            }
-        }
-        Ok(())
-    }
-
     pub fn set_io(&mut self, stdin: RawFd, stdout: RawFd) {
         match self {
             JobProcess::Builtin(jprocess) => {

@@ -360,13 +360,23 @@ impl FrecencyHistory {
         }
     }
 
-    pub fn search_first(&self, pattern: &str) -> Option<String> {
+    pub fn search_fuzzy_first(&self, pattern: &str) -> Option<String> {
         let results = self.sort_by_match(pattern);
         if results.is_empty() {
             None
         } else {
             Some(results[0].item.clone())
         }
+    }
+
+    pub fn search_first(&self, pattern: &str) -> Option<String> {
+        let results = self.sort_by_match(pattern);
+        for res in results {
+            if res.item.starts_with(pattern) {
+                return Some(res.item.clone());
+            }
+        }
+        None
     }
 
     pub fn sort_by_match(&self, pattern: &str) -> Vec<ItemStats> {

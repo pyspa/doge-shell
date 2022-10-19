@@ -1,7 +1,6 @@
-use crate::parser::{self, Rule, ShellParser};
-use anyhow::{anyhow, Result};
-use pest::iterators::{Pair, Pairs};
-use pest::Parser;
+use crate::parser::{self, Rule};
+use anyhow::Result;
+use pest::Span;
 use std::cmp::min;
 
 #[derive(Debug, Clone)]
@@ -103,7 +102,7 @@ impl Input {
         self.input.is_empty()
     }
 
-    pub fn get_cursor_word(&self) -> Result<Option<(Rule, String)>> {
+    pub fn get_cursor_word(&self) -> Result<Option<(Rule, Span)>> {
         parser::get_pos_word(self.input.as_str(), self.cursor)
     }
 }

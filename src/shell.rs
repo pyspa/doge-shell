@@ -320,7 +320,6 @@ impl Shell {
         queue!(stdout, cursor::Hide).ok();
 
         let input = self.input.as_str();
-        let res = self.input.get_cursor_word()?;
         let prompt = self.get_prompt().chars().count();
 
         let mut fg_color = Color::White;
@@ -340,15 +339,17 @@ impl Shell {
                 }
             }
 
+            let cursor_word = self.input.get_cursor_word()?;
             if comp.is_none() {
-                if let Some((rule, ref word)) = res {
+                if let Some((rule, ref span)) = cursor_word {
+                    let word = span.as_str();
                     match rule {
                         Rule::argv0 => {
                             // command
-                            if let Some(_found) = self.environment.lookup(word) {
+                            if let Some(_found) = self.environment.lookup(&word) {
                                 fg_color = Color::Blue;
                             } else {
-                                if let Some(file) = self.environment.search(word) {
+                                if let Some(file) = self.environment.search(&word) {
                                     if file.len() >= input.len() {
                                         comp = Some(file[input.len()..].to_string());
                                     }

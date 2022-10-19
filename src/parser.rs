@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use log::debug;
 use pest::iterators::Pair;
 use pest::Parser;
+use pest::Span;
 use pest_derive::Parser;
 
 #[derive(Parser)]
@@ -60,7 +61,7 @@ pub fn get_argv(pair: Pair<Rule>) -> Vec<String> {
     argv
 }
 
-pub fn get_pos_word(input: &str, pos: usize) -> Result<Option<(Rule, String)>> {
+pub fn get_pos_word(input: &str, pos: usize) -> Result<Option<(Rule, Span)>> {
     let pairs = ShellParser::parse(Rule::command, input).map_err(|e| anyhow!(e))?;
 
     for pair in pairs {
@@ -79,7 +80,11 @@ pub fn get_pos_word(input: &str, pos: usize) -> Result<Option<(Rule, String)>> {
     Ok(None)
 }
 
-fn search_pos_word(pair: Pair<Rule>, input: &str, pos: usize) -> Option<(Rule, String)> {
+fn search_pos_word<'a>(
+    pair: Pair<'a, Rule>,
+    input: &'a str,
+    pos: usize,
+) -> Option<(Rule, Span<'a>)> {
     match pair.as_rule() {
         Rule::simple_command | Rule::simple_command_bg => {
             for pair in pair.into_inner() {
@@ -113,20 +118,17 @@ fn search_pos_word(pair: Pair<Rule>, input: &str, pos: usize) -> Option<(Rule, S
     None
 }
 
-fn search_inner_word(pair: Pair<Rule>, pos: usize) -> Option<String> {
+fn search_inner_word(pair: Pair<Rule>, pos: usize) -> Option<Span> {
     match pair.as_rule() {
         Rule::span => {
             for pair in pair.into_inner() {
                 let pair_span = pair.as_span();
                 if pair_span.start() < pos && pos <= pair_span.end() {
-                    return Some(pair.as_str().to_string());
+                    return Some(pair_span);
                 }
             }
         }
-        _ => {
-            // TODO
-            // println!("{:?} {:?}", pair.as_rule(), pair.as_str());
-        }
+        _ => {}
     }
     None
 }

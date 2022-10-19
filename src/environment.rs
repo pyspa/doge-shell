@@ -32,7 +32,7 @@ impl Environment {
     pub fn lookup(&self, cmd: &str) -> Option<String> {
         if cmd.starts_with("/") {
             let cmd_path = Path::new(cmd);
-            if cmd_path.exists() {
+            if cmd_path.exists() && cmd_path.is_file() {
                 return Some(cmd.to_string());
             } else {
                 return None;
@@ -40,7 +40,7 @@ impl Environment {
         }
         if cmd.starts_with("./") {
             let cmd_path = Path::new(cmd);
-            if cmd_path.exists() {
+            if cmd_path.exists() && cmd_path.is_file() {
                 return Some(cmd.to_string());
             } else {
                 return None;

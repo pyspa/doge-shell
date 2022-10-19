@@ -65,13 +65,17 @@ pub fn move_dir(dir: &str, shell: &mut Shell) -> ExitStatus {
             String::from("/")
         }
     } else {
-        Path::new(&current_dir)
-            .join(dir.to_string())
-            .canonicalize()
-            .unwrap() // TODO error check
-            .to_string_lossy()
-            .into_owned()
+        let res = Path::new(&current_dir).join(dir.to_string()).canonicalize();
+
+        match res {
+            Ok(res) => res.to_string_lossy().into_owned(),
+            Err(err) => {
+                eprint!("cd: {}: {}", err, &dir);
+                return ExitStatus::ExitedWith(1);
+            }
+        }
     };
+
     match std::env::set_current_dir(&dir) {
         Ok(_) => {
             // save path
@@ -81,7 +85,7 @@ pub fn move_dir(dir: &str, shell: &mut Shell) -> ExitStatus {
             ExitStatus::ExitedWith(0)
         }
         Err(err) => {
-            eprint!("cd: {}: `{}'", err, dir);
+            eprint!("cd: {}: {}", err, &dir);
             std::io::stderr().flush().ok();
             ExitStatus::ExitedWith(1)
         }

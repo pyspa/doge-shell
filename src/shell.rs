@@ -370,7 +370,15 @@ impl Shell {
                         }
                         Rule::args => {
                             if word.len() > 1 {
-                                if let Some(ref dir) = completion::path_completion_first(&word)? {
+                                if let Some(file) = self.environment.search(&word) {
+                                    if file.len() >= word.len() {
+                                        let part = file[word.len()..].to_string();
+                                        comp = Some(file[word.len()..].to_string());
+                                        self.input.completion = Some(input.to_string() + &part);
+                                    }
+                                } else if let Some(ref dir) =
+                                    completion::path_completion_first(&word)?
+                                {
                                     if dirs::is_dir(dir) {
                                         if dir.len() >= word.len() {
                                             let part = dir[word.len()..].to_string();

@@ -33,7 +33,7 @@ impl Config {
     fn read_file(name: &str) -> Result<Self> {
         let xdg_dir =
             xdg::BaseDirectories::with_prefix(APP_NAME).context("failed get xdg directory")?;
-        let file_path = xdg_dir.place_data_file(name).context("failed get path")?;
+        let file_path = xdg_dir.place_config_file(name).context("failed get path")?;
         let toml_str: String = std::fs::read_to_string(file_path)?;
 
         let config: Config = toml::from_str(&toml_str)?;

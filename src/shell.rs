@@ -506,7 +506,7 @@ impl Shell {
                                     if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get("cd") {
                                         let builtin = process::BuiltinProcess::new(
                                             *cmd_fn,
-                                            vec![cmd.to_string()],
+                                            vec!["cd".to_string(), cmd.to_string()],
                                         );
                                         job.set_process(JobProcess::Builtin(builtin));
                                     }
@@ -538,7 +538,7 @@ impl Shell {
                                                 {
                                                     let builtin = process::BuiltinProcess::new(
                                                         *cmd_fn,
-                                                        vec![cmd.to_string()],
+                                                        vec!["cd".to_string(), cmd.to_string()],
                                                     );
                                                     job.set_process(JobProcess::Builtin(builtin));
                                                 }

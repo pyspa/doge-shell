@@ -498,4 +498,21 @@ mod test {
 
         Ok(())
     }
+
+    #[test]
+    fn print_item() -> Result<()> {
+        env_logger::try_init();
+
+        let mut history = FrecencyHistory::from_file("dsh_frecency_history")?;
+        history.add("git status");
+        history.add("git checkout");
+
+        let vec = history.sort_by_match("gsta");
+
+        for item in vec {
+            item.print(true);
+        }
+
+        Ok(())
+    }
 }

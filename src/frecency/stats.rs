@@ -1,4 +1,5 @@
 use super::*;
+use crossterm::style::{Color, Stylize};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
@@ -123,6 +124,28 @@ impl ItemStats {
             }
         } else {
             return format!("{}\n", self.item.clone());
+        }
+    }
+
+    pub fn print(&self, new_line: bool) {
+        let mut index_iter = self.match_index.iter();
+        let mut match_index = index_iter.next();
+
+        for (i, ch) in self.item.as_str().chars().enumerate() {
+            let color = if let Some(idx) = match_index {
+                if *idx == i {
+                    match_index = index_iter.next();
+                    Color::Blue
+                } else {
+                    Color::White
+                }
+            } else {
+                Color::White
+            };
+            print!("{}", ch.with(color));
+        }
+        if new_line {
+            println!("");
         }
     }
 }

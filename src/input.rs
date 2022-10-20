@@ -1,5 +1,6 @@
 use crate::parser::{self, Rule};
 use anyhow::Result;
+use crossterm::style::{Color, Stylize};
 use pest::Span;
 use std::cmp::min;
 
@@ -9,6 +10,7 @@ pub struct Input {
     input: String,
     indices: Vec<usize>,
     pub completion: Option<String>,
+    pub match_index: Option<Vec<usize>>,
 }
 
 const INITIAL_CAP: usize = 256;
@@ -20,6 +22,7 @@ impl Input {
             input: String::with_capacity(INITIAL_CAP),
             indices: Vec::with_capacity(INITIAL_CAP),
             completion: None,
+            match_index: None,
         }
     }
 
@@ -27,6 +30,14 @@ impl Input {
         self.input = input;
         self.update_indices();
         self.move_to_end();
+        self.match_index = None;
+    }
+
+    pub fn reset_with_match_index(&mut self, input: String, match_index: Vec<usize>) {
+        self.input = input;
+        self.update_indices();
+        self.move_to_end();
+        self.match_index = Some(match_index);
     }
 
     pub fn as_str(&self) -> String {
@@ -104,5 +115,28 @@ impl Input {
 
     pub fn get_cursor_word(&self) -> Result<Option<(Rule, Span)>> {
         parser::get_pos_word(self.input.as_str(), self.cursor)
+    }
+
+    pub fn print(&self, fg_color: Color) {
+        if let Some(match_index) = &self.match_index {
+            let mut index_iter = match_index.iter();
+            let mut match_index = index_iter.next();
+
+            for (i, ch) in self.as_str().chars().enumerate() {
+                let color = if let Some(idx) = match_index {
+                    if *idx == i {
+                        match_index = index_iter.next();
+                        Color::Blue
+                    } else {
+                        Color::White
+                    }
+                } else {
+                    Color::White
+                };
+                print!("{}", ch.with(color));
+            }
+        } else {
+            print!("{}", self.as_str().with(fg_color));
+        }
     }
 }

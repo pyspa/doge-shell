@@ -1,7 +1,78 @@
+use crate::frecency::ItemStats;
 use anyhow::Result;
 use log::debug;
 use std::fs::read_dir;
 use std::path::PathBuf;
+
+#[derive(Debug)]
+pub struct Completion {
+    pub input: Option<String>,
+    completions: Vec<ItemStats>,
+    current_index: usize,
+}
+
+impl Completion {
+    pub fn new() -> Self {
+        Completion {
+            input: None,
+            current_index: 0,
+            completions: Vec::new(),
+        }
+    }
+
+    pub fn is_changed(&self, word: &str) -> bool {
+        if let Some(input) = &self.input {
+            input != word
+        } else {
+            !word.is_empty()
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.input = None;
+        self.current_index = 0;
+        self.completions = Vec::new();
+    }
+
+    pub fn completion_mode(&self) -> bool {
+        !self.completions.is_empty()
+    }
+
+    pub fn set_completions(&mut self, input: &str, comps: Vec<ItemStats>) {
+        let item = ItemStats::new(&input.to_string(), 0.0, 0.0);
+
+        self.input = if input == "" {
+            None
+        } else {
+            Some(input.to_string())
+        };
+        self.completions = comps;
+        self.completions.insert(0, item);
+        self.current_index = 0;
+    }
+
+    pub fn backward(&mut self) -> Option<ItemStats> {
+        if self.completions.is_empty() {
+            return None;
+        }
+
+        if self.completions.len() - 1 > self.current_index {
+            self.current_index += 1;
+            Some(self.completions[self.current_index as usize].clone())
+        } else {
+            None
+        }
+    }
+
+    pub fn forward(&mut self) -> Option<ItemStats> {
+        if self.current_index > 0 {
+            self.current_index -= 1;
+            Some(self.completions[self.current_index as usize].clone())
+        } else {
+            None
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, PartialOrd, Eq, Ord)]
 pub enum Candidate {

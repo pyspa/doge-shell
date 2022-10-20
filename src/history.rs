@@ -289,7 +289,7 @@ impl FrecencyHistory {
         }
     }
 
-    pub fn back(&mut self) -> Option<ItemStats> {
+    pub fn backward(&mut self) -> Option<ItemStats> {
         if self.histories.is_none() {
             self.current_index = 0;
             match &self.search_word {
@@ -510,7 +510,7 @@ mod test {
         let vec = history.sort_by_match("gsta");
 
         for item in vec {
-            item.print(true);
+            item.print();
         }
 
         Ok(())

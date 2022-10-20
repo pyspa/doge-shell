@@ -1,8 +1,9 @@
 use crate::builtin;
-use crate::completion;
+use crate::completion::{self, Completion};
 use crate::config::Config;
 use crate::dirs;
 use crate::environment::Environment;
+use crate::frecency::ItemStats;
 use crate::history::FrecencyHistory;
 use crate::input::Input;
 use crate::parser::{get_argv, Rule, ShellParser};
@@ -57,6 +58,7 @@ pub struct Shell {
     start_completion: bool,
     config: Config,
     pub wait_jobs: Vec<WaitJob>,
+    completion: Completion,
 }
 
 impl Drop for Shell {
@@ -88,6 +90,7 @@ impl Shell {
             start_completion: false,
             config,
             wait_jobs: Vec::new(),
+            completion: Completion::new(),
         }
     }
 
@@ -207,29 +210,44 @@ impl Shell {
         }
     }
 
+    fn set_completions(&mut self) {
+        if let Some(ref mut history) = self.cmd_history {
+            let comps = if self.input.is_empty() {
+                history.sorted(&crate::frecency::SortMethod::Frecent)
+            } else {
+                history.sort_by_match(&self.input.as_str())
+            };
+            self.completion.set_completions(&self.input.as_str(), comps);
+        }
+    }
+
     fn handle_key_event(&mut self, ev: &KeyEvent) -> Result<()> {
         let mut redraw = true;
         let mut backspace = false;
         match (ev.code, ev.modifiers) {
             // history
             (KeyCode::Up, NONE) => {
-                if let Some(ref mut history) = self.cmd_history {
-                    let input = self.input.as_str();
-
-                    if history.search_word.is_none() {
-                        history.set_search_word(input.to_string());
+                if self.completion.completion_mode() {
+                    if let Some(item) = self.completion.backward() {
+                        self.input
+                            .reset_with_match_index(item.item, item.match_index);
+                    } else {
                     }
-
-                    if let Some(item) = history.back() {
-                        self.input.reset(item.item);
+                } else {
+                    self.set_completions();
+                    if let Some(item) = self.completion.backward() {
+                        self.input
+                            .reset_with_match_index(item.item, item.match_index);
+                    } else {
                     }
                 }
             }
             // history
             (KeyCode::Down, NONE) => {
-                if let Some(ref mut history) = self.cmd_history {
-                    if let Some(item) = history.forward() {
-                        self.input.reset(item.item);
+                if self.completion.completion_mode() {
+                    if let Some(item) = self.completion.forward() {
+                        self.input
+                            .reset_with_match_index(item.item, item.match_index);
                     }
                 }
             }
@@ -258,13 +276,22 @@ impl Shell {
             }
             (KeyCode::Char(ch), NONE) => {
                 self.input.insert(ch);
+                if self.completion.is_changed(&self.input.as_str()) {
+                    self.completion.clear();
+                }
             }
             (KeyCode::Char(ch), SHIFT) => {
                 self.input.insert(ch);
+                if self.completion.is_changed(&self.input.as_str()) {
+                    self.completion.clear();
+                }
             }
             (KeyCode::Backspace, NONE) => {
                 backspace = true;
                 self.input.backspace();
+                if self.completion.is_changed(&self.input.as_str()) {
+                    self.completion.clear();
+                }
             }
             (KeyCode::Tab, NONE) | (KeyCode::BackTab, NONE) => {
                 self.start_completion = true;
@@ -306,6 +333,7 @@ impl Shell {
                 warn!("unsupported key event: {:?}", ev);
             }
         }
+
         if redraw {
             let _ = self.print_input(backspace)?;
         } else {
@@ -318,7 +346,6 @@ impl Shell {
         let mut stdout = std::io::stdout();
 
         queue!(stdout, cursor::Hide).ok();
-
         let input = self.input.as_str();
         let prompt = self.get_prompt().chars().count();
 
@@ -403,7 +430,7 @@ impl Shell {
         )
         .ok();
 
-        print!("{}", input.with(fg_color));
+        self.input.print(fg_color);
 
         self.move_cursor_input_end();
 
@@ -424,6 +451,17 @@ impl Shell {
             stdout,
             ResetColor,
             cursor::MoveToColumn((prompt_size + self.input.cursor() + 1) as u16),
+        )
+        .ok();
+    }
+
+    fn move_cursor(&self, len: usize) {
+        let mut stdout = std::io::stdout();
+        let prompt_size = self.get_prompt().chars().count();
+        queue!(
+            stdout,
+            ResetColor,
+            cursor::MoveToColumn((prompt_size + len + 1) as u16),
         )
         .ok();
     }
@@ -469,6 +507,7 @@ impl Shell {
 
     fn get_command_argv(&self, pair: Pair<Rule>) -> Vec<String> {
         let mut argv = get_argv(pair);
+
         let cmd = argv[0].as_str();
         let mut new_argv: Vec<String> = vec![];
         // check alias

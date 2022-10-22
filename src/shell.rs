@@ -289,9 +289,8 @@ impl Shell {
             (KeyCode::Backspace, NONE) => {
                 backspace = true;
                 self.input.backspace();
-                if self.completion.is_changed(&self.input.as_str()) {
-                    self.completion.clear();
-                }
+                self.completion.clear();
+                self.input.match_index = None;
             }
             (KeyCode::Tab, NONE) | (KeyCode::BackTab, NONE) => {
                 self.start_completion = true;

@@ -120,7 +120,7 @@ fn search_pos_word<'a>(
 
 fn search_inner_word(pair: Pair<Rule>, pos: usize) -> Option<Span> {
     match pair.as_rule() {
-        Rule::span => {
+        Rule::s_quoted | Rule::d_quoted | Rule::span => {
             for pair in pair.into_inner() {
                 let pair_span = pair.as_span();
                 if pair_span.start() < pos && pos <= pair_span.end() {

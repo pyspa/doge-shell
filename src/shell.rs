@@ -334,14 +334,14 @@ impl Shell {
         }
 
         if redraw {
-            let _ = self.print_input(backspace)?;
+            self.print_input(backspace);
         } else {
             self.print_prompt();
         }
         Ok(())
     }
 
-    fn print_input(&mut self, backspace: bool) -> Result<()> {
+    fn print_input(&mut self, backspace: bool) {
         let mut stdout = std::io::stdout();
 
         queue!(stdout, cursor::Hide).ok();
@@ -364,59 +364,69 @@ impl Shell {
                     }
                 }
             }
-
-            let cursor_word = self.input.get_cursor_word()?;
-            if comp.is_none() {
-                if let Some((rule, ref span)) = cursor_word {
-                    let word = span.as_str();
-                    match rule {
-                        Rule::argv0 => {
-                            // command
-                            if let Some(_found) = self.environment.lookup(&word) {
-                                fg_color = Color::Blue;
-                            } else {
-                                if let Some(file) = self.environment.search(&word) {
-                                    if file.len() >= input.len() {
-                                        comp = Some(file[input.len()..].to_string());
-                                    }
-                                    self.input.completion = Some(file.clone());
-                                } else {
-                                    // first path completion
-                                    if let Some(ref dir) = completion::path_completion_first(&word)?
-                                    {
-                                        if dirs::is_dir(dir) {
-                                            if dir.len() >= input.len() {
-                                                comp = Some(dir[input.len()..].to_string());
+            match self.input.get_cursor_word() {
+                Ok(cursor_word) => {
+                    if comp.is_none() {
+                        if let Some((rule, ref span)) = cursor_word {
+                            let word = span.as_str();
+                            match rule {
+                                Rule::argv0 => {
+                                    // command
+                                    if let Some(_found) = self.environment.lookup(&word) {
+                                        fg_color = Color::Blue;
+                                    } else {
+                                        if let Some(file) = self.environment.search(&word) {
+                                            if file.len() >= input.len() {
+                                                comp = Some(file[input.len()..].to_string());
                                             }
-                                            self.input.completion = Some(dir.clone());
+                                            self.input.completion = Some(file.clone());
+                                        } else {
+                                            match completion::path_completion_first(&word) {
+                                                Ok(Some(ref dir)) => {
+                                                    if dirs::is_dir(dir) {
+                                                        if dir.len() >= input.len() {
+                                                            comp = Some(
+                                                                dir[input.len()..].to_string(),
+                                                            );
+                                                        }
+                                                        self.input.completion = Some(dir.clone());
+                                                    }
+                                                }
+                                                _ => {}
+                                            }
                                         }
                                     }
                                 }
-                            }
-                        }
-                        Rule::args => {
-                            if word.len() > 1 {
-                                // if let Some(file) = self.environment.search(&word) {
-                                //     if file.len() >= word.len() {
-                                //         let part = file[word.len()..].to_string();
-                                //         comp = Some(file[word.len()..].to_string());
-                                //         self.input.completion = Some(input.to_string() + &part);
-                                //     }
-                                // } else
-
-                                if let Some(ref path) = completion::path_completion_first(&word)? {
-                                    if path.len() >= word.len() {
-                                        let part = path[word.len()..].to_string();
-                                        comp = Some(path[word.len()..].to_string());
-                                        self.input.completion = Some(input.to_string() + &part);
+                                Rule::args => {
+                                    if word.len() > 1 {
+                                        // if let Some(file) = self.environment.search(&word) {
+                                        //     if file.len() >= word.len() {
+                                        //         let part = file[word.len()..].to_string();
+                                        //         comp = Some(file[word.len()..].to_string());
+                                        //         self.input.completion = Some(input.to_string() + &part);
+                                        //     }
+                                        // } else
+                                        let res = completion::path_completion_first(&word);
+                                        match res {
+                                            Ok(Some(ref path)) => {
+                                                if path.len() >= word.len() {
+                                                    let part = path[word.len()..].to_string();
+                                                    comp = Some(path[word.len()..].to_string());
+                                                    self.input.completion =
+                                                        Some(input.to_string() + &part);
+                                                }
+                                            }
+                                            _ => {}
+                                        };
                                     }
                                 }
+                                _ => {}
                             }
-                        }
-                        _ => {}
+                        };
                     }
-                };
-            }
+                }
+                _ => {}
+            };
         }
 
         queue!(
@@ -438,7 +448,6 @@ impl Shell {
         queue!(stdout, cursor::Show).ok();
 
         stdout.flush().ok();
-        Ok(())
     }
 
     fn move_cursor_input_end(&self) {

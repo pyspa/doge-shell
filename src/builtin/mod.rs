@@ -1,7 +1,7 @@
 use crate::process::{Context, ExitStatus};
 use crate::shell::Shell;
 use hashbrown::HashMap;
-use log::debug;
+
 use once_cell::sync::Lazy;
 
 pub mod cd;

@@ -3,7 +3,7 @@ use crate::shell::Shell;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use log::error;
+
 use std::io::stdout;
 
 mod builtin;

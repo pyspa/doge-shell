@@ -238,7 +238,7 @@ impl BuiltinProcess {
             "launch: builtin process infile:{:?} outfile:{:?}",
             self.stdin, self.stdout
         );
-        let exit = (self.cmd_fn)(ctx, self.argv.to_vec(), shell);
+        let _exit = (self.cmd_fn)(ctx, self.argv.to_vec(), shell);
         // TODO check exit
         Ok(())
     }
@@ -556,7 +556,7 @@ impl Job {
         Ok(())
     }
 
-    fn put_in_background(&mut self, ctx: &Context) -> Result<()> {
+    fn put_in_background(&mut self, _ctx: &Context) -> Result<()> {
         debug!("put_in_background pgid {:?}", self.pgid);
 
         // TODO Send the job a continue signal, if necessary.
@@ -728,8 +728,8 @@ mod test {
     #[test]
     fn create_job() -> Result<()> {
         let input = "/usr/bin/touch".to_string();
-        let path = input.clone();
-        let argv: Vec<String> = input.split_whitespace().map(|s| s.to_string()).collect();
+        let _path = input.clone();
+        let _argv: Vec<String> = input.split_whitespace().map(|s| s.to_string()).collect();
         let ref mut job = Job::new(input);
 
         let process = Process::new("1".to_string(), vec![]);
@@ -740,7 +740,7 @@ mod test {
         let pid = getpid();
         let pgid = getpgrp();
         let tmode = tcgetattr(SHELL_TERMINAL).expect("failed cgetattr");
-        let mut ctx = Context::new(pid, pgid, tmode, true);
+        let _ctx = Context::new(pid, pgid, tmode, true);
 
         // info!("launch");
 

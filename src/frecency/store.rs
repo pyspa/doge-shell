@@ -1,7 +1,7 @@
 use super::*;
-use log::debug;
+
 use serde::{Deserialize, Serialize};
-use std::io::{BufWriter, Write};
+
 
 /// A collection of statistics about the stored items
 pub struct FrecencyStore {

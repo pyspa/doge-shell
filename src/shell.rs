@@ -3,7 +3,7 @@ use crate::completion::{self, Completion};
 use crate::config::Config;
 use crate::dirs;
 use crate::environment::Environment;
-use crate::frecency::ItemStats;
+
 use crate::history::FrecencyHistory;
 use crate::input::Input;
 use crate::parser::{get_argv, Rule, ShellParser};

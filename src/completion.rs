@@ -1,6 +1,6 @@
 use crate::frecency::ItemStats;
 use anyhow::Result;
-use log::debug;
+
 use std::fs::read_dir;
 use std::path::PathBuf;
 

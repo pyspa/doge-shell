@@ -2,7 +2,7 @@ use super::*;
 use crossterm::style::{Color, Stylize};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::io::{self, Write};
+
 
 /// A representation of statistics for a single item
 #[derive(Debug, Clone)]

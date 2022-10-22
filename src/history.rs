@@ -1,12 +1,12 @@
 use crate::frecency::{read_store, write_store, FrecencyStore, ItemStats, SortMethod};
 use crate::shell::APP_NAME;
 use anyhow::Context as _;
-use anyhow::{bail, Result};
+use anyhow::Result;
 use chrono::Local;
 use easy_reader::EasyReader;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
-use log::debug;
+
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -413,6 +413,7 @@ impl FrecencyHistory {
 #[cfg(test)]
 mod test {
     use super::*;
+    use log::debug;
 
     #[test]
     fn init() {

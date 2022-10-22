@@ -213,7 +213,7 @@ impl Shell {
     fn set_completions(&mut self) {
         if let Some(ref mut history) = self.cmd_history {
             let comps = if self.input.is_empty() {
-                history.sorted(&crate::frecency::SortMethod::Frecent)
+                history.sorted(&crate::frecency::SortMethod::Recent)
             } else {
                 history.sort_by_match(&self.input.as_str())
             };

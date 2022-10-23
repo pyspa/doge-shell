@@ -39,7 +39,7 @@ impl FrecencyStore {
 
     /// Return the number of half lives passed since the reference time
     pub fn half_lives_passed(&self) -> f64 {
-        return (current_time_secs() - self.reference_time) / self.half_life as f64;
+        (current_time_secs() - self.reference_time) / self.half_life as f64
     }
 
     /// Reset the reference time to now, and reweight all the statistics to reflect that
@@ -55,7 +55,7 @@ impl FrecencyStore {
 
     /// Log a visit to a item
     pub fn add(&mut self, item: &str) {
-        let item_stats = self.get(&item);
+        let item_stats = self.get(item);
 
         item_stats.update_frecency(1.0);
         item_stats.update_num_accesses(1);
@@ -64,7 +64,7 @@ impl FrecencyStore {
 
     /// Adjust the score of a item by a given weight
     pub fn adjust(&mut self, item: &str, weight: f32) {
-        let item_stats = self.get(&item);
+        let item_stats = self.get(item);
 
         item_stats.update_frecency(weight);
         item_stats.update_num_accesses(weight as i32);
@@ -116,7 +116,7 @@ impl From<&FrecencyStore> for FrecencyStoreSerializer {
         let items: Vec<ItemStatsSerializer> = store
             .items
             .iter()
-            .map(|s| ItemStatsSerializer::from(s))
+            .map(ItemStatsSerializer::from)
             .collect();
 
         FrecencyStoreSerializer {
@@ -140,7 +140,7 @@ impl From<&FrecencyStoreSerializer> for FrecencyStore {
         FrecencyStore {
             reference_time: store.reference_time,
             half_life: store.half_life,
-            items: items,
+            items,
         }
     }
 }

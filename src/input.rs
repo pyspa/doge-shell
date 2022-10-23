@@ -84,9 +84,9 @@ impl Input {
 
     pub fn move_by(&mut self, offset: isize) {
         if offset < 0 {
-            self.cursor = self.cursor.saturating_sub(offset.abs() as usize);
+            self.cursor = self.cursor.saturating_sub(offset.unsigned_abs());
         } else {
-            self.cursor = min(self.len(), self.cursor + offset.abs() as usize);
+            self.cursor = min(self.len(), self.cursor + offset.unsigned_abs());
         }
     }
 

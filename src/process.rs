@@ -41,12 +41,7 @@ pub struct Context {
 }
 
 impl Context {
-    pub fn new<'a>(
-        shell_pid: Pid,
-        shell_pgid: Pid,
-        shell_tmode: Termios,
-        foreground: bool,
-    ) -> Self {
+    pub fn new(shell_pid: Pid, shell_pgid: Pid, shell_tmode: Termios, foreground: bool) -> Self {
         Context {
             shell_pid,
             shell_pgid,
@@ -91,8 +86,8 @@ impl JobProcess {
 
     pub fn next(&self) -> Option<Box<JobProcess>> {
         match self {
-            JobProcess::Builtin(jprocess) => jprocess.next.as_ref().map(|p| p.clone()),
-            JobProcess::Command(jprocess) => jprocess.next.as_ref().map(|p| p.clone()),
+            JobProcess::Builtin(jprocess) => jprocess.next.as_ref().cloned(),
+            JobProcess::Command(jprocess) => jprocess.next.as_ref().cloned(),
         }
     }
 
@@ -324,7 +319,7 @@ impl Process {
         setpgid(pid, pgid).context("failed setpgid")?;
 
         if foreground {
-            let _ = tcsetpgrp(SHELL_TERMINAL, pgid).context("failed tcsetpgrp")?;
+            tcsetpgrp(SHELL_TERMINAL, pgid).context("failed tcsetpgrp")?;
             debug!("launch: tcsetpgrp pgid");
         }
 
@@ -345,7 +340,7 @@ impl Process {
             .clone()
             .into_iter()
             .filter(|a| !a.is_empty())
-            .map(|a| CString::new(a.to_string()).expect("failed new CString"))
+            .map(|a| CString::new(a).expect("failed new CString"))
             .collect();
 
         debug!("launch: execv cmd:{:?} argv:{:?}", cmd, argv);
@@ -456,7 +451,7 @@ impl Job {
         let pid = match process {
             JobProcess::Builtin(process) => {
                 let pid = getpid();
-                let _ = process.launch(ctx, shell)?;
+                process.launch(ctx, shell)?;
                 pid
             }
             JobProcess::Command(process) => {
@@ -471,19 +466,17 @@ impl Job {
                 debug!("job pgid {:?}", self.pgid);
             }
             // debug!("parent setpgid pid:{:?} pgid:{:?}", pid, self.pgid);
-            let _ = setpgid(pid, self.pgid.unwrap_or(pid))?;
+            setpgid(pid, self.pgid.unwrap_or(pid))?;
         }
 
         process.set_pid(Some(pid));
         if !ctx.foreground {
             let job_id = if shell.wait_jobs.is_empty() {
                 1
+            } else if let Some(wait) = shell.wait_jobs.last() {
+                wait.job_id + 1
             } else {
-                if let Some(wait) = shell.wait_jobs.last() {
-                    wait.job_id + 1
-                } else {
-                    1
-                }
+                1
             };
 
             // background
@@ -496,8 +489,8 @@ impl Job {
 
         self.show_job_status();
 
-        if pipe_out.is_some() {
-            ctx.infile = pipe_out.unwrap();
+        if let Some(pipe_out) = pipe_out {
+            ctx.infile = pipe_out;
         }
         let (stdin, stdout) = process.get_io();
         if stdin != self.stdin {
@@ -510,15 +503,12 @@ impl Job {
         let mut next_process = process.next().take();
         self.set_process(process.to_owned());
 
-        match next_process
+        if let Some(Err(err)) = next_process
             .take()
             .as_mut()
             .map(|process| self.launch_process(ctx, shell, process))
         {
-            Some(Err(err)) => {
-                return Err(err);
-            }
-            _ => {}
+            return Err(err);
         }
 
         if !ctx.interactive {
@@ -537,14 +527,14 @@ impl Job {
         debug!("put_in_foreground: pgid {:?}", self.pgid);
         // Put the job into the foreground
 
-        let _ = tcsetpgrp(SHELL_TERMINAL, self.pgid.unwrap()).context("failed tcsetpgrp")?;
+        tcsetpgrp(SHELL_TERMINAL, self.pgid.unwrap()).context("failed tcsetpgrp")?;
         debug!("put_in_foreground: tcsetpgrp pgid");
 
         // TODO Send the job a continue signal, if necessary.
 
         self.wait_job();
 
-        let _ = tcsetpgrp(SHELL_TERMINAL, ctx.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
+        tcsetpgrp(SHELL_TERMINAL, ctx.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
         debug!("put_in_foreground: tcsetpgrp shell");
 
         // let tmodes = tcgetattr(SHELL_TERMINAL).context("failed tcgetattr wait")?;
@@ -638,7 +628,6 @@ fn set_process_state(process: &mut JobProcess, pid: Pid, state: ProcessState) {
         if ppid == pid {
             debug!("set_process_state: found pid:{:?}", pid);
             process.set_state(state);
-            return;
         }
     }
 }
@@ -707,15 +696,15 @@ mod test {
         let pgid2 = Pid::from_raw(2);
         let pgid3 = Pid::from_raw(3);
 
-        let ref mut job1 = Job::new_with_process("test1".to_owned(), "".to_owned(), vec![]);
+        let job1 = &mut Job::new_with_process("test1".to_owned(), "".to_owned(), vec![]);
         job1.pgid = Some(pgid1);
-        let ref mut job2 = Job::new_with_process("test2".to_owned(), "".to_owned(), vec![]);
+        let job2 = &mut Job::new_with_process("test2".to_owned(), "".to_owned(), vec![]);
         job2.pgid = Some(pgid2);
-        let ref mut job3 = Job::new_with_process("test3".to_owned(), "".to_owned(), vec![]);
+        let job3 = &mut Job::new_with_process("test3".to_owned(), "".to_owned(), vec![]);
         job3.pgid = Some(pgid3);
 
-        job1.link(&job2);
-        job2.link(&job3);
+        job1.link(job2);
+        job2.link(job3);
 
         let found = find_job(job1, pgid2).unwrap();
         assert_eq!(found.pgid.unwrap().as_raw(), pgid2.as_raw());
@@ -730,7 +719,7 @@ mod test {
         let input = "/usr/bin/touch".to_string();
         let _path = input.clone();
         let _argv: Vec<String> = input.split_whitespace().map(|s| s.to_string()).collect();
-        let ref mut job = Job::new(input);
+        let job = &mut Job::new(input);
 
         let process = Process::new("1".to_string(), vec![]);
         job.set_process(JobProcess::Command(process));
@@ -753,7 +742,7 @@ mod test {
 
         let input = "/usr/bin/touch";
 
-        let ref mut job = Job::new(input.to_string());
+        let job = &mut Job::new(input.to_string());
         let mut process = Process::new("1".to_string(), vec![]);
         process.state = ProcessState::Completed(0);
         job.set_process(JobProcess::Command(process));
@@ -768,7 +757,7 @@ mod test {
         debug!("{:?}", job);
         assert_eq!(false, is_job_stopped(job));
 
-        let ref mut job = Job::new(input.to_string());
+        let job = &mut Job::new(input.to_string());
         let mut process = Process::new("1".to_string(), vec![]);
         process.state = ProcessState::Completed(0);
         job.set_process(JobProcess::Command(process));
@@ -791,7 +780,7 @@ mod test {
 
         let input = "/usr/bin/touch";
 
-        let ref mut job = Job::new(input.to_string());
+        let job = &mut Job::new(input.to_string());
         let mut process = Process::new("1".to_string(), vec![]);
         process.state = ProcessState::Completed(0);
         job.set_process(JobProcess::Command(process));
@@ -807,7 +796,7 @@ mod test {
         debug!("{:?}", job);
         assert_eq!(false, is_job_completed(job));
 
-        let ref mut job = Job::new(input.to_string());
+        let job = &mut Job::new(input.to_string());
         let mut process = Process::new("1".to_string(), vec![]);
         process.state = ProcessState::Completed(0);
         job.set_process(JobProcess::Command(process));

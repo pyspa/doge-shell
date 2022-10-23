@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Result};
-
 use pest::iterators::Pair;
 use pest::Parser;
 use pest::Span;
@@ -19,20 +18,14 @@ pub fn get_string(pair: Pair<Rule>) -> Option<String> {
                 None
             }
         }
-        Rule::s_quoted => {
-            if let Some(next) = pair.into_inner().next() {
-                Some(next.as_str().to_string())
-            } else {
-                None
-            }
-        }
-        Rule::d_quoted => {
-            if let Some(next) = pair.into_inner().next() {
-                Some(next.as_str().to_string())
-            } else {
-                None
-            }
-        }
+        Rule::s_quoted => pair
+            .into_inner()
+            .next()
+            .map(|next| next.as_str().to_string()),
+        Rule::d_quoted => pair
+            .into_inner()
+            .next()
+            .map(|next| next.as_str().to_string()),
         _ => Some(pair.as_str().to_string()),
     }
 }
@@ -96,17 +89,15 @@ fn search_pos_word<'a>(
         }
         Rule::argv0 => {
             for pair in pair.into_inner() {
-                let res = search_inner_word(pair, pos);
-                if res.is_some() {
-                    return Some((Rule::argv0, res.unwrap()));
+                if let Some(res) = search_inner_word(pair, pos) {
+                    return Some((Rule::argv0, res));
                 }
             }
         }
         Rule::args => {
             for pair in pair.into_inner() {
-                let res = search_inner_word(pair, pos);
-                if res.is_some() {
-                    return Some((Rule::args, res.unwrap()));
+                if let Some(res) = search_inner_word(pair, pos) {
+                    return Some((Rule::args, res));
                 }
             }
         }
@@ -135,9 +126,9 @@ fn search_inner_word(pair: Pair<Rule>, pos: usize) -> Option<Span> {
 
 #[cfg(test)]
 mod test {
-    use pest::Parser;
-
     use super::*;
+    use log::debug;
+    use pest::Parser;
     #[test]
     fn init() {
         let _ = env_logger::try_init();

@@ -18,7 +18,7 @@ impl Environment {
             .collect();
 
         if let Ok(val) = env::var("PATH") {
-            paths = val.split(":").map(|s| s.to_string()).collect();
+            paths = val.split(':').map(|s| s.to_string()).collect();
         }
 
         debug!("default path {:?}", &paths);
@@ -30,7 +30,7 @@ impl Environment {
     }
 
     pub fn lookup(&self, cmd: &str) -> Option<String> {
-        if cmd.starts_with("/") {
+        if cmd.starts_with('/') {
             let cmd_path = Path::new(cmd);
             if cmd_path.exists() && cmd_path.is_file() {
                 return Some(cmd.to_string());
@@ -56,7 +56,7 @@ impl Environment {
     }
 
     pub fn search(&self, cmd: &str) -> Option<String> {
-        if cmd.starts_with("/") {
+        if cmd.starts_with('/') {
             // TODO
         }
         if cmd.starts_with("./") {

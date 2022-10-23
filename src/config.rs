@@ -41,7 +41,7 @@ impl Config {
     }
 
     pub fn from_file(name: &str) -> Self {
-        match Config::read_file(&name) {
+        match Config::read_file(name) {
             Ok(conf) => conf,
             Err(_) => Config::default(),
         }

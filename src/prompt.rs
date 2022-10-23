@@ -1,7 +1,7 @@
 use crossterm::style::Stylize;
 use std::process::Command;
 
-pub const BRANCH_MARK: &'static str = "";
+pub const BRANCH_MARK: &str = "";
 
 pub fn print_preprompt() {
     let (branch, git) = get_git_branch();

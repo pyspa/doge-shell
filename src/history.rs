@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use xdg;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Entry {
@@ -120,14 +119,8 @@ impl History {
         if let Some(file) = &self.open_file {
             let mut reader = EasyReader::new(file)?;
             while let Some(line) = reader.next_line()? {
-                match serde_json::from_str(&line) {
-                    Ok::<Entry, _>(e) => {
-                        self.histories.push(e);
-                    }
-
-                    Err(_) => {
-                        // nothing
-                    }
+                if let Ok::<Entry, _>(e) = serde_json::from_str(&line) {
+                    self.histories.push(e);
                 }
             }
             self.current_index = self.histories.len();
@@ -139,18 +132,16 @@ impl History {
     fn open(&mut self) -> Result<&mut History> {
         if self.open_file.is_some() {
             Ok(self)
-        } else {
-            if let Some(ref path) = self.path {
-                let file = OpenOptions::new()
-                    .read(true)
-                    .open(path)
-                    .context("failed open file")?;
+        } else if let Some(ref path) = self.path {
+            let file = OpenOptions::new()
+                .read(true)
+                .open(path)
+                .context("failed open file")?;
 
-                self.open_file = Some(file);
-                Ok(self)
-            } else {
-                Ok(self)
-            }
+            self.open_file = Some(file);
+            Ok(self)
+        } else {
+            Ok(self)
         }
     }
 
@@ -179,7 +170,7 @@ impl History {
             let _size = history_file
                 .write(json.as_bytes())
                 .context("failed write entry")?;
-            let _ = history_file.flush().context("failed flush")?;
+            history_file.flush().context("failed flush")?;
 
             self.histories.push(entry);
             self.reset_index();
@@ -373,7 +364,7 @@ impl FrecencyHistory {
         let results = self.sort_by_match(pattern);
         for res in results {
             if res.item.starts_with(pattern) {
-                return Some(res.item.clone());
+                return Some(res.item);
             }
         }
         None
@@ -438,6 +429,7 @@ mod test {
     }
 
     #[test]
+    #[ignore]
     fn test_load() -> Result<()> {
         let mut history = History::from_file("dsh_cmd_history");
         let s = history.load()?;
@@ -446,6 +438,7 @@ mod test {
     }
 
     #[test]
+    #[ignore]
     fn test_back() -> Result<()> {
         let cmd1 = "docker";
         let cmd2 = "docker-compose";

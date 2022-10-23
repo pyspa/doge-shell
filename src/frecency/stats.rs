@@ -123,7 +123,7 @@ impl ItemStats {
                 SortMethod::Frecent => format!("{: <.3}\t{}\n", self.get_frecency(), self.item),
             }
         } else {
-            return format!("{}\n", self.item.clone());
+            format!("{}\n", self.item.clone())
         }
     }
 

@@ -39,9 +39,9 @@ impl Completion {
     }
 
     pub fn set_completions(&mut self, input: &str, comps: Vec<ItemStats>) {
-        let item = ItemStats::new(&input.to_string(), 0.0, 0.0);
+        let item = ItemStats::new(input, 0.0, 0.0);
 
-        self.input = if input == "" {
+        self.input = if input.is_empty() {
             None
         } else {
             Some(input.to_string())
@@ -96,17 +96,15 @@ pub fn path_completion_first(input: &str) -> Result<Option<String>> {
             input.to_string()
         };
         path_completion_path(PathBuf::from(dir))?
-    } else {
-        if let Some(dir) = parent {
-            if dir.display().to_string().is_empty() {
-                // current dir
-                path_completion_path(PathBuf::from("."))?
-            } else {
-                path_completion_path(PathBuf::from(dir))?
-            }
+    } else if let Some(dir) = parent {
+        if dir.display().to_string().is_empty() {
+            // current dir
+            path_completion_path(PathBuf::from("."))?
         } else {
-            path_completion()?
+            path_completion_path(PathBuf::from(dir))?
         }
+    } else {
+        path_completion()?
     };
 
     for cand in paths.iter() {
@@ -118,7 +116,7 @@ pub fn path_completion_first(input: &str) -> Result<Option<String>> {
                 }
 
                 match PathBuf::from(path).strip_prefix("./") {
-                    Ok(ref striped) => {
+                    Ok(striped) => {
                         let striped_str = striped.display().to_string();
                         if striped_str.starts_with(&search) {
                             return Ok(Some(path_str[2..].to_string()));
@@ -164,7 +162,7 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
     let dir = read_dir(&path)?;
     let mut files: Vec<Candidate> = Vec::new();
 
-    for entry in dir.into_iter() {
+    for entry in dir {
         if let Ok(entry) = entry {
             let entry_path = entry.path();
             let is_dir = is_dir(&entry_path)?;
@@ -175,14 +173,14 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
                     pb.push(part);
                     let mut path = pb.display().to_string();
                     if is_dir {
-                        path = path + "/";
+                        path += "/";
                     }
                     files.push(Candidate::Path(path));
                 }
             } else {
                 let mut path = entry_path.display().to_string();
                 if is_dir {
-                    path = path + "/";
+                    path += "/";
                 }
                 files.push(Candidate::Path(path));
             }

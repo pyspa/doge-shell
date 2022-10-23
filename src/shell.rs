@@ -28,7 +28,7 @@ use pest::Parser;
 use std::io::Write;
 use std::time::Duration;
 
-pub const APP_NAME: &'static str = "dsh";
+pub const APP_NAME: &str = "dsh";
 pub const SHELL_TERMINAL: c_int = STDIN_FILENO;
 
 const NONE: KeyModifiers = KeyModifiers::NONE;
@@ -124,7 +124,7 @@ impl Shell {
                     // TODO fix message format
                     print!("\r\n[{:?}] done '{}' \r\n\r", job.job_id, job.cmd);
                     self.wait_jobs.remove(index);
-                    let _ = self.print_prompt();
+                    self.print_prompt();
                 }
             }
         }
@@ -364,69 +364,53 @@ impl Shell {
                     }
                 }
             }
-            match self.input.get_cursor_word() {
-                Ok(cursor_word) => {
-                    if comp.is_none() {
-                        if let Some((rule, ref span)) = cursor_word {
-                            let word = span.as_str();
-                            match rule {
-                                Rule::argv0 => {
-                                    // command
-                                    if let Some(_found) = self.environment.lookup(&word) {
-                                        fg_color = Color::Blue;
-                                    } else {
-                                        if let Some(file) = self.environment.search(&word) {
-                                            if file.len() >= input.len() {
-                                                comp = Some(file[input.len()..].to_string());
-                                            }
-                                            self.input.completion = Some(file.clone());
-                                        } else {
-                                            match completion::path_completion_first(&word) {
-                                                Ok(Some(ref dir)) => {
-                                                    if dirs::is_dir(dir) {
-                                                        if dir.len() >= input.len() {
-                                                            comp = Some(
-                                                                dir[input.len()..].to_string(),
-                                                            );
-                                                        }
-                                                        self.input.completion = Some(dir.clone());
-                                                    }
-                                                }
-                                                _ => {}
-                                            }
-                                        }
-                                    }
+            if comp.is_none() {
+                if let Ok(Some((rule, ref span))) = self.input.get_cursor_word() {
+                    let word = span.as_str();
+                    match rule {
+                        Rule::argv0 => {
+                            // command
+                            if let Some(_found) = self.environment.lookup(word) {
+                                fg_color = Color::Blue;
+                            } else if let Some(file) = self.environment.search(word) {
+                                if file.len() >= input.len() {
+                                    comp = Some(file[input.len()..].to_string());
                                 }
-                                Rule::args => {
-                                    if word.len() > 1 {
-                                        // if let Some(file) = self.environment.search(&word) {
-                                        //     if file.len() >= word.len() {
-                                        //         let part = file[word.len()..].to_string();
-                                        //         comp = Some(file[word.len()..].to_string());
-                                        //         self.input.completion = Some(input.to_string() + &part);
-                                        //     }
-                                        // } else
-                                        let res = completion::path_completion_first(&word);
-                                        match res {
-                                            Ok(Some(ref path)) => {
-                                                if path.len() >= word.len() {
-                                                    let part = path[word.len()..].to_string();
-                                                    comp = Some(path[word.len()..].to_string());
-                                                    self.input.completion =
-                                                        Some(input.to_string() + &part);
-                                                }
-                                            }
-                                            _ => {}
-                                        };
+                                self.input.completion = Some(file);
+                            } else if let Ok(Some(ref dir)) =
+                                completion::path_completion_first(word)
+                            {
+                                if dirs::is_dir(dir) {
+                                    if dir.len() >= input.len() {
+                                        comp = Some(dir[input.len()..].to_string());
                                     }
+                                    self.input.completion = Some(dir.clone());
                                 }
-                                _ => {}
                             }
-                        };
+                        }
+                        Rule::args => {
+                            if word.len() > 1 {
+                                // if let Some(file) = self.environment.search(&word) {
+                                //     if file.len() >= word.len() {
+                                //         let part = file[word.len()..].to_string();
+                                //         comp = Some(file[word.len()..].to_string());
+                                //         self.input.completion = Some(input.to_string() + &part);
+                                //     }
+                                // } else
+                                if let Ok(Some(ref path)) = completion::path_completion_first(word)
+                                {
+                                    if path.len() >= word.len() {
+                                        let part = path[word.len()..].to_string();
+                                        comp = Some(path[word.len()..].to_string());
+                                        self.input.completion = Some(input + &part);
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
-                _ => {}
-            };
+            }
         }
 
         queue!(
@@ -537,109 +521,88 @@ impl Shell {
         let pairs = ShellParser::parse(Rule::command, &input).map_err(|e| anyhow!(e))?;
 
         for pair in pairs {
-            match pair.as_rule() {
-                Rule::command => {
-                    let _cmd_cnt = pair.clone().into_inner().count();
-                    let mut job = Job::new(pair.as_str().to_string());
-                    debug!("@ {:?} {:?}", pair.as_rule(), pair.as_str());
+            if let Rule::command = pair.as_rule() {
+                let _cmd_cnt = pair.clone().into_inner().count();
+                let mut job = Job::new(pair.as_str().to_string());
+                debug!("@ {:?} {:?}", pair.as_rule(), pair.as_str());
 
-                    for inner_pair in pair.into_inner() {
-                        debug!("{:?} {:?}", inner_pair.as_rule(), inner_pair.as_str());
-                        match inner_pair.as_rule() {
-                            Rule::simple_command => {
-                                let argv = self.get_command_argv(inner_pair);
-                                let cmd = argv[0].as_str();
+                for inner_pair in pair.into_inner() {
+                    debug!("{:?} {:?}", inner_pair.as_rule(), inner_pair.as_str());
+                    match inner_pair.as_rule() {
+                        Rule::simple_command => {
+                            let argv = self.get_command_argv(inner_pair);
+                            let cmd = argv[0].as_str();
 
-                                if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get(cmd) {
-                                    let builtin = process::BuiltinProcess::new(*cmd_fn, argv);
+                            if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get(cmd) {
+                                let builtin = process::BuiltinProcess::new(*cmd_fn, argv);
+                                job.set_process(JobProcess::Builtin(builtin));
+                            } else if let Some(cmd) = self.environment.lookup(cmd) {
+                                let process = process::Process::new(cmd, argv);
+                                job.set_process(JobProcess::Command(process));
+                            } else if dirs::is_dir(cmd) {
+                                if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get("cd") {
+                                    let builtin = process::BuiltinProcess::new(
+                                        *cmd_fn,
+                                        vec!["cd".to_string(), cmd.to_string()],
+                                    );
                                     job.set_process(JobProcess::Builtin(builtin));
-                                } else if let Some(cmd) = self.environment.lookup(cmd) {
-                                    let process = process::Process::new(cmd, argv);
-                                    job.set_process(JobProcess::Command(process));
-                                } else if dirs::is_dir(cmd) {
-                                    if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get("cd") {
-                                        let builtin = process::BuiltinProcess::new(
-                                            *cmd_fn,
-                                            vec!["cd".to_string(), cmd.to_string()],
-                                        );
-                                        job.set_process(JobProcess::Builtin(builtin));
-                                    }
-                                } else {
-                                    self.print_error(format!("unknown command: {}", cmd));
                                 }
+                            } else {
+                                self.print_error(format!("unknown command: {}", cmd));
                             }
-
-                            Rule::simple_command_bg => {
-                                // background job
-                                for inner_pair in inner_pair.into_inner() {
-                                    match inner_pair.as_rule() {
-                                        Rule::simple_command => {
-                                            let argv = self.get_command_argv(inner_pair);
-                                            let cmd = argv[0].as_str();
-
-                                            if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get(cmd)
-                                            {
-                                                let builtin =
-                                                    process::BuiltinProcess::new(*cmd_fn, argv);
-                                                job.set_process(JobProcess::Builtin(builtin));
-                                            } else if let Some(cmd) = self.environment.lookup(cmd) {
-                                                let process = process::Process::new(cmd, argv);
-                                                job.set_process(JobProcess::Command(process));
-                                                job.foreground = false;
-                                            } else if dirs::is_dir(cmd) {
-                                                if let Some(cmd_fn) =
-                                                    builtin::BUILTIN_COMMAND.get("cd")
-                                                {
-                                                    let builtin = process::BuiltinProcess::new(
-                                                        *cmd_fn,
-                                                        vec!["cd".to_string(), cmd.to_string()],
-                                                    );
-                                                    job.set_process(JobProcess::Builtin(builtin));
-                                                }
-                                            } else {
-                                                self.print_error(format!(
-                                                    "unknown command: {}",
-                                                    cmd
-                                                ));
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
-                            Rule::pipe_command => {
-                                for inner_pair in inner_pair.into_inner() {
-                                    match inner_pair.as_rule() {
-                                        Rule::simple_command => {
-                                            // simple_command
-                                            let argv = self.get_command_argv(inner_pair);
-                                            let cmd = argv[0].as_str();
-
-                                            if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get(cmd)
-                                            {
-                                                let builtin =
-                                                    process::BuiltinProcess::new(*cmd_fn, argv);
-                                                job.set_process(JobProcess::Builtin(builtin));
-                                            } else if let Some(cmd) = self.environment.lookup(cmd) {
-                                                let process = process::Process::new(cmd, argv);
-                                                job.set_process(JobProcess::Command(process));
-                                            } else {
-                                                self.print_error(format!(
-                                                    "unknown command: {}",
-                                                    cmd
-                                                ));
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
-                            _ => {}
                         }
+
+                        Rule::simple_command_bg => {
+                            // background job
+                            for inner_pair in inner_pair.into_inner() {
+                                if let Rule::simple_command = inner_pair.as_rule() {
+                                    let argv = self.get_command_argv(inner_pair);
+                                    let cmd = argv[0].as_str();
+
+                                    if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get(cmd) {
+                                        let builtin = process::BuiltinProcess::new(*cmd_fn, argv);
+                                        job.set_process(JobProcess::Builtin(builtin));
+                                    } else if let Some(cmd) = self.environment.lookup(cmd) {
+                                        let process = process::Process::new(cmd, argv);
+                                        job.set_process(JobProcess::Command(process));
+                                        job.foreground = false;
+                                    } else if dirs::is_dir(cmd) {
+                                        if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get("cd") {
+                                            let builtin = process::BuiltinProcess::new(
+                                                *cmd_fn,
+                                                vec!["cd".to_string(), cmd.to_string()],
+                                            );
+                                            job.set_process(JobProcess::Builtin(builtin));
+                                        }
+                                    } else {
+                                        self.print_error(format!("unknown command: {}", cmd));
+                                    }
+                                }
+                            }
+                        }
+                        Rule::pipe_command => {
+                            for inner_pair in inner_pair.into_inner() {
+                                if let Rule::simple_command = inner_pair.as_rule() {
+                                    // simple_command
+                                    let argv = self.get_command_argv(inner_pair);
+                                    let cmd = argv[0].as_str();
+
+                                    if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get(cmd) {
+                                        let builtin = process::BuiltinProcess::new(*cmd_fn, argv);
+                                        job.set_process(JobProcess::Builtin(builtin));
+                                    } else if let Some(cmd) = self.environment.lookup(cmd) {
+                                        let process = process::Process::new(cmd, argv);
+                                        job.set_process(JobProcess::Command(process));
+                                    } else {
+                                        self.print_error(format!("unknown command: {}", cmd));
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
                     }
-                    return Ok(Some(job));
                 }
-                _ => {}
+                return Ok(Some(job));
             }
         }
 

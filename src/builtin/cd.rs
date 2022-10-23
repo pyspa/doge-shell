@@ -14,7 +14,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, shell: &mut Shell) -> ExitStatu
         Some(dir) if dir.starts_with('/') => dir.to_string(),
         Some(dir) if dir.starts_with('~') => shellexpand::tilde(dir).to_string(),
         Some(dir) => {
-            let res = Path::new(&current_dir).join(dir.to_string()).canonicalize();
+            let res = Path::new(&current_dir).join(dir).canonicalize();
 
             match res {
                 Ok(res) => res.to_string_lossy().into_owned(),
@@ -39,7 +39,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, shell: &mut Shell) -> ExitStatu
         Ok(_) => {
             // save path
             if let Some(ref mut history) = shell.path_history {
-                let _ = history.add(&dir);
+                history.add(&dir);
             }
             ExitStatus::ExitedWith(0)
         }
@@ -56,16 +56,16 @@ pub fn move_dir(dir: &str, shell: &mut Shell) -> ExitStatus {
     let current_dir = std::env::current_dir().expect("failed to getcwd()");
     let dir = if dir.starts_with('/') {
         dir.to_string()
-    } else if dir.starts_with("~") {
+    } else if dir.starts_with('~') {
         shellexpand::tilde(dir).to_string()
-    } else if dir == "" {
+    } else if dir.is_empty() {
         if let Some(home_dir) = dirs::home_dir() {
             home_dir.to_string_lossy().into_owned()
         } else {
             String::from("/")
         }
     } else {
-        let res = Path::new(&current_dir).join(dir.to_string()).canonicalize();
+        let res = Path::new(&current_dir).join(dir).canonicalize();
 
         match res {
             Ok(res) => res.to_string_lossy().into_owned(),
@@ -80,7 +80,7 @@ pub fn move_dir(dir: &str, shell: &mut Shell) -> ExitStatus {
         Ok(_) => {
             // save path
             if let Some(ref mut history) = shell.path_history {
-                let _ = history.add(&dir);
+                history.add(&dir);
             }
             ExitStatus::ExitedWith(0)
         }

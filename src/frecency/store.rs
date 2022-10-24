@@ -113,11 +113,8 @@ pub struct FrecencyStoreSerializer {
 
 impl From<&FrecencyStore> for FrecencyStoreSerializer {
     fn from(store: &FrecencyStore) -> Self {
-        let items: Vec<ItemStatsSerializer> = store
-            .items
-            .iter()
-            .map(ItemStatsSerializer::from)
-            .collect();
+        let items: Vec<ItemStatsSerializer> =
+            store.items.iter().map(ItemStatsSerializer::from).collect();
 
         FrecencyStoreSerializer {
             reference_time: store.reference_time,
@@ -134,7 +131,7 @@ impl From<&FrecencyStoreSerializer> for FrecencyStore {
         let items: Vec<ItemStats> = store
             .items
             .iter()
-            .map(|s| s.into_item_stats(ref_time, half_life))
+            .map(|s| s.to_item_stats(ref_time, half_life))
             .collect();
 
         FrecencyStore {

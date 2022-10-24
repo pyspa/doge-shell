@@ -237,12 +237,9 @@ mod test {
             assert_eq!(1, count);
 
             for inner_pair in pair.into_inner() {
-                match inner_pair.as_rule() {
-                    Rule::argv0 => {
-                        let cmd = inner_pair.as_str();
-                        assert_eq!("test", cmd);
-                    }
-                    _ => {}
+                if inner_pair.as_rule() == Rule::argv0 {
+                    let cmd = inner_pair.as_str();
+                    assert_eq!("test", cmd);
                 }
             }
         }

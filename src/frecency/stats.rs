@@ -172,7 +172,7 @@ impl From<&ItemStats> for ItemStatsSerializer {
 }
 
 impl ItemStatsSerializer {
-    pub fn into_item_stats(&self, ref_time: f64, half_life: f32) -> ItemStats {
+    pub fn to_item_stats(&self, ref_time: f64, half_life: f32) -> ItemStats {
         ItemStats {
             half_life,
             reference_time: ref_time,

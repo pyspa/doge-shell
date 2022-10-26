@@ -32,7 +32,9 @@ pub fn print_preprompt() {
         if git_status.branch_status.is_some() {
             print!(
                 "{}",
-                format!(" [{}]", git_status.branch_status.unwrap()).red()
+                format!(" [{}]", git_status.branch_status.unwrap())
+                    .bold()
+                    .red()
             );
         }
         print!("{}", "\r\n".reset());

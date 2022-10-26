@@ -7,25 +7,14 @@ use std::collections::HashMap;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     pub alias: HashMap<String, String>,
-}
-
-fn default_vec_str() -> Vec<String> {
-    Vec::new()
-}
-fn default_bool() -> bool {
-    false
-}
-fn default_num() -> u64 {
-    1
-}
-fn default_zero() -> u64 {
-    0
+    pub completion: HashMap<String, String>,
 }
 
 impl Default for Config {
     fn default() -> Config {
         let alias: HashMap<String, String> = HashMap::new();
-        Config { alias }
+        let completion: HashMap<String, String> = HashMap::new();
+        Config { alias, completion }
     }
 }
 
@@ -60,9 +49,10 @@ mod test {
     #[test]
     fn parse_config() -> Result<()> {
         let mut alias: HashMap<String, String> = HashMap::new();
+        let mut completion: HashMap<String, String> = HashMap::new();
         alias.insert("ll".to_string(), "ls -al".to_string());
         alias.insert("g".to_string(), "git".to_string());
-        let config = Config { alias };
+        let config = Config { alias, completion };
         let toml_str = toml::to_string(&config)?;
 
         let config: Config = toml::from_str(&toml_str)?;

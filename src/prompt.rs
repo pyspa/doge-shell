@@ -1,4 +1,5 @@
 use crossterm::style::Stylize;
+use log::debug;
 use std::io::{BufRead, BufReader};
 use std::process::Command;
 
@@ -122,22 +123,23 @@ fn get_git_status() -> Option<GitStatus> {
                 if size == 0 {
                     break;
                 }
-                let mut splited = buf.split_whitespace();
+
+                let splited: Vec<&str> = buf.split_whitespace().collect();
 
                 if buf.starts_with('#') {
                     // branch info
                     if buf.starts_with("# branch.head") {
-                        if let Some(branch) = splited.nth(2) {
+                        if let Some(branch) = splited.get(2) {
                             status.branch = branch.to_string();
                         }
                     } else if buf.starts_with("# branch.ab") {
-                        if let Some(val) = splited.nth(2) {
-                            if val != "+0" {
+                        if let Some(val) = splited.get(2) {
+                            if *val != "+0" {
                                 branch_status = BRANCH_AHEAD.to_string();
                             }
                         }
-                        if let Some(val) = splited.nth(3) {
-                            if val != "-0" {
+                        if let Some(val) = splited.get(3) {
+                            if *val != "-0" {
                                 if branch_status == BRANCH_AHEAD {
                                     branch_status = BRANCH_DIVERGED.to_string();
                                 } else {

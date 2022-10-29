@@ -1,8 +1,11 @@
 use crate::frecency::ItemStats;
 use anyhow::Result;
 
+use skim::prelude::*;
+use skim::{Skim, SkimItemReceiver, SkimItemSender};
 use std::fs::read_dir;
 use std::path::PathBuf;
+use std::{process::Command, sync::Arc};
 
 #[derive(Debug)]
 pub struct Completion {
@@ -77,6 +80,7 @@ impl Completion {
 #[derive(Debug, PartialEq, PartialOrd, Eq, Ord)]
 pub enum Candidate {
     Path(String),
+    Basic(String),
 }
 
 pub fn path_completion_first(input: &str) -> Result<Option<String>> {
@@ -108,16 +112,17 @@ pub fn path_completion_first(input: &str) -> Result<Option<String>> {
     };
 
     for cand in paths.iter() {
-        let Candidate::Path(ref path) = cand;
-        let path_str = path.to_string();
-        if path.starts_with(&search) {
-            return Ok(Some(path_str));
-        }
+        if let Candidate::Path(ref path) = cand {
+            let path_str = path.to_string();
+            if path.starts_with(&search) {
+                return Ok(Some(path_str));
+            }
 
-        if let Ok(striped) = PathBuf::from(path).strip_prefix("./") {
-            let striped_str = striped.display().to_string();
-            if striped_str.starts_with(&search) {
-                return Ok(Some(path_str[2..].to_string()));
+            if let Ok(striped) = PathBuf::from(path).strip_prefix("./") {
+                let striped_str = striped.display().to_string();
+                if striped_str.starts_with(&search) {
+                    return Ok(Some(path_str[2..].to_string()));
+                }
             }
         }
     }
@@ -179,6 +184,22 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
     }
     files.sort();
     Ok(files)
+}
+
+impl SkimItem for Candidate {
+    fn text(&self) -> Cow<str> {
+        match self {
+            Candidate::Path(p) => Cow::Borrowed(p),
+            Candidate::Basic(p) => Cow::Borrowed(p),
+        }
+    }
+
+    fn output(&self) -> Cow<str> {
+        match self {
+            Candidate::Path(p) => Cow::Borrowed(p),
+            Candidate::Basic(p) => Cow::Borrowed(p),
+        }
+    }
 }
 
 #[cfg(test)]

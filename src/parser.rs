@@ -160,7 +160,7 @@ fn to_vec(pair: Pair<Rule>) -> Vec<String> {
     argv
 }
 
-pub fn expand_alias(input: String, alias: HashMap<String, String>) -> Result<String> {
+pub fn expand_alias(input: String, alias: &HashMap<String, String>) -> Result<String> {
     let mut buf: Vec<String> = Vec::new();
     let pairs = ShellParser::parse(Rule::command, &input).map_err(|e| anyhow!(e))?;
 
@@ -556,28 +556,28 @@ mod test {
         alias.insert("alias".to_string(), "echo 'test' | sk ".to_string());
 
         let input = r#"alias abc " test" '-vvv' --foo "#.to_string();
-        let replaced = expand_alias(input, alias.clone())?;
+        let replaced = expand_alias(input, &alias)?;
         assert_eq!(
             replaced,
             r#"echo 'test' | sk abc " test" '-vvv' --foo"#.to_string()
         );
 
         let input = r#"alias abc " test" '-vvv' --foo &"#.to_string();
-        let replaced = expand_alias(input, alias.clone())?;
+        let replaced = expand_alias(input, &alias)?;
         assert_eq!(
             replaced,
             r#"echo 'test' | sk abc " test" '-vvv' --foo &"#.to_string()
         );
 
         let input = r#"alias | abc " test" '-vvv' --foo &"#.to_string();
-        let replaced = expand_alias(input, alias.clone())?;
+        let replaced = expand_alias(input, &alias)?;
         assert_eq!(
             replaced,
             r#"echo 'test' | sk | abc " test" '-vvv' --foo &"#.to_string()
         );
 
         let input = r#"sh -c | alias " test" '-vvv' --foo &"#.to_string();
-        let replaced = expand_alias(input, alias.clone())?;
+        let replaced = expand_alias(input, &alias)?;
         assert_eq!(
             replaced,
             r#"sh -c | echo 'test' | sk " test" '-vvv' --foo &"#.to_string()

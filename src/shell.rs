@@ -3,10 +3,9 @@ use crate::completion::{self, Completion};
 use crate::config::Config;
 use crate::dirs;
 use crate::environment::Environment;
-
 use crate::history::FrecencyHistory;
 use crate::input::Input;
-use crate::parser::{get_argv, Rule, ShellParser};
+use crate::parser::{expand_alias, get_argv, Rule, ShellParser};
 use crate::process::{self, wait_any_job, Context, ExitStatus, Job, JobProcess, WaitJob};
 use crate::prompt::print_preprompt;
 use anyhow::Context as _;
@@ -495,28 +494,10 @@ impl Shell {
         Ok(())
     }
 
-    fn get_command_argv(&self, pair: Pair<Rule>) -> Vec<String> {
-        let mut argv = get_argv(pair);
-
-        let cmd = argv[0].as_str();
-        let mut new_argv: Vec<String> = vec![];
-        // check alias
-        if let Some(alias) = self.config.alias.get(cmd) {
-            for s in alias.split_ascii_whitespace() {
-                new_argv.push(s.to_string());
-            }
-            argv.remove(0);
-            for s in argv {
-                new_argv.push(s);
-            }
-            new_argv
-        } else {
-            argv
-        }
-    }
-
     fn get_command(&self, input: String) -> Result<Option<Job>> {
         // TODO tests
+
+        let input = expand_alias(input, &self.config.alias)?;
 
         let pairs = ShellParser::parse(Rule::command, &input).map_err(|e| anyhow!(e))?;
 
@@ -530,7 +511,7 @@ impl Shell {
                     debug!("{:?} {:?}", inner_pair.as_rule(), inner_pair.as_str());
                     match inner_pair.as_rule() {
                         Rule::simple_command => {
-                            let argv = self.get_command_argv(inner_pair);
+                            let argv = get_argv(inner_pair);
                             let cmd = argv[0].as_str();
 
                             if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get(cmd) {
@@ -556,7 +537,7 @@ impl Shell {
                             // background job
                             for inner_pair in inner_pair.into_inner() {
                                 if let Rule::simple_command = inner_pair.as_rule() {
-                                    let argv = self.get_command_argv(inner_pair);
+                                    let argv = get_argv(inner_pair);
                                     let cmd = argv[0].as_str();
 
                                     if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get(cmd) {
@@ -584,7 +565,7 @@ impl Shell {
                             for inner_pair in inner_pair.into_inner() {
                                 if let Rule::simple_command = inner_pair.as_rule() {
                                     // simple_command
-                                    let argv = self.get_command_argv(inner_pair);
+                                    let argv = get_argv(inner_pair);
                                     let cmd = argv[0].as_str();
 
                                     if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get(cmd) {

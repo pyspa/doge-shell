@@ -1,8 +1,10 @@
 use anyhow::{anyhow, Result};
+use log::debug;
 use pest::iterators::Pair;
 use pest::Parser;
 use pest::Span;
 use pest_derive::Parser;
+use std::collections::HashMap;
 
 #[derive(Parser)]
 #[grammar = "shell.pest"]
@@ -122,6 +124,94 @@ fn search_inner_word(pair: Pair<Rule>, pos: usize) -> Option<Span> {
         _ => {}
     }
     None
+}
+
+fn to_vec(pair: Pair<Rule>) -> Vec<String> {
+    let mut argv: Vec<String> = vec![];
+    for inner_pair in pair.into_inner() {
+        match inner_pair.as_rule() {
+            Rule::simple_command => {
+                for inner_pair in inner_pair.into_inner() {
+                    let mut v = to_vec(inner_pair);
+                    argv.append(&mut v);
+                }
+            }
+            Rule::simple_command_bg => {
+                for inner_pair in inner_pair.into_inner() {
+                    let mut v = to_vec(inner_pair);
+                    argv.append(&mut v);
+                }
+                argv.push("&".to_string());
+            }
+            Rule::argv0 | Rule::args | Rule::span => {
+                for inner_pair in inner_pair.into_inner() {
+                    argv.push(inner_pair.as_str().to_string());
+                }
+            }
+            _ => {
+                debug!(
+                    "missing {:?} {:?}",
+                    inner_pair.as_rule(),
+                    inner_pair.as_str()
+                );
+            }
+        }
+    }
+    argv
+}
+
+pub fn expand_alias(input: String, alias: HashMap<String, String>) -> Result<String> {
+    let mut buf: Vec<String> = Vec::new();
+    let pairs = ShellParser::parse(Rule::command, &input).map_err(|e| anyhow!(e))?;
+
+    for pair in pairs {
+        if let Rule::command = pair.as_rule() {
+            for inner_pair in pair.into_inner() {
+                match inner_pair.as_rule() {
+                    Rule::simple_command => {
+                        let args = to_vec(inner_pair);
+                        for arg in args {
+                            if let Some(val) = alias.get(&arg) {
+                                buf.push(val.trim().to_string());
+                            } else {
+                                buf.push(arg);
+                            }
+                        }
+                    }
+                    Rule::simple_command_bg => {
+                        let args = to_vec(inner_pair);
+                        for arg in args {
+                            if let Some(val) = alias.get(&arg) {
+                                buf.push(val.trim().to_string());
+                            } else {
+                                buf.push(arg);
+                            }
+                        }
+                        buf.push("&".to_string());
+                    }
+                    Rule::pipe_command => {
+                        buf.push("|".to_string());
+                        let args = to_vec(inner_pair);
+                        for arg in args {
+                            if let Some(val) = alias.get(&arg) {
+                                buf.push(val.trim().to_string());
+                            } else {
+                                buf.push(arg);
+                            }
+                        }
+                    }
+                    _ => {
+                        debug!(
+                            "missing {:?} {:?}",
+                            inner_pair.as_rule(),
+                            inner_pair.as_str()
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Ok(buf.join(" "))
 }
 
 #[cfg(test)]
@@ -456,6 +546,42 @@ mod test {
         let input = "sudo ";
         let res = get_pos_word(input, 1)?;
         assert_eq!("sudo", res.unwrap().1.as_str());
+
+        Ok(())
+    }
+
+    #[test]
+    fn replace_command() -> Result<()> {
+        let mut alias: HashMap<String, String> = HashMap::new();
+        alias.insert("alias".to_string(), "echo 'test' | sk ".to_string());
+
+        let input = r#"alias abc " test" '-vvv' --foo "#.to_string();
+        let replaced = expand_alias(input, alias.clone())?;
+        assert_eq!(
+            replaced,
+            r#"echo 'test' | sk abc " test" '-vvv' --foo"#.to_string()
+        );
+
+        let input = r#"alias abc " test" '-vvv' --foo &"#.to_string();
+        let replaced = expand_alias(input, alias.clone())?;
+        assert_eq!(
+            replaced,
+            r#"echo 'test' | sk abc " test" '-vvv' --foo &"#.to_string()
+        );
+
+        let input = r#"alias | abc " test" '-vvv' --foo &"#.to_string();
+        let replaced = expand_alias(input, alias.clone())?;
+        assert_eq!(
+            replaced,
+            r#"echo 'test' | sk | abc " test" '-vvv' --foo &"#.to_string()
+        );
+
+        let input = r#"sh -c | alias " test" '-vvv' --foo &"#.to_string();
+        let replaced = expand_alias(input, alias.clone())?;
+        assert_eq!(
+            replaced,
+            r#"sh -c | echo 'test' | sk " test" '-vvv' --foo &"#.to_string()
+        );
 
         Ok(())
     }

@@ -202,6 +202,53 @@ impl SkimItem for Candidate {
     }
 }
 
+pub fn select_item(items: Vec<Candidate>, query: Option<&str>) -> Option<String> {
+    let options = SkimOptionsBuilder::default()
+        .height(Some("30%"))
+        .bind(vec!["Enter:accept"])
+        .query(query)
+        .build()
+        .unwrap();
+
+    let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
+    for item in items {
+        let _ = tx_item.send(Arc::new(item));
+    }
+    drop(tx_item);
+
+    let selected = Skim::run_with(&options, Some(rx_item))
+        .map(|out| match out.final_key {
+            Key::Enter => out.selected_items,
+            _ => Vec::new(),
+        })
+        .unwrap_or_else(Vec::new);
+
+    if !selected.is_empty() {
+        let val = selected[0].output().to_string();
+        return Some(val);
+    }
+
+    None
+}
+
+pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String> {
+    match Command::new("sh").arg("-c").arg(input).output() {
+        Ok(output) => {
+            if let Ok(out) = String::from_utf8(output.stdout) {
+                let items: Vec<Candidate> = out
+                    .split('\n')
+                    // TODO filter
+                    .map(|x| Candidate::Basic(x.trim().to_string()))
+                    .collect();
+
+                return select_item(items, query);
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod test {
 
@@ -242,5 +289,24 @@ mod test {
         assert_eq!(Some("~/.config/git/".to_string()), p);
 
         Ok(())
+    }
+
+    #[test]
+    #[ignore]
+    fn test_select_item() {
+        let mut items: Vec<Candidate> = Vec::new();
+        // items.push();
+        items.push(Candidate::Basic("test1".to_string()));
+        items.push(Candidate::Basic("test2".to_string()));
+
+        let a = select_item(items, Some("test"));
+        assert_eq!("test1", a.unwrap());
+    }
+
+    #[test]
+    #[ignore]
+    fn test_select() {
+        let res = completion_from_cmd("git branch --all | grep -v HEAD".to_string(), None);
+        println!("{:?}", res);
     }
 }

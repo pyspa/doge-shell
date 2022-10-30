@@ -1,5 +1,5 @@
 use crate::builtin;
-use crate::completion::{self, Completion};
+use crate::completion::{self, completion_from_cmd, Completion};
 use crate::config::Config;
 use crate::dirs;
 use crate::environment::Environment;
@@ -292,6 +292,15 @@ impl Shell {
                 self.input.match_index = None;
             }
             (KeyCode::Tab, NONE) | (KeyCode::BackTab, NONE) => {
+                for (key, value) in self.config.completion.iter() {
+                    let comp = format!("{} ", key);
+                    if self.input.as_str() == comp {
+                        // TODO set query
+                        if let Some(val) = completion_from_cmd(value.to_string(), None) {
+                            self.input.insert_str(val.as_str());
+                        }
+                    }
+                }
                 self.start_completion = true;
             }
             (KeyCode::Enter, NONE) => {

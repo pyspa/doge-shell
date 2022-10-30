@@ -204,7 +204,7 @@ impl SkimItem for Candidate {
 
 pub fn select_item(items: Vec<Candidate>, query: Option<&str>) -> Option<String> {
     let options = SkimOptionsBuilder::default()
-        .height(Some("30%"))
+        //        .height(Some("30%"))
         .bind(vec!["Enter:accept"])
         .query(query)
         .build()
@@ -247,6 +247,17 @@ pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String>
         }
         _ => None,
     }
+}
+
+pub fn git_branch(query: Option<&str>) -> Option<String> {
+    completion_from_cmd("git branch --all | grep -v HEAD".to_string(), query)
+}
+
+pub fn docker_images(query: Option<&str>) -> Option<String> {
+    completion_from_cmd(
+        "docker images | awk '// {print $1 \":\" $2}'".to_string(),
+        query,
+    )
 }
 
 #[cfg(test)]
@@ -306,7 +317,9 @@ mod test {
     #[test]
     #[ignore]
     fn test_select() {
-        let res = completion_from_cmd("git branch --all | grep -v HEAD".to_string(), None);
-        println!("{:?}", res);
+        let ret = git_branch(None);
+        println!("{:?}", ret);
+        let ret = docker_images(None);
+        println!("{:?}", ret);
     }
 }

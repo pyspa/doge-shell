@@ -5,11 +5,11 @@ use std::process::Command;
 
 // TODO stash, rename, delete
 
-const BRANCH_MARK: &str = "";
-const BRANCH_AHEAD: &str = "⇡";
-const BRANCH_BEHIND: &str = "⇣";
-const BRANCH_DIVERGED: &str = "⇕";
-const BRANCH_CONFLICT: &str = "=";
+const BRANCH_MARK: &str = "🐾";
+const BRANCH_AHEAD: &str = "🦮";
+const BRANCH_BEHIND: &str = "🐩";
+const BRANCH_DIVERGED: &str = "🦖";
+const BRANCH_CONFLICT: &str = "🏴‍☠️";
 const UNTRACKED: &str = "?";
 const MODIFIED: &str = "!";
 const NEW_FILE: &str = "+";

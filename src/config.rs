@@ -5,16 +5,23 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct Completion {
+    pub target: String,
+    pub completion_cmd: String,
+    pub post_processing: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     pub alias: HashMap<String, String>,
-    pub completion: HashMap<String, String>,
+    pub completions: Vec<Completion>,
 }
 
 impl Default for Config {
     fn default() -> Config {
         let alias: HashMap<String, String> = HashMap::new();
-        let completion: HashMap<String, String> = HashMap::new();
-        Config { alias, completion }
+        let completions = Vec::new();
+        Config { alias, completions }
     }
 }
 
@@ -49,11 +56,26 @@ mod test {
     #[test]
     fn parse_config() -> Result<()> {
         let mut alias: HashMap<String, String> = HashMap::new();
-        let mut completion: HashMap<String, String> = HashMap::new();
+        let mut completions = Vec::new();
         alias.insert("ll".to_string(), "ls -al".to_string());
         alias.insert("g".to_string(), "git".to_string());
-        let config = Config { alias, completion };
+
+        let compl = Completion {
+            target: "a".to_string(),
+            completion_cmd: "b".to_string(),
+            post_processing: Some("c".to_string()),
+        };
+        completions.push(compl);
+        let compl = Completion {
+            target: "d".to_string(),
+            completion_cmd: "e".to_string(),
+            post_processing: Some("f".to_string()),
+        };
+        completions.push(compl);
+
+        let config = Config { alias, completions };
         let toml_str = toml::to_string(&config)?;
+        println!("{}", toml_str);
 
         let config: Config = toml::from_str(&toml_str)?;
         let val = config.alias.get("ll");

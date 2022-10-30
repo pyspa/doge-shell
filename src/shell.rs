@@ -1,5 +1,5 @@
 use crate::builtin;
-use crate::completion::{self, completion_from_cmd, Completion};
+use crate::completion::{self, Completion};
 use crate::config::Config;
 use crate::dirs;
 use crate::environment::Environment;
@@ -22,7 +22,6 @@ use log::{debug, warn};
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::sys::termios::{tcgetattr, Termios};
 use nix::unistd::{getpid, setpgid, tcsetpgrp, Pid};
-use pest::iterators::Pair;
 use pest::Parser;
 use std::io::Write;
 use std::time::Duration;
@@ -292,13 +291,20 @@ impl Shell {
                 self.input.match_index = None;
             }
             (KeyCode::Tab, NONE) | (KeyCode::BackTab, NONE) => {
-                for (key, value) in self.config.completion.iter() {
-                    let comp = format!("{} ", key);
-                    if self.input.as_str() == comp {
-                        // TODO set query
-                        if let Some(val) = completion_from_cmd(value.to_string(), None) {
+                for compl in &self.config.completions {
+                    let cmd_str = format!("{} ", compl.target);
+                    if self.input.as_str() == cmd_str {
+                        let res = if compl.completion_cmd == "git_branch" {
+                            completion::git_branch(None)
+                        } else {
+                            completion::completion_from_cmd(compl.completion_cmd.to_string(), None)
+                        };
+
+                        if let Some(val) = res {
                             self.input.insert_str(val.as_str());
                         }
+
+                        break;
                     }
                 }
                 self.start_completion = true;

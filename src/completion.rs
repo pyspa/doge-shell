@@ -1,6 +1,7 @@
 use crate::frecency::ItemStats;
 use anyhow::Result;
 
+use log::debug;
 use skim::prelude::*;
 use skim::{Skim, SkimItemReceiver, SkimItemSender};
 use std::fs::read_dir;
@@ -232,6 +233,7 @@ pub fn select_item(items: Vec<Candidate>, query: Option<&str>) -> Option<String>
 }
 
 pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String> {
+    debug!("{} ", &input);
     match Command::new("sh").arg("-c").arg(input).output() {
         Ok(output) => {
             if let Ok(out) = String::from_utf8(output.stdout) {
@@ -250,10 +252,18 @@ pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String>
 }
 
 pub fn git_branch(query: Option<&str>) -> Option<String> {
-    completion_from_cmd("git branch --all | grep -v HEAD".to_string(), query)
+    if let Some(val) = completion_from_cmd("git branch --all | grep -v HEAD".to_string(), query) {
+        if val.starts_with('*') {
+            Some(val[2..].to_string())
+        } else {
+            Some(val)
+        }
+    } else {
+        None
+    }
 }
 
-pub fn docker_images(query: Option<&str>) -> Option<String> {
+pub fn docker_image(query: Option<&str>) -> Option<String> {
     completion_from_cmd(
         "docker images | awk '// {print $1 \":\" $2}'".to_string(),
         query,
@@ -319,7 +329,7 @@ mod test {
     fn test_select() {
         let ret = git_branch(None);
         println!("{:?}", ret);
-        let ret = docker_images(None);
+        let ret = docker_image(None);
         println!("{:?}", ret);
     }
 }

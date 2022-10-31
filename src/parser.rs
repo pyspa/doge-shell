@@ -219,6 +219,23 @@ mod test {
     use super::*;
     use log::debug;
     use pest::Parser;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type JobLink = Rc<RefCell<Job>>;
+
+    #[derive(Debug)]
+    pub struct Job {
+        name: String,
+        next: Option<JobLink>,
+    }
+
+    impl Job {
+        fn new(name: String) -> Rc<RefCell<Self>> {
+            Rc::new(RefCell::new(Self { name, next: None }))
+        }
+    }
+
     #[test]
     fn init() {
         let _ = env_logger::try_init();
@@ -584,5 +601,41 @@ mod test {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn parse_commands() {
+        let _ = env_logger::try_init();
+        let pairs = ShellParser::parse(Rule::commands, "history | sk ; echo 'test' | cat; ")
+            .unwrap_or_else(|e| panic!("{}", e));
+
+        let mut result: Option<JobLink> = None;
+        let mut root: Option<JobLink> = None;
+        // let mut result: Option<JobLink> = None;
+
+        for pair in pairs {
+            for pair in pair.into_inner() {
+                match pair.as_rule() {
+                    Rule::command => {
+                        let job = Job::new(pair.as_str().to_string());
+                        match result.take() {
+                            Some(prev) => {
+                                prev.borrow_mut().next = Some(Rc::clone(&job));
+                                result = Some(Rc::clone(&job));
+                            }
+                            None => {
+                                result = Some(Rc::clone(&job));
+                                root = Some(Rc::clone(&job));
+                            }
+                        }
+                    }
+                    Rule::command_list_sep => {}
+                    _ => {}
+                }
+                debug!("{:?}", pair.as_rule());
+            }
+        }
+
+        debug!("{:?}", root);
     }
 }

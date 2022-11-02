@@ -546,6 +546,9 @@ impl Shell {
 
     fn parse_command(&self, job: &mut Job, pair: Pair<Rule>, foreground: bool) -> bool {
         let argv = get_argv(pair);
+        if argv.is_empty() {
+            return false;
+        }
         let cmd = argv[0].as_str();
         let mut result = true;
 
@@ -570,7 +573,7 @@ impl Shell {
     }
 
     fn parse_jobs(&self, pair: Pair<Rule>) -> Option<Vec<Job>> {
-        let _cmd_cnt = pair.clone().into_inner().count();
+        let job_str = pair.as_str().to_string();
         debug!("@ {:?} {:?}", pair.as_rule(), pair.as_str());
         let mut jobs: Vec<Job> = Vec::new();
 
@@ -578,7 +581,7 @@ impl Shell {
             debug!("{:?} {:?}", inner_pair.as_rule(), inner_pair.as_str());
             match inner_pair.as_rule() {
                 Rule::simple_command => {
-                    let mut job = Job::new(inner_pair.as_str().to_string());
+                    let mut job = Job::new(job_str.clone());
                     self.parse_command(&mut job, inner_pair, true);
                     if job.process.is_some() {
                         jobs.push(job);
@@ -598,23 +601,16 @@ impl Shell {
                     }
                 }
                 Rule::pipe_command => {
-                    for inner_pair in inner_pair.into_inner() {
-                        let cmd = inner_pair.as_str();
-                        let mut job = Job::new(cmd.to_string());
-                        if let Rule::simple_command = inner_pair.as_rule() {
-                            self.parse_command(&mut job, inner_pair, false);
-                            if job.process.is_some() {
-                                jobs.push(job);
-                            }
-                        } else if let Rule::simple_command_bg = inner_pair.as_rule() {
-                            self.parse_command(&mut job, inner_pair, false);
-                            if let Some(last_job) = jobs.last_mut() {
-                                last_job.link(job);
+                    if let Some(job) = jobs.last_mut() {
+                        for inner_pair in inner_pair.into_inner() {
+                            let _cmd = inner_pair.as_str();
+                            if let Rule::simple_command = inner_pair.as_rule() {
+                                self.parse_command(job, inner_pair, true);
+                            } else if let Rule::simple_command_bg = inner_pair.as_rule() {
+                                self.parse_command(job, inner_pair, false);
                             } else {
-                                warn!("incorrect command {}", &cmd);
+                                // TODO check?
                             }
-                        } else {
-                            // TODO check?
                         }
                     }
                 }

@@ -6,7 +6,7 @@ use crate::environment::Environment;
 use crate::history::FrecencyHistory;
 use crate::input::Input;
 use crate::parser::{expand_alias, get_argv, Rule, ShellParser};
-use crate::process::{self, wait_any_job, Context, ExitStatus, Job, JobProcess, WaitJob};
+use crate::process::{self, wait_any_job, Context, ExitStatus, Job, JobProcess, JobRef, WaitJob};
 use crate::prompt::print_preprompt;
 use anyhow::Context as _;
 use anyhow::{anyhow, Result};
@@ -22,6 +22,7 @@ use log::{debug, warn};
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::sys::termios::{tcgetattr, Termios};
 use nix::unistd::{getpid, setpgid, tcsetpgrp, Pid};
+use pest::iterators::Pair;
 use pest::Parser;
 use std::io::Write;
 use std::time::Duration;
@@ -499,8 +500,9 @@ impl Shell {
         let tmode = tcgetattr(0).expect("failed tcgetattr");
         let mut ctx = Context::new(self.pid, self.pgid, tmode, true);
 
-        if let Some(ref mut job) = self.get_command(input)? {
-            debug!("launch {:?}", job);
+        let jobs = self.get_jobs(input)?;
+
+        for mut job in jobs {
             disable_raw_mode().ok();
             job.launch(&mut ctx, self)?;
             enable_raw_mode().ok();
@@ -509,100 +511,122 @@ impl Shell {
         Ok(())
     }
 
-    fn get_command(&self, input: String) -> Result<Option<Job>> {
+    fn get_jobs(&self, input: String) -> Result<Vec<Job>> {
         // TODO tests
 
         let input = expand_alias(input, &self.config.alias)?;
 
-        let pairs = ShellParser::parse(Rule::command, &input).map_err(|e| anyhow!(e))?;
+        let pairs = ShellParser::parse(Rule::commands, &input).map_err(|e| anyhow!(e))?;
+
+        let mut jobs: Vec<Job> = Vec::new();
 
         for pair in pairs {
-            if let Rule::command = pair.as_rule() {
-                let _cmd_cnt = pair.clone().into_inner().count();
-                let mut job = Job::new(pair.as_str().to_string());
-                debug!("@ {:?} {:?}", pair.as_rule(), pair.as_str());
-
-                for inner_pair in pair.into_inner() {
-                    debug!("{:?} {:?}", inner_pair.as_rule(), inner_pair.as_str());
-                    match inner_pair.as_rule() {
-                        Rule::simple_command => {
-                            let argv = get_argv(inner_pair);
-                            let cmd = argv[0].as_str();
-
-                            if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get(cmd) {
-                                let builtin = process::BuiltinProcess::new(*cmd_fn, argv);
-                                job.set_process(JobProcess::Builtin(builtin));
-                            } else if let Some(cmd) = self.environment.lookup(cmd) {
-                                let process = process::Process::new(cmd, argv);
-                                job.set_process(JobProcess::Command(process));
-                            } else if dirs::is_dir(cmd) {
-                                if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get("cd") {
-                                    let builtin = process::BuiltinProcess::new(
-                                        *cmd_fn,
-                                        vec!["cd".to_string(), cmd.to_string()],
-                                    );
-                                    job.set_process(JobProcess::Builtin(builtin));
-                                }
-                            } else {
-                                self.print_error(format!("unknown command: {}", cmd));
+            if let Rule::commands = pair.as_rule() {
+                for pair in pair.into_inner() {
+                    match pair.as_rule() {
+                        Rule::command => {
+                            if let Some(ref mut parsed) = self.parse_jobs(pair) {
+                                jobs.append(parsed);
                             }
                         }
-
-                        Rule::simple_command_bg => {
-                            // background job
-                            for inner_pair in inner_pair.into_inner() {
-                                if let Rule::simple_command = inner_pair.as_rule() {
-                                    let argv = get_argv(inner_pair);
-                                    let cmd = argv[0].as_str();
-
-                                    if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get(cmd) {
-                                        let builtin = process::BuiltinProcess::new(*cmd_fn, argv);
-                                        job.set_process(JobProcess::Builtin(builtin));
-                                    } else if let Some(cmd) = self.environment.lookup(cmd) {
-                                        let process = process::Process::new(cmd, argv);
-                                        job.set_process(JobProcess::Command(process));
-                                        job.foreground = false;
-                                    } else if dirs::is_dir(cmd) {
-                                        if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get("cd") {
-                                            let builtin = process::BuiltinProcess::new(
-                                                *cmd_fn,
-                                                vec!["cd".to_string(), cmd.to_string()],
-                                            );
-                                            job.set_process(JobProcess::Builtin(builtin));
-                                        }
-                                    } else {
-                                        self.print_error(format!("unknown command: {}", cmd));
-                                    }
-                                }
-                            }
+                        Rule::command_list_sep => {
+                            // TODO keep separator type
+                            // simple list
                         }
-                        Rule::pipe_command => {
-                            for inner_pair in inner_pair.into_inner() {
-                                if let Rule::simple_command = inner_pair.as_rule() {
-                                    // simple_command
-                                    let argv = get_argv(inner_pair);
-                                    let cmd = argv[0].as_str();
-
-                                    if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get(cmd) {
-                                        let builtin = process::BuiltinProcess::new(*cmd_fn, argv);
-                                        job.set_process(JobProcess::Builtin(builtin));
-                                    } else if let Some(cmd) = self.environment.lookup(cmd) {
-                                        let process = process::Process::new(cmd, argv);
-                                        job.set_process(JobProcess::Command(process));
-                                    } else {
-                                        self.print_error(format!("unknown command: {}", cmd));
-                                    }
-                                }
-                            }
+                        _ => {
+                            debug!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
                         }
-                        _ => {}
                     }
                 }
-                return Ok(Some(job));
             }
         }
 
-        Ok(None)
+        Ok(jobs)
+    }
+
+    fn parse_command(&self, job: &mut Job, pair: Pair<Rule>, foreground: bool) -> bool {
+        let argv = get_argv(pair);
+        let cmd = argv[0].as_str();
+        let mut result = true;
+
+        if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get(cmd) {
+            let builtin = process::BuiltinProcess::new(*cmd_fn, argv);
+            job.set_process(JobProcess::Builtin(builtin));
+        } else if let Some(cmd) = self.environment.lookup(cmd) {
+            let process = process::Process::new(cmd, argv);
+            job.set_process(JobProcess::Command(process));
+            job.foreground = foreground;
+        } else if dirs::is_dir(cmd) {
+            if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get("cd") {
+                let builtin =
+                    process::BuiltinProcess::new(*cmd_fn, vec!["cd".to_string(), cmd.to_string()]);
+                job.set_process(JobProcess::Builtin(builtin));
+            }
+        } else {
+            result = false;
+            self.print_error(format!("unknown command: {}", cmd));
+        }
+        result
+    }
+
+    fn parse_jobs(&self, pair: Pair<Rule>) -> Option<Vec<Job>> {
+        let _cmd_cnt = pair.clone().into_inner().count();
+        debug!("@ {:?} {:?}", pair.as_rule(), pair.as_str());
+        let mut jobs: Vec<Job> = Vec::new();
+
+        for inner_pair in pair.into_inner() {
+            debug!("{:?} {:?}", inner_pair.as_rule(), inner_pair.as_str());
+            match inner_pair.as_rule() {
+                Rule::simple_command => {
+                    let mut job = Job::new(inner_pair.as_str().to_string());
+                    self.parse_command(&mut job, inner_pair, true);
+                    if job.process.is_some() {
+                        jobs.push(job);
+                    }
+                }
+                Rule::simple_command_bg => {
+                    // background job
+                    let mut job = Job::new(inner_pair.as_str().to_string());
+                    for bg_pair in inner_pair.into_inner() {
+                        if let Rule::simple_command = bg_pair.as_rule() {
+                            self.parse_command(&mut job, bg_pair, false);
+                            if job.process.is_some() {
+                                jobs.push(job);
+                            }
+                            break;
+                        }
+                    }
+                }
+                Rule::pipe_command => {
+                    for inner_pair in inner_pair.into_inner() {
+                        let cmd = inner_pair.as_str();
+                        let mut job = Job::new(cmd.to_string());
+                        if let Rule::simple_command = inner_pair.as_rule() {
+                            self.parse_command(&mut job, inner_pair, false);
+                            if job.process.is_some() {
+                                jobs.push(job);
+                            }
+                        } else if let Rule::simple_command_bg = inner_pair.as_rule() {
+                            self.parse_command(&mut job, inner_pair, false);
+                            if let Some(last_job) = jobs.last_mut() {
+                                last_job.link(job);
+                            } else {
+                                warn!("incorrect command {}", &cmd);
+                            }
+                        } else {
+                            // TODO check?
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if jobs.is_empty() {
+            None
+        } else {
+            Some(jobs)
+        }
     }
 
     pub fn exit(&mut self) {

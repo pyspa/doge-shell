@@ -484,12 +484,14 @@ impl Job {
                 1
             };
 
-            // background
-            shell.wait_jobs.push(WaitJob {
-                job_id,
-                pid,
-                cmd: self.cmd.clone(),
-            });
+            if process.next().is_none() {
+                // background
+                shell.wait_jobs.push(WaitJob {
+                    job_id,
+                    pid,
+                    cmd: self.cmd.clone(),
+                });
+            }
         }
 
         self.show_job_status();

@@ -162,56 +162,69 @@ fn to_vec(pair: Pair<Rule>) -> Vec<String> {
 
 pub fn expand_alias(input: String, alias: &HashMap<String, String>) -> Result<String> {
     let mut buf: Vec<String> = Vec::new();
-    let pairs = ShellParser::parse(Rule::command, &input).map_err(|e| anyhow!(e))?;
+    let pairs = ShellParser::parse(Rule::commands, &input).map_err(|e| anyhow!(e))?;
 
     for pair in pairs {
-        if let Rule::command = pair.as_rule() {
-            for inner_pair in pair.into_inner() {
-                match inner_pair.as_rule() {
-                    Rule::simple_command => {
-                        let args = to_vec(inner_pair);
-                        for arg in args {
-                            if let Some(val) = alias.get(&arg) {
-                                buf.push(val.trim().to_string());
-                            } else {
-                                buf.push(arg);
-                            }
-                        }
-                    }
-                    Rule::simple_command_bg => {
-                        let args = to_vec(inner_pair);
-                        for arg in args {
-                            if let Some(val) = alias.get(&arg) {
-                                buf.push(val.trim().to_string());
-                            } else {
-                                buf.push(arg);
-                            }
-                        }
-                        buf.push("&".to_string());
-                    }
-                    Rule::pipe_command => {
-                        buf.push("|".to_string());
-                        let args = to_vec(inner_pair);
-                        for arg in args {
-                            if let Some(val) = alias.get(&arg) {
-                                buf.push(val.trim().to_string());
-                            } else {
-                                buf.push(arg);
-                            }
-                        }
-                    }
-                    _ => {
-                        debug!(
-                            "missing {:?} {:?}",
-                            inner_pair.as_rule(),
-                            inner_pair.as_str()
-                        );
-                    }
-                }
-            }
+        for pair in pair.into_inner() {
+            let mut commands = expand_command_alias(pair, alias)?;
+            buf.append(&mut commands);
         }
     }
     Ok(buf.join(" "))
+}
+
+fn expand_command_alias(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Result<Vec<String>> {
+    let mut buf: Vec<String> = Vec::new();
+
+    if let Rule::command = pair.as_rule() {
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::simple_command => {
+                    let args = to_vec(inner_pair);
+                    for arg in args {
+                        if let Some(val) = alias.get(&arg) {
+                            buf.push(val.trim().to_string());
+                        } else {
+                            buf.push(arg);
+                        }
+                    }
+                }
+                Rule::simple_command_bg => {
+                    let args = to_vec(inner_pair);
+                    for arg in args {
+                        if let Some(val) = alias.get(&arg) {
+                            buf.push(val.trim().to_string());
+                        } else {
+                            buf.push(arg);
+                        }
+                    }
+                    buf.push("&".to_string());
+                }
+                Rule::pipe_command => {
+                    buf.push("|".to_string());
+                    let args = to_vec(inner_pair);
+                    for arg in args {
+                        if let Some(val) = alias.get(&arg) {
+                            buf.push(val.trim().to_string());
+                        } else {
+                            buf.push(arg);
+                        }
+                    }
+                }
+                _ => {
+                    debug!(
+                        "missing {:?} {:?}",
+                        inner_pair.as_rule(),
+                        inner_pair.as_str()
+                    );
+                }
+            }
+        }
+    } else if let Rule::command_list_sep = pair.as_rule() {
+        buf.push(pair.as_str().to_string());
+    }
+
+    Ok(buf)
 }
 
 #[cfg(test)]
@@ -606,7 +619,7 @@ mod test {
     #[test]
     fn parse_commands() {
         let _ = env_logger::try_init();
-        let pairs = ShellParser::parse(Rule::commands, "history | sk ; echo 'test' | cat; ")
+        let pairs = ShellParser::parse(Rule::commands, "sleep 10 ; echo 'test' ")
             .unwrap_or_else(|e| panic!("{}", e));
 
         let mut result: Option<JobLink> = None;
@@ -617,6 +630,7 @@ mod test {
             for pair in pair.into_inner() {
                 match pair.as_rule() {
                     Rule::command => {
+                        debug!("{:?} {:?}", pair.as_rule(), pair.as_str());
                         let job = Job::new(pair.as_str().to_string());
                         match result.take() {
                             Some(prev) => {
@@ -632,7 +646,6 @@ mod test {
                     Rule::command_list_sep => {}
                     _ => {}
                 }
-                debug!("{:?}", pair.as_rule());
             }
         }
 

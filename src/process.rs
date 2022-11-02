@@ -1,7 +1,3 @@
-// This is based on the libc documentation.
-// https://www.gnu.org/software/libc/manual/html_node/Data-Structures.html
-// https://www.gnu.org/software/libc/manual/html_node/Launching-Jobs.html
-
 use crate::builtin::BuiltinCommand;
 use crate::shell::{Shell, SHELL_TERMINAL};
 use anyhow::Context as _;
@@ -12,8 +8,10 @@ use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal
 use nix::sys::termios::Termios;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{close, dup2, execv, fork, getpid, pipe, setpgid, tcsetpgrp, ForkResult, Pid};
+use std::cell::RefCell;
 use std::ffi::CString;
 use std::os::unix::io::RawFd;
+use std::rc::Rc;
 
 fn copy_fd(src: RawFd, dst: RawFd) {
     if src != dst {
@@ -360,6 +358,8 @@ impl Process {
     }
 }
 
+pub type JobRef = Rc<RefCell<Job>>;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Job {
     pub cmd: String,
@@ -370,6 +370,7 @@ pub struct Job {
     pub stdin: RawFd,
     pub stdout: RawFd,
     pub stderr: RawFd,
+    // pub next: Option<JobRef>,
     pub next: Option<Box<Job>>,
     pub foreground: bool,
 }
@@ -406,8 +407,26 @@ impl Job {
         }
     }
 
-    pub fn link(&mut self, job: &Job) {
-        self.next = Some(Box::new(job.clone()));
+    // pub fn to_link(self) -> Rc<RefCell<Self>> {
+    //     Rc::new(RefCell::new(self))
+    // }
+
+    // pub fn link_(&mut self, job: JobRef) {
+    //     match self.next {
+    //         Some(ref mut j) => j.borrow_mut().link(job),
+    //         None => self.next = Some(Rc::clone(&job)),
+    //     }
+    // }
+
+    pub fn link(&mut self, job: Job) {
+        match self.next {
+            Some(ref mut j) => {
+                j.link(job);
+            }
+            None => {
+                self.next = Some(Box::new(job));
+            }
+        }
     }
 
     pub fn set_process(&mut self, process: JobProcess) {
@@ -647,17 +666,26 @@ fn fork_process(ctx: &Context, job_pgid: Option<Pid>, process: &mut Process) -> 
     }
 }
 
-pub fn find_job(first_job: &Job, pgid: Pid) -> Option<Job> {
-    let mut job = first_job;
-    while let Some(ref bj) = job.next {
-        if bj.pgid == Some(pgid) {
-            let j = *bj.clone();
-            return Some(j);
-        }
-        job = bj;
-    }
-    None
-}
+// pub fn find_job(first_job: Job, pgid: Pid) -> Option<Job> {
+//     let mut job = first_job.to_link();
+//     while let Some(j) = job.borrow().next {
+//         if j.borrow().pgid == Some(pgid) {
+//             let j = *j.clone();
+//             return Some(j.into_inner());
+//         }
+//         job = j;
+//     }
+//     None
+// }
+
+// pub fn find_job(job: Job, pgid: Pid) -> Option<JobRef> {
+//     // while let Some(job) = &job.next {
+//     //     if job.borrow().pgid == Some(pgid) {
+//     //         return Some(Rc::clone(&job));
+//     //     }
+//     // }
+//     None
+// }
 
 pub fn is_job_stopped(job: &Job) -> bool {
     debug!("is_job_stopped: process:{:?}", job);
@@ -696,22 +724,24 @@ mod test {
         let pgid2 = Pid::from_raw(2);
         let pgid3 = Pid::from_raw(3);
 
-        let job1 = &mut Job::new_with_process("test1".to_owned(), "".to_owned(), vec![]);
+        let mut job1 = Job::new_with_process("test1".to_owned(), "".to_owned(), vec![]);
         job1.pgid = Some(pgid1);
-        let job2 = &mut Job::new_with_process("test2".to_owned(), "".to_owned(), vec![]);
+        let mut job2 = Job::new_with_process("test2".to_owned(), "".to_owned(), vec![]);
         job2.pgid = Some(pgid2);
-        let job3 = &mut Job::new_with_process("test3".to_owned(), "".to_owned(), vec![]);
+        let mut job3 = Job::new_with_process("test3".to_owned(), "".to_owned(), vec![]);
         job3.pgid = Some(pgid3);
 
-        job1.link(job2);
-        job2.link(job3);
+        // let joblink2 = job2.to_link();
+        // let joblink3 = job3.to_link();
+        // job1.link(Rc::clone(&joblink2));
+        // joblink2.borrow_mut().link(joblink3);
 
-        let found = find_job(job1, pgid2).unwrap();
-        assert_eq!(found.pgid.unwrap().as_raw(), pgid2.as_raw());
+        // let found = find_job(job1, pgid2).unwrap();
+        // assert_eq!(found.pgid.unwrap().as_raw(), pgid2.as_raw());
 
-        let pgid4 = Pid::from_raw(4);
-        let nt = find_job(job1, pgid4);
-        assert_eq!(nt, None::<Job>);
+        // let pgid4 = Pid::from_raw(4);
+        // let nt = find_job(job1, pgid4);
+        // assert_eq!(nt, None::<Job>);
     }
 
     #[test]

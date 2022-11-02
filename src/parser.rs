@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use log::debug;
+use log::{debug, warn};
 use pest::iterators::Pair;
 use pest::Parser;
 use pest::Span;
@@ -50,7 +50,13 @@ pub fn get_argv(pair: Pair<Rule>) -> Vec<String> {
                     }
                 }
             }
-            _ => {}
+            Rule::simple_command => {
+                let mut res = get_argv(inner_pair);
+                argv.append(&mut res);
+            }
+            _ => {
+                warn!("missing {:?}", inner_pair.as_rule());
+            }
         }
     }
     argv

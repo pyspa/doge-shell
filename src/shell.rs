@@ -6,7 +6,7 @@ use crate::environment::Environment;
 use crate::history::FrecencyHistory;
 use crate::input::Input;
 use crate::parser::{expand_alias, get_argv, Rule, ShellParser};
-use crate::process::{self, wait_any_job, Context, ExitStatus, Job, JobProcess, JobRef, WaitJob};
+use crate::process::{self, wait_any_job, Context, ExitStatus, Job, JobProcess, WaitJob};
 use crate::prompt::print_preprompt;
 use anyhow::Context as _;
 use anyhow::{anyhow, Result};

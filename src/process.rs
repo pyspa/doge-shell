@@ -358,8 +358,6 @@ impl Process {
     }
 }
 
-pub type JobRef = Rc<RefCell<Job>>;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Job {
     pub cmd: String,
@@ -370,7 +368,6 @@ pub struct Job {
     pub stdin: RawFd,
     pub stdout: RawFd,
     pub stderr: RawFd,
-    // pub next: Option<JobRef>,
     pub next: Option<Box<Job>>,
     pub foreground: bool,
 }
@@ -406,17 +403,6 @@ impl Job {
             foreground: true,
         }
     }
-
-    // pub fn to_link(self) -> Rc<RefCell<Self>> {
-    //     Rc::new(RefCell::new(self))
-    // }
-
-    // pub fn link_(&mut self, job: JobRef) {
-    //     match self.next {
-    //         Some(ref mut j) => j.borrow_mut().link(job),
-    //         None => self.next = Some(Rc::clone(&job)),
-    //     }
-    // }
 
     pub fn link(&mut self, job: Job) {
         match self.next {

@@ -654,26 +654,17 @@ fn fork_process(ctx: &Context, job_pgid: Option<Pid>, process: &mut Process) -> 
     }
 }
 
-// pub fn find_job(first_job: Job, pgid: Pid) -> Option<Job> {
-//     let mut job = first_job.to_link();
-//     while let Some(j) = job.borrow().next {
-//         if j.borrow().pgid == Some(pgid) {
-//             let j = *j.clone();
-//             return Some(j.into_inner());
-//         }
-//         job = j;
-//     }
-//     None
-// }
-
-// pub fn find_job(job: Job, pgid: Pid) -> Option<JobRef> {
-//     // while let Some(job) = &job.next {
-//     //     if job.borrow().pgid == Some(pgid) {
-//     //         return Some(Rc::clone(&job));
-//     //     }
-//     // }
-//     None
-// }
+pub fn find_job(first_job: &Job, pgid: Pid) -> Option<Job> {
+    let mut job = first_job;
+    while let Some(ref bj) = job.next {
+        if bj.pgid == Some(pgid) {
+            let j = *bj.clone();
+            return Some(j);
+        }
+        job = bj;
+    }
+    None
+}
 
 pub fn is_job_stopped(job: &Job) -> bool {
     debug!("is_job_stopped: process:{:?}", job);
@@ -719,17 +710,15 @@ mod test {
         let mut job3 = Job::new_with_process("test3".to_owned(), "".to_owned(), vec![]);
         job3.pgid = Some(pgid3);
 
-        // let joblink2 = job2.to_link();
-        // let joblink3 = job3.to_link();
-        // job1.link(Rc::clone(&joblink2));
-        // joblink2.borrow_mut().link(joblink3);
+        job2.link(job3);
+        job1.link(job2);
 
-        // let found = find_job(job1, pgid2).unwrap();
-        // assert_eq!(found.pgid.unwrap().as_raw(), pgid2.as_raw());
+        let found = find_job(&job1, pgid2).unwrap();
+        assert_eq!(found.pgid.unwrap().as_raw(), pgid2.as_raw());
 
-        // let pgid4 = Pid::from_raw(4);
-        // let nt = find_job(job1, pgid4);
-        // assert_eq!(nt, None::<Job>);
+        let pgid4 = Pid::from_raw(4);
+        let nt = find_job(&job1, pgid4);
+        assert_eq!(nt, None::<Job>);
     }
 
     #[test]

@@ -48,7 +48,7 @@ impl Environment {
         }
         for path in &self.paths {
             let cmd_path = Path::new(path).join(cmd);
-            if cmd_path.exists() {
+            if cmd_path.exists() && cmd_path.is_file() {
                 return cmd_path.to_str().map(|s| s.to_string());
             }
         }

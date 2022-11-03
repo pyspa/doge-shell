@@ -40,3 +40,22 @@ fn is_executable(entry: &DirEntry) -> bool {
 pub fn is_dir(input: &str) -> bool {
     path::Path::new(&shellexpand::tilde(input).to_string()).is_dir()
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use log::debug;
+
+    #[test]
+    fn init() {
+        let _ = env_logger::try_init();
+    }
+
+    #[test]
+    fn test_is_dir() {
+        let b = is_dir("./");
+        assert_eq!(true, b);
+        let b = is_dir("../");
+        assert_eq!(true, b);
+    }
+}

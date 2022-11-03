@@ -44,7 +44,7 @@ pub fn is_dir(input: &str) -> bool {
 #[cfg(test)]
 mod test {
     use super::*;
-    use log::debug;
+    
 
     #[test]
     fn init() {

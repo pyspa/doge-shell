@@ -1,5 +1,5 @@
 use crossterm::style::Stylize;
-use log::debug;
+
 use std::io::{BufRead, BufReader};
 use std::process::Command;
 

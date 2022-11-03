@@ -151,7 +151,7 @@ fn to_vec(pair: Pair<Rule>) -> Vec<String> {
             }
             Rule::argv0 | Rule::args | Rule::span => {
                 for inner_pair in inner_pair.into_inner() {
-                    argv.push(inner_pair.as_str().to_string());
+                    argv.push(shellexpand::tilde(inner_pair.as_str()).to_string());
                 }
             }
             _ => {

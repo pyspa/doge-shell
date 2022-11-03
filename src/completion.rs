@@ -1,12 +1,23 @@
 use crate::frecency::ItemStats;
 use anyhow::Result;
-
+use hashbrown::HashMap;
 use log::debug;
+use once_cell::sync::Lazy;
 use skim::prelude::*;
 use skim::{Skim, SkimItemReceiver, SkimItemSender};
 use std::fs::read_dir;
 use std::path::PathBuf;
 use std::{process::Command, sync::Arc};
+
+pub type CompletionCommand = fn(Option<&str>) -> Option<String>;
+
+pub static COMPLETION_COMMAND: Lazy<HashMap<&str, CompletionCommand>> = Lazy::new(|| {
+    let mut comps = HashMap::new();
+
+    comps.insert("git_branch", git_branch as CompletionCommand);
+    comps.insert("docker_image", docker_image as CompletionCommand);
+    comps
+});
 
 #[derive(Debug)]
 pub struct Completion {
@@ -327,7 +338,7 @@ mod test {
     #[test]
     #[ignore]
     fn test_select() {
-        let ret = git_branch(None);
+        let ret = git_branch(Some("dev"));
         println!("{:?}", ret);
         let ret = docker_image(None);
         println!("{:?}", ret);

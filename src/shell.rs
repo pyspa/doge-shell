@@ -256,6 +256,7 @@ impl Shell {
                     let mut stdout = std::io::stdout();
                     queue!(stdout, cursor::MoveLeft(1)).ok();
                     stdout.flush().ok();
+                    self.completion.clear();
                 }
                 return Ok(());
             }
@@ -263,6 +264,7 @@ impl Shell {
                 if let Some(comp) = &self.input.completion.take() {
                     self.input.reset(comp.to_string());
                 }
+                self.completion.clear();
             }
             (KeyCode::Right, NONE) => {
                 if self.input.cursor() < self.input.len() {
@@ -270,6 +272,7 @@ impl Shell {
                     let mut stdout = std::io::stdout();
                     queue!(stdout, cursor::MoveRight(1)).ok();
                     stdout.flush().ok();
+                    self.completion.clear();
                 }
                 return Ok(());
             }

@@ -495,6 +495,7 @@ impl Shell {
     fn eval_str(&mut self, input: String) -> Result<()> {
         if let Some(ref mut history) = self.cmd_history {
             history.add(&input);
+            history.reset_index();
         }
 
         let tmode = tcgetattr(0).expect("failed tcgetattr");

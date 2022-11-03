@@ -8,10 +8,10 @@ use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal
 use nix::sys::termios::Termios;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{close, dup2, execv, fork, getpid, pipe, setpgid, tcsetpgrp, ForkResult, Pid};
-use std::cell::RefCell;
+
 use std::ffi::CString;
 use std::os::unix::io::RawFd;
-use std::rc::Rc;
+
 
 fn copy_fd(src: RawFd, dst: RawFd) {
     if src != dst {

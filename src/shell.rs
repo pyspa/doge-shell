@@ -35,7 +35,7 @@ const CTRL: KeyModifiers = KeyModifiers::CONTROL;
 const ALT: KeyModifiers = KeyModifiers::ALT;
 const SHIFT: KeyModifiers = KeyModifiers::SHIFT;
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
 pub enum ShellEvent {
     Input(Event),
     ScreenResized,

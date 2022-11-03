@@ -295,15 +295,24 @@ impl Shell {
                 self.input.match_index = None;
             }
             (KeyCode::Tab, NONE) | (KeyCode::BackTab, NONE) => {
+                let completion_query = match self.input.get_cursor_word() {
+                    Ok(Some((_rule, span))) => Some(span.as_str()),
+                    _ => None,
+                };
+
                 for compl in &self.config.completions {
                     let cmd_str = format!("{} ", compl.target);
-                    if self.input.as_str() == cmd_str {
-                        let res = if compl.completion_cmd == "git_branch" {
-                            completion::git_branch(None)
+                    if self.input.as_str().starts_with(cmd_str.as_str()) {
+                        let res = if let Some(cmd_fn) =
+                            completion::COMPLETION_COMMAND.get(compl.completion_cmd.as_str())
+                        {
+                            (cmd_fn)(completion_query)
                         } else {
-                            completion::completion_from_cmd(compl.completion_cmd.to_string(), None)
+                            completion::completion_from_cmd(
+                                compl.completion_cmd.to_string(),
+                                completion_query,
+                            )
                         };
-
                         if let Some(val) = res {
                             self.input.insert_str(val.as_str());
                         }

@@ -29,7 +29,7 @@ pub fn current_time_secs() -> f64 {
 
 pub fn read_store(path: &PathBuf) -> Result<FrecencyStore> {
     if path.is_file() {
-        let file = File::open(&path)?;
+        let file = File::open(path)?;
         let reader = BufReader::new(file);
         let store: FrecencyStoreSerializer = bincode::deserialize_from(reader)?;
         Ok(FrecencyStore::from(&store))
@@ -40,8 +40,8 @@ pub fn read_store(path: &PathBuf) -> Result<FrecencyStore> {
 
 pub fn write_store(store: &FrecencyStore, path: &PathBuf) -> Result<()> {
     let store_dir = path.parent().expect("file must have parent");
-    create_dir_all(&store_dir)?;
-    let file = File::create(&path)?;
+    create_dir_all(store_dir)?;
+    let file = File::create(path)?;
     let writer = BufWriter::new(file);
     bincode::serialize_into(writer, &FrecencyStoreSerializer::from(store))?;
     Ok(())

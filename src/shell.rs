@@ -222,7 +222,7 @@ impl Shell {
 
     fn handle_key_event(&mut self, ev: &KeyEvent) -> Result<()> {
         let mut redraw = true;
-        let mut backspace = false;
+        let mut reset_completion = false;
         match (ev.code, ev.modifiers) {
             // history
             (KeyCode::Up, NONE) => {
@@ -252,6 +252,7 @@ impl Shell {
             }
             (KeyCode::Left, NONE) => {
                 if self.input.cursor() > 0 {
+                    self.input.completion = None;
                     self.input.move_by(-1);
                     let mut stdout = std::io::stdout();
                     queue!(stdout, cursor::MoveLeft(1)).ok();
@@ -289,7 +290,7 @@ impl Shell {
                 }
             }
             (KeyCode::Backspace, NONE) => {
-                backspace = true;
+                reset_completion = true;
                 self.input.backspace();
                 self.completion.clear();
                 self.input.match_index = None;
@@ -323,6 +324,7 @@ impl Shell {
                 self.start_completion = true;
             }
             (KeyCode::Enter, NONE) => {
+                self.input.completion.take();
                 self.stop_history_mode();
                 print!("\r\n");
                 if !self.input.is_empty() {
@@ -361,14 +363,14 @@ impl Shell {
         }
 
         if redraw {
-            self.print_input(backspace);
+            self.print_input(reset_completion);
         } else {
             self.print_prompt();
         }
         Ok(())
     }
 
-    fn print_input(&mut self, backspace: bool) {
+    fn print_input(&mut self, reset_completion: bool) {
         let mut stdout = std::io::stdout();
 
         queue!(stdout, cursor::Hide).ok();
@@ -378,7 +380,7 @@ impl Shell {
         let mut fg_color = Color::White;
         let mut comp: Option<String> = None;
 
-        if input.is_empty() || backspace {
+        if input.is_empty() || reset_completion {
             self.input.completion = None
         } else {
             // TODO refactor

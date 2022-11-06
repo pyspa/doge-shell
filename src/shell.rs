@@ -301,26 +301,14 @@ impl Shell {
                     _ => None,
                 };
 
-                for compl in &self.config.completions {
-                    let cmd_str = format!("{} ", compl.target);
-                    if self.input.as_str().starts_with(cmd_str.as_str()) {
-                        let res = if let Some(cmd_fn) =
-                            completion::COMPLETION_COMMAND.get(compl.completion_cmd.as_str())
-                        {
-                            (cmd_fn)(completion_query)
-                        } else {
-                            completion::completion_from_cmd(
-                                compl.completion_cmd.to_string(),
-                                completion_query,
-                            )
-                        };
-                        if let Some(val) = res {
-                            self.input.insert_str(val.as_str());
-                        }
-
-                        break;
-                    }
+                if let Some(val) = completion::input_completion(
+                    &self.input.as_str(),
+                    &self.config.completions,
+                    completion_query,
+                ) {
+                    self.input.insert_str(val.as_str());
                 }
+
                 self.start_completion = true;
             }
             (KeyCode::Enter, NONE) => {

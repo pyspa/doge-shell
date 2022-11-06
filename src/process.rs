@@ -420,14 +420,28 @@ impl Job {
         }
     }
 
-    pub fn launch(&mut self, ctx: &mut Context, shell: &mut Shell) -> Result<()> {
+    pub fn last_process_state(&self) -> ProcessState {
+        if let Some(ref p) = &self.process {
+            last_process_state(*p.clone())
+        } else {
+            // not running
+            ProcessState::Completed(0)
+        }
+    }
+
+    pub fn launch(&mut self, ctx: &mut Context, shell: &mut Shell) -> Result<ProcessState> {
         ctx.foreground = self.foreground;
         self.process
             .take()
             .as_mut()
             .map(|process| self.launch_process(ctx, shell, process));
 
-        Ok(())
+        if ctx.foreground {
+            Ok(self.last_process_state())
+        } else {
+            // background
+            Ok(ProcessState::Running)
+        }
     }
 
     pub fn launch_process(
@@ -626,6 +640,14 @@ pub fn wait_any_job(no_block: bool) -> Option<(Pid, ProcessState)> {
         }
     };
     Some(res)
+}
+
+fn last_process_state(process: JobProcess) -> ProcessState {
+    if let Some(next_proc) = process.next() {
+        last_process_state(*next_proc)
+    } else {
+        process.get_state()
+    }
 }
 
 fn set_process_state(process: &mut JobProcess, pid: Pid, state: ProcessState) {

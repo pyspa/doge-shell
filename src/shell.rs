@@ -507,7 +507,14 @@ impl Shell {
 
         for mut job in jobs {
             disable_raw_mode().ok();
-            job.launch(&mut ctx, self)?;
+            if let process::ProcessState::Completed(exit) = job.launch(&mut ctx, self)? {
+                if exit != 0 {
+                    // TODO check
+                    debug!("job exit code {:?}", exit);
+                }
+            } else {
+                // Stop next job
+            }
             enable_raw_mode().ok();
         }
 

@@ -1,3 +1,4 @@
+pub use dirs;
 use std::fs::{read_dir, DirEntry};
 use std::os::unix::fs::PermissionsExt;
 use std::path;
@@ -44,7 +45,6 @@ pub fn is_dir(input: &str) -> bool {
 #[cfg(test)]
 mod test {
     use super::*;
-    
 
     #[test]
     fn init() {

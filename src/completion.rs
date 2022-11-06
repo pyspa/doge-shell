@@ -1,3 +1,5 @@
+use crate::config;
+use crate::dirs::is_dir;
 use crate::frecency::ItemStats;
 use anyhow::Result;
 use hashbrown::HashMap;
@@ -141,7 +143,7 @@ pub fn path_completion_first(input: &str) -> Result<Option<String>> {
     Ok(None)
 }
 
-fn is_dir(path: &PathBuf) -> Result<bool> {
+fn path_is_dir(path: &PathBuf) -> Result<bool> {
     if let Ok(mut metadata) = path.metadata() {
         if metadata.is_symlink() {
             let link = std::fs::read_link(path)?;
@@ -174,7 +176,7 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
 
     for entry in dir.flatten() {
         let entry_path = entry.path();
-        let is_dir = is_dir(&entry_path)?;
+        let is_dir = path_is_dir(&entry_path)?;
         if expand {
             if let Ok(part) = entry_path.strip_prefix(&home) {
                 let mut pb = PathBuf::new();
@@ -262,6 +264,32 @@ pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String>
     }
 }
 
+pub fn input_completion(
+    input: &str,
+    completions: &Vec<config::Completion>,
+    query: Option<&str>,
+) -> Option<String> {
+    let has = query.is_some();
+    // 1. completion from configs
+    for compl in completions {
+        let cmd_str = format!("{} ", compl.target);
+        if input.starts_with(cmd_str.as_str()) {
+            let res = if let Some(cmd_fn) = COMPLETION_COMMAND.get(compl.completion_cmd.as_str()) {
+                (cmd_fn)(query)
+            } else {
+                completion_from_cmd(compl.completion_cmd.to_string(), query)
+            };
+            return res;
+        }
+    }
+
+    if has && is_dir(query.unwrap()) {
+        // 2 . try path completion
+        return list_files(query);
+    }
+    None
+}
+
 pub fn git_branch(query: Option<&str>) -> Option<String> {
     if let Some(val) = completion_from_cmd("git branch --all | grep -v HEAD".to_string(), query) {
         if val.starts_with('*') {
@@ -281,13 +309,17 @@ pub fn docker_image(query: Option<&str>) -> Option<String> {
     )
 }
 
+pub fn list_files(query: Option<&str>) -> Option<String> {
+    completion_from_cmd(format!("ls -1 {}", query.unwrap()), None)
+}
+
 #[cfg(test)]
 mod test {
 
     use super::*;
 
     #[test]
-    fn completion() -> Result<()> {
+    fn test_completion() -> Result<()> {
         let _ = env_logger::try_init();
 
         let p = path_completion_first(".")?;

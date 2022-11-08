@@ -6,19 +6,17 @@ use std::path;
 pub fn search_file(dir: &str, name: &str) -> Option<String> {
     match read_dir(dir) {
         Ok(entries) => {
+            let mut entries: Vec<DirEntry> = entries.flatten().collect();
+            entries.sort_by_key(|x| x.file_name());
+
             for entry in entries {
-                match entry {
-                    Ok(entry) => {
-                        let buf = entry.file_name();
-                        let file_name = buf.to_str().unwrap();
-                        if file_name.starts_with(name)
-                            && entry.file_type().unwrap().is_file()
-                            && is_executable(&entry)
-                        {
-                            return Some(file_name.to_string());
-                        }
-                    }
-                    Err(_err) => {}
+                let buf = entry.file_name();
+                let file_name = buf.to_str().unwrap();
+                if file_name.starts_with(name)
+                    && entry.file_type().unwrap().is_file()
+                    && is_executable(&entry)
+                {
+                    return Some(file_name.to_string());
                 }
             }
             None
@@ -57,5 +55,12 @@ mod test {
         assert_eq!(true, b);
         let b = is_dir("../");
         assert_eq!(true, b);
+    }
+
+    #[test]
+    #[ignore]
+    fn test_search_file() {
+        let b = search_file("/bin", "g");
+        println!("{:?}", b);
     }
 }

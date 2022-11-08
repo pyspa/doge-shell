@@ -421,6 +421,17 @@ impl Shell {
                                         comp = Some(path[word.len()..].to_string());
                                         self.input.completion = Some(input + &part);
                                     }
+                                } else {
+                                    // TODO
+                                    if !word.starts_with('-') {
+                                        if let Some(file) = self.environment.search(word) {
+                                            if file.len() >= word.len() {
+                                                let part = file[word.len()..].to_string();
+                                                comp = Some(file[word.len()..].to_string());
+                                                self.input.completion = Some(input + &part);
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }

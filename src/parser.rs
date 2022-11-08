@@ -69,7 +69,7 @@ pub fn get_pos_word(input: &str, pos: usize) -> Result<Option<(Rule, Span)>> {
         match pair.as_rule() {
             Rule::command => {
                 for pair in pair.into_inner() {
-                    let res = search_pos_word(pair, input, pos);
+                    let res = search_pos_word(pair, pos);
                     if res.is_some() {
                         return Ok(res);
                     }
@@ -81,15 +81,11 @@ pub fn get_pos_word(input: &str, pos: usize) -> Result<Option<(Rule, Span)>> {
     Ok(None)
 }
 
-fn search_pos_word<'a>(
-    pair: Pair<'a, Rule>,
-    input: &'a str,
-    pos: usize,
-) -> Option<(Rule, Span<'a>)> {
+fn search_pos_word<'a>(pair: Pair<'a, Rule>, pos: usize) -> Option<(Rule, Span<'a>)> {
     match pair.as_rule() {
         Rule::simple_command | Rule::simple_command_bg => {
             for pair in pair.into_inner() {
-                let res = search_pos_word(pair, input, pos);
+                let res = search_pos_word(pair, pos);
                 if res.is_some() {
                     return res;
                 }
@@ -231,6 +227,79 @@ fn expand_command_alias(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Re
     }
 
     Ok(buf)
+}
+
+pub fn get_words(input: &str, pos: usize) -> Result<Vec<(Rule, Span, bool)>> {
+    let pairs = ShellParser::parse(Rule::command, input).map_err(|e| anyhow!(e))?;
+    let mut result: Vec<(Rule, Span, bool)> = Vec::new();
+    for pair in pairs {
+        match pair.as_rule() {
+            Rule::command => {
+                for pair in pair.into_inner() {
+                    let mut res = to_words(pair, pos);
+                    result.append(&mut res);
+                }
+            }
+            _ => return Ok(result),
+        }
+    }
+    Ok(result)
+}
+
+fn to_words(pair: Pair<Rule>, pos: usize) -> Vec<(Rule, Span, bool)> {
+    let mut result: Vec<(Rule, Span, bool)> = vec![];
+    for inner_pair in pair.into_inner() {
+        match inner_pair.as_rule() {
+            Rule::simple_command | Rule::simple_command_bg => {
+                for inner_pair in inner_pair.into_inner() {
+                    let mut v = to_words(inner_pair, pos);
+                    result.append(&mut v);
+                }
+            }
+            Rule::argv0 => {
+                for pair in inner_pair.into_inner() {
+                    if let Some((span, current)) = get_span(pair, pos) {
+                        result.push((Rule::argv0, span, current));
+                    }
+                }
+            }
+            Rule::args => {
+                for pair in inner_pair.into_inner() {
+                    if let Some((span, current)) = get_span(pair, pos) {
+                        result.push((Rule::args, span, current));
+                    }
+                }
+            }
+
+            _ => {
+                debug!(
+                    "missing {:?} {:?}",
+                    inner_pair.as_rule(),
+                    inner_pair.as_str()
+                );
+            }
+        }
+    }
+    result
+}
+
+fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {
+    match pair.as_rule() {
+        Rule::s_quoted | Rule::d_quoted | Rule::span => {
+            for pair in pair.into_inner() {
+                let pair_span = pair.as_span();
+                if pair_span.start() < pos && pos <= pair_span.end() {
+                    return Some((pair_span, true));
+                } else {
+                    return Some((pair_span, false));
+                }
+            }
+        }
+        _ => {
+            debug!("missing {:?} {:?}", pair.as_rule(), pair.as_str());
+        }
+    }
+    None
 }
 
 #[cfg(test)]

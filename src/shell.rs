@@ -365,14 +365,13 @@ impl Shell {
         let input = self.input.as_str();
         let prompt = self.get_prompt().chars().count();
 
-        let mut fg_color = Color::White;
+        let fg_color = Color::White;
         let mut comp: Option<String> = None;
 
         if input.is_empty() || reset_completion {
             self.input.completion = None
         } else {
             // TODO refactor
-
             if let Some(ref mut history) = self.cmd_history {
                 if let Some(hist) = history.search_first(&input) {
                     self.input.completion = Some(hist.clone());
@@ -381,64 +380,70 @@ impl Shell {
                     }
                 }
             }
-            if comp.is_none() {
-                if let Ok(Some((rule, ref span))) = self.input.get_cursor_word() {
+
+            let mut match_index: Vec<usize> = Vec::new();
+
+            // TODO refactor
+            if let Ok(words) = self.input.get_words() {
+                for (ref rule, ref span, current) in words {
                     let word = span.as_str();
-                    match rule {
-                        Rule::argv0 => {
-                            // command
-                            if let Some(_found) = self.environment.lookup(word) {
-                                fg_color = Color::Blue;
-                            } else if let Some(file) = self.environment.search(word) {
-                                if file.len() >= input.len() {
-                                    comp = Some(file[input.len()..].to_string());
-                                }
-                                self.input.completion = Some(file);
-                            } else if let Ok(Some(ref dir)) =
-                                completion::path_completion_first(word)
-                            {
-                                if dirs::is_dir(dir) {
-                                    if dir.len() >= input.len() {
-                                        comp = Some(dir[input.len()..].to_string());
+                    if let Some(_found) = self.environment.lookup(word) {
+                        for pos in span.start()..span.end() {
+                            // change color
+                            match_index.push(pos);
+                        }
+                    }
+
+                    if !word.is_empty() && current && comp.is_none() {
+                        match rule {
+                            Rule::argv0 => {
+                                if let Some(file) = self.environment.search(word) {
+                                    if file.len() >= input.len() {
+                                        comp = Some(file[input.len()..].to_string());
                                     }
-                                    self.input.completion = Some(dir.clone());
+                                    self.input.completion = Some(file);
+                                    break;
+                                } else if let Ok(Some(ref dir)) =
+                                    completion::path_completion_first(word)
+                                {
+                                    if dirs::is_dir(dir) {
+                                        if dir.len() >= input.len() {
+                                            comp = Some(dir[input.len()..].to_string());
+                                        }
+                                        self.input.completion = Some(dir.clone());
+                                        break;
+                                    }
                                 }
                             }
-                        }
-                        Rule::args => {
-                            if word.len() > 1 {
-                                // if let Some(file) = self.environment.search(&word) {
-                                //     if file.len() >= word.len() {
-                                //         let part = file[word.len()..].to_string();
-                                //         comp = Some(file[word.len()..].to_string());
-                                //         self.input.completion = Some(input.to_string() + &part);
-                                //     }
-                                // } else
+                            Rule::args => {
                                 if let Ok(Some(ref path)) = completion::path_completion_first(word)
                                 {
                                     if path.len() >= word.len() {
                                         let part = path[word.len()..].to_string();
                                         comp = Some(path[word.len()..].to_string());
                                         self.input.completion = Some(input + &part);
+                                        break;
                                     }
                                 } else {
-                                    // TODO
                                     if !word.starts_with('-') {
                                         if let Some(file) = self.environment.search(word) {
                                             if file.len() >= word.len() {
                                                 let part = file[word.len()..].to_string();
                                                 comp = Some(file[word.len()..].to_string());
                                                 self.input.completion = Some(input + &part);
+                                                break;
                                             }
                                         }
                                     }
                                 }
                             }
+
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
             }
+            self.input.match_index = Some(match_index);
         }
 
         queue!(

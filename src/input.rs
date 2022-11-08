@@ -117,6 +117,10 @@ impl Input {
         parser::get_pos_word(self.input.as_str(), self.cursor)
     }
 
+    pub fn get_words(&self) -> Result<Vec<(Rule, Span, bool)>> {
+        parser::get_words(self.input.as_str(), self.cursor)
+    }
+
     pub fn print(&self, fg_color: Color) {
         if let Some(match_index) = &self.match_index {
             let mut index_iter = match_index.iter();

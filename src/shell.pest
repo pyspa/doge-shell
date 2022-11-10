@@ -10,7 +10,6 @@ s_quoted = { "\'" ~ s_quoted_inner* ~ "\'" }
 s_quoted_inner = _{
     literal_s_quoted
 }
-
 literal_s_quoted = ${ ( "\\'"  | !("\'") ~ ANY | sp)+ }
 
 d_quoted = { "\"" ~ d_quoted_inner* ~ "\"" }
@@ -25,8 +24,13 @@ literal_d_quoted = ${
     )+
 }
 
+subshell = { "(" ~ group_list ~ ")" }
+group_list = _{
+    commands
+}
+
 quoted = _{ d_quoted|s_quoted }
-span = { quoted|word }
+span = { quoted|word|subshell }
 argv0 = { span }
 args = { (sp* ~ span)+ }
 background = _{ "&" }

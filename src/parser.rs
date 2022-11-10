@@ -726,4 +726,57 @@ mod test {
 
         debug!("{:?}", root);
     }
+
+    #[test]
+    fn parse_subshell() {
+        let _ = env_logger::try_init();
+        let pairs = ShellParser::parse(Rule::commands, "sudo docker rm -v (sudo docker ps -a -q)")
+            .unwrap_or_else(|e| panic!("{}", e));
+
+        for pair in pairs {
+            for pair in pair.into_inner() {
+                match pair.as_rule() {
+                    Rule::command => {
+                        for pair in pair.into_inner() {
+                            match pair.as_rule() {
+                                Rule::simple_command => {
+                                    for pair in pair.into_inner() {
+                                        match pair.as_rule() {
+                                            Rule::argv0 => {}
+                                            Rule::args => {
+                                                for pair in pair.into_inner() {
+                                                    match pair.as_rule() {
+                                                        Rule::span => {
+                                                            for pair in pair.into_inner() {
+                                                                match pair.as_rule() {
+                                                                    Rule::subshell => {
+                                                                        assert_eq!(pair.as_str(), "(sudo docker ps -a -q)")
+                                                                    }
+                                                                    _ => {}
+                                                                }
+                                                            }
+                                                        }
+
+                                                        _ => {}
+                                                    }
+                                                }
+                                            }
+
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    println!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        println!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
+                    }
+                }
+            }
+        }
+    }
 }

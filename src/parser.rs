@@ -34,6 +34,7 @@ pub fn get_string(pair: Pair<Rule>) -> Option<String> {
 
 pub fn get_argv(pair: Pair<Rule>) -> Vec<String> {
     let mut argv: Vec<String> = vec![];
+
     for inner_pair in pair.into_inner() {
         match inner_pair.as_rule() {
             Rule::argv0 => {
@@ -128,34 +129,62 @@ fn search_inner_word(pair: Pair<Rule>, pos: usize) -> Option<Span> {
     None
 }
 
-fn to_vec(pair: Pair<Rule>) -> Vec<String> {
+fn expand_tilde(pair: Pair<Rule>) -> Vec<String> {
     let mut argv: Vec<String> = vec![];
-    for inner_pair in pair.into_inner() {
-        match inner_pair.as_rule() {
-            Rule::simple_command => {
-                for inner_pair in inner_pair.into_inner() {
-                    let mut v = to_vec(inner_pair);
-                    argv.append(&mut v);
+
+    match pair.as_rule() {
+        Rule::word
+        | Rule::s_quoted
+        | Rule::d_quoted
+        | Rule::literal_s_quoted
+        | Rule::literal_d_quoted => {
+            argv.push(shellexpand::tilde(pair.as_str()).to_string());
+        }
+        _ => {
+            for inner_pair in pair.into_inner() {
+                match inner_pair.as_rule() {
+                    Rule::simple_command_bg => {
+                        for inner_pair in inner_pair.into_inner() {
+                            let mut v = expand_tilde(inner_pair);
+                            argv.append(&mut v);
+                        }
+                        argv.push("&".to_string());
+                    }
+                    Rule::subshell => {
+                        argv.push("(".to_string());
+                        for inner_pair in inner_pair.into_inner() {
+                            let mut v = expand_tilde(inner_pair);
+                            argv.append(&mut v);
+                        }
+                        argv.push(")".to_string());
+                    }
+                    Rule::commands
+                    | Rule::command
+                    | Rule::simple_command
+                    | Rule::argv0
+                    | Rule::args
+                    | Rule::span => {
+                        for inner_pair in inner_pair.into_inner() {
+                            let mut v = expand_tilde(inner_pair);
+                            argv.append(&mut v);
+                        }
+                    }
+                    Rule::word
+                    | Rule::s_quoted
+                    | Rule::d_quoted
+                    | Rule::literal_s_quoted
+                    | Rule::literal_d_quoted => {
+                        let mut v = expand_tilde(inner_pair);
+                        argv.append(&mut v);
+                    }
+                    _ => {
+                        debug!(
+                            "missing {:?} {:?}",
+                            inner_pair.as_rule(),
+                            inner_pair.as_str()
+                        );
+                    }
                 }
-            }
-            Rule::simple_command_bg => {
-                for inner_pair in inner_pair.into_inner() {
-                    let mut v = to_vec(inner_pair);
-                    argv.append(&mut v);
-                }
-                argv.push("&".to_string());
-            }
-            Rule::argv0 | Rule::args | Rule::span => {
-                for inner_pair in inner_pair.into_inner() {
-                    argv.push(shellexpand::tilde(inner_pair.as_str()).to_string());
-                }
-            }
-            _ => {
-                debug!(
-                    "missing {:?} {:?}",
-                    inner_pair.as_rule(),
-                    inner_pair.as_str()
-                );
             }
         }
     }
@@ -182,7 +211,7 @@ fn expand_command_alias(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Re
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::simple_command => {
-                    let args = to_vec(inner_pair);
+                    let args = expand_tilde(inner_pair);
                     for arg in args {
                         if let Some(val) = alias.get(&arg) {
                             buf.push(val.trim().to_string());
@@ -192,7 +221,7 @@ fn expand_command_alias(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Re
                     }
                 }
                 Rule::simple_command_bg => {
-                    let args = to_vec(inner_pair);
+                    let args = expand_tilde(inner_pair);
                     for arg in args {
                         if let Some(val) = alias.get(&arg) {
                             buf.push(val.trim().to_string());
@@ -204,7 +233,7 @@ fn expand_command_alias(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Re
                 }
                 Rule::pipe_command => {
                     buf.push("|".to_string());
-                    let args = to_vec(inner_pair);
+                    let args = expand_tilde(inner_pair);
                     for arg in args {
                         if let Some(val) = alias.get(&arg) {
                             buf.push(val.trim().to_string());
@@ -656,7 +685,7 @@ mod test {
     }
 
     #[test]
-    fn replace_command() -> Result<()> {
+    fn test_expand_alias() -> Result<()> {
         let mut alias: HashMap<String, String> = HashMap::new();
         alias.insert("alias".to_string(), "echo 'test' | sk ".to_string());
 
@@ -686,6 +715,13 @@ mod test {
         assert_eq!(
             replaced,
             r#"sh -c | echo 'test' | sk " test" '-vvv' --foo &"#.to_string()
+        );
+
+        let input = r#"echo (alias " test" '-vvv' --foo) "#.to_string();
+        let replaced = expand_alias(input, &alias)?;
+        assert_eq!(
+            replaced,
+            r#"echo ( echo 'test' | sk " test" '-vvv' --foo )"#.to_string()
         );
 
         Ok(())

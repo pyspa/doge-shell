@@ -82,9 +82,13 @@ pub fn get_pos_word(input: &str, pos: usize) -> Result<Option<(Rule, Span)>> {
     Ok(None)
 }
 
-fn search_pos_word<'a>(pair: Pair<'a, Rule>, pos: usize) -> Option<(Rule, Span<'a>)> {
+fn search_pos_word(pair: Pair<Rule>, pos: usize) -> Option<(Rule, Span)> {
     match pair.as_rule() {
-        Rule::simple_command | Rule::simple_command_bg => {
+        Rule::commands
+        | Rule::command
+        | Rule::simple_command
+        | Rule::simple_command_bg
+        | Rule::subshell => {
             for pair in pair.into_inner() {
                 let res = search_pos_word(pair, pos);
                 if res.is_some() {
@@ -94,21 +98,45 @@ fn search_pos_word<'a>(pair: Pair<'a, Rule>, pos: usize) -> Option<(Rule, Span<'
         }
         Rule::argv0 => {
             for pair in pair.into_inner() {
-                if let Some(res) = search_inner_word(pair, pos) {
-                    return Some((Rule::argv0, res));
+                for pair in pair.into_inner() {
+                    match pair.as_rule() {
+                        Rule::subshell => {
+                            let res = search_pos_word(pair, pos);
+                            if res.is_some() {
+                                return res;
+                            }
+                        }
+                        _ => {
+                            if let Some(res) = search_inner_word(pair, pos) {
+                                return Some((Rule::argv0, res));
+                            }
+                        }
+                    }
                 }
             }
         }
         Rule::args => {
             for pair in pair.into_inner() {
-                if let Some(res) = search_inner_word(pair, pos) {
-                    return Some((Rule::args, res));
+                for pair in pair.into_inner() {
+                    match pair.as_rule() {
+                        Rule::subshell => {
+                            let res = search_pos_word(pair, pos);
+                            if res.is_some() {
+                                return res;
+                            }
+                        }
+                        _ => {
+                            if let Some(res) = search_inner_word(pair, pos) {
+                                return Some((Rule::argv0, res));
+                            }
+                        }
+                    }
                 }
             }
         }
         _ => {
             // TODO
-            // println!("{:?} {:?}", pair.as_rule(), pair.as_str());
+            println!("{:?} {:?}", pair.as_rule(), pair.as_str());
         }
     }
     None
@@ -116,12 +144,18 @@ fn search_pos_word<'a>(pair: Pair<'a, Rule>, pos: usize) -> Option<(Rule, Span<'
 
 fn search_inner_word(pair: Pair<Rule>, pos: usize) -> Option<Span> {
     match pair.as_rule() {
-        Rule::s_quoted | Rule::d_quoted | Rule::span => {
+        Rule::s_quoted | Rule::d_quoted => {
             for pair in pair.into_inner() {
                 let pair_span = pair.as_span();
                 if pair_span.start() < pos && pos <= pair_span.end() {
                     return Some(pair_span);
                 }
+            }
+        }
+        Rule::word => {
+            let pair_span = pair.as_span();
+            if pair_span.start() < pos && pos <= pair_span.end() {
+                return Some(pair_span);
             }
         }
         _ => {}
@@ -314,14 +348,20 @@ fn to_words(pair: Pair<Rule>, pos: usize) -> Vec<(Rule, Span, bool)> {
 
 fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {
     match pair.as_rule() {
-        Rule::s_quoted | Rule::d_quoted | Rule::span => {
+        Rule::s_quoted | Rule::d_quoted => {
             for pair in pair.into_inner() {
-                let pair_span = pair.as_span();
-                if pair_span.start() < pos && pos <= pair_span.end() {
-                    return Some((pair_span, true));
-                } else {
-                    return Some((pair_span, false));
+                let span = get_span(pair, pos);
+                if span.is_some() {
+                    return span;
                 }
+            }
+        }
+        Rule::word | Rule::literal_s_quoted | Rule::literal_d_quoted => {
+            let pair_span = pair.as_span();
+            if pair_span.start() < pos && pos <= pair_span.end() {
+                return Some((pair_span, true));
+            } else {
+                return Some((pair_span, false));
             }
         }
         _ => {
@@ -666,7 +706,7 @@ mod test {
     }
 
     #[test]
-    fn get_pos_word1() -> Result<()> {
+    fn test_get_pos_word() -> Result<()> {
         let input = "sudo git st aaa &";
         let res = get_pos_word(input, 1)?;
         assert_eq!("sudo", res.unwrap().1.as_str());
@@ -680,6 +720,11 @@ mod test {
         let input = "sudo ";
         let res = get_pos_word(input, 1)?;
         assert_eq!("sudo", res.unwrap().1.as_str());
+
+        let input = "sudo git st ( docker ps -a -q) &";
+        let res = get_pos_word(input, 15)?;
+        assert_eq!("docker", res.unwrap().1.as_str());
+        assert_eq!(Rule::argv0, res.unwrap().0);
 
         Ok(())
     }

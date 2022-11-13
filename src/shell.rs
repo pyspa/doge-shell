@@ -550,11 +550,7 @@ impl Shell {
             if let Rule::commands = pair.as_rule() {
                 for pair in pair.into_inner() {
                     match pair.as_rule() {
-                        Rule::command => {
-                            if let Some(ref mut parsed) = self.parse_jobs(pair) {
-                                jobs.append(parsed);
-                            }
-                        }
+                        Rule::command => self.parse_jobs(pair, &mut jobs),
                         Rule::command_list_sep => {
                             // TODO keep separator type
                             // simple list
@@ -575,6 +571,10 @@ impl Shell {
         if argv.is_empty() {
             return false;
         }
+
+        // TODO
+        let argv: Vec<String> = argv.iter().map(|x| x.0.clone()).collect();
+
         let cmd = argv[0].as_str();
         let mut result = true;
 
@@ -598,13 +598,38 @@ impl Shell {
         result
     }
 
-    fn parse_jobs(&self, pair: Pair<Rule>) -> Option<Vec<Job>> {
+    // fn parse_command2(&self, job: &mut Job, pair: Pair<Rule>, foreground: bool) -> bool {
+    //     let argv = get_argv(pair);
+    //     if argv.is_empty() {
+    //         return false;
+    //     }
+    //     let cmd = argv[0].as_str();
+    //     let mut result = true;
+
+    //     if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get(cmd) {
+    //         let builtin = process::BuiltinProcess::new(*cmd_fn, argv);
+    //         job.set_process(JobProcess::Builtin(builtin));
+    //     } else if let Some(cmd) = self.environment.lookup(cmd) {
+    //         let process = process::Process::new(cmd, argv);
+    //         job.set_process(JobProcess::Command(process));
+    //         job.foreground = foreground;
+    //     } else if dirs::is_dir(cmd) {
+    //         if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get("cd") {
+    //             let builtin =
+    //                 process::BuiltinProcess::new(*cmd_fn, vec!["cd".to_string(), cmd.to_string()]);
+    //             job.set_process(JobProcess::Builtin(builtin));
+    //         }
+    //     } else {
+    //         result = false;
+    //         self.print_error(format!("unknown command: {}", cmd));
+    //     }
+    //     result
+    // }
+
+    fn parse_jobs(&self, pair: Pair<Rule>, jobs: &mut Vec<Job>) {
         let job_str = pair.as_str().to_string();
-        debug!("@ {:?} {:?}", pair.as_rule(), pair.as_str());
-        let mut jobs: Vec<Job> = Vec::new();
 
         for inner_pair in pair.into_inner() {
-            debug!("{:?} {:?}", inner_pair.as_rule(), inner_pair.as_str());
             match inner_pair.as_rule() {
                 Rule::simple_command => {
                     let mut job = Job::new(job_str.clone());
@@ -642,12 +667,6 @@ impl Shell {
                 }
                 _ => {}
             }
-        }
-
-        if jobs.is_empty() {
-            None
-        } else {
-            Some(jobs)
         }
     }
 

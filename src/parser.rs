@@ -1,3 +1,4 @@
+use crate::process;
 use anyhow::{anyhow, Result};
 use log::{debug, warn};
 use pest::iterators::Pair;
@@ -32,22 +33,22 @@ pub fn get_string(pair: Pair<Rule>) -> Option<String> {
     }
 }
 
-pub fn get_argv(pair: Pair<Rule>) -> Vec<String> {
-    let mut argv: Vec<String> = vec![];
+pub fn get_argv(pair: Pair<Rule>) -> Vec<(String, Option<process::Job>)> {
+    let mut argv: Vec<(String, Option<process::Job>)> = vec![];
 
     for inner_pair in pair.into_inner() {
         match inner_pair.as_rule() {
             Rule::argv0 => {
                 for inner_pair in inner_pair.into_inner() {
                     if let Some(arg) = get_string(inner_pair) {
-                        argv.push(arg);
+                        argv.push((arg, None));
                     }
                 }
             }
             Rule::args => {
                 for inner_pair in inner_pair.into_inner() {
                     if let Some(arg) = get_string(inner_pair) {
-                        argv.push(arg)
+                        argv.push((arg, None))
                     }
                 }
             }
@@ -520,11 +521,11 @@ mod test {
 
             let argv = get_argv(pair);
             assert_eq!(5, argv.len());
-            assert_eq!("echo", argv[0]);
-            assert_eq!("abc", argv[1]);
-            assert_eq!(" test", argv[2]);
-            assert_eq!("-vvv", argv[3]);
-            assert_eq!("--foo", argv[4]);
+            assert_eq!("echo", argv[0].0);
+            assert_eq!("abc", argv[1].0);
+            assert_eq!(" test", argv[2].0);
+            assert_eq!("-vvv", argv[3].0);
+            assert_eq!("--foo", argv[4].0);
         }
     }
 
@@ -858,6 +859,23 @@ mod test {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_exec_subshell() {
+        let pairs = ShellParser::parse(Rule::simple_command, r#"sleep (echo 1) "#)
+            .unwrap_or_else(|e| panic!("{}", e));
+
+        for pair in pairs {
+            assert_eq!(Rule::simple_command, pair.as_rule());
+            let count = pair.clone().into_inner().count();
+            assert_eq!(2, count);
+
+            let argv = get_argv(pair);
+            assert_eq!(2, argv.len());
+            assert_eq!("sleep", argv[0].0);
+            assert_eq!("(echo 1)", argv[1].0);
         }
     }
 }

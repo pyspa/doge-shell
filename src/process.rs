@@ -459,7 +459,10 @@ impl Job {
                 pipe_out = Some(pout);
             }
             _ => {
-                ctx.outfile = self.stdout;
+                // reset
+                if ctx.infile != STDIN_FILENO {
+                    ctx.outfile = self.stdout;
+                }
             }
         }
 

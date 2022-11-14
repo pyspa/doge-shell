@@ -5,7 +5,7 @@ use crate::dirs;
 use crate::environment::Environment;
 use crate::history::FrecencyHistory;
 use crate::input::Input;
-use crate::parser::{expand_alias, get_argv, Rule, ShellParser};
+use crate::parser::{self, Rule, ShellParser};
 use crate::process::{self, wait_any_job, Context, ExitStatus, Job, JobProcess, WaitJob};
 use crate::prompt::print_preprompt;
 use anyhow::Context as _;
@@ -21,10 +21,13 @@ use libc::{c_int, STDIN_FILENO};
 use log::{debug, warn};
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::sys::termios::{tcgetattr, Termios};
-use nix::unistd::{getpid, setpgid, tcsetpgrp, Pid};
+use nix::unistd::{getpid, pipe, setpgid, tcsetpgrp, Pid};
 use pest::iterators::Pair;
 use pest::Parser;
+use std::fs::File;
+use std::io::prelude::*;
 use std::io::Write;
+use std::os::unix::io::FromRawFd;
 use std::time::Duration;
 
 pub const APP_NAME: &str = "dsh";
@@ -537,27 +540,93 @@ impl Shell {
         Ok(())
     }
 
-    fn get_jobs(&self, input: String) -> Result<Vec<Job>> {
+    fn get_jobs(&mut self, input: String) -> Result<Vec<Job>> {
         // TODO tests
 
-        let input = expand_alias(input, &self.config.alias)?;
+        let input = parser::expand_alias(input, &self.config.alias)?;
 
-        let pairs = ShellParser::parse(Rule::commands, &input).map_err(|e| anyhow!(e))?;
+        let mut pairs = ShellParser::parse(Rule::commands, &input).map_err(|e| anyhow!(e))?;
 
+        if let Some(pair) = pairs.next() {
+            self.parse_commands(pair)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    fn get_argv(&mut self, pair: Pair<Rule>) -> Result<Vec<(String, Option<Vec<process::Job>>)>> {
+        let mut argv: Vec<(String, Option<Vec<process::Job>>)> = vec![];
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::argv0 => {
+                    for inner_pair in inner_pair.into_inner() {
+                        // span
+                        for inner_pair in inner_pair.into_inner() {
+                            match inner_pair.as_rule() {
+                                Rule::subshell => {
+                                    for inner_pair in inner_pair.into_inner() {
+                                        // commands
+                                        let cmd_str = inner_pair.as_str().to_string();
+                                        let res = self.parse_commands(inner_pair)?;
+                                        argv.push((cmd_str, Some(res)));
+                                    }
+                                }
+                                _ => {
+                                    if let Some(arg) = parser::get_string(inner_pair) {
+                                        argv.push((arg, None));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Rule::args => {
+                    for inner_pair in inner_pair.into_inner() {
+                        // span
+                        for inner_pair in inner_pair.into_inner() {
+                            match inner_pair.as_rule() {
+                                Rule::subshell => {
+                                    for inner_pair in inner_pair.into_inner() {
+                                        // commands
+                                        let cmd_str = inner_pair.as_str().to_string();
+                                        let res = self.parse_commands(inner_pair)?;
+                                        argv.push((cmd_str, Some(res)));
+                                    }
+                                }
+                                _ => {
+                                    if let Some(arg) = parser::get_string(inner_pair) {
+                                        argv.push((arg, None));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Rule::simple_command => {
+                    let mut res = self.get_argv(inner_pair)?;
+                    argv.append(&mut res);
+                }
+                _ => {
+                    warn!("missing {:?}", inner_pair.as_rule());
+                }
+            }
+        }
+        Ok(argv)
+    }
+
+    fn parse_commands(&mut self, pair: Pair<Rule>) -> Result<Vec<Job>> {
         let mut jobs: Vec<Job> = Vec::new();
-
-        for pair in pairs {
-            if let Rule::commands = pair.as_rule() {
-                for pair in pair.into_inner() {
-                    match pair.as_rule() {
-                        Rule::command => self.parse_jobs(pair, &mut jobs),
-                        Rule::command_list_sep => {
-                            // TODO keep separator type
-                            // simple list
-                        }
-                        _ => {
-                            debug!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
-                        }
+        if let Rule::commands = pair.as_rule() {
+            for pair in pair.into_inner() {
+                match pair.as_rule() {
+                    Rule::command => self.parse_jobs(pair, &mut jobs)?,
+                    Rule::command_list_sep => {
+                        // TODO keep separator type
+                        // simple list
+                    }
+                    _ => {
+                        debug!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
                     }
                 }
             }
@@ -566,14 +635,55 @@ impl Shell {
         Ok(jobs)
     }
 
-    fn parse_command(&self, job: &mut Job, pair: Pair<Rule>, foreground: bool) -> bool {
-        let argv = get_argv(pair);
-        if argv.is_empty() {
-            return false;
+    fn launch_subshell(&mut self, jobs: Vec<Job>) -> Result<String> {
+        let tmode = tcgetattr(0).expect("failed tcgetattr");
+        let mut ctx = Context::new(self.pid, self.pgid, tmode, true);
+        ctx.foreground = false;
+        let (pout, pin) = pipe().context("failed pipe")?;
+        ctx.outfile = pin;
+
+        for mut job in jobs {
+            disable_raw_mode().ok();
+            if let Ok(process::ProcessState::Completed(exit)) = job.launch(&mut ctx, self) {
+                if exit != 0 {
+                    // TODO check
+                    debug!("job exit code {:?}", exit);
+                }
+            } else {
+                // Stop next job
+            }
+            enable_raw_mode().ok();
+            // debug!("{:?}", job.cmd);
+        }
+        let mut raw_stdout = Vec::new();
+        unsafe { File::from_raw_fd(pout).read_to_end(&mut raw_stdout).ok() };
+
+        let output = std::str::from_utf8(&raw_stdout)
+            .map_err(|err| {
+                // TODO
+                eprintln!("binary in variable/expansion is not supported");
+                err
+            })?
+            .trim_end_matches('\n')
+            .to_owned();
+        Ok(output)
+    }
+
+    fn parse_command(&mut self, job: &mut Job, pair: Pair<Rule>, foreground: bool) -> Result<bool> {
+        let parsed = self.get_argv(pair)?;
+        if parsed.is_empty() {
+            return Ok(false);
         }
 
-        // TODO
-        let argv: Vec<String> = argv.iter().map(|x| x.0.clone()).collect();
+        let mut argv: Vec<String> = Vec::new();
+        for (str, jobs) in parsed {
+            if let Some(jobs) = jobs {
+                let output = self.launch_subshell(jobs)?;
+                output.lines().for_each(|x| argv.push(x.to_owned()));
+            } else {
+                argv.push(str);
+            }
+        }
 
         let cmd = argv[0].as_str();
         let mut result = true;
@@ -595,45 +705,17 @@ impl Shell {
             result = false;
             self.print_error(format!("unknown command: {}", cmd));
         }
-        result
+        Ok(result)
     }
 
-    // fn parse_command2(&self, job: &mut Job, pair: Pair<Rule>, foreground: bool) -> bool {
-    //     let argv = get_argv(pair);
-    //     if argv.is_empty() {
-    //         return false;
-    //     }
-    //     let cmd = argv[0].as_str();
-    //     let mut result = true;
-
-    //     if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get(cmd) {
-    //         let builtin = process::BuiltinProcess::new(*cmd_fn, argv);
-    //         job.set_process(JobProcess::Builtin(builtin));
-    //     } else if let Some(cmd) = self.environment.lookup(cmd) {
-    //         let process = process::Process::new(cmd, argv);
-    //         job.set_process(JobProcess::Command(process));
-    //         job.foreground = foreground;
-    //     } else if dirs::is_dir(cmd) {
-    //         if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get("cd") {
-    //             let builtin =
-    //                 process::BuiltinProcess::new(*cmd_fn, vec!["cd".to_string(), cmd.to_string()]);
-    //             job.set_process(JobProcess::Builtin(builtin));
-    //         }
-    //     } else {
-    //         result = false;
-    //         self.print_error(format!("unknown command: {}", cmd));
-    //     }
-    //     result
-    // }
-
-    fn parse_jobs(&self, pair: Pair<Rule>, jobs: &mut Vec<Job>) {
+    fn parse_jobs(&mut self, pair: Pair<Rule>, jobs: &mut Vec<Job>) -> Result<()> {
         let job_str = pair.as_str().to_string();
 
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::simple_command => {
                     let mut job = Job::new(job_str.clone());
-                    self.parse_command(&mut job, inner_pair, true);
+                    self.parse_command(&mut job, inner_pair, true)?;
                     if job.process.is_some() {
                         jobs.push(job);
                     }
@@ -643,7 +725,7 @@ impl Shell {
                     let mut job = Job::new(inner_pair.as_str().to_string());
                     for bg_pair in inner_pair.into_inner() {
                         if let Rule::simple_command = bg_pair.as_rule() {
-                            self.parse_command(&mut job, bg_pair, false);
+                            self.parse_command(&mut job, bg_pair, false)?;
                             if job.process.is_some() {
                                 jobs.push(job);
                             }
@@ -656,7 +738,7 @@ impl Shell {
                         for inner_pair in inner_pair.into_inner() {
                             let _cmd = inner_pair.as_str();
                             if let Rule::simple_command = inner_pair.as_rule() {
-                                self.parse_command(job, inner_pair, true);
+                                self.parse_command(job, inner_pair, true)?;
                             } else if let Rule::simple_command_bg = inner_pair.as_rule() {
                                 self.parse_command(job, inner_pair, false);
                             } else {
@@ -668,6 +750,7 @@ impl Shell {
                 _ => {}
             }
         }
+        Ok(())
     }
 
     pub fn exit(&mut self) {

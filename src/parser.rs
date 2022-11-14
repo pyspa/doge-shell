@@ -14,13 +14,6 @@ pub struct ShellParser;
 /// helpers
 pub fn get_string(pair: Pair<Rule>) -> Option<String> {
     match pair.as_rule() {
-        Rule::span => {
-            if let Some(pair) = pair.into_inner().next() {
-                get_string(pair)
-            } else {
-                None
-            }
-        }
         Rule::s_quoted => pair
             .into_inner()
             .next()
@@ -31,37 +24,6 @@ pub fn get_string(pair: Pair<Rule>) -> Option<String> {
             .map(|next| next.as_str().to_string()),
         _ => Some(pair.as_str().to_string()),
     }
-}
-
-pub fn get_argv(pair: Pair<Rule>) -> Vec<(String, Option<process::Job>)> {
-    let mut argv: Vec<(String, Option<process::Job>)> = vec![];
-
-    for inner_pair in pair.into_inner() {
-        match inner_pair.as_rule() {
-            Rule::argv0 => {
-                for inner_pair in inner_pair.into_inner() {
-                    if let Some(arg) = get_string(inner_pair) {
-                        argv.push((arg, None));
-                    }
-                }
-            }
-            Rule::args => {
-                for inner_pair in inner_pair.into_inner() {
-                    if let Some(arg) = get_string(inner_pair) {
-                        argv.push((arg, None))
-                    }
-                }
-            }
-            Rule::simple_command => {
-                let mut res = get_argv(inner_pair);
-                argv.append(&mut res);
-            }
-            _ => {
-                warn!("missing {:?}", inner_pair.as_rule());
-            }
-        }
-    }
-    argv
 }
 
 pub fn get_pos_word(input: &str, pos: usize) -> Result<Option<(Rule, Span)>> {
@@ -89,6 +51,7 @@ fn search_pos_word(pair: Pair<Rule>, pos: usize) -> Option<(Rule, Span)> {
         | Rule::command
         | Rule::simple_command
         | Rule::simple_command_bg
+        | Rule::span
         | Rule::subshell => {
             for pair in pair.into_inner() {
                 let res = search_pos_word(pair, pos);
@@ -136,8 +99,8 @@ fn search_pos_word(pair: Pair<Rule>, pos: usize) -> Option<(Rule, Span)> {
             }
         }
         _ => {
-            // TODO
-            println!("{:?} {:?}", pair.as_rule(), pair.as_str());
+            // TODO check search_pos_word
+            println!("search_pos_word {:?} {:?}", pair.as_rule(), pair.as_str());
         }
     }
     None
@@ -214,7 +177,7 @@ fn expand_tilde(pair: Pair<Rule>) -> Vec<String> {
                     }
                     _ => {
                         debug!(
-                            "missing {:?} {:?}",
+                            "expand_tilde missing {:?} {:?}",
                             inner_pair.as_rule(),
                             inner_pair.as_str()
                         );
@@ -279,7 +242,7 @@ fn expand_command_alias(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Re
                 }
                 _ => {
                     debug!(
-                        "missing {:?} {:?}",
+                        "expand_command_alias missing {:?} {:?}",
                         inner_pair.as_rule(),
                         inner_pair.as_str()
                     );
@@ -322,22 +285,36 @@ fn to_words(pair: Pair<Rule>, pos: usize) -> Vec<(Rule, Span, bool)> {
             }
             Rule::argv0 => {
                 for pair in inner_pair.into_inner() {
-                    if let Some((span, current)) = get_span(pair, pos) {
-                        result.push((Rule::argv0, span, current));
+                    for pair in pair.into_inner() {
+                        // TODO check subshell
+                        match pair {
+                            _ => {
+                                if let Some((span, current)) = get_span(pair, pos) {
+                                    result.push((Rule::argv0, span, current));
+                                }
+                            }
+                        }
                     }
                 }
             }
             Rule::args => {
                 for pair in inner_pair.into_inner() {
-                    if let Some((span, current)) = get_span(pair, pos) {
-                        result.push((Rule::args, span, current));
+                    for pair in pair.into_inner() {
+                        match pair {
+                            // TODO check subshell
+                            _ => {
+                                if let Some((span, current)) = get_span(pair, pos) {
+                                    result.push((Rule::args, span, current));
+                                }
+                            }
+                        }
                     }
                 }
             }
 
             _ => {
                 debug!(
-                    "missing {:?} {:?}",
+                    "to_words missing {:?} {:?}",
                     inner_pair.as_rule(),
                     inner_pair.as_str()
                 );
@@ -366,7 +343,7 @@ fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {
             }
         }
         _ => {
-            debug!("missing {:?} {:?}", pair.as_rule(), pair.as_str());
+            debug!("get_span missing {:?} {:?}", pair.as_rule(), pair.as_str());
         }
     }
     None
@@ -519,13 +496,13 @@ mod test {
             let count = pair.clone().into_inner().count();
             assert_eq!(2, count);
 
-            let argv = get_argv(pair);
-            assert_eq!(5, argv.len());
-            assert_eq!("echo", argv[0].0);
-            assert_eq!("abc", argv[1].0);
-            assert_eq!(" test", argv[2].0);
-            assert_eq!("-vvv", argv[3].0);
-            assert_eq!("--foo", argv[4].0);
+            // let argv = get_argv(pair);
+            // assert_eq!(5, argv.len());
+            // assert_eq!("echo", argv[0].0);
+            // assert_eq!("abc", argv[1].0);
+            // assert_eq!(" test", argv[2].0);
+            // assert_eq!("-vvv", argv[3].0);
+            // assert_eq!("--foo", argv[4].0);
         }
     }
 
@@ -872,10 +849,10 @@ mod test {
             let count = pair.clone().into_inner().count();
             assert_eq!(2, count);
 
-            let argv = get_argv(pair);
-            assert_eq!(2, argv.len());
-            assert_eq!("sleep", argv[0].0);
-            assert_eq!("(echo 1)", argv[1].0);
+            // let argv = get_argv(pair);
+            // assert_eq!(2, argv.len());
+            // assert_eq!("sleep", argv[0].0);
+            // assert_eq!("(echo 1)", argv[1].0);
         }
     }
 }

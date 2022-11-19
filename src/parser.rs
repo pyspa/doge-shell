@@ -22,6 +22,7 @@ pub fn get_string(pair: Pair<Rule>) -> Option<String> {
             .into_inner()
             .next()
             .map(|next| next.as_str().to_string()),
+        Rule::span => get_string(pair.into_inner().next().unwrap()), // TODO fix
         _ => Some(pair.as_str().to_string()),
     }
 }
@@ -423,6 +424,7 @@ mod test {
 
     #[test]
     fn parse_args2() {
+        let _ = env_logger::try_init();
         let pairs =
             ShellParser::parse(Rule::args, r#"echo "test""#).unwrap_or_else(|e| panic!("{}", e));
         for pair in pairs {

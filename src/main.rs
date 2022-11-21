@@ -17,6 +17,7 @@ mod input;
 mod parser;
 mod process;
 mod prompt;
+mod script;
 mod shell;
 
 #[async_std::main]

@@ -320,7 +320,19 @@ impl Shell {
                 print!("\r\n");
                 if !self.input.is_empty() {
                     let input = self.input.as_str();
-                    self.eval_str(input)?;
+                    self.eval_str(input, false)?;
+                    self.input.clear();
+                }
+                redraw = false;
+                // self.print_prompt();
+            }
+            (KeyCode::Enter, ALT) => {
+                self.input.completion.take();
+                self.stop_history_mode();
+                print!("\r\n");
+                if !self.input.is_empty() {
+                    let input = self.input.as_str();
+                    self.eval_str(input, true)?;
                     self.input.clear();
                 }
                 redraw = false;
@@ -513,7 +525,7 @@ impl Shell {
         }
     }
 
-    fn eval_str(&mut self, input: String) -> Result<()> {
+    fn eval_str(&mut self, input: String, background: bool) -> Result<()> {
         if let Some(ref mut history) = self.cmd_history {
             history.add(&input);
             history.reset_index();
@@ -526,6 +538,10 @@ impl Shell {
 
         for mut job in jobs {
             disable_raw_mode().ok();
+            if background {
+                // all job run background
+                job.foreground = false;
+            }
             if let process::ProcessState::Completed(exit) = job.launch(&mut ctx, self)? {
                 if exit != 0 {
                     // TODO check

@@ -8,6 +8,7 @@ use crate::input::Input;
 use crate::parser::{self, Rule, ShellParser};
 use crate::process::{self, wait_any_job, Context, ExitStatus, Job, JobProcess, WaitJob};
 use crate::prompt::print_preprompt;
+use crate::wasm;
 use anyhow::Context as _;
 use anyhow::{anyhow, Result};
 use crossterm::cursor;
@@ -61,6 +62,7 @@ pub struct Shell {
     config: Config,
     pub wait_jobs: Vec<WaitJob>,
     completion: Completion,
+    wasm_engine: wasm::WASMEngine,
 }
 
 impl Drop for Shell {
@@ -77,6 +79,8 @@ impl Shell {
         let cmd_history = FrecencyHistory::from_file("dsh_cmd_history").unwrap();
         let path_history = FrecencyHistory::from_file("dsh_path_history").unwrap();
         let config = Config::from_file("config.toml");
+        let wasm_engine = wasm::WASMEngine::new(&config.wasm);
+
         Shell {
             environment,
             input: Input::new(),
@@ -93,6 +97,7 @@ impl Shell {
             config,
             wait_jobs: Vec::new(),
             completion: Completion::new(),
+            wasm_engine,
         }
     }
 
@@ -707,6 +712,9 @@ impl Shell {
         if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get(cmd) {
             let builtin = process::BuiltinProcess::new(*cmd_fn, argv);
             job.set_process(JobProcess::Builtin(builtin));
+        } else if let Some(_) = self.wasm_engine.modules.get(cmd) {
+            let wasm = process::WASMProcess::new(cmd.to_string(), argv);
+            job.set_process(JobProcess::WASM(wasm));
         } else if let Some(cmd) = self.environment.lookup(cmd) {
             let process = process::Process::new(cmd, argv);
             job.set_process(JobProcess::Command(process));
@@ -767,6 +775,11 @@ impl Shell {
             }
         }
         Ok(())
+    }
+
+    pub fn run_wasm(&mut self, name: &str, args: Vec<String>) {
+        // TODO support ctx
+        self.wasm_engine.call(name, args.as_ref());
     }
 
     pub fn exit(&mut self) {

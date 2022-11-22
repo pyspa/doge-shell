@@ -19,6 +19,7 @@ mod process;
 mod prompt;
 mod script;
 mod shell;
+mod wasm;
 
 #[async_std::main]
 async fn main() -> std::io::Result<()> {

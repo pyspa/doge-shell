@@ -54,6 +54,7 @@ impl Context {
 #[derive(Clone, PartialEq, Eq)]
 pub enum JobProcess {
     Builtin(BuiltinProcess),
+    WASM(WASMProcess),
     Command(Process),
 }
 
@@ -63,6 +64,10 @@ impl std::fmt::Debug for JobProcess {
             JobProcess::Builtin(jprocess) => f
                 .debug_struct("JobProcess::Builtin")
                 .field("builtin", jprocess)
+                .finish(),
+            JobProcess::WASM(jprocess) => f
+                .debug_struct("JobProcess::WASM")
+                .field("wasm", jprocess)
                 .finish(),
             JobProcess::Command(jprocess) => f
                 .debug_struct("JobProcess::Command")
@@ -76,6 +81,7 @@ impl JobProcess {
     pub fn link(&mut self, process: JobProcess) {
         match self {
             JobProcess::Builtin(jprocess) => jprocess.link(process),
+            JobProcess::WASM(jprocess) => jprocess.link(process),
             JobProcess::Command(jprocess) => jprocess.link(process),
         }
     }
@@ -83,6 +89,7 @@ impl JobProcess {
     pub fn next(&self) -> Option<Box<JobProcess>> {
         match self {
             JobProcess::Builtin(jprocess) => jprocess.next.as_ref().cloned(),
+            JobProcess::WASM(jprocess) => jprocess.next.as_ref().cloned(),
             JobProcess::Command(jprocess) => jprocess.next.as_ref().cloned(),
         }
     }
@@ -90,6 +97,10 @@ impl JobProcess {
     pub fn set_io(&mut self, stdin: RawFd, stdout: RawFd) {
         match self {
             JobProcess::Builtin(jprocess) => {
+                jprocess.stdin = stdin;
+                jprocess.stdout = stdout;
+            }
+            JobProcess::WASM(jprocess) => {
                 jprocess.stdin = stdin;
                 jprocess.stdout = stdout;
             }
@@ -103,6 +114,7 @@ impl JobProcess {
     pub fn get_io(&self) -> (RawFd, RawFd) {
         match self {
             JobProcess::Builtin(jprocess) => (jprocess.stdin, jprocess.stdout),
+            JobProcess::WASM(jprocess) => (jprocess.stdin, jprocess.stdout),
             JobProcess::Command(jprocess) => (jprocess.stdin, jprocess.stdout),
         }
     }
@@ -110,6 +122,9 @@ impl JobProcess {
     pub fn set_pid(&mut self, pid: Option<Pid>) {
         match self {
             JobProcess::Builtin(_) => {
+                // noop
+            }
+            JobProcess::WASM(_) => {
                 // noop
             }
             JobProcess::Command(process) => {
@@ -124,6 +139,10 @@ impl JobProcess {
                 // noop
                 None
             }
+            JobProcess::WASM(_) => {
+                // noop
+                None
+            }
             JobProcess::Command(process) => process.pid,
         }
     }
@@ -131,6 +150,7 @@ impl JobProcess {
     pub fn set_state(&mut self, state: ProcessState) {
         match self {
             JobProcess::Builtin(p) => p.state = state,
+            JobProcess::WASM(p) => p.state = state,
             JobProcess::Command(p) => p.state = state,
         }
     }
@@ -138,6 +158,7 @@ impl JobProcess {
     pub fn get_state(&self) -> ProcessState {
         match self {
             JobProcess::Builtin(p) => p.state,
+            JobProcess::WASM(p) => p.state,
             JobProcess::Command(p) => p.state,
         }
     }
@@ -230,6 +251,75 @@ impl BuiltinProcess {
             self.stdin, self.stdout
         );
         let _exit = (self.cmd_fn)(ctx, self.argv.to_vec(), shell);
+        // TODO check exit
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct WASMProcess {
+    name: String,
+    argv: Vec<String>,
+    state: ProcessState, // completed, stopped,
+    pub next: Option<Box<JobProcess>>,
+    pub stdin: RawFd,
+    pub stdout: RawFd,
+    pub stderr: RawFd,
+}
+
+impl PartialEq for WASMProcess {
+    fn eq(&self, other: &Self) -> bool {
+        self.argv == other.argv
+    }
+}
+
+impl Eq for WASMProcess {}
+
+impl std::fmt::Debug for WASMProcess {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
+        f.debug_struct("WASMProcess")
+            .field("name", &self.name)
+            .field("argv", &self.argv)
+            .field("state", &self.state)
+            .field("next", &self.next)
+            .field("stdin", &self.stdin)
+            .field("stdout", &self.stdout)
+            .field("stderr", &self.stderr)
+            .finish()
+    }
+}
+
+impl WASMProcess {
+    pub fn new(name: String, argv: Vec<String>) -> Self {
+        WASMProcess {
+            name,
+            argv,
+            state: ProcessState::Running,
+            next: None,
+            stdin: STDIN_FILENO,
+            stdout: STDOUT_FILENO,
+            stderr: STDERR_FILENO,
+        }
+    }
+
+    pub fn link(&mut self, process: JobProcess) {
+        match self.next {
+            Some(ref mut p) => {
+                p.link(process);
+            }
+            None => {
+                self.next = Some(Box::new(process));
+            }
+        }
+    }
+
+    pub fn launch(&mut self, ctx: &mut Context, shell: &mut Shell) -> Result<()> {
+        debug!(
+            "launch: wasm process infile:{:?} outfile:{:?}",
+            self.stdin, self.stdout
+        );
+
+        let _exit = shell.run_wasm(self.name.as_str(), self.argv.to_vec());
         // TODO check exit
         Ok(())
     }
@@ -470,6 +560,11 @@ impl Job {
 
         let pid = match process {
             JobProcess::Builtin(process) => {
+                let pid = getpid();
+                process.launch(ctx, shell)?;
+                pid
+            }
+            JobProcess::WASM(process) => {
                 let pid = getpid();
                 process.launch(ctx, shell)?;
                 pid

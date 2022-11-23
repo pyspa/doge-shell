@@ -1,6 +1,6 @@
 use anyhow::Result;
-use hashbrown::HashMap;
 use log::debug;
+use std::collections::HashMap;
 use std::fs;
 use wasmtime::{Engine, Linker, Module, Store};
 use wasmtime_wasi::sync::WasiCtxBuilder;

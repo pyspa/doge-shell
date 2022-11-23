@@ -1,6 +1,6 @@
 use crate::dirs::search_file;
-use hashbrown::HashMap;
 use log::debug;
+use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 

@@ -54,7 +54,7 @@ impl Context {
 #[derive(Clone, PartialEq, Eq)]
 pub enum JobProcess {
     Builtin(BuiltinProcess),
-    WASM(WASMProcess),
+    Wasm(WasmProcess),
     Command(Process),
 }
 
@@ -65,7 +65,7 @@ impl std::fmt::Debug for JobProcess {
                 .debug_struct("JobProcess::Builtin")
                 .field("builtin", jprocess)
                 .finish(),
-            JobProcess::WASM(jprocess) => f
+            JobProcess::Wasm(jprocess) => f
                 .debug_struct("JobProcess::WASM")
                 .field("wasm", jprocess)
                 .finish(),
@@ -81,7 +81,7 @@ impl JobProcess {
     pub fn link(&mut self, process: JobProcess) {
         match self {
             JobProcess::Builtin(jprocess) => jprocess.link(process),
-            JobProcess::WASM(jprocess) => jprocess.link(process),
+            JobProcess::Wasm(jprocess) => jprocess.link(process),
             JobProcess::Command(jprocess) => jprocess.link(process),
         }
     }
@@ -89,7 +89,7 @@ impl JobProcess {
     pub fn next(&self) -> Option<Box<JobProcess>> {
         match self {
             JobProcess::Builtin(jprocess) => jprocess.next.as_ref().cloned(),
-            JobProcess::WASM(jprocess) => jprocess.next.as_ref().cloned(),
+            JobProcess::Wasm(jprocess) => jprocess.next.as_ref().cloned(),
             JobProcess::Command(jprocess) => jprocess.next.as_ref().cloned(),
         }
     }
@@ -100,7 +100,7 @@ impl JobProcess {
                 jprocess.stdin = stdin;
                 jprocess.stdout = stdout;
             }
-            JobProcess::WASM(jprocess) => {
+            JobProcess::Wasm(jprocess) => {
                 jprocess.stdin = stdin;
                 jprocess.stdout = stdout;
             }
@@ -114,7 +114,7 @@ impl JobProcess {
     pub fn get_io(&self) -> (RawFd, RawFd) {
         match self {
             JobProcess::Builtin(jprocess) => (jprocess.stdin, jprocess.stdout),
-            JobProcess::WASM(jprocess) => (jprocess.stdin, jprocess.stdout),
+            JobProcess::Wasm(jprocess) => (jprocess.stdin, jprocess.stdout),
             JobProcess::Command(jprocess) => (jprocess.stdin, jprocess.stdout),
         }
     }
@@ -124,7 +124,7 @@ impl JobProcess {
             JobProcess::Builtin(_) => {
                 // noop
             }
-            JobProcess::WASM(_) => {
+            JobProcess::Wasm(_) => {
                 // noop
             }
             JobProcess::Command(process) => {
@@ -139,7 +139,7 @@ impl JobProcess {
                 // noop
                 None
             }
-            JobProcess::WASM(_) => {
+            JobProcess::Wasm(_) => {
                 // noop
                 None
             }
@@ -150,7 +150,7 @@ impl JobProcess {
     pub fn set_state(&mut self, state: ProcessState) {
         match self {
             JobProcess::Builtin(p) => p.state = state,
-            JobProcess::WASM(p) => p.state = state,
+            JobProcess::Wasm(p) => p.state = state,
             JobProcess::Command(p) => p.state = state,
         }
     }
@@ -158,7 +158,7 @@ impl JobProcess {
     pub fn get_state(&self) -> ProcessState {
         match self {
             JobProcess::Builtin(p) => p.state,
-            JobProcess::WASM(p) => p.state,
+            JobProcess::Wasm(p) => p.state,
             JobProcess::Command(p) => p.state,
         }
     }
@@ -257,7 +257,7 @@ impl BuiltinProcess {
 }
 
 #[derive(Clone)]
-pub struct WASMProcess {
+pub struct WasmProcess {
     name: String,
     argv: Vec<String>,
     state: ProcessState, // completed, stopped,
@@ -267,15 +267,15 @@ pub struct WASMProcess {
     pub stderr: RawFd,
 }
 
-impl PartialEq for WASMProcess {
+impl PartialEq for WasmProcess {
     fn eq(&self, other: &Self) -> bool {
         self.argv == other.argv
     }
 }
 
-impl Eq for WASMProcess {}
+impl Eq for WasmProcess {}
 
-impl std::fmt::Debug for WASMProcess {
+impl std::fmt::Debug for WasmProcess {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
         f.debug_struct("WASMProcess")
             .field("name", &self.name)
@@ -289,9 +289,9 @@ impl std::fmt::Debug for WASMProcess {
     }
 }
 
-impl WASMProcess {
+impl WasmProcess {
     pub fn new(name: String, argv: Vec<String>) -> Self {
-        WASMProcess {
+        WasmProcess {
             name,
             argv,
             state: ProcessState::Running,
@@ -313,15 +313,14 @@ impl WASMProcess {
         }
     }
 
-    pub fn launch(&mut self, ctx: &mut Context, shell: &mut Shell) -> Result<()> {
+    pub fn launch(&mut self, _ctx: &mut Context, shell: &mut Shell) -> Result<()> {
         debug!(
             "launch: wasm process infile:{:?} outfile:{:?}",
             self.stdin, self.stdout
         );
 
-        let _exit = shell.run_wasm(self.name.as_str(), self.argv.to_vec());
         // TODO check exit
-        Ok(())
+        shell.run_wasm(self.name.as_str(), self.argv.to_vec())
     }
 }
 
@@ -564,7 +563,7 @@ impl Job {
                 process.launch(ctx, shell)?;
                 pid
             }
-            JobProcess::WASM(process) => {
+            JobProcess::Wasm(process) => {
                 let pid = getpid();
                 process.launch(ctx, shell)?;
                 pid
@@ -880,7 +879,7 @@ mod test {
         job.set_process(JobProcess::Command(process));
 
         debug!("{:?}", job);
-        assert_eq!(false, is_job_stopped(job));
+        assert!(!is_job_stopped(job));
 
         let job = &mut Job::new(input.to_string());
         let mut process = Process::new("1".to_string(), vec![]);
@@ -896,7 +895,7 @@ mod test {
         job.set_process(JobProcess::Command(process));
 
         debug!("{:?}", job);
-        assert_eq!(true, is_job_stopped(job));
+        assert!(is_job_stopped(job));
     }
 
     #[test]
@@ -919,7 +918,7 @@ mod test {
         job.set_process(JobProcess::Command(process));
 
         debug!("{:?}", job);
-        assert_eq!(false, is_job_completed(job));
+        assert!(!is_job_completed(job));
 
         let job = &mut Job::new(input.to_string());
         let mut process = Process::new("1".to_string(), vec![]);
@@ -935,6 +934,6 @@ mod test {
         job.set_process(JobProcess::Command(process));
 
         debug!("{:?}", job);
-        assert_eq!(true, is_job_completed(job));
+        assert!(is_job_completed(job));
     }
 }

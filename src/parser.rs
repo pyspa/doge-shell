@@ -1,6 +1,5 @@
-use crate::process;
 use anyhow::{anyhow, Result};
-use log::{debug, warn};
+use log::debug;
 use pest::iterators::Pair;
 use pest::Parser;
 use pest::Span;
@@ -288,27 +287,18 @@ fn to_words(pair: Pair<Rule>, pos: usize) -> Vec<(Rule, Span, bool)> {
                 for pair in inner_pair.into_inner() {
                     for pair in pair.into_inner() {
                         // TODO check subshell
-                        match pair {
-                            _ => {
-                                if let Some((span, current)) = get_span(pair, pos) {
-                                    result.push((Rule::argv0, span, current));
-                                }
-                            }
-                        }
+                        if let Some((span, current)) = get_span(pair, pos) {
+                            result.push((Rule::argv0, span, current));
+                        };
                     }
                 }
             }
             Rule::args => {
                 for pair in inner_pair.into_inner() {
                     for pair in pair.into_inner() {
-                        match pair {
-                            // TODO check subshell
-                            _ => {
-                                if let Some((span, current)) = get_span(pair, pos) {
-                                    result.push((Rule::args, span, current));
-                                }
-                            }
-                        }
+                        if let Some((span, current)) = get_span(pair, pos) {
+                            result.push((Rule::args, span, current));
+                        };
                     }
                 }
             }

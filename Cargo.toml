@@ -54,5 +54,6 @@ shellexpand = "2"
 bincode = "1"
 skim = "0.10"
 deno_core = "0"
+deno_ast = { version = "0", features = ["transpiling"] }
 wasmtime = "3"
 wasmtime-wasi = "3"

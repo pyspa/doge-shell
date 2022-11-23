@@ -1,42 +1,11 @@
+use crate::script::{build_extension, Context};
 use anyhow::Result;
-use deno_core::error::AnyError;
-use deno_core::{op, Extension, JsRuntime, OpState, RuntimeOptions};
-
-#[derive(Debug, Clone)]
-pub struct Context {
-    pub buf: String,
-}
-
-impl Context {
-    pub fn new() -> Self {
-        Context { buf: String::new() }
-    }
-}
-
-#[op]
-pub fn op_print(state: &mut OpState, msg: String, _is_err: bool) -> Result<(), AnyError> {
-    // TODO check stdout or stderr
-    let ctx: &mut Context = state.borrow_mut();
-    ctx.buf.push_str(msg.as_str());
-    Ok(())
-}
+use deno_core::{JsRuntime, RuntimeOptions};
 
 pub fn execute_js(src: &str, fn_name: &str, add_builtin: bool) -> Result<Context> {
-    let exts = Extension::builder()
-        .state(move |state| {
-            let ctx = Context::new();
-            state.put::<Context>(ctx);
-            Ok(())
-        })
-        .middleware(|op| match op.name {
-            "op_print" => op_print::decl(),
-            _ => op,
-        })
-        .ops(vec![]) // custom function
-        .build();
-
+    let ext = build_extension();
     let mut runtime = JsRuntime::new(RuntimeOptions {
-        extensions: vec![exts],
+        extensions: vec![ext],
         ..Default::default()
     });
 
@@ -88,6 +57,6 @@ mod test {
         );
 
         assert!(res.is_ok());
-        assert_eq!("hello\n", res.unwrap().buf.as_str());
+        assert_eq!("hello\n", res.unwrap().stdout.as_str());
     }
 }

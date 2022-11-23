@@ -444,15 +444,13 @@ impl Shell {
                                         self.input.completion = Some(input + &part);
                                         break;
                                     }
-                                } else {
-                                    if !word.starts_with('-') {
-                                        if let Some(file) = self.environment.search(word) {
-                                            if file.len() >= word.len() {
-                                                let part = file[word.len()..].to_string();
-                                                comp = Some(file[word.len()..].to_string());
-                                                self.input.completion = Some(input + &part);
-                                                break;
-                                            }
+                                } else if !word.starts_with('-') {
+                                    if let Some(file) = self.environment.search(word) {
+                                        if file.len() >= word.len() {
+                                            let part = file[word.len()..].to_string();
+                                            comp = Some(file[word.len()..].to_string());
+                                            self.input.completion = Some(input + &part);
+                                            break;
                                         }
                                     }
                                 }
@@ -712,9 +710,9 @@ impl Shell {
         if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.get(cmd) {
             let builtin = process::BuiltinProcess::new(*cmd_fn, argv);
             job.set_process(JobProcess::Builtin(builtin));
-        } else if let Some(_) = self.wasm_engine.modules.get(cmd) {
-            let wasm = process::WASMProcess::new(cmd.to_string(), argv);
-            job.set_process(JobProcess::WASM(wasm));
+        } else if self.wasm_engine.modules.get(cmd).is_some() {
+            let wasm = process::WasmProcess::new(cmd.to_string(), argv);
+            job.set_process(JobProcess::Wasm(wasm));
         } else if let Some(cmd) = self.environment.lookup(cmd) {
             let process = process::Process::new(cmd, argv);
             job.set_process(JobProcess::Command(process));
@@ -764,7 +762,7 @@ impl Shell {
                             if let Rule::simple_command = inner_pair.as_rule() {
                                 self.parse_command(job, inner_pair, true)?;
                             } else if let Rule::simple_command_bg = inner_pair.as_rule() {
-                                self.parse_command(job, inner_pair, false);
+                                self.parse_command(job, inner_pair, false)?;
                             } else {
                                 // TODO check?
                             }
@@ -777,9 +775,9 @@ impl Shell {
         Ok(())
     }
 
-    pub fn run_wasm(&mut self, name: &str, args: Vec<String>) {
+    pub fn run_wasm(&mut self, name: &str, args: Vec<String>) -> Result<()> {
         // TODO support ctx
-        self.wasm_engine.call(name, args.as_ref());
+        self.wasm_engine.call(name, args.as_ref())
     }
 
     pub fn exit(&mut self) {

@@ -467,7 +467,7 @@ mod test {
 
     #[test]
     fn frecency() -> Result<()> {
-        env_logger::try_init();
+        let _ = env_logger::try_init();
 
         let mut history = FrecencyHistory::from_file("dsh_frecency_history")?;
         history.add("git");
@@ -495,7 +495,7 @@ mod test {
 
     #[test]
     fn print_item() -> Result<()> {
-        env_logger::try_init();
+        let _ = env_logger::try_init();
 
         let mut history = FrecencyHistory::from_file("dsh_frecency_history")?;
         history.add("git status");

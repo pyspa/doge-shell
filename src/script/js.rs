@@ -14,7 +14,7 @@ impl Context {
 }
 
 #[op]
-pub fn op_print(state: &mut OpState, msg: String, is_err: bool) -> Result<(), AnyError> {
+pub fn op_print(state: &mut OpState, msg: String, _is_err: bool) -> Result<(), AnyError> {
     // TODO check stdout or stderr
     let ctx: &mut Context = state.borrow_mut();
     ctx.buf.push_str(msg.as_str());

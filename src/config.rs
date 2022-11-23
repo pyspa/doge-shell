@@ -86,7 +86,11 @@ mod test {
         };
         completions.push(compl);
 
-        let config = Config { alias, completions };
+        let config = Config {
+            alias,
+            completions,
+            wasm: None,
+        };
         let toml_str = toml::to_string(&config)?;
         println!("{}", toml_str);
 

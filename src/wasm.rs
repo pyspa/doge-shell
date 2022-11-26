@@ -1,59 +1,91 @@
+use crate::shell::APP_NAME;
 use anyhow::Result;
 use log::debug;
 use std::collections::HashMap;
 use std::fs;
-use wasmtime::{Engine, Linker, Module, Store};
-use wasmtime_wasi::sync::WasiCtxBuilder;
+use wasmer::{Instance, Module, Store};
+use wasmer_compiler_cranelift::Cranelift;
+use wasmer_wasi::WasiState;
 
-pub struct WASMEngine {
-    engine: Engine,
+pub struct WasmEngine {
+    // engine: Engine,
     pub modules: HashMap<String, Module>,
+    store: Store,
 }
 
-impl std::fmt::Debug for WASMEngine {
+impl std::fmt::Debug for WasmEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
         f.debug_struct("WASMEngine").finish()
     }
 }
 
-impl WASMEngine {
-    pub fn new(wasm_dir: &Option<String>) -> Self {
-        let engine = Engine::default();
+impl Default for WasmEngine {
+    fn default() -> Self {
+        WasmEngine::new()
+    }
+}
+
+impl WasmEngine {
+    pub fn new() -> Self {
+        let xdg_dir =
+            xdg::BaseDirectories::with_prefix(APP_NAME).expect("failed get xdg directory");
+        let wasm_dir = xdg_dir
+            .place_config_file("wasm")
+            .expect("failed get path")
+            .to_string_lossy()
+            .to_string();
+        Self::from_path(&wasm_dir)
+    }
+
+    pub fn from_path(wasm_dir: &str) -> Self {
+        let store = Store::new(Cranelift::default());
         let mut modules: HashMap<String, Module> = HashMap::new();
 
-        if let Some(wasm_dir) = wasm_dir {
-            if let Ok(entries) = fs::read_dir(wasm_dir) {
-                let entries: Vec<fs::DirEntry> = entries.flatten().collect();
-                for entry in entries {
-                    if let Ok(path) = entry.path().canonicalize() {
-                        if let Some(file) = path.file_stem() {
-                            if let Ok(module) = Module::from_file(&engine, &path) {
+        if let Ok(entries) = fs::read_dir(wasm_dir) {
+            let entries: Vec<fs::DirEntry> = entries
+                .flatten()
+                .filter(|x| x.path().extension().unwrap_or_default() == "wasm") // filer .wasm
+                .collect();
+
+            for entry in entries {
+                if let Ok(path) = entry.path().canonicalize() {
+                    if let Some(file) = path.file_stem() {
+                        let name = file.to_string_lossy().to_string();
+                        if let Ok(wasm_bytes) = std::fs::read(&path) {
+                            if let Ok(module) = Module::new(&store, wasm_bytes) {
                                 debug!("load wasm {:?} {:?}", &file, &path);
-                                modules.insert(file.to_string_lossy().to_string(), module);
+                                modules.insert(name, module);
+                            } else {
+                                eprint!("\rfailed load wasm: {:?}\r\n", &file);
                             }
+                        } else {
+                            eprint!("\rfailed read wasm: {:?}\r\n", &file);
                         }
                     }
                 }
             }
         }
-        WASMEngine { engine, modules }
+        WasmEngine { modules, store }
     }
 
-    pub fn call(&self, name: &str, args: &[String]) -> Result<()> {
+    pub fn call(&mut self, name: &str, args: &[String]) -> Result<()> {
         if let Some(module) = self.modules.get(name) {
-            // new linker
-            let mut linker = Linker::new(&self.engine);
-            wasmtime_wasi::add_to_linker(&mut linker, |s| s)?;
+            // TODO pipe stdin/out
+            let wasi_env = WasiState::new(name)
+                .args(args)
+                // .env("KEY", "Value")
+                .finalize(&mut self.store)?;
 
-            // TODO use ctx
-            let wasi = WasiCtxBuilder::new().inherit_stdio().args(args)?.build();
-            let mut store = Store::new(&self.engine, wasi);
+            let import_object = wasi_env.import_object(&mut self.store, module)?;
+            let instance = Instance::new(&mut self.store, module, &import_object)?;
 
-            linker.module(&mut store, "", module)?;
-            linker
-                .get_default(&mut store, "")?
-                .typed::<(), (), _>(&store)?
-                .call(&mut store, ())?;
+            let memory = instance.exports.get_memory("memory")?;
+            wasi_env
+                .data_mut(&mut self.store)
+                .set_memory(memory.clone());
+
+            let start = instance.exports.get_function("_start")?;
+            start.call(&mut self.store, &[])?;
         } else {
             eprint!("\runknown wasm command: {}\r\n", name);
         }

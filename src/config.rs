@@ -22,18 +22,11 @@ impl Default for Config {
     fn default() -> Config {
         let alias: HashMap<String, String> = HashMap::new();
         let completions = Vec::new();
-        let xdg_dir =
-            xdg::BaseDirectories::with_prefix(APP_NAME).expect("failed get xdg directory");
-        let wasm = xdg_dir
-            .place_config_file("wasm")
-            .expect("failed get path")
-            .to_string_lossy()
-            .to_string();
 
         Config {
             alias,
             completions,
-            wasm: Some(wasm),
+            wasm: None,
         }
     }
 }

@@ -62,7 +62,7 @@ pub struct Shell {
     config: Config,
     pub wait_jobs: Vec<WaitJob>,
     completion: Completion,
-    wasm_engine: wasm::WASMEngine,
+    wasm_engine: wasm::WasmEngine,
 }
 
 impl Drop for Shell {
@@ -79,7 +79,12 @@ impl Shell {
         let cmd_history = FrecencyHistory::from_file("dsh_cmd_history").unwrap();
         let path_history = FrecencyHistory::from_file("dsh_path_history").unwrap();
         let config = Config::from_file("config.toml");
-        let wasm_engine = wasm::WASMEngine::new(&config.wasm);
+
+        let wasm_engine = if let Some(wasm_dir) = &config.wasm {
+            wasm::WasmEngine::from_path(wasm_dir)
+        } else {
+            Default::default()
+        };
 
         Shell {
             environment,

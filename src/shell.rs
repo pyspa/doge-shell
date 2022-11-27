@@ -30,6 +30,7 @@ use std::io::prelude::*;
 use std::io::Write;
 use std::os::unix::io::FromRawFd;
 use std::time::Duration;
+use std::{cell::RefCell, rc::Rc};
 
 pub const APP_NAME: &str = "dsh";
 pub const SHELL_TERMINAL: c_int = STDIN_FILENO;
@@ -59,7 +60,7 @@ pub struct Shell {
     tmode: Option<Termios>,
     history_search: Option<String>,
     start_completion: bool,
-    config: Config,
+    config: Rc<RefCell<Config>>,
     pub wait_jobs: Vec<WaitJob>,
     completion: Completion,
     wasm_engine: wasm::WasmEngine,
@@ -78,9 +79,9 @@ impl Shell {
 
         let cmd_history = FrecencyHistory::from_file("dsh_cmd_history").unwrap();
         let path_history = FrecencyHistory::from_file("dsh_path_history").unwrap();
-        let config = Config::from_file("config.toml");
+        let config = Rc::new(RefCell::new(Config::from_file("config.toml")));
 
-        let wasm_engine = if let Some(wasm_dir) = &config.wasm {
+        let wasm_engine = if let Some(wasm_dir) = &config.borrow().wasm {
             wasm::WasmEngine::from_path(wasm_dir)
         } else {
             Default::default()
@@ -316,7 +317,7 @@ impl Shell {
 
                 if let Some(val) = completion::input_completion(
                     &self.input.as_str(),
-                    &self.config.completions,
+                    &self.config.borrow().completions,
                     completion_query,
                 ) {
                     self.input.insert_str(val.as_str());
@@ -567,7 +568,7 @@ impl Shell {
     fn get_jobs(&mut self, input: String) -> Result<Vec<Job>> {
         // TODO tests
 
-        let input = parser::expand_alias(input, &self.config.alias)?;
+        let input = parser::expand_alias(input, &self.config.borrow().alias)?;
 
         let mut pairs = ShellParser::parse(Rule::commands, &input).map_err(|e| anyhow!(e))?;
 

@@ -8,6 +8,7 @@ use crate::input::Input;
 use crate::parser::{self, Rule, ShellParser};
 use crate::process::{self, wait_any_job, Context, ExitStatus, Job, JobProcess, WaitJob};
 use crate::prompt::print_preprompt;
+use crate::script;
 use crate::wasm;
 use anyhow::Context as _;
 use anyhow::{anyhow, Result};
@@ -79,8 +80,12 @@ impl Shell {
 
         let cmd_history = FrecencyHistory::from_file("dsh_cmd_history").unwrap();
         let path_history = FrecencyHistory::from_file("dsh_path_history").unwrap();
-        let config = Rc::new(RefCell::new(Config::from_file("config.toml")));
+        let config = Rc::new(RefCell::new(Config::default()));
+        // let config = Rc::new(RefCell::new(Config::from_file("config.toml")));
 
+        if let Err(err) = script::read_init_file(config.clone()) {
+            eprintln!("failed load init lisp {:?}", err);
+        }
         let wasm_engine = if let Some(wasm_dir) = &config.borrow().wasm {
             wasm::WasmEngine::from_path(wasm_dir)
         } else {

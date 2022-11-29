@@ -525,10 +525,16 @@ impl Shell {
         std::io::stdout().flush().ok();
     }
 
-    fn print_error(&self, msg: String) {
+    pub fn print_error(&self, msg: String) {
         // unknown command, etc
         eprint!("\r{}\r\n", msg);
         std::io::stderr().flush().ok();
+    }
+
+    pub fn print_stdout(&self, msg: String) {
+        // unknown command, etc
+        print!("\r{}\r\n", msg);
+        std::io::stdout().flush().ok();
     }
 
     fn stop_history_mode(&mut self) {

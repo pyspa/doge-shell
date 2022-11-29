@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 pub mod cd;
 pub mod history;
+mod jobs;
 mod z;
 
 pub type BuiltinCommand = fn(ctx: &Context, argv: Vec<String>, shell: &mut Shell) -> ExitStatus;
@@ -17,6 +18,7 @@ pub static BUILTIN_COMMAND: Lazy<HashMap<&str, BuiltinCommand>> = Lazy::new(|| {
     builtin.insert("cd", cd::command as BuiltinCommand);
     builtin.insert("history", history::command as BuiltinCommand);
     builtin.insert("z", z::command as BuiltinCommand);
+    builtin.insert("jobs", jobs::command as BuiltinCommand);
     builtin
 });
 

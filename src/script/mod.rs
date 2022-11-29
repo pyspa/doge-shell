@@ -9,11 +9,13 @@ use std::{cell::RefCell, rc::Rc};
 mod builtin;
 mod util;
 
-pub fn read_init_file(config: Rc<RefCell<config::Config>>) -> anyhow::Result<()> {
+pub const CONFIG_FILE: &str = "config.lisp";
+
+pub fn read_config_lisp(config: Rc<RefCell<config::Config>>) -> anyhow::Result<()> {
     let xdg_dir =
         xdg::BaseDirectories::with_prefix(APP_NAME).context("failed get xdg directory")?;
     let file_path = xdg_dir
-        .place_config_file("init.lisp")
+        .place_config_file(CONFIG_FILE)
         .context("failed get path")?;
     let init_lisp: String = std::fs::read_to_string(file_path)?.trim().to_string();
     let _ = run(config, format!("(begin {} )", init_lisp).as_str());

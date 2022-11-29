@@ -83,7 +83,7 @@ impl Shell {
         let config = Rc::new(RefCell::new(Config::default()));
         // let config = Rc::new(RefCell::new(Config::from_file("config.toml")));
 
-        if let Err(err) = script::read_init_file(config.clone()) {
+        if let Err(err) = script::read_config_lisp(config.clone()) {
             eprintln!("failed load init lisp {:?}", err);
         }
         let wasm_engine = if let Some(wasm_dir) = &config.borrow().wasm {

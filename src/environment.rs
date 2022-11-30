@@ -14,7 +14,7 @@ pub struct Environment {
     paths: Vec<String>,
     variables: Rc<RefCell<HashMap<String, String>>>,
     pub wasm_engine: wasm::WasmEngine,
-    pub lisp_engine: script::LispEngine,
+    pub lisp_engine: Rc<RefCell<script::LispEngine>>,
 }
 
 impl Environment {
@@ -32,7 +32,7 @@ impl Environment {
 
         let config = Rc::new(RefCell::new(Config::default()));
         let lisp_engine = script::LispEngine::new(Rc::clone(&config));
-        if let Err(err) = lisp_engine.run_config_lisp() {
+        if let Err(err) = lisp_engine.borrow().run_config_lisp() {
             eprintln!("failed load init lisp {:?}", err);
         }
         let wasm_engine = if let Some(wasm_dir) = &config.borrow().wasm {

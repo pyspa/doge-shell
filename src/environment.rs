@@ -12,8 +12,9 @@ use std::{cell::RefCell, rc::Rc};
 pub struct Environment {
     pub config: Rc<RefCell<Config>>,
     paths: Vec<String>,
-    variables: HashMap<String, String>,
+    variables: Rc<RefCell<HashMap<String, String>>>,
     pub wasm_engine: wasm::WasmEngine,
+    pub lisp_engine: script::LispEngine,
 }
 
 impl Environment {
@@ -30,7 +31,8 @@ impl Environment {
         debug!("default path {:?}", &paths);
 
         let config = Rc::new(RefCell::new(Config::default()));
-        if let Err(err) = script::read_config_lisp(config.clone()) {
+        let lisp_engine = script::LispEngine::new(Rc::clone(&config));
+        if let Err(err) = lisp_engine.run_config_lisp() {
             eprintln!("failed load init lisp {:?}", err);
         }
         let wasm_engine = if let Some(wasm_dir) = &config.borrow().wasm {
@@ -40,10 +42,11 @@ impl Environment {
         };
 
         Environment {
-            variables: HashMap::new(),
+            variables: Rc::new(RefCell::new(HashMap::new())),
             paths,
             config,
             wasm_engine,
+            lisp_engine,
         }
     }
 

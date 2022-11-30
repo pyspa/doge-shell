@@ -457,6 +457,7 @@ pub struct Job {
     pub stderr: RawFd,
     pub next: Option<Box<Job>>,
     pub foreground: bool,
+    pub need_wait: bool,
 }
 
 impl Job {
@@ -473,6 +474,7 @@ impl Job {
             stderr: STDERR_FILENO,
             next: None,
             foreground: true,
+            need_wait: false,
         }
     }
 
@@ -488,6 +490,7 @@ impl Job {
             stderr: STDERR_FILENO,
             next: None,
             foreground: true,
+            need_wait: false,
         }
     }
 
@@ -569,6 +572,7 @@ impl Job {
                 pid
             }
             JobProcess::Command(process) => {
+                self.need_wait = true;
                 // fork
                 fork_process(ctx, self.pgid, process)?
             }
@@ -677,6 +681,12 @@ impl Job {
     fn show_job_status(&self) {}
 
     pub fn wait_job(&mut self) {
+        debug!("wait job pgid: {:?}", self.pgid);
+
+        if !self.need_wait {
+            return;
+        }
+
         loop {
             // TODO other process waitpid
             let result = waitpid(None, Some(WaitPidFlag::WUNTRACED));

@@ -681,7 +681,7 @@ impl Job {
     fn show_job_status(&self) {}
 
     pub fn wait_job(&mut self) {
-        debug!("wait job pgid: {:?}", self.pgid);
+        debug!("pgid: {:?} need_wait: {:?}", self.pgid, self.need_wait);
 
         if !self.need_wait {
             return;

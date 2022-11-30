@@ -706,9 +706,9 @@ impl Shell {
         let cmd = argv[0].as_str();
         let mut result = true;
 
-        if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.lock().unwrap().get(cmd) {
+        if let Some(cmd_fn) = builtin::get_command(cmd) {
             // TODO check return lock
-            let builtin = process::BuiltinProcess::new(*cmd_fn, argv);
+            let builtin = process::BuiltinProcess::new(cmd_fn, argv);
             job.set_process(JobProcess::Builtin(builtin));
         } else if self.environment.wasm_engine.modules.get(cmd).is_some() {
             let wasm = process::WasmProcess::new(cmd.to_string(), argv);
@@ -718,10 +718,9 @@ impl Shell {
             job.set_process(JobProcess::Command(process));
             job.foreground = foreground;
         } else if dirs::is_dir(cmd) {
-            if let Some(cmd_fn) = builtin::BUILTIN_COMMAND.lock().unwrap().get("cd") {
-                // TODO check return lock
+            if let Some(cmd_fn) = builtin::get_command("cd") {
                 let builtin =
-                    process::BuiltinProcess::new(*cmd_fn, vec!["cd".to_string(), cmd.to_string()]);
+                    process::BuiltinProcess::new(cmd_fn, vec!["cd".to_string(), cmd.to_string()]);
                 job.set_process(JobProcess::Builtin(builtin));
             }
         } else {

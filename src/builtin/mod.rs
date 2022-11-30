@@ -2,6 +2,7 @@ use crate::process::{Context, ExitStatus};
 use crate::shell::Shell;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 pub mod cd;
 pub mod history;
@@ -10,7 +11,7 @@ mod z;
 
 pub type BuiltinCommand = fn(ctx: &Context, argv: Vec<String>, shell: &mut Shell) -> ExitStatus;
 
-pub static BUILTIN_COMMAND: Lazy<HashMap<&str, BuiltinCommand>> = Lazy::new(|| {
+pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, BuiltinCommand>>> = Lazy::new(|| {
     let mut builtin = HashMap::new();
 
     // Add builtin command
@@ -19,7 +20,7 @@ pub static BUILTIN_COMMAND: Lazy<HashMap<&str, BuiltinCommand>> = Lazy::new(|| {
     builtin.insert("history", history::command as BuiltinCommand);
     builtin.insert("z", z::command as BuiltinCommand);
     builtin.insert("jobs", jobs::command as BuiltinCommand);
-    builtin
+    Mutex::new(builtin)
 });
 
 pub fn exit(_ctx: &Context, _argv: Vec<String>, shell: &mut Shell) -> ExitStatus {

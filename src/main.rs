@@ -25,7 +25,7 @@ mod wasm;
 async fn main() -> std::io::Result<()> {
     env_logger::init();
 
-    let env = Environment::new();
+    let env: Environment = Default::default();
     let mut stdout = stdout();
     execute!(stdout, EnableMouseCapture)?;
     enable_raw_mode()?;

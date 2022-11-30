@@ -23,6 +23,14 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, BuiltinCommand>>> = Lazy::n
     Mutex::new(builtin)
 });
 
+pub fn get_command(name: &str) -> Option<BuiltinCommand> {
+    if let Ok(builtin) = BUILTIN_COMMAND.lock() {
+        builtin.get(name).copied()
+    } else {
+        None
+    }
+}
+
 pub fn exit(_ctx: &Context, _argv: Vec<String>, shell: &mut Shell) -> ExitStatus {
     shell.exit();
     ExitStatus::ExitedWith(0)

@@ -1,15 +1,9 @@
-use rust_lisp::model::Value;
-use rust_lisp::parser::{parse, ParseError};
+use rust_lisp::model::{List, Value};
+use std::iter::FromIterator;
 
-pub fn make_list(vec: Vec<String>) -> Result<Value, ParseError> {
-    let mut buf = String::new();
-    let list: Vec<String> = vec.iter().map(|x| format!("\"{}\"", x)).collect();
-    let list = list.join(" ");
-    buf.push('(');
-    buf.push_str(list.as_str());
-    buf.push(')');
-    let x = parse(buf.as_str()).next().unwrap();
-    x
+pub fn make_list(vec: Vec<String>) -> Value {
+    let lst = vec.iter().map(|x| Value::String(x.to_string()));
+    Value::List(List::from_iter(lst))
 }
 
 #[cfg(test)]
@@ -19,7 +13,7 @@ mod test {
 
     #[test]
     fn test_make_list() {
-        let args = make_list(vec!["aaa".to_string(), "bbb".to_string()]).ok();
+        let args = make_list(vec!["aaa".to_string(), "bbb".to_string()]);
         println!("list {:?}", args);
     }
 }

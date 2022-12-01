@@ -2,10 +2,6 @@ use rust_lisp::model::{Env, RuntimeError, Symbol, Value};
 use std::convert::From;
 use std::process::Command;
 use std::{cell::RefCell, rc::Rc};
-pub fn print(_env: Rc<RefCell<Env>>, args: &[Value]) -> Result<Value, RuntimeError> {
-    args.iter().for_each(|x| println!("print: {:?}", x));
-    Ok(Value::True)
-}
 
 pub fn alias(env: Rc<RefCell<Env>>, args: &[Value]) -> Result<Value, RuntimeError> {
     if let Some(Value::Foreign(val)) = env.borrow_mut().get(&Symbol::from("engine")) {

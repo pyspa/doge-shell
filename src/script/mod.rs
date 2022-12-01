@@ -149,6 +149,6 @@ mod test {
             .insert("test".to_owned(), "value".to_owned());
 
         let engine = LispEngine::new(config);
-        let _res = engine.borrow_mut().run("(alias \"e\" \"emacs\")");
+        let _res = engine.borrow().run("(alias \"e\" \"emacs\")");
     }
 }

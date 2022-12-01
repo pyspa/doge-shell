@@ -140,6 +140,8 @@ pub fn make_env() -> Rc<RefCell<Env>> {
         .define(Symbol::from("alias"), Value::NativeFunc(builtin::alias));
     env.borrow_mut()
         .define(Symbol::from("command"), Value::NativeFunc(builtin::command));
+    env.borrow_mut()
+        .define(Symbol::from("sh"), Value::NativeFunc(builtin::sh));
     // TODO add shell env
     env
 }

@@ -15,8 +15,7 @@ pub fn command(_env: Rc<RefCell<Env>>, args: &[Value]) -> Result<Value, RuntimeE
     let mut cmd_args: Vec<String> = Vec::new();
     for arg in args {
         if let Value::String(val) = arg {
-            val.split_whitespace()
-                .for_each(|x| cmd_args.push(x.to_string()));
+            cmd_args.push(val.to_string());
         }
     }
 
@@ -25,7 +24,10 @@ pub fn command(_env: Rc<RefCell<Env>>, args: &[Value]) -> Result<Value, RuntimeE
     match Command::new(cmd).args(cmd_args).output() {
         Ok(output) => {
             if output.status.success() {
-                let stdout = String::from_utf8(output.stdout).expect("fail get stdout");
+                let stdout = String::from_utf8(output.stdout)
+                    .expect("fail get stdout")
+                    .trim_end()
+                    .to_string();
 
                 // let mut out: Vec<String> = Vec::new();
                 // stdout.split('\n').for_each(|x| out.push(x.to_string()));
@@ -36,6 +38,33 @@ pub fn command(_env: Rc<RefCell<Env>>, args: &[Value]) -> Result<Value, RuntimeE
                 //     }),
                 // }
 
+                Ok(Value::String(stdout))
+            } else {
+                Ok(Value::NIL)
+            }
+        }
+        Err(err) => Err(RuntimeError {
+            msg: err.to_string(),
+        }),
+    }
+}
+
+pub fn sh(_env: Rc<RefCell<Env>>, args: &[Value]) -> Result<Value, RuntimeError> {
+    let mut cmd_args: Vec<String> = Vec::new();
+    cmd_args.push("-c".to_string());
+    for arg in args {
+        if let Value::String(val) = arg {
+            cmd_args.push(val.to_string());
+        }
+    }
+    match Command::new("sh").args(cmd_args).output() {
+        Ok(output) => {
+            let stdout = String::from_utf8(output.stdout)
+                .expect("fail get stdout")
+                .trim_end()
+                .to_string();
+
+            if output.status.success() {
                 Ok(Value::String(stdout))
             } else {
                 Ok(Value::NIL)

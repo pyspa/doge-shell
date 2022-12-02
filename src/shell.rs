@@ -8,7 +8,7 @@ use crate::parser::{self, Rule, ShellParser};
 use crate::process::{self, wait_any_job, Context, ExitStatus, Job, JobProcess, WaitJob};
 use crate::prompt::print_preprompt;
 use anyhow::Context as _;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use crossterm::cursor;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::style::{Color, Print, ResetColor, Stylize};
@@ -317,7 +317,9 @@ impl Shell {
                 print!("\r\n");
                 if !self.input.is_empty() {
                     let input = self.input.as_str();
-                    self.eval_str(input, false)?;
+                    if let Err(err) = self.eval_str(input, false) {
+                        eprintln!("{:?}", err);
+                    }
                     self.input.clear();
                 }
                 redraw = false;
@@ -329,7 +331,9 @@ impl Shell {
                 print!("\r\n");
                 if !self.input.is_empty() {
                     let input = self.input.as_str();
-                    self.eval_str(input, true)?;
+                    if let Err(err) = self.eval_str(input, true) {
+                        eprintln!("{:?}", err)
+                    }
                     self.input.clear();
                 }
                 redraw = false;
@@ -686,10 +690,10 @@ impl Shell {
         Ok(output)
     }
 
-    fn parse_command(&mut self, job: &mut Job, pair: Pair<Rule>, foreground: bool) -> Result<bool> {
+    fn parse_command(&mut self, job: &mut Job, pair: Pair<Rule>, foreground: bool) -> Result<()> {
         let parsed = self.get_argv(pair)?;
         if parsed.is_empty() {
-            return Ok(false);
+            return Ok(());
         }
 
         let mut argv: Vec<String> = Vec::new();
@@ -703,10 +707,7 @@ impl Shell {
         }
 
         let cmd = argv[0].as_str();
-        let mut result = true;
-
         if let Some(cmd_fn) = builtin::get_command(cmd) {
-            // TODO check return lock
             let builtin = process::BuiltinProcess::new(cmd_fn, argv);
             job.set_process(JobProcess::Builtin(builtin));
         } else if self.environment.wasm_engine.modules.get(cmd).is_some() {
@@ -723,10 +724,9 @@ impl Shell {
                 job.set_process(JobProcess::Builtin(builtin));
             }
         } else {
-            result = false;
-            self.print_error(format!("unknown command: {}", cmd));
+            bail!("unknown command: {}", cmd);
         }
-        Ok(result)
+        Ok(())
     }
 
     fn parse_jobs(&mut self, pair: Pair<Rule>, jobs: &mut Vec<Job>) -> Result<()> {

@@ -167,9 +167,12 @@ mod test {
 
     use super::*;
 
+    fn init() {
+        tracing_subscriber::fmt::init();
+    }
+
     #[test]
     fn test_run_lisp() {
-        let _ = env_logger::try_init();
         let config: Rc<RefCell<config::Config>> = Rc::new(RefCell::new(Default::default()));
         config
             .borrow_mut()
@@ -182,7 +185,6 @@ mod test {
 
     #[test]
     fn test_apply_fn() {
-        let _ = env_logger::try_init();
         let config: Rc<RefCell<config::Config>> = Rc::new(RefCell::new(Default::default()));
         let engine = LispEngine::new(config);
         let res = engine.borrow().run(
@@ -201,7 +203,6 @@ mod test {
 
     #[test]
     fn test_call_fn() {
-        let _ = env_logger::try_init();
         let config: Rc<RefCell<config::Config>> = Rc::new(RefCell::new(Default::default()));
         let engine = LispEngine::new(config);
         let res = engine.borrow().run(

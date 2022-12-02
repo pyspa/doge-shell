@@ -54,9 +54,8 @@ impl Config {
 mod test {
     use super::*;
 
-    #[test]
     fn init() {
-        let _ = env_logger::try_init();
+        tracing_subscriber::fmt::init();
     }
 
     #[test]

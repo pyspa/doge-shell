@@ -1,6 +1,7 @@
 use crate::environment::Environment;
 use crate::shell::Shell;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use tracing::debug;
 
 mod builtin;
 mod completion;
@@ -19,8 +20,9 @@ mod wasm;
 
 #[async_std::main]
 async fn main() -> std::io::Result<()> {
-    env_logger::init();
+    tracing_subscriber::fmt::init();
 
+    debug!("start shell");
     let env: Environment = Default::default();
     enable_raw_mode()?;
 

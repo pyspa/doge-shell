@@ -2,7 +2,6 @@ use crate::config;
 use crate::dirs::is_dir;
 use crate::frecency::ItemStats;
 use anyhow::Result;
-use log::debug;
 use once_cell::sync::Lazy;
 use skim::prelude::*;
 use skim::{Skim, SkimItemReceiver, SkimItemSender};
@@ -10,6 +9,7 @@ use std::collections::HashMap;
 use std::fs::read_dir;
 use std::path::PathBuf;
 use std::{process::Command, sync::Arc};
+use tracing::debug;
 
 pub type CompletionCommand = fn(Option<&str>) -> Option<String>;
 
@@ -318,10 +318,12 @@ mod test {
 
     use super::*;
 
+    fn init() {
+        tracing_subscriber::fmt::init();
+    }
+
     #[test]
     fn test_completion() -> Result<()> {
-        let _ = env_logger::try_init();
-
         let p = path_completion_first(".")?;
         assert_eq!(None, p);
 

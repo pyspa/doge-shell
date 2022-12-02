@@ -7,6 +7,7 @@ use std::sync::Mutex;
 pub mod cd;
 pub mod history;
 mod jobs;
+mod lisp;
 mod z;
 
 pub type BuiltinCommand = fn(ctx: &Context, argv: Vec<String>, shell: &mut Shell) -> ExitStatus;
@@ -20,6 +21,7 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, BuiltinCommand>>> = Lazy::n
     builtin.insert("history", history::command as BuiltinCommand);
     builtin.insert("z", z::command as BuiltinCommand);
     builtin.insert("jobs", jobs::command as BuiltinCommand);
+    builtin.insert("lisp", lisp::command as BuiltinCommand);
     Mutex::new(builtin)
 });
 

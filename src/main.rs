@@ -1,9 +1,6 @@
 use crate::environment::Environment;
 use crate::shell::Shell;
-use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-
-use std::io::stdout;
 
 mod builtin;
 mod completion;

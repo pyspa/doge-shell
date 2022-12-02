@@ -45,7 +45,7 @@ pub enum ShellEvent {
 
 #[derive(Debug)]
 pub struct Shell {
-    environment: Environment,
+    pub environment: Environment,
     input: Input,
     columns: usize,
     lines: usize,
@@ -57,7 +57,6 @@ pub struct Shell {
     tmode: Option<Termios>,
     history_search: Option<String>,
     start_completion: bool,
-    // config: Rc<RefCell<Config>>,
     pub wait_jobs: Vec<WaitJob>,
     completion: Completion,
 }

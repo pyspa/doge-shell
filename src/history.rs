@@ -404,11 +404,9 @@ impl FrecencyHistory {
 #[cfg(test)]
 mod test {
     use super::*;
-    use log::debug;
 
-    #[test]
     fn init() {
-        let _ = env_logger::try_init();
+        tracing_subscriber::fmt::init();
     }
 
     #[test]
@@ -433,7 +431,7 @@ mod test {
     fn test_load() -> Result<()> {
         let mut history = History::from_file("dsh_cmd_history");
         let s = history.load()?;
-        debug!("loaded {:?}", s);
+        tracing::debug!("loaded {:?}", s);
         Ok(())
     }
 
@@ -446,7 +444,7 @@ mod test {
         let mut history = History::from_file("dsh_cmd_history");
 
         let s = history.load()?;
-        debug!("loaded {:?}", s);
+        tracing::debug!("loaded {:?}", s);
 
         history.write_history(cmd1)?;
         history.write_history(cmd2)?;
@@ -467,8 +465,6 @@ mod test {
 
     #[test]
     fn frecency() -> Result<()> {
-        let _ = env_logger::try_init();
-
         let mut history = FrecencyHistory::from_file("dsh_frecency_history")?;
         history.add("git");
         history.add("git");
@@ -495,8 +491,6 @@ mod test {
 
     #[test]
     fn print_item() -> Result<()> {
-        let _ = env_logger::try_init();
-
         let mut history = FrecencyHistory::from_file("dsh_frecency_history")?;
         history.add("git status");
         history.add("git checkout");

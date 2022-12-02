@@ -1,10 +1,10 @@
 use anyhow::{anyhow, Result};
-use log::debug;
 use pest::iterators::Pair;
 use pest::Parser;
 use pest::Span;
 use pest_derive::Parser;
 use std::collections::HashMap;
+use tracing::debug;
 
 #[derive(Parser)]
 #[grammar = "shell.pest"]
@@ -343,10 +343,13 @@ fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use log::debug;
     use pest::Parser;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    fn init() {
+        tracing_subscriber::fmt::init();
+    }
 
     type JobLink = Rc<RefCell<Job>>;
 
@@ -360,11 +363,6 @@ mod test {
         fn new(name: String) -> Rc<RefCell<Self>> {
             Rc::new(RefCell::new(Self { name, next: None }))
         }
-    }
-
-    #[test]
-    fn init() {
-        let _ = env_logger::try_init();
     }
 
     #[test]
@@ -414,7 +412,6 @@ mod test {
 
     #[test]
     fn parse_args2() {
-        let _ = env_logger::try_init();
         let pairs =
             ShellParser::parse(Rule::args, r#"echo "test""#).unwrap_or_else(|e| panic!("{}", e));
         for pair in pairs {
@@ -585,7 +582,6 @@ mod test {
 
     #[test]
     fn parse_command4() {
-        let _ = env_logger::try_init();
         let pairs = ShellParser::parse(Rule::command, "history | sk | bash -s")
             .unwrap_or_else(|e| panic!("{}", e));
         for pair in pairs {
@@ -744,7 +740,6 @@ mod test {
 
     #[test]
     fn parse_commands() {
-        let _ = env_logger::try_init();
         let pairs = ShellParser::parse(Rule::commands, "sleep 10 ; echo 'test' ")
             .unwrap_or_else(|e| panic!("{}", e));
 
@@ -780,7 +775,6 @@ mod test {
 
     #[test]
     fn parse_subshell() {
-        let _ = env_logger::try_init();
         let pairs = ShellParser::parse(Rule::commands, "sudo docker rm -v (sudo docker ps -a -q)")
             .unwrap_or_else(|e| panic!("{}", e));
 

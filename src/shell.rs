@@ -17,7 +17,6 @@ use crossterm::{execute, queue};
 use futures::{future::FutureExt, select, StreamExt};
 use futures_timer::Delay;
 use libc::{c_int, STDIN_FILENO};
-use log::{debug, warn};
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::sys::termios::{tcgetattr, Termios};
 use nix::unistd::{getpid, pipe, setpgid, tcsetpgrp, Pid};
@@ -28,6 +27,7 @@ use std::io::prelude::*;
 use std::io::Write;
 use std::os::unix::io::FromRawFd;
 use std::time::Duration;
+use tracing::{debug, warn};
 
 pub const APP_NAME: &str = "dsh";
 pub const SHELL_TERMINAL: c_int = STDIN_FILENO;

@@ -1,10 +1,10 @@
 use anyhow::Result;
-use log::error;
 use std::fs::{create_dir_all, File};
 use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;
 use std::process;
 use std::time::SystemTime;
+use tracing::error;
 
 mod stats;
 mod store;

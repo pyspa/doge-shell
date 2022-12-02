@@ -1,8 +1,8 @@
 use crate::shell::APP_NAME;
 use anyhow::Result;
-use log::debug;
 use std::collections::HashMap;
 use std::fs;
+use tracing::debug;
 use wasmer::{Instance, Module, Store};
 use wasmer_compiler_cranelift::Cranelift;
 use wasmer_wasi::WasiState;

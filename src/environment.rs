@@ -2,19 +2,19 @@ use crate::config::Config;
 use crate::dirs::search_file;
 use crate::script;
 use crate::wasm;
-use log::debug;
 use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::{cell::RefCell, rc::Rc};
+use tracing::debug;
 
 #[derive(Debug)]
 pub struct Environment {
     pub config: Rc<RefCell<Config>>,
+    pub lisp_engine: Rc<RefCell<script::LispEngine>>,
     paths: Vec<String>,
     variables: Rc<RefCell<HashMap<String, String>>>,
     pub wasm_engine: wasm::WasmEngine,
-    pub lisp_engine: Rc<RefCell<script::LispEngine>>,
 }
 
 impl Environment {
@@ -101,10 +101,8 @@ impl Default for Environment {
 #[cfg(test)]
 mod test {
     use super::*;
-
-    #[test]
     fn init() {
-        let _ = env_logger::try_init();
+        tracing_subscriber::fmt::init();
     }
 
     #[test]

@@ -3,13 +3,13 @@ use crate::shell::{Shell, SHELL_TERMINAL};
 use anyhow::Context as _;
 use anyhow::Result;
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
-use log::{debug, error};
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::sys::termios::Termios;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{close, dup2, execv, fork, getpid, pipe, setpgid, tcsetpgrp, ForkResult, Pid};
 use std::ffi::CString;
 use std::os::unix::io::RawFd;
+use tracing::{debug, error};
 
 fn copy_fd(src: RawFd, dst: RawFd) {
     if src != dst {
@@ -819,9 +819,8 @@ mod test {
 
     use super::*;
 
-    #[test]
     fn init() {
-        let _ = env_logger::try_init();
+        tracing_subscriber::fmt::init();
     }
 
     #[test]
@@ -872,8 +871,6 @@ mod test {
 
     #[test]
     fn is_stopped() {
-        let _ = env_logger::try_init();
-
         let input = "/usr/bin/touch";
 
         let job = &mut Job::new(input.to_string());
@@ -910,8 +907,6 @@ mod test {
 
     #[test]
     fn is_completed() {
-        let _ = env_logger::try_init();
-
         let input = "/usr/bin/touch";
 
         let job = &mut Job::new(input.to_string());

@@ -443,7 +443,7 @@ impl Repl {
 
         loop {
             let mut save_history_delay = Delay::new(Duration::from_millis(10_000)).fuse();
-            let mut check_background_delay = Delay::new(Duration::from_millis(1_000)).fuse();
+            let mut check_background_delay = Delay::new(Duration::from_millis(200)).fuse();
             let mut event = reader.next().fuse();
 
             select! {

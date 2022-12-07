@@ -1,4 +1,5 @@
 use crate::environment::Environment;
+use crate::repl::Repl;
 use crate::shell::Shell;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use tracing::debug;
@@ -14,6 +15,7 @@ mod input;
 mod parser;
 mod process;
 mod prompt;
+mod repl;
 mod script;
 mod shell;
 mod wasm;
@@ -26,8 +28,10 @@ async fn main() -> std::io::Result<()> {
     let env: Environment = Default::default();
     enable_raw_mode()?;
 
-    let mut shell = Shell::new(env);
-    async_std::task::block_on(shell.run_interactive());
+    let shell = Shell::new(env);
+    let mut repl = Repl::new(shell);
+
+    async_std::task::block_on(repl.run_interactive());
 
     disable_raw_mode()
 }

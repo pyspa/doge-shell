@@ -454,6 +454,7 @@ impl Repl {
                     self.save_history();
                 },
                 maybe_event = event => {
+
                     match maybe_event {
                         Some(Ok(event)) => {
                             if let Err(err) = self.handle_event(ShellEvent::Input(event)){

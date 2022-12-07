@@ -23,7 +23,7 @@ incremental = true
 overflow-checks = false
 
 [dependencies]
-clap = "4"
+clap = { version="4", features = ["derive"] }
 anyhow = "1"
 regex = "1.5"
 libc = "0"

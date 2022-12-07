@@ -1,6 +1,7 @@
 use crate::environment::Environment;
 use crate::repl::Repl;
 use crate::shell::Shell;
+use clap::Parser;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use tracing::debug;
 
@@ -20,18 +21,30 @@ mod script;
 mod shell;
 mod wasm;
 
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    #[arg(short, long)]
+    command: Option<String>,
+}
+
 #[async_std::main]
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
 
+    let cli = Cli::parse();
     debug!("start shell");
     let env: Environment = Default::default();
-    enable_raw_mode()?;
+    let mut shell = Shell::new(env);
 
-    let shell = Shell::new(env);
-    let mut repl = Repl::new(shell);
-
-    async_std::task::block_on(repl.run_interactive());
-
-    disable_raw_mode()
+    if let Some(command) = cli.command.as_deref() {
+        enable_raw_mode()?;
+        let _ = shell.eval_str(command.to_string(), false);
+        disable_raw_mode()
+    } else {
+        enable_raw_mode()?;
+        let mut repl = Repl::new(shell);
+        async_std::task::block_on(repl.run_interactive());
+        disable_raw_mode()
+    }
 }

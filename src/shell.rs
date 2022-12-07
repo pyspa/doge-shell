@@ -34,7 +34,7 @@ pub struct Shell {
 
 impl Drop for Shell {
     fn drop(&mut self) {
-        // TODO
+        disable_raw_mode();
     }
 }
 
@@ -97,6 +97,7 @@ impl Shell {
             enable_raw_mode().ok();
         }
 
+        // TODO set exitcode
         Ok(())
     }
 

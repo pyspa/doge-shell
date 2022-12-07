@@ -435,7 +435,6 @@ impl Repl {
             "shell setpgid pid:{:?} pgid:{:?}",
             self.shell.pid, self.shell.pgid
         );
-        // let _ = setpgid(self.pgid, self.pgid).context("failed setpgid");
         let _ = tcsetpgrp(SHELL_TERMINAL, self.shell.pgid).context("failed tcsetpgrp");
         self.tmode = Some(tcgetattr(SHELL_TERMINAL).expect("failed cgetattr"));
 

@@ -14,7 +14,6 @@ use crossterm::terminal::{self, enable_raw_mode, Clear, ClearType};
 use crossterm::{execute, queue};
 use futures::{future::FutureExt, select, StreamExt};
 use futures_timer::Delay;
-use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::sys::termios::{tcgetattr, Termios};
 use nix::unistd::tcsetpgrp;
 use std::io::Write;
@@ -73,17 +72,6 @@ impl Repl {
     fn get_prompt(&self) -> &str {
         //"$"
         "🐕 < "
-    }
-
-    fn set_signals(&mut self) {
-        let action = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
-        unsafe {
-            sigaction(Signal::SIGINT, &action).expect("failed sigaction");
-            sigaction(Signal::SIGQUIT, &action).expect("failed sigaction");
-            sigaction(Signal::SIGTSTP, &action).expect("failed sigaction");
-            sigaction(Signal::SIGTTIN, &action).expect("failed sigaction");
-            sigaction(Signal::SIGTTOU, &action).expect("failed sigaction");
-        }
     }
 
     fn check_background_jobs(&mut self) {
@@ -376,9 +364,13 @@ impl Repl {
                 self.stop_history_mode();
                 print!("\r\n");
                 if !self.input.is_empty() {
-                    let input = self.input.as_str();
-                    if let Err(err) = self.shell.eval_str(input, false) {
-                        eprintln!("{:?}", err);
+                    match self.shell.eval_str(self.input.as_str(), false) {
+                        Ok(code) => {
+                            debug!("exit: {} : {:?}", self.input.as_str(), code);
+                        }
+                        Err(err) => {
+                            eprintln!("{:?}", err);
+                        }
                     }
                     self.input.clear();
                 }
@@ -438,7 +430,6 @@ impl Repl {
         let mut reader = EventStream::new();
 
         self.setup();
-        self.set_signals();
 
         debug!(
             "shell setpgid pid:{:?} pgid:{:?}",

@@ -340,7 +340,7 @@ pub struct Process {
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ProcessState {
     Running,
-    Completed(i32),
+    Completed(u8),
     Stopped(Pid),
 }
 
@@ -692,8 +692,8 @@ impl Job {
             let result = waitpid(None, Some(WaitPidFlag::WUNTRACED));
 
             let (pid, state) = match result {
-                Ok(WaitStatus::Exited(pid, status)) => (pid, ProcessState::Completed(status)),
-                Ok(WaitStatus::Signaled(pid, _signal, _)) => (pid, ProcessState::Completed(-1)),
+                Ok(WaitStatus::Exited(pid, status)) => (pid, ProcessState::Completed(status as u8)), // ok??
+                Ok(WaitStatus::Signaled(pid, _signal, _)) => (pid, ProcessState::Completed(1)),
                 Ok(WaitStatus::Stopped(pid, _signal)) => (pid, ProcessState::Stopped(pid)),
                 Err(nix::errno::Errno::ECHILD) | Ok(WaitStatus::StillAlive) => {
                     // break?
@@ -736,8 +736,8 @@ pub fn wait_any_job(no_block: bool) -> Option<(Pid, ProcessState)> {
 
     let result = waitpid(None, Some(options));
     let res = match result {
-        Ok(WaitStatus::Exited(pid, status)) => (pid, ProcessState::Completed(status)),
-        Ok(WaitStatus::Signaled(pid, _signal, _)) => (pid, ProcessState::Completed(-1)),
+        Ok(WaitStatus::Exited(pid, status)) => (pid, ProcessState::Completed(status as u8)),
+        Ok(WaitStatus::Signaled(pid, _signal, _)) => (pid, ProcessState::Completed(1)),
         Ok(WaitStatus::Stopped(pid, _signal)) => (pid, ProcessState::Stopped(pid)),
         Err(nix::errno::Errno::ECHILD) | Ok(WaitStatus::StillAlive) => {
             return None;

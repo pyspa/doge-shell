@@ -8,6 +8,7 @@ use anyhow::Context as _;
 use anyhow::{anyhow, bail, Result};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use libc::{c_int, STDIN_FILENO};
+use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::sys::termios::tcgetattr;
 use nix::unistd::{getpid, pipe, Pid};
 use pest::iterators::Pair;
@@ -16,6 +17,7 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::io::Write;
 use std::os::unix::io::FromRawFd;
+use std::process::ExitCode;
 use tracing::{debug, warn};
 
 pub const APP_NAME: &str = "dsh";
@@ -57,6 +59,17 @@ impl Shell {
         }
     }
 
+    pub fn set_signals(&mut self) {
+        let action = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
+        unsafe {
+            sigaction(Signal::SIGINT, &action).expect("failed sigaction");
+            sigaction(Signal::SIGQUIT, &action).expect("failed sigaction");
+            sigaction(Signal::SIGTSTP, &action).expect("failed sigaction");
+            sigaction(Signal::SIGTTIN, &action).expect("failed sigaction");
+            sigaction(Signal::SIGTTOU, &action).expect("failed sigaction");
+        }
+    }
+
     pub fn print_error(&self, msg: String) {
         // unknown command, etc
         eprint!("\r{}\r\n", msg);
@@ -69,7 +82,7 @@ impl Shell {
         std::io::stdout().flush().ok();
     }
 
-    pub fn eval_str(&mut self, input: String, background: bool) -> Result<()> {
+    pub fn eval_str(&mut self, input: String, background: bool) -> Result<ExitCode> {
         if let Some(ref mut history) = self.cmd_history {
             history.add(&input);
             history.reset_index();
@@ -87,9 +100,9 @@ impl Shell {
                 job.foreground = false;
             }
             if let process::ProcessState::Completed(exit) = job.launch(&mut ctx, self)? {
+                debug!("job exit code {:?}", exit);
                 if exit != 0 {
-                    // TODO check
-                    debug!("job exit code {:?}", exit);
+                    return Ok(ExitCode::from(exit));
                 }
             } else {
                 // Stop next job
@@ -97,8 +110,7 @@ impl Shell {
             enable_raw_mode().ok();
         }
 
-        // TODO set exitcode
-        Ok(())
+        Ok(ExitCode::from(0))
     }
 
     fn get_jobs(&mut self, input: String) -> Result<Vec<Job>> {

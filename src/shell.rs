@@ -10,7 +10,7 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use libc::{c_int, STDIN_FILENO};
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::sys::termios::tcgetattr;
-use nix::unistd::{getpid, pipe, Pid};
+use nix::unistd::{getpid, pipe, setpgid, Pid};
 use pest::iterators::Pair;
 use pest::Parser;
 use std::fs::File;
@@ -45,6 +45,7 @@ impl Shell {
         let pid = getpid();
         let pgid = pid;
 
+        let _ = setpgid(pgid, pgid).context("failed setpgid");
         let cmd_history = FrecencyHistory::from_file("dsh_cmd_history").unwrap();
         let path_history = FrecencyHistory::from_file("dsh_path_history").unwrap();
 

@@ -2,12 +2,16 @@ use crate::builtin::BuiltinCommand;
 use crate::shell::{Shell, SHELL_TERMINAL};
 use anyhow::Context as _;
 use anyhow::Result;
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::sys::termios::Termios;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{close, dup2, execv, fork, getpid, pipe, setpgid, tcsetpgrp, ForkResult, Pid};
 use std::ffi::CString;
+use std::fs::File;
+use std::io::Read;
+use std::os::unix::io::FromRawFd;
 use std::os::unix::io::RawFd;
 use tracing::{debug, error};
 
@@ -23,6 +27,48 @@ pub struct WaitJob {
     pub job_id: usize,
     pub pid: Pid,
     pub cmd: String,
+    pub stdout: Option<RawFd>,
+    pub stderr: Option<RawFd>,
+}
+
+impl WaitJob {
+    pub fn output(&self) {
+        if let Some(fd) = self.stdout {
+            let mut file = unsafe { File::from_raw_fd(fd) };
+            let mut buf = String::new();
+            match file.read_to_string(&mut buf) {
+                Ok(size) => {
+                    if size > 0 {
+                        disable_raw_mode().ok();
+                        print!("{}", buf);
+                        enable_raw_mode().ok();
+                    }
+                }
+
+                Err(_err) => {
+                    // break;
+                }
+            }
+        }
+
+        // if let Some(fd) = self.stderr {
+        //     let mut file = unsafe { File::from_raw_fd(fd) };
+        //     let mut buf = String::new();
+        //     match file.read_to_string(&mut buf) {
+        //         Ok(size) => {
+        //             if size > 0 {
+        //                 disable_raw_mode().ok();
+        //                 eprint!("{}", buf);
+        //                 enable_raw_mode().ok();
+        //             }
+        //         }
+
+        //         Err(_err) => {
+        //             // break;
+        //         }
+        //     }
+        // }
+    }
 }
 
 pub struct Context {
@@ -187,6 +233,14 @@ impl JobProcess {
         };
         true
     }
+
+    pub fn get_cap_out(&self) -> (Option<RawFd>, Option<RawFd>) {
+        match self {
+            JobProcess::Builtin(_p) => (None, None),
+            JobProcess::Wasm(_p) => (None, None),
+            JobProcess::Command(p) => (p.cap_stdout, p.cap_stderr),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -335,6 +389,8 @@ pub struct Process {
     pub stdin: RawFd,
     pub stdout: RawFd,
     pub stderr: RawFd,
+    cap_stdout: Option<RawFd>,
+    cap_stderr: Option<RawFd>,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -365,6 +421,8 @@ impl Process {
             stdin: STDIN_FILENO,
             stdout: STDOUT_FILENO,
             stderr: STDERR_FILENO,
+            cap_stdout: None,
+            cap_stderr: None,
         }
     }
 
@@ -430,9 +488,7 @@ impl Process {
 
         debug!("launch: execv cmd:{:?} argv:{:?}", cmd, argv);
         match execv(&cmd, &argv) {
-            Ok(_) => {
-                unreachable!();
-            }
+            Ok(_) => Ok(()),
             Err(nix::errno::Errno::EACCES) => {
                 error!("Failed to exec {:?} (EACCESS). chmod(1) may help.", cmd);
                 std::process::exit(1);
@@ -599,11 +655,16 @@ impl Job {
 
             if process.next().is_none() {
                 // background
-                shell.wait_jobs.push(WaitJob {
+                let (stdout, stderr) = process.get_cap_out();
+                let wait_job = WaitJob {
                     job_id,
                     pid,
                     cmd: self.cmd.clone(),
-                });
+                    stdout,
+                    stderr,
+                };
+
+                shell.wait_jobs.push(wait_job);
             }
         }
 
@@ -767,10 +828,24 @@ fn set_process_state(process: &mut JobProcess, pid: Pid, state: ProcessState) {
 }
 
 fn fork_process(ctx: &Context, job_pgid: Option<Pid>, process: &mut Process) -> Result<Pid> {
+    if ctx.outfile == STDOUT_FILENO && !ctx.foreground {
+        let (pout, pin) = pipe().context("failed pipe")?;
+        process.stdout = pin;
+        process.cap_stdout = Some(pout);
+    }
+    if ctx.errfile == STDERR_FILENO && !ctx.foreground {
+        let (pout, pin) = pipe().context("failed pipe")?;
+        process.stderr = pin;
+        process.cap_stderr = Some(pout);
+    }
+
     let pid = unsafe { fork().context("failed fork")? };
+
     match pid {
         ForkResult::Parent { child } => {
-            process.pid = Some(child);
+            if process.stdout != STDOUT_FILENO {
+                close(process.stdout).context("failed close")?;
+            }
             Ok(child)
         }
         ForkResult::Child => {

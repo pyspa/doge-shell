@@ -36,7 +36,7 @@ pub struct Shell {
 
 impl Drop for Shell {
     fn drop(&mut self) {
-        disable_raw_mode();
+        disable_raw_mode().ok();
     }
 }
 
@@ -94,9 +94,8 @@ impl Shell {
 
         let jobs = self.get_jobs(input)?;
 
-        disable_raw_mode().ok();
-
         for mut job in jobs {
+            disable_raw_mode().ok();
             if background {
                 // all job run background
                 job.foreground = false;
@@ -109,11 +108,9 @@ impl Shell {
             } else {
                 // Stop next job
             }
-        }
-
-        if self.wait_jobs.is_empty() {
             enable_raw_mode().ok();
         }
+
         Ok(ExitCode::from(0))
     }
 

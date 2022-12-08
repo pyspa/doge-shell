@@ -75,9 +75,11 @@ impl Repl {
     }
 
     fn check_background_jobs(&mut self) {
+        // TODO thread
         if let Some((pid, _state)) = wait_any_job(true) {
             if let Some(index) = self.shell.wait_jobs.iter().position(|job| job.pid == pid) {
                 if let Some(job) = self.shell.wait_jobs.get(index) {
+                    job.output();
                     // TODO fix message format
                     print!("\r\n[{:?}] done '{}' \r\n\r", job.job_id, job.cmd);
                     self.shell.wait_jobs.remove(index);

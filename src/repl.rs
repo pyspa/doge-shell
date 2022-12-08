@@ -445,16 +445,17 @@ impl Repl {
             let mut save_history_delay = Delay::new(Duration::from_millis(10_000)).fuse();
             let mut check_background_delay = Delay::new(Duration::from_millis(200)).fuse();
             let mut event = reader.next().fuse();
-
             select! {
                 _ = check_background_delay => {
                     self.check_background_jobs();
+                    if self.shell.wait_jobs.is_empty() {
+                        enable_raw_mode().ok();
+                    }
                 },
                 _ = save_history_delay => {
                     self.save_history();
                 },
                 maybe_event = event => {
-
                     match maybe_event {
                         Some(Ok(event)) => {
                             if let Err(err) = self.handle_event(ShellEvent::Input(event)){

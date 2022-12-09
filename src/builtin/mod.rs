@@ -6,8 +6,8 @@ use std::sync::Mutex;
 
 pub mod cd;
 pub mod history;
-mod jobs;
-mod lisp;
+pub mod jobs;
+pub mod lisp;
 mod z;
 
 pub type BuiltinCommand = fn(ctx: &Context, argv: Vec<String>, shell: &mut Shell) -> ExitStatus;

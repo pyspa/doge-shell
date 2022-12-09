@@ -15,8 +15,8 @@ pub const CONFIG_FILE: &str = "config.lisp";
 
 #[derive(Debug)]
 pub struct LispEngine {
-    config: Rc<RefCell<config::Config>>,
-    env: Rc<RefCell<Env>>,
+    pub config: Rc<RefCell<config::Config>>,
+    pub env: Rc<RefCell<Env>>,
 }
 
 impl LispEngine {
@@ -69,10 +69,15 @@ impl LispEngine {
     }
 
     pub fn run_func(&self, name: &str, args: Vec<String>) -> anyhow::Result<Value> {
-        // get func
-        let func = self.run(name)?;
         // to args
         let args: Vec<Value> = args.iter().map(|x| Value::String(x.to_string())).collect();
+        // apply
+        self.run_func_values(name, args)
+    }
+
+    pub fn run_func_values(&self, name: &str, args: Vec<Value>) -> anyhow::Result<Value> {
+        // get func
+        let func = self.run(name)?;
         // apply
         let res = func.apply(self.env.clone(), args)?;
 
@@ -209,12 +214,28 @@ mod test {
             "
 (begin
   (defun log (str)
-    (print str)))",
+    (print str))
+  (defun adder (x y)
+    (+ x y))
+  (defun call ()
+    (sh \"ls -al\"))
+)
+",
         );
         assert!(res.is_ok());
 
         let args = vec!["abcdefg".to_string()];
         let res = engine.borrow().run_func("log", args);
         assert!(res.is_ok());
+
+        let args = vec![Value::Int(1), Value::Int(2)];
+        let res = engine.borrow().run_func_values("adder", args);
+        assert!(res.is_ok());
+        println!("{:?}", res);
+
+        let args = vec![];
+        let res = engine.borrow().run_func_values("call", args);
+        assert!(res.is_ok());
+        println!("{:?}", res);
     }
 }

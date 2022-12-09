@@ -8,7 +8,7 @@ pub fn command(_ctx: &Context, argv: Vec<String>, shell: &mut Shell) -> ExitStat
     } else {
         match shell.environment.lisp_engine.borrow().run(argv[1].as_str()) {
             Ok(val) => {
-                println!("{}", val);
+                debug!("{}", val);
             }
             Err(err) => {
                 eprintln!("{}", err);

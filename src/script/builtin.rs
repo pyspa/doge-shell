@@ -19,29 +19,23 @@ pub fn command(_env: Rc<RefCell<Env>>, args: &[Value]) -> Result<Value, RuntimeE
             cmd_args.push(val.to_string());
         }
     }
-
     let cmd = cmd_args.remove(0);
-
     match Command::new(cmd).args(cmd_args).output() {
         Ok(output) => {
-            if output.status.success() {
-                let stdout = String::from_utf8(output.stdout)
-                    .expect("fail get stdout")
-                    .trim_end()
-                    .to_string();
+            let stdout = String::from_utf8(output.stdout)
+                .expect("fail get stdout")
+                .trim_end()
+                .to_string();
 
-                // let mut out: Vec<String> = Vec::new();
-                // stdout.split('\n').for_each(|x| out.push(x.to_string()));
-                // match make_list(out) {
-                //     Ok(lst) => Ok(lst),
-                //     Err(err) => Err(RuntimeError {
-                //         msg: err.to_string(),
-                //     }),
-                // }
+            let stderr = String::from_utf8(output.stderr)
+                .expect("fail get stdout")
+                .trim_end()
+                .to_string();
 
+            if !stdout.is_empty() {
                 Ok(Value::String(stdout))
             } else {
-                Ok(Value::NIL)
+                Ok(Value::String(stderr))
             }
         }
         Err(err) => Err(RuntimeError {
@@ -57,7 +51,6 @@ pub fn sh(_env: Rc<RefCell<Env>>, args: &[Value]) -> Result<Value, RuntimeError>
         let val = arg.to_string();
         cmd_args.push(util::unquote(val.as_str()));
     }
-
     // TODO use own shell
     match Command::new("sh").args(cmd_args).output() {
         Ok(output) => {
@@ -71,7 +64,7 @@ pub fn sh(_env: Rc<RefCell<Env>>, args: &[Value]) -> Result<Value, RuntimeError>
                 .trim_end()
                 .to_string();
 
-            if output.status.success() {
+            if !stdout.is_empty() {
                 Ok(Value::String(stdout))
             } else {
                 Ok(Value::String(stderr))
@@ -98,11 +91,15 @@ mod test {
     fn test_lisp_sh() {
         let config: Rc<RefCell<config::Config>> = Rc::new(RefCell::new(Default::default()));
         let engine = LispEngine::new(config);
-        let env = engine.borrow().env.clone();
-        let args = vec![Value::String("ls -al".to_string())];
 
-        let res = sh(env, args.as_slice());
+        let args = vec![Value::String("ls -al".to_string())];
+        let res = sh(Rc::clone(&engine.borrow().env), args.as_slice());
         assert!(res.is_ok());
-        println!("{:?}", res);
+        println!("{}", res.unwrap());
+
+        // let args = vec![Value::String("cargo build".to_string())];
+        // let res = sh(Rc::clone(&engine.borrow().env), args.as_slice());
+        // assert!(res.is_ok());
+        // println!("{}", res.unwrap());
     }
 }

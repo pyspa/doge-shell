@@ -266,6 +266,10 @@ impl Shell {
         } else if self.environment.wasm_engine.modules.get(cmd).is_some() {
             let wasm = process::WasmProcess::new(cmd.to_string(), argv);
             job.set_process(JobProcess::Wasm(wasm));
+        } else if self.environment.lisp_engine.borrow().has(cmd) {
+            let cmd_fn = builtin::lisp::run;
+            let builtin = process::BuiltinProcess::new(cmd_fn, argv);
+            job.set_process(JobProcess::Builtin(builtin));
         } else if let Some(cmd) = self.environment.lookup(cmd) {
             let process = process::Process::new(cmd, argv);
             job.set_process(JobProcess::Command(process));

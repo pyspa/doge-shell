@@ -5,6 +5,7 @@ word_char = _{
 }
 
 word = { word_char+ }
+variable = { "$" ~ word }
 
 s_quoted = { "\'" ~ s_quoted_inner* ~ "\'" }
 s_quoted_inner = _{
@@ -30,7 +31,7 @@ group_list = _{
 }
 
 quoted = _{ d_quoted|s_quoted }
-span = { quoted|word|subshell }
+span = { quoted|word|variable|subshell }
 argv0 = { span }
 args = { (sp* ~ span)+ }
 background = _{ "&" }

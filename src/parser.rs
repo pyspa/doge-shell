@@ -841,4 +841,32 @@ mod test {
             // assert_eq!("(echo 1)", argv[1].0);
         }
     }
+
+    #[test]
+    fn test_variable() {
+        let mut find = false;
+        let pairs = ShellParser::parse(Rule::simple_command, r#"sleep $foo "#)
+            .unwrap_or_else(|e| panic!("{}", e));
+
+        for pair in pairs {
+            assert_eq!(Rule::simple_command, pair.as_rule());
+            let count = pair.clone().into_inner().count();
+            assert_eq!(2, count);
+            for pair in pair.into_inner() {
+                match pair.as_rule() {
+                    Rule::args => {
+                        for pair in pair.into_inner() {
+                            for pair in pair.into_inner() {
+                                assert_eq!(Rule::variable, pair.as_rule());
+                                find = true;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(find);
+    }
 }

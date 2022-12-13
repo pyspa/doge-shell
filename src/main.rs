@@ -7,7 +7,6 @@ use tracing::debug;
 
 mod builtin;
 mod completion;
-mod config;
 mod dirs;
 mod environment;
 mod frecency;
@@ -34,9 +33,10 @@ async fn main() -> ExitCode {
 
     let cli = Cli::parse();
     debug!("start shell");
-    let env: Environment = Default::default();
+    let env = Environment::new();
     let mut shell = Shell::new(env);
     shell.set_signals();
+
     if let Some(command) = cli.command.as_deref() {
         match shell.eval_str(command.to_string(), false) {
             Ok(code) => {

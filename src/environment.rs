@@ -1,24 +1,28 @@
-use crate::config::Config;
 use crate::dirs::search_file;
-use crate::script;
-use crate::wasm;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::path::Path;
 use std::{cell::RefCell, rc::Rc};
 use tracing::debug;
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Completion {
+    pub target: String,
+    pub completion_cmd: String,
+    pub post_processing: Option<String>,
+}
+
 #[derive(Debug)]
 pub struct Environment {
-    pub config: Rc<RefCell<Config>>,
-    pub lisp_engine: Rc<RefCell<script::LispEngine>>,
+    pub alias: HashMap<String, String>,
+    pub completions: Vec<Completion>,
     paths: Vec<String>,
-    variables: Rc<RefCell<HashMap<String, String>>>,
-    pub wasm_engine: wasm::WasmEngine,
+    pub variables: Rc<RefCell<HashMap<String, String>>>,
 }
 
 impl Environment {
-    pub fn new() -> Self {
+    pub fn new() -> Rc<RefCell<Self>> {
         let mut paths = ["/bin", "/usr/bin", "/sbin", "/usr/sbin"]
             .iter()
             .map(|s| s.to_string())
@@ -30,24 +34,13 @@ impl Environment {
 
         debug!("default path {:?}", &paths);
 
-        let config = Rc::new(RefCell::new(Config::default()));
-        let lisp_engine = script::LispEngine::new(Rc::clone(&config));
-        if let Err(err) = lisp_engine.borrow().run_config_lisp() {
-            eprintln!("failed load init lisp {:?}", err);
-        }
-        let wasm_engine = if let Some(wasm_dir) = &config.borrow().wasm {
-            wasm::WasmEngine::from_path(wasm_dir)
-        } else {
-            Default::default()
-        };
-
-        Environment {
+        let alias: HashMap<String, String> = HashMap::new();
+        Rc::new(RefCell::new(Environment {
+            alias,
+            completions: Vec::new(),
             variables: Rc::new(RefCell::new(HashMap::new())),
             paths,
-            config,
-            wasm_engine,
-            lisp_engine,
-        }
+        }))
     }
 
     pub fn lookup(&self, cmd: &str) -> Option<String> {
@@ -92,12 +85,6 @@ impl Environment {
     }
 }
 
-impl Default for Environment {
-    fn default() -> Self {
-        Environment::new()
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -107,8 +94,8 @@ mod test {
 
     #[test]
     fn test_lookup() {
-        let env = Environment::default();
-        let p = env.lookup("touch");
+        let env = Environment::new();
+        let p = env.borrow().lookup("touch");
         assert_eq!(Some("/usr/bin/touch".to_string()), p)
     }
 }

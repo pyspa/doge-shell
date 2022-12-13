@@ -1,5 +1,5 @@
-use crate::config;
 use crate::dirs::is_dir;
+use crate::environment;
 use crate::frecency::ItemStats;
 use anyhow::Result;
 use once_cell::sync::Lazy;
@@ -266,7 +266,7 @@ pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String>
 
 pub fn input_completion(
     input: &str,
-    completions: &Vec<config::Completion>,
+    completions: &Vec<environment::Completion>,
     query: Option<&str>,
 ) -> Option<String> {
     let has = query.is_some();

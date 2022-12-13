@@ -1,4 +1,4 @@
-use crate::config;
+use crate::environment::Environment;
 use crate::shell::APP_NAME;
 use anyhow::Context as _;
 use rust_lisp::default_env;
@@ -15,15 +15,15 @@ pub const CONFIG_FILE: &str = "config.lisp";
 
 #[derive(Debug)]
 pub struct LispEngine {
-    pub config: Rc<RefCell<config::Config>>,
     pub env: Rc<RefCell<Env>>,
+    environment: Rc<RefCell<Environment>>,
 }
 
 impl LispEngine {
-    pub fn new(config: Rc<RefCell<config::Config>>) -> Rc<RefCell<Self>> {
+    pub fn new(environment: Rc<RefCell<Environment>>) -> Rc<RefCell<Self>> {
         let env = make_env();
         let engine = Rc::new(RefCell::new(LispEngine {
-            config,
+            environment,
             env: Rc::clone(&env),
         }));
 
@@ -108,7 +108,7 @@ impl ForeignValue for Wrapper {
         match command {
             "get-alias" => {
                 let alias = require_typed_arg::<&String>("get-alias", args, 0)?;
-                if let Some(v) = self.engine.borrow().config.borrow().alias.get(alias) {
+                if let Some(v) = self.engine.borrow().environment.borrow().alias.get(alias) {
                     Ok(Value::String(v.to_string()))
                 } else {
                     Ok(Value::NIL)
@@ -120,7 +120,7 @@ impl ForeignValue for Wrapper {
                 if let Some(cmd) = self
                     .engine
                     .borrow()
-                    .config
+                    .environment
                     .borrow_mut()
                     .alias
                     .insert(alias.to_string(), command.to_string())
@@ -178,20 +178,15 @@ mod test {
 
     #[test]
     fn test_run_lisp() {
-        let config: Rc<RefCell<config::Config>> = Rc::new(RefCell::new(Default::default()));
-        config
-            .borrow_mut()
-            .alias
-            .insert("test".to_owned(), "value".to_owned());
-
-        let engine = LispEngine::new(config);
+        let env = Environment::new();
+        let engine = LispEngine::new(env);
         let _res = engine.borrow().run("(alias \"e\" \"emacs\")");
     }
 
     #[test]
     fn test_apply_fn() {
-        let config: Rc<RefCell<config::Config>> = Rc::new(RefCell::new(Default::default()));
-        let engine = LispEngine::new(config);
+        let env = Environment::new();
+        let engine = LispEngine::new(env);
         let res = engine.borrow().run(
             "
 (begin
@@ -208,8 +203,8 @@ mod test {
 
     #[test]
     fn test_call_fn() {
-        let config: Rc<RefCell<config::Config>> = Rc::new(RefCell::new(Default::default()));
-        let engine = LispEngine::new(config);
+        let env = Environment::new();
+        let engine = LispEngine::new(env);
         let res = engine.borrow().run(
             "
 (begin

@@ -4,6 +4,8 @@ use crate::environment::Environment;
 use crate::history::FrecencyHistory;
 use crate::parser::{self, Rule, ShellParser};
 use crate::process::{self, Context, ExitStatus, Job, JobProcess, WaitJob};
+use crate::script;
+use crate::wasm;
 use anyhow::Context as _;
 use anyhow::{anyhow, bail, Result};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
@@ -18,6 +20,7 @@ use std::io::prelude::*;
 use std::io::Write;
 use std::os::unix::io::FromRawFd;
 use std::process::ExitCode;
+use std::{cell::RefCell, rc::Rc};
 use tracing::{debug, warn};
 
 pub const APP_NAME: &str = "dsh";
@@ -25,13 +28,15 @@ pub const SHELL_TERMINAL: c_int = STDIN_FILENO;
 
 #[derive(Debug)]
 pub struct Shell {
-    pub environment: Environment,
+    pub environment: Rc<RefCell<Environment>>,
     pub exited: Option<ExitStatus>,
     pub pid: Pid,
     pub pgid: Pid,
     pub cmd_history: Option<FrecencyHistory>,
     pub path_history: Option<FrecencyHistory>,
     pub wait_jobs: Vec<WaitJob>,
+    pub lisp_engine: Rc<RefCell<script::LispEngine>>,
+    pub wasm_engine: wasm::WasmEngine,
 }
 
 impl Drop for Shell {
@@ -41,13 +46,18 @@ impl Drop for Shell {
 }
 
 impl Shell {
-    pub fn new(environment: Environment) -> Self {
+    pub fn new(environment: Rc<RefCell<Environment>>) -> Self {
         let pid = getpid();
         let pgid = pid;
 
         let _ = setpgid(pgid, pgid).context("failed setpgid");
         let cmd_history = FrecencyHistory::from_file("dsh_cmd_history").unwrap();
         let path_history = FrecencyHistory::from_file("dsh_path_history").unwrap();
+        let wasm_engine = wasm::WasmEngine::new(Rc::clone(&environment));
+        let lisp_engine = script::LispEngine::new(Rc::clone(&environment));
+        if let Err(err) = lisp_engine.borrow().run_config_lisp() {
+            eprintln!("failed load init lisp {:?}", err);
+        }
 
         Shell {
             environment,
@@ -57,6 +67,8 @@ impl Shell {
             cmd_history: Some(cmd_history),
             path_history: Some(path_history),
             wait_jobs: Vec::new(),
+            lisp_engine,
+            wasm_engine,
         }
     }
 
@@ -117,7 +129,7 @@ impl Shell {
     fn get_jobs(&mut self, input: String) -> Result<Vec<Job>> {
         // TODO tests
 
-        let input = parser::expand_alias(input, &self.environment.config.borrow().alias)?;
+        let input = parser::expand_alias(input, &self.environment.borrow().alias)?;
 
         let mut pairs = ShellParser::parse(Rule::commands, &input).map_err(|e| anyhow!(e))?;
 
@@ -263,14 +275,14 @@ impl Shell {
         if let Some(cmd_fn) = builtin::get_command(cmd) {
             let builtin = process::BuiltinProcess::new(cmd_fn, argv);
             job.set_process(JobProcess::Builtin(builtin));
-        } else if self.environment.wasm_engine.modules.get(cmd).is_some() {
+        } else if self.wasm_engine.modules.get(cmd).is_some() {
             let wasm = process::WasmProcess::new(cmd.to_string(), argv);
             job.set_process(JobProcess::Wasm(wasm));
-        } else if self.environment.lisp_engine.borrow().has(cmd) {
+        } else if self.lisp_engine.borrow().has(cmd) {
             let cmd_fn = builtin::lisp::run;
             let builtin = process::BuiltinProcess::new(cmd_fn, argv);
             job.set_process(JobProcess::Builtin(builtin));
-        } else if let Some(cmd) = self.environment.lookup(cmd) {
+        } else if let Some(cmd) = self.environment.borrow().lookup(cmd) {
             let process = process::Process::new(cmd, argv);
             job.set_process(JobProcess::Command(process));
             job.foreground = foreground;
@@ -333,7 +345,7 @@ impl Shell {
 
     pub fn run_wasm(&mut self, name: &str, args: Vec<String>) -> Result<()> {
         // TODO support ctx
-        self.environment.wasm_engine.call(name, args.as_ref())
+        self.wasm_engine.call(name, args.as_ref())
     }
 
     pub fn exit(&mut self) {

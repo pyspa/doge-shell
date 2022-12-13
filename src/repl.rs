@@ -192,7 +192,7 @@ impl Repl {
             if let Ok(words) = self.input.get_words() {
                 for (ref rule, ref span, current) in words {
                     let word = span.as_str();
-                    if let Some(_found) = self.shell.environment.lookup(word) {
+                    if let Some(_found) = self.shell.environment.borrow().lookup(word) {
                         for pos in span.start()..span.end() {
                             // change color
                             match_index.push(pos);
@@ -202,7 +202,7 @@ impl Repl {
                     if !word.is_empty() && current && comp.is_none() {
                         match rule {
                             Rule::argv0 => {
-                                if let Some(file) = self.shell.environment.search(word) {
+                                if let Some(file) = self.shell.environment.borrow().search(word) {
                                     if file.len() >= input.len() {
                                         comp = Some(file[input.len()..].to_string());
                                     }
@@ -230,7 +230,8 @@ impl Repl {
                                         break;
                                     }
                                 } else if !word.starts_with('-') {
-                                    if let Some(file) = self.shell.environment.search(word) {
+                                    if let Some(file) = self.shell.environment.borrow().search(word)
+                                    {
                                         if file.len() >= word.len() {
                                             let part = file[word.len()..].to_string();
                                             comp = Some(file[word.len()..].to_string());
@@ -353,7 +354,7 @@ impl Repl {
 
                 if let Some(val) = completion::input_completion(
                     &self.input.as_str(),
-                    &self.shell.environment.config.borrow().completions,
+                    &self.shell.environment.borrow().completions,
                     completion_query,
                 ) {
                     self.input.insert_str(val.as_str());

@@ -80,7 +80,7 @@ pub fn sh(_env: Rc<RefCell<Env>>, args: &[Value]) -> Result<Value, RuntimeError>
 mod test {
 
     use super::*;
-    use crate::config;
+    use crate::environment::Environment;
     use crate::script::LispEngine;
 
     fn init() {
@@ -89,8 +89,8 @@ mod test {
 
     #[test]
     fn test_lisp_sh() {
-        let config: Rc<RefCell<config::Config>> = Rc::new(RefCell::new(Default::default()));
-        let engine = LispEngine::new(config);
+        let env = Environment::new();
+        let engine = LispEngine::new(env);
 
         let args = vec![Value::String("ls -al".to_string())];
         let res = sh(Rc::clone(&engine.borrow().env), args.as_slice());

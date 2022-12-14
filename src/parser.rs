@@ -1,9 +1,11 @@
+use crate::environment::Environment;
 use anyhow::{anyhow, Result};
 use pest::iterators::Pair;
 use pest::Parser;
 use pest::Span;
 use pest_derive::Parser;
 use std::collections::HashMap;
+use std::{cell::RefCell, rc::Rc};
 use tracing::debug;
 
 #[derive(Parser)]
@@ -189,20 +191,23 @@ fn expand_tilde(pair: Pair<Rule>) -> Vec<String> {
     argv
 }
 
-pub fn expand_alias(input: String, alias: &HashMap<String, String>) -> Result<String> {
+pub fn expand_alias(input: String, environment: Rc<RefCell<Environment>>) -> Result<String> {
     let mut buf: Vec<String> = Vec::new();
     let pairs = ShellParser::parse(Rule::commands, &input).map_err(|e| anyhow!(e))?;
 
     for pair in pairs {
         for pair in pair.into_inner() {
-            let mut commands = expand_command_alias(pair, alias)?;
+            let mut commands = expand_command_alias(pair, Rc::clone(&environment))?;
             buf.append(&mut commands);
         }
     }
     Ok(buf.join(" "))
 }
 
-fn expand_command_alias(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Result<Vec<String>> {
+fn expand_command_alias(
+    pair: Pair<Rule>,
+    environment: Rc<RefCell<Environment>>,
+) -> Result<Vec<String>> {
     let mut buf: Vec<String> = Vec::new();
 
     if let Rule::command = pair.as_rule() {
@@ -211,7 +216,9 @@ fn expand_command_alias(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Re
                 Rule::simple_command => {
                     let args = expand_tilde(inner_pair);
                     for arg in args {
-                        if let Some(val) = alias.get(&arg) {
+                        if let Some(val) = environment.borrow().alias.get(&arg) {
+                            buf.push(val.trim().to_string());
+                        } else if let Some(val) = environment.borrow().variables.get(&arg) {
                             buf.push(val.trim().to_string());
                         } else {
                             buf.push(arg);
@@ -221,7 +228,7 @@ fn expand_command_alias(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Re
                 Rule::simple_command_bg => {
                     let args = expand_tilde(inner_pair);
                     for arg in args {
-                        if let Some(val) = alias.get(&arg) {
+                        if let Some(val) = environment.borrow().alias.get(&arg) {
                             buf.push(val.trim().to_string());
                         } else {
                             buf.push(arg);
@@ -233,7 +240,7 @@ fn expand_command_alias(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Re
                     buf.push("|".to_string());
                     let args = expand_tilde(inner_pair);
                     for arg in args {
-                        if let Some(val) = alias.get(&arg) {
+                        if let Some(val) = environment.borrow().alias.get(&arg) {
                             buf.push(val.trim().to_string());
                         } else {
                             buf.push(arg);
@@ -697,39 +704,42 @@ mod test {
 
     #[test]
     fn test_expand_alias() -> Result<()> {
-        let mut alias: HashMap<String, String> = HashMap::new();
-        alias.insert("alias".to_string(), "echo 'test' | sk ".to_string());
+        let env = crate::environment::Environment::new();
+
+        env.borrow_mut()
+            .alias
+            .insert("alias".to_string(), "echo 'test' | sk ".to_string());
 
         let input = r#"alias abc " test" '-vvv' --foo "#.to_string();
-        let replaced = expand_alias(input, &alias)?;
+        let replaced = expand_alias(input, Rc::clone(&env))?;
         assert_eq!(
             replaced,
             r#"echo 'test' | sk abc " test" '-vvv' --foo"#.to_string()
         );
 
         let input = r#"alias abc " test" '-vvv' --foo &"#.to_string();
-        let replaced = expand_alias(input, &alias)?;
+        let replaced = expand_alias(input, Rc::clone(&env))?;
         assert_eq!(
             replaced,
             r#"echo 'test' | sk abc " test" '-vvv' --foo &"#.to_string()
         );
 
         let input = r#"alias | abc " test" '-vvv' --foo &"#.to_string();
-        let replaced = expand_alias(input, &alias)?;
+        let replaced = expand_alias(input, Rc::clone(&env))?;
         assert_eq!(
             replaced,
             r#"echo 'test' | sk | abc " test" '-vvv' --foo &"#.to_string()
         );
 
         let input = r#"sh -c | alias " test" '-vvv' --foo &"#.to_string();
-        let replaced = expand_alias(input, &alias)?;
+        let replaced = expand_alias(input, Rc::clone(&env))?;
         assert_eq!(
             replaced,
             r#"sh -c | echo 'test' | sk " test" '-vvv' --foo &"#.to_string()
         );
 
         let input = r#"echo (alias " test" '-vvv' --foo) "#.to_string();
-        let replaced = expand_alias(input, &alias)?;
+        let replaced = expand_alias(input, Rc::clone(&env))?;
         assert_eq!(
             replaced,
             r#"echo ( echo 'test' | sk " test" '-vvv' --foo )"#.to_string()

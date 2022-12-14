@@ -18,7 +18,7 @@ pub struct Environment {
     pub alias: HashMap<String, String>,
     pub completions: Vec<Completion>,
     paths: Vec<String>,
-    pub variables: Rc<RefCell<HashMap<String, String>>>,
+    pub variables: HashMap<String, String>,
 }
 
 impl Environment {
@@ -38,7 +38,7 @@ impl Environment {
         Rc::new(RefCell::new(Environment {
             alias,
             completions: Vec::new(),
-            variables: Rc::new(RefCell::new(HashMap::new())),
+            variables: HashMap::new(),
             paths,
         }))
     }

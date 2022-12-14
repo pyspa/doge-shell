@@ -129,7 +129,7 @@ impl Shell {
     fn get_jobs(&mut self, input: String) -> Result<Vec<Job>> {
         // TODO tests
 
-        let input = parser::expand_alias(input, &self.environment.borrow().alias)?;
+        let input = parser::expand_alias(input, Rc::clone(&self.environment))?;
 
         let mut pairs = ShellParser::parse(Rule::commands, &input).map_err(|e| anyhow!(e))?;
 

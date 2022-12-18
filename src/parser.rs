@@ -118,7 +118,7 @@ fn search_inner_word(pair: Pair<Rule>, pos: usize) -> Option<Span> {
                 }
             }
         }
-        Rule::word => {
+        Rule::word | Rule::variable => {
             let pair_span = pair.as_span();
             if pair_span.start() < pos && pos <= pair_span.end() {
                 return Some(pair_span);
@@ -134,6 +134,7 @@ fn expand_tilde(pair: Pair<Rule>) -> Vec<String> {
 
     match pair.as_rule() {
         Rule::word
+        | Rule::variable
         | Rule::s_quoted
         | Rule::d_quoted
         | Rule::literal_s_quoted
@@ -170,6 +171,7 @@ fn expand_tilde(pair: Pair<Rule>) -> Vec<String> {
                         }
                     }
                     Rule::word
+                    | Rule::variable
                     | Rule::s_quoted
                     | Rule::d_quoted
                     | Rule::literal_s_quoted
@@ -332,7 +334,7 @@ fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {
                 }
             }
         }
-        Rule::word | Rule::literal_s_quoted | Rule::literal_d_quoted => {
+        Rule::word | Rule::variable | Rule::literal_s_quoted | Rule::literal_d_quoted => {
             let pair_span = pair.as_span();
             if pair_span.start() < pos && pos <= pair_span.end() {
                 return Some((pair_span, true));
@@ -709,6 +711,9 @@ mod test {
         env.borrow_mut()
             .alias
             .insert("alias".to_string(), "echo 'test' | sk ".to_string());
+        env.borrow_mut()
+            .variables
+            .insert("$FOO".to_string(), "BAR".to_string());
 
         let input = r#"alias abc " test" '-vvv' --foo "#.to_string();
         let replaced = expand_alias(input, Rc::clone(&env))?;
@@ -744,6 +749,9 @@ mod test {
             replaced,
             r#"echo ( echo 'test' | sk " test" '-vvv' --foo )"#.to_string()
         );
+        let input = r#"echo $FOO"#.to_string();
+        let replaced = expand_alias(input, Rc::clone(&env))?;
+        assert_eq!(replaced, r#"echo BAR"#.to_string());
 
         Ok(())
     }
@@ -868,6 +876,8 @@ mod test {
                         for pair in pair.into_inner() {
                             for pair in pair.into_inner() {
                                 assert_eq!(Rule::variable, pair.as_rule());
+                                assert_eq!("$foo", pair.as_str());
+
                                 find = true;
                             }
                         }

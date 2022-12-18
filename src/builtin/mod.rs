@@ -8,6 +8,8 @@ pub mod cd;
 pub mod history;
 pub mod jobs;
 pub mod lisp;
+mod set;
+mod var;
 mod z;
 
 pub type BuiltinCommand = fn(ctx: &Context, argv: Vec<String>, shell: &mut Shell) -> ExitStatus;
@@ -22,6 +24,8 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, BuiltinCommand>>> = Lazy::n
     builtin.insert("z", z::command as BuiltinCommand);
     builtin.insert("jobs", jobs::command as BuiltinCommand);
     builtin.insert("lisp", lisp::command as BuiltinCommand);
+    builtin.insert("set", set::command as BuiltinCommand);
+    builtin.insert("var", var::command as BuiltinCommand);
     Mutex::new(builtin)
 });
 

@@ -284,40 +284,70 @@ pub fn get_words(input: &str, pos: usize) -> Result<Vec<(Rule, Span, bool)>> {
 
 fn to_words(pair: Pair<Rule>, pos: usize) -> Vec<(Rule, Span, bool)> {
     let mut result: Vec<(Rule, Span, bool)> = vec![];
-    for inner_pair in pair.into_inner() {
-        match inner_pair.as_rule() {
-            Rule::simple_command | Rule::simple_command_bg => {
-                for inner_pair in inner_pair.into_inner() {
-                    let mut v = to_words(inner_pair, pos);
-                    result.append(&mut v);
+    match pair.as_rule() {
+        Rule::argv0 => {
+            for pair in pair.into_inner() {
+                for pair in pair.into_inner() {
+                    // TODO check subshell
+                    if let Some((span, current)) = get_span(pair, pos) {
+                        result.push((Rule::argv0, span, current));
+                    };
                 }
             }
-            Rule::argv0 => {
-                for pair in inner_pair.into_inner() {
-                    for pair in pair.into_inner() {
-                        // TODO check subshell
-                        if let Some((span, current)) = get_span(pair, pos) {
-                            result.push((Rule::argv0, span, current));
-                        };
-                    }
+        }
+        Rule::args => {
+            for pair in pair.into_inner() {
+                for pair in pair.into_inner() {
+                    if let Some((span, current)) = get_span(pair, pos) {
+                        result.push((Rule::args, span, current));
+                    };
                 }
             }
-            Rule::args => {
-                for pair in inner_pair.into_inner() {
-                    for pair in pair.into_inner() {
-                        if let Some((span, current)) = get_span(pair, pos) {
-                            result.push((Rule::args, span, current));
-                        };
-                    }
-                }
-            }
+        }
 
-            _ => {
-                debug!(
-                    "to_words missing {:?} {:?}",
-                    inner_pair.as_rule(),
-                    inner_pair.as_str()
-                );
+        _ => {
+            for inner_pair in pair.into_inner() {
+                // debug!(
+                //     "inner_pair {:?} {:?}",
+                //     inner_pair.as_rule(),
+                //     inner_pair.as_str()
+                // );
+
+                match inner_pair.as_rule() {
+                    Rule::simple_command | Rule::simple_command_bg => {
+                        for inner_pair in inner_pair.into_inner() {
+                            let mut v = to_words(inner_pair, pos);
+                            result.append(&mut v);
+                        }
+                    }
+                    Rule::argv0 => {
+                        for pair in inner_pair.into_inner() {
+                            for pair in pair.into_inner() {
+                                // TODO check subshell
+                                if let Some((span, current)) = get_span(pair, pos) {
+                                    result.push((Rule::argv0, span, current));
+                                };
+                            }
+                        }
+                    }
+                    Rule::args => {
+                        for pair in inner_pair.into_inner() {
+                            for pair in pair.into_inner() {
+                                if let Some((span, current)) = get_span(pair, pos) {
+                                    result.push((Rule::args, span, current));
+                                };
+                            }
+                        }
+                    }
+
+                    _ => {
+                        debug!(
+                            "to_words missing {:?} {:?}",
+                            inner_pair.as_rule(),
+                            inner_pair.as_str()
+                        );
+                    }
+                }
             }
         }
     }

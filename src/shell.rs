@@ -107,6 +107,7 @@ impl Shell {
         let jobs = self.get_jobs(input)?;
 
         for mut job in jobs {
+            debug!("start job {:?}", job.cmd);
             disable_raw_mode().ok();
             if background {
                 // all job run background

@@ -616,6 +616,8 @@ impl Job {
 
         process.set_io(ctx.infile, ctx.outfile);
 
+        debug!("start process {:?}", self);
+
         let pid = match process {
             JobProcess::Builtin(process) => {
                 let pid = getpid();

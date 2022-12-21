@@ -845,9 +845,9 @@ fn fork_process(ctx: &Context, job_pgid: Option<Pid>, process: &mut Process) -> 
 
     match pid {
         ForkResult::Parent { child } => {
-            if process.stdout != STDOUT_FILENO {
-                close(process.stdout).context("failed close")?;
-            }
+            // if process.stdout != STDOUT_FILENO {
+            //     close(process.stdout).context("failed close")?;
+            // }
             Ok(child)
         }
         ForkResult::Child => {

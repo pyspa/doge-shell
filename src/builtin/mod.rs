@@ -8,6 +8,7 @@ pub mod cd;
 pub mod history;
 pub mod jobs;
 pub mod lisp;
+mod read;
 mod set;
 mod var;
 mod z;
@@ -26,6 +27,8 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, BuiltinCommand>>> = Lazy::n
     builtin.insert("lisp", lisp::command as BuiltinCommand);
     builtin.insert("set", set::command as BuiltinCommand);
     builtin.insert("var", var::command as BuiltinCommand);
+    builtin.insert("read", read::command as BuiltinCommand);
+
     Mutex::new(builtin)
 });
 

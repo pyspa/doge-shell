@@ -47,7 +47,7 @@ async-std = {version = "1", features = ["attributes"]}
 pest = "2"
 pest_derive = "2"
 fuzzy-matcher = "*"
-shellexpand = "2"
+shellexpand = "3"
 bincode = "1"
 skim = "0.10"
 rust_lisp = "0.16"

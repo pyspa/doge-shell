@@ -81,7 +81,7 @@ mod test {
 
     use super::*;
     use crate::environment::Environment;
-    use crate::script::LispEngine;
+    use crate::lisp::LispEngine;
 
     fn init() {
         tracing_subscriber::fmt::init();

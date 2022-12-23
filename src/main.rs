@@ -12,11 +12,11 @@ mod environment;
 mod frecency;
 mod history;
 mod input;
+mod lisp;
 mod parser;
 mod process;
 mod prompt;
 mod repl;
-mod script;
 mod shell;
 mod wasm;
 

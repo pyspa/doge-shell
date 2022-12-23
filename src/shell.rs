@@ -2,9 +2,9 @@ use crate::builtin;
 use crate::dirs;
 use crate::environment::Environment;
 use crate::history::FrecencyHistory;
+use crate::lisp;
 use crate::parser::{self, Rule, ShellParser};
 use crate::process::{self, Context, ExitStatus, Job, JobProcess, WaitJob};
-use crate::script;
 use crate::wasm;
 use anyhow::Context as _;
 use anyhow::{anyhow, bail, Result};
@@ -35,7 +35,7 @@ pub struct Shell {
     pub cmd_history: Option<FrecencyHistory>,
     pub path_history: Option<FrecencyHistory>,
     pub wait_jobs: Vec<WaitJob>,
-    pub lisp_engine: Rc<RefCell<script::LispEngine>>,
+    pub lisp_engine: Rc<RefCell<lisp::LispEngine>>,
     pub wasm_engine: wasm::WasmEngine,
 }
 
@@ -54,7 +54,7 @@ impl Shell {
         let cmd_history = FrecencyHistory::from_file("dsh_cmd_history").unwrap();
         let path_history = FrecencyHistory::from_file("dsh_path_history").unwrap();
         let wasm_engine = wasm::WasmEngine::new(Rc::clone(&environment));
-        let lisp_engine = script::LispEngine::new(Rc::clone(&environment));
+        let lisp_engine = lisp::LispEngine::new(Rc::clone(&environment));
         if let Err(err) = lisp_engine.borrow().run_config_lisp() {
             eprintln!("failed load init lisp {:?}", err);
         }

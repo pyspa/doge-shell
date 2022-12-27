@@ -837,6 +837,7 @@ dependencies = [
  "anyhow",
  "async-std",
  "bincode",
+ "cfg-if 1.0.0",
  "chrono",
  "clap 4.0.32",
  "crossterm",
@@ -852,7 +853,6 @@ dependencies = [
  "pest",
  "pest_derive",
  "regex",
- "rust_lisp",
  "serde",
  "serde_json",
  "shellexpand",
@@ -1946,15 +1946,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "rust_lisp"
-version = "0.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32d1b51239a81675b0f869298be6eff3595956c8470a27c025f0f66638e5e6ef"
-dependencies = [
- "cfg-if 1.0.0",
 ]
 
 [[package]]

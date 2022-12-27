@@ -1,40 +1,36 @@
-use crate::environment::Environment;
+use crate::environment::{self, Environment};
+use crate::lisp::default_environment::default_env;
+use crate::lisp::interpreter::eval;
+use crate::lisp::model::{Env, List, RuntimeError, Symbol, Value};
+use crate::lisp::parser::parse;
+use crate::lisp::utils::require_typed_arg;
 use crate::shell::APP_NAME;
 use anyhow::Context as _;
-use rust_lisp::default_env;
-use rust_lisp::interpreter::eval;
-use rust_lisp::model::{Env, ForeignValue, List, RuntimeError, Symbol, Value};
-use rust_lisp::parser::parse;
-use rust_lisp::utils::require_typed_arg;
 use std::{cell::RefCell, rc::Rc};
 
 mod builtin;
-mod util;
+mod default_environment;
+mod interpreter;
+mod macros;
+mod model;
+mod parser;
+mod utils;
 
 pub const CONFIG_FILE: &str = "config.lisp";
 
 #[derive(Debug)]
 pub struct LispEngine {
     pub env: Rc<RefCell<Env>>,
-    environment: Rc<RefCell<Environment>>,
+    shell_env: Rc<RefCell<Environment>>,
 }
 
 impl LispEngine {
-    pub fn new(environment: Rc<RefCell<Environment>>) -> Rc<RefCell<Self>> {
-        let env = make_env();
+    pub fn new(shell_env: Rc<RefCell<Environment>>) -> Rc<RefCell<Self>> {
+        let env = make_env(Rc::clone(&shell_env));
         let engine = Rc::new(RefCell::new(LispEngine {
-            environment,
+            shell_env: Rc::clone(&shell_env),
             env: Rc::clone(&env),
         }));
-
-        let wrapper = Rc::new(RefCell::new(Wrapper {
-            engine: Rc::clone(&engine),
-        }));
-
-        // add global object
-        // set self
-        env.borrow_mut()
-            .define(Symbol::from("engine"), Value::Foreign(wrapper));
 
         engine
     }
@@ -93,52 +89,8 @@ impl LispEngine {
     }
 }
 
-#[derive(Debug)]
-struct Wrapper {
-    engine: Rc<RefCell<LispEngine>>,
-}
-
-impl ForeignValue for Wrapper {
-    fn command(
-        &mut self,
-        _env: Rc<RefCell<Env>>,
-        command: &str,
-        args: &[Value],
-    ) -> Result<Value, RuntimeError> {
-        match command {
-            "get-alias" => {
-                let alias = require_typed_arg::<&String>("get-alias", args, 0)?;
-                if let Some(v) = self.engine.borrow().environment.borrow().alias.get(alias) {
-                    Ok(Value::String(v.to_string()))
-                } else {
-                    Ok(Value::NIL)
-                }
-            }
-            "set-alias" => {
-                let alias = require_typed_arg::<&String>("set-alias", args, 0)?;
-                let command = require_typed_arg::<&String>("set-alias", args, 1)?;
-                if let Some(cmd) = self
-                    .engine
-                    .borrow()
-                    .environment
-                    .borrow_mut()
-                    .alias
-                    .insert(alias.to_string(), command.to_string())
-                {
-                    Ok(Value::String(cmd))
-                } else {
-                    Ok(Value::NIL)
-                }
-            }
-            _ => Err(RuntimeError {
-                msg: format!("Unexpected command {}", command),
-            }),
-        }
-    }
-}
-
-pub fn make_env() -> Rc<RefCell<Env>> {
-    let env = Rc::new(RefCell::new(default_env()));
+pub fn make_env(environment: Rc<RefCell<Environment>>) -> Rc<RefCell<Env>> {
+    let env = Rc::new(RefCell::new(default_env(environment)));
 
     // add builtin functions
     env.borrow_mut()
@@ -147,6 +99,7 @@ pub fn make_env() -> Rc<RefCell<Env>> {
         .define(Symbol::from("command"), Value::NativeFunc(builtin::command));
     env.borrow_mut()
         .define(Symbol::from("sh"), Value::NativeFunc(builtin::sh));
+
     // TODO add shell env
     env
 }

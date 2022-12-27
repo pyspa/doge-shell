@@ -1,18 +1,22 @@
-use super::util;
-use rust_lisp::model::{Env, RuntimeError, Symbol, Value};
-use std::convert::From;
+use super::utils;
+use crate::environment::Environment;
+use crate::lisp::model::{Env, RuntimeError, Symbol, Value};
+use crate::lisp::utils::require_typed_arg;
+use crate::lisp::LispEngine;
 use std::process::Command;
 use std::{cell::RefCell, rc::Rc};
 
-pub fn alias(env: Rc<RefCell<Env>>, args: &[Value]) -> Result<Value, RuntimeError> {
-    if let Some(Value::Foreign(val)) = env.borrow_mut().get(&Symbol::from("engine")) {
-        val.borrow_mut().command(env.clone(), "set-alias", args)
-    } else {
-        Ok(Value::NIL)
-    }
+pub fn alias(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let alias = &args[0];
+    let command = &args[1];
+    env.borrow().shell_env.borrow_mut().alias.insert(
+        utils::unquote(alias.to_string().as_str()),
+        utils::unquote(command.to_string().as_str()),
+    );
+    Ok(Value::NIL)
 }
 
-pub fn command(_env: Rc<RefCell<Env>>, args: &[Value]) -> Result<Value, RuntimeError> {
+pub fn command(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let mut cmd_args: Vec<String> = Vec::new();
     for arg in args {
         if let Value::String(val) = arg {
@@ -44,13 +48,14 @@ pub fn command(_env: Rc<RefCell<Env>>, args: &[Value]) -> Result<Value, RuntimeE
     }
 }
 
-pub fn sh(_env: Rc<RefCell<Env>>, args: &[Value]) -> Result<Value, RuntimeError> {
+pub fn sh(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let mut cmd_args: Vec<String> = Vec::new();
     cmd_args.push("-c".to_string());
     for arg in args {
         let val = arg.to_string();
-        cmd_args.push(util::unquote(val.as_str()));
+        cmd_args.push(utils::unquote(val.as_str()));
     }
+
     // TODO use own shell
     match Command::new("sh").args(cmd_args).output() {
         Ok(output) => {
@@ -93,7 +98,7 @@ mod test {
         let engine = LispEngine::new(env);
 
         let args = vec![Value::String("ls -al".to_string())];
-        let res = sh(Rc::clone(&engine.borrow().env), args.as_slice());
+        let res = sh(Rc::clone(&engine.borrow().env), args.to_vec());
         assert!(res.is_ok());
         println!("{}", res.unwrap());
 

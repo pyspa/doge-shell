@@ -271,7 +271,7 @@ impl std::fmt::Display for Value {
             Value::False => f.write_str("F"),
             Value::Lambda(this) => write!(f, "<func:(lambda {})>", this),
             Value::Macro(this) => write!(f, "(macro {})", this),
-            Value::String(this) => write!(f, "\"{}\"", this),
+            Value::String(this) => write!(f, "{}", this),
             Value::List(this) => write!(f, "{}", this),
             Value::HashMap(this) => {
                 let borrowed = this.borrow();

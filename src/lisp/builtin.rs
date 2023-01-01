@@ -1,4 +1,3 @@
-use super::utils;
 use crate::environment::Environment;
 use crate::lisp::model::{Env, RuntimeError, Symbol, Value};
 use crate::lisp::utils::require_typed_arg;
@@ -9,10 +8,11 @@ use std::{cell::RefCell, rc::Rc};
 pub fn alias(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let alias = &args[0];
     let command = &args[1];
-    env.borrow().shell_env.borrow_mut().alias.insert(
-        utils::unquote(alias.to_string().as_str()),
-        utils::unquote(command.to_string().as_str()),
-    );
+    env.borrow()
+        .shell_env
+        .borrow_mut()
+        .alias
+        .insert(alias.to_string(), command.to_string());
     Ok(Value::NIL)
 }
 
@@ -53,7 +53,7 @@ pub fn sh(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeErro
     cmd_args.push("-c".to_string());
     for arg in args {
         let val = arg.to_string();
-        cmd_args.push(utils::unquote(val.as_str()));
+        cmd_args.push(val);
     }
 
     // TODO use own shell

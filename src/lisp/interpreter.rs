@@ -1,6 +1,9 @@
-use crate::lisp::{
-    model::{Env, Lambda, List, RuntimeError, Symbol, Value},
-    utils::{require_arg, require_typed_arg},
+use crate::{
+    completion,
+    lisp::{
+        model::{Env, Lambda, List, RuntimeError, Symbol, Value},
+        utils::{require_arg, require_typed_arg},
+    },
 };
 use std::{cell::RefCell, rc::Rc};
 
@@ -146,6 +149,48 @@ fn eval_inner(
                     });
 
                     env.borrow_mut().define(symbol.clone(), lambda);
+
+                    Ok(Value::NIL)
+                }
+
+                Value::Symbol(Symbol(keyword)) if keyword == "autocomplete" => {
+                    let args = &list.cdr().into_iter().collect::<Vec<Value>>();
+
+                    let name_symbol = require_typed_arg::<&Symbol>(keyword, args, 0)?;
+                    let target = name_symbol.to_string();
+                    let mut cmd = None;
+                    let mut func = None;
+                    let mut candidates = None;
+
+                    let val = args[1].clone();
+
+                    match val {
+                        Value::List(list) => {
+                            let list = list.into_iter().map(|x| x.to_string()).collect();
+                            candidates = Some(list);
+                        }
+                        Value::Lambda(lambda) => {
+                            func = Some(Value::Lambda(lambda));
+                        }
+                        Value::String(str) => {
+                            cmd = Some(str);
+                        }
+                        _ => {
+                            println!("autocomplete unknown value: {:?}", val);
+                        }
+                    }
+
+                    let ac = completion::AutoComplete {
+                        target,
+                        cmd,
+                        func,
+                        candidates,
+                    };
+                    env.borrow_mut()
+                        .shell_env
+                        .borrow_mut()
+                        .autocompletion
+                        .push(ac);
 
                     Ok(Value::NIL)
                 }

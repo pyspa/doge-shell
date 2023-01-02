@@ -1,6 +1,8 @@
 use crate::dirs::is_dir;
 use crate::environment;
 use crate::frecency::ItemStats;
+use crate::lisp;
+use crate::lisp::Value;
 use anyhow::Result;
 use once_cell::sync::Lazy;
 use skim::prelude::*;
@@ -11,15 +13,13 @@ use std::path::PathBuf;
 use std::{process::Command, sync::Arc};
 use tracing::debug;
 
-pub type CompletionCommand = fn(Option<&str>) -> Option<String>;
-
-pub static COMPLETION_COMMAND: Lazy<HashMap<&str, CompletionCommand>> = Lazy::new(|| {
-    let mut comps = HashMap::new();
-
-    comps.insert("git_branch", git_branch as CompletionCommand);
-    comps.insert("docker_image", docker_image as CompletionCommand);
-    comps
-});
+#[derive(Debug)]
+pub struct AutoComplete {
+    pub target: String,
+    pub cmd: Option<String>,
+    pub func: Option<Value>,
+    pub candidates: Option<Vec<String>>,
+}
 
 #[derive(Debug)]
 pub struct Completion {
@@ -266,25 +266,44 @@ pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String>
 
 pub fn input_completion(
     input: &str,
-    completions: &Vec<environment::Completion>,
+    lisp_engine: Rc<RefCell<lisp::LispEngine>>,
     query: Option<&str>,
 ) -> Option<String> {
+    // TODO convert input
     let has = query.is_some();
-    // 1. completion from configs
-    for compl in completions {
+    let environment = Rc::clone(&lisp_engine.borrow().shell_env);
+    // 1. completion from autocomplete
+    for compl in environment.borrow().autocompletion.iter() {
         let cmd_str = format!("{} ", compl.target);
         if input.starts_with(cmd_str.as_str()) {
-            let res = if let Some(cmd_fn) = COMPLETION_COMMAND.get(compl.completion_cmd.as_str()) {
-                (cmd_fn)(query)
-            } else {
-                completion_from_cmd(compl.completion_cmd.to_string(), query)
-            };
-            return res;
+            if let Some(func) = &compl.func {
+                // run lisp func
+                match lisp_engine.borrow().apply_func(func.to_owned(), vec![]) {
+                    Ok(Value::List(list)) => {
+                        let mut items: Vec<Candidate> = Vec::new();
+                        for val in list.into_iter() {
+                            items.push(Candidate::Basic(val.to_string()));
+                        }
+                        return select_item(items, query);
+                    }
+                    Ok(Value::String(str)) => {
+                        return Some(str);
+                    }
+                    Err(err) => {
+                        println!("{:?}", err);
+                    }
+                    _ => {}
+                }
+            } else if let Some(cmd) = &compl.cmd {
+                // run command
+                return completion_from_cmd(cmd.to_string(), query);
+            }
+            return None;
         }
     }
 
+    // 2 . try path completion
     if has && is_dir(query.unwrap()) {
-        // 2 . try path completion
         return list_files(query);
     }
     None

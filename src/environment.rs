@@ -1,3 +1,4 @@
+use crate::completion::AutoComplete;
 use crate::dirs::search_file;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -6,17 +7,10 @@ use std::path::Path;
 use std::{cell::RefCell, rc::Rc};
 use tracing::debug;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Completion {
-    pub target: String,
-    pub completion_cmd: String,
-    pub post_processing: Option<String>,
-}
-
 #[derive(Debug)]
 pub struct Environment {
     pub alias: HashMap<String, String>,
-    pub completions: Vec<Completion>,
+    pub autocompletion: Vec<AutoComplete>,
     paths: Vec<String>,
     pub variables: HashMap<String, String>,
 }
@@ -37,7 +31,7 @@ impl Environment {
         let alias: HashMap<String, String> = HashMap::new();
         Rc::new(RefCell::new(Environment {
             alias,
-            completions: Vec::new(),
+            autocompletion: Vec::new(),
             variables: HashMap::new(),
             paths,
         }))

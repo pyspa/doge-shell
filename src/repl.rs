@@ -18,6 +18,7 @@ use nix::sys::termios::{tcgetattr, Termios};
 use nix::unistd::tcsetpgrp;
 use std::io::Write;
 use std::time::Duration;
+use std::{cell::RefCell, rc::Rc};
 use tracing::{debug, warn};
 
 const NONE: KeyModifiers = KeyModifiers::NONE;
@@ -354,7 +355,7 @@ impl Repl {
 
                 if let Some(val) = completion::input_completion(
                     &self.input.as_str(),
-                    &self.shell.environment.borrow().completions,
+                    Rc::clone(&self.shell.lisp_engine),
                     completion_query,
                 ) {
                     self.input.insert_str(val.as_str());

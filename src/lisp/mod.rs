@@ -1,7 +1,8 @@
 use crate::environment::{self, Environment};
 use crate::lisp::default_environment::default_env;
 use crate::lisp::interpreter::eval;
-use crate::lisp::model::{Env, List, RuntimeError, Symbol, Value};
+pub use crate::lisp::model::Value;
+use crate::lisp::model::{Env, List, RuntimeError, Symbol};
 use crate::lisp::parser::parse;
 use crate::lisp::utils::require_typed_arg;
 use crate::shell::APP_NAME;
@@ -21,7 +22,7 @@ pub const CONFIG_FILE: &str = "config.lisp";
 #[derive(Debug)]
 pub struct LispEngine {
     pub env: Rc<RefCell<Env>>,
-    shell_env: Rc<RefCell<Environment>>,
+    pub shell_env: Rc<RefCell<Environment>>,
 }
 
 impl LispEngine {
@@ -74,6 +75,13 @@ impl LispEngine {
     pub fn run_func_values(&self, name: &str, args: Vec<Value>) -> anyhow::Result<Value> {
         // get func
         let func = self.run(name)?;
+        // apply
+        let res = func.apply(self.env.clone(), args)?;
+
+        Ok(res)
+    }
+
+    pub fn apply_func(&self, func: Value, args: Vec<Value>) -> anyhow::Result<Value> {
         // apply
         let res = func.apply(self.env.clone(), args)?;
 

@@ -1,13 +1,11 @@
 use crate::dirs::is_dir;
-use crate::environment;
 use crate::frecency::ItemStats;
 use crate::lisp;
 use crate::lisp::Value;
 use anyhow::Result;
-use once_cell::sync::Lazy;
+use regex::Regex;
 use skim::prelude::*;
 use skim::{Skim, SkimItemReceiver, SkimItemSender};
-use std::collections::HashMap;
 use std::fs::read_dir;
 use std::path::PathBuf;
 use std::{process::Command, sync::Arc};
@@ -274,8 +272,10 @@ pub fn input_completion(
     let environment = Rc::clone(&lisp_engine.borrow().shell_env);
     // 1. completion from autocomplete
     for compl in environment.borrow().autocompletion.iter() {
-        let cmd_str = format!("{} ", compl.target);
-        if input.starts_with(cmd_str.as_str()) {
+        let cmd_str = format!("{}", compl.target);
+
+        // debug!("match cmd:'{}' in:'{}'", cmd_str, replace_space(input));
+        if replace_space(input).starts_with(cmd_str.as_str()) {
             if let Some(func) = &compl.func {
                 // run lisp func
                 match lisp_engine.borrow().apply_func(func.to_owned(), vec![]) {
@@ -296,7 +296,19 @@ pub fn input_completion(
                 }
             } else if let Some(cmd) = &compl.cmd {
                 // run command
-                return completion_from_cmd(cmd.to_string(), query);
+                if let Some(val) = completion_from_cmd(cmd.to_string(), query) {
+                    if val.starts_with('*') {
+                        return Some(val[2..].to_string());
+                    } else {
+                        return Some(val);
+                    }
+                }
+            } else if let Some(items) = &compl.candidates {
+                let items: Vec<Candidate> = items
+                    .iter()
+                    .map(|x| Candidate::Basic(x.trim().to_string()))
+                    .collect();
+                return select_item(items, query);
             }
             return None;
         }
@@ -309,27 +321,31 @@ pub fn input_completion(
     None
 }
 
-pub fn git_branch(query: Option<&str>) -> Option<String> {
-    if let Some(val) = completion_from_cmd("git branch --all | grep -v HEAD".to_string(), query) {
-        if val.starts_with('*') {
-            Some(val[2..].to_string())
-        } else {
-            Some(val)
-        }
-    } else {
-        None
-    }
-}
+// pub fn git_branch(query: Option<&str>) -> Option<String> {
+//     if let Some(val) = completion_from_cmd("git branch --all | grep -v HEAD".to_string(), query) {
+//         if val.starts_with('*') {
+//             Some(val[2..].to_string())
+//         } else {
+//             Some(val)
+//         }
+//     } else {
+//         None
+//     }
+// }
+// pub fn docker_image(query: Option<&str>) -> Option<String> {
+//     completion_from_cmd(
+//         "docker images | awk '// {print $1 \":\" $2}'".to_string(),
+//         query,
+//     )
+// }
 
-pub fn docker_image(query: Option<&str>) -> Option<String> {
-    completion_from_cmd(
-        "docker images | awk '// {print $1 \":\" $2}'".to_string(),
-        query,
-    )
-}
-
-pub fn list_files(query: Option<&str>) -> Option<String> {
+fn list_files(query: Option<&str>) -> Option<String> {
     completion_from_cmd(format!("ls -1 {}", query.unwrap()), None)
+}
+
+fn replace_space(s: &str) -> String {
+    let re = Regex::new(r"\s+").unwrap();
+    re.replace_all(s, "_").to_string()
 }
 
 #[cfg(test)]
@@ -395,5 +411,11 @@ mod test {
         println!("{:?}", ret);
         let ret = docker_image(None);
         println!("{:?}", ret);
+    }
+
+    #[test]
+    fn test_replace_space() {
+        let a = replace_space("aa     bb");
+        assert_eq!(a, "aa_bb")
     }
 }

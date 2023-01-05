@@ -1,4 +1,4 @@
-use crate::environment::{self, Environment};
+use crate::environment::Environment;
 use crate::lisp::default_environment::default_env;
 use crate::lisp::interpreter::eval;
 pub use crate::lisp::model::Value;
@@ -28,12 +28,10 @@ pub struct LispEngine {
 impl LispEngine {
     pub fn new(shell_env: Rc<RefCell<Environment>>) -> Rc<RefCell<Self>> {
         let env = make_env(Rc::clone(&shell_env));
-        let engine = Rc::new(RefCell::new(LispEngine {
+        Rc::new(RefCell::new(LispEngine {
             shell_env: Rc::clone(&shell_env),
             env: Rc::clone(&env),
-        }));
-
-        engine
+        }))
     }
 
     pub fn run_config_lisp(&self) -> anyhow::Result<()> {
@@ -44,6 +42,7 @@ impl LispEngine {
             .context("failed get path")?;
         let config_lisp: String = std::fs::read_to_string(file_path)?.trim().to_string();
         let _ = self.run(format!("(begin {} )", config_lisp).as_str());
+
         Ok(())
     }
 

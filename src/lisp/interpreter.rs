@@ -6,6 +6,7 @@ use crate::{
     },
 };
 use std::{cell::RefCell, rc::Rc};
+use tracing::log::debug;
 
 /// Evaluate a single Lisp expression in the context of a given environment.
 pub fn eval(env: Rc<RefCell<Env>>, expression: &Value) -> Result<Value, RuntimeError> {
@@ -180,17 +181,19 @@ fn eval_inner(
                         }
                     }
 
-                    let ac = completion::AutoComplete {
+                    let entry = completion::AutoComplete {
                         target,
                         cmd,
                         func,
                         candidates,
                     };
+                    debug!("add autocomplete {:?}", entry);
+
                     env.borrow_mut()
                         .shell_env
                         .borrow_mut()
                         .autocompletion
-                        .push(ac);
+                        .push(entry);
 
                     Ok(Value::NIL)
                 }

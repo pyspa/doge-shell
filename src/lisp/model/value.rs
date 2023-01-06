@@ -484,10 +484,10 @@ impl Div<&Value> for &Value {
             (Value::Float(this), Value::Float(other)) => Ok(Value::from(this / other)),
 
             (Value::Int(this), Value::Float(other)) => {
-                Ok(Value::from(int_type_to_float_type(&this) / other))
+                Ok(Value::from(int_type_to_float_type(this) / other))
             }
             (Value::Float(this), Value::Int(other)) => {
-                Ok(Value::from(this / int_type_to_float_type(&other)))
+                Ok(Value::from(this / int_type_to_float_type(other)))
             }
 
             _ => Err(()),
@@ -515,7 +515,7 @@ fn int_type_to_float_type(i: &IntType) -> FloatType {
                 }
             }
         } else {
-            return *i as FloatType;
+            *i as FloatType
         }
     }
 }

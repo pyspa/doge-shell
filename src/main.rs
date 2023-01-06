@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::derive_hash_xor_eq)]
+
 use crate::environment::Environment;
 use crate::repl::Repl;
 use crate::shell::Shell;
@@ -34,11 +37,11 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
     debug!("start shell");
     let env = Environment::new();
-    let mut shell = Shell::new(env);
-    shell.set_signals();
+    let shell = Shell::new(env);
+    shell.borrow_mut().set_signals();
 
     if let Some(command) = cli.command.as_deref() {
-        match shell.eval_str(command.to_string(), false) {
+        match shell.borrow_mut().eval_str(command.to_string(), false) {
             Ok(code) => {
                 tracing::debug!("run command mode {:?} : {:?}", command, &code);
                 code

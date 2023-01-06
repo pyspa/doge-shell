@@ -1,10 +1,9 @@
+use super::{RuntimeError, Value};
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::iter::FromIterator;
 use std::rc::Rc;
-
-use super::{RuntimeError, Value};
 
 /**
  * A Lisp list, implemented as a linked-list

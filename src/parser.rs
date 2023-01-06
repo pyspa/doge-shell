@@ -4,7 +4,6 @@ use pest::iterators::Pair;
 use pest::Parser;
 use pest::Span;
 use pest_derive::Parser;
-use std::collections::HashMap;
 use std::{cell::RefCell, rc::Rc};
 use tracing::debug;
 

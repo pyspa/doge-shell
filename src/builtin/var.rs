@@ -8,7 +8,7 @@ struct Var {
     value: String,
 }
 
-pub fn command(_ctx: &Context, argv: Vec<String>, shell: &mut Shell) -> ExitStatus {
+pub fn command(_ctx: &Context, _argv: Vec<String>, shell: &mut Shell) -> ExitStatus {
     let vars: Vec<Var> = shell
         .environment
         .borrow()

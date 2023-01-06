@@ -1,5 +1,5 @@
 use super::{RuntimeError, Symbol, Value};
-use crate::environment::Environment;
+use crate::shell::Shell;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::{collections::HashMap, fmt::Debug};
@@ -10,26 +10,26 @@ use std::{collections::HashMap, fmt::Debug};
 pub struct Env {
     parent: Option<Rc<RefCell<Env>>>,
     entries: HashMap<Symbol, Value>,
-    pub shell_env: Rc<RefCell<Environment>>,
+    pub shell: Rc<RefCell<Shell>>,
 }
 
 impl Env {
     /// Create a new, empty environment
-    pub fn new(shell_env: Rc<RefCell<Environment>>) -> Self {
+    pub fn new(shell: Rc<RefCell<Shell>>) -> Self {
         Self {
             parent: None,
             entries: HashMap::new(),
-            shell_env,
+            shell: Rc::clone(&shell),
         }
     }
 
     /// Create a new environment extending the given environment
     pub fn extend(parent: Rc<RefCell<Env>>) -> Self {
-        let shell_env = Rc::clone(&parent.borrow_mut().shell_env);
+        let shell = Rc::clone(&parent.borrow_mut().shell);
         Self {
             parent: Some(parent),
             entries: HashMap::new(),
-            shell_env: shell_env,
+            shell,
         }
     }
 

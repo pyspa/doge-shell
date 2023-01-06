@@ -1,10 +1,9 @@
-use crate::environment::Environment;
 use crate::lisp::default_environment::default_env;
 use crate::lisp::interpreter::eval;
 pub use crate::lisp::model::Value;
 use crate::lisp::model::{Env, List, RuntimeError, Symbol};
 use crate::lisp::parser::parse;
-use crate::lisp::utils::require_typed_arg;
+use crate::shell::Shell;
 use crate::shell::APP_NAME;
 use anyhow::Context as _;
 use std::{cell::RefCell, rc::Rc};
@@ -21,17 +20,19 @@ pub const CONFIG_FILE: &str = "config.lisp";
 
 #[derive(Debug)]
 pub struct LispEngine {
-    pub env: Rc<RefCell<Env>>,
-    pub shell_env: Rc<RefCell<Environment>>,
+    env: Rc<RefCell<Env>>,
+    shell: Rc<RefCell<Shell>>,
 }
 
 impl LispEngine {
-    pub fn new(shell_env: Rc<RefCell<Environment>>) -> Rc<RefCell<Self>> {
-        let env = make_env(Rc::clone(&shell_env));
-        Rc::new(RefCell::new(LispEngine {
-            shell_env: Rc::clone(&shell_env),
+    pub fn new(shell: Rc<RefCell<Shell>>) -> Self {
+        // create base env
+        let env = make_env(Rc::clone(&shell));
+
+        LispEngine {
+            shell: Rc::clone(&shell),
             env: Rc::clone(&env),
-        }))
+        }
     }
 
     pub fn run_config_lisp(&self) -> anyhow::Result<()> {
@@ -96,8 +97,8 @@ impl LispEngine {
     }
 }
 
-pub fn make_env(environment: Rc<RefCell<Environment>>) -> Rc<RefCell<Env>> {
-    let env = Rc::new(RefCell::new(default_env(environment)));
+pub fn make_env(shell: Rc<RefCell<Shell>>) -> Rc<RefCell<Env>> {
+    let env = Rc::new(RefCell::new(default_env(shell)));
 
     // add builtin functions
     env.borrow_mut()
@@ -131,6 +132,7 @@ impl Applicable for Value {
 mod test {
 
     use super::*;
+    use crate::Environment;
 
     fn init() {
         tracing_subscriber::fmt::init();
@@ -139,15 +141,17 @@ mod test {
     #[test]
     fn test_run_lisp() {
         let env = Environment::new();
-        let engine = LispEngine::new(env);
-        let _res = engine.borrow().run("(alias \"e\" \"emacs\")");
+        let shell = Shell::new(env);
+        let engine = LispEngine::new(shell);
+        let _res = engine.run("(alias \"e\" \"emacs\")");
     }
 
     #[test]
     fn test_apply_fn() {
         let env = Environment::new();
-        let engine = LispEngine::new(env);
-        let res = engine.borrow().run(
+        let shell = Shell::new(env);
+        let engine = LispEngine::new(shell);
+        let res = engine.run(
             "
 (begin
   (defun log (str)
@@ -155,17 +159,18 @@ mod test {
         );
         assert!(res.is_ok());
 
-        let func = engine.borrow().run("log").unwrap();
+        let func = engine.run("log").unwrap();
         let args = vec![Value::String("abcdefg".to_owned())];
-        let res = func.apply(engine.borrow().env.clone(), args);
+        let res = func.apply(Rc::clone(&engine.env), args);
         assert!(res.is_ok());
     }
 
     #[test]
     fn test_call_fn() {
         let env = Environment::new();
-        let engine = LispEngine::new(env);
-        let res = engine.borrow().run(
+        let shell = Shell::new(env);
+        let engine = LispEngine::new(shell);
+        let res = engine.run(
             "
 (begin
   (defun log (str)
@@ -180,16 +185,16 @@ mod test {
         assert!(res.is_ok());
 
         let args = vec!["abcdefg".to_string()];
-        let res = engine.borrow().run_func("log", args);
+        let res = engine.run_func("log", args);
         assert!(res.is_ok());
 
         let args = vec![Value::Int(1), Value::Int(2)];
-        let res = engine.borrow().run_func_values("adder", args);
+        let res = engine.run_func_values("adder", args);
         assert!(res.is_ok());
         println!("{:?}", res);
 
         let args = vec![];
-        let res = engine.borrow().run_func_values("call", args);
+        let res = engine.run_func_values("call", args);
         assert!(res.is_ok());
         println!("{:?}", res);
     }

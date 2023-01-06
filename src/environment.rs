@@ -1,6 +1,5 @@
 use crate::completion::AutoComplete;
 use crate::dirs::search_file;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::path::Path;

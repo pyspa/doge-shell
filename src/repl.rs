@@ -33,7 +33,7 @@ pub enum ShellEvent {
 }
 
 pub struct Repl {
-    pub shell: Shell,
+    shell: Rc<RefCell<Shell>>,
     input: Input,
     columns: usize,
     lines: usize,
@@ -50,7 +50,7 @@ impl Drop for Repl {
 }
 
 impl Repl {
-    pub fn new(shell: Shell) -> Self {
+    pub fn new(shell: Rc<RefCell<Shell>>) -> Self {
         Repl {
             shell,
             input: Input::new(),
@@ -78,12 +78,18 @@ impl Repl {
     fn check_background_jobs(&mut self) {
         // TODO thread
         if let Some((pid, _state)) = wait_any_job(true) {
-            if let Some(index) = self.shell.wait_jobs.iter().position(|job| job.pid == pid) {
-                if let Some(job) = self.shell.wait_jobs.get(index) {
+            if let Some(index) = self
+                .shell
+                .borrow_mut()
+                .wait_jobs
+                .iter()
+                .position(|job| job.pid == pid)
+            {
+                if let Some(job) = self.shell.borrow_mut().wait_jobs.get(index) {
                     job.output();
                     // TODO fix message format
                     print!("\r\n[{:?}] done '{}' \r\n\r", job.job_id, job.cmd);
-                    self.shell.wait_jobs.remove(index);
+                    self.shell.borrow_mut().wait_jobs.remove(index);
                     self.print_prompt();
                 }
             }
@@ -91,10 +97,10 @@ impl Repl {
     }
 
     fn save_history(&mut self) {
-        if let Some(ref mut history) = self.shell.cmd_history {
+        if let Some(ref mut history) = self.shell.borrow_mut().cmd_history {
             let _ = history.save();
         }
-        if let Some(ref mut history) = self.shell.path_history {
+        if let Some(ref mut history) = self.shell.borrow_mut().path_history {
             let _ = history.save();
         }
     }
@@ -121,7 +127,7 @@ impl Repl {
         .ok();
     }
 
-    fn print_prompt(&mut self) {
+    fn print_prompt(&self) {
         let prompt = self.get_prompt();
         print_preprompt();
         print!("\r{}", prompt);
@@ -130,14 +136,14 @@ impl Repl {
 
     fn stop_history_mode(&mut self) {
         self.history_search = None;
-        if let Some(ref mut history) = self.shell.cmd_history {
+        if let Some(ref mut history) = self.shell.borrow_mut().cmd_history {
             history.search_word = None;
             history.reset_index();
         }
     }
 
     fn set_completions(&mut self) {
-        if let Some(ref mut history) = self.shell.cmd_history {
+        if let Some(ref mut history) = self.shell.borrow_mut().cmd_history {
             let comps = if self.input.is_empty() {
                 history.sorted(&crate::frecency::SortMethod::Recent)
             } else {
@@ -178,7 +184,7 @@ impl Repl {
             self.input.completion = None
         } else {
             // TODO refactor
-            if let Some(ref mut history) = self.shell.cmd_history {
+            if let Some(ref mut history) = self.shell.borrow_mut().cmd_history {
                 if let Some(hist) = history.search_first(&input) {
                     self.input.completion = Some(hist.clone());
                     if hist.len() >= input.len() {
@@ -193,7 +199,8 @@ impl Repl {
             if let Ok(words) = self.input.get_words() {
                 for (ref rule, ref span, current) in words {
                     let word = span.as_str();
-                    if let Some(_found) = self.shell.environment.borrow().lookup(word) {
+                    if let Some(_found) = self.shell.borrow_mut().environment.borrow().lookup(word)
+                    {
                         for pos in span.start()..span.end() {
                             // change color
                             match_index.push(pos);
@@ -203,7 +210,9 @@ impl Repl {
                     if !word.is_empty() && current && comp.is_none() {
                         match rule {
                             Rule::argv0 => {
-                                if let Some(file) = self.shell.environment.borrow().search(word) {
+                                if let Some(file) =
+                                    self.shell.borrow_mut().environment.borrow().search(word)
+                                {
                                     if file.len() >= input.len() {
                                         comp = Some(file[input.len()..].to_string());
                                     }
@@ -231,7 +240,8 @@ impl Repl {
                                         break;
                                     }
                                 } else if !word.starts_with('-') {
-                                    if let Some(file) = self.shell.environment.borrow().search(word)
+                                    if let Some(file) =
+                                        self.shell.borrow_mut().environment.borrow().search(word)
                                     {
                                         if file.len() >= word.len() {
                                             let part = file[word.len()..].to_string();
@@ -355,7 +365,7 @@ impl Repl {
 
                 if let Some(val) = completion::input_completion(
                     &self.input.as_str(),
-                    Rc::clone(&self.shell.lisp_engine),
+                    Rc::clone(&self.shell),
                     completion_query,
                 ) {
                     self.input.insert_str(val.as_str());
@@ -368,7 +378,7 @@ impl Repl {
                 self.stop_history_mode();
                 print!("\r\n");
                 if !self.input.is_empty() {
-                    match self.shell.eval_str(self.input.as_str(), false) {
+                    match self.shell.borrow_mut().eval_str(self.input.as_str(), false) {
                         Ok(code) => {
                             debug!("exit: {} : {:?}", self.input.as_str(), code);
                         }
@@ -387,7 +397,7 @@ impl Repl {
                 print!("\r\n");
                 if !self.input.is_empty() {
                     let input = self.input.as_str();
-                    if let Err(err) = self.shell.eval_str(input, true) {
+                    if let Err(err) = self.shell.borrow_mut().eval_str(input, true) {
                         eprintln!("{:?}", err)
                     }
                     self.input.clear();
@@ -414,7 +424,7 @@ impl Repl {
                 self.input.clear();
             }
             (KeyCode::Char('d'), CTRL) => {
-                self.shell.exit();
+                self.shell.borrow_mut().exit();
             }
 
             _ => {
@@ -437,9 +447,11 @@ impl Repl {
 
         debug!(
             "shell setpgid pid:{:?} pgid:{:?}",
-            self.shell.pid, self.shell.pgid
+            self.shell.borrow().pid,
+            self.shell.borrow().pgid
         );
-        let _ = tcsetpgrp(SHELL_TERMINAL, self.shell.pgid).context("failed tcsetpgrp");
+
+        let _ = tcsetpgrp(SHELL_TERMINAL, self.shell.borrow_mut().pgid).context("failed tcsetpgrp");
         self.tmode = Some(tcgetattr(SHELL_TERMINAL).expect("failed cgetattr"));
 
         // start repl loop
@@ -452,7 +464,7 @@ impl Repl {
             select! {
                 _ = check_background_delay => {
                     self.check_background_jobs();
-                    if self.shell.wait_jobs.is_empty() {
+                    if self.shell.borrow_mut().wait_jobs.is_empty() {
                         enable_raw_mode().ok();
                     }
                 },
@@ -463,12 +475,12 @@ impl Repl {
                     match maybe_event {
                         Some(Ok(event)) => {
                             if let Err(err) = self.handle_event(ShellEvent::Input(event)){
-                                self.shell.print_error(format!("Error: {:?}\r",err));
+                                self.shell.borrow_mut().print_error(format!("Error: {:?}\r",err));
                                 break;
                             }
                         }
                         Some(Err(err)) => {
-                            self.shell.print_error(format!("Error: {:?}\r",err));
+                            self.shell.borrow_mut().print_error(format!("Error: {:?}\r",err));
                             break;
                         },
                         None => break,
@@ -480,7 +492,7 @@ impl Repl {
                 // show completion
                 self.start_completion = false;
             }
-            if let Some(_status) = self.shell.exited {
+            if let Some(_status) = self.shell.borrow_mut().exited {
                 debug!("exited");
                 break;
             }

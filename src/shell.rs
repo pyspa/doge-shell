@@ -2,10 +2,10 @@ use crate::builtin;
 use crate::dirs;
 use crate::environment::Environment;
 use crate::history::FrecencyHistory;
-use crate::lisp;
+use crate::lisp::LispEngine;
 use crate::parser::{self, Rule, ShellParser};
 use crate::process::{self, Context, ExitStatus, Job, JobProcess, WaitJob};
-use crate::wasm;
+use crate::wasm::WasmEngine;
 use anyhow::Context as _;
 use anyhow::{anyhow, bail, Result};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
@@ -35,8 +35,8 @@ pub struct Shell {
     pub cmd_history: Option<FrecencyHistory>,
     pub path_history: Option<FrecencyHistory>,
     pub wait_jobs: Vec<WaitJob>,
-    pub lisp_engine: Rc<RefCell<lisp::LispEngine>>,
-    pub wasm_engine: wasm::WasmEngine,
+    pub lisp_engine: Option<LispEngine>,
+    pub wasm_engine: WasmEngine, // TODO Option?
 }
 
 impl Drop for Shell {
@@ -46,30 +46,37 @@ impl Drop for Shell {
 }
 
 impl Shell {
-    pub fn new(environment: Rc<RefCell<Environment>>) -> Self {
+    pub fn new(environment: Rc<RefCell<Environment>>) -> Rc<RefCell<Self>> {
         let pid = getpid();
         let pgid = pid;
 
         let _ = setpgid(pgid, pgid).context("failed setpgid");
         let cmd_history = FrecencyHistory::from_file("dsh_cmd_history").unwrap();
         let path_history = FrecencyHistory::from_file("dsh_path_history").unwrap();
-        let wasm_engine = wasm::WasmEngine::new(Rc::clone(&environment));
-        let lisp_engine = lisp::LispEngine::new(Rc::clone(&environment));
-        if let Err(err) = lisp_engine.borrow().run_config_lisp() {
-            eprintln!("failed load init lisp {:?}", err);
-        }
+        let wasm_engine = WasmEngine::new(Rc::clone(&environment));
 
-        Shell {
-            environment,
+        // create shell
+        let shell = Rc::new(RefCell::new(Shell {
+            environment: Rc::clone(&environment),
             exited: None::<ExitStatus>,
             pid,
             pgid,
             cmd_history: Some(cmd_history),
             path_history: Some(path_history),
             wait_jobs: Vec::new(),
-            lisp_engine,
+            lisp_engine: None,
             wasm_engine,
+        }));
+
+        // share shell
+        let lisp_engine = LispEngine::new(Rc::clone(&shell));
+        if let Err(err) = lisp_engine.run_config_lisp() {
+            eprintln!("failed load init lisp {:?}", err);
         }
+
+        // set lisp_engine
+        shell.borrow_mut().lisp_engine = Some(lisp_engine);
+        shell
     }
 
     pub fn set_signals(&mut self) {
@@ -279,7 +286,7 @@ impl Shell {
         } else if self.wasm_engine.modules.get(cmd).is_some() {
             let wasm = process::WasmProcess::new(cmd.to_string(), argv);
             job.set_process(JobProcess::Wasm(wasm));
-        } else if self.lisp_engine.borrow().has(cmd) {
+        } else if self.lisp_engine.is_some() && self.lisp_engine.as_ref().unwrap().has(cmd) {
             let cmd_fn = builtin::lisp::run;
             let builtin = process::BuiltinProcess::new(cmd_fn, argv);
             job.set_process(JobProcess::Builtin(builtin));

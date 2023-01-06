@@ -64,7 +64,7 @@ pub struct ParseError {
 
 impl Display for ParseError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        return write!(formatter, "Parse error: {}", self.msg);
+        write!(formatter, "Parse error: {}", self.msg)
     }
 }
 
@@ -310,9 +310,9 @@ fn consume(code: &str, index: usize, s: &str) -> ConsumeResult {
             .zip(s.chars())
             .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
     {
-        return Some(index + s.len());
+        Some(index + s.len())
     } else {
-        return None;
+        None
     }
 }
 

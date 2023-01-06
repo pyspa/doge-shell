@@ -1,7 +1,7 @@
 use crate::dirs::is_dir;
 use crate::frecency::ItemStats;
-use crate::lisp;
 use crate::lisp::Value;
+use crate::shell::Shell;
 use anyhow::Result;
 use regex::Regex;
 use skim::prelude::*;
@@ -73,7 +73,7 @@ impl Completion {
 
         if self.completions.len() - 1 > self.current_index {
             self.current_index += 1;
-            Some(self.completions[self.current_index as usize].clone())
+            Some(self.completions[self.current_index].clone())
         } else {
             None
         }
@@ -82,7 +82,7 @@ impl Completion {
     pub fn forward(&mut self) -> Option<ItemStats> {
         if self.current_index > 0 {
             self.current_index -= 1;
-            Some(self.completions[self.current_index as usize].clone())
+            Some(self.completions[self.current_index].clone())
         } else {
             None
         }
@@ -169,7 +169,7 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
     let home = dirs::home_dir().unwrap();
     let path = PathBuf::from(exp_str);
 
-    let dir = read_dir(&path)?;
+    let dir = read_dir(path)?;
     let mut files: Vec<Candidate> = Vec::new();
 
     for entry in dir.flatten() {
@@ -264,21 +264,27 @@ pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String>
 
 pub fn input_completion(
     input: &str,
-    lisp_engine: Rc<RefCell<lisp::LispEngine>>,
+    shell: Rc<RefCell<Shell>>,
     query: Option<&str>,
 ) -> Option<String> {
-    // TODO convert input
     let has = query.is_some();
-    let environment = Rc::clone(&lisp_engine.borrow().shell_env);
+
+    let environment = Rc::clone(&shell.borrow().environment);
     // 1. completion from autocomplete
     for compl in environment.borrow().autocompletion.iter() {
-        let cmd_str = format!("{}", compl.target);
+        let cmd_str = format!("{}_", compl.target);
 
         // debug!("match cmd:'{}' in:'{}'", cmd_str, replace_space(input));
         if replace_space(input).starts_with(cmd_str.as_str()) {
             if let Some(func) = &compl.func {
                 // run lisp func
-                match lisp_engine.borrow().apply_func(func.to_owned(), vec![]) {
+                match shell
+                    .borrow()
+                    .lisp_engine
+                    .as_ref()
+                    .unwrap()
+                    .apply_func(func.to_owned(), vec![])
+                {
                     Ok(Value::List(list)) => {
                         let mut items: Vec<Candidate> = Vec::new();
                         for val in list.into_iter() {

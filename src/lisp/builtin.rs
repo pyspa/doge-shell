@@ -1,7 +1,4 @@
-use crate::environment::Environment;
-use crate::lisp::model::{Env, RuntimeError, Symbol, Value};
-use crate::lisp::utils::require_typed_arg;
-use crate::lisp::LispEngine;
+use crate::lisp::model::{Env, RuntimeError, Value};
 use std::process::Command;
 use std::{cell::RefCell, rc::Rc};
 
@@ -9,7 +6,9 @@ pub fn alias(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeEr
     let alias = &args[0];
     let command = &args[1];
     env.borrow()
-        .shell_env
+        .shell
+        .borrow()
+        .environment
         .borrow_mut()
         .alias
         .insert(alias.to_string(), command.to_string());
@@ -87,6 +86,7 @@ mod test {
     use super::*;
     use crate::environment::Environment;
     use crate::lisp::LispEngine;
+    use crate::shell::Shell;
 
     fn init() {
         tracing_subscriber::fmt::init();
@@ -95,10 +95,11 @@ mod test {
     #[test]
     fn test_lisp_sh() {
         let env = Environment::new();
-        let engine = LispEngine::new(env);
+        let shell = Shell::new(env);
+        let engine = LispEngine::new(shell);
 
         let args = vec![Value::String("ls -al".to_string())];
-        let res = sh(Rc::clone(&engine.borrow().env), args.to_vec());
+        let res = sh(Rc::clone(&engine.env), args.to_vec());
         assert!(res.is_ok());
         println!("{}", res.unwrap());
 

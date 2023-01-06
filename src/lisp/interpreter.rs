@@ -190,7 +190,9 @@ fn eval_inner(
                     debug!("add autocomplete {:?}", entry);
 
                     env.borrow_mut()
-                        .shell_env
+                        .shell
+                        .borrow()
+                        .environment
                         .borrow_mut()
                         .autocompletion
                         .push(entry);
@@ -282,7 +284,7 @@ fn eval_inner(
                         eval_inner(env, then_expr, context)
                     } else {
                         else_expr
-                            .map(|expr| eval_inner(env, &expr, context))
+                            .map(|expr| eval_inner(env, expr, context))
                             .unwrap_or(Ok(Value::NIL))
                     }
                 }
@@ -319,10 +321,9 @@ fn eval_inner(
                     if matches!(func_or_macro, Value::Macro(_)) {
                         let args = list.into_iter().skip(1).collect::<Vec<Value>>();
 
-                        let expanded =
-                            call_function_or_macro(env.clone(), &mut func_or_macro, args)?;
+                        let expanded = call_function_or_macro(env.clone(), &func_or_macro, args)?;
 
-                        eval_inner(env.clone(), &expanded, Context::new())
+                        eval_inner(env, &expanded, Context::new())
                     } else {
                         let args = list
                             .into_iter()

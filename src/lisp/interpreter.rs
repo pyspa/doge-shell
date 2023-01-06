@@ -158,7 +158,7 @@ fn eval_inner(
                     let args = &list.cdr().into_iter().collect::<Vec<Value>>();
 
                     let name_symbol = require_typed_arg::<&Symbol>(keyword, args, 0)?;
-                    let target = name_symbol.to_string();
+                    let target = name_symbol.to_string().replace('-', "_");
                     let mut cmd = None;
                     let mut func = None;
                     let mut candidates = None;

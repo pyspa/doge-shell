@@ -321,24 +321,6 @@ pub fn input_completion(
     None
 }
 
-// pub fn git_branch(query: Option<&str>) -> Option<String> {
-//     if let Some(val) = completion_from_cmd("git branch --all | grep -v HEAD".to_string(), query) {
-//         if val.starts_with('*') {
-//             Some(val[2..].to_string())
-//         } else {
-//             Some(val)
-//         }
-//     } else {
-//         None
-//     }
-// }
-// pub fn docker_image(query: Option<&str>) -> Option<String> {
-//     completion_from_cmd(
-//         "docker images | awk '// {print $1 \":\" $2}'".to_string(),
-//         query,
-//     )
-// }
-
 fn list_files(query: Option<&str>) -> Option<String> {
     completion_from_cmd(format!("ls -1 {}", query.unwrap()), None)
 }
@@ -402,15 +384,6 @@ mod test {
 
         let a = select_item(items, Some("test"));
         assert_eq!("test1", a.unwrap());
-    }
-
-    #[test]
-    #[ignore]
-    fn test_select() {
-        let ret = git_branch(Some("dev"));
-        println!("{:?}", ret);
-        let ret = docker_image(None);
-        println!("{:?}", ret);
     }
 
     #[test]

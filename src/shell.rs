@@ -95,14 +95,19 @@ impl Shell {
         std::io::stdout().flush().ok();
     }
 
-    pub fn eval_str(&mut self, input: String, background: bool) -> Result<ExitCode> {
+    pub fn eval_str(
+        &mut self,
+        mut ctx: Context,
+        input: String,
+        background: bool,
+    ) -> Result<ExitCode> {
         if let Some(ref mut history) = self.cmd_history {
             history.add(&input);
             history.reset_index();
         }
         // TODO refactor context
-        let tmode = tcgetattr(0).expect("failed tcgetattr");
-        let mut ctx = Context::new(self.pid, self.pgid, tmode, true);
+        // let tmode = tcgetattr(0).expect("failed tcgetattr");
+        // let mut ctx = Context::new(self.pid, self.pgid, tmode, true);
 
         let jobs = self.get_jobs(input)?;
 

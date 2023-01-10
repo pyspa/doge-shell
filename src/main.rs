@@ -1,7 +1,9 @@
 use crate::environment::Environment;
+use crate::process::Context;
 use crate::repl::Repl;
 use crate::shell::Shell;
 use clap::Parser;
+use nix::sys::termios::tcgetattr;
 use std::process::ExitCode;
 use tracing::debug;
 
@@ -38,7 +40,9 @@ async fn main() -> ExitCode {
     shell.set_signals();
 
     if let Some(command) = cli.command.as_deref() {
-        match shell.eval_str(command.to_string(), false) {
+        let shell_tmode = tcgetattr(0).expect("failed tcgetattr");
+        let ctx = Context::new(shell.pid, shell.pgid, shell_tmode, true);
+        match shell.eval_str(ctx, command.to_string(), false) {
             Ok(code) => {
                 tracing::debug!("run command mode {:?} : {:?}", command, &code);
                 code

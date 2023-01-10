@@ -1,7 +1,11 @@
-use crate::environment::Environment;
-use crate::lisp::model::{Env, RuntimeError, Symbol, Value};
-use crate::lisp::utils::require_typed_arg;
-use crate::lisp::LispEngine;
+use crate::lisp::model::{Env, RuntimeError, Value};
+use crate::process::Context;
+use crate::shell::Shell;
+use nix::sys::termios::tcgetattr;
+use nix::unistd::pipe;
+use std::fs::File;
+use std::io::prelude::*;
+use std::os::unix::io::FromRawFd;
 use std::process::Command;
 use std::{cell::RefCell, rc::Rc};
 
@@ -48,37 +52,63 @@ pub fn command(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
     }
 }
 
-pub fn sh(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+pub fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let mut cmd_args: Vec<String> = Vec::new();
-    cmd_args.push("-c".to_string());
+
     for arg in args {
         let val = arg.to_string();
         cmd_args.push(val);
     }
+    let input = cmd_args.join(" ");
 
-    // TODO use own shell
-    match Command::new("sh").args(cmd_args).output() {
-        Ok(output) => {
-            let stdout = String::from_utf8(output.stdout)
-                .expect("fail get stdout")
-                .trim_end()
-                .to_string();
+    let mut shell = Shell::new(Rc::clone(&env.borrow().shell_env));
+    shell.set_signals();
+    let shell_tmode = tcgetattr(0).expect("failed tcgetattr");
 
-            let stderr = String::from_utf8(output.stderr)
-                .expect("fail get stdout")
-                .trim_end()
-                .to_string();
+    // TODO capture
+    let mut ctx = Context::new(shell.pid, shell.pgid, shell_tmode, true);
+    let (pout, pin) = pipe().expect("failed pipe");
+    ctx.outfile = pin;
 
-            if !stdout.is_empty() {
-                Ok(Value::String(stdout))
-            } else {
-                Ok(Value::String(stderr))
-            }
-        }
-        Err(err) => Err(RuntimeError {
-            msg: err.to_string(),
-        }),
-    }
+    let result = shell.eval_str(ctx, input, false);
+
+    let mut raw_stdout = Vec::new();
+    unsafe { File::from_raw_fd(pout).read_to_end(&mut raw_stdout).ok() };
+    let output = std::str::from_utf8(&raw_stdout)
+        .map_err(|err| {
+            // TODO
+            eprintln!("binary in variable/expansion is not supported");
+            err
+        })
+        .expect("")
+        .trim_end_matches('\n')
+        .to_owned();
+
+    // // TODO use own shell
+    // match Command::new("sh").args(cmd_args).output() {
+    //     Ok(output) => {
+    //         let stdout = String::from_utf8(output.stdout)
+    //             .expect("fail get stdout")
+    //             .trim_end()
+    //             .to_string();
+
+    //         let stderr = String::from_utf8(output.stderr)
+    //             .expect("fail get stdout")
+    //             .trim_end()
+    //             .to_string();
+
+    //         if !stdout.is_empty() {
+    //             Ok(Value::String(stdout))
+    //         } else {
+    //             Ok(Value::String(stderr))
+    //         }
+    //     }
+    //     Err(err) => Err(RuntimeError {
+    //         msg: err.to_string(),
+    //     }),
+    // }
+
+    Ok(Value::NIL)
 }
 
 #[cfg(test)]

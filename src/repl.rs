@@ -3,6 +3,7 @@ use crate::dirs;
 use crate::input::Input;
 use crate::parser::Rule;
 use crate::process::wait_any_job;
+use crate::process::Context;
 use crate::prompt::print_preprompt;
 use crate::shell::{Shell, SHELL_TERMINAL};
 use anyhow::Context as _;
@@ -368,7 +369,9 @@ impl Repl {
                 self.stop_history_mode();
                 print!("\r\n");
                 if !self.input.is_empty() {
-                    match self.shell.eval_str(self.input.as_str(), false) {
+                    let shell_tmode = tcgetattr(0).expect("failed tcgetattr");
+                    let ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);
+                    match self.shell.eval_str(ctx, self.input.as_str(), false) {
                         Ok(code) => {
                             debug!("exit: {} : {:?}", self.input.as_str(), code);
                         }
@@ -387,7 +390,9 @@ impl Repl {
                 print!("\r\n");
                 if !self.input.is_empty() {
                     let input = self.input.as_str();
-                    if let Err(err) = self.shell.eval_str(input, true) {
+                    let shell_tmode = tcgetattr(0).expect("failed tcgetattr");
+                    let ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);
+                    if let Err(err) = self.shell.eval_str(ctx, input, true) {
                         eprintln!("{:?}", err)
                     }
                     self.input.clear();

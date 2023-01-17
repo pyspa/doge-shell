@@ -63,52 +63,49 @@ pub fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError
 
     let mut shell = Shell::new(Rc::clone(&env.borrow().shell_env));
     shell.set_signals();
-    let shell_tmode = tcgetattr(0).expect("failed tcgetattr");
+    let shell_tmode = match tcgetattr(0) {
+        Ok(tmode) => tmode,
+        Err(err) => {
+            eprintln!("{}", err);
+            return Err(RuntimeError {
+                msg: err.to_string(),
+            });
+        }
+    };
 
-    // TODO capture
     let mut ctx = Context::new(shell.pid, shell.pgid, shell_tmode, true);
-    let (pout, pin) = pipe().expect("failed pipe");
+    let (pout, pin) = match pipe() {
+        Ok(p) => p,
+        Err(err) => {
+            eprintln!("{}", err);
+            return Err(RuntimeError {
+                msg: err.to_string(),
+            });
+        }
+    };
+
     ctx.outfile = pin;
 
-    let result = shell.eval_str(ctx, input, false);
+    if let Err(err) = shell.eval_str(ctx, input, false) {
+        eprintln!("{}", err);
+        return Err(RuntimeError {
+            msg: err.to_string(),
+        });
+    }
 
     let mut raw_stdout = Vec::new();
     unsafe { File::from_raw_fd(pout).read_to_end(&mut raw_stdout).ok() };
-    let output = std::str::from_utf8(&raw_stdout)
-        .map_err(|err| {
-            // TODO
-            eprintln!("binary in variable/expansion is not supported");
-            err
-        })
-        .expect("")
-        .trim_end_matches('\n')
-        .to_owned();
+    let output = match std::str::from_utf8(&raw_stdout) {
+        Ok(str) => str.trim_matches('\n').to_owned(),
+        Err(err) => {
+            eprintln!("{}", err);
+            return Err(RuntimeError {
+                msg: err.to_string(),
+            });
+        }
+    };
 
-    // // TODO use own shell
-    // match Command::new("sh").args(cmd_args).output() {
-    //     Ok(output) => {
-    //         let stdout = String::from_utf8(output.stdout)
-    //             .expect("fail get stdout")
-    //             .trim_end()
-    //             .to_string();
-
-    //         let stderr = String::from_utf8(output.stderr)
-    //             .expect("fail get stdout")
-    //             .trim_end()
-    //             .to_string();
-
-    //         if !stdout.is_empty() {
-    //             Ok(Value::String(stdout))
-    //         } else {
-    //             Ok(Value::String(stderr))
-    //         }
-    //     }
-    //     Err(err) => Err(RuntimeError {
-    //         msg: err.to_string(),
-    //     }),
-    // }
-
-    Ok(Value::NIL)
+    Ok(Value::String(output))
 }
 
 #[cfg(test)]

@@ -45,9 +45,10 @@ fn eval_block_inner(
     if let Some(expr) = &current_expr {
         eval_inner(env, expr, context)
     } else {
-        Err(RuntimeError {
-            msg: "Unrecognized expression".to_owned(),
-        })
+        Ok(Value::NIL)
+        // Err(RuntimeError {
+        //     msg: "Unrecognized expression".to_owned(),
+        // })
     }
 }
 
@@ -243,6 +244,49 @@ fn eval_inner(
                         ),
                     })?;
 
+                    eval_block_inner(let_env, body.into_iter(), context)
+                }
+
+                Value::Symbol(Symbol(keyword)) if keyword == "vlet" => {
+                    let let_env = Rc::new(RefCell::new(Env::extend(env)));
+
+                    let args = &list.cdr().into_iter().collect::<Vec<Value>>();
+
+                    let declarations = require_typed_arg::<&List>(keyword, args, 0)?;
+
+                    for decl in declarations.into_iter() {
+                        let decl = &decl;
+
+                        let decl_cons: &List = decl.try_into().map_err(|_| RuntimeError {
+                            msg: format!("Expected declaration clause, found {}", decl),
+                        })?;
+                        let symbol = &decl_cons.car()?;
+                        let symbol: &Symbol = symbol.try_into().map_err(|_| RuntimeError {
+                            msg: format!("Expected symbol for let declaration, found {}", symbol),
+                        })?;
+                        let expr = &decl_cons.cdr().car()?;
+
+                        let result = eval_inner(let_env.clone(), expr, context.found_tail(true))?;
+                        let_env
+                            .borrow_mut()
+                            .shell_env
+                            .borrow_mut()
+                            .variables
+                            .insert(format!("${}", symbol), result.to_string());
+                        let_env.borrow_mut().define(symbol.clone(), result);
+                    }
+
+                    let body = &Value::List(list.cdr().cdr());
+                    let body: &List = body.try_into().map_err(|_| RuntimeError {
+                        msg: format!(
+                            "Expected expression(s) after let-declarations, found {}",
+                            body
+                        ),
+                    })?;
+                    debug!(
+                        "variables {:?}",
+                        let_env.borrow().shell_env.borrow().variables
+                    );
                     eval_block_inner(let_env, body.into_iter(), context)
                 }
 

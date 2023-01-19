@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::{process::Command, sync::Arc};
 use tracing::debug;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AutoComplete {
     pub target: String,
     pub cmd: Option<String>,

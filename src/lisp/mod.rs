@@ -1,4 +1,4 @@
-use crate::environment::Environment;
+use crate::environment::{self, Environment};
 use crate::lisp::default_environment::default_env;
 use crate::lisp::interpreter::eval;
 pub use crate::lisp::model::Value;
@@ -35,11 +35,7 @@ impl LispEngine {
     }
 
     pub fn run_config_lisp(&self) -> anyhow::Result<()> {
-        let xdg_dir =
-            xdg::BaseDirectories::with_prefix(APP_NAME).context("failed get xdg directory")?;
-        let file_path = xdg_dir
-            .place_config_file(CONFIG_FILE)
-            .context("failed get path")?;
+        let file_path = environment::get_config_file(CONFIG_FILE)?;
         let config_lisp: String = std::fs::read_to_string(file_path)?.trim().to_string();
         let _ = self.run(format!("(begin {} )", config_lisp).as_str());
 
@@ -106,8 +102,9 @@ pub fn make_env(environment: Rc<RefCell<Environment>>) -> Rc<RefCell<Env>> {
         .define(Symbol::from("command"), Value::NativeFunc(builtin::command));
     env.borrow_mut()
         .define(Symbol::from("sh"), Value::NativeFunc(builtin::sh));
+    env.borrow_mut()
+        .define(Symbol::from("direnv"), Value::NativeFunc(builtin::direnv));
 
-    // TODO add shell env
     env
 }
 

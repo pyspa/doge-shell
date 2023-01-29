@@ -1,4 +1,5 @@
 use crate::builtin;
+use crate::direnv;
 use crate::dirs;
 use crate::environment::Environment;
 use crate::history::FrecencyHistory;
@@ -15,18 +16,20 @@ use nix::sys::termios::tcgetattr;
 use nix::unistd::{getpid, pipe, setpgid, Pid};
 use pest::iterators::Pair;
 use pest::Parser;
+use std::fmt::Debug;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::Write;
 use std::os::unix::io::FromRawFd;
+use std::path::Path;
 use std::process::ExitCode;
 use std::{cell::RefCell, rc::Rc};
 use tracing::{debug, warn};
 
 pub const APP_NAME: &str = "dsh";
 pub const SHELL_TERMINAL: c_int = STDIN_FILENO;
+pub type CommandHook = fn(pwd: &Path, env: Rc<RefCell<Environment>>);
 
-#[derive(Debug)]
 pub struct Shell {
     pub environment: Rc<RefCell<Environment>>,
     pub exited: Option<ExitStatus>,
@@ -37,6 +40,17 @@ pub struct Shell {
     pub wait_jobs: Vec<WaitJob>,
     pub lisp_engine: Rc<RefCell<lisp::LispEngine>>,
     pub wasm_engine: wasm::WasmEngine,
+    pub chpwd_hooks: Vec<CommandHook>,
+}
+
+impl std::fmt::Debug for Shell {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
+        f.debug_struct("Shell")
+            .field("environment", &self.environment)
+            .field("pid", &self.pid)
+            .field("pgid", &self.pgid)
+            .finish()
+    }
 }
 
 impl Drop for Shell {
@@ -58,6 +72,8 @@ impl Shell {
         if let Err(err) = lisp_engine.borrow().run_config_lisp() {
             eprintln!("failed load init lisp {:?}", err);
         }
+        debug!("dump environment {:?}", environment);
+        let chpwd_hooks: Vec<CommandHook> = Vec::new();
 
         Shell {
             environment,
@@ -69,7 +85,13 @@ impl Shell {
             wait_jobs: Vec::new(),
             lisp_engine,
             wasm_engine,
+            chpwd_hooks,
         }
+    }
+
+    pub fn install_chpwd_hooks(&mut self) {
+        self.chpwd_hooks.push(chpwd_debug);
+        self.chpwd_hooks.push(direnv::check_path);
     }
 
     pub fn set_signals(&mut self) {
@@ -357,4 +379,24 @@ impl Shell {
     pub fn exit(&mut self) {
         self.exited = Some(ExitStatus::ExitedWith(0));
     }
+
+    pub fn chpwd(&mut self, pwd: &str) {
+        let pwd = Path::new(pwd);
+        for hook in &self.chpwd_hooks {
+            hook(pwd, Rc::clone(&self.environment));
+        }
+    }
+
+    // pub fn chpwd2(&mut self, pwd: &str) {
+    //     let env = Rc::clone(&self.environment);
+    //     let hooks = env.borrow().chpwd_hooks.;
+    //     let pwd = Path::new(pwd);
+    //     for hook in hooks {
+    //         hook(pwd, Rc::clone(&env));
+    //     }
+    // }
+}
+
+fn chpwd_debug(pwd: &Path, _env: Rc<RefCell<Environment>>) {
+    debug!("!chpwd {:?}", pwd);
 }

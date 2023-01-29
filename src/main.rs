@@ -9,6 +9,7 @@ use tracing::debug;
 
 mod builtin;
 mod completion;
+mod direnv;
 mod dirs;
 mod environment;
 mod frecency;
@@ -53,6 +54,7 @@ async fn main() -> ExitCode {
             }
         }
     } else {
+        shell.install_chpwd_hooks();
         let mut repl = Repl::new(shell);
         async_std::task::block_on(repl.run_interactive());
         ExitCode::from(0)

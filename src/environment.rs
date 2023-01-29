@@ -1,18 +1,21 @@
 use crate::completion::AutoComplete;
+use crate::direnv::DirEnvironment;
 use crate::dirs::search_file;
-use serde::{Deserialize, Serialize};
+use crate::shell::APP_NAME;
+use anyhow::Context as _;
+use anyhow::Result;
 use std::collections::HashMap;
 use std::env;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::{cell::RefCell, rc::Rc};
 use tracing::debug;
 
-#[derive(Debug)]
 pub struct Environment {
     pub alias: HashMap<String, String>,
     pub autocompletion: Vec<AutoComplete>,
     paths: Vec<String>,
     pub variables: HashMap<String, String>,
+    pub direnv_roots: Vec<DirEnvironment>,
 }
 
 impl Environment {
@@ -28,12 +31,12 @@ impl Environment {
 
         debug!("default path {:?}", &paths);
 
-        let alias: HashMap<String, String> = HashMap::new();
         Rc::new(RefCell::new(Environment {
-            alias,
+            alias: HashMap::new(),
             autocompletion: Vec::new(),
             variables: HashMap::new(),
             paths,
+            direnv_roots: Vec::new(),
         }))
     }
 
@@ -42,12 +45,14 @@ impl Environment {
         let paths = parent.borrow().paths.clone();
         let autocompletion = parent.borrow().autocompletion.clone();
         let variables = parent.borrow().variables.clone();
+        let direnv_roots = parent.borrow().direnv_roots.clone();
 
         Rc::new(RefCell::new(Environment {
             alias,
             autocompletion,
             variables,
             paths,
+            direnv_roots,
         }))
     }
 
@@ -93,9 +98,34 @@ impl Environment {
     }
 }
 
+impl std::fmt::Debug for Environment {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
+        f.debug_struct("Environment")
+            .field("alias", &self.alias)
+            .field("autocompletion", &self.autocompletion)
+            .field("direnv_paths", &self.direnv_roots)
+            .field("paths", &self.paths)
+            .field("variables", &self.variables)
+            .finish()
+    }
+}
+
+pub fn get_config_file(name: &str) -> Result<PathBuf> {
+    let xdg_dir =
+        xdg::BaseDirectories::with_prefix(APP_NAME).context("failed get xdg directory")?;
+    xdg_dir.place_config_file(name).context("failed get path")
+}
+
+pub fn get_data_file(name: &str) -> Result<PathBuf> {
+    let xdg_dir =
+        xdg::BaseDirectories::with_prefix(APP_NAME).context("failed get xdg directory")?;
+    xdg_dir.place_data_file(name).context("failed get path")
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+
     fn init() {
         tracing_subscriber::fmt::init();
     }

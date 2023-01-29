@@ -41,6 +41,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, shell: &mut Shell) -> ExitStatu
             if let Some(ref mut history) = shell.path_history {
                 history.add(&dir);
             }
+            shell.chpwd(&dir);
             ExitStatus::ExitedWith(0)
         }
         Err(err) => {

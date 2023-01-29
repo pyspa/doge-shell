@@ -1,12 +1,11 @@
+use crate::environment;
 use crate::frecency::{read_store, write_store, FrecencyStore, ItemStats, SortMethod};
-use crate::shell::APP_NAME;
 use anyhow::Context as _;
 use anyhow::Result;
 use chrono::Local;
 use easy_reader::EasyReader;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
-
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -41,8 +40,7 @@ impl History {
     }
 
     pub fn from_file(name: &str) -> Self {
-        let xdg_dir = xdg::BaseDirectories::with_prefix(APP_NAME).unwrap();
-        let file_path = xdg_dir.place_data_file(name).unwrap();
+        let file_path = environment::get_data_file(name).unwrap();
         let path = file_path.into_os_string().into_string().unwrap();
 
         History {
@@ -227,9 +225,7 @@ impl FrecencyHistory {
     }
 
     pub fn from_file(name: &str) -> Result<Self> {
-        let xdg_dir =
-            xdg::BaseDirectories::with_prefix(APP_NAME).context("failed get xdg directory")?;
-        let file_path = xdg_dir.place_data_file(name).context("failed get path")?;
+        let file_path = environment::get_data_file(name)?;
         let matcher = SkimMatcherV2::default();
 
         let store = match read_store(&file_path) {
@@ -403,6 +399,8 @@ impl FrecencyHistory {
 
 #[cfg(test)]
 mod test {
+    use crate::shell;
+
     use super::*;
 
     fn init() {
@@ -413,7 +411,7 @@ mod test {
     fn test_new() {
         let history = History::from_file("dsh_cmd_history");
         let mut data_dir = dirs::data_dir().unwrap();
-        data_dir.push(APP_NAME);
+        data_dir.push(shell::APP_NAME);
         data_dir.push("dsh_cmd_history");
         let dir = data_dir.into_os_string().into_string().unwrap();
         assert_eq!(history.path, Some(dir));

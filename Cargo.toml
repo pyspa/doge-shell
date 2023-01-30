@@ -57,4 +57,3 @@ tabled = "*"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 cfg-if = "1.0"
-simple_config_parser = "1.0"

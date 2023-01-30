@@ -1,5 +1,6 @@
 use crate::environment::Environment;
-use simple_config_parser::Config;
+use anyhow::Result;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::{cell::RefCell, rc::Rc};
 
@@ -53,16 +54,28 @@ impl DirEnvironment {
         let env_file = root.join(".env");
         if env_file.exists() {
             if let Some(file) = env_file.to_str() {
-                let cfg = Config::new().file(file).unwrap();
-                for data in &cfg.data {
+                let cfg = read_config_file(file).unwrap();
+                for data in &cfg {
                     self.entries.push(EnvEntry {
-                        key: data[0].to_string().to_uppercase(),
+                        key: data[0].to_string(),
                         value: data[1].to_string(),
                     });
                 }
             }
         }
     }
+}
+
+fn read_config_file(file: &str) -> Result<Vec<[String; 2]>> {
+    let mut ret: Vec<[String; 2]> = Vec::new();
+    let contents = fs::read_to_string(file)?;
+    for line in contents.lines() {
+        let parts: Vec<&str> = line.splitn(2, '=').collect();
+        let key = parts[0].trim().to_uppercase().to_string();
+        let value = parts[1].trim().to_string();
+        ret.push([key, value]);
+    }
+    Ok(ret)
 }
 
 pub fn check_path(pwd: &Path, env: Rc<RefCell<Environment>>) {

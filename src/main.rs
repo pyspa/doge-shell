@@ -39,10 +39,10 @@ async fn main() -> ExitCode {
     let env = Environment::new();
     let mut shell = Shell::new(env);
     shell.set_signals();
+    let shell_tmode = tcgetattr(0).expect("failed tcgetattr");
+    let ctx = Context::new(shell.pid, shell.pgid, shell_tmode, true);
 
     if let Some(command) = cli.command.as_deref() {
-        let shell_tmode = tcgetattr(0).expect("failed tcgetattr");
-        let ctx = Context::new(shell.pid, shell.pgid, shell_tmode, true);
         match shell.eval_str(ctx, command.to_string(), false) {
             Ok(code) => {
                 tracing::debug!("run command mode {:?} : {:?}", command, &code);
@@ -55,6 +55,13 @@ async fn main() -> ExitCode {
         }
     } else {
         shell.install_chpwd_hooks();
+        match shell.eval_str(ctx, "cd .".to_string(), true) {
+            Ok(_) => {}
+            Err(err) => {
+                eprintln!("{:?}", err);
+                return ExitCode::FAILURE;
+            }
+        };
         let mut repl = Repl::new(shell);
         async_std::task::block_on(repl.run_interactive());
         ExitCode::from(0)

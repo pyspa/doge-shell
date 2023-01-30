@@ -80,6 +80,7 @@ pub struct Context {
     pub infile: RawFd,
     pub outfile: RawFd,
     pub errfile: RawFd,
+    pub captured_out: Option<RawFd>,
 }
 
 impl Context {
@@ -93,6 +94,7 @@ impl Context {
             infile: STDIN_FILENO,
             outfile: STDOUT_FILENO,
             errfile: STDERR_FILENO,
+            captured_out: None,
         }
     }
 }
@@ -608,7 +610,9 @@ impl Job {
             }
             _ => {
                 // reset
-                if ctx.infile != STDIN_FILENO {
+                if let Some(out) = ctx.captured_out {
+                    ctx.outfile = out;
+                } else if ctx.infile != STDIN_FILENO {
                     ctx.outfile = self.stdout;
                 }
             }

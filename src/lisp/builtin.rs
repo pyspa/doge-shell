@@ -9,6 +9,7 @@ use std::io::prelude::*;
 use std::os::unix::io::FromRawFd;
 use std::process::Command;
 use std::{cell::RefCell, rc::Rc};
+use tracing::debug;
 
 pub fn alias(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let alias = &args[0];
@@ -73,12 +74,13 @@ pub fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError
     }
     let input = cmd_args.join(" ");
 
+    debug!("var {:?}", &env.borrow().shell_env.borrow().variables);
     let mut shell = Shell::new(Rc::clone(&env.borrow().shell_env));
     shell.set_signals();
     let shell_tmode = match tcgetattr(0) {
         Ok(tmode) => tmode,
         Err(err) => {
-            eprintln!("{}", err);
+            eprintln!("error: {}", err);
             return Err(RuntimeError {
                 msg: err.to_string(),
             });
@@ -89,17 +91,16 @@ pub fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError
     let (pout, pin) = match pipe() {
         Ok(p) => p,
         Err(err) => {
-            eprintln!("{}", err);
+            eprintln!("error: {}", err);
             return Err(RuntimeError {
                 msg: err.to_string(),
             });
         }
     };
 
-    ctx.outfile = pin;
-
+    ctx.captured_out = Some(pin);
     if let Err(err) = shell.eval_str(ctx, input, false) {
-        eprintln!("{}", err);
+        eprintln!("error: {}", err);
         return Err(RuntimeError {
             msg: err.to_string(),
         });
@@ -107,16 +108,17 @@ pub fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError
 
     let mut raw_stdout = Vec::new();
     unsafe { File::from_raw_fd(pout).read_to_end(&mut raw_stdout).ok() };
+
     let output = match std::str::from_utf8(&raw_stdout) {
         Ok(str) => str.trim_matches('\n').to_owned(),
         Err(err) => {
-            eprintln!("{}", err);
+            eprintln!("error: {}", err);
             return Err(RuntimeError {
                 msg: err.to_string(),
             });
         }
     };
-
+    debug!("'{}'", output);
     Ok(Value::String(output))
 }
 

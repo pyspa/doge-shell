@@ -102,8 +102,10 @@ pub fn make_env(environment: Rc<RefCell<Environment>>) -> Rc<RefCell<Env>> {
         .define(Symbol::from("command"), Value::NativeFunc(builtin::command));
     env.borrow_mut()
         .define(Symbol::from("sh"), Value::NativeFunc(builtin::sh));
-    env.borrow_mut()
-        .define(Symbol::from("direnv"), Value::NativeFunc(builtin::direnv));
+    env.borrow_mut().define(
+        Symbol::from("allow-direnv"),
+        Value::NativeFunc(builtin::allow_direnv),
+    );
 
     env
 }

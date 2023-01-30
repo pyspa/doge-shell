@@ -1,4 +1,4 @@
-use crate::direnv;
+use crate::direnv::DirEnvironment;
 use crate::lisp::model::{Env, RuntimeError, Value};
 use crate::process::Context;
 use crate::shell::Shell;
@@ -22,7 +22,7 @@ pub fn alias(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeEr
     Ok(Value::NIL)
 }
 
-pub fn direnv(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+pub fn allow_direnv(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     for arg in args {
         let root = arg.to_string();
         let root = shellexpand::tilde(root.as_str());
@@ -31,7 +31,7 @@ pub fn direnv(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeE
             .shell_env
             .borrow_mut()
             .direnv_roots
-            .push(direnv::DirEnvironment::new(root.to_string()));
+            .push(DirEnvironment::new(root.to_string()));
     }
     Ok(Value::NIL)
 }

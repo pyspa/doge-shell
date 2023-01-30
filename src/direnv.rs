@@ -83,7 +83,8 @@ pub fn check_path(pwd: &Path, env: Rc<RefCell<Environment>>) {
         if pwd.starts_with(&env.path) {
             if !env.loaded {
                 env.read_envfile();
-                print!("load direnv ");
+                println!("direnv: loading {}", env.path);
+                print!("direnv: export ");
                 env.set_env();
                 println!("");
                 env.loaded = true;
@@ -91,7 +92,8 @@ pub fn check_path(pwd: &Path, env: Rc<RefCell<Environment>>) {
             env.set_env();
         } else {
             if env.loaded {
-                print!("unload direnv ");
+                println!("direnv: unloading {}", env.path);
+                print!("direnv: unxport ");
                 env.remove_env();
                 println!("");
                 env.loaded = false;

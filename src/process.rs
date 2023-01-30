@@ -111,7 +111,7 @@ impl std::fmt::Debug for JobProcess {
         match self {
             JobProcess::Builtin(jprocess) => f
                 .debug_struct("JobProcess::Builtin")
-                .field("builtin", jprocess)
+                .field("cmd", &jprocess.argv)
                 .finish(),
             JobProcess::Wasm(jprocess) => f
                 .debug_struct("JobProcess::WASM")
@@ -119,7 +119,8 @@ impl std::fmt::Debug for JobProcess {
                 .finish(),
             JobProcess::Command(jprocess) => f
                 .debug_struct("JobProcess::Command")
-                .field("command", jprocess)
+                .field("cmd", &jprocess.cmd)
+                .field("pid", &jprocess.pid)
                 .finish(),
         }
     }
@@ -454,10 +455,10 @@ impl Process {
 
     pub fn launch(&mut self, pgid: Option<Pid>, foreground: bool) -> Result<()> {
         let pid = getpid();
-        debug!("launch: foreground:{:?}", foreground);
+        debug!("launch: {} foreground:{:?}", &self.cmd, foreground);
         debug!(
-            "launch: child process setpgid pid:{:?} pgid:{:?}",
-            pid, pgid
+            "launch: child process {} setpgid pid:{:?} pgid:{:?}",
+            &self.cmd, pid, pgid
         );
 
         let pgid = pgid.unwrap_or(pid);
@@ -465,7 +466,6 @@ impl Process {
 
         if foreground {
             tcsetpgrp(SHELL_TERMINAL, pgid).context("failed tcsetpgrp")?;
-            debug!("launch: tcsetpgrp pgid");
         }
 
         self.set_signals();
@@ -711,18 +711,18 @@ impl Job {
     }
 
     fn put_in_foreground(&mut self, ctx: &Context) -> Result<()> {
-        debug!("put_in_foreground: pgid {:?}", self.pgid);
+        debug!("put_in_foreground: {:?} pgid {:?}", &self.cmd, self.pgid);
         // Put the job into the foreground
 
         tcsetpgrp(SHELL_TERMINAL, self.pgid.unwrap()).context("failed tcsetpgrp")?;
-        debug!("put_in_foreground: tcsetpgrp pgid");
+        // debug!("put_in_foreground: {:?} tcsetpgrp pgid", &self.cmd);
 
         // TODO Send the job a continue signal, if necessary.
 
         self.wait_job();
 
         tcsetpgrp(SHELL_TERMINAL, ctx.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
-        debug!("put_in_foreground: tcsetpgrp shell");
+        // debug!("put_in_foreground: {:?} tcsetpgrp shell", &self.cmd);
 
         // let tmodes = tcgetattr(SHELL_TERMINAL).context("failed tcgetattr wait")?;
         // self.tmodes = Some(tmodes);
@@ -748,7 +748,10 @@ impl Job {
     fn show_job_status(&self) {}
 
     pub fn wait_job(&mut self) {
-        debug!("pgid: {:?} need_wait: {:?}", self.pgid, self.need_wait);
+        debug!(
+            "wait_job: {:?} pgid: {:?} need_wait: {:?}",
+            &self.cmd, self.pgid, self.need_wait
+        );
 
         if !self.need_wait {
             return;
@@ -770,12 +773,13 @@ impl Job {
                     panic!("unexpected waitpid event: {:?}", status);
                 }
             };
-            debug!("wait_job: waitpid result {:?} {:?}", pid, state);
+            debug!("wait_job: {:?} {:?} {:?}", &self.cmd, pid, state);
 
             self.set_process_state(pid, state);
 
             debug!(
-                "wait_job: complete:{:?} stopped:{:?}",
+                "wait_job: {:?} complete:{:?} stopped:{:?}",
+                &self.cmd,
                 is_job_completed(self),
                 is_job_stopped(self),
             );
@@ -788,8 +792,7 @@ impl Job {
 
     fn set_process_state(&mut self, pid: Pid, state: ProcessState) {
         if let Some(process) = self.process.as_mut() {
-            debug!("set_process_state: pid:{:?}", pid);
-            set_process_state(process, pid, state)
+            set_process_state(process, pid, state);
         }
     }
 }
@@ -827,9 +830,15 @@ fn last_process_state(process: JobProcess) -> ProcessState {
 fn set_process_state(process: &mut JobProcess, pid: Pid, state: ProcessState) {
     if let Some(ppid) = process.get_pid() {
         if ppid == pid {
-            debug!("set_process_state: found pid:{:?}", pid);
+            debug!(
+                "set_process_state: {:?} pid:{:?} state:{:?}",
+                &process, pid, state
+            );
             process.set_state(state);
         }
+    }
+    if let Some(mut p) = process.next() {
+        set_process_state(&mut p, pid, state);
     }
 }
 
@@ -875,18 +884,20 @@ pub fn find_job(first_job: &Job, pgid: Pid) -> Option<Job> {
 }
 
 pub fn is_job_stopped(job: &Job) -> bool {
-    debug!("is_job_stopped: process:{:?}", job);
     if let Some(p) = &job.process {
-        p.is_stopped()
+        let res = p.is_stopped();
+        // debug!("is_job_stopped: process:{:?} is_job_stopped:{}", &p, &res);
+        res
     } else {
         true
     }
 }
 
 pub fn is_job_completed(job: &Job) -> bool {
-    debug!("is_job_completed: process:{:?}", job);
     if let Some(p) = &job.process {
-        p.is_completed()
+        let res = p.is_completed();
+        // debug!("is_job_completed: process:{:?} completed:{}", &p, &res);
+        res
     } else {
         true
     }

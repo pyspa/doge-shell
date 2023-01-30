@@ -24,11 +24,14 @@ pub fn alias(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeEr
 
 pub fn direnv(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     for arg in args {
+        let root = arg.to_string();
+        let root = shellexpand::tilde(root.as_str());
+
         env.borrow()
             .shell_env
             .borrow_mut()
             .direnv_roots
-            .push(direnv::DirEnvironment::new(arg.to_string()));
+            .push(direnv::DirEnvironment::new(root.to_string()));
     }
     Ok(Value::NIL)
 }

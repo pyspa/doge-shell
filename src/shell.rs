@@ -129,7 +129,6 @@ impl Shell {
         }
         // TODO refactor context
         // let tmode = tcgetattr(0).expect("failed tcgetattr");
-        // let mut ctx = Context::new(self.pid, self.pgid, tmode, true);
 
         let jobs = self.get_jobs(input)?;
 
@@ -301,14 +300,14 @@ impl Shell {
 
         let cmd = argv[0].as_str();
         if let Some(cmd_fn) = builtin::get_command(cmd) {
-            let builtin = process::BuiltinProcess::new(cmd_fn, argv);
+            let builtin = process::BuiltinProcess::new(cmd.to_string(), cmd_fn, argv);
             job.set_process(JobProcess::Builtin(builtin));
         } else if self.wasm_engine.modules.get(cmd).is_some() {
             let wasm = process::WasmProcess::new(cmd.to_string(), argv);
             job.set_process(JobProcess::Wasm(wasm));
-        } else if self.lisp_engine.borrow().has(cmd) {
+        } else if self.lisp_engine.borrow().is_export(cmd) {
             let cmd_fn = builtin::lisp::run;
-            let builtin = process::BuiltinProcess::new(cmd_fn, argv);
+            let builtin = process::BuiltinProcess::new(cmd.to_string(), cmd_fn, argv);
             job.set_process(JobProcess::Builtin(builtin));
         } else if let Some(cmd) = self.environment.borrow().lookup(cmd) {
             let process = process::Process::new(cmd, argv);
@@ -316,8 +315,11 @@ impl Shell {
             job.foreground = foreground;
         } else if dirs::is_dir(cmd) {
             if let Some(cmd_fn) = builtin::get_command("cd") {
-                let builtin =
-                    process::BuiltinProcess::new(cmd_fn, vec!["cd".to_string(), cmd.to_string()]);
+                let builtin = process::BuiltinProcess::new(
+                    cmd.to_string(),
+                    cmd_fn,
+                    vec!["cd".to_string(), cmd.to_string()],
+                );
                 job.set_process(JobProcess::Builtin(builtin));
             }
         } else {

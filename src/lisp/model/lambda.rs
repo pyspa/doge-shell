@@ -10,6 +10,7 @@ pub struct Lambda {
     pub closure: Rc<RefCell<Env>>,
     pub argnames: Vec<Symbol>,
     pub body: Rc<Value>,
+    pub export: bool,
 }
 
 impl PartialEq for Lambda {

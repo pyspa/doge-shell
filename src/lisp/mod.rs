@@ -90,6 +90,14 @@ impl LispEngine {
             false
         }
     }
+
+    pub fn is_export(&self, name: &str) -> bool {
+        if let Ok(Value::Lambda(l)) = self.run(name) {
+            l.export
+        } else {
+            false
+        }
+    }
 }
 
 pub fn make_env(environment: Rc<RefCell<Environment>>) -> Rc<RefCell<Env>> {

@@ -248,6 +248,7 @@ impl JobProcess {
 
 #[derive(Clone)]
 pub struct BuiltinProcess {
+    name: String,
     cmd_fn: BuiltinCommand,
     argv: Vec<String>,
     state: ProcessState, // completed, stopped,
@@ -279,8 +280,9 @@ impl std::fmt::Debug for BuiltinProcess {
 }
 
 impl BuiltinProcess {
-    pub fn new(cmd_fn: BuiltinCommand, argv: Vec<String>) -> Self {
+    pub fn new(name: String, cmd_fn: BuiltinCommand, argv: Vec<String>) -> Self {
         BuiltinProcess {
+            name,
             cmd_fn,
             argv,
             state: ProcessState::Running,
@@ -304,8 +306,8 @@ impl BuiltinProcess {
 
     pub fn launch(&mut self, ctx: &mut Context, shell: &mut Shell) -> Result<()> {
         debug!(
-            "launch: builtin process infile:{:?} outfile:{:?}",
-            self.stdin, self.stdout
+            "launch: builtin process {:?} infile:{:?} outfile:{:?}",
+            &self.name, self.stdin, self.stdout
         );
         let _exit = (self.cmd_fn)(ctx, self.argv.to_vec(), shell);
         // TODO check exit

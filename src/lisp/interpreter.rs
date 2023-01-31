@@ -129,6 +129,7 @@ fn eval_inner(
                         closure: env.clone(),
                         argnames,
                         body,
+                        export: false,
                     });
 
                     env.borrow_mut().define(symbol.clone(), lambda);
@@ -148,6 +149,27 @@ fn eval_inner(
                         closure: env.clone(),
                         argnames,
                         body,
+                        export: false,
+                    });
+
+                    env.borrow_mut().define(symbol.clone(), lambda);
+
+                    Ok(Value::NIL)
+                }
+
+                Value::Symbol(Symbol(keyword)) if keyword == "fn" => {
+                    let args = &list.cdr().into_iter().collect::<Vec<Value>>();
+
+                    let symbol = require_typed_arg::<&Symbol>(keyword, args, 0)?;
+                    let argnames_list = require_typed_arg::<&List>(keyword, args, 1)?;
+                    let argnames = value_to_argnames(argnames_list.clone())?;
+                    let body = Rc::new(Value::List(list.cdr().cdr().cdr()));
+
+                    let lambda = Value::Lambda(Lambda {
+                        closure: env.clone(),
+                        argnames,
+                        body,
+                        export: true,
                     });
 
                     env.borrow_mut().define(symbol.clone(), lambda);
@@ -210,6 +232,7 @@ fn eval_inner(
                         closure: env,
                         argnames,
                         body,
+                        export: false,
                     }))
                 }
 

@@ -369,6 +369,7 @@ impl Repl {
                 self.stop_history_mode();
                 print!("\r\n");
                 if !self.input.is_empty() {
+                    self.completion.clear();
                     let shell_tmode = tcgetattr(0).expect("failed tcgetattr");
                     let ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);
                     match self.shell.eval_str(ctx, self.input.as_str(), false) {
@@ -389,6 +390,7 @@ impl Repl {
                 self.stop_history_mode();
                 print!("\r\n");
                 if !self.input.is_empty() {
+                    self.completion.clear();
                     let input = self.input.as_str();
                     let shell_tmode = tcgetattr(0).expect("failed tcgetattr");
                     let ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);

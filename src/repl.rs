@@ -353,12 +353,14 @@ impl Repl {
                     Ok(Some((_rule, span))) => Some(span.as_str()),
                     _ => None,
                 };
-
                 if let Some(val) = completion::input_completion(
                     &self.input.as_str(),
                     Rc::clone(&self.shell.lisp_engine),
                     completion_query,
                 ) {
+                    if let Some(q) = completion_query {
+                        self.input.backspacen(q.len());
+                    }
                     self.input.insert_str(val.as_str());
                 }
 

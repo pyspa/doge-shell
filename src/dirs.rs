@@ -25,7 +25,7 @@ pub fn search_file(dir: &str, name: &str) -> Option<String> {
     }
 }
 
-fn is_executable(entry: &DirEntry) -> bool {
+pub fn is_executable(entry: &DirEntry) -> bool {
     match entry.metadata() {
         Ok(meta) => {
             let permissions = meta.permissions();

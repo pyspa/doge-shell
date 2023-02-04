@@ -1,4 +1,4 @@
-use crate::dirs::is_dir;
+use crate::dirs::{is_dir, is_executable};
 use crate::frecency::ItemStats;
 use crate::lisp;
 use crate::lisp::Value;
@@ -91,6 +91,7 @@ impl Completion {
 
 #[derive(Debug, PartialEq, PartialOrd, Eq, Ord)]
 pub enum Candidate {
+    Detail(String, String),
     Path(String),
     Basic(String),
 }
@@ -201,15 +202,17 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
 impl SkimItem for Candidate {
     fn text(&self) -> Cow<str> {
         match self {
+            Candidate::Detail(x, _) => Cow::Borrowed(x),
             Candidate::Path(p) => Cow::Borrowed(p),
-            Candidate::Basic(p) => Cow::Borrowed(p),
+            Candidate::Basic(x) => Cow::Borrowed(x),
         }
     }
 
     fn output(&self) -> Cow<str> {
         match self {
+            Candidate::Detail(_, y) => Cow::Borrowed(y),
             Candidate::Path(p) => Cow::Borrowed(p),
-            Candidate::Basic(p) => Cow::Borrowed(p),
+            Candidate::Basic(x) => Cow::Borrowed(x),
         }
     }
 }
@@ -268,7 +271,7 @@ pub fn input_completion(
     query: Option<&str>,
 ) -> Option<String> {
     // TODO convert input
-    let has = query.is_some();
+    let has_query = query.is_some();
     let environment = Rc::clone(&lisp_engine.borrow().shell_env);
     // 1. completion from autocomplete
     for compl in environment.borrow().autocompletion.iter() {
@@ -314,11 +317,101 @@ pub fn input_completion(
         }
     }
 
-    // 2 . try path completion
-    if has && is_dir(query.unwrap()) {
-        return list_files(query);
+    // 2 . try completion
+    if has_query {
+        let path = std::env::current_dir().expect("fail get current_dir");
+        let path_str = path.display().to_string();
+
+        // path
+        let mut path_items = get_files(path_str.as_str(), query.unwrap());
+        let mut cmds_items = get_commands(&environment.borrow().paths, query.unwrap());
+        path_items.append(&mut cmds_items);
+        return select_item(path_items, query);
     }
     None
+}
+
+fn get_commands(paths: &Vec<String>, cmd: &str) -> Vec<Candidate> {
+    let mut list = Vec::new();
+    if cmd.starts_with('/') {
+        let cmd_path = std::path::Path::new(cmd);
+        if cmd_path.exists() && cmd_path.is_file() {
+            list.push(Candidate::Detail(
+                format!("{} (command)", cmd),
+                cmd.to_string(),
+            ));
+        }
+    }
+    if cmd.starts_with("./") {
+        let cmd_path = std::path::Path::new(cmd);
+        if cmd_path.exists() && cmd_path.is_file() {
+            list.push(Candidate::Detail(
+                format!("{} (command)", cmd),
+                cmd.to_string(),
+            ));
+        }
+    }
+
+    for path in paths {
+        let mut cmds = get_executables(&path, cmd);
+        list.append(&mut cmds);
+    }
+    list
+}
+
+fn get_executables(dir: &str, name: &str) -> Vec<Candidate> {
+    let mut list = Vec::new();
+    match read_dir(dir) {
+        Ok(entries) => {
+            let mut entries: Vec<std::fs::DirEntry> = entries.flatten().collect();
+            entries.sort_by_key(|x| x.file_name());
+
+            for entry in entries {
+                let buf = entry.file_name();
+                let file_name = buf.to_str().unwrap();
+                let is_file = entry.file_type().unwrap().is_file();
+                if file_name.starts_with(name) && is_file && is_executable(&entry) {
+                    list.push(Candidate::Detail(
+                        format!("{} (command)", file_name),
+                        file_name.to_string(),
+                    ));
+                }
+            }
+        }
+        Err(_err) => {}
+    }
+    list
+}
+
+fn get_files(dir: &str, name: &str) -> Vec<Candidate> {
+    let mut list = Vec::new();
+    match read_dir(dir) {
+        Ok(entries) => {
+            let mut entries: Vec<std::fs::DirEntry> = entries.flatten().collect();
+            entries.sort_by_key(|x| x.file_name());
+
+            for entry in entries {
+                let buf = entry.file_name();
+                let file_name = buf.to_str().unwrap();
+                let is_file = entry.file_type().unwrap().is_file();
+                if file_name.starts_with(name) {
+                    if is_file {
+                        list.push(Candidate::Detail(
+                            format!("{} (file)", file_name),
+                            file_name.to_string(),
+                        ));
+                    } else {
+                        list.push(Candidate::Detail(
+                            format!("{} (directory)", file_name),
+                            file_name.to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+        Err(_err) => {}
+    }
+    list
 }
 
 fn list_files(query: Option<&str>) -> Option<String> {

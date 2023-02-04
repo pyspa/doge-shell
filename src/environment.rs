@@ -1,3 +1,4 @@
+use crate::completion;
 use crate::completion::AutoComplete;
 use crate::direnv::DirEnvironment;
 use crate::dirs::search_file;
@@ -13,7 +14,7 @@ use tracing::debug;
 pub struct Environment {
     pub alias: HashMap<String, String>,
     pub autocompletion: Vec<AutoComplete>,
-    paths: Vec<String>,
+    pub paths: Vec<String>,
     pub variables: HashMap<String, String>,
     pub direnv_roots: Vec<DirEnvironment>,
 }

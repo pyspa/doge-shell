@@ -82,6 +82,12 @@ impl Input {
         }
     }
 
+    pub fn backspacen(&mut self, n: usize) {
+        for _ in 0..n {
+            self.backspace();
+        }
+    }
+
     pub fn move_by(&mut self, offset: isize) {
         if offset < 0 {
             self.cursor = self.cursor.saturating_sub(offset.unsigned_abs());

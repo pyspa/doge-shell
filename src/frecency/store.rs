@@ -13,7 +13,7 @@ impl Default for FrecencyStore {
     fn default() -> FrecencyStore {
         FrecencyStore {
             reference_time: current_time_secs(),
-            half_life: 60.0 * 60.0 * 24.0 * 3.0, // three day half life
+            half_life: 60.0 * 60.0 * 12.0 * 1.0,
             items: Vec::new(),
         }
     }

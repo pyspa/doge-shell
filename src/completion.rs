@@ -7,7 +7,7 @@ use regex::Regex;
 use skim::prelude::*;
 use skim::{Skim, SkimItemReceiver, SkimItemSender};
 use std::fs::read_dir;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{process::Command, sync::Arc};
 use tracing::debug;
 
@@ -318,17 +318,47 @@ pub fn input_completion(
     }
 
     // 2 . try completion
-    if has_query {
-        let path = std::env::current_dir().expect("fail get current_dir");
-        let path_str = path.display().to_string();
+    if let Some(query_str) = query {
+        // check path
+        let current = std::env::current_dir().expect("fail get current_dir");
+
+        let expand_path = shellexpand::tilde(&query_str);
+        let expand = expand_path.as_ref();
+        let path = Path::new(expand);
+
+        let (path, path_query, only_path) = if path.is_dir() {
+            (path, "", true)
+        } else {
+            if let Some(parent) = path.parent() {
+                let parent = Path::new(parent);
+                let has_parent = !parent.as_os_str().is_empty();
+                if let Some(file_name) = &path.file_name() {
+                    (parent, file_name.to_str().unwrap(), has_parent)
+                } else {
+                    (path, "", has_parent)
+                }
+            } else {
+                (current.as_path(), "", false)
+            }
+        };
+
+        let canonical_path = if let Ok(path) = path.canonicalize() {
+            path
+        } else {
+            std::env::current_dir().expect("fail get current_dir")
+        };
+        let path_str = canonical_path.display().to_string();
 
         // path
-        let mut path_items = get_files(path_str.as_str(), query.unwrap());
-        let mut cmds_items = get_commands(&environment.borrow().paths, query.unwrap());
-        path_items.append(&mut cmds_items);
-        return select_item(path_items, query);
+        let mut items = get_file_completions(path_str.as_str(), path.to_str().unwrap());
+        if !only_path {
+            let mut cmds_items = get_commands(&environment.borrow().paths, &query_str);
+            items.append(&mut cmds_items);
+        }
+        select_item(items, Some(path_query))
+    } else {
+        None
     }
-    None
 }
 
 fn get_commands(paths: &Vec<String>, cmd: &str) -> Vec<Candidate> {
@@ -383,8 +413,13 @@ fn get_executables(dir: &str, name: &str) -> Vec<Candidate> {
     list
 }
 
-fn get_files(dir: &str, name: &str) -> Vec<Candidate> {
+fn get_file_completions(dir: &str, prefix: &str) -> Vec<Candidate> {
     let mut list = Vec::new();
+    let prefix = if !prefix.is_empty() {
+        format!("{}/", prefix)
+    } else {
+        prefix.to_string()
+    };
     match read_dir(dir) {
         Ok(entries) => {
             let mut entries: Vec<std::fs::DirEntry> = entries.flatten().collect();
@@ -394,18 +429,17 @@ fn get_files(dir: &str, name: &str) -> Vec<Candidate> {
                 let buf = entry.file_name();
                 let file_name = buf.to_str().unwrap();
                 let is_file = entry.file_type().unwrap().is_file();
-                if file_name.starts_with(name) {
-                    if is_file {
-                        list.push(Candidate::Detail(
-                            format!("{} (file)", file_name),
-                            file_name.to_string(),
-                        ));
-                    } else {
-                        list.push(Candidate::Detail(
-                            format!("{} (directory)", file_name),
-                            file_name.to_string(),
-                        ));
-                    }
+
+                if is_file {
+                    list.push(Candidate::Detail(
+                        format!("{}{} (file)", prefix, file_name),
+                        format!("{}{}", prefix, file_name),
+                    ));
+                } else {
+                    list.push(Candidate::Detail(
+                        format!("{}{} (directory)", prefix, file_name),
+                        format!("{}{}", prefix, file_name),
+                    ));
                 }
             }
         }
@@ -425,6 +459,8 @@ fn replace_space(s: &str) -> String {
 
 #[cfg(test)]
 mod test {
+
+    use std::path::Path;
 
     use super::*;
 

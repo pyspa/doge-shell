@@ -415,7 +415,7 @@ fn get_executables(dir: &str, name: &str) -> Vec<Candidate> {
 
 fn get_file_completions(dir: &str, prefix: &str) -> Vec<Candidate> {
     let mut list = Vec::new();
-    let prefix = if !prefix.is_empty() {
+    let prefix = if !prefix.is_empty() && !prefix.ends_with("/") {
         format!("{}/", prefix)
     } else {
         prefix.to_string()

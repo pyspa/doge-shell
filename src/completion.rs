@@ -219,7 +219,7 @@ impl SkimItem for Candidate {
 
 pub fn select_item(items: Vec<Candidate>, query: Option<&str>) -> Option<String> {
     let options = SkimOptionsBuilder::default()
-        //        .height(Some("30%"))
+        .select1(true)
         .bind(vec!["Enter:accept"])
         .query(query)
         .build()

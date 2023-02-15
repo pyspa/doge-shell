@@ -456,17 +456,17 @@ impl Repl {
 
         loop {
             let mut save_history_delay = Delay::new(Duration::from_millis(10_000)).fuse();
-            let mut check_background_delay = Delay::new(Duration::from_millis(200)).fuse();
+            let mut check_background_delay = Delay::new(Duration::from_millis(500)).fuse();
             let mut event = reader.next().fuse();
             select! {
+                _ = save_history_delay => {
+                    self.save_history();
+                },
                 _ = check_background_delay => {
                     self.check_background_jobs();
                     if self.shell.wait_jobs.is_empty() {
                         enable_raw_mode().ok();
                     }
-                },
-                _ = save_history_delay => {
-                    self.save_history();
                 },
                 maybe_event = event => {
                     match maybe_event {

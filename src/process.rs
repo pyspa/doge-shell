@@ -309,7 +309,12 @@ impl BuiltinProcess {
             "launch: builtin process {:?} infile:{:?} outfile:{:?}",
             &self.name, self.stdin, self.stdout
         );
-        let _exit = (self.cmd_fn)(ctx, self.argv.to_vec(), shell);
+        let exit = (self.cmd_fn)(ctx, self.argv.to_vec(), shell);
+        if let ExitStatus::ExitedWith(code) = exit {
+            if code >= 0 {
+                self.state = ProcessState::Completed(0);
+            }
+        }
         // TODO check exit
         Ok(())
     }
@@ -662,17 +667,19 @@ impl Job {
             };
 
             if process.next().is_none() {
-                // background
-                let (stdout, stderr) = process.get_cap_out();
-                let wait_job = WaitJob {
-                    job_id,
-                    pid,
-                    cmd: self.cmd.clone(),
-                    stdout,
-                    stderr,
-                };
-
-                shell.wait_jobs.push(wait_job);
+                // process is running?
+                if !process.is_completed() {
+                    // wait background process
+                    let (stdout, stderr) = process.get_cap_out();
+                    let wait_job = WaitJob {
+                        job_id,
+                        pid,
+                        cmd: self.cmd.clone(),
+                        stdout,
+                        stderr,
+                    };
+                    shell.wait_jobs.push(wait_job);
+                }
             }
         }
 

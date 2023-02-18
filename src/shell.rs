@@ -16,10 +16,10 @@ use nix::sys::termios::tcgetattr;
 use nix::unistd::{getpid, pipe, setpgid, Pid};
 use pest::iterators::Pair;
 use pest::Parser;
-use std::fmt::Debug;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::Write;
+use std::os::fd::RawFd;
 use std::os::unix::io::FromRawFd;
 use std::path::Path;
 use std::process::ExitCode;
@@ -70,7 +70,7 @@ impl Shell {
         let wasm_engine = wasm::WasmEngine::new(Rc::clone(&environment));
         let lisp_engine = lisp::LispEngine::new(Rc::clone(&environment));
         if let Err(err) = lisp_engine.borrow().run_config_lisp() {
-            eprintln!("failed load init lisp {:?}", err);
+            eprintln!("failed load init lisp {err:?}");
         }
         debug!("dump environment {:?}", environment);
         let chpwd_hooks: Vec<CommandHook> = Vec::new();
@@ -107,13 +107,13 @@ impl Shell {
 
     pub fn print_error(&self, msg: String) {
         // unknown command, etc
-        eprint!("\r{}\r\n", msg);
+        eprint!("\r{msg}\r\n");
         std::io::stderr().flush().ok();
     }
 
     pub fn print_stdout(&self, msg: String) {
         // unknown command, etc
-        print!("\r{}\r\n", msg);
+        print!("\r{msg}\r\n");
         std::io::stdout().flush().ok();
     }
 
@@ -248,7 +248,7 @@ impl Shell {
         Ok(jobs)
     }
 
-    fn launch_subshell(&mut self, jobs: Vec<Job>) -> Result<String> {
+    fn launch_subshell(&mut self, jobs: Vec<Job>) -> Result<RawFd> {
         let tmode = tcgetattr(0).expect("failed tcgetattr");
         let mut ctx = Context::new(self.pid, self.pgid, tmode, true);
         ctx.foreground = false;
@@ -268,18 +268,9 @@ impl Shell {
             enable_raw_mode().ok();
             // debug!("{:?}", job.cmd);
         }
-        let mut raw_stdout = Vec::new();
-        unsafe { File::from_raw_fd(pout).read_to_end(&mut raw_stdout).ok() };
 
-        let output = std::str::from_utf8(&raw_stdout)
-            .map_err(|err| {
-                // TODO
-                eprintln!("binary in variable/expansion is not supported");
-                err
-            })?
-            .trim_end_matches('\n')
-            .to_owned();
-        Ok(output)
+        // TODO wait and check error
+        Ok(pout)
     }
 
     fn parse_command(&mut self, job: &mut Job, pair: Pair<Rule>, foreground: bool) -> Result<()> {
@@ -291,7 +282,8 @@ impl Shell {
         let mut argv: Vec<String> = Vec::new();
         for (str, jobs) in parsed {
             if let Some(jobs) = jobs {
-                let output = self.launch_subshell(jobs)?;
+                let out = self.launch_subshell(jobs)?;
+                let output = read_fd(out)?;
                 output.lines().for_each(|x| argv.push(x.to_owned()));
             } else {
                 argv.push(str);
@@ -401,4 +393,19 @@ impl Shell {
 
 fn chpwd_debug(pwd: &Path, _env: Rc<RefCell<Environment>>) {
     debug!("!chpwd {:?}", pwd);
+}
+
+fn read_fd(fd: RawFd) -> Result<String> {
+    let mut raw_stdout = Vec::new();
+    unsafe { File::from_raw_fd(fd).read_to_end(&mut raw_stdout).ok() };
+
+    let output = std::str::from_utf8(&raw_stdout)
+        .map_err(|err| {
+            // TODO
+            eprintln!("binary in variable/expansion is not supported");
+            err
+        })?
+        .trim_end_matches('\n')
+        .to_owned();
+    Ok(output)
 }

@@ -1,4 +1,4 @@
-use crate::dirs::{is_dir, is_executable};
+use crate::dirs::is_executable;
 use crate::frecency::ItemStats;
 use crate::lisp;
 use crate::lisp::Value;
@@ -328,18 +328,16 @@ pub fn input_completion(
 
         let (path, path_query, only_path) = if path.is_dir() {
             (path, "", true)
-        } else {
-            if let Some(parent) = path.parent() {
-                let parent = Path::new(parent);
-                let has_parent = !parent.as_os_str().is_empty();
-                if let Some(file_name) = &path.file_name() {
-                    (parent, file_name.to_str().unwrap(), has_parent)
-                } else {
-                    (path, "", has_parent)
-                }
+        } else if let Some(parent) = path.parent() {
+            let parent = Path::new(parent);
+            let has_parent = !parent.as_os_str().is_empty();
+            if let Some(file_name) = &path.file_name() {
+                (parent, file_name.to_str().unwrap(), has_parent)
             } else {
-                (current.as_path(), "", false)
+                (path, "", has_parent)
             }
+        } else {
+            (current.as_path(), "", false)
         };
 
         let canonical_path = if let Ok(path) = path.canonicalize() {
@@ -459,8 +457,6 @@ fn replace_space(s: &str) -> String {
 
 #[cfg(test)]
 mod test {
-
-    use std::path::Path;
 
     use super::*;
 

@@ -4,9 +4,6 @@ use crate::lisp::interpreter::eval;
 pub use crate::lisp::model::Value;
 use crate::lisp::model::{Env, List, RuntimeError, Symbol};
 use crate::lisp::parser::parse;
-use crate::lisp::utils::require_typed_arg;
-use crate::shell::APP_NAME;
-use anyhow::Context as _;
 use std::{cell::RefCell, rc::Rc};
 
 mod builtin;

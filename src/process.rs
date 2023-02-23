@@ -894,9 +894,7 @@ pub fn find_job(first_job: &Job, pgid: Pid) -> Option<Job> {
 
 pub fn is_job_stopped(job: &Job) -> bool {
     if let Some(p) = &job.process {
-        let res = p.is_stopped();
-        // debug!("is_job_stopped: process:{:?} is_job_stopped:{}", &p, &res);
-        res
+        p.is_stopped()
     } else {
         true
     }
@@ -904,9 +902,7 @@ pub fn is_job_stopped(job: &Job) -> bool {
 
 pub fn is_job_completed(job: &Job) -> bool {
     if let Some(p) = &job.process {
-        let res = p.is_completed();
-        // debug!("is_job_completed: process:{:?} completed:{}", &p, &res);
-        res
+        p.is_completed()
     } else {
         true
     }

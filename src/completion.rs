@@ -271,7 +271,6 @@ pub fn input_completion(
     query: Option<&str>,
 ) -> Option<String> {
     // TODO convert input
-    let has_query = query.is_some();
     let environment = Rc::clone(&lisp_engine.borrow().shell_env);
     // 1. completion from autocomplete
     for compl in environment.borrow().autocompletion.iter() {

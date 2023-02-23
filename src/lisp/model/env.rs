@@ -29,7 +29,7 @@ impl Env {
         Self {
             parent: Some(parent),
             entries: HashMap::new(),
-            shell_env: shell_env,
+            shell_env,
         }
     }
 

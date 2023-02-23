@@ -129,7 +129,7 @@ fn search_inner_word(pair: Pair<Rule>, pos: usize) -> Option<Span> {
     None
 }
 
-fn expand_tilde(pair: Pair<Rule>) -> Vec<String> {
+fn expand_alias_tilde(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Vec<String> {
     let mut argv: Vec<String> = vec![];
 
     match pair.as_rule() {
@@ -141,12 +141,29 @@ fn expand_tilde(pair: Pair<Rule>) -> Vec<String> {
         | Rule::literal_d_quoted => {
             argv.push(shellexpand::tilde(pair.as_str()).to_string());
         }
+        Rule::argv0 => {
+            for inner_pair in pair.into_inner() {
+                let v = expand_alias_tilde(inner_pair, alias);
+                for (i, arg) in v.iter().enumerate() {
+                    if i == 0 {
+                        if let Some(val) = alias.get(arg) {
+                            debug!("replaced alias {arg} to {val}");
+                            argv.push(val.trim().to_string());
+                        } else {
+                            argv.push(arg.trim().to_string());
+                        }
+                    } else {
+                        argv.push(arg.trim().to_string());
+                    }
+                }
+            }
+        }
         _ => {
             for inner_pair in pair.into_inner() {
                 match inner_pair.as_rule() {
                     Rule::simple_command_bg => {
                         for inner_pair in inner_pair.into_inner() {
-                            let mut v = expand_tilde(inner_pair);
+                            let mut v = expand_alias_tilde(inner_pair, alias);
                             argv.append(&mut v);
                         }
                         argv.push("&".to_string());
@@ -154,19 +171,35 @@ fn expand_tilde(pair: Pair<Rule>) -> Vec<String> {
                     Rule::subshell => {
                         argv.push("(".to_string());
                         for inner_pair in inner_pair.into_inner() {
-                            let mut v = expand_tilde(inner_pair);
+                            let mut v = expand_alias_tilde(inner_pair, alias);
                             argv.append(&mut v);
                         }
                         argv.push(")".to_string());
                     }
+                    Rule::argv0 => {
+                        for inner_pair in inner_pair.into_inner() {
+                            let v = expand_alias_tilde(inner_pair, alias);
+                            for (i, arg) in v.iter().enumerate() {
+                                if i == 0 {
+                                    if let Some(val) = alias.get(arg) {
+                                        debug!("replaced alias {arg} to {val}");
+                                        argv.push(val.trim().to_string());
+                                    } else {
+                                        argv.push(arg.trim().to_string());
+                                    }
+                                } else {
+                                    argv.push(arg.trim().to_string());
+                                }
+                            }
+                        }
+                    }
                     Rule::commands
                     | Rule::command
                     | Rule::simple_command
-                    | Rule::argv0
                     | Rule::args
                     | Rule::span => {
                         for inner_pair in inner_pair.into_inner() {
-                            let mut v = expand_tilde(inner_pair);
+                            let mut v = expand_alias_tilde(inner_pair, alias);
                             argv.append(&mut v);
                         }
                     }
@@ -176,7 +209,7 @@ fn expand_tilde(pair: Pair<Rule>) -> Vec<String> {
                     | Rule::d_quoted
                     | Rule::literal_s_quoted
                     | Rule::literal_d_quoted => {
-                        let mut v = expand_tilde(inner_pair);
+                        let mut v = expand_alias_tilde(inner_pair, alias);
                         argv.append(&mut v);
                     }
                     _ => {
@@ -216,11 +249,9 @@ fn expand_command_alias(
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::simple_command => {
-                    let args = expand_tilde(inner_pair);
+                    let args = expand_alias_tilde(inner_pair, &environment.borrow().alias);
                     for arg in args {
-                        if let Some(val) = environment.borrow().alias.get(&arg) {
-                            buf.push(val.trim().to_string());
-                        } else if let Some(val) = environment.borrow().variables.get(&arg) {
+                        if let Some(val) = environment.borrow().variables.get(&arg) {
                             buf.push(val.trim().to_string());
                         } else {
                             buf.push(arg);
@@ -228,9 +259,9 @@ fn expand_command_alias(
                     }
                 }
                 Rule::simple_command_bg => {
-                    let args = expand_tilde(inner_pair);
+                    let args = expand_alias_tilde(inner_pair, &environment.borrow().alias);
                     for arg in args {
-                        if let Some(val) = environment.borrow().alias.get(&arg) {
+                        if let Some(val) = environment.borrow().variables.get(&arg) {
                             buf.push(val.trim().to_string());
                         } else {
                             buf.push(arg);
@@ -240,9 +271,9 @@ fn expand_command_alias(
                 }
                 Rule::pipe_command => {
                     buf.push("|".to_string());
-                    let args = expand_tilde(inner_pair);
+                    let args = expand_alias_tilde(inner_pair, &environment.borrow().alias);
                     for arg in args {
-                        if let Some(val) = environment.borrow().alias.get(&arg) {
+                        if let Some(val) = environment.borrow().variables.get(&arg) {
                             buf.push(val.trim().to_string());
                         } else {
                             buf.push(arg);

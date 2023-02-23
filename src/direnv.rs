@@ -90,14 +90,12 @@ pub fn check_path(pwd: &Path, env: Rc<RefCell<Environment>>) {
                 env.loaded = true;
             }
             env.set_env();
-        } else {
-            if env.loaded {
-                println!("direnv: unloading {}", env.path);
-                print!("direnv: unxport ");
-                env.remove_env();
-                println!("");
-                env.loaded = false;
-            }
+        } else if env.loaded {
+            println!("direnv: unloading {}", env.path);
+            print!("direnv: unxport ");
+            env.remove_env();
+            println!("");
+            env.loaded = false;
         }
     }
 }

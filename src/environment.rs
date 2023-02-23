@@ -1,4 +1,3 @@
-use crate::completion;
 use crate::completion::AutoComplete;
 use crate::direnv::DirEnvironment;
 use crate::dirs::search_file;

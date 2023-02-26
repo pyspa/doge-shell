@@ -82,6 +82,7 @@ pub struct Context {
     pub outfile: RawFd,
     pub errfile: RawFd,
     pub captured_out: Option<RawFd>,
+    pub save_history: bool,
 }
 
 impl Context {
@@ -96,6 +97,7 @@ impl Context {
             outfile: STDOUT_FILENO,
             errfile: STDERR_FILENO,
             captured_out: None,
+            save_history: true,
         }
     }
 }

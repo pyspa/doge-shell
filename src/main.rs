@@ -40,7 +40,7 @@ async fn main() -> ExitCode {
     let mut shell = Shell::new(env);
     shell.set_signals();
     let shell_tmode = tcgetattr(0).expect("failed tcgetattr");
-    let ctx = Context::new(shell.pid, shell.pgid, shell_tmode, true);
+    let mut ctx = Context::new(shell.pid, shell.pgid, shell_tmode, true);
 
     if let Some(command) = cli.command.as_deref() {
         match shell.eval_str(ctx, command.to_string(), false) {
@@ -55,6 +55,7 @@ async fn main() -> ExitCode {
         }
     } else {
         shell.install_chpwd_hooks();
+        ctx.save_history = false;
         match shell.eval_str(ctx, "cd .".to_string(), true) {
             Ok(_) => {}
             Err(err) => {

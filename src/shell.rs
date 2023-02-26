@@ -138,9 +138,11 @@ impl Shell {
         input: String,
         background: bool,
     ) -> Result<ExitCode> {
-        if let Some(ref mut history) = self.cmd_history {
-            history.add(&input);
-            history.reset_index();
+        if ctx.save_history {
+            if let Some(ref mut history) = self.cmd_history {
+                history.add(&input);
+                history.reset_index();
+            }
         }
         // TODO refactor context
         // let tmode = tcgetattr(0).expect("failed tcgetattr");

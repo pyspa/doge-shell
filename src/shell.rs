@@ -13,7 +13,8 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use libc::{c_int, STDIN_FILENO};
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::sys::termios::tcgetattr;
-use nix::unistd::{getpid, pipe, setpgid, Pid};
+use nix::unistd::close;
+use nix::unistd::{fork, getpid, pipe, setpgid, ForkResult, Pid};
 use pest::iterators::Pair;
 use pest::Parser;
 use std::fs::File;
@@ -273,23 +274,34 @@ impl Shell {
     }
 
     fn launch_subshell(&mut self, ctx: &mut Context, jobs: Vec<Job>) -> Result<()> {
-        // TODO fork
         for mut job in jobs {
             disable_raw_mode().ok();
-            if let Ok(process::ProcessState::Completed(exit)) = job.launch(ctx, self) {
-                if exit != 0 {
-                    // TODO check
-                    debug!("job exit code {:?}", exit);
-                }
-            } else {
-                // Stop next job
-            }
+            let pid = self.spawn_subshell(ctx, &mut job)?;
+            debug!("spawned subshell pid: {:?}", pid);
+            let res = process::wait_pid(pid);
+            debug!("wait subshell pid: {:?}", res);
             enable_raw_mode().ok();
-            // debug!("{:?}", job.cmd);
         }
 
-        // TODO wait and check error
         Ok(())
+    }
+
+    fn spawn_subshell(&mut self, ctx: &mut Context, job: &mut Job) -> Result<Pid> {
+        let pid = unsafe { fork().context("failed fork")? };
+        match pid {
+            ForkResult::Parent { child } => Ok(child),
+            ForkResult::Child => {
+                if let Ok(process::ProcessState::Completed(exit)) = job.launch(ctx, self) {
+                    if exit != 0 {
+                        // TODO check
+                        debug!("\rjob exit code {:?}", exit);
+                    }
+                    std::process::exit(exit as i32);
+                } else {
+                    std::process::exit(-1);
+                }
+            }
+        }
     }
 
     fn parse_command(
@@ -298,21 +310,23 @@ impl Shell {
         job: &mut Job,
         pair: Pair<Rule>,
     ) -> Result<()> {
-        let parsed = self.get_argv(ctx, pair)?;
-        if parsed.is_empty() {
+        let parsed_subshell = self.get_argv(ctx, pair)?;
+        if parsed_subshell.is_empty() {
             return Ok(());
         }
 
         let mut argv: Vec<String> = Vec::new();
-        for (str, jobs) in parsed {
+        for (str, jobs) in parsed_subshell {
             if let Some(jobs) = jobs {
                 let tmode = tcgetattr(0).expect("failed tcgetattr");
-                let mut ctx = Context::new(self.pid, self.pgid, tmode, true);
-                ctx.foreground = false;
+
+                let mut ctx = Context::new(self.pid, self.pgid, tmode, false);
+                // make pipe
                 let (pout, pin) = pipe().context("failed pipe")?;
                 ctx.outfile = pin;
 
                 self.launch_subshell(&mut ctx, jobs)?;
+                close(pin).expect("failed close");
 
                 let output = read_fd(pout)?;
                 output.lines().for_each(|x| argv.push(x.to_owned()));

@@ -9,6 +9,7 @@ use nix::sys::termios::Termios;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{close, dup2, execv, fork, getpid, pipe, setpgid, tcsetpgrp, ForkResult, Pid};
 use std::ffi::CString;
+use std::fmt::Debug;
 use std::fs::File;
 use std::io::Read;
 use std::os::unix::io::FromRawFd;
@@ -99,6 +100,21 @@ impl Context {
     }
 }
 
+impl Debug for Context {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
+        f.debug_struct("Context")
+            .field("shell_pid", &self.shell_pid)
+            .field("shell_pgid", &self.shell_pgid)
+            .field("foreground", &self.foreground)
+            .field("interactive", &self.interactive)
+            .field("infile", &self.infile)
+            .field("outfile", &self.outfile)
+            .field("errfile", &self.errfile)
+            .field("captured_out", &self.captured_out)
+            .finish()
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub enum JobProcess {
     Builtin(BuiltinProcess),
@@ -121,6 +137,9 @@ impl std::fmt::Debug for JobProcess {
                 .debug_struct("JobProcess::Command")
                 .field("cmd", &jprocess.cmd)
                 .field("pid", &jprocess.pid)
+                .field("stdin", &jprocess.stdin)
+                .field("stdout", &jprocess.stdout)
+                .field("stderr", &jprocess.stderr)
                 .finish(),
         }
     }
@@ -630,7 +649,8 @@ impl Job {
 
         process.set_io(ctx.infile, ctx.outfile);
 
-        debug!("start process {:?}", self);
+        debug!("start process ctx {:?}", &ctx);
+        debug!("start process {:?}", &process);
 
         let pid = match process {
             JobProcess::Builtin(process) => {
@@ -855,6 +875,7 @@ fn set_process_state(process: &mut JobProcess, pid: Pid, state: ProcessState) {
 }
 
 fn fork_process(ctx: &Context, job_pgid: Option<Pid>, process: &mut Process) -> Result<Pid> {
+    // capture
     if ctx.outfile == STDOUT_FILENO && !ctx.foreground {
         let (pout, pin) = pipe().context("failed pipe")?;
         process.stdout = pin;
@@ -909,6 +930,24 @@ pub fn is_job_completed(job: &Job) -> bool {
     } else {
         true
     }
+}
+
+pub fn wait_pid(pid: Pid) -> Option<(Pid, ProcessState)> {
+    let options = WaitPidFlag::WUNTRACED;
+
+    let result = waitpid(pid, Some(options));
+    let res = match result {
+        Ok(WaitStatus::Exited(pid, status)) => (pid, ProcessState::Completed(status as u8)),
+        Ok(WaitStatus::Signaled(pid, _signal, _)) => (pid, ProcessState::Completed(1)),
+        Ok(WaitStatus::Stopped(pid, _signal)) => (pid, ProcessState::Stopped(pid)),
+        Err(nix::errno::Errno::ECHILD) | Ok(WaitStatus::StillAlive) => {
+            return None;
+        }
+        status => {
+            panic!("unexpected waitpid event: {:?}", status);
+        }
+    };
+    Some(res)
 }
 
 #[cfg(test)]

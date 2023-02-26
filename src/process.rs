@@ -523,6 +523,7 @@ pub struct Job {
     pub next: Option<Box<Job>>,
     pub foreground: bool,
     pub need_wait: bool,
+    pub subshell: bool,
 }
 
 impl Job {
@@ -540,6 +541,7 @@ impl Job {
             next: None,
             foreground: true,
             need_wait: false,
+            subshell: false,
         }
     }
 
@@ -556,6 +558,7 @@ impl Job {
             next: None,
             foreground: true,
             need_wait: false,
+            subshell: false,
         }
     }
 

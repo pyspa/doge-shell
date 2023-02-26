@@ -30,6 +30,20 @@ pub const APP_NAME: &str = "dsh";
 pub const SHELL_TERMINAL: c_int = STDIN_FILENO;
 pub type CommandHook = fn(pwd: &Path, env: Rc<RefCell<Environment>>);
 
+struct ParseContext {
+    pub subshell: bool,
+    pub foreground: bool,
+}
+
+impl ParseContext {
+    pub fn new(foreground: bool) -> Self {
+        ParseContext {
+            subshell: false,
+            foreground,
+        }
+    }
+}
+
 pub struct Shell {
     pub environment: Rc<RefCell<Environment>>,
     pub exited: Option<ExitStatus>,
@@ -159,15 +173,19 @@ impl Shell {
         let input = parser::expand_alias(input, Rc::clone(&self.environment))?;
 
         let mut pairs = ShellParser::parse(Rule::commands, &input).map_err(|e| anyhow!(e))?;
-
+        let mut ctx = ParseContext::new(true);
         if let Some(pair) = pairs.next() {
-            self.parse_commands(pair)
+            self.parse_commands(&mut ctx, pair)
         } else {
             Ok(Vec::new())
         }
     }
 
-    fn get_argv(&mut self, pair: Pair<Rule>) -> Result<Vec<(String, Option<Vec<process::Job>>)>> {
+    fn get_argv(
+        &mut self,
+        ctx: &mut ParseContext,
+        pair: Pair<Rule>,
+    ) -> Result<Vec<(String, Option<Vec<process::Job>>)>> {
         let mut argv: Vec<(String, Option<Vec<process::Job>>)> = vec![];
 
         for inner_pair in pair.into_inner() {
@@ -181,7 +199,10 @@ impl Shell {
                                     for inner_pair in inner_pair.into_inner() {
                                         // commands
                                         let cmd_str = inner_pair.as_str().to_string();
-                                        let res = self.parse_commands(inner_pair)?;
+                                        // subshell
+                                        let mut ctx = ParseContext::new(ctx.foreground);
+                                        ctx.subshell = true;
+                                        let res = self.parse_commands(&mut ctx, inner_pair)?;
                                         argv.push((cmd_str, Some(res)));
                                     }
                                 }
@@ -203,7 +224,10 @@ impl Shell {
                                     for inner_pair in inner_pair.into_inner() {
                                         // commands
                                         let cmd_str = inner_pair.as_str().to_string();
-                                        let res = self.parse_commands(inner_pair)?;
+                                        // subshell
+                                        let mut ctx = ParseContext::new(ctx.foreground);
+                                        ctx.subshell = true;
+                                        let res = self.parse_commands(&mut ctx, inner_pair)?;
                                         argv.push((cmd_str, Some(res)));
                                     }
                                 }
@@ -217,7 +241,7 @@ impl Shell {
                     }
                 }
                 Rule::simple_command => {
-                    let mut res = self.get_argv(inner_pair)?;
+                    let mut res = self.get_argv(ctx, inner_pair)?;
                     argv.append(&mut res);
                 }
                 _ => {
@@ -228,12 +252,12 @@ impl Shell {
         Ok(argv)
     }
 
-    fn parse_commands(&mut self, pair: Pair<Rule>) -> Result<Vec<Job>> {
+    fn parse_commands(&mut self, ctx: &mut ParseContext, pair: Pair<Rule>) -> Result<Vec<Job>> {
         let mut jobs: Vec<Job> = Vec::new();
         if let Rule::commands = pair.as_rule() {
             for pair in pair.into_inner() {
                 match pair.as_rule() {
-                    Rule::command => self.parse_jobs(pair, &mut jobs)?,
+                    Rule::command => self.parse_jobs(ctx, pair, &mut jobs)?,
                     Rule::command_list_sep => {
                         // TODO keep separator type
                         // simple list
@@ -273,8 +297,13 @@ impl Shell {
         Ok(pout)
     }
 
-    fn parse_command(&mut self, job: &mut Job, pair: Pair<Rule>, foreground: bool) -> Result<()> {
-        let parsed = self.get_argv(pair)?;
+    fn parse_command(
+        &mut self,
+        ctx: &mut ParseContext,
+        job: &mut Job,
+        pair: Pair<Rule>,
+    ) -> Result<()> {
+        let parsed = self.get_argv(ctx, pair)?;
         if parsed.is_empty() {
             return Ok(());
         }
@@ -304,7 +333,7 @@ impl Shell {
         } else if let Some(cmd) = self.environment.borrow().lookup(cmd) {
             let process = process::Process::new(cmd, argv);
             job.set_process(JobProcess::Command(process));
-            job.foreground = foreground;
+            job.foreground = ctx.foreground;
         } else if dirs::is_dir(cmd) {
             if let Some(cmd_fn) = builtin::get_command("cd") {
                 let builtin = process::BuiltinProcess::new(
@@ -320,15 +349,21 @@ impl Shell {
         Ok(())
     }
 
-    fn parse_jobs(&mut self, pair: Pair<Rule>, jobs: &mut Vec<Job>) -> Result<()> {
+    fn parse_jobs(
+        &mut self,
+        ctx: &mut ParseContext,
+        pair: Pair<Rule>,
+        jobs: &mut Vec<Job>,
+    ) -> Result<()> {
         let job_str = pair.as_str().to_string();
 
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::simple_command => {
                     let mut job = Job::new(job_str.clone());
-                    self.parse_command(&mut job, inner_pair, true)?;
+                    self.parse_command(ctx, &mut job, inner_pair)?;
                     if job.process.is_some() {
+                        job.subshell = ctx.subshell;
                         jobs.push(job);
                     }
                 }
@@ -337,8 +372,9 @@ impl Shell {
                     let mut job = Job::new(inner_pair.as_str().to_string());
                     for bg_pair in inner_pair.into_inner() {
                         if let Rule::simple_command = bg_pair.as_rule() {
-                            self.parse_command(&mut job, bg_pair, false)?;
+                            self.parse_command(ctx, &mut job, bg_pair)?;
                             if job.process.is_some() {
+                                job.subshell = ctx.subshell;
                                 jobs.push(job);
                             }
                             break;
@@ -350,9 +386,11 @@ impl Shell {
                         for inner_pair in inner_pair.into_inner() {
                             let _cmd = inner_pair.as_str();
                             if let Rule::simple_command = inner_pair.as_rule() {
-                                self.parse_command(job, inner_pair, true)?;
+                                ctx.foreground = true;
+                                self.parse_command(ctx, job, inner_pair)?;
                             } else if let Rule::simple_command_bg = inner_pair.as_rule() {
-                                self.parse_command(job, inner_pair, false)?;
+                                ctx.foreground = false;
+                                self.parse_command(ctx, job, inner_pair)?;
                             } else {
                                 // TODO check?
                             }

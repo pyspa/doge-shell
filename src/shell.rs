@@ -272,16 +272,11 @@ impl Shell {
         Ok(jobs)
     }
 
-    fn launch_subshell(&mut self, jobs: Vec<Job>) -> Result<RawFd> {
-        let tmode = tcgetattr(0).expect("failed tcgetattr");
-        let mut ctx = Context::new(self.pid, self.pgid, tmode, true);
-        ctx.foreground = false;
-        let (pout, pin) = pipe().context("failed pipe")?;
-        ctx.outfile = pin;
-
+    fn launch_subshell(&mut self, ctx: &mut Context, jobs: Vec<Job>) -> Result<()> {
+        // TODO fork
         for mut job in jobs {
             disable_raw_mode().ok();
-            if let Ok(process::ProcessState::Completed(exit)) = job.launch(&mut ctx, self) {
+            if let Ok(process::ProcessState::Completed(exit)) = job.launch(ctx, self) {
                 if exit != 0 {
                     // TODO check
                     debug!("job exit code {:?}", exit);
@@ -294,7 +289,7 @@ impl Shell {
         }
 
         // TODO wait and check error
-        Ok(pout)
+        Ok(())
     }
 
     fn parse_command(
@@ -311,8 +306,15 @@ impl Shell {
         let mut argv: Vec<String> = Vec::new();
         for (str, jobs) in parsed {
             if let Some(jobs) = jobs {
-                let out = self.launch_subshell(jobs)?;
-                let output = read_fd(out)?;
+                let tmode = tcgetattr(0).expect("failed tcgetattr");
+                let mut ctx = Context::new(self.pid, self.pgid, tmode, true);
+                ctx.foreground = false;
+                let (pout, pin) = pipe().context("failed pipe")?;
+                ctx.outfile = pin;
+
+                self.launch_subshell(&mut ctx, jobs)?;
+
+                let output = read_fd(pout)?;
                 output.lines().for_each(|x| argv.push(x.to_owned()));
             } else {
                 argv.push(str);

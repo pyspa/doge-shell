@@ -28,5 +28,40 @@ To start using doge-shell, simply run:
 $ dsh
 ```
 
+## config.lisp
+
+Users can extend the functionality with their own lisp scripts.
+An example is shown below.
+
+```lisp
+
+;; Define alias
+
+(alias "a" "cd ../")
+(alias "aa" "cd ../../")
+(alias "aaa" "cd ../../../")
+(alias "aaaa" "cd ../../../../")
+(alias "ll" "exa -al")
+(alias "cat" "bat")
+(alias "g" "git")
+(alias "gp" "git push")
+(alias "m" "make")
+
+;; It has a direnv equivalent.
+(allow-direnv "~/repos/github.com/pyspa/doge-shell")
+
+;; User functions
+(fn gco ()
+    (vlet ((slct (sh "git branch --all | grep -v HEAD | sk | tr -d ' ' "))
+           (branch (sh "echo $slct | sed 's/.* //' | sed 's#remotes/[^/]*/##'")))
+          (sh "git checkout $branch")))
+
+(fn fkill (arg)
+    (vlet ((q arg)
+           (slct (sh "ps -ef | sed 1d | sk -q $q | awk '{print $2}' ")))
+        (sh "kill -TERM $slct")))
+
+```
+
 License
 Doge-shell is released under the MIT license. For more information, see LICENSE.

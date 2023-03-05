@@ -1,4 +1,3 @@
-use crate::shell::APP_NAME;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::fs;
@@ -20,8 +19,7 @@ impl std::fmt::Debug for WasmEngine {
 
 impl WasmEngine {
     pub fn new() -> Self {
-        let xdg_dir =
-            xdg::BaseDirectories::with_prefix(APP_NAME).expect("failed get xdg directory");
+        let xdg_dir = xdg::BaseDirectories::with_prefix("dsh").expect("failed get xdg directory");
         let wasm_dir = xdg_dir
             .place_config_file("wasm")
             .expect("failed get path")

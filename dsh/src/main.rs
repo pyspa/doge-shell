@@ -24,7 +24,7 @@ mod prompt;
 mod proxy;
 mod repl;
 mod shell;
-mod wasm;
+// mod wasm;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]

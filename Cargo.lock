@@ -842,6 +842,7 @@ dependencies = [
  "clap 4.1.8",
  "crossterm",
  "dirs",
+ "dsh-wasm",
  "easy_reader",
  "file-lock",
  "futures",
@@ -862,6 +863,18 @@ dependencies = [
  "termion",
  "termios",
  "toml",
+ "tracing",
+ "tracing-subscriber",
+ "xdg",
+]
+
+[[package]]
+name = "dsh-wasm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cfg-if 1.0.0",
+ "clap 4.1.8",
  "tracing",
  "tracing-subscriber",
  "wasmer",

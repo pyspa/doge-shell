@@ -8,10 +8,10 @@ use crate::history::FrecencyHistory;
 use crate::lisp;
 use crate::parser::{self, Rule, ShellParser};
 use crate::process::{self, Job, JobProcess, WaitJob};
-use crate::wasm;
 use anyhow::Context as _;
 use anyhow::{anyhow, bail, Result};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use dsh_wasm::WasmEngine;
 use libc::{c_int, STDIN_FILENO};
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::sys::termios::tcgetattr;
@@ -55,7 +55,7 @@ pub struct Shell {
     pub path_history: Option<FrecencyHistory>,
     pub wait_jobs: Vec<WaitJob>,
     pub lisp_engine: Rc<RefCell<lisp::LispEngine>>,
-    pub wasm_engine: wasm::WasmEngine,
+    pub wasm_engine: WasmEngine,
     pub chpwd_hooks: Vec<CommandHook>,
 }
 
@@ -83,7 +83,7 @@ impl Shell {
         let _ = setpgid(pgid, pgid).context("failed setpgid");
         let cmd_history = FrecencyHistory::from_file("dsh_cmd_history").unwrap();
         let path_history = FrecencyHistory::from_file("dsh_path_history").unwrap();
-        let wasm_engine = wasm::WasmEngine::new();
+        let wasm_engine = WasmEngine::new();
         let lisp_engine = lisp::LispEngine::new(Rc::clone(&environment));
         if let Err(err) = lisp_engine.borrow().run_config_lisp() {
             eprintln!("failed load init lisp {err:?}");

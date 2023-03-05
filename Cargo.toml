@@ -7,4 +7,11 @@ edition = "2021"
 
 [workspace]
 resolver = "2"
-members = ["dsh"]
+members = ["dsh", "dsh-wasm"]
+
+[workspace.dependencies]
+anyhow = "1"
+xdg = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+cfg-if = "1.0"

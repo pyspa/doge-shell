@@ -1,4 +1,3 @@
-use crate::environment::Environment;
 use crate::shell::APP_NAME;
 use anyhow::Result;
 use std::collections::HashMap;
@@ -10,7 +9,6 @@ use wasmer_compiler_cranelift::Cranelift;
 use wasmer_wasi::WasiState;
 
 pub struct WasmEngine {
-    environment: Rc<RefCell<Environment>>,
     pub modules: HashMap<String, Module>,
     store: Store,
 }
@@ -22,7 +20,7 @@ impl std::fmt::Debug for WasmEngine {
 }
 
 impl WasmEngine {
-    pub fn new(environment: Rc<RefCell<Environment>>) -> Self {
+    pub fn new() -> Self {
         let xdg_dir =
             xdg::BaseDirectories::with_prefix(APP_NAME).expect("failed get xdg directory");
         let wasm_dir = xdg_dir
@@ -30,10 +28,10 @@ impl WasmEngine {
             .expect("failed get path")
             .to_string_lossy()
             .to_string();
-        Self::from_path(environment, &wasm_dir)
+        Self::from_path(&wasm_dir)
     }
 
-    pub fn from_path(environment: Rc<RefCell<Environment>>, wasm_dir: &str) -> Self {
+    pub fn from_path(wasm_dir: &str) -> Self {
         let store = Store::new(Cranelift::default());
         let mut modules: HashMap<String, Module> = HashMap::new();
 
@@ -61,11 +59,7 @@ impl WasmEngine {
                 }
             }
         }
-        WasmEngine {
-            environment,
-            modules,
-            store,
-        }
+        WasmEngine { modules, store }
     }
 
     pub fn call(&mut self, name: &str, args: &[String]) -> Result<()> {

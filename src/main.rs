@@ -1,5 +1,5 @@
+use crate::context::Context;
 use crate::environment::Environment;
-use crate::process::Context;
 use crate::repl::Repl;
 use crate::shell::Shell;
 use clap::Parser;
@@ -9,9 +9,11 @@ use tracing::debug;
 
 mod builtin;
 mod completion;
+mod context;
 mod direnv;
 mod dirs;
 mod environment;
+mod exitstatus;
 mod frecency;
 mod history;
 mod input;
@@ -19,6 +21,7 @@ mod lisp;
 mod parser;
 mod process;
 mod prompt;
+mod proxy;
 mod repl;
 mod shell;
 mod wasm;

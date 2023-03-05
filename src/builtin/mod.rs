@@ -1,5 +1,6 @@
-use crate::process::{Context, ExitStatus};
-use crate::shell::Shell;
+use crate::context::Context;
+use crate::exitstatus::ExitStatus;
+use anyhow::Result;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -13,7 +14,14 @@ mod set;
 mod var;
 mod z;
 
-pub type BuiltinCommand = fn(ctx: &Context, argv: Vec<String>, shell: &mut Shell) -> ExitStatus;
+pub trait ShellProxy {
+    fn run_builtin(&mut self, ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()>;
+    fn save_path_history(&mut self, path: &str);
+    fn changepwd(&mut self, path: &str);
+}
+
+pub type BuiltinCommand =
+    fn(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus;
 
 pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, BuiltinCommand>>> = Lazy::new(|| {
     let mut builtin = HashMap::new();
@@ -40,7 +48,7 @@ pub fn get_command(name: &str) -> Option<BuiltinCommand> {
     }
 }
 
-pub fn exit(_ctx: &Context, _argv: Vec<String>, shell: &mut Shell) -> ExitStatus {
-    shell.exit();
+pub fn exit(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    let _ret = proxy.run_builtin(ctx, "exit", Vec::new());
     ExitStatus::ExitedWith(0)
 }

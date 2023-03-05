@@ -1,5 +1,6 @@
-use crate::process::{Context, ExitStatus};
-use crate::shell::Shell;
+use crate::builtin::ShellProxy;
+use crate::context::Context;
+use crate::exitstatus::ExitStatus;
 use dirs;
 use std::fs::File;
 use std::io::Write;
@@ -7,7 +8,7 @@ use std::mem;
 use std::os::unix::io::FromRawFd;
 use std::path::Path;
 
-pub fn command(ctx: &Context, argv: Vec<String>, shell: &mut Shell) -> ExitStatus {
+pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     let current_dir = std::env::current_dir().expect("failed to getcwd()");
 
     let dir = match argv.get(1).map(|s| s.as_str()) {
@@ -37,11 +38,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, shell: &mut Shell) -> ExitStatu
 
     match std::env::set_current_dir(&dir) {
         Ok(_) => {
-            // save path
-            if let Some(ref mut history) = shell.path_history {
-                history.add(&dir);
-            }
-            shell.chpwd(&dir);
+            proxy.run_builtin(ctx, "cd", vec![dir]).unwrap();
             ExitStatus::ExitedWith(0)
         }
         Err(err) => {
@@ -53,7 +50,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, shell: &mut Shell) -> ExitStatu
     }
 }
 
-pub fn move_dir(dir: &str, shell: &mut Shell) -> ExitStatus {
+pub fn move_dir(ctx: &Context, dir: &str, proxy: &mut dyn ShellProxy) -> ExitStatus {
     let current_dir = std::env::current_dir().expect("failed to getcwd()");
     let dir = if dir.starts_with('/') {
         dir.to_string()
@@ -79,10 +76,7 @@ pub fn move_dir(dir: &str, shell: &mut Shell) -> ExitStatus {
 
     match std::env::set_current_dir(&dir) {
         Ok(_) => {
-            // save path
-            if let Some(ref mut history) = shell.path_history {
-                history.add(&dir);
-            }
+            proxy.run_builtin(ctx, "move_dir", vec![dir]).unwrap();
             ExitStatus::ExitedWith(0)
         }
         Err(err) => {

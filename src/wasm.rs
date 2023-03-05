@@ -2,7 +2,6 @@ use crate::shell::APP_NAME;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::fs;
-use std::{cell::RefCell, rc::Rc};
 use tracing::debug;
 use wasmer::{Instance, Module, Store};
 use wasmer_compiler_cranelift::Cranelift;

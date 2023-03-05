@@ -1,6 +1,6 @@
+use crate::context::Context;
 use crate::direnv::DirEnvironment;
 use crate::lisp::model::{Env, RuntimeError, Value};
-use crate::process::Context;
 use crate::shell::Shell;
 use nix::sys::termios::tcgetattr;
 use nix::unistd::pipe;

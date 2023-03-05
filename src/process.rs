@@ -1,4 +1,6 @@
 use crate::builtin::BuiltinCommand;
+use crate::context::Context;
+use crate::exitstatus::ExitStatus;
 use crate::shell::{Shell, SHELL_TERMINAL};
 use anyhow::Context as _;
 use anyhow::Result;
@@ -72,50 +74,50 @@ impl WaitJob {
     }
 }
 
-pub struct Context {
-    pub shell_pid: Pid,
-    pub shell_pgid: Pid,
-    pub shell_tmode: Termios,
-    pub foreground: bool,
-    pub interactive: bool,
-    pub infile: RawFd,
-    pub outfile: RawFd,
-    pub errfile: RawFd,
-    pub captured_out: Option<RawFd>,
-    pub save_history: bool,
-}
+// pub struct Context {
+//     pub shell_pid: Pid,
+//     pub shell_pgid: Pid,
+//     pub shell_tmode: Termios,
+//     pub foreground: bool,
+//     pub interactive: bool,
+//     pub infile: RawFd,
+//     pub outfile: RawFd,
+//     pub errfile: RawFd,
+//     pub captured_out: Option<RawFd>,
+//     pub save_history: bool,
+// }
 
-impl Context {
-    pub fn new(shell_pid: Pid, shell_pgid: Pid, shell_tmode: Termios, foreground: bool) -> Self {
-        Context {
-            shell_pid,
-            shell_pgid,
-            shell_tmode,
-            foreground,
-            interactive: true,
-            infile: STDIN_FILENO,
-            outfile: STDOUT_FILENO,
-            errfile: STDERR_FILENO,
-            captured_out: None,
-            save_history: true,
-        }
-    }
-}
+// impl Context {
+//     pub fn new(shell_pid: Pid, shell_pgid: Pid, shell_tmode: Termios, foreground: bool) -> Self {
+//         Context {
+//             shell_pid,
+//             shell_pgid,
+//             shell_tmode,
+//             foreground,
+//             interactive: true,
+//             infile: STDIN_FILENO,
+//             outfile: STDOUT_FILENO,
+//             errfile: STDERR_FILENO,
+//             captured_out: None,
+//             save_history: true,
+//         }
+//     }
+// }
 
-impl Debug for Context {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
-        f.debug_struct("Context")
-            .field("shell_pid", &self.shell_pid)
-            .field("shell_pgid", &self.shell_pgid)
-            .field("foreground", &self.foreground)
-            .field("interactive", &self.interactive)
-            .field("infile", &self.infile)
-            .field("outfile", &self.outfile)
-            .field("errfile", &self.errfile)
-            .field("captured_out", &self.captured_out)
-            .finish()
-    }
-}
+// impl Debug for Context {
+//     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
+//         f.debug_struct("Context")
+//             .field("shell_pid", &self.shell_pid)
+//             .field("shell_pgid", &self.shell_pgid)
+//             .field("foreground", &self.foreground)
+//             .field("interactive", &self.interactive)
+//             .field("infile", &self.infile)
+//             .field("outfile", &self.outfile)
+//             .field("errfile", &self.errfile)
+//             .field("captured_out", &self.captured_out)
+//             .finish()
+//     }
+// }
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum JobProcess {
@@ -431,14 +433,14 @@ pub enum ProcessState {
     Stopped(Pid),
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum ExitStatus {
-    ExitedWith(i32),
-    Running(Pid),
-    Break,
-    Continue,
-    Return,
-}
+// #[derive(Debug, Copy, Clone, Eq, PartialEq)]
+// pub enum ExitStatus {
+//     ExitedWith(i32),
+//     Running(Pid),
+//     Break,
+//     Continue,
+//     Return,
+// }
 
 impl Process {
     pub fn new(cmd: String, argv: Vec<String>) -> Self {

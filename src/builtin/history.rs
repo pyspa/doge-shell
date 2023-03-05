@@ -1,20 +1,8 @@
-use crate::frecency::SortMethod;
-use crate::process::{Context, ExitStatus};
-use crate::shell::Shell;
-use nix::unistd::dup;
-use std::fs::File;
-use std::io::Write;
-use std::os::unix::io::FromRawFd;
+use crate::builtin::ShellProxy;
+use crate::context::Context;
+use crate::exitstatus::ExitStatus;
 
-pub fn command(ctx: &Context, _argv: Vec<String>, shell: &mut Shell) -> ExitStatus {
-    if let Some(ref mut history) = shell.cmd_history {
-        let fd = dup(ctx.outfile).expect("failed dup");
-        let mut file = unsafe { File::from_raw_fd(fd) };
-        let vec = history.sorted(&SortMethod::Recent);
-        for item in vec {
-            writeln!(file, "{}", item.item).ok();
-        }
-        history.reset_index();
-    }
+pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    proxy.run_builtin(ctx, "history", argv).unwrap();
     ExitStatus::ExitedWith(0)
 }

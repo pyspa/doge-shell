@@ -1,11 +1,13 @@
 use crate::builtin;
+use crate::context::Context;
 use crate::direnv;
 use crate::dirs;
 use crate::environment::Environment;
+use crate::exitstatus::ExitStatus;
 use crate::history::FrecencyHistory;
 use crate::lisp;
 use crate::parser::{self, Rule, ShellParser};
-use crate::process::{self, Context, ExitStatus, Job, JobProcess, WaitJob};
+use crate::process::{self, Job, JobProcess, WaitJob};
 use crate::wasm;
 use anyhow::Context as _;
 use anyhow::{anyhow, bail, Result};
@@ -13,8 +15,7 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use libc::{c_int, STDIN_FILENO};
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::sys::termios::tcgetattr;
-use nix::unistd::close;
-use nix::unistd::{fork, getpid, pipe, setpgid, ForkResult, Pid};
+use nix::unistd::{close, fork, getpid, pipe, setpgid, ForkResult, Pid};
 use pest::iterators::Pair;
 use pest::Parser;
 use std::fs::File;
@@ -345,9 +346,9 @@ impl Shell {
             let wasm = process::WasmProcess::new(cmd.to_string(), argv);
             job.set_process(JobProcess::Wasm(wasm));
         } else if self.lisp_engine.borrow().is_export(cmd) {
-            let cmd_fn = builtin::lisp::run;
-            let builtin = process::BuiltinProcess::new(cmd.to_string(), cmd_fn, argv);
-            job.set_process(JobProcess::Builtin(builtin));
+            // let cmd_fn = builtin::lisp::run;
+            // let builtin = process::BuiltinProcess::new(cmd.to_string(), cmd_fn, argv);
+            // job.set_process(JobProcess::Builtin(builtin));
         } else if let Some(cmd) = self.environment.borrow().lookup(cmd) {
             let process = process::Process::new(cmd, argv);
             job.set_process(JobProcess::Command(process));

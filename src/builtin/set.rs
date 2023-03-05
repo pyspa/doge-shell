@@ -1,14 +1,13 @@
-use crate::process::{Context, ExitStatus};
-use crate::shell::Shell;
+use crate::builtin::ShellProxy;
+use crate::context::Context;
+use crate::exitstatus::ExitStatus;
 
-pub fn command(_ctx: &Context, argv: Vec<String>, shell: &mut Shell) -> ExitStatus {
+pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     if argv.len() < 3 {
         println!("set variable");
         println!("set KEY VALUE");
     } else {
-        let key = format!("${}", argv[1]);
-        let val = argv[2].to_string();
-        shell.environment.borrow_mut().variables.insert(key, val);
+        proxy.run_builtin(ctx, "set", argv).unwrap();
     }
     ExitStatus::ExitedWith(0)
 }

@@ -1,9 +1,9 @@
 use crate::completion::{self, Completion};
+use crate::context::Context;
 use crate::dirs;
 use crate::input::Input;
 use crate::parser::Rule;
 use crate::process::wait_any_job;
-use crate::process::Context;
 use crate::prompt::print_preprompt;
 use crate::shell::{Shell, SHELL_TERMINAL};
 use anyhow::Context as _;

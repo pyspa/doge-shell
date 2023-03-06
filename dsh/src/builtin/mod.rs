@@ -1,6 +1,5 @@
-use crate::context::Context;
-use crate::exitstatus::ExitStatus;
 use anyhow::Result;
+use dsh_types::{Context, ExitStatus};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;

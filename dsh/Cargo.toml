@@ -24,13 +24,19 @@ overflow-checks = false
 
 [dependencies]
 dsh-wasm = { path = "../dsh-wasm" }
-clap = { version="4", features = ["derive"] }
+dsh-types = { path = "../dsh-types" }
+
 anyhow.workspace = true
+libc.workspace=true
+nix.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+cfg-if.workspace = true
+
+clap = { version="4", features = ["derive"] }
 regex = "1.5"
-libc = "0"
 serde_json = "1.0"
 toml = "0.7"
-nix = "0"
 chrono = "0.4"
 term_size = "0.3"
 termion = "*"
@@ -52,6 +58,3 @@ shellexpand = "3"
 bincode = "1"
 skim = "0.10"
 tabled = "*"
-tracing.workspace = true
-tracing-subscriber.workspace = true
-cfg-if.workspace = true

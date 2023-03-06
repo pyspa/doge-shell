@@ -1,9 +1,7 @@
 use crate::builtin;
-use crate::context::Context;
 use crate::direnv;
 use crate::dirs;
 use crate::environment::Environment;
-use crate::exitstatus::ExitStatus;
 use crate::history::FrecencyHistory;
 use crate::lisp;
 use crate::parser::{self, Rule, ShellParser};
@@ -11,6 +9,7 @@ use crate::process::{self, Job, JobProcess, WaitJob};
 use anyhow::Context as _;
 use anyhow::{anyhow, bail, Result};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use dsh_types::{Context, ExitStatus};
 use dsh_wasm::WasmEngine;
 use libc::{c_int, STDIN_FILENO};
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};

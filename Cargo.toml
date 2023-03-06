@@ -7,10 +7,12 @@ edition = "2021"
 
 [workspace]
 resolver = "2"
-members = ["dsh", "dsh-wasm"]
+members = ["dsh", "dsh-wasm", "dsh-types"]
 
 [workspace.dependencies]
 anyhow = "1"
+libc = "0.2"
+nix = "0.26"
 xdg = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -1,6 +1,5 @@
 use crate::builtin::ShellProxy;
-use crate::context::Context;
-use crate::exitstatus::ExitStatus;
+use dsh_types::{Context, ExitStatus};
 
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     if argv.len() < 3 {

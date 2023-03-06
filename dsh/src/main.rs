@@ -1,19 +1,17 @@
-use crate::context::Context;
 use crate::environment::Environment;
 use crate::repl::Repl;
 use crate::shell::Shell;
 use clap::Parser;
+use dsh_types::Context;
 use nix::sys::termios::tcgetattr;
 use std::process::ExitCode;
 use tracing::debug;
 
 mod builtin;
 mod completion;
-mod context;
 mod direnv;
 mod dirs;
 mod environment;
-mod exitstatus;
 mod frecency;
 mod history;
 mod input;
@@ -24,7 +22,6 @@ mod prompt;
 mod proxy;
 mod repl;
 mod shell;
-// mod wasm;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]

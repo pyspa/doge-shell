@@ -1,7 +1,7 @@
-use crate::context::Context;
 use crate::direnv::DirEnvironment;
 use crate::lisp::model::{Env, RuntimeError, Value};
 use crate::shell::Shell;
+use dsh_types::Context;
 use nix::sys::termios::tcgetattr;
 use nix::unistd::pipe;
 use std::fs::File;

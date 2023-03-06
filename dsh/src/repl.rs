@@ -1,5 +1,4 @@
 use crate::completion::{self, Completion};
-use crate::context::Context;
 use crate::dirs;
 use crate::input::Input;
 use crate::parser::Rule;
@@ -13,6 +12,7 @@ use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::style::{Color, Print, ResetColor, Stylize};
 use crossterm::terminal::{self, enable_raw_mode, Clear, ClearType};
 use crossterm::{execute, queue};
+use dsh_types::Context;
 use futures::{future::FutureExt, select, StreamExt};
 use futures_timer::Delay;
 use nix::sys::termios::{tcgetattr, Termios};

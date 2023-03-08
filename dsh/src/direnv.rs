@@ -1,8 +1,6 @@
-use crate::environment::Environment;
 use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::{cell::RefCell, rc::Rc};
 
 #[derive(Debug, Clone)]
 pub struct EnvEntry {
@@ -78,8 +76,8 @@ fn read_config_file(file: &str) -> Result<Vec<[String; 2]>> {
     Ok(ret)
 }
 
-pub fn check_path(pwd: &Path, env: Rc<RefCell<Environment>>) {
-    for env in env.borrow_mut().direnv_roots.iter_mut() {
+pub fn check_path(pwd: &Path, entries: &mut Vec<DirEnvironment>) {
+    for env in entries {
         if pwd.starts_with(&env.path) {
             if !env.loaded {
                 env.read_envfile();

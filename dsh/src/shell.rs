@@ -106,7 +106,7 @@ impl Shell {
 
     pub fn install_chpwd_hooks(&mut self) {
         self.chpwd_hooks.push(chpwd_debug);
-        self.chpwd_hooks.push(direnv::check_path);
+        self.chpwd_hooks.push(check_direnv);
     }
 
     pub fn set_signals(&mut self) {
@@ -449,6 +449,10 @@ impl Shell {
 
 fn chpwd_debug(pwd: &Path, _env: Rc<RefCell<Environment>>) {
     debug!("!chpwd {:?}", pwd);
+}
+
+fn check_direnv(pwd: &Path, env: Rc<RefCell<Environment>>) {
+    direnv::check_path(pwd, &mut env.borrow_mut().direnv_roots);
 }
 
 fn read_fd(fd: RawFd) -> Result<String> {

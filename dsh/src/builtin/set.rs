@@ -6,7 +6,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         println!("set variable");
         println!("set KEY VALUE");
     } else {
-        proxy.run_builtin(ctx, "set", argv).unwrap();
+        proxy.dispatch(ctx, "set", argv).unwrap();
     }
     ExitStatus::ExitedWith(0)
 }

@@ -14,7 +14,7 @@ mod var;
 mod z;
 
 pub trait ShellProxy {
-    fn run_builtin(&mut self, ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()>;
+    fn dispatch(&mut self, ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()>;
     fn save_path_history(&mut self, path: &str);
     fn changepwd(&mut self, path: &str);
 }
@@ -48,6 +48,6 @@ pub fn get_command(name: &str) -> Option<BuiltinCommand> {
 }
 
 pub fn exit(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
-    let _ret = proxy.run_builtin(ctx, "exit", Vec::new());
+    let _ret = proxy.dispatch(ctx, "exit", Vec::new());
     ExitStatus::ExitedWith(0)
 }

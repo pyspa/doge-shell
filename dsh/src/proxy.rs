@@ -35,7 +35,7 @@ impl ShellProxy for Shell {
         self.chpwd(path);
     }
 
-    fn run_builtin(&mut self, ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()> {
+    fn dispatch(&mut self, ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()> {
         match cmd {
             "exit" => {
                 self.exit();
@@ -65,7 +65,7 @@ impl ShellProxy for Shell {
                     let results = history.sort_by_match(path);
                     if !results.is_empty() {
                         let path = results[0].item.clone();
-                        self.run_builtin(ctx, "cd", vec![path]).unwrap();
+                        self.dispatch(ctx, "cd", vec![path]).unwrap();
                     }
                 }
             }

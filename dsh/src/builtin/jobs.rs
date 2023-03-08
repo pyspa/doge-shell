@@ -14,6 +14,6 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     // let table = Table::new(jobs).to_string();
     // shell.print_stdout(table);
 
-    proxy.run_builtin(ctx, "jobs", argv).unwrap();
+    proxy.dispatch(ctx, "jobs", argv).unwrap();
     ExitStatus::ExitedWith(0)
 }

@@ -37,7 +37,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 
     match std::env::set_current_dir(&dir) {
         Ok(_) => {
-            proxy.run_builtin(ctx, "cd", vec![dir]).unwrap();
+            proxy.dispatch(ctx, "cd", vec![dir]).unwrap();
             ExitStatus::ExitedWith(0)
         }
         Err(err) => {

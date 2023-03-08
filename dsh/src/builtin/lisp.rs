@@ -5,7 +5,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     if argv.len() < 2 {
         println!("lisp: missing s-expression");
     } else {
-        proxy.run_builtin(ctx, "lisp", argv).unwrap();
+        proxy.dispatch(ctx, "lisp", argv).unwrap();
     }
     ExitStatus::ExitedWith(0)
 }

@@ -1,8 +1,8 @@
 use crate::dirs::is_executable;
-use crate::frecency::ItemStats;
 use crate::lisp;
 use crate::lisp::Value;
 use anyhow::Result;
+use dsh_frecency::ItemStats;
 use regex::Regex;
 use skim::prelude::*;
 use skim::{Skim, SkimItemReceiver, SkimItemSender};

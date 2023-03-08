@@ -47,7 +47,7 @@ pub fn write_store(store: &FrecencyStore, path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-pub use crate::frecency::stats::ItemStats;
-pub use crate::frecency::stats::ItemStatsSerializer;
-pub use crate::frecency::store::FrecencyStore;
-pub use crate::frecency::store::FrecencyStoreSerializer;
+pub use crate::stats::ItemStats;
+pub use crate::stats::ItemStatsSerializer;
+pub use crate::store::FrecencyStore;
+pub use crate::store::FrecencyStoreSerializer;

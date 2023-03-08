@@ -1,7 +1,7 @@
 use crate::builtin::ShellProxy;
-use crate::frecency::SortMethod;
 use crate::shell::Shell;
 use anyhow::Result;
+use dsh_frecency::SortMethod;
 use dsh_types::Context;
 use nix::unistd::dup;
 use std::fs::File;

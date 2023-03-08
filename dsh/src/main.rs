@@ -12,7 +12,6 @@ mod completion;
 mod direnv;
 mod dirs;
 mod environment;
-mod frecency;
 mod history;
 mod input;
 mod lisp;

@@ -140,7 +140,7 @@ impl Repl {
     fn set_completions(&mut self) {
         if let Some(ref mut history) = self.shell.cmd_history {
             let comps = if self.input.is_empty() {
-                history.sorted(&crate::frecency::SortMethod::Recent)
+                history.sorted(&dsh_frecency::SortMethod::Recent)
             } else {
                 history.sort_by_match(&self.input.as_str())
             };

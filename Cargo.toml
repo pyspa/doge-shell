@@ -8,7 +8,12 @@ version = "0.0.1"
 
 [workspace]
 resolver = "2"
-members = ["dsh", "dsh-wasm", "dsh-types"]
+members = [
+  "dsh",
+  "dsh-frecency",
+  "dsh-wasm",
+  "dsh-types"
+]
 
 [workspace.dependencies]
 anyhow = "1"
@@ -18,3 +23,7 @@ xdg = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 cfg-if = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+crossterm = {version = "0", features = ["event-stream"]}
+bincode = "1"

@@ -1,8 +1,8 @@
 use crate::environment;
-use crate::frecency::{read_store, write_store, FrecencyStore, ItemStats, SortMethod};
 use anyhow::Context as _;
 use anyhow::Result;
 use chrono::Local;
+use dsh_frecency::{read_store, write_store, FrecencyStore, ItemStats, SortMethod};
 use easy_reader::EasyReader;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;

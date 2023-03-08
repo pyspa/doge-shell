@@ -684,12 +684,12 @@ name = "doge-shell"
 version = "0.0.1"
 dependencies = [
  "anyhow",
- "bincode",
  "cfg-if 1.0.0",
  "chrono",
  "clap 4.1.8",
  "crossterm",
  "dirs",
+ "dsh-frecency",
  "dsh-types",
  "dsh-wasm",
  "easy_reader",
@@ -713,6 +713,23 @@ dependencies = [
  "termios",
  "tokio",
  "toml",
+ "tracing",
+ "tracing-subscriber",
+ "xdg",
+]
+
+[[package]]
+name = "dsh-frecency"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "cfg-if 1.0.0",
+ "crossterm",
+ "libc",
+ "nix 0.26.2",
+ "serde",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
  "xdg",

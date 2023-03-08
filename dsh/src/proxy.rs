@@ -133,4 +133,16 @@ impl ShellProxy for Shell {
         }
         Ok(())
     }
+
+    fn get_var(&mut self, key: &str) -> Option<String> {
+        if let Some(val) = self.environment.borrow().variables.get(key) {
+            Some(val.to_string())
+        } else {
+            None
+        }
+    }
+
+    fn save_var(&mut self, key: String, value: String) {
+        self.environment.borrow_mut().variables.insert(key, value);
+    }
 }

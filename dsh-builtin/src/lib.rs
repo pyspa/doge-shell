@@ -17,6 +17,8 @@ pub trait ShellProxy {
     fn dispatch(&mut self, ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()>;
     fn save_path_history(&mut self, path: &str);
     fn changepwd(&mut self, path: &str);
+    fn get_var(&mut self, key: &str) -> Option<String>;
+    fn save_var(&mut self, key: String, value: String);
 }
 
 pub type BuiltinCommand =

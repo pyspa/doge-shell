@@ -30,7 +30,8 @@ struct Cli {
     command: Option<String>,
 }
 
-#[async_std::main]
+//#[async_std::main]
+#[tokio::main]
 async fn main() -> ExitCode {
     tracing_subscriber::fmt::init();
 
@@ -64,7 +65,8 @@ async fn main() -> ExitCode {
             }
         };
         let mut repl = Repl::new(shell);
-        async_std::task::block_on(repl.run_interactive());
+        //async_std::task::block_on(repl.run_interactive());
+        repl.run_interactive().await;
         ExitCode::from(0)
     }
 }

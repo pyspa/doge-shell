@@ -1,9 +1,9 @@
 [package]
 name = "dsh-wasm"
-version.workspace = true
-authors.workspace = true
-license.workspace = true
-edition.workspace = true
+description = "The simple shell"
+authors = ["mopemope <yutaka.matsubara@gmail.com>"]
+edition = "2021"
+version = "0.0.1"
 
 [dependencies]
 clap = { version="4", features = ["derive"] }

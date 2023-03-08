@@ -1,8 +1,8 @@
-use crate::builtin::BuiltinCommand;
 use crate::shell::{Shell, SHELL_TERMINAL};
 use anyhow::Context as _;
 use anyhow::Result;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use dsh_builtin::BuiltinCommand;
 use dsh_types::{Context, ExitStatus};
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};

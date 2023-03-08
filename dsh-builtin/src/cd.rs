@@ -1,4 +1,4 @@
-use crate::builtin::ShellProxy;
+use super::ShellProxy;
 use dirs;
 use dsh_types::{Context, ExitStatus};
 use std::fs::File;

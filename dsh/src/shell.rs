@@ -1,4 +1,3 @@
-use crate::builtin;
 use crate::direnv;
 use crate::dirs;
 use crate::environment::Environment;
@@ -338,7 +337,7 @@ impl Shell {
         }
 
         let cmd = argv[0].as_str();
-        if let Some(cmd_fn) = builtin::get_command(cmd) {
+        if let Some(cmd_fn) = dsh_builtin::get_command(cmd) {
             let builtin = process::BuiltinProcess::new(cmd.to_string(), cmd_fn, argv);
             job.set_process(JobProcess::Builtin(builtin));
         } else if self.wasm_engine.modules.get(cmd).is_some() {
@@ -353,7 +352,7 @@ impl Shell {
             job.set_process(JobProcess::Command(process));
             job.foreground = ctx.foreground;
         } else if dirs::is_dir(cmd) {
-            if let Some(cmd_fn) = builtin::get_command("cd") {
+            if let Some(cmd_fn) = dsh_builtin::get_command("cd") {
                 let builtin = process::BuiltinProcess::new(
                     cmd.to_string(),
                     cmd_fn,

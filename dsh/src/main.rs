@@ -7,7 +7,6 @@ use nix::sys::termios::tcgetattr;
 use std::process::ExitCode;
 use tracing::debug;
 
-mod builtin;
 mod completion;
 mod direnv;
 mod dirs;

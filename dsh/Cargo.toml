@@ -24,6 +24,7 @@ overflow-checks = false
 dsh-wasm = { path = "../dsh-wasm" }
 dsh-types = { path = "../dsh-types" }
 dsh-frecency = { path = "../dsh-frecency" }
+dsh-builtin = { path = "../dsh-builtin" }
 
 anyhow.workspace = true
 libc.workspace=true
@@ -35,6 +36,9 @@ serde.workspace = true
 serde_json.workspace = true
 crossterm.workspace = true
 xdg.workspace = true
+shellexpand.workspace = true
+once_cell.workspace = true
+dirs.workspace = true
 
 clap = { version="4", features = ["derive"] }
 regex = "1.5"
@@ -44,15 +48,12 @@ term_size = "0.3"
 termion = "*"
 termios = "*"
 file-lock = "2"
-dirs = "4"
 easy_reader = "0"
-once_cell = "1"
 futures = "0.3"
 futures-timer = "3"
 tokio = { version = "1", features = ["full"] }
 pest = "2"
 pest_derive = "2"
 fuzzy-matcher = "*"
-shellexpand = "3"
 skim = "0.10"
 tabled = "*"

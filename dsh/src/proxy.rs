@@ -1,6 +1,6 @@
-use crate::builtin::ShellProxy;
 use crate::shell::Shell;
 use anyhow::Result;
+use dsh_builtin::ShellProxy;
 use dsh_frecency::SortMethod;
 use dsh_types::Context;
 use nix::unistd::dup;

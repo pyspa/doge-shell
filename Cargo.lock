@@ -689,6 +689,7 @@ dependencies = [
  "clap 4.1.8",
  "crossterm",
  "dirs",
+ "dsh-builtin",
  "dsh-frecency",
  "dsh-types",
  "dsh-wasm",
@@ -716,6 +717,18 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "xdg",
+]
+
+[[package]]
+name = "dsh-builtin"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "dsh-frecency",
+ "dsh-types",
+ "once_cell",
+ "shellexpand",
 ]
 
 [[package]]

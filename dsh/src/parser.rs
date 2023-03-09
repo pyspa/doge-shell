@@ -138,7 +138,8 @@ fn expand_alias_tilde(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Vec<
         | Rule::s_quoted
         | Rule::d_quoted
         | Rule::literal_s_quoted
-        | Rule::literal_d_quoted => {
+        | Rule::literal_d_quoted
+        | Rule::redirect_direction => {
             argv.push(shellexpand::tilde(pair.as_str()).to_string());
         }
         Rule::argv0 => {
@@ -208,7 +209,8 @@ fn expand_alias_tilde(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Vec<
                     | Rule::s_quoted
                     | Rule::d_quoted
                     | Rule::literal_s_quoted
-                    | Rule::literal_d_quoted => {
+                    | Rule::literal_d_quoted
+                    | Rule::redirect_direction => {
                         let mut v = expand_alias_tilde(inner_pair, alias);
                         argv.append(&mut v);
                     }
@@ -395,7 +397,11 @@ fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {
                 }
             }
         }
-        Rule::word | Rule::variable | Rule::literal_s_quoted | Rule::literal_d_quoted => {
+        Rule::word
+        | Rule::variable
+        | Rule::literal_s_quoted
+        | Rule::literal_d_quoted
+        | Rule::redirect_direction => {
             let pair_span = pair.as_span();
             if pair_span.start() < pos && pos <= pair_span.end() {
                 return Some((pair_span, true));
@@ -814,6 +820,10 @@ mod test {
         let replaced = expand_alias(input, Rc::clone(&env))?;
         assert_eq!(replaced, r#"echo BAR"#.to_string());
 
+        let input = r#"echo 'test' > test.log"#.to_string();
+        let replaced = expand_alias(input, Rc::clone(&env))?;
+        assert_eq!(replaced, r#"echo 'test' > test.log"#.to_string());
+
         Ok(())
     }
 
@@ -949,5 +959,36 @@ mod test {
         }
 
         assert!(find);
+    }
+
+    #[test]
+    fn test_redirect() {
+        let pairs = ShellParser::parse(Rule::simple_command, r#"echo "f" > test.log "#)
+            .unwrap_or_else(|e| panic!("{}", e));
+        let mut found = false;
+        for pair in pairs {
+            assert_eq!(Rule::simple_command, pair.as_rule());
+            // println!("* {:?} {:?}", pair.as_rule(), pair.as_str());
+            let count = pair.clone().into_inner().count();
+            assert_eq!(2, count);
+            for pair in pair.into_inner() {
+                match pair.as_rule() {
+                    Rule::args => {
+                        for pair in pair.into_inner() {
+                            // println!("** {:?} {:?}", pair.as_rule(), pair.as_str());
+                            let parent = pair.as_rule();
+                            if parent == Rule::redirect {
+                                for pair in pair.into_inner() {
+                                    println!("*** {:?} {:?}", pair.as_rule(), pair.as_str());
+                                    found = true;
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert!(found);
     }
 }

@@ -1,6 +1,7 @@
 use crate::shell::{Shell, SHELL_TERMINAL};
 use anyhow::Context as _;
 use anyhow::Result;
+use async_std::{fs, io, task};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dsh_builtin::BuiltinCommand;
 use dsh_types::{Context, ExitStatus};
@@ -11,7 +12,6 @@ use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{close, dup2, execv, fork, getpid, pipe, setpgid, tcsetpgrp, ForkResult, Pid};
 use std::ffi::CString;
 use std::fmt::Debug;
-use std::fs::File;
 use std::io::Read;
 use std::os::unix::io::FromRawFd;
 use std::os::unix::io::RawFd;
@@ -36,7 +36,7 @@ pub struct WaitJob {
 impl WaitJob {
     pub fn output(&self) {
         if let Some(fd) = self.stdout {
-            let mut file = unsafe { File::from_raw_fd(fd) };
+            let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
             let mut buf = String::new();
             match file.read_to_string(&mut buf) {
                 Ok(size) => {
@@ -72,51 +72,6 @@ impl WaitJob {
         // }
     }
 }
-
-// pub struct Context {
-//     pub shell_pid: Pid,
-//     pub shell_pgid: Pid,
-//     pub shell_tmode: Termios,
-//     pub foreground: bool,
-//     pub interactive: bool,
-//     pub infile: RawFd,
-//     pub outfile: RawFd,
-//     pub errfile: RawFd,
-//     pub captured_out: Option<RawFd>,
-//     pub save_history: bool,
-// }
-
-// impl Context {
-//     pub fn new(shell_pid: Pid, shell_pgid: Pid, shell_tmode: Termios, foreground: bool) -> Self {
-//         Context {
-//             shell_pid,
-//             shell_pgid,
-//             shell_tmode,
-//             foreground,
-//             interactive: true,
-//             infile: STDIN_FILENO,
-//             outfile: STDOUT_FILENO,
-//             errfile: STDERR_FILENO,
-//             captured_out: None,
-//             save_history: true,
-//         }
-//     }
-// }
-
-// impl Debug for Context {
-//     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
-//         f.debug_struct("Context")
-//             .field("shell_pid", &self.shell_pid)
-//             .field("shell_pgid", &self.shell_pgid)
-//             .field("foreground", &self.foreground)
-//             .field("interactive", &self.interactive)
-//             .field("infile", &self.infile)
-//             .field("outfile", &self.outfile)
-//             .field("errfile", &self.errfile)
-//             .field("captured_out", &self.captured_out)
-//             .finish()
-//     }
-// }
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum JobProcess {
@@ -546,6 +501,7 @@ pub struct Job {
     pub foreground: bool,
     pub need_wait: bool,
     pub subshell: bool,
+    pub redirect_out: Option<String>, // TODO in,stdout,stderr
 }
 
 impl Job {
@@ -564,6 +520,7 @@ impl Job {
             foreground: true,
             need_wait: false,
             subshell: false,
+            redirect_out: None,
         }
     }
 
@@ -581,6 +538,7 @@ impl Job {
             foreground: true,
             need_wait: false,
             subshell: false,
+            redirect_out: None,
         }
     }
 
@@ -613,6 +571,7 @@ impl Job {
 
     pub fn launch(&mut self, ctx: &mut Context, shell: &mut Shell) -> Result<ProcessState> {
         ctx.foreground = self.foreground;
+
         self.process
             .take()
             .as_mut()
@@ -641,11 +600,19 @@ impl Job {
                 pipe_out = Some(pout);
             }
             _ => {
-                // reset
-                if let Some(out) = ctx.captured_out {
-                    ctx.outfile = out;
-                } else if ctx.infile != STDIN_FILENO {
-                    ctx.outfile = self.stdout;
+                if let Some(ref output) = self.redirect_out {
+                    // redirect
+                    let (pout, pin) = pipe().context("failed pipe")?;
+                    ctx.outfile = pin;
+                    pipe_out = Some(pout);
+                    ctx.redirect_out = Some(output.to_string());
+                } else {
+                    // reset
+                    if let Some(out) = ctx.captured_out {
+                        ctx.outfile = out;
+                    } else if ctx.infile != STDIN_FILENO {
+                        ctx.outfile = self.stdout;
+                    }
                 }
             }
         }
@@ -733,8 +700,24 @@ impl Job {
             return Err(err);
         }
 
+        if let Some(ref file) = ctx.redirect_out {
+            // TODO refactor to function
+
+            let infile = ctx.infile.clone();
+            let file = file.clone();
+
+            // spawn and io copy
+            task::spawn(async move {
+                // copy io
+                let mut reader = unsafe { fs::File::from_raw_fd(infile) };
+                // TODO add append mode
+                let mut writer = fs::File::create(file.to_string()).await.unwrap(); // TODO check err
+                let _res = io::copy(&mut reader, &mut writer).await; // TODO check err
+            });
+        }
+
         if !ctx.interactive {
-            self.wait_job();
+            self.wait_job(ctx);
             Ok(())
         } else if ctx.foreground {
             // foreground
@@ -754,7 +737,7 @@ impl Job {
 
         // TODO Send the job a continue signal, if necessary.
 
-        self.wait_job();
+        self.wait_job(ctx);
 
         tcsetpgrp(SHELL_TERMINAL, ctx.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
         // debug!("put_in_foreground: {:?} tcsetpgrp shell", &self.cmd);
@@ -782,7 +765,7 @@ impl Job {
 
     fn show_job_status(&self) {}
 
-    pub fn wait_job(&mut self) {
+    pub fn wait_job(&mut self, _ctx: &Context) {
         debug!(
             "wait_job: {:?} pgid: {:?} need_wait: {:?}",
             &self.cmd, self.pgid, self.need_wait

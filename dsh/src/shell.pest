@@ -31,9 +31,11 @@ group_list = _{
 }
 
 quoted = _{ d_quoted|s_quoted }
+redirect_direction = { (">>" | ">") }
+redirect = { redirect_direction ~ sp* ~ span }
 span = { quoted|word|variable|subshell }
 argv0 = { span }
-args = { (sp* ~ span)+ }
+args = { (sp* ~ (redirect|span))+ }
 background = _{ "&" }
 pipeline = _{ "|" }
 command_list_sep = { ";" }

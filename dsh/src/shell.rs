@@ -30,6 +30,7 @@ pub const APP_NAME: &str = "dsh";
 pub const SHELL_TERMINAL: c_int = STDIN_FILENO;
 pub type CommandHook = fn(pwd: &Path, env: Rc<RefCell<Environment>>);
 
+#[derive(Debug)]
 struct ParseContext {
     pub subshell: bool,
     pub foreground: bool,
@@ -155,6 +156,12 @@ impl Shell {
                 // all job run background
                 job.foreground = false;
             }
+
+            debug!(
+                "start job:'{:?}' foreground:{:?} redirect:{:?}",
+                job.cmd, job.foreground, job.redirect_out
+            );
+
             if let process::ProcessState::Completed(exit) = job.launch(&mut ctx, self)? {
                 debug!("job exit code {:?}", exit);
                 if exit != 0 {
@@ -183,9 +190,10 @@ impl Shell {
         }
     }
 
-    fn get_argv(
+    fn parse_argv(
         &mut self,
         ctx: &mut ParseContext,
+        current_job: &mut Job,
         pair: Pair<Rule>,
     ) -> Result<Vec<(String, Option<Vec<process::Job>>)>> {
         let mut argv: Vec<(String, Option<Vec<process::Job>>)> = vec![];
@@ -219,7 +227,16 @@ impl Shell {
                 }
                 Rule::args => {
                     for inner_pair in inner_pair.into_inner() {
-                        // span
+                        if let Rule::redirect = inner_pair.as_rule() {
+                            // set redirect
+                            for inner_pair in inner_pair.into_inner() {
+                                if let Rule::span = inner_pair.as_rule() {
+                                    current_job.redirect_out =
+                                        Some(inner_pair.as_str().to_string());
+                                }
+                            }
+                            continue;
+                        }
                         for inner_pair in inner_pair.into_inner() {
                             match inner_pair.as_rule() {
                                 Rule::subshell => {
@@ -243,7 +260,7 @@ impl Shell {
                     }
                 }
                 Rule::simple_command => {
-                    let mut res = self.get_argv(ctx, inner_pair)?;
+                    let mut res = self.parse_argv(ctx, current_job, inner_pair)?;
                     argv.append(&mut res);
                 }
                 _ => {
@@ -308,16 +325,17 @@ impl Shell {
     fn parse_command(
         &mut self,
         ctx: &mut ParseContext,
-        job: &mut Job,
+        current_job: &mut Job,
         pair: Pair<Rule>,
     ) -> Result<()> {
-        let parsed_subshell = self.get_argv(ctx, pair)?;
-        if parsed_subshell.is_empty() {
+        let parsed_argv = self.parse_argv(ctx, current_job, pair)?;
+        if parsed_argv.is_empty() {
             return Ok(());
         }
 
         let mut argv: Vec<String> = Vec::new();
-        for (str, jobs) in parsed_subshell {
+
+        for (str, jobs) in parsed_argv {
             if let Some(jobs) = jobs {
                 let tmode = tcgetattr(0).expect("failed tcgetattr");
 
@@ -339,18 +357,18 @@ impl Shell {
         let cmd = argv[0].as_str();
         if let Some(cmd_fn) = dsh_builtin::get_command(cmd) {
             let builtin = process::BuiltinProcess::new(cmd.to_string(), cmd_fn, argv);
-            job.set_process(JobProcess::Builtin(builtin));
+            current_job.set_process(JobProcess::Builtin(builtin));
         } else if self.wasm_engine.modules.get(cmd).is_some() {
             let wasm = process::WasmProcess::new(cmd.to_string(), argv);
-            job.set_process(JobProcess::Wasm(wasm));
+            current_job.set_process(JobProcess::Wasm(wasm));
         } else if self.lisp_engine.borrow().is_export(cmd) {
             // let cmd_fn = builtin::lisp::run;
             // let builtin = process::BuiltinProcess::new(cmd.to_string(), cmd_fn, argv);
             // job.set_process(JobProcess::Builtin(builtin));
         } else if let Some(cmd) = self.environment.borrow().lookup(cmd) {
             let process = process::Process::new(cmd, argv);
-            job.set_process(JobProcess::Command(process));
-            job.foreground = ctx.foreground;
+            current_job.set_process(JobProcess::Command(process));
+            current_job.foreground = ctx.foreground;
         } else if dirs::is_dir(cmd) {
             if let Some(cmd_fn) = dsh_builtin::get_command("cd") {
                 let builtin = process::BuiltinProcess::new(
@@ -358,7 +376,7 @@ impl Shell {
                     cmd_fn,
                     vec!["cd".to_string(), cmd.to_string()],
                 );
-                job.set_process(JobProcess::Builtin(builtin));
+                current_job.set_process(JobProcess::Builtin(builtin));
             }
         } else {
             bail!("unknown command: {}", cmd);
@@ -378,6 +396,7 @@ impl Shell {
             match inner_pair.as_rule() {
                 Rule::simple_command => {
                     let mut job = Job::new(job_str.clone());
+
                     self.parse_command(ctx, &mut job, inner_pair)?;
                     if job.process.is_some() {
                         job.subshell = ctx.subshell;

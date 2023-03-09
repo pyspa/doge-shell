@@ -8,8 +8,11 @@ edition = "2021"
 [dependencies]
 dsh-types = { path = "../dsh-types" }
 dsh-frecency = { path = "../dsh-frecency" }
+dsh-chatgpt = { path = "../dsh-chatgpt" }
 
 anyhow.workspace = true
 shellexpand.workspace = true
 once_cell.workspace = true
 dirs.workspace = true
+futures.workspace = true
+tracing.workspace = true

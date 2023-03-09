@@ -11,6 +11,18 @@ use std::process::Command;
 use std::{cell::RefCell, rc::Rc};
 use tracing::debug;
 
+pub fn set_variable(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let key = &args[0];
+    let val = &args[1];
+    debug!("set variable {} {}", &key, &val);
+    env.borrow()
+        .shell_env
+        .borrow_mut()
+        .variables
+        .insert(key.to_string(), val.to_string());
+    Ok(Value::NIL)
+}
+
 pub fn alias(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let alias = &args[0];
     let command = &args[1];

@@ -14,6 +14,7 @@ members = [
   "dsh-wasm",
   "dsh-types",
   "dsh-builtin",
+  "dsh-chatgpt",
 ]
 
 [workspace.dependencies]
@@ -31,3 +32,6 @@ bincode = "1"
 shellexpand = "3"
 once_cell = "1"
 dirs = "4"
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+futures-timer = "3"

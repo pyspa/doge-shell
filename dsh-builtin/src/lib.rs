@@ -5,9 +5,10 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 pub mod cd;
-pub mod history;
-pub mod jobs;
-pub mod lisp;
+mod chatgpt;
+mod history;
+mod jobs;
+mod lisp;
 mod read;
 mod set;
 mod var;
@@ -37,6 +38,8 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, BuiltinCommand>>> = Lazy::n
     builtin.insert("set", set::command as BuiltinCommand);
     builtin.insert("var", var::command as BuiltinCommand);
     builtin.insert("read", read::command as BuiltinCommand);
+    builtin.insert("chat", chatgpt::chat as BuiltinCommand);
+    builtin.insert("chat_prompt", chatgpt::chat_prompt as BuiltinCommand);
 
     Mutex::new(builtin)
 });

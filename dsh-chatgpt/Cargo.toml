@@ -1,0 +1,20 @@
+[package]
+name = "dsh-chatgpt"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+cfg-if.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+futures.workspace = true
+
+[dependencies.reqwest]
+version = "0.11"
+features = ["json", "stream", "socks", "rustls-tls", "rustls-tls-native-roots"]
+default-features = false

@@ -1,6 +1,7 @@
 use crate::environment::Environment;
 use crate::repl::Repl;
 use crate::shell::Shell;
+use async_std::task;
 use clap::Parser;
 use dsh_types::Context;
 use nix::sys::termios::tcgetattr;
@@ -28,9 +29,7 @@ struct Cli {
     command: Option<String>,
 }
 
-//#[async_std::main]
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
@@ -63,8 +62,7 @@ async fn main() -> ExitCode {
             }
         };
         let mut repl = Repl::new(shell);
-        //async_std::task::block_on(repl.run_interactive());
-        repl.run_interactive().await;
+        task::block_on(repl.run_interactive());
         ExitCode::from(0)
     }
 }

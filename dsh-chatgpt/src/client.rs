@@ -1,11 +1,11 @@
-use anyhow::Context as _;
 use anyhow::{anyhow, Result};
-use reqwest::{Client, RequestBuilder};
+use async_std::task;
 use serde_json::{json, Value};
 use std::time::Duration;
+use surf::{Client, Config, RequestBuilder, Url};
 use tracing::debug;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 const API_URL: &str = "https://api.openai.com/v1/chat/completions";
 const MODEL: &str = "gpt-3.5-turbo";
 
@@ -28,7 +28,7 @@ impl ChatGptClient {
         temperature: Option<f64>,
     ) -> Result<String> {
         let f = self.send_message_inner(input, prompt, temperature);
-        futures::executor::block_on(f)
+        task::block_on(f)
     }
 
     async fn send_message_inner(
@@ -39,8 +39,8 @@ impl ChatGptClient {
     ) -> Result<String> {
         let builder = self.request_builder(content, prompt, temperature)?;
 
-        let data: Value = builder.send().await?.json().await?;
-
+        let mut res = builder.await.unwrap();
+        let data: Value = res.body_json().await.unwrap();
         let output = data["choices"][0]["message"]["content"]
             .as_str()
             .ok_or_else(|| anyhow!("Unexpected response {data}"))?;
@@ -49,12 +49,11 @@ impl ChatGptClient {
     }
 
     fn build_client(&self) -> Result<Client> {
-        let builder = Client::builder();
-        // TODO proxy?
-        let client = builder
-            .connect_timeout(CONNECT_TIMEOUT)
-            .build()
-            .with_context(|| "Failed to build http client")?;
+        let config = Config::new();
+        let client = config
+            .set_base_url(Url::parse(API_URL)?)
+            .set_timeout(Some(CONNECT_TIMEOUT))
+            .try_into()?;
         Ok(client)
     }
 
@@ -87,11 +86,13 @@ impl ChatGptClient {
 
         debug!("req: {:?}", body);
 
+        let header_value = format!("Bearer {}", &self.api_key);
         let builder = self
             .build_client()?
             .post(API_URL)
-            .bearer_auth(&self.api_key)
-            .json(&body);
+            .header("Authorization", header_value)
+            .body_json(&body)
+            .unwrap(); // TODO check err
 
         Ok(builder)
     }

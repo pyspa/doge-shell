@@ -40,7 +40,7 @@ xdg.workspace = true
 shellexpand.workspace = true
 once_cell.workspace = true
 dirs.workspace = true
-tokio.workspace = true
+async-std.workspace = true
 futures.workspace = true
 futures-timer.workspace = true
 

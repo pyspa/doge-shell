@@ -16,3 +16,5 @@ once_cell.workspace = true
 dirs.workspace = true
 futures.workspace = true
 tracing.workspace = true
+
+termimad = "0.20"

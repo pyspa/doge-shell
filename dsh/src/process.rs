@@ -16,6 +16,7 @@ use std::io::Read;
 use std::os::unix::io::FromRawFd;
 use std::os::unix::io::RawFd;
 use tracing::{debug, error};
+use xid;
 
 fn copy_fd(src: RawFd, dst: RawFd) {
     if src != dst {
@@ -26,7 +27,8 @@ fn copy_fd(src: RawFd, dst: RawFd) {
 
 #[derive(Debug)]
 pub struct WaitJob {
-    pub job_id: usize,
+    pub job_id: String,
+    pub wait_job_id: usize,
     pub pid: Pid,
     pub cmd: String,
     pub stdout: Option<RawFd>,
@@ -489,6 +491,7 @@ impl Process {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Job {
+    pub id: String,
     pub cmd: String,
     pub pgid: Option<Pid>,
     pub process: Option<Box<JobProcess>>,
@@ -507,7 +510,9 @@ pub struct Job {
 impl Job {
     pub fn new_with_process(cmd: String, path: String, argv: Vec<String>) -> Self {
         let process = JobProcess::Command(Process::new(path, argv));
+        let id = format!("{}", xid::new());
         Job {
+            id,
             cmd,
             pgid: None,
             process: Some(Box::new(process)),
@@ -525,7 +530,9 @@ impl Job {
     }
 
     pub fn new(cmd: String) -> Self {
+        let id = format!("{}", xid::new());
         Job {
+            id,
             cmd,
             pgid: None,
             process: None,
@@ -654,7 +661,7 @@ impl Job {
             let job_id = if shell.wait_jobs.is_empty() {
                 1
             } else if let Some(wait) = shell.wait_jobs.last() {
-                wait.job_id + 1
+                wait.wait_job_id + 1
             } else {
                 1
             };
@@ -665,7 +672,8 @@ impl Job {
                     // wait background process
                     let (stdout, stderr) = process.get_cap_out();
                     let wait_job = WaitJob {
-                        job_id,
+                        job_id: self.id.clone(),
+                        wait_job_id: job_id,
                         pid,
                         cmd: self.cmd.clone(),
                         stdout,

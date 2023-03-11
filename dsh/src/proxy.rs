@@ -74,7 +74,7 @@ impl ShellProxy for Shell {
                     .wait_jobs
                     .iter()
                     .map(|job| Job {
-                        job: job.job_id,
+                        job: job.wait_job_id,
                         pid: job.pid.as_raw(),
                         command: job.cmd.clone(),
                     })

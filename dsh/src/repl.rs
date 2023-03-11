@@ -83,7 +83,7 @@ impl Repl {
                 if let Some(job) = self.shell.wait_jobs.get(index) {
                     job.output();
                     // TODO fix message format
-                    print!("\r\n[{:?}] done '{}' \r\n\r", job.job_id, job.cmd);
+                    print!("\r\n[{:?}] done '{}' \r\n\r", job.wait_job_id, job.cmd);
                     self.shell.wait_jobs.remove(index);
                     self.print_prompt();
                 }

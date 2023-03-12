@@ -15,6 +15,7 @@ mod var;
 mod z;
 
 pub trait ShellProxy {
+    fn exit_shell(&mut self);
     fn dispatch(&mut self, ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()>;
     fn save_path_history(&mut self, path: &str);
     fn changepwd(&mut self, path: &str);

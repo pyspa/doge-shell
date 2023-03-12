@@ -24,6 +24,10 @@ struct Var {
 }
 
 impl ShellProxy for Shell {
+    fn exit_shell(&mut self) {
+        self.exit();
+    }
+
     fn save_path_history(&mut self, path: &str) {
         if let Some(ref mut history) = self.path_history {
             history.add(path);

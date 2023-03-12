@@ -1,3 +1,4 @@
+use crate::completion;
 use crate::direnv;
 use crate::dirs;
 use crate::environment::Environment;

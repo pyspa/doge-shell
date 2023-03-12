@@ -426,6 +426,9 @@ impl Repl {
                 self.shell.exit();
             }
 
+            (KeyCode::Char('r'), CTRL) => {
+                self.select_history(&self.input.as_str());
+            }
             _ => {
                 warn!("unsupported key event: {:?}", ev);
             }
@@ -493,6 +496,23 @@ impl Repl {
                 debug!("exited");
                 break;
             }
+        }
+    }
+
+    pub fn select_history(&mut self, query: &str) {
+        if let Some(ref mut history) = self.shell.cmd_history {
+            let histories = history.sorted(&dsh_frecency::SortMethod::Frecent);
+
+            if let Some(val) = completion::select_item(
+                histories
+                    .iter()
+                    .map(|history| completion::Candidate::Basic(history.item.to_string()))
+                    .collect(),
+                Some(query),
+            ) {
+                self.input.insert_str(val.as_str());
+            }
+            history.reset_index();
         }
     }
 }

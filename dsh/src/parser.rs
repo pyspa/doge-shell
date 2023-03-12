@@ -198,6 +198,7 @@ fn expand_alias_tilde(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Vec<
                     | Rule::command
                     | Rule::simple_command
                     | Rule::args
+                    | Rule::redirect
                     | Rule::span => {
                         for inner_pair in inner_pair.into_inner() {
                             let mut v = expand_alias_tilde(inner_pair, alias);
@@ -216,7 +217,7 @@ fn expand_alias_tilde(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Vec<
                     }
                     _ => {
                         debug!(
-                            "expand_tilde missing {:?} {:?}",
+                            "expand_alias_tilde missing {:?} {:?}",
                             inner_pair.as_rule(),
                             inner_pair.as_str()
                         );
@@ -389,6 +390,14 @@ fn to_words(pair: Pair<Rule>, pos: usize) -> Vec<(Rule, Span, bool)> {
 
 fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {
     match pair.as_rule() {
+        Rule::span => {
+            for pair in pair.into_inner() {
+                let span = get_span(pair, pos);
+                if span.is_some() {
+                    return span;
+                }
+            }
+        }
         Rule::s_quoted | Rule::d_quoted => {
             for pair in pair.into_inner() {
                 let span = get_span(pair, pos);

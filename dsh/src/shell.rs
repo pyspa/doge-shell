@@ -150,7 +150,6 @@ impl Shell {
         let jobs = self.get_jobs(input)?;
 
         for mut job in jobs {
-            debug!("start job {:?}", job.cmd);
             disable_raw_mode().ok();
             if background {
                 // all job run background
@@ -466,7 +465,7 @@ impl Shell {
 }
 
 fn chpwd_debug(pwd: &Path, _env: Rc<RefCell<Environment>>) {
-    debug!("!chpwd {:?}", pwd);
+    debug!("chpwd {:?}", pwd);
 }
 
 fn check_direnv(pwd: &Path, env: Rc<RefCell<Environment>>) {

@@ -223,6 +223,14 @@ impl JobProcess {
             JobProcess::Command(p) => (p.cap_stdout, p.cap_stderr),
         }
     }
+
+    pub fn get_cmd(&self) -> &str {
+        match self {
+            JobProcess::Builtin(p) => &p.name,
+            JobProcess::Wasm(p) => &p.name,
+            JobProcess::Command(p) => &p.cmd,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -441,11 +449,6 @@ impl Process {
 
     pub fn launch(&mut self, pgid: Option<Pid>, foreground: bool) -> Result<()> {
         let pid = getpid();
-        debug!("launch: {} foreground:{:?}", &self.cmd, foreground);
-        debug!(
-            "launch: child process {} setpgid pid:{:?} pgid:{:?}",
-            &self.cmd, pid, pgid
-        );
 
         let pgid = pgid.unwrap_or(pid);
         setpgid(pid, pgid).context("failed setpgid")?;
@@ -456,15 +459,6 @@ impl Process {
 
         self.set_signals();
 
-        debug!(
-            "launch: process {:?} infile:{:?} outfile:{:?}",
-            self.cmd, self.stdin, self.stdout
-        );
-
-        copy_fd(self.stdin, STDIN_FILENO);
-        copy_fd(self.stdout, STDOUT_FILENO);
-        copy_fd(self.stderr, STDERR_FILENO);
-
         let cmd = CString::new(self.cmd.clone()).context("failed new CString")?;
         let argv: Vec<CString> = self
             .argv
@@ -474,7 +468,14 @@ impl Process {
             .map(|a| CString::new(a).expect("failed new CString"))
             .collect();
 
-        debug!("launch: execv cmd:{:?} argv:{:?}", cmd, argv);
+        debug!(
+            "launch: execv cmd:{:?} argv:{:?} foreground:{:?} infile:{:?} outfile:{:?} pid:{:?} pgid:{:?}",
+            cmd, argv, foreground, self.stdin, self.stdout,pid, pgid,
+        );
+
+        copy_fd(self.stdin, STDIN_FILENO);
+        copy_fd(self.stdout, STDOUT_FILENO);
+        copy_fd(self.stderr, STDERR_FILENO);
         match execv(&cmd, &argv) {
             Ok(_) => Ok(()),
             Err(nix::errno::Errno::EACCES) => {
@@ -607,6 +608,12 @@ impl Job {
                 pipe_out = Some(pout);
             }
             _ => {
+                debug!(
+                    "last command: {} {:?}",
+                    process.get_cmd(),
+                    &self.redirect_out
+                );
+
                 if let Some(ref output) = self.redirect_out {
                     // redirect
                     let (pout, pin) = pipe().context("failed pipe")?;
@@ -700,20 +707,10 @@ impl Job {
         let mut next_process = process.next().take();
         self.set_process(process.to_owned());
 
-        if let Some(Err(err)) = next_process
-            .take()
-            .as_mut()
-            .map(|process| self.launch_process(ctx, shell, process))
-        {
-            return Err(err);
-        }
-
         if let Some(ref file) = ctx.redirect_out {
             // TODO refactor to function
-
             let infile = ctx.infile.clone();
             let file = file.clone();
-
             // spawn and io copy
             task::spawn(async move {
                 // copy io
@@ -724,20 +721,32 @@ impl Job {
             });
         }
 
+        if let Some(Err(err)) = next_process
+            .take()
+            .as_mut()
+            .map(|process| self.launch_process(ctx, shell, process))
+        {
+            return Err(err);
+        }
+
         if !ctx.interactive {
-            self.wait_job(ctx);
+            self.wait_job(ctx, process);
             Ok(())
         } else if ctx.foreground {
             // foreground
-            self.put_in_foreground(ctx)
+            self.put_in_foreground(ctx, process)
         } else {
             // background
-            self.put_in_background(ctx)
+            self.put_in_background(ctx, process)
         }
     }
 
-    fn put_in_foreground(&mut self, ctx: &Context) -> Result<()> {
-        debug!("put_in_foreground: {:?} pgid {:?}", &self.cmd, self.pgid);
+    fn put_in_foreground(&mut self, ctx: &Context, process: &mut JobProcess) -> Result<()> {
+        debug!(
+            "put_in_foreground: {:?} pgid {:?}",
+            &process.get_cmd(),
+            self.pgid
+        );
         // Put the job into the foreground
 
         tcsetpgrp(SHELL_TERMINAL, self.pgid.unwrap()).context("failed tcsetpgrp")?;
@@ -745,7 +754,7 @@ impl Job {
 
         // TODO Send the job a continue signal, if necessary.
 
-        self.wait_job(ctx);
+        self.wait_job(ctx, process);
 
         tcsetpgrp(SHELL_TERMINAL, ctx.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
         // debug!("put_in_foreground: {:?} tcsetpgrp shell", &self.cmd);
@@ -759,8 +768,12 @@ impl Job {
         Ok(())
     }
 
-    fn put_in_background(&mut self, _ctx: &Context) -> Result<()> {
-        debug!("put_in_background pgid {:?}", self.pgid);
+    fn put_in_background(&mut self, _ctx: &Context, process: &mut JobProcess) -> Result<()> {
+        debug!(
+            "put_in_background {:?} pgid {:?}",
+            process.get_cmd(),
+            self.pgid,
+        );
 
         // TODO Send the job a continue signal, if necessary.
 
@@ -773,10 +786,12 @@ impl Job {
 
     fn show_job_status(&self) {}
 
-    pub fn wait_job(&mut self, _ctx: &Context) {
+    pub fn wait_job(&mut self, _ctx: &Context, process: &mut JobProcess) {
         debug!(
-            "wait_job: {:?} pgid: {:?} need_wait: {:?}",
-            &self.cmd, self.pgid, self.need_wait
+            "call wait_job: {:?} pgid: {:?} need_wait: {:?}",
+            process.get_cmd(),
+            self.pgid,
+            self.need_wait
         );
 
         if !self.need_wait {
@@ -799,13 +814,12 @@ impl Job {
                     panic!("unexpected waitpid event: {:?}", status);
                 }
             };
-            debug!("wait_job: {:?} {:?} {:?}", &self.cmd, pid, state);
-
             self.set_process_state(pid, state);
 
             debug!(
-                "wait_job: {:?} complete:{:?} stopped:{:?}",
-                &self.cmd,
+                "fin wait_job: {:?} pid:{:?} complete:{:?} stopped:{:?}",
+                process.get_cmd(),
+                pid,
                 is_job_completed(self),
                 is_job_stopped(self),
             );

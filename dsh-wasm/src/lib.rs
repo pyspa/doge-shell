@@ -18,8 +18,9 @@ impl std::fmt::Debug for WasmEngine {
 }
 
 impl WasmEngine {
-    pub fn new() -> Self {
-        let xdg_dir = xdg::BaseDirectories::with_prefix("dsh").expect("failed get xdg directory");
+    pub fn new(app_name: &str) -> Self {
+        let xdg_dir =
+            xdg::BaseDirectories::with_prefix(app_name).expect("failed get xdg directory");
         let wasm_dir = xdg_dir
             .place_config_file("wasm")
             .expect("failed get path")
@@ -81,11 +82,5 @@ impl WasmEngine {
             eprint!("\runknown wasm command: {}\r\n", name);
         }
         Ok(())
-    }
-}
-
-impl Default for WasmEngine {
-    fn default() -> Self {
-        Self::new()
     }
 }

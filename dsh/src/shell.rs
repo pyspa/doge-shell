@@ -83,7 +83,7 @@ impl Shell {
         let _ = setpgid(pgid, pgid).context("failed setpgid");
         let cmd_history = FrecencyHistory::from_file("dsh_cmd_history").unwrap();
         let path_history = FrecencyHistory::from_file("dsh_path_history").unwrap();
-        let wasm_engine = WasmEngine::new();
+        let wasm_engine = WasmEngine::new(APP_NAME);
         let lisp_engine = lisp::LispEngine::new(Rc::clone(&environment));
         if let Err(err) = lisp_engine.borrow().run_config_lisp() {
             eprintln!("failed load init lisp {err:?}");

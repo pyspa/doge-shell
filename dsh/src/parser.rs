@@ -1026,7 +1026,7 @@ mod test {
                                             // );
                                             let parent = pair.as_rule();
                                             if parent == Rule::redirect {
-                                                for pair in pair.into_inner() {
+                                                for _pair in pair.into_inner() {
                                                     // println!(
                                                     //     "**** {:?} {:?}",
                                                     //     pair.as_rule(),

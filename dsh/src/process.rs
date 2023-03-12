@@ -523,7 +523,7 @@ impl Process {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Job {
     pub id: String,
     pub cmd: String,

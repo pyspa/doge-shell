@@ -83,3 +83,9 @@ impl WasmEngine {
         Ok(())
     }
 }
+
+impl Default for WasmEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}

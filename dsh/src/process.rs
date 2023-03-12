@@ -17,6 +17,49 @@ use std::os::unix::io::FromRawFd;
 use std::os::unix::io::RawFd;
 use tracing::{debug, error};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Redirect {
+    Output(String),
+    Append(String),
+    Input,
+}
+
+impl Redirect {
+    fn process(&self, ctx: &mut Context) {
+        match self {
+            Redirect::Output(out) => {
+                let infile = ctx.infile;
+                let file = out.to_string();
+                // spawn and io copy
+                task::spawn(async move {
+                    // copy io
+                    let mut reader = unsafe { fs::File::from_raw_fd(infile) };
+                    let mut writer = fs::File::create(file.to_string()).await.unwrap(); // TODO check err
+                    let _res = io::copy(&mut reader, &mut writer).await; // TODO check err
+                });
+            }
+
+            Redirect::Append(out) => {
+                let infile = ctx.infile;
+                let file = out.to_string();
+                // spawn and io copy
+                task::spawn(async move {
+                    // copy io
+                    let mut reader = unsafe { fs::File::from_raw_fd(infile) };
+                    let mut writer = fs::OpenOptions::new()
+                        .write(true)
+                        .append(true)
+                        .open(file.to_string())
+                        .await
+                        .unwrap();
+                    let _res = io::copy(&mut reader, &mut writer).await; // TODO check err
+                });
+            }
+            Redirect::Input => {}
+        }
+    }
+}
+
 fn copy_fd(src: RawFd, dst: RawFd) {
     if src != dst {
         dup2(src, dst).expect("failed dup2");
@@ -396,15 +439,6 @@ pub enum ProcessState {
     Stopped(Pid),
 }
 
-// #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-// pub enum ExitStatus {
-//     ExitedWith(i32),
-//     Running(Pid),
-//     Break,
-//     Continue,
-//     Return,
-// }
-
 impl Process {
     pub fn new(cmd: String, argv: Vec<String>) -> Self {
         Process {
@@ -489,7 +523,7 @@ impl Process {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Job {
     pub id: String,
     pub cmd: String,
@@ -504,7 +538,7 @@ pub struct Job {
     pub foreground: bool,
     pub need_wait: bool,
     pub subshell: bool,
-    pub redirect_out: Option<String>, // TODO in,stdout,stderr
+    pub redirect: Option<Redirect>,
 }
 
 impl Job {
@@ -525,7 +559,7 @@ impl Job {
             foreground: true,
             need_wait: false,
             subshell: false,
-            redirect_out: None,
+            redirect: None,
         }
     }
 
@@ -545,7 +579,7 @@ impl Job {
             foreground: true,
             need_wait: false,
             subshell: false,
-            redirect_out: None,
+            redirect: None,
         }
     }
 
@@ -607,18 +641,13 @@ impl Job {
                 pipe_out = Some(pout);
             }
             _ => {
-                debug!(
-                    "last command: {} {:?}",
-                    process.get_cmd(),
-                    &self.redirect_out
-                );
+                debug!("last command: {} {:?}", process.get_cmd(), &self.redirect);
 
-                if let Some(ref output) = self.redirect_out {
+                if let Some(ref _output) = self.redirect {
                     // redirect
                     let (pout, pin) = pipe().context("failed pipe")?;
                     ctx.outfile = pin;
                     pipe_out = Some(pout);
-                    ctx.redirect_out = Some(output.to_string());
                 } else {
                     // reset
                     if let Some(out) = ctx.captured_out {
@@ -706,18 +735,19 @@ impl Job {
         let mut next_process = process.next().take();
         self.set_process(process.to_owned());
 
-        if let Some(ref file) = ctx.redirect_out {
-            // TODO refactor to function
-            let infile = ctx.infile;
-            let file = file.clone();
-            // spawn and io copy
-            task::spawn(async move {
-                // copy io
-                let mut reader = unsafe { fs::File::from_raw_fd(infile) };
-                // TODO add append mode
-                let mut writer = fs::File::create(file.to_string()).await.unwrap(); // TODO check err
-                let _res = io::copy(&mut reader, &mut writer).await; // TODO check err
-            });
+        if let Some(ref redirect) = self.redirect {
+            redirect.process(ctx);
+            // // TODO refactor to function
+            // let infile = ctx.infile;
+            // let file = out.to_string();
+            // // spawn and io copy
+            // task::spawn(async move {
+            //     // copy io
+            //     let mut reader = unsafe { fs::File::from_raw_fd(infile) };
+            //     // TODO add append mode
+            //     let mut writer = fs::File::create(file.to_string()).await.unwrap(); // TODO check err
+            //     let _res = io::copy(&mut reader, &mut writer).await; // TODO check err
+            // });
         }
 
         if let Some(Err(err)) = next_process

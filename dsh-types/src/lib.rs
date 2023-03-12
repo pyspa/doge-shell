@@ -15,7 +15,6 @@ pub struct Context {
     pub outfile: RawFd,
     pub errfile: RawFd,
     pub captured_out: Option<RawFd>,
-    pub redirect_out: Option<String>, // TODO to redirect enum
     pub save_history: bool,
 }
 
@@ -31,7 +30,6 @@ impl Context {
             outfile: STDOUT_FILENO,
             errfile: STDERR_FILENO,
             captured_out: None,
-            redirect_out: None,
             save_history: true,
         }
     }

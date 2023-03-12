@@ -4,6 +4,7 @@ use crate::environment::Environment;
 use crate::history::FrecencyHistory;
 use crate::lisp;
 use crate::parser::{self, Rule, ShellParser};
+use crate::process::Redirect;
 use crate::process::{self, Job, JobProcess, WaitJob};
 use anyhow::Context as _;
 use anyhow::{anyhow, bail, Result};
@@ -158,7 +159,7 @@ impl Shell {
 
             debug!(
                 "start job:'{:?}' foreground:{:?} redirect:{:?}",
-                job.cmd, job.foreground, job.redirect_out
+                job.cmd, job.foreground, job.redirect
             );
 
             if let process::ProcessState::Completed(exit) = job.launch(&mut ctx, self)? {
@@ -228,11 +229,21 @@ impl Shell {
                     for inner_pair in inner_pair.into_inner() {
                         if let Rule::redirect = inner_pair.as_rule() {
                             // set redirect
-                            for inner_pair in inner_pair.into_inner() {
-                                if let Rule::span = inner_pair.as_rule() {
-                                    current_job.redirect_out =
-                                        Some(inner_pair.as_str().to_string());
+                            let mut direction = "";
+                            for pair in inner_pair.into_inner() {
+                                if let Rule::redirect_direction = pair.as_rule() {
+                                    direction = pair.as_str();
                                 }
+                                let redirect = if let Rule::span = pair.as_rule() {
+                                    if direction == ">>" {
+                                        Some(Redirect::Append(pair.as_str().to_string()))
+                                    } else {
+                                        Some(Redirect::Output(pair.as_str().to_string()))
+                                    }
+                                } else {
+                                    None
+                                };
+                                current_job.redirect = redirect;
                             }
                             continue;
                         }

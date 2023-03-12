@@ -422,6 +422,7 @@ mod test {
     use pest::Parser;
     use std::cell::RefCell;
     use std::rc::Rc;
+    use tracing::debug;
 
     fn init() {
         tracing_subscriber::fmt::init();
@@ -986,6 +987,53 @@ mod test {
                         }
                     }
                     _ => {}
+                }
+            }
+        }
+        assert!(found);
+    }
+
+    #[test]
+    fn test_redirect2() {
+        let pairs = ShellParser::parse(Rule::command, r#"ls -al | wc -l > test.log "#)
+            .unwrap_or_else(|e| panic!("{}", e));
+        let mut found = false;
+        for pair in pairs {
+            // println!("* {:?} {:?}", pair.as_rule(), pair.as_str());
+            for pair in pair.into_inner() {
+                // println!("** {:?} {:?}", pair.as_rule(), pair.as_str());
+                for pair in pair.into_inner() {
+                    // println!("*** {:?} {:?}", pair.as_rule(), pair.as_str());
+                    match pair.as_rule() {
+                        Rule::simple_command => {
+                            for pair in pair.into_inner() {
+                                match pair.as_rule() {
+                                    Rule::args => {
+                                        for pair in pair.into_inner() {
+                                            // println!(
+                                            //     "**** {:?} {:?}",
+                                            //     pair.as_rule(),
+                                            //     pair.as_str()
+                                            // );
+                                            let parent = pair.as_rule();
+                                            if parent == Rule::redirect {
+                                                for pair in pair.into_inner() {
+                                                    // println!(
+                                                    //     "**** {:?} {:?}",
+                                                    //     pair.as_rule(),
+                                                    //     pair.as_str()
+                                                    // );
+                                                    found = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
         }

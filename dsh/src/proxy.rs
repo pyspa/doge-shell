@@ -46,7 +46,7 @@ impl ShellProxy for Shell {
             }
             "cd" => {
                 let dir = &argv[0];
-                self.changepwd(&dir);
+                self.changepwd(dir);
             }
             "move_dir" => {
                 let dir = &argv[0];
@@ -139,11 +139,11 @@ impl ShellProxy for Shell {
     }
 
     fn get_var(&mut self, key: &str) -> Option<String> {
-        if let Some(val) = self.environment.borrow().variables.get(key) {
-            Some(val.to_string())
-        } else {
-            None
-        }
+        self.environment
+            .borrow()
+            .variables
+            .get(key)
+            .map(|val| val.to_string())
     }
 
     fn save_var(&mut self, key: String, value: String) {

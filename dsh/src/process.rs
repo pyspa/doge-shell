@@ -16,7 +16,6 @@ use std::io::Read;
 use std::os::unix::io::FromRawFd;
 use std::os::unix::io::RawFd;
 use tracing::{debug, error};
-use xid;
 
 fn copy_fd(src: RawFd, dst: RawFd) {
     if src != dst {
@@ -709,7 +708,7 @@ impl Job {
 
         if let Some(ref file) = ctx.redirect_out {
             // TODO refactor to function
-            let infile = ctx.infile.clone();
+            let infile = ctx.infile;
             let file = file.clone();
             // spawn and io copy
             task::spawn(async move {

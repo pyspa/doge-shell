@@ -111,16 +111,16 @@ impl Repl {
         .ok();
     }
 
-    fn move_cursor(&self, len: usize) {
-        let mut stdout = std::io::stdout();
-        let prompt_size = self.get_prompt().chars().count();
-        queue!(
-            stdout,
-            ResetColor,
-            cursor::MoveToColumn((prompt_size + len + 1) as u16),
-        )
-        .ok();
-    }
+    // fn move_cursor(&self, len: usize) {
+    //     let mut stdout = std::io::stdout();
+    //     let prompt_size = self.get_prompt().chars().count();
+    //     queue!(
+    //         stdout,
+    //         ResetColor,
+    //         cursor::MoveToColumn((prompt_size + len + 1) as u16),
+    //     )
+    //     .ok();
+    // }
 
     fn print_prompt(&mut self) {
         let prompt = self.get_prompt();

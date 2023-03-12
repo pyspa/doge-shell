@@ -84,7 +84,7 @@ pub fn check_path(pwd: &Path, entries: &mut Vec<DirEnvironment>) {
                 println!("direnv: loading {}", env.path);
                 print!("direnv: export ");
                 env.set_env();
-                println!("");
+                println!();
                 env.loaded = true;
             }
             env.set_env();
@@ -92,7 +92,7 @@ pub fn check_path(pwd: &Path, entries: &mut Vec<DirEnvironment>) {
             println!("direnv: unloading {}", env.path);
             print!("direnv: unxport ");
             env.remove_env();
-            println!("");
+            println!();
             env.loaded = false;
         }
     }

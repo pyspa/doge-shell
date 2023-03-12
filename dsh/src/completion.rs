@@ -73,7 +73,7 @@ impl Completion {
 
         if self.completions.len() - 1 > self.current_index {
             self.current_index += 1;
-            Some(self.completions[self.current_index as usize].clone())
+            Some(self.completions[self.current_index].clone())
         } else {
             None
         }
@@ -82,7 +82,7 @@ impl Completion {
     pub fn forward(&mut self) -> Option<ItemStats> {
         if self.current_index > 0 {
             self.current_index -= 1;
-            Some(self.completions[self.current_index as usize].clone())
+            Some(self.completions[self.current_index].clone())
         } else {
             None
         }
@@ -274,7 +274,7 @@ pub fn input_completion(
     let environment = Rc::clone(&lisp_engine.borrow().shell_env);
     // 1. completion from autocomplete
     for compl in environment.borrow().autocompletion.iter() {
-        let cmd_str = format!("{}", compl.target);
+        let cmd_str = compl.target.to_string();
 
         // debug!("match cmd:'{}' in:'{}'", cmd_str, replace_space(input));
         if replace_space(input).starts_with(cmd_str.as_str()) {
@@ -349,7 +349,7 @@ pub fn input_completion(
         // path
         let mut items = get_file_completions(path_str.as_str(), path.to_str().unwrap());
         if !only_path {
-            let mut cmds_items = get_commands(&environment.borrow().paths, &query_str);
+            let mut cmds_items = get_commands(&environment.borrow().paths, query_str);
             items.append(&mut cmds_items);
         }
         select_item(items, Some(path_query))
@@ -380,7 +380,7 @@ fn get_commands(paths: &Vec<String>, cmd: &str) -> Vec<Candidate> {
     }
 
     for path in paths {
-        let mut cmds = get_executables(&path, cmd);
+        let mut cmds = get_executables(path, cmd);
         list.append(&mut cmds);
     }
     list
@@ -412,7 +412,7 @@ fn get_executables(dir: &str, name: &str) -> Vec<Candidate> {
 
 fn get_file_completions(dir: &str, prefix: &str) -> Vec<Candidate> {
     let mut list = Vec::new();
-    let prefix = if !prefix.is_empty() && !prefix.ends_with("/") {
+    let prefix = if !prefix.is_empty() && !prefix.ends_with('/') {
         format!("{}/", prefix)
     } else {
         prefix.to_string()
@@ -443,10 +443,6 @@ fn get_file_completions(dir: &str, prefix: &str) -> Vec<Candidate> {
         Err(_err) => {}
     }
     list
-}
-
-fn list_files(query: Option<&str>) -> Option<String> {
-    completion_from_cmd(format!("ls -1 {}", query.unwrap()), None)
 }
 
 fn replace_space(s: &str) -> String {

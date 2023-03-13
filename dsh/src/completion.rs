@@ -1,12 +1,16 @@
 use crate::dirs::is_executable;
+use crate::environment::{get_data_file, Environment};
 use crate::lisp;
 use crate::lisp::Value;
+use crate::repl::Repl;
 use anyhow::Result;
 use dsh_frecency::ItemStats;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use skim::prelude::*;
 use skim::{Skim, SkimItemReceiver, SkimItemSender};
-use std::fs::read_dir;
+use std::fs::{create_dir_all, read_dir, remove_file, File};
+use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::{process::Command, sync::Arc};
 use tracing::debug;
@@ -89,7 +93,7 @@ impl Completion {
     }
 }
 
-#[derive(Debug, PartialEq, PartialOrd, Eq, Ord)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, PartialOrd, Eq, Ord)]
 pub enum Candidate {
     Detail(String, String),
     Path(String),
@@ -265,13 +269,11 @@ pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String>
     }
 }
 
-pub fn input_completion(
-    input: &str,
-    lisp_engine: Rc<RefCell<lisp::LispEngine>>,
-    query: Option<&str>,
-) -> Option<String> {
+pub fn input_completion(input: &str, repl: &Repl, query: Option<&str>) -> Option<String> {
     // TODO convert input
+    let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
     let environment = Rc::clone(&lisp_engine.borrow().shell_env);
+
     // 1. completion from autocomplete
     for compl in environment.borrow().autocompletion.iter() {
         let cmd_str = compl.target.to_string();
@@ -354,6 +356,30 @@ pub fn input_completion(
         }
         select_item(items, Some(path_query))
     } else {
+        // ChatGPT Completion
+        if let Some(api_key) = environment
+            .borrow()
+            .variables
+            .get("OPEN_AI_API_KEY")
+            .map(|val| val.to_string())
+        {
+            debug!("ChatGPT completion input:{:?}", input);
+            // TODO displaying the inquiring mark
+            match ChatGPTCompletion::new(api_key) {
+                Ok(mut processor) => match processor.completion(input) {
+                    Ok(res) => {
+                        return res;
+                    }
+                    Err(err) => {
+                        eprintln!("{:?}", err);
+                    }
+                },
+                Err(err) => {
+                    eprintln!("{:?}", err);
+                }
+            }
+        }
+
         None
     }
 }
@@ -448,6 +474,99 @@ fn get_file_completions(dir: &str, prefix: &str) -> Vec<Candidate> {
 fn replace_space(s: &str) -> String {
     let re = Regex::new(r"\s+").unwrap();
     re.replace_all(s, "_").to_string()
+}
+
+#[derive(Debug)]
+pub struct ChatGPTCompletion {
+    api_key: String,
+    pub store_path: PathBuf,
+}
+
+impl ChatGPTCompletion {
+    pub fn new(api_key: String) -> Result<Self> {
+        let store_path = get_data_file("completions")?;
+        create_dir_all(&store_path)?;
+        Ok(ChatGPTCompletion {
+            api_key,
+            store_path,
+        })
+    }
+
+    pub fn completion(&mut self, cmd: &str) -> Result<Option<String>> {
+        let file_name = replace_space(cmd.trim());
+        debug!("completion file name : {}", file_name);
+        let completion_file_path = self.store_path.join(file_name + ".bin");
+
+        let items = if completion_file_path.exists() {
+            let open_file = File::open(&completion_file_path)?;
+            let reader = BufReader::new(open_file);
+            let items: Vec<Candidate> = bincode::deserialize_from(reader)?;
+            items
+        } else {
+            let client = dsh_chatgpt::ChatGptClient::new(self.api_key.to_string())?;
+            let content = format!(
+                r#"
+You are a talented software engineer.
+You know how to use various CLI commands and know the command options for tools written in go, rust, and node.js. For example, the "bat" command.
+I would like to be taught the options for various commands, so when I type in a command name, please output a list of pairs of options and a brief description of those options. The original command name is not required. Be sure to break the line for each pair you output. Also, if there is an option that begins with "--", please output it first.
+The output format is as follows
+
+"Option 1", "Description of Option 1"
+
+"Option 2", "Description of option 2"
+
+Example
+In the case of the ls command, the format is as follows.
+
+"--all", "Do not ignore entries beginning with"
+
+"--author", "-l to show the author of each file"
+
+Follow the above rules to print the subcommands and option lists for the "{}" command.
+"#,
+                cmd
+            );
+            let mut items: Vec<Candidate> = Vec::new();
+            match client.send_message(&content, None, Some(0.1)) {
+                Ok(res) => {
+                    for res in res.split("\n") {
+                        if res.starts_with("\"") {
+                            if let Some((opt, desc)) = res.split_once(',') {
+                                let opt = unquote(opt).to_string();
+                                let item = Candidate::Detail(
+                                    format!("{}        {}", opt, unquote(desc).to_string()), // TODO format
+                                    opt,
+                                );
+                                items.push(item);
+                            }
+                        }
+                    }
+
+                    let write_file = File::create(&completion_file_path)?;
+                    let writer = BufWriter::new(write_file);
+                    let _res = bincode::serialize_into(writer, &items)?;
+                    items
+                }
+                _ => items,
+            }
+        };
+
+        if items.is_empty() {
+            remove_file(&completion_file_path)?;
+        }
+        let res = select_item(items, None);
+        Ok(res)
+    }
+}
+
+pub fn unquote(s: &str) -> String {
+    let quote = s.chars().next().unwrap();
+
+    if quote != '"' && quote != '\'' && quote != '`' {
+        return s.to_string();
+    }
+    let s = &s[1..s.len() - 1];
+    s.to_string()
 }
 
 #[cfg(test)]

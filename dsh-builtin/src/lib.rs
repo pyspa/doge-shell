@@ -8,7 +8,7 @@ pub mod cd;
 mod chatgpt;
 mod history;
 mod jobs;
-mod lisp;
+pub mod lisp;
 mod read;
 mod set;
 mod var;

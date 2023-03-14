@@ -1,6 +1,5 @@
 use crate::dirs::is_executable;
-use crate::environment::{get_data_file, Environment};
-use crate::lisp;
+use crate::environment::{get_data_file};
 use crate::lisp::Value;
 use crate::repl::Repl;
 use anyhow::Result;
@@ -529,12 +528,12 @@ Follow the above rules to print the subcommands and option lists for the "{}" co
             let mut items: Vec<Candidate> = Vec::new();
             match client.send_message(&content, None, Some(0.1)) {
                 Ok(res) => {
-                    for res in res.split("\n") {
-                        if res.starts_with("\"") {
+                    for res in res.split('\n') {
+                        if res.starts_with('"') {
                             if let Some((opt, desc)) = res.split_once(',') {
                                 let opt = unquote(opt).to_string();
                                 let item = Candidate::Detail(
-                                    format!("{}        {}", opt, unquote(desc).to_string()), // TODO format
+                                    format!("{}        {}", opt, unquote(desc)), // TODO format
                                     opt,
                                 );
                                 items.push(item);
@@ -544,7 +543,7 @@ Follow the above rules to print the subcommands and option lists for the "{}" co
 
                     let write_file = File::create(&completion_file_path)?;
                     let writer = BufWriter::new(write_file);
-                    let _res = bincode::serialize_into(writer, &items)?;
+                    bincode::serialize_into(writer, &items)?;
                     items
                 }
                 _ => items,

@@ -95,6 +95,18 @@ impl ShellProxy for Shell {
                     eprintln!("{}", err);
                 }
             },
+            "lisp-run" => {
+                let mut argv = argv;
+                let cmd = argv.remove(0);
+                match self.lisp_engine.borrow().run_func(cmd.as_str(), argv) {
+                    Ok(val) => {
+                        debug!("{}", val);
+                    }
+                    Err(err) => {
+                        eprintln!("{}", err);
+                    }
+                }
+            }
             "set" => {
                 let key = format!("${}", &argv[1]);
                 let val = &argv[2];

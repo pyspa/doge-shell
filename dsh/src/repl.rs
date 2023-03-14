@@ -18,7 +18,6 @@ use futures_timer::Delay;
 use nix::sys::termios::{tcgetattr, Termios};
 use nix::unistd::tcsetpgrp;
 use std::io::Write;
-use std::rc::Rc;
 use std::time::Duration;
 use tracing::{debug, warn};
 

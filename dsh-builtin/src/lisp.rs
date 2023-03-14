@@ -10,18 +10,9 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     ExitStatus::ExitedWith(0)
 }
 
-// pub fn run(_ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
-//     let mut argv = argv;
-//     let cmd = argv.remove(0);
-
-//     match shell.lisp_engine.borrow().run_func(cmd.as_str(), argv) {
-//         Ok(val) => {
-//             debug!("{}", val);
-//         }
-//         Err(err) => {
-//             eprintln!("{}", err);
-//         }
-//     }
-
-//     ExitStatus::ExitedWith(0)
-// }
+pub fn run(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    match proxy.dispatch(ctx, "lisp-run", argv) {
+        Ok(_) => ExitStatus::ExitedWith(0),
+        _ => ExitStatus::ExitedWith(1),
+    }
+}

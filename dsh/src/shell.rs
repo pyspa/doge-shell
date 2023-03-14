@@ -1,4 +1,3 @@
-use crate::completion;
 use crate::direnv;
 use crate::dirs;
 use crate::environment::Environment;
@@ -373,9 +372,9 @@ impl Shell {
             let wasm = process::WasmProcess::new(cmd.to_string(), argv);
             current_job.set_process(JobProcess::Wasm(wasm));
         } else if self.lisp_engine.borrow().is_export(cmd) {
-            // let cmd_fn = builtin::lisp::run;
-            // let builtin = process::BuiltinProcess::new(cmd.to_string(), cmd_fn, argv);
-            // job.set_process(JobProcess::Builtin(builtin));
+            let cmd_fn = dsh_builtin::lisp::run;
+            let builtin = process::BuiltinProcess::new(cmd.to_string(), cmd_fn, argv);
+            current_job.set_process(JobProcess::Builtin(builtin));
         } else if let Some(cmd) = self.environment.borrow().lookup(cmd) {
             let process = process::Process::new(cmd, argv);
             current_job.set_process(JobProcess::Command(process));

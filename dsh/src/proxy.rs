@@ -4,6 +4,7 @@ use dsh_builtin::ShellProxy;
 use dsh_frecency::SortMethod;
 use dsh_types::Context;
 use nix::unistd::dup;
+use std::env;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::Write;
@@ -107,14 +108,6 @@ impl ShellProxy for Shell {
                     }
                 }
             }
-            "set" => {
-                let key = format!("${}", &argv[1]);
-                let val = &argv[2];
-                self.environment
-                    .borrow_mut()
-                    .variables
-                    .insert(key, val.to_string());
-            }
             "var" => {
                 let vars: Vec<Var> = self
                     .environment
@@ -158,7 +151,11 @@ impl ShellProxy for Shell {
             .map(|val| val.to_string())
     }
 
-    fn save_var(&mut self, key: String, value: String) {
+    fn set_var(&mut self, key: String, value: String) {
         self.environment.borrow_mut().variables.insert(key, value);
+    }
+
+    fn set_env_var(&mut self, key: String, value: String) {
+        env::set_var(key, value);
     }
 }

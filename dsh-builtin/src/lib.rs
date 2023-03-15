@@ -20,7 +20,8 @@ pub trait ShellProxy {
     fn save_path_history(&mut self, path: &str);
     fn changepwd(&mut self, path: &str);
     fn get_var(&mut self, key: &str) -> Option<String>;
-    fn save_var(&mut self, key: String, value: String);
+    fn set_var(&mut self, key: String, value: String);
+    fn set_env_var(&mut self, key: String, value: String);
 }
 
 pub type BuiltinCommand =

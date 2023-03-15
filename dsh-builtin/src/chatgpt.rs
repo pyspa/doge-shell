@@ -41,7 +41,7 @@ pub fn chat_prompt(_ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy
         println!("chat_prompt variable");
     } else {
         let prompt = &argv[1];
-        proxy.save_var(PROMPT_KEY.to_string(), prompt.to_string());
+        proxy.set_var(PROMPT_KEY.to_string(), prompt.to_string());
     }
     ExitStatus::ExitedWith(0)
 }

@@ -356,7 +356,7 @@ impl FrecencyHistory {
         }
     }
 
-    pub fn search_first(&self, pattern: &str) -> Option<String> {
+    pub fn search_prefix(&self, pattern: &str) -> Option<String> {
         let results = self.sort_by_match(pattern);
         for res in results {
             if res.item.starts_with(pattern) {
@@ -476,7 +476,7 @@ mod test {
         assert_eq!(frequent[0].item, "git");
         assert_eq!(frequent[1].item, "git checkout");
 
-        let first = history.search_first("gi").unwrap();
+        let first = history.search_prefix("gi").unwrap();
         assert_eq!(first, "git");
 
         history.add("git checkout origin master");

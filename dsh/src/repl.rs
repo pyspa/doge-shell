@@ -164,6 +164,18 @@ impl Repl {
         }
     }
 
+    fn get_completion_from_history(&mut self, input: &str) -> Option<String> {
+        if let Some(ref mut history) = self.shell.cmd_history {
+            if let Some(entry) = history.search_prefix(&input) {
+                self.input.completion = Some(entry.clone());
+                if entry.len() >= input.len() {
+                    return Some(entry[input.len()..].to_string());
+                }
+            }
+        }
+        None
+    }
+
     fn print_input(&mut self, reset_completion: bool) {
         let mut stdout = std::io::stdout();
 
@@ -172,20 +184,12 @@ impl Repl {
         let prompt = self.get_prompt().chars().count();
 
         let fg_color = Color::White;
-        let mut comp: Option<String> = None;
+        let mut completion: Option<String> = None;
 
         if input.is_empty() || reset_completion {
             self.input.completion = None
         } else {
-            // TODO refactor
-            if let Some(ref mut history) = self.shell.cmd_history {
-                if let Some(hist) = history.search_first(&input) {
-                    self.input.completion = Some(hist.clone());
-                    if hist.len() >= input.len() {
-                        comp = Some(hist[input.len()..].to_string());
-                    }
-                }
-            }
+            completion = self.get_completion_from_history(&input);
 
             let mut match_index: Vec<usize> = Vec::new();
 
@@ -200,12 +204,12 @@ impl Repl {
                         }
                     }
 
-                    if !word.is_empty() && current && comp.is_none() {
+                    if !word.is_empty() && current && completion.is_none() {
                         match rule {
                             Rule::argv0 => {
                                 if let Some(file) = self.shell.environment.borrow().search(word) {
                                     if file.len() >= input.len() {
-                                        comp = Some(file[input.len()..].to_string());
+                                        completion = Some(file[input.len()..].to_string());
                                     }
                                     self.input.completion = Some(file);
                                     break;
@@ -214,7 +218,7 @@ impl Repl {
                                 {
                                     if dirs::is_dir(dir) {
                                         if dir.len() >= input.len() {
-                                            comp = Some(dir[input.len()..].to_string());
+                                            completion = Some(dir[input.len()..].to_string());
                                         }
                                         self.input.completion = Some(dir.clone());
                                         break;
@@ -226,7 +230,7 @@ impl Repl {
                                 {
                                     if path.len() >= word.len() {
                                         let part = path[word.len()..].to_string();
-                                        comp = Some(path[word.len()..].to_string());
+                                        completion = Some(path[word.len()..].to_string());
                                         self.input.completion = Some(input + &part);
                                         break;
                                     }
@@ -235,7 +239,7 @@ impl Repl {
                                     {
                                         if file.len() >= word.len() {
                                             let part = file[word.len()..].to_string();
-                                            comp = Some(file[word.len()..].to_string());
+                                            completion = Some(file[word.len()..].to_string());
                                             self.input.completion = Some(input + &part);
                                             break;
                                         }
@@ -263,8 +267,8 @@ impl Repl {
 
         self.move_cursor_input_end();
 
-        if let Some(comp) = comp {
-            print!("{}", comp.dark_grey());
+        if let Some(completion) = completion {
+            print!("{}", completion.dark_grey());
             self.move_cursor_input_end();
         }
         queue!(stdout, cursor::Show).ok();

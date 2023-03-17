@@ -534,9 +534,17 @@ impl ChatGPTCompletion {
             let content = format!(
                 r#"
 You are a talented software engineer.
-You know how to use various CLI commands and know the command options for tools written in go, rust, and node.js. For example, the "bat" command.
-I would like to be taught the options for various commands, so when I type in a command name, please output a list of pairs of options and a brief description of those options. The original command name is not required. Be sure to break the line for each pair you output. Also, if there is an option that begins with "--", please output it first.
+You know how to use various CLI commands and know the command options for tools written in go, rust and node.js as well as linux commands.
+For example, the "bat" command.
+I would like to be taught the options for various commands, so when I type in a command name, please output a list of pairs of options and a brief description of those options.
+Output as many options as possible.
+the output of the man command is also helpful.
+The original command name is not required.
+Be sure to start a new line for each pair you output.
+Also, if you have an option that begins with "--", please output that as an option.
 The output format is as follows
+
+Output:
 
 "Option 1", "Description of Option 1"
 
@@ -545,9 +553,12 @@ The output format is as follows
 Example
 In the case of the ls command, the format is as follows.
 
+Output:
+
 "--all", "Do not ignore entries beginning with"
 
 "--author", "-l to show the author of each file"
+
 
 Follow the above rules to print the subcommands and option lists for the "{}" command.
 "#,
@@ -561,7 +572,7 @@ Follow the above rules to print the subcommands and option lists for the "{}" co
                             if let Some((opt, desc)) = res.split_once(',') {
                                 let opt = unquote(opt).to_string();
                                 let item = Candidate::Detail(
-                                    format!("{}        {}", opt, unquote(desc)), // TODO format
+                                    format!("{0:<30} {1}", opt, unquote(desc)), // TODO format
                                     opt,
                                 );
                                 items.push(item);

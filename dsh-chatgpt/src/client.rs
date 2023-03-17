@@ -7,7 +7,7 @@ use tracing::debug;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
 const API_URL: &str = "https://api.openai.com/v1/chat/completions";
-const MODEL: &str = "gpt-3.5-turbo";
+const MODEL: &str = "gpt-4";
 
 #[derive(Debug)]
 pub struct ChatGptClient {

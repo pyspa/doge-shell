@@ -214,7 +214,7 @@ impl Repl {
                                     self.input.completion = Some(file);
                                     break;
                                 } else if let Ok(Some(ref dir)) =
-                                    completion::path_completion_first(word)
+                                    completion::path_completion_prefix(word)
                                 {
                                     if dirs::is_dir(dir) {
                                         if dir.len() >= input.len() {
@@ -226,23 +226,13 @@ impl Repl {
                                 }
                             }
                             Rule::args => {
-                                if let Ok(Some(ref path)) = completion::path_completion_first(word)
+                                if let Ok(Some(ref path)) = completion::path_completion_prefix(word)
                                 {
                                     if path.len() >= word.len() {
                                         let part = path[word.len()..].to_string();
                                         completion = Some(path[word.len()..].to_string());
                                         self.input.completion = Some(input + &part);
                                         break;
-                                    }
-                                } else if !word.starts_with('-') {
-                                    if let Some(file) = self.shell.environment.borrow().search(word)
-                                    {
-                                        if file.len() >= word.len() {
-                                            let part = file[word.len()..].to_string();
-                                            completion = Some(file[word.len()..].to_string());
-                                            self.input.completion = Some(input + &part);
-                                            break;
-                                        }
                                     }
                                 }
                             }

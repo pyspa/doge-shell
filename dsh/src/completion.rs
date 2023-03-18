@@ -99,7 +99,7 @@ pub enum Candidate {
     Basic(String),
 }
 
-pub fn path_completion_first(input: &str) -> Result<Option<String>> {
+pub fn path_completion_prefix(input: &str) -> Result<Option<String>> {
     let pbuf = PathBuf::from(input);
     let absolute = pbuf.is_absolute();
     let file_name = pbuf.file_name();
@@ -618,34 +618,34 @@ mod test {
 
     #[test]
     fn test_completion() -> Result<()> {
-        let p = path_completion_first(".")?;
+        let p = path_completion_prefix(".")?;
         assert_eq!(None, p);
 
-        let p = path_completion_first("./")?;
+        let p = path_completion_prefix("./")?;
         assert_eq!(None, p);
 
-        let p = path_completion_first("./sr")?;
+        let p = path_completion_prefix("./sr")?;
         assert_eq!(Some("./src/".to_string()), p);
 
-        let p = path_completion_first("sr")?;
+        let p = path_completion_prefix("sr")?;
         assert_eq!(Some("src/".to_string()), p);
 
         // let p = path_completion_first("src/b")?;
         // assert_eq!(Some("src/builtin/".to_string()), p);
 
-        let p = path_completion_first("/")?;
+        let p = path_completion_prefix("/")?;
         assert_eq!(None, p);
 
-        let p = path_completion_first("/s")?;
+        let p = path_completion_prefix("/s")?;
         assert_eq!(Some("/sbin/".to_string()), p);
 
-        let p = path_completion_first("/usr/b")?;
+        let p = path_completion_prefix("/usr/b")?;
         assert_eq!(Some("/usr/bin/".to_string()), p);
 
-        let p = path_completion_first("~/.lo")?;
+        let p = path_completion_prefix("~/.lo")?;
         assert_eq!(Some("~/.local/".to_string()), p);
 
-        let p = path_completion_first("~/.config/gi")?;
+        let p = path_completion_prefix("~/.config/gi")?;
         assert_eq!(Some("~/.config/git/".to_string()), p);
 
         Ok(())

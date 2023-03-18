@@ -6,6 +6,7 @@ use anyhow::Result;
 use dsh_frecency::ItemStats;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use serde_json;
 use skim::prelude::*;
 use skim::{Skim, SkimItemReceiver, SkimItemSender};
 use std::fs::{create_dir_all, read_dir, remove_file, File};
@@ -94,7 +95,7 @@ impl Completion {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, PartialOrd, Eq, Ord)]
 pub enum Candidate {
-    Detail(String, String),
+    Item(String, String), // output, description
     Path(String),
     Basic(String),
 }
@@ -203,17 +204,20 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
 }
 
 impl SkimItem for Candidate {
-    fn text(&self) -> Cow<str> {
+    fn output(&self) -> Cow<str> {
         match self {
-            Candidate::Detail(x, _) => Cow::Borrowed(x),
+            Candidate::Item(x, _) => Cow::Borrowed(x),
             Candidate::Path(p) => Cow::Borrowed(p),
             Candidate::Basic(x) => Cow::Borrowed(x),
         }
     }
 
-    fn output(&self) -> Cow<str> {
+    fn text(&self) -> Cow<str> {
         match self {
-            Candidate::Detail(_, y) => Cow::Borrowed(y),
+            Candidate::Item(x, y) => {
+                let desc = format!("{0:<30} {1}", x, y);
+                Cow::Owned(desc)
+            }
             Candidate::Path(p) => Cow::Borrowed(p),
             Candidate::Basic(x) => Cow::Borrowed(x),
         }
@@ -416,19 +420,13 @@ fn get_commands(paths: &Vec<String>, cmd: &str) -> Vec<Candidate> {
     if cmd.starts_with('/') {
         let cmd_path = std::path::Path::new(cmd);
         if cmd_path.exists() && cmd_path.is_file() {
-            list.push(Candidate::Detail(
-                format!("{} (command)", cmd),
-                cmd.to_string(),
-            ));
+            list.push(Candidate::Item(cmd.to_string(), "(command)".to_string()));
         }
     }
     if cmd.starts_with("./") {
         let cmd_path = std::path::Path::new(cmd);
         if cmd_path.exists() && cmd_path.is_file() {
-            list.push(Candidate::Detail(
-                format!("{} (command)", cmd),
-                cmd.to_string(),
-            ));
+            list.push(Candidate::Item(cmd.to_string(), "(command)".to_string()));
         }
     }
 
@@ -451,9 +449,9 @@ fn get_executables(dir: &str, name: &str) -> Vec<Candidate> {
                 let file_name = buf.to_str().unwrap();
                 let is_file = entry.file_type().unwrap().is_file();
                 if file_name.starts_with(name) && is_file && is_executable(&entry) {
-                    list.push(Candidate::Detail(
-                        format!("{} (command)", file_name),
+                    list.push(Candidate::Item(
                         file_name.to_string(),
+                        "(command)".to_string(),
                     ));
                 }
             }
@@ -481,14 +479,14 @@ fn get_file_completions(dir: &str, prefix: &str) -> Vec<Candidate> {
                 let is_file = entry.file_type().unwrap().is_file();
 
                 if is_file {
-                    list.push(Candidate::Detail(
-                        format!("{}{} (file)", prefix, file_name),
+                    list.push(Candidate::Item(
                         format!("{}{}", prefix, file_name),
+                        "(file)".to_string(),
                     ));
                 } else {
-                    list.push(Candidate::Detail(
-                        format!("{}{} (directory)", prefix, file_name),
+                    list.push(Candidate::Item(
                         format!("{}{}", prefix, file_name),
+                        "(directory)".to_string(),
                     ));
                 }
             }
@@ -522,12 +520,12 @@ impl ChatGPTCompletion {
     pub fn completion(&mut self, cmd: &str) -> Result<Option<String>> {
         let file_name = replace_space(cmd.trim());
         debug!("completion file name : {}", file_name);
-        let completion_file_path = self.store_path.join(file_name + ".bin");
+        let completion_file_path = self.store_path.join(file_name + ".json");
 
         let items = if completion_file_path.exists() {
             let open_file = File::open(&completion_file_path)?;
             let reader = BufReader::new(open_file);
-            let items: Vec<Candidate> = bincode::deserialize_from(reader)?;
+            let items: Vec<Candidate> = serde_json::from_reader(reader)?;
             items
         } else {
             let client = dsh_chatgpt::ChatGptClient::new(self.api_key.to_string())?;
@@ -571,10 +569,8 @@ Follow the above rules to print the subcommands and option lists for the "{}" co
                         if res.starts_with('"') {
                             if let Some((opt, desc)) = res.split_once(',') {
                                 let opt = unquote(opt).to_string();
-                                let item = Candidate::Detail(
-                                    format!("{0:<30} {1}", opt, unquote(desc)), // TODO format
-                                    opt,
-                                );
+                                let unq_desc = unquote(desc.trim()).to_string();
+                                let item = Candidate::Item(opt, unq_desc);
                                 items.push(item);
                             }
                         }
@@ -582,7 +578,7 @@ Follow the above rules to print the subcommands and option lists for the "{}" co
 
                     let write_file = File::create(&completion_file_path)?;
                     let writer = BufWriter::new(write_file);
-                    bincode::serialize_into(writer, &items)?;
+                    serde_json::to_writer(writer, &items)?;
                     items
                 }
                 _ => items,

@@ -41,6 +41,7 @@ pub struct Repl {
     history_search: Option<String>,
     start_completion: bool,
     completion: Completion,
+    pub can_execute: bool,
 }
 
 impl Drop for Repl {
@@ -60,6 +61,7 @@ impl Repl {
             history_search: None,
             start_completion: false,
             completion: Completion::new(),
+            can_execute: false,
         }
     }
 
@@ -176,7 +178,7 @@ impl Repl {
         None
     }
 
-    fn print_input(&mut self, reset_completion: bool) {
+    pub fn print_input(&mut self, reset_completion: bool) {
         let mut stdout = std::io::stdout();
 
         queue!(stdout, cursor::Hide).ok();
@@ -185,6 +187,8 @@ impl Repl {
 
         let fg_color = Color::White;
         let mut completion: Option<String> = None;
+        // reset
+        self.can_execute = false;
 
         if input.is_empty() || reset_completion {
             self.input.completion = None
@@ -201,6 +205,9 @@ impl Repl {
                         for pos in span.start()..span.end() {
                             // change color
                             match_index.push(pos);
+                        }
+                        if let Rule::argv0 = rule {
+                            self.can_execute = true;
                         }
                     }
 

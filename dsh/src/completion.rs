@@ -408,9 +408,11 @@ pub fn input_completion(input: &str, repl: &Repl, query: Option<&str>) -> Option
     if res.is_some() {
         return res;
     }
-    let res = completion_from_chatgpt(input, repl, query);
-    if res.is_some() {
-        return res;
+    if repl.can_execute {
+        let res = completion_from_chatgpt(input, repl, query);
+        if res.is_some() {
+            return res;
+        }
     }
     None
 }

@@ -114,7 +114,7 @@ pub fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError
     };
 
     ctx.captured_out = Some(pin);
-    if let Err(err) = shell.eval_str(ctx, input, false) {
+    if let Err(err) = shell.eval_str(&mut ctx, input, false) {
         eprintln!("error: {}", err);
         return Err(RuntimeError {
             msg: err.to_string(),

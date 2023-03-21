@@ -322,7 +322,7 @@ fn completion_from_lisp(input: &str, repl: &Repl, query: Option<&str>) -> Option
     None
 }
 
-fn completion_from_current(input: &str, repl: &Repl, query: Option<&str>) -> Option<String> {
+fn completion_from_current(_input: &str, repl: &Repl, query: Option<&str>) -> Option<String> {
     let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
     let environment = Rc::clone(&lisp_engine.borrow().shell_env);
 
@@ -368,7 +368,7 @@ fn completion_from_current(input: &str, repl: &Repl, query: Option<&str>) -> Opt
     }
 }
 
-fn completion_from_chatgpt(input: &str, repl: &Repl, query: Option<&str>) -> Option<String> {
+fn completion_from_chatgpt(input: &str, repl: &Repl, _query: Option<&str>) -> Option<String> {
     let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
     let environment = Rc::clone(&lisp_engine.borrow().shell_env);
 

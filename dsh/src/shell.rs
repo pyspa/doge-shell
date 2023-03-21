@@ -135,7 +135,7 @@ impl Shell {
 
     pub fn eval_str(
         &mut self,
-        mut ctx: Context,
+        ctx: &mut Context,
         input: String,
         background: bool,
     ) -> Result<ExitCode> {
@@ -162,7 +162,7 @@ impl Shell {
                 job.cmd, job.foreground, job.redirect
             );
 
-            if let process::ProcessState::Completed(exit) = job.launch(&mut ctx, self)? {
+            if let process::ProcessState::Completed(exit) = job.launch(ctx, self)? {
                 debug!("job exit code {:?}", exit);
                 if exit != 0 {
                     return Ok(ExitCode::from(exit));

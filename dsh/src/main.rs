@@ -30,39 +30,56 @@ struct Cli {
 }
 
 fn main() -> ExitCode {
-    tracing_subscriber::fmt::init();
-
+    init_tracing();
     let cli = Cli::parse();
-    debug!("start shell");
     let env = Environment::new();
     let mut shell = Shell::new(env);
-    shell.set_signals();
-    let shell_tmode = tcgetattr(0).expect("failed tcgetattr");
-    let mut ctx = Context::new(shell.pid, shell.pgid, shell_tmode, true);
+    let mut ctx = create_context(&shell);
 
     if let Some(command) = cli.command.as_deref() {
-        match shell.eval_str(ctx, command.to_string(), false) {
-            Ok(code) => {
-                tracing::debug!("run command mode {:?} : {:?}", command, &code);
-                code
-            }
-            Err(err) => {
-                eprintln!("{:?}", err);
-                ExitCode::FAILURE
-            }
-        }
+        execute_command(&mut shell, &mut ctx, command)
     } else {
-        shell.install_chpwd_hooks();
-        ctx.save_history = false;
-        match shell.eval_str(ctx, "cd .".to_string(), true) {
-            Ok(_) => {}
-            Err(err) => {
-                eprintln!("{:?}", err);
-                return ExitCode::FAILURE;
-            }
-        };
-        let mut repl = Repl::new(shell);
-        task::block_on(repl.run_interactive());
-        ExitCode::from(0)
+        run_interactive(&mut shell, &mut ctx)
     }
+}
+
+fn init_tracing() {
+    tracing_subscriber::fmt::init();
+}
+
+fn create_context(shell: &Shell) -> Context {
+    let shell_tmode = tcgetattr(0).expect("failed tcgetattr");
+    Context::new(shell.pid, shell.pgid, shell_tmode, true)
+}
+
+fn execute_command(shell: &mut Shell, ctx: &mut Context, command: &str) -> ExitCode {
+    debug!("start shell");
+    shell.set_signals();
+
+    match shell.eval_str(ctx, command.to_string(), false) {
+        Ok(code) => {
+            debug!("run command mode {:?} : {:?}", command, &code);
+            code
+        }
+        Err(err) => {
+            eprintln!("{:?}", err);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
+    debug!("start shell");
+    shell.set_signals();
+    shell.install_chpwd_hooks();
+    ctx.save_history = false;
+
+    if let Err(err) = shell.eval_str(ctx, "cd .".to_string(), true) {
+        eprintln!("{:?}", err);
+        return ExitCode::FAILURE;
+    }
+
+    let mut repl = Repl::new(shell);
+    task::block_on(repl.run_interactive());
+    ExitCode::from(0)
 }

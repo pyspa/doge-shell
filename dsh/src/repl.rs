@@ -32,8 +32,8 @@ pub enum ShellEvent {
     ScreenResized,
 }
 
-pub struct Repl {
-    pub shell: Shell,
+pub struct Repl<'a> {
+    pub shell: &'a mut Shell,
     input: Input,
     columns: usize,
     lines: usize,
@@ -44,14 +44,14 @@ pub struct Repl {
     pub can_execute: bool,
 }
 
-impl Drop for Repl {
+impl<'a> Drop for Repl<'a> {
     fn drop(&mut self) {
         self.save_history();
     }
 }
 
-impl Repl {
-    pub fn new(shell: Shell) -> Self {
+impl<'a> Repl<'a> {
+    pub fn new(shell: &'a mut Shell) -> Self {
         Repl {
             shell,
             input: Input::new(),
@@ -371,8 +371,8 @@ impl Repl {
                 if !self.input.is_empty() {
                     self.completion.clear();
                     let shell_tmode = tcgetattr(0).expect("failed tcgetattr");
-                    let ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);
-                    match self.shell.eval_str(ctx, self.input.as_str(), false) {
+                    let mut ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);
+                    match self.shell.eval_str(&mut ctx, self.input.as_str(), false) {
                         Ok(code) => {
                             debug!("exit: {} : {:?}", self.input.as_str(), code);
                         }
@@ -393,8 +393,8 @@ impl Repl {
                     self.completion.clear();
                     let input = self.input.as_str();
                     let shell_tmode = tcgetattr(0).expect("failed tcgetattr");
-                    let ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);
-                    if let Err(err) = self.shell.eval_str(ctx, input, true) {
+                    let mut ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);
+                    if let Err(err) = self.shell.eval_str(&mut ctx, input, true) {
                         eprintln!("{:?}", err)
                     }
                     self.input.clear();

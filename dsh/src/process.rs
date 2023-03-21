@@ -632,32 +632,10 @@ impl Job {
         shell: &mut Shell,
         process: &mut JobProcess,
     ) -> Result<()> {
-        let mut pipe_out = None;
-
-        match process.next() {
-            Some(_) => {
-                let (pout, pin) = pipe().context("failed pipe")?;
-                ctx.outfile = pin;
-                pipe_out = Some(pout);
-            }
-            _ => {
-                debug!("last command: {} {:?}", process.get_cmd(), &self.redirect);
-
-                if let Some(ref _output) = self.redirect {
-                    // redirect
-                    let (pout, pin) = pipe().context("failed pipe")?;
-                    ctx.outfile = pin;
-                    pipe_out = Some(pout);
-                } else {
-                    // reset
-                    if let Some(out) = ctx.captured_out {
-                        ctx.outfile = out;
-                    } else if ctx.infile != STDIN_FILENO {
-                        ctx.outfile = self.stdout;
-                    }
-                }
-            }
-        }
+        let pipe_out = match process.next() {
+            Some(_) => create_pipe(ctx)?,
+            None => handle_output_redirect(ctx, &self.redirect, self.stdout)?,
+        };
 
         process.set_io(ctx.infile, ctx.outfile);
 
@@ -985,6 +963,29 @@ pub fn wait_pid(pid: Pid) -> Option<(Pid, ProcessState)> {
         }
     };
     Some(res)
+}
+
+fn create_pipe(ctx: &mut Context) -> Result<Option<RawFd>> {
+    let (pout, pin) = pipe().context("failed pipe")?;
+    ctx.outfile = pin;
+    Ok(Some(pout))
+}
+
+fn handle_output_redirect(
+    ctx: &mut Context,
+    redirect: &Option<Redirect>,
+    stdout: RawFd,
+) -> Result<Option<RawFd>> {
+    if let Some(ref _output) = redirect {
+        create_pipe(ctx)
+    } else {
+        if let Some(out) = ctx.captured_out {
+            ctx.outfile = out;
+        } else if ctx.infile != STDIN_FILENO {
+            ctx.outfile = stdout;
+        }
+        Ok(None)
+    }
 }
 
 #[cfg(test)]

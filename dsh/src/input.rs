@@ -11,6 +11,7 @@ pub struct Input {
     indices: Vec<usize>,
     pub completion: Option<String>,
     pub match_index: Option<Vec<usize>>,
+    pub can_execute: bool,
 }
 
 const INITIAL_CAP: usize = 256;
@@ -23,6 +24,7 @@ impl Input {
             indices: Vec::with_capacity(INITIAL_CAP),
             completion: None,
             match_index: None,
+            can_execute: false,
         }
     }
 
@@ -40,8 +42,12 @@ impl Input {
         self.match_index = Some(match_index);
     }
 
-    pub fn as_str(&self) -> String {
+    pub fn to_string(&self) -> String {
         self.input.as_str().to_string()
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.input.as_str()
     }
 
     pub fn cursor(&self) -> usize {

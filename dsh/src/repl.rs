@@ -41,7 +41,6 @@ pub struct Repl<'a> {
     history_search: Option<String>,
     start_completion: bool,
     completion: Completion,
-    pub can_execute: bool,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -61,7 +60,6 @@ impl<'a> Repl<'a> {
             history_search: None,
             start_completion: false,
             completion: Completion::new(),
-            can_execute: false,
         }
     }
 
@@ -182,13 +180,14 @@ impl<'a> Repl<'a> {
         let mut stdout = std::io::stdout();
 
         queue!(stdout, cursor::Hide).ok();
-        let input = self.input.as_str();
+        let input = self.input.to_string();
         let prompt = self.get_prompt().chars().count();
 
         let fg_color = Color::White;
         let mut completion: Option<String> = None;
         // reset
-        self.can_execute = false;
+
+        let mut can_execute = false;
 
         if input.is_empty() || reset_completion {
             self.input.completion = None
@@ -207,7 +206,7 @@ impl<'a> Repl<'a> {
                             match_index.push(pos);
                         }
                         if let Rule::argv0 = rule {
-                            self.can_execute = true;
+                            can_execute = true;
                         }
                     }
 
@@ -251,6 +250,8 @@ impl<'a> Repl<'a> {
             }
             self.input.match_index = Some(match_index);
         }
+
+        self.input.can_execute = can_execute;
 
         queue!(
             stdout,
@@ -354,7 +355,7 @@ impl<'a> Repl<'a> {
                     _ => None,
                 };
                 if let Some(val) =
-                    completion::input_completion(&self.input.as_str(), &self, completion_query)
+                    completion::input_completion(&self.input, &self, completion_query)
                 {
                     if let Some(q) = completion_query {
                         self.input.backspacen(q.len());
@@ -372,7 +373,7 @@ impl<'a> Repl<'a> {
                     self.completion.clear();
                     let shell_tmode = tcgetattr(0).expect("failed tcgetattr");
                     let mut ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);
-                    match self.shell.eval_str(&mut ctx, self.input.as_str(), false) {
+                    match self.shell.eval_str(&mut ctx, self.input.to_string(), false) {
                         Ok(code) => {
                             debug!("exit: {} : {:?}", self.input.as_str(), code);
                         }
@@ -391,7 +392,7 @@ impl<'a> Repl<'a> {
                 print!("\r\n");
                 if !self.input.is_empty() {
                     self.completion.clear();
-                    let input = self.input.as_str();
+                    let input = self.input.to_string();
                     let shell_tmode = tcgetattr(0).expect("failed tcgetattr");
                     let mut ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);
                     if let Err(err) = self.shell.eval_str(&mut ctx, input, true) {
@@ -425,7 +426,7 @@ impl<'a> Repl<'a> {
             }
 
             (KeyCode::Char('r'), CTRL) => {
-                self.select_history(&self.input.as_str());
+                self.select_history();
             }
             _ => {
                 warn!("unsupported key event: {:?}", ev);
@@ -497,7 +498,8 @@ impl<'a> Repl<'a> {
         }
     }
 
-    pub fn select_history(&mut self, query: &str) {
+    pub fn select_history(&mut self) {
+        let query = self.input.as_str();
         if let Some(ref mut history) = self.shell.cmd_history {
             let histories = history.sorted(&dsh_frecency::SortMethod::Frecent);
 

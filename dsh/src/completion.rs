@@ -1,5 +1,6 @@
 use crate::dirs::is_executable;
 use crate::environment::get_data_file;
+use crate::input::Input;
 use crate::lisp::Value;
 use crate::repl::Repl;
 use anyhow::Result;
@@ -272,7 +273,7 @@ pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String>
     }
 }
 
-fn completion_from_lisp(input: &str, repl: &Repl, query: Option<&str>) -> Option<String> {
+fn completion_from_lisp(input: &Input, repl: &Repl, query: Option<&str>) -> Option<String> {
     // TODO convert input
     let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
     let environment = Rc::clone(&lisp_engine.borrow().shell_env);
@@ -281,7 +282,7 @@ fn completion_from_lisp(input: &str, repl: &Repl, query: Option<&str>) -> Option
     for compl in environment.borrow().autocompletion.iter() {
         let cmd_str = compl.target.to_string();
         // debug!("match cmd:'{}' in:'{}'", cmd_str, replace_space(input));
-        if replace_space(input).starts_with(cmd_str.as_str()) {
+        if replace_space(input.as_str()).starts_with(cmd_str.as_str()) {
             if let Some(func) = &compl.func {
                 // run lisp func
                 match lisp_engine.borrow().apply_func(func.to_owned(), vec![]) {
@@ -322,7 +323,7 @@ fn completion_from_lisp(input: &str, repl: &Repl, query: Option<&str>) -> Option
     None
 }
 
-fn completion_from_current(_input: &str, repl: &Repl, query: Option<&str>) -> Option<String> {
+fn completion_from_current(_input: &Input, repl: &Repl, query: Option<&str>) -> Option<String> {
     let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
     let environment = Rc::clone(&lisp_engine.borrow().shell_env);
 
@@ -368,7 +369,7 @@ fn completion_from_current(_input: &str, repl: &Repl, query: Option<&str>) -> Op
     }
 }
 
-fn completion_from_chatgpt(input: &str, repl: &Repl, _query: Option<&str>) -> Option<String> {
+fn completion_from_chatgpt(input: &Input, repl: &Repl, _query: Option<&str>) -> Option<String> {
     let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
     let environment = Rc::clone(&lisp_engine.borrow().shell_env);
 
@@ -382,7 +383,7 @@ fn completion_from_chatgpt(input: &str, repl: &Repl, _query: Option<&str>) -> Op
         debug!("ChatGPT completion input:{:?}", input);
         // TODO displaying the inquiring mark
         match ChatGPTCompletion::new(api_key) {
-            Ok(mut processor) => match processor.completion(input) {
+            Ok(mut processor) => match processor.completion(input.as_str()) {
                 Ok(res) => {
                     return res;
                 }
@@ -399,7 +400,7 @@ fn completion_from_chatgpt(input: &str, repl: &Repl, _query: Option<&str>) -> Op
     None
 }
 
-pub fn input_completion(input: &str, repl: &Repl, query: Option<&str>) -> Option<String> {
+pub fn input_completion(input: &Input, repl: &Repl, query: Option<&str>) -> Option<String> {
     let res = completion_from_lisp(input, repl, query);
     if res.is_some() {
         return res;
@@ -408,7 +409,7 @@ pub fn input_completion(input: &str, repl: &Repl, query: Option<&str>) -> Option
     if res.is_some() {
         return res;
     }
-    if repl.can_execute {
+    if input.can_execute {
         let res = completion_from_chatgpt(input, repl, query);
         if res.is_some() {
             return res;

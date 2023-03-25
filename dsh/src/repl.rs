@@ -185,10 +185,7 @@ impl<'a> Repl<'a> {
 
         let fg_color = Color::White;
         let mut completion: Option<String> = None;
-        // reset
-
         let mut can_execute = false;
-
         if input.is_empty() || reset_completion {
             self.input.completion = None
         } else {
@@ -200,6 +197,9 @@ impl<'a> Repl<'a> {
             if let Ok(words) = self.input.get_words() {
                 for (ref rule, ref span, current) in words {
                     let word = span.as_str();
+                    if word.is_empty() {
+                        continue;
+                    }
                     if let Some(_found) = self.shell.environment.borrow().lookup(word) {
                         for pos in span.start()..span.end() {
                             // change color
@@ -210,7 +210,7 @@ impl<'a> Repl<'a> {
                         }
                     }
 
-                    if !word.is_empty() && current && completion.is_none() {
+                    if current && completion.is_none() {
                         match rule {
                             Rule::argv0 => {
                                 if let Some(file) = self.shell.environment.borrow().search(word) {

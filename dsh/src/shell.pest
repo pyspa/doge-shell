@@ -31,8 +31,14 @@ group_list = _{
 }
 
 quoted = _{ d_quoted|s_quoted }
-redirect_direction = { (">>" | ">") }
-redirect = { redirect_direction ~ sp* ~ span }
+
+stderr_redirect_direction_out = { "2>" }
+stderr_redirect_direction_append = { "2>>" }
+stdout_redirect_direction_out = { ">" }
+stdout_redirect_direction_append = { ">>" }
+stderr_redirect_direction = { ( stderr_redirect_direction_append | stderr_redirect_direction_out ) }
+stdout_redirect_direction = { ( stdout_redirect_direction_append | stdout_redirect_direction_out ) }
+redirect = { (stderr_redirect_direction | stdout_redirect_direction) ~ sp* ~ span }
 span = { quoted|word|variable|subshell }
 argv0 = { span }
 args = { (sp* ~ (redirect|span))+ }

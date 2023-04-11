@@ -139,7 +139,8 @@ fn expand_alias_tilde(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Vec<
         | Rule::d_quoted
         | Rule::literal_s_quoted
         | Rule::literal_d_quoted
-        | Rule::redirect_direction => {
+        | Rule::stdout_redirect_direction
+        | Rule::stderr_redirect_direction => {
             argv.push(shellexpand::tilde(pair.as_str()).to_string());
         }
         Rule::argv0 => {
@@ -211,7 +212,8 @@ fn expand_alias_tilde(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Vec<
                     | Rule::d_quoted
                     | Rule::literal_s_quoted
                     | Rule::literal_d_quoted
-                    | Rule::redirect_direction => {
+                    | Rule::stdout_redirect_direction
+                    | Rule::stderr_redirect_direction => {
                         let mut v = expand_alias_tilde(inner_pair, alias);
                         argv.append(&mut v);
                     }
@@ -410,7 +412,8 @@ fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {
         | Rule::variable
         | Rule::literal_s_quoted
         | Rule::literal_d_quoted
-        | Rule::redirect_direction => {
+        | Rule::stdout_redirect_direction
+        | Rule::stderr_redirect_direction => {
             let pair_span = pair.as_span();
             if pair_span.start() < pos && pos <= pair_span.end() {
                 return Some((pair_span, true));

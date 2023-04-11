@@ -19,15 +19,17 @@ use tracing::{debug, error};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Redirect {
-    Output(String),
-    Append(String),
+    StdoutOutput(String),
+    StdoutAppend(String),
+    StderrOutput(String),
+    StderrAppend(String),
     Input,
 }
 
 impl Redirect {
     fn process(&self, ctx: &mut Context) {
         match self {
-            Redirect::Output(out) => {
+            Redirect::StdoutOutput(out) | Redirect::StderrOutput(out) => {
                 let infile = ctx.infile;
                 let file = out.to_string();
                 // spawn and io copy
@@ -39,7 +41,7 @@ impl Redirect {
                 });
             }
 
-            Redirect::Append(out) => {
+            Redirect::StdoutAppend(out) | Redirect::StderrAppend(out) => {
                 let infile = ctx.infile;
                 let file = out.to_string();
                 // spawn and io copy
@@ -164,28 +166,31 @@ impl JobProcess {
         }
     }
 
-    pub fn set_io(&mut self, stdin: RawFd, stdout: RawFd) {
+    pub fn set_io(&mut self, stdin: RawFd, stdout: RawFd, stderr: RawFd) {
         match self {
             JobProcess::Builtin(jprocess) => {
                 jprocess.stdin = stdin;
                 jprocess.stdout = stdout;
+                jprocess.stderr = stderr;
             }
             JobProcess::Wasm(jprocess) => {
                 jprocess.stdin = stdin;
                 jprocess.stdout = stdout;
+                jprocess.stderr = stderr;
             }
             JobProcess::Command(jprocess) => {
                 jprocess.stdin = stdin;
                 jprocess.stdout = stdout;
+                jprocess.stderr = stderr;
             }
         }
     }
 
-    pub fn get_io(&self) -> (RawFd, RawFd) {
+    pub fn get_io(&self) -> (RawFd, RawFd, RawFd) {
         match self {
-            JobProcess::Builtin(jprocess) => (jprocess.stdin, jprocess.stdout),
-            JobProcess::Wasm(jprocess) => (jprocess.stdin, jprocess.stdout),
-            JobProcess::Command(jprocess) => (jprocess.stdin, jprocess.stdout),
+            JobProcess::Builtin(jprocess) => (jprocess.stdin, jprocess.stdout, jprocess.stderr),
+            JobProcess::Wasm(jprocess) => (jprocess.stdin, jprocess.stdout, jprocess.stderr),
+            JobProcess::Command(jprocess) => (jprocess.stdin, jprocess.stdout, jprocess.stderr),
         }
     }
 
@@ -637,7 +642,7 @@ impl Job {
             None => handle_output_redirect(ctx, &self.redirect, self.stdout)?,
         };
 
-        process.set_io(ctx.infile, ctx.outfile);
+        process.set_io(ctx.infile, ctx.outfile, ctx.errfile);
 
         debug!("start process ctx {:?}", &ctx);
         debug!("start process {:?}", &process);
@@ -702,12 +707,15 @@ impl Job {
         if let Some(pipe_out) = pipe_out {
             ctx.infile = pipe_out;
         }
-        let (stdin, stdout) = process.get_io();
+        let (stdin, stdout, stderr) = process.get_io();
         if stdin != self.stdin {
             close(stdin).context("failed close")?;
         }
         if stdout != self.stdout {
-            close(stdout).context("failed close")?;
+            close(stdout).context("failed close stdout")?;
+        }
+        if stderr != self.stderr {
+            close(stderr).context("failed close stderr")?;
         }
 
         let mut next_process = process.next().take();
@@ -976,8 +984,18 @@ fn handle_output_redirect(
     redirect: &Option<Redirect>,
     stdout: RawFd,
 ) -> Result<Option<RawFd>> {
-    if let Some(ref _output) = redirect {
-        create_pipe(ctx)
+    if let Some(ref output) = redirect {
+        let (pout, pin) = pipe().context("failed pipe")?;
+        match output {
+            Redirect::StdoutOutput(_) | Redirect::StdoutAppend(_) => {
+                ctx.outfile = pin;
+            }
+            Redirect::StderrOutput(_) | Redirect::StderrAppend(_) => {
+                ctx.errfile = pin;
+            }
+            _ => {}
+        }
+        Ok(Some(pout))
     } else {
         if let Some(out) = ctx.captured_out {
             ctx.outfile = out;

@@ -264,7 +264,6 @@ impl Shell {
                                         }
                                         _ => None,
                                     };
-                                    println!("{:?}", redirect);
                                     current_job.redirect = redirect;
                                 }
                             }

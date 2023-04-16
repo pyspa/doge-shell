@@ -141,9 +141,9 @@ impl<'a> Repl<'a> {
             let comps = if self.input.is_empty() {
                 history.sorted(&dsh_frecency::SortMethod::Recent)
             } else {
-                history.sort_by_match(&self.input.as_str())
+                history.sort_by_match(self.input.as_str())
             };
-            self.completion.set_completions(&self.input.as_str(), comps);
+            self.completion.set_completions(self.input.as_str(), comps);
         }
     }
 
@@ -166,7 +166,7 @@ impl<'a> Repl<'a> {
 
     fn get_completion_from_history(&mut self, input: &str) -> Option<String> {
         if let Some(ref mut history) = self.shell.cmd_history {
-            if let Some(entry) = history.search_prefix(&input) {
+            if let Some(entry) = history.search_prefix(input) {
                 self.input.completion = Some(entry.clone());
                 if entry.len() >= input.len() {
                     return Some(entry[input.len()..].to_string());
@@ -333,13 +333,13 @@ impl<'a> Repl<'a> {
             }
             (KeyCode::Char(ch), NONE) => {
                 self.input.insert(ch);
-                if self.completion.is_changed(&self.input.as_str()) {
+                if self.completion.is_changed(self.input.as_str()) {
                     self.completion.clear();
                 }
             }
             (KeyCode::Char(ch), SHIFT) => {
                 self.input.insert(ch);
-                if self.completion.is_changed(&self.input.as_str()) {
+                if self.completion.is_changed(self.input.as_str()) {
                     self.completion.clear();
                 }
             }
@@ -355,7 +355,7 @@ impl<'a> Repl<'a> {
                     _ => None,
                 };
                 if let Some(val) =
-                    completion::input_completion(&self.input, &self, completion_query)
+                    completion::input_completion(&self.input, self, completion_query)
                 {
                     if let Some(q) = completion_query {
                         self.input.backspacen(q.len());

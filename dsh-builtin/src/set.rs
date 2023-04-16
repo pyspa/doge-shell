@@ -15,7 +15,7 @@ pub fn command(_ctx: &Context, args: Vec<String>, proxy: &mut dyn ShellProxy) ->
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
         Err(f) => {
-            eprintln!("{}", f.to_string());
+            eprintln!("{}", f);
             return ExitStatus::ExitedWith(1);
         }
     };

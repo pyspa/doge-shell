@@ -7,7 +7,6 @@ use anyhow::Result;
 use dsh_frecency::ItemStats;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json;
 use skim::prelude::*;
 use skim::{Skim, SkimItemReceiver, SkimItemSender};
 use std::fs::{create_dir_all, read_dir, remove_file, File};

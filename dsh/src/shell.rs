@@ -232,7 +232,8 @@ impl Shell {
                             let mut redirect_rule = None;
                             for pair in inner_pair.into_inner() {
                                 if let Rule::stdout_redirect_direction
-                                | Rule::stderr_redirect_direction = pair.as_rule()
+                                | Rule::stderr_redirect_direction
+                                | Rule::stdouterr_redirect_direction = pair.as_rule()
                                 {
                                     if let Some(rule) = pair.into_inner().next() {
                                         redirect_rule = Some(rule.as_rule());
@@ -241,21 +242,29 @@ impl Shell {
                                     let dest = pair.as_str();
 
                                     let redirect = match redirect_rule {
-                                        Some(Rule::stderr_redirect_direction_out) => {
-                                            Some(Redirect::StderrOutput(dest.to_string()))
-                                        }
-                                        Some(Rule::stderr_redirect_direction_append) => {
-                                            Some(Redirect::StderrAppend(dest.to_string()))
-                                        }
                                         Some(Rule::stdout_redirect_direction_out) => {
                                             Some(Redirect::StdoutOutput(dest.to_string()))
                                         }
                                         Some(Rule::stdout_redirect_direction_append) => {
                                             Some(Redirect::StdoutAppend(dest.to_string()))
                                         }
+
+                                        Some(Rule::stderr_redirect_direction_out) => {
+                                            Some(Redirect::StderrOutput(dest.to_string()))
+                                        }
+                                        Some(Rule::stderr_redirect_direction_append) => {
+                                            Some(Redirect::StderrAppend(dest.to_string()))
+                                        }
+
+                                        Some(Rule::stdouterr_redirect_direction_out) => {
+                                            Some(Redirect::StdouterrOutput(dest.to_string()))
+                                        }
+                                        Some(Rule::stdouterr_redirect_direction_append) => {
+                                            Some(Redirect::StdouterrAppend(dest.to_string()))
+                                        }
                                         _ => None,
                                     };
-
+                                    println!("{:?}", redirect);
                                     current_job.redirect = redirect;
                                 }
                             }

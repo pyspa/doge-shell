@@ -23,13 +23,17 @@ pub enum Redirect {
     StdoutAppend(String),
     StderrOutput(String),
     StderrAppend(String),
+    StdouterrOutput(String),
+    StdouterrAppend(String),
     Input,
 }
 
 impl Redirect {
     fn process(&self, ctx: &mut Context) {
         match self {
-            Redirect::StdoutOutput(out) | Redirect::StderrOutput(out) => {
+            Redirect::StdoutOutput(out)
+            | Redirect::StderrOutput(out)
+            | Redirect::StdouterrOutput(out) => {
                 let infile = ctx.infile;
                 let file = out.to_string();
                 // spawn and io copy
@@ -41,7 +45,9 @@ impl Redirect {
                 });
             }
 
-            Redirect::StdoutAppend(out) | Redirect::StderrAppend(out) => {
+            Redirect::StdoutAppend(out)
+            | Redirect::StderrAppend(out)
+            | Redirect::StdouterrAppend(out) => {
                 let infile = ctx.infile;
                 let file = out.to_string();
                 // spawn and io copy
@@ -512,8 +518,14 @@ impl Process {
         );
 
         copy_fd(self.stdin, STDIN_FILENO);
-        copy_fd(self.stdout, STDOUT_FILENO);
-        copy_fd(self.stderr, STDERR_FILENO);
+        if self.stdout == self.stderr {
+            dup2(self.stdout, STDOUT_FILENO).expect("failed dup2");
+            dup2(self.stderr, STDERR_FILENO).expect("failed dup2");
+            close(self.stdout).expect("failed close");
+        } else {
+            copy_fd(self.stdout, STDOUT_FILENO);
+            copy_fd(self.stderr, STDERR_FILENO);
+        }
         match execv(&cmd, &argv) {
             Ok(_) => Ok(()),
             Err(nix::errno::Errno::EACCES) => {
@@ -714,7 +726,7 @@ impl Job {
         if stdout != self.stdout {
             close(stdout).context("failed close stdout")?;
         }
-        if stderr != self.stderr {
+        if stderr != self.stderr && stdout != stderr {
             close(stderr).context("failed close stderr")?;
         }
 
@@ -985,17 +997,25 @@ fn handle_output_redirect(
     stdout: RawFd,
 ) -> Result<Option<RawFd>> {
     if let Some(ref output) = redirect {
-        let (pout, pin) = pipe().context("failed pipe")?;
         match output {
             Redirect::StdoutOutput(_) | Redirect::StdoutAppend(_) => {
+                let (pout, pin) = pipe().context("failed pipe")?;
                 ctx.outfile = pin;
+                Ok(Some(pout))
             }
             Redirect::StderrOutput(_) | Redirect::StderrAppend(_) => {
+                let (pout, pin) = pipe().context("failed pipe")?;
                 ctx.errfile = pin;
+                Ok(Some(pout))
             }
-            _ => {}
+            Redirect::StdouterrOutput(_) | Redirect::StdouterrAppend(_) => {
+                let (pout, pin) = pipe().context("failed pipe")?;
+                ctx.outfile = pin;
+                ctx.errfile = pin;
+                Ok(Some(pout))
+            }
+            _ => Ok(None),
         }
-        Ok(Some(pout))
     } else {
         if let Some(out) = ctx.captured_out {
             ctx.outfile = out;

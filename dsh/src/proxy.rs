@@ -40,6 +40,13 @@ impl ShellProxy for Shell {
         self.chpwd(path);
     }
 
+    fn insert_path(&mut self, idx: usize, path: &str) {
+        self.environment
+            .borrow_mut()
+            .paths
+            .insert(idx, path.to_string());
+    }
+
     fn dispatch(&mut self, ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()> {
         match cmd {
             "exit" => {

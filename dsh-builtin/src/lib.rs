@@ -4,6 +4,7 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+mod add_path;
 pub mod cd;
 mod chatgpt;
 mod history;
@@ -19,6 +20,7 @@ pub trait ShellProxy {
     fn dispatch(&mut self, ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()>;
     fn save_path_history(&mut self, path: &str);
     fn changepwd(&mut self, path: &str);
+    fn insert_path(&mut self, index: usize, path: &str);
     fn get_var(&mut self, key: &str) -> Option<String>;
     fn set_var(&mut self, key: String, value: String);
     fn set_env_var(&mut self, key: String, value: String);
@@ -42,6 +44,7 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, BuiltinCommand>>> = Lazy::n
     builtin.insert("read", read::command as BuiltinCommand);
     builtin.insert("chat", chatgpt::chat as BuiltinCommand);
     builtin.insert("chat_prompt", chatgpt::chat_prompt as BuiltinCommand);
+    builtin.insert("add_path", add_path::command as BuiltinCommand);
 
     Mutex::new(builtin)
 });

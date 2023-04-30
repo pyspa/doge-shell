@@ -9,7 +9,7 @@ use std::io::prelude::*;
 use std::os::unix::io::FromRawFd;
 use std::process::Command;
 use std::{cell::RefCell, rc::Rc};
-use tracing::debug;
+use tracing::{debug, Instrument};
 
 pub fn set_variable(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let key = &args[0];
@@ -44,6 +44,19 @@ pub fn allow_direnv(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
             .borrow_mut()
             .direnv_roots
             .push(DirEnvironment::new(root.to_string()));
+    }
+    Ok(Value::NIL)
+}
+
+pub fn add_path(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    for arg in args {
+        let path = arg.to_string();
+        let path = shellexpand::tilde(path.as_str());
+        env.borrow()
+            .shell_env
+            .borrow_mut()
+            .paths
+            .insert(0, path.to_string());
     }
     Ok(Value::NIL)
 }

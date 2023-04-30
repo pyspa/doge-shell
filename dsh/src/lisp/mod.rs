@@ -115,6 +115,10 @@ pub fn make_env(environment: Rc<RefCell<Environment>>) -> Rc<RefCell<Env>> {
         Symbol::from("vset"),
         Value::NativeFunc(builtin::set_variable),
     );
+    env.borrow_mut().define(
+        Symbol::from("add_path"),
+        Value::NativeFunc(builtin::add_path),
+    );
 
     env
 }

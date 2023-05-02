@@ -18,12 +18,17 @@ const NEW_FILE: &str = "+";
 pub fn print_preprompt() {
     // let (branch, git) = get_git_branch();
     let status = get_git_status();
-    let git = status.is_some();
+    let has_git = status.is_some();
 
-    let path = if git { get_cwd(false) } else { get_cwd(true) };
+    let (path, _is_git_root) = get_cwd();
 
     print!("{}", "\r".reset());
-    print!("{}", path.white());
+
+    if has_git {
+        print!("{}", path.cyan());
+    } else {
+        print!("{}", path.white());
+    }
     if let Some(git_status) = status {
         print!(" {} ", "on".reset());
         print!(
@@ -44,20 +49,23 @@ pub fn print_preprompt() {
     }
 }
 
-fn get_cwd(full: bool) -> String {
+fn get_cwd() -> (String, bool) {
     match std::env::current_dir() {
         Ok(pathbuf) => {
-            if full {
-                let path = pathbuf.display().to_string();
-                let home = dirs::home_dir().map_or("".to_owned(), |p| p.display().to_string());
-                path.replace(&home, "~")
-            } else {
+            let is_git_root = pathbuf.join(".git").exists();
+
+            let path = if is_git_root {
                 pathbuf
                     .file_name()
                     .map_or("".to_owned(), |s| s.to_string_lossy().into_owned())
-            }
+            } else {
+                let path = pathbuf.display().to_string();
+                let home = dirs::home_dir().map_or("".to_owned(), |p| p.display().to_string());
+                path.replace(&home, "~")
+            };
+            (path, is_git_root)
         }
-        Err(_) => String::from(""),
+        Err(_) => (String::from(""), false),
     }
 }
 

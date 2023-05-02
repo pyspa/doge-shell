@@ -354,8 +354,7 @@ impl<'a> Repl<'a> {
                     Ok(Some((_rule, span))) => Some(span.as_str()),
                     _ => None,
                 };
-                if let Some(val) =
-                    completion::input_completion(&self.input, self, completion_query)
+                if let Some(val) = completion::input_completion(&self.input, self, completion_query)
                 {
                     if let Some(q) = completion_query {
                         self.input.backspacen(q.len());

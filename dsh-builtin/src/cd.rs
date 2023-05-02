@@ -35,11 +35,8 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         }
     };
 
-    match std::env::set_current_dir(&dir) {
-        Ok(_) => {
-            proxy.dispatch(ctx, "cd", vec![dir]).unwrap();
-            ExitStatus::ExitedWith(0)
-        }
+    match proxy.changepwd(&dir) {
+        Ok(_) => ExitStatus::ExitedWith(0),
         Err(err) => {
             let file = unsafe { File::from_raw_fd(ctx.outfile) };
             writeln!(&file, "cd: {}: {}", err, dir).ok();

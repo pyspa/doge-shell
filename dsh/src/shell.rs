@@ -481,7 +481,7 @@ impl Shell {
         self.exited = Some(ExitStatus::ExitedWith(0));
     }
 
-    pub fn chpwd(&mut self, pwd: &str) {
+    pub fn exec_chpwd_hooks(&mut self, pwd: &str) {
         let pwd = Path::new(pwd);
         for hook in &self.chpwd_hooks {
             hook(pwd, Rc::clone(&self.environment));

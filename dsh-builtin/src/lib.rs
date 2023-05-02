@@ -19,7 +19,7 @@ pub trait ShellProxy {
     fn exit_shell(&mut self);
     fn dispatch(&mut self, ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()>;
     fn save_path_history(&mut self, path: &str);
-    fn changepwd(&mut self, path: &str);
+    fn changepwd(&mut self, path: &str) -> Result<()>;
     fn insert_path(&mut self, index: usize, path: &str);
     fn get_var(&mut self, key: &str) -> Option<String>;
     fn set_var(&mut self, key: String, value: String);

@@ -35,9 +35,11 @@ impl ShellProxy for Shell {
         }
     }
 
-    fn changepwd(&mut self, path: &str) {
+    fn changepwd(&mut self, path: &str) -> Result<()> {
+        std::env::set_current_dir(path)?;
         self.save_path_history(path);
-        self.chpwd(path);
+        self.exec_chpwd_hooks(path);
+        Ok(())
     }
 
     fn insert_path(&mut self, idx: usize, path: &str) {
@@ -51,14 +53,6 @@ impl ShellProxy for Shell {
         match cmd {
             "exit" => {
                 self.exit();
-            }
-            "cd" => {
-                let dir = &argv[0];
-                self.changepwd(dir);
-            }
-            "move_dir" => {
-                let dir = &argv[0];
-                self.save_path_history(dir);
             }
             "history" => {
                 if let Some(ref mut history) = self.cmd_history {
@@ -76,8 +70,8 @@ impl ShellProxy for Shell {
                 if let Some(ref mut history) = self.path_history {
                     let results = history.sort_by_match(path);
                     if !results.is_empty() {
-                        let path = results[0].item.clone();
-                        self.dispatch(ctx, "cd", vec![path]).unwrap();
+                        let path = &results[0].item;
+                        return self.changepwd(path);
                     }
                 }
             }

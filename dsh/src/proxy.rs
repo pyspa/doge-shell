@@ -4,7 +4,6 @@ use dsh_builtin::ShellProxy;
 use dsh_frecency::SortMethod;
 use dsh_types::Context;
 use nix::unistd::dup;
-use std::env;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::Write;
@@ -157,6 +156,18 @@ impl ShellProxy for Shell {
     }
 
     fn set_env_var(&mut self, key: String, value: String) {
-        env::set_var(key, value);
+        if key == "PATH" {
+            let mut path_vec = vec![];
+            for value in value.split(":") {
+                path_vec.push(value.to_string());
+            }
+            let env_path = path_vec.join(":");
+            std::env::set_var("PATH", &env_path);
+            debug!("set env {} {}", &key, &env_path);
+            self.environment.borrow_mut().paths = path_vec;
+        } else {
+            std::env::set_var(&key, value.to_string());
+            debug!("set env {} {}", &key, &value);
+        }
     }
 }

@@ -37,7 +37,7 @@ impl ShellProxy for Shell {
     fn changepwd(&mut self, path: &str) -> Result<()> {
         std::env::set_current_dir(path)?;
         self.save_path_history(path);
-        self.exec_chpwd_hooks(path);
+        self.exec_chpwd_hooks(path)?;
         Ok(())
     }
 
@@ -158,15 +158,15 @@ impl ShellProxy for Shell {
     fn set_env_var(&mut self, key: String, value: String) {
         if key == "PATH" {
             let mut path_vec = vec![];
-            for value in value.split(":") {
+            for value in value.split(':') {
                 path_vec.push(value.to_string());
             }
             let env_path = path_vec.join(":");
             std::env::set_var("PATH", &env_path);
             debug!("set env {} {}", &key, &env_path);
-            self.environment.borrow_mut().paths = path_vec;
+            self.environment.borrow_mut().reload_path();
         } else {
-            std::env::set_var(&key, value.to_string());
+            std::env::set_var(&key, &value);
             debug!("set env {} {}", &key, &value);
         }
     }

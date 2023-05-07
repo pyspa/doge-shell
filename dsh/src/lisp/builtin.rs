@@ -61,12 +61,13 @@ pub fn allow_direnv(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
     for arg in args {
         let root = arg.to_string();
         let root = shellexpand::tilde(root.as_str());
-
+        // TODO check error
+        let direnv = DirEnvironment::new(root.to_string()).unwrap();
         env.borrow()
             .shell_env
             .borrow_mut()
             .direnv_roots
-            .push(DirEnvironment::new(root.to_string()));
+            .push(direnv);
     }
     Ok(Value::NIL)
 }

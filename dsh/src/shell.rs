@@ -29,7 +29,7 @@ use tracing::{debug, warn};
 
 pub const APP_NAME: &str = "dsh";
 pub const SHELL_TERMINAL: c_int = STDIN_FILENO;
-pub type CommandHook = fn(pwd: &Path, env: Rc<RefCell<Environment>>);
+pub type CommandHook = fn(pwd: &Path, env: Rc<RefCell<Environment>>) -> Result<()>;
 
 #[derive(Debug)]
 struct ParseContext {
@@ -481,11 +481,12 @@ impl Shell {
         self.exited = Some(ExitStatus::ExitedWith(0));
     }
 
-    pub fn exec_chpwd_hooks(&mut self, pwd: &str) {
+    pub fn exec_chpwd_hooks(&mut self, pwd: &str) -> Result<()> {
         let pwd = Path::new(pwd);
         for hook in &self.chpwd_hooks {
-            hook(pwd, Rc::clone(&self.environment));
+            hook(pwd, Rc::clone(&self.environment))?;
         }
+        Ok(())
     }
 
     // pub fn chpwd2(&mut self, pwd: &str) {
@@ -498,12 +499,13 @@ impl Shell {
     // }
 }
 
-fn chpwd_debug(pwd: &Path, _env: Rc<RefCell<Environment>>) {
+fn chpwd_debug(pwd: &Path, _env: Rc<RefCell<Environment>>) -> Result<()> {
     debug!("chpwd {:?}", pwd);
+    Ok(())
 }
 
-fn check_direnv(pwd: &Path, env: Rc<RefCell<Environment>>) {
-    direnv::check_path(pwd, &mut env.borrow_mut().direnv_roots);
+fn check_direnv(pwd: &Path, env: Rc<RefCell<Environment>>) -> Result<()> {
+    direnv::check_path(pwd, env)
 }
 
 fn read_fd(fd: RawFd) -> Result<String> {

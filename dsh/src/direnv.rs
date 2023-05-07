@@ -1,6 +1,20 @@
+use crate::environment::Environment;
 use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::{cell::RefCell, rc::Rc};
+
+#[derive(Debug, Clone)]
+pub enum Entry {
+    Env(EnvEntry),
+    PathAdd(PathAddEntry),
+}
+
+#[derive(Debug, Clone)]
+pub struct PathAddEntry {
+    pub path: String,
+    pub old: String,
+}
 
 #[derive(Debug, Clone)]
 pub struct EnvEntry {
@@ -11,89 +25,152 @@ pub struct EnvEntry {
 #[derive(Debug, Clone)]
 pub struct DirEnvironment {
     pub path: String,
-    pub entries: Vec<EnvEntry>,
+    pub entries: Vec<Entry>,
+    pub env_path: String,
     loaded: bool,
 }
 
 impl DirEnvironment {
-    pub fn new(path: String) -> Self {
-        DirEnvironment {
+    pub fn new(path: String) -> Result<Self> {
+        let env_path = std::env::var("PATH")?;
+        Ok(DirEnvironment {
             path,
             entries: Vec::new(),
+            env_path,
             loaded: false,
-        }
+        })
     }
 
-    pub fn set_env(&self) {
+    pub fn set_env(&self) -> Result<()> {
         if self.loaded {
-            return;
+            return Ok(());
         }
+
+        let mut env_path = std::env::var("PATH")?;
         for entry in &self.entries {
-            std::env::set_var(&entry.key, &entry.value);
-            print!("+{} ", &entry.key);
+            match entry {
+                Entry::Env(env_entry) => {
+                    std::env::set_var(&env_entry.key, &env_entry.value);
+                    print!("+{} ", &env_entry.key);
+                }
+                Entry::PathAdd(path_entry) => {
+                    let mut path = path_entry.path.clone();
+                    path.push_str(&env_path);
+                    env_path = path;
+                }
+            }
         }
+        std::env::set_var("PATH", &env_path);
+
+        Ok(())
     }
 
     pub fn remove_env(&self) {
         if !self.loaded {
             return;
         }
+        let mut require_reset = false;
         for entry in &self.entries {
-            std::env::remove_var(&entry.key);
-            print!("-{} ", &entry.key);
-        }
-    }
-
-    pub fn read_envfile(&mut self) {
-        if self.loaded {
-            return;
-        }
-        let root = PathBuf::from(&self.path);
-        let env_file = root.join(".env");
-        if env_file.exists() {
-            if let Some(file) = env_file.to_str() {
-                let cfg = read_config_file(file).unwrap();
-                for data in &cfg {
-                    self.entries.push(EnvEntry {
-                        key: data[0].to_string(),
-                        value: data[1].to_string(),
-                    });
+            match entry {
+                Entry::Env(env_entry) => {
+                    std::env::remove_var(&env_entry.key);
+                }
+                Entry::PathAdd(_) => {
+                    require_reset = true;
                 }
             }
         }
+        if require_reset {
+            std::env::set_var("PATH", &self.env_path);
+        }
+    }
+
+    pub fn read_env_file(&mut self) -> Result<()> {
+        if self.loaded {
+            return Ok(());
+        }
+
+        let root = PathBuf::from(&self.path);
+        let env_file = root.join(".env");
+        let envrc_file = root.join(".envrc");
+        if env_file.exists() {
+            if let Some(file) = env_file.to_str() {
+                let cfgs = read_env_config_file(file)?;
+                for data in cfgs {
+                    self.entries.push(data);
+                }
+            }
+        } else if envrc_file.exists() {
+            if let Some(file) = envrc_file.to_str() {
+                let cfgs = read_envrc_config_file(file)?;
+                for data in cfgs {
+                    self.entries.push(data);
+                }
+            }
+        }
+        Ok(())
     }
 }
 
-fn read_config_file(file: &str) -> Result<Vec<[String; 2]>> {
-    let mut ret: Vec<[String; 2]> = Vec::new();
+fn read_env_config_file(file: &str) -> Result<Vec<Entry>> {
+    let mut ret: Vec<Entry> = Vec::new();
     let contents = fs::read_to_string(file)?;
     for line in contents.lines() {
         let parts: Vec<&str> = line.splitn(2, '=').collect();
         let key = parts[0].trim().to_uppercase().to_string();
         let value = parts[1].trim().to_string();
-        ret.push([key, value]);
+        ret.push(Entry::Env(EnvEntry { key, value }));
     }
     Ok(ret)
 }
 
-pub fn check_path(pwd: &Path, entries: &mut Vec<DirEnvironment>) {
-    for env in entries {
+fn read_envrc_config_file(file: &str) -> Result<Vec<Entry>> {
+    let mut ret: Vec<Entry> = Vec::new();
+    let contents = fs::read_to_string(file)?;
+    let current_path = std::env::var("PATH")?;
+
+    for line in contents.lines() {
+        let parts: Vec<&str> = line.splitn(2, ' ').collect();
+        let cmd = parts[0].trim().to_uppercase().to_string();
+        let value = parts[1].trim().to_string();
+
+        match cmd.as_str() {
+            "PATH_ADD" => ret.push(Entry::PathAdd(PathAddEntry {
+                path: value,
+                old: current_path.clone(),
+            })),
+            "EXPORT" => {
+                let parts: Vec<&str> = value.splitn(2, '=').collect();
+                let key = parts[0].trim().to_uppercase().to_string();
+                let value = parts[1].trim().to_string();
+                ret.push(Entry::Env(EnvEntry { key, value }));
+            }
+            _ => {}
+        }
+    }
+    Ok(ret)
+}
+
+pub fn check_path(pwd: &Path, environment: Rc<RefCell<Environment>>) -> Result<()> {
+    let environment = &mut environment.borrow_mut();
+    let entries = &mut environment.direnv_roots;
+    for mut env in entries {
         if pwd.starts_with(&env.path) {
             if !env.loaded {
-                env.read_envfile();
+                env.read_env_file()?;
                 println!("direnv: loading {}", env.path);
                 print!("direnv: export ");
-                env.set_env();
+                env.set_env()?;
                 println!();
                 env.loaded = true;
             }
-            env.set_env();
+            // env.set_env();
         } else if env.loaded {
             println!("direnv: unloading {}", env.path);
-            print!("direnv: unxport ");
             env.remove_env();
-            println!();
             env.loaded = false;
         }
     }
+    environment.reload_path();
+    Ok(())
 }

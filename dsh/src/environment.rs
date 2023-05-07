@@ -96,6 +96,18 @@ impl Environment {
         }
         None
     }
+
+    pub fn reload_path(&mut self) {
+        let mut paths: Vec<String> = ["/bin", "/usr/bin", "/sbin", "/usr/sbin"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        if let Ok(val) = env::var("PATH") {
+            paths = val.split(':').map(|s| s.to_string()).collect();
+        }
+        self.paths = paths;
+    }
 }
 
 impl std::fmt::Debug for Environment {

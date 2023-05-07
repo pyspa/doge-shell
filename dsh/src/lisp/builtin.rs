@@ -9,7 +9,30 @@ use std::io::prelude::*;
 use std::os::unix::io::FromRawFd;
 use std::process::Command;
 use std::{cell::RefCell, rc::Rc};
-use tracing::{debug, Instrument};
+use tracing::debug;
+
+pub fn set_env(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let key = &args[0];
+    let key = key.to_string();
+    if key == "PATH" {
+        let mut path_vec = vec![];
+        for val in &args[1..] {
+            let val = val.to_string();
+            for val in val.split(":") {
+                path_vec.push(val.to_string());
+            }
+        }
+        let env_path = path_vec.join(":");
+        std::env::set_var("PATH", &env_path);
+        debug!("set env {} {}", &key, &env_path);
+        env.borrow().shell_env.borrow_mut().paths = path_vec;
+    } else {
+        let val = &args[1];
+        std::env::set_var(&key, val.to_string());
+        debug!("set env {} {}", &key, &val);
+    }
+    Ok(Value::NIL)
+}
 
 pub fn set_variable(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let key = &args[0];

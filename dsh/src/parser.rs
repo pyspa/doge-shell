@@ -1,10 +1,12 @@
 use crate::environment::Environment;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, ensure, Result};
+use globmatch;
 use pest::iterators::Pair;
 use pest::Parser;
 use pest::Span;
 use pest_derive::Parser;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::{cell::RefCell, rc::Rc};
 use tracing::debug;
 
@@ -129,12 +131,32 @@ fn search_inner_word(pair: Pair<Rule>, pos: usize) -> Option<Span> {
     None
 }
 
-fn expand_alias_tilde(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Vec<String> {
+fn expand_alias_tilde(
+    pair: Pair<Rule>,
+    alias: &HashMap<String, String>,
+    current_dir: &PathBuf,
+) -> Result<Vec<String>> {
     let mut argv: Vec<String> = vec![];
 
     match pair.as_rule() {
+        Rule::glob_word => {
+            let pattern = shellexpand::tilde(pair.as_str()).to_string();
+
+            let builder = globmatch::Builder::new(&pattern)
+                .build(".")
+                .expect("failed create globmatch");
+            let paths: Vec<_> = builder.into_iter().flatten().collect();
+            ensure!(
+                !paths.is_empty(),
+                "No matches for wildcard '{}'. ",
+                &pattern
+            );
+
+            for path in paths {
+                argv.push(format!("{}", path.display()));
+            }
+        }
         Rule::word
-        | Rule::glob_word
         | Rule::variable
         | Rule::s_quoted
         | Rule::d_quoted
@@ -147,7 +169,7 @@ fn expand_alias_tilde(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Vec<
         }
         Rule::argv0 => {
             for inner_pair in pair.into_inner() {
-                let v = expand_alias_tilde(inner_pair, alias);
+                let v = expand_alias_tilde(inner_pair, alias, current_dir)?;
                 for (i, arg) in v.iter().enumerate() {
                     if i == 0 {
                         if let Some(val) = alias.get(arg) {
@@ -167,7 +189,7 @@ fn expand_alias_tilde(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Vec<
                 match inner_pair.as_rule() {
                     Rule::simple_command_bg => {
                         for inner_pair in inner_pair.into_inner() {
-                            let mut v = expand_alias_tilde(inner_pair, alias);
+                            let mut v = expand_alias_tilde(inner_pair, alias, current_dir)?;
                             argv.append(&mut v);
                         }
                         argv.push("&".to_string());
@@ -175,14 +197,14 @@ fn expand_alias_tilde(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Vec<
                     Rule::subshell => {
                         argv.push("(".to_string());
                         for inner_pair in inner_pair.into_inner() {
-                            let mut v = expand_alias_tilde(inner_pair, alias);
+                            let mut v = expand_alias_tilde(inner_pair, alias, current_dir)?;
                             argv.append(&mut v);
                         }
                         argv.push(")".to_string());
                     }
                     Rule::argv0 => {
                         for inner_pair in inner_pair.into_inner() {
-                            let v = expand_alias_tilde(inner_pair, alias);
+                            let v = expand_alias_tilde(inner_pair, alias, current_dir)?;
                             for (i, arg) in v.iter().enumerate() {
                                 if i == 0 {
                                     if let Some(val) = alias.get(arg) {
@@ -204,7 +226,7 @@ fn expand_alias_tilde(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Vec<
                     | Rule::redirect
                     | Rule::span => {
                         for inner_pair in inner_pair.into_inner() {
-                            let mut v = expand_alias_tilde(inner_pair, alias);
+                            let mut v = expand_alias_tilde(inner_pair, alias, current_dir)?;
                             argv.append(&mut v);
                         }
                     }
@@ -218,7 +240,7 @@ fn expand_alias_tilde(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Vec<
                     | Rule::stdout_redirect_direction
                     | Rule::stderr_redirect_direction
                     | Rule::stdouterr_redirect_direction => {
-                        let mut v = expand_alias_tilde(inner_pair, alias);
+                        let mut v = expand_alias_tilde(inner_pair, alias, current_dir)?;
                         argv.append(&mut v);
                     }
                     _ => {
@@ -232,16 +254,16 @@ fn expand_alias_tilde(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Vec<
             }
         }
     }
-    argv
+    Ok(argv)
 }
 
 pub fn expand_alias(input: String, environment: Rc<RefCell<Environment>>) -> Result<String> {
     let mut buf: Vec<String> = Vec::new();
     let pairs = ShellParser::parse(Rule::commands, &input).map_err(|e| anyhow!(e))?;
-
+    let current_dir = std::env::current_dir()?;
     for pair in pairs {
         for pair in pair.into_inner() {
-            let mut commands = expand_command_alias(pair, Rc::clone(&environment))?;
+            let mut commands = expand_command_alias(pair, Rc::clone(&environment), &current_dir)?;
             buf.append(&mut commands);
         }
     }
@@ -251,6 +273,7 @@ pub fn expand_alias(input: String, environment: Rc<RefCell<Environment>>) -> Res
 fn expand_command_alias(
     pair: Pair<Rule>,
     environment: Rc<RefCell<Environment>>,
+    current_dir: &PathBuf,
 ) -> Result<Vec<String>> {
     let mut buf: Vec<String> = Vec::new();
 
@@ -258,7 +281,8 @@ fn expand_command_alias(
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::simple_command => {
-                    let args = expand_alias_tilde(inner_pair, &environment.borrow().alias);
+                    let args =
+                        expand_alias_tilde(inner_pair, &environment.borrow().alias, current_dir)?;
                     for arg in args {
                         if let Some(val) = environment.borrow().variables.get(&arg) {
                             buf.push(val.trim().to_string());
@@ -268,7 +292,8 @@ fn expand_command_alias(
                     }
                 }
                 Rule::simple_command_bg => {
-                    let args = expand_alias_tilde(inner_pair, &environment.borrow().alias);
+                    let args =
+                        expand_alias_tilde(inner_pair, &environment.borrow().alias, current_dir)?;
                     for arg in args {
                         if let Some(val) = environment.borrow().variables.get(&arg) {
                             buf.push(val.trim().to_string());
@@ -280,7 +305,8 @@ fn expand_command_alias(
                 }
                 Rule::pipe_command => {
                     buf.push("|".to_string());
-                    let args = expand_alias_tilde(inner_pair, &environment.borrow().alias);
+                    let args =
+                        expand_alias_tilde(inner_pair, &environment.borrow().alias, current_dir)?;
                     for arg in args {
                         if let Some(val) = environment.borrow().variables.get(&arg) {
                             buf.push(val.trim().to_string());

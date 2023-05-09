@@ -47,6 +47,7 @@ xid.workspace = true
 bincode.workspace = true
 
 clap = { version="4", features = ["derive"] }
+globmatch = "0.2"
 regex = "1.5"
 toml = "0.7"
 chrono = "0.4"

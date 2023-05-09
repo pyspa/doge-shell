@@ -118,7 +118,7 @@ fn search_inner_word(pair: Pair<Rule>, pos: usize) -> Option<Span> {
                 }
             }
         }
-        Rule::word | Rule::variable => {
+        Rule::word | Rule::glob_word | Rule::variable => {
             let pair_span = pair.as_span();
             if pair_span.start() < pos && pos <= pair_span.end() {
                 return Some(pair_span);
@@ -134,6 +134,7 @@ fn expand_alias_tilde(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Vec<
 
     match pair.as_rule() {
         Rule::word
+        | Rule::glob_word
         | Rule::variable
         | Rule::s_quoted
         | Rule::d_quoted
@@ -208,6 +209,7 @@ fn expand_alias_tilde(pair: Pair<Rule>, alias: &HashMap<String, String>) -> Vec<
                         }
                     }
                     Rule::word
+                    | Rule::glob_word
                     | Rule::variable
                     | Rule::s_quoted
                     | Rule::d_quoted
@@ -411,6 +413,7 @@ fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {
             }
         }
         Rule::word
+        | Rule::glob_word
         | Rule::variable
         | Rule::literal_s_quoted
         | Rule::literal_d_quoted
@@ -764,7 +767,7 @@ mod test {
     }
 
     #[test]
-    fn test_get_pos_word() -> Result<()> {
+    fn test_get_pos_word1() -> Result<()> {
         let input = "sudo git st aaa &";
         let res = get_pos_word(input, 1)?;
         assert_eq!("sudo", res.unwrap().1.as_str());
@@ -783,6 +786,16 @@ mod test {
         let res = get_pos_word(input, 15)?;
         assert_eq!("docker", res.unwrap().1.as_str());
         assert_eq!(Rule::argv0, res.unwrap().0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_pos_word2() -> Result<()> {
+        let input = "mv *.toml ";
+        let res = get_pos_word(input, 9)?;
+        println!("{:?}", res.unwrap().0);
+        assert_eq!("*.toml", res.unwrap().1.as_str());
 
         Ok(())
     }

@@ -144,11 +144,7 @@ impl ShellProxy for Shell {
     }
 
     fn get_var(&mut self, key: &str) -> Option<String> {
-        self.environment
-            .borrow()
-            .variables
-            .get(key)
-            .map(|val| val.to_string())
+        self.environment.borrow().get_var(key)
     }
 
     fn set_var(&mut self, key: String, value: String) {

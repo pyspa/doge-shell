@@ -108,6 +108,23 @@ impl Environment {
         }
         self.paths = paths;
     }
+
+    pub fn get_var(&self, key: &str) -> Option<String> {
+        let val = self.variables.get(key);
+        if val.is_some() {
+            return val.map(|x| x.to_string());
+        }
+
+        if key.starts_with("$") {
+            // expand env var
+            match std::env::var(&key[1..]) {
+                Ok(val) => Some(val),
+                Err(_) => None,
+            }
+        } else {
+            None
+        }
+    }
 }
 
 impl std::fmt::Debug for Environment {

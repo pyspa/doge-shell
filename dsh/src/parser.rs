@@ -284,7 +284,7 @@ fn expand_command_alias(
                     let args =
                         expand_alias_tilde(inner_pair, &environment.borrow().alias, current_dir)?;
                     for arg in args {
-                        if let Some(val) = environment.borrow().variables.get(&arg) {
+                        if let Some(val) = environment.borrow().get_var(&arg) {
                             buf.push(val.trim().to_string());
                         } else {
                             buf.push(arg);
@@ -295,7 +295,7 @@ fn expand_command_alias(
                     let args =
                         expand_alias_tilde(inner_pair, &environment.borrow().alias, current_dir)?;
                     for arg in args {
-                        if let Some(val) = environment.borrow().variables.get(&arg) {
+                        if let Some(val) = environment.borrow().get_var(&arg) {
                             buf.push(val.trim().to_string());
                         } else {
                             buf.push(arg);
@@ -308,7 +308,7 @@ fn expand_command_alias(
                     let args =
                         expand_alias_tilde(inner_pair, &environment.borrow().alias, current_dir)?;
                     for arg in args {
-                        if let Some(val) = environment.borrow().variables.get(&arg) {
+                        if let Some(val) = environment.borrow().get_var(&arg) {
                             buf.push(val.trim().to_string());
                         } else {
                             buf.push(arg);

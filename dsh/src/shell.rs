@@ -106,7 +106,7 @@ impl Shell {
     }
 
     pub fn install_chpwd_hooks(&mut self) {
-        self.chpwd_hooks.push(chpwd_debug);
+        self.chpwd_hooks.push(chpwd_update_env);
         self.chpwd_hooks.push(check_direnv);
     }
 
@@ -499,8 +499,9 @@ impl Shell {
     // }
 }
 
-fn chpwd_debug(pwd: &Path, _env: Rc<RefCell<Environment>>) -> Result<()> {
+fn chpwd_update_env(pwd: &Path, _env: Rc<RefCell<Environment>>) -> Result<()> {
     debug!("chpwd {:?}", pwd);
+    std::env::set_var("PWD", pwd);
     Ok(())
 }
 

@@ -126,7 +126,6 @@ pub fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError
     }
     let input = cmd_args.join(" ");
 
-    debug!("var {:?}", &env.borrow().shell_env.borrow().variables);
     let mut shell = Shell::new(Rc::clone(&env.borrow().shell_env));
     shell.set_signals();
     let shell_tmode = match tcgetattr(0) {

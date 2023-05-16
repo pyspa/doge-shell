@@ -59,7 +59,14 @@ impl LispEngine {
 
     pub fn run_func(&self, name: &str, args: Vec<String>) -> anyhow::Result<Value> {
         // to args
-        let args: Vec<Value> = args.iter().map(|x| Value::String(x.to_string())).collect();
+        let mut args: Vec<Value> = args.iter().map(|x| Value::String(x.to_string())).collect();
+        // get func
+        let func = self.run(name)?;
+        if let Value::Lambda(lambda) = func {
+            while lambda.argnames.len() > args.len() {
+                args.push(Value::String("".to_string()));
+            }
+        }
         // apply
         self.run_func_values(name, args)
     }
@@ -67,6 +74,7 @@ impl LispEngine {
     pub fn run_func_values(&self, name: &str, args: Vec<Value>) -> anyhow::Result<Value> {
         // get func
         let func = self.run(name)?;
+
         // apply
         let res = func.apply(self.env.clone(), args)?;
 
@@ -132,6 +140,7 @@ impl Applicable for Value {
         match self {
             val @ Value::Lambda(_) => {
                 let params = List::from_iter(args);
+
                 eval(env, &Value::List(params.cons(val.clone())))
             }
             _ => Ok(Value::NIL),

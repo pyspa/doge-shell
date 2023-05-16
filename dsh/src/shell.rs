@@ -88,7 +88,7 @@ impl Shell {
         if let Err(err) = lisp_engine.borrow().run_config_lisp() {
             eprintln!("failed load init lisp {err:?}");
         }
-        debug!("dump environment {:?}", environment);
+
         let chpwd_hooks: Vec<CommandHook> = Vec::new();
 
         Shell {

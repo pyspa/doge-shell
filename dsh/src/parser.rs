@@ -17,14 +17,14 @@ pub struct ShellParser;
 /// helpers
 pub fn get_string(pair: Pair<Rule>) -> Option<String> {
     match pair.as_rule() {
-        Rule::s_quoted => pair
-            .into_inner()
-            .next()
-            .map(|next| next.as_str().to_string()),
-        Rule::d_quoted => pair
-            .into_inner()
-            .next()
-            .map(|next| next.as_str().to_string()),
+        Rule::s_quoted | Rule::d_quoted => {
+            let res = if let Some(next) = pair.into_inner().next() {
+                next.as_str().to_string()
+            } else {
+                "".to_string()
+            };
+            Some(res)
+        }
         Rule::span => get_string(pair.into_inner().next().unwrap()), // TODO fix
         _ => Some(pair.as_str().to_string()),
     }
@@ -285,7 +285,12 @@ fn expand_command_alias(
                         expand_alias_tilde(inner_pair, &environment.borrow().alias, current_dir)?;
                     for arg in args {
                         if let Some(val) = environment.borrow().get_var(&arg) {
-                            buf.push(val.trim().to_string());
+                            if val.is_empty() {
+                                buf.push("\"\"".to_string());
+                            } else {
+                                let val = val.trim().to_string();
+                                buf.push(val);
+                            }
                         } else {
                             buf.push(arg);
                         }
@@ -296,7 +301,12 @@ fn expand_command_alias(
                         expand_alias_tilde(inner_pair, &environment.borrow().alias, current_dir)?;
                     for arg in args {
                         if let Some(val) = environment.borrow().get_var(&arg) {
-                            buf.push(val.trim().to_string());
+                            if val.is_empty() {
+                                buf.push("\"\"".to_string());
+                            } else {
+                                let val = val.trim().to_string();
+                                buf.push(val);
+                            }
                         } else {
                             buf.push(arg);
                         }
@@ -309,7 +319,12 @@ fn expand_command_alias(
                         expand_alias_tilde(inner_pair, &environment.borrow().alias, current_dir)?;
                     for arg in args {
                         if let Some(val) = environment.borrow().get_var(&arg) {
-                            buf.push(val.trim().to_string());
+                            if val.is_empty() {
+                                buf.push("\"\"".to_string());
+                            } else {
+                                let val = val.trim().to_string();
+                                buf.push(val);
+                            }
                         } else {
                             buf.push(arg);
                         }
@@ -614,6 +629,36 @@ mod test {
             // assert_eq!("-vvv", argv[3].0);
             // assert_eq!("--foo", argv[4].0);
         }
+    }
+
+    #[test]
+    fn parse_simple_command4() {
+        let pairs = ShellParser::parse(Rule::simple_command, r#"sk -q "" "#)
+            .unwrap_or_else(|e| panic!("{}", e));
+
+        let mut v = vec![];
+        for pair in pairs {
+            assert_eq!(Rule::simple_command, pair.as_rule());
+            let count = pair.clone().into_inner().count();
+            assert_eq!(2, count);
+
+            for pair in pair.into_inner() {
+                if let Rule::args = pair.as_rule() {
+                    for pair in pair.into_inner() {
+                        debug!("arg:'{}'", pair.as_str());
+                        v.push(pair.as_str().to_string());
+                    }
+                }
+            }
+            // assert_eq!(5, argv.len());
+            // assert_eq!("echo", argv[0].0);
+            // assert_eq!("abc", argv[1].0);
+            // assert_eq!(" test", argv[2].0);
+            // assert_eq!("-vvv", argv[3].0);
+            // assert_eq!("--foo", argv[4].0);
+        }
+
+        debug!("{}", v.join(" "));
     }
 
     #[test]

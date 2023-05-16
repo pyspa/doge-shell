@@ -146,6 +146,7 @@ impl std::fmt::Debug for JobProcess {
             JobProcess::Command(jprocess) => f
                 .debug_struct("JobProcess::Command")
                 .field("cmd", &jprocess.cmd)
+                .field("argv", &jprocess.argv)
                 .field("pid", &jprocess.pid)
                 .field("stdin", &jprocess.stdin)
                 .field("stdout", &jprocess.stdout)
@@ -508,7 +509,6 @@ impl Process {
             .argv
             .clone()
             .into_iter()
-            .filter(|a| !a.is_empty())
             .map(|a| CString::new(a).expect("failed new CString"))
             .collect();
 

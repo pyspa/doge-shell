@@ -125,6 +125,13 @@ impl WaitJob {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListOp {
+    None,
+    And,
+    Or,
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub enum JobProcess {
     Builtin(BuiltinProcess),
@@ -556,6 +563,7 @@ pub struct Job {
     pub need_wait: bool,
     pub subshell: bool,
     pub redirect: Option<Redirect>,
+    pub list_op: ListOp,
 }
 
 impl Job {
@@ -577,6 +585,7 @@ impl Job {
             need_wait: false,
             subshell: false,
             redirect: None,
+            list_op: ListOp::None,
         }
     }
 
@@ -597,6 +606,7 @@ impl Job {
             need_wait: false,
             subshell: false,
             redirect: None,
+            list_op: ListOp::None,
         }
     }
 

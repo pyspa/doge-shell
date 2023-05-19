@@ -46,11 +46,16 @@ redirect = { (stdouterr_redirect_direction | stderr_redirect_direction | stdout_
 span = { quoted | word | glob_word | variable | subshell }
 argv0 = { span }
 args = { (sp* ~ (redirect|span))+ }
-background = _{ "&" }
-pipeline = _{ "|" }
-command_list_sep = { ";" }
+
+background_op = _{ !("&&") ~ "&" }
+pipeline_op = _{ "|" }
+sequential_op = { ";" }
+and_op = { "&&" }
+or_op = { "||" }
+
+command_list_sep = { sequential_op | and_op | or_op }
 simple_command = { sp* ~ argv0 ~ args* }
-simple_command_bg = { simple_command ~ sp* ~ background}
-pipe_command = { pipeline ~ sp* ~ (simple_command_bg|simple_command) ~ sp* }
+simple_command_bg = { simple_command ~ sp* ~ background_op}
+pipe_command = { pipeline_op ~ sp* ~ (simple_command_bg|simple_command) ~ sp* }
 command = { (sp* ~ simple_command_bg|simple_command)* ~ sp* ~ pipe_command* }
 commands = { (sp* ~ command) ~ (command_list_sep ~ sp* ~ command)*   }

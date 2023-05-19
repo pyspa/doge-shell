@@ -149,7 +149,7 @@ impl Shell {
         // let tmode = tcgetattr(0).expect("failed tcgetattr");
 
         let jobs = self.get_jobs(input)?;
-
+        let mut last_exit_code = 0;
         for mut job in jobs {
             disable_raw_mode().ok();
             if force_background {
@@ -158,14 +158,15 @@ impl Shell {
             }
 
             debug!(
-                "start job:'{:?}' foreground:{:?} redirect:{:?}",
-                job.cmd, job.foreground, job.redirect
+                "start job:'{:?}' foreground:{:?} redirect:{:?} list_op:{:?}",
+                job.cmd, job.foreground, job.redirect, job.list_op,
             );
 
             if let process::ProcessState::Completed(exit) = job.launch(ctx, self)? {
-                debug!("job exit code {:?}", exit);
-                if exit != 0 {
-                    return Ok(ExitCode::from(exit));
+                debug!("job '{}' exit code {:?}", job.cmd, exit);
+                last_exit_code = exit;
+                if job.list_op == process::ListOp::And && exit != 0 {
+                    break;
                 }
             } else {
                 // Stop next job
@@ -173,7 +174,8 @@ impl Shell {
             enable_raw_mode().ok();
         }
 
-        Ok(ExitCode::from(0))
+        enable_raw_mode().ok();
+        Ok(ExitCode::from(last_exit_code))
     }
 
     fn get_jobs(&mut self, input: String) -> Result<Vec<Job>> {
@@ -311,8 +313,20 @@ impl Shell {
                 match pair.as_rule() {
                     Rule::command => self.parse_jobs(ctx, pair, &mut jobs)?,
                     Rule::command_list_sep => {
-                        // TODO keep separator type
-                        // simple list
+                        if let Some(sep) = pair.into_inner().next() {
+                            if let Some(ref mut last) = jobs.last_mut() {
+                                debug!("{:?}", &last);
+                                match sep.as_rule() {
+                                    Rule::and_op => {
+                                        last.list_op = process::ListOp::And;
+                                    }
+                                    Rule::or_op => {
+                                        last.list_op = process::ListOp::Or;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
                     }
                     _ => {
                         debug!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
@@ -321,6 +335,7 @@ impl Shell {
             }
         }
 
+        debug!("jobs {}", jobs.len());
         Ok(jobs)
     }
 
@@ -345,7 +360,7 @@ impl Shell {
                 if let Ok(process::ProcessState::Completed(exit)) = job.launch(ctx, self) {
                     if exit != 0 {
                         // TODO check
-                        debug!("\rjob exit code {:?}", exit);
+                        debug!("job exit code {:?}", exit);
                     }
                     std::process::exit(exit as i32);
                 } else {
@@ -426,7 +441,11 @@ impl Shell {
         let job_str = pair.as_str().to_string();
 
         for inner_pair in pair.into_inner() {
-            debug!("{:?} {:?}", inner_pair.as_rule(), inner_pair.as_str());
+            debug!(
+                "find {:?}:'{:?}'",
+                inner_pair.as_rule(),
+                inner_pair.as_str()
+            );
             match inner_pair.as_rule() {
                 Rule::simple_command => {
                     let mut job = Job::new(job_str.clone());

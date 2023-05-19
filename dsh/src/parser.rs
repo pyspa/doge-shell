@@ -1,6 +1,5 @@
 use crate::environment::Environment;
 use anyhow::{anyhow, ensure, Result};
-use globmatch;
 use pest::iterators::Pair;
 use pest::Parser;
 use pest::Span;
@@ -173,7 +172,7 @@ fn expand_alias_tilde(
                 for (i, arg) in v.iter().enumerate() {
                     if i == 0 {
                         if let Some(val) = alias.get(arg) {
-                            debug!("replaced alias {arg} to {val}");
+                            debug!("alias '{arg}' => '{val}'");
                             argv.push(val.trim().to_string());
                         } else {
                             argv.push(arg.trim().to_string());
@@ -208,7 +207,7 @@ fn expand_alias_tilde(
                             for (i, arg) in v.iter().enumerate() {
                                 if i == 0 {
                                     if let Some(val) = alias.get(arg) {
-                                        debug!("replaced alias {arg} to {val}");
+                                        debug!("alias '{arg}' => '{val}'");
                                         argv.push(val.trim().to_string());
                                     } else {
                                         argv.push(arg.trim().to_string());

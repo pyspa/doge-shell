@@ -137,7 +137,7 @@ impl Shell {
         &mut self,
         ctx: &mut Context,
         input: String,
-        background: bool,
+        force_background: bool,
     ) -> Result<ExitCode> {
         if ctx.save_history {
             if let Some(ref mut history) = self.cmd_history {
@@ -152,7 +152,7 @@ impl Shell {
 
         for mut job in jobs {
             disable_raw_mode().ok();
-            if background {
+            if force_background {
                 // all job run background
                 job.foreground = false;
             }
@@ -426,6 +426,7 @@ impl Shell {
         let job_str = pair.as_str().to_string();
 
         for inner_pair in pair.into_inner() {
+            debug!("{:?} {:?}", inner_pair.as_rule(), inner_pair.as_str());
             match inner_pair.as_rule() {
                 Rule::simple_command => {
                     let mut job = Job::new(job_str.clone());
@@ -444,6 +445,7 @@ impl Shell {
                             self.parse_command(ctx, &mut job, bg_pair)?;
                             if job.process.is_some() {
                                 job.subshell = ctx.subshell;
+                                job.foreground = false; // background
                                 jobs.push(job);
                             }
                             break;
@@ -466,7 +468,13 @@ impl Shell {
                         }
                     }
                 }
-                _ => {}
+                _ => {
+                    warn!(
+                        "missing rule {:?} {:?}",
+                        inner_pair.as_rule(),
+                        inner_pair.as_str()
+                    );
+                }
             }
         }
         Ok(())

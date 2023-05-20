@@ -173,6 +173,39 @@ pub fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError
     Ok(Value::String(output))
 }
 
+pub fn sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let mut cmd_args: Vec<String> = Vec::new();
+
+    for arg in args {
+        let val = arg.to_string();
+        cmd_args.push(val);
+    }
+    let input = cmd_args.join(" ");
+
+    let mut shell = Shell::new(Rc::clone(&env.borrow().shell_env));
+    shell.set_signals();
+    let shell_tmode = match tcgetattr(0) {
+        Ok(tmode) => tmode,
+        Err(err) => {
+            eprintln!("error: {}", err);
+            return Err(RuntimeError {
+                msg: err.to_string(),
+            });
+        }
+    };
+
+    let mut ctx = Context::new(shell.pid, shell.pgid, shell_tmode, true);
+    // ctx.captured_out = Some(pin);
+    if let Err(err) = shell.eval_str(&mut ctx, input, false) {
+        eprintln!("error: {}", err);
+        return Err(RuntimeError {
+            msg: err.to_string(),
+        });
+    }
+
+    Ok(Value::NIL)
+}
+
 #[cfg(test)]
 mod test {
 

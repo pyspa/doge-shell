@@ -3,6 +3,7 @@ use anyhow::Result;
 use crossterm::style::{Color, Stylize};
 use pest::Span;
 use std::cmp::min;
+use std::io::{BufWriter, StdoutLock, Write};
 
 #[derive(Debug, Clone)]
 pub struct Input {
@@ -133,7 +134,9 @@ impl Input {
         parser::get_words(self.input.as_str(), self.cursor)
     }
 
-    pub fn print(&self, fg_color: Color) {
+    pub fn print(&self, out: &mut StdoutLock<'static>, fg_color: Color) {
+        let mut out = BufWriter::new(out);
+
         if let Some(match_index) = &self.match_index {
             let mut index_iter = match_index.iter();
             let mut match_index = index_iter.next();
@@ -149,10 +152,12 @@ impl Input {
                 } else {
                     Color::White
                 };
-                print!("{}", ch.with(color));
+
+                out.write_fmt(format_args!("{}", ch.with(color))).ok();
             }
         } else {
-            print!("{}", self.as_str().with(fg_color));
+            out.write_fmt(format_args!("{}", self.as_str().with(fg_color)))
+                .ok();
         }
     }
 }

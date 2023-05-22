@@ -1,6 +1,5 @@
 use crossterm::style::Stylize;
-
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, BufWriter, StdoutLock, Write};
 use std::process::Command;
 
 // TODO stash, rename, delete
@@ -15,37 +14,40 @@ const MODIFIED: &str = "!";
 const NEW_FILE: &str = "+";
 
 //
-pub fn print_preprompt() {
-    // let (branch, git) = get_git_branch();
+pub fn print_preprompt(out: &mut StdoutLock<'static>) {
     let status = get_git_status();
     let has_git = status.is_some();
 
     let (path, _is_git_root) = get_cwd();
 
-    print!("{}", "\r".reset());
+    let mut out = BufWriter::new(out);
+    out.write_fmt(format_args!("{}", "\r".reset())).ok();
 
     if has_git {
-        print!("{}", path.cyan());
+        out.write_fmt(format_args!("{}", path.cyan())).ok();
     } else {
-        print!("{}", path.white());
+        out.write_fmt(format_args!("{}", path.white())).ok();
     }
+
     if let Some(git_status) = status {
-        print!(" {} ", "on".reset());
-        print!(
+        out.write_fmt(format_args!(" {} ", "on".reset())).ok();
+        out.write_fmt(format_args!(
             "{}",
-            format!("{} {}", BRANCH_MARK, git_status.branch).magenta()
-        );
+            format!("{} {}", BRANCH_MARK, git_status.branch).magenta(),
+        ))
+        .ok();
         if git_status.branch_status.is_some() {
-            print!(
+            out.write_fmt(format_args!(
                 "{}",
                 format!(" [{}]", git_status.branch_status.unwrap())
                     .bold()
                     .red()
-            );
+            ))
+            .ok();
         }
-        print!("{}", "\r\n".reset());
+        out.write_fmt(format_args!("{}", "\r\n".reset(),)).ok();
     } else {
-        print!("{}", "\r\n".reset());
+        out.write_fmt(format_args!("{}", "\r\n".reset(),)).ok();
     }
 }
 

@@ -17,7 +17,7 @@ use futures::{future::FutureExt, select, StreamExt};
 use futures_timer::Delay;
 use nix::sys::termios::{tcgetattr, Termios};
 use nix::unistd::tcsetpgrp;
-use std::io::Write;
+use std::io::{StdoutLock, Write};
 use std::time::Duration;
 use tracing::{debug, warn};
 
@@ -76,15 +76,21 @@ impl<'a> Repl<'a> {
     }
 
     fn check_background_jobs(&mut self) {
+        let mut out = std::io::stdout().lock();
+
         // TODO thread
         if let Some((pid, _state)) = wait_any_job(true) {
             if let Some(index) = self.shell.wait_jobs.iter().position(|job| job.pid == pid) {
                 if let Some(job) = self.shell.wait_jobs.get(index) {
                     job.output();
                     // TODO fix message format
-                    print!("\r\n[{:?}] done '{}' \r\n\r", job.wait_job_id, job.cmd);
+                    out.write_fmt(format_args!(
+                        "\r\n[{:?}] done '{}' \r\n\r",
+                        job.wait_job_id, job.cmd
+                    ))
+                    .ok();
                     self.shell.wait_jobs.remove(index);
-                    self.print_prompt();
+                    self.print_prompt(&mut out);
                 }
             }
         }
@@ -99,11 +105,10 @@ impl<'a> Repl<'a> {
         }
     }
 
-    fn move_cursor_input_end(&self) {
-        let mut stdout = std::io::stdout();
+    fn move_cursor_input_end(&self, out: &mut StdoutLock<'static>) {
         let prompt_size = self.get_prompt().chars().count();
         queue!(
-            stdout,
+            out,
             ResetColor,
             cursor::MoveToColumn((prompt_size + self.input.cursor() + 1) as u16),
         )
@@ -121,11 +126,12 @@ impl<'a> Repl<'a> {
     //     .ok();
     // }
 
-    fn print_prompt(&mut self) {
+    fn print_prompt(&mut self, out: &mut StdoutLock<'static>) {
         let prompt = self.get_prompt();
-        print_preprompt();
-        print!("\r{}", prompt);
-        std::io::stdout().flush().ok();
+        print_preprompt(out);
+        out.write(b"\r").ok();
+        out.write(prompt.as_bytes()).ok();
+        out.flush().ok();
     }
 
     fn stop_history_mode(&mut self) {
@@ -176,10 +182,8 @@ impl<'a> Repl<'a> {
         None
     }
 
-    pub fn print_input(&mut self, reset_completion: bool) {
-        let mut stdout = std::io::stdout();
-
-        queue!(stdout, cursor::Hide).ok();
+    pub fn print_input(&mut self, out: &mut StdoutLock<'static>, reset_completion: bool) {
+        queue!(out, cursor::Hide).ok();
         let input = self.input.to_string();
         let prompt = self.get_prompt().chars().count();
 
@@ -254,29 +258,29 @@ impl<'a> Repl<'a> {
         self.input.can_execute = can_execute;
 
         queue!(
-            stdout,
+            out,
             Print("\r"),
             cursor::MoveRight((prompt + 1) as u16),
             Clear(ClearType::UntilNewLine),
         )
         .ok();
 
-        self.input.print(fg_color);
+        self.input.print(out, fg_color);
 
-        self.move_cursor_input_end();
+        self.move_cursor_input_end(out);
 
         if let Some(completion) = completion {
-            print!("{}", completion.dark_grey());
-            self.move_cursor_input_end();
+            out.write_fmt(format_args!("{}", completion.dark_grey()))
+                .ok();
+            self.move_cursor_input_end(out);
         }
-        queue!(stdout, cursor::Show).ok();
-
-        stdout.flush().ok();
+        queue!(out, cursor::Show).ok();
     }
 
     fn handle_key_event(&mut self, ev: &KeyEvent) -> Result<()> {
         let mut redraw = true;
         let mut reset_completion = false;
+
         match (ev.code, ev.modifiers) {
             // history
             (KeyCode::Up, NONE) => {
@@ -306,11 +310,11 @@ impl<'a> Repl<'a> {
             }
             (KeyCode::Left, NONE) => {
                 if self.input.cursor() > 0 {
+                    let mut out = std::io::stdout().lock();
                     self.input.completion = None;
                     self.input.move_by(-1);
-                    let mut stdout = std::io::stdout();
-                    queue!(stdout, cursor::MoveLeft(1)).ok();
-                    stdout.flush().ok();
+                    queue!(out, cursor::MoveLeft(1)).ok();
+                    out.flush().ok();
                     self.completion.clear();
                 }
                 return Ok(());
@@ -323,10 +327,10 @@ impl<'a> Repl<'a> {
             }
             (KeyCode::Right, NONE) => {
                 if self.input.cursor() < self.input.len() {
+                    let mut out = std::io::stdout().lock();
                     self.input.move_by(1);
-                    let mut stdout = std::io::stdout();
-                    queue!(stdout, cursor::MoveRight(1)).ok();
-                    stdout.flush().ok();
+                    queue!(out, cursor::MoveRight(1)).ok();
+                    out.flush().ok();
                     self.completion.clear();
                 }
                 return Ok(());
@@ -406,19 +410,18 @@ impl<'a> Repl<'a> {
                 self.input.move_to_begin();
             }
             (KeyCode::Char('c'), CTRL) => {
-                execute!(std::io::stdout(), Print("\r\n")).ok();
-                self.print_prompt();
+                let mut out = std::io::stdout().lock();
+                execute!(out, Print("\r\n")).ok();
+                self.print_prompt(&mut out);
                 self.input.clear();
+                return Ok(());
             }
             (KeyCode::Char('l'), CTRL) => {
-                execute!(
-                    std::io::stdout(),
-                    Clear(ClearType::All),
-                    cursor::MoveTo(0, 0)
-                )
-                .ok();
-                self.print_prompt();
+                let mut out = std::io::stdout().lock();
+                execute!(out, Clear(ClearType::All), cursor::MoveTo(0, 0)).ok();
+                self.print_prompt(&mut out);
                 self.input.clear();
+                return Ok(());
             }
             (KeyCode::Char('d'), CTRL) => {
                 self.shell.exit();
@@ -432,11 +435,13 @@ impl<'a> Repl<'a> {
             }
         }
 
+        let mut out = std::io::stdout().lock();
         if redraw {
-            self.print_input(reset_completion);
+            self.print_input(&mut out, reset_completion);
         } else {
-            self.print_prompt();
+            self.print_prompt(&mut out);
         }
+        out.flush().ok();
         Ok(())
     }
 
@@ -451,9 +456,10 @@ impl<'a> Repl<'a> {
         );
         let _ = tcsetpgrp(SHELL_TERMINAL, self.shell.pgid).context("failed tcsetpgrp");
         self.tmode = Some(tcgetattr(SHELL_TERMINAL).expect("failed cgetattr"));
+        let mut out = std::io::stdout().lock();
 
         // start repl loop
-        self.print_prompt();
+        self.print_prompt(&mut out);
 
         loop {
             let mut save_history_delay = Delay::new(Duration::from_millis(10_000)).fuse();

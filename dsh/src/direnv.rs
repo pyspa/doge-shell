@@ -1,6 +1,7 @@
 use crate::environment::Environment;
 use anyhow::Result;
 use std::fs;
+use std::io::{BufWriter, StdoutLock, Write};
 use std::path::{Path, PathBuf};
 use std::{cell::RefCell, rc::Rc};
 
@@ -41,7 +42,7 @@ impl DirEnvironment {
         })
     }
 
-    pub fn set_env(&self) -> Result<()> {
+    pub fn set_env(&self, out: &mut BufWriter<StdoutLock>) -> Result<()> {
         if self.loaded {
             return Ok(());
         }
@@ -51,7 +52,8 @@ impl DirEnvironment {
             match entry {
                 Entry::Env(env_entry) => {
                     std::env::set_var(&env_entry.key, &env_entry.value);
-                    print!("+{} ", &env_entry.key);
+                    out.write_fmt(format_args!("+{} ", &env_entry.key)).ok();
+                    // print!("+{} ", &env_entry.key);
                 }
                 Entry::PathAdd(path_entry) => {
                     let mut path = path_entry.path.clone();
@@ -154,23 +156,29 @@ fn read_envrc_config_file(file: &str) -> Result<Vec<Entry>> {
 pub fn check_path(pwd: &Path, environment: Rc<RefCell<Environment>>) -> Result<()> {
     let environment = &mut environment.borrow_mut();
     let entries = &mut environment.direnv_roots;
+    let out = std::io::stdout().lock();
+    let mut out = BufWriter::new(out);
+
     for mut env in entries {
         if pwd.starts_with(&env.path) {
             if !env.loaded {
                 env.read_env_file()?;
-                println!("direnv: loading {}", env.path);
-                print!("direnv: export ");
-                env.set_env()?;
-                println!();
+                out.write_fmt(format_args!("direnv: loading {}\n", env.path))
+                    .ok();
+                out.write(b"direnv: export ").ok();
+                env.set_env(&mut out)?;
+                out.write(b"\n").ok();
                 env.loaded = true;
             }
             // env.set_env();
         } else if env.loaded {
-            println!("direnv: unloading {}", env.path);
+            out.write_fmt(format_args!("direnv: unloading {}\n", env.path))
+                .ok();
             env.remove_env();
             env.loaded = false;
         }
     }
+    out.flush().ok();
     environment.reload_path();
     Ok(())
 }

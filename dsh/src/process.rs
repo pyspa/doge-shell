@@ -12,7 +12,7 @@ use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{close, dup2, execv, fork, getpid, pipe, setpgid, tcsetpgrp, ForkResult, Pid};
 use std::ffi::CString;
 use std::fmt::Debug;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::unix::io::FromRawFd;
 use std::os::unix::io::RawFd;
 use tracing::{debug, error};
@@ -90,11 +90,13 @@ impl WaitJob {
         if let Some(fd) = self.stdout {
             let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
             let mut buf = String::new();
+            let mut out = std::io::stdout().lock();
+
             match file.read_to_string(&mut buf) {
                 Ok(size) => {
                     if size > 0 {
                         disable_raw_mode().ok();
-                        print!("{}", buf);
+                        out.write(buf.as_bytes()).ok();
                         enable_raw_mode().ok();
                     }
                 }

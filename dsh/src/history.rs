@@ -494,9 +494,9 @@ mod test {
         history.add("git checkout");
 
         let vec = history.sort_by_match("gsta");
-
+        let mut out = std::io::stdout().lock();
         for item in vec {
-            item.print();
+            item.print(&mut out);
         }
 
         Ok(())

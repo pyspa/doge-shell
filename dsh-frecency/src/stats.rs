@@ -2,6 +2,7 @@ use super::*;
 use crossterm::style::{Color, Stylize};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
+use std::io::{StdoutLock, Write};
 
 /// A representation of statistics for a single item
 #[derive(Debug, Clone)]
@@ -131,7 +132,7 @@ impl ItemStats {
         }
     }
 
-    pub fn print(&self) {
+    pub fn print(&self, out: &mut StdoutLock<'static>) {
         let mut index_iter = self.match_index.iter();
         let mut match_index = index_iter.next();
 
@@ -146,7 +147,8 @@ impl ItemStats {
             } else {
                 Color::White
             };
-            print!("{}", ch.with(color));
+
+            out.write_fmt(format_args!("{}", ch.with(color))).ok();
         }
     }
 }

@@ -39,3 +39,10 @@ xid = "1"
 wasmer = "3.1.1"
 wasmer-compiler-cranelift = "3.1.1"
 wasmer-wasi = "3.1.1"
+
+[profile.dev]
+# https://jakedeichert.com/blog/reducing-rust-incremental-compilation-times-on-macos-by-70-percent/
+split-debuginfo = "unpacked"
+lto = false
+incremental = true
+opt-level = 0

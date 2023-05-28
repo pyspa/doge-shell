@@ -1,6 +1,8 @@
 use anyhow::Result;
+use nix::fcntl::{flock, FlockArg};
 use std::fs::{create_dir_all, File};
 use std::io::{BufReader, BufWriter};
+use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 use std::process;
 use std::time::SystemTime;
@@ -42,6 +44,8 @@ pub fn write_store(store: &FrecencyStore, path: &PathBuf) -> Result<()> {
     let store_dir = path.parent().expect("file must have parent");
     create_dir_all(store_dir)?;
     let file = File::create(path)?;
+    let fd = file.as_raw_fd();
+    flock(fd, FlockArg::LockExclusive)?;
     let writer = BufWriter::new(file);
     bincode::serialize_into(writer, &FrecencyStoreSerializer::from(store))?;
     Ok(())

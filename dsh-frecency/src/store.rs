@@ -6,6 +6,8 @@ pub struct FrecencyStore {
     pub reference_time: f64,
     pub half_life: f32,
     pub items: Vec<ItemStats>,
+    pub size: usize,
+    pub changed: bool,
 }
 
 impl Default for FrecencyStore {
@@ -14,6 +16,8 @@ impl Default for FrecencyStore {
             reference_time: current_time_secs(),
             half_life: 60.0 * 60.0 * 12.0 * 1.0,
             items: Vec::new(),
+            size: 0,
+            changed: false,
         }
     }
 }
@@ -59,6 +63,14 @@ impl FrecencyStore {
         item_stats.update_frecency(1.0);
         item_stats.update_num_accesses(1);
         item_stats.update_last_access(current_time_secs());
+
+        self.check_changed();
+    }
+
+    pub fn check_changed(&mut self) {
+        let changed = self.size != self.items.len();
+        self.size = self.items.len();
+        self.changed = changed;
     }
 
     /// Adjust the score of a item by a given weight
@@ -74,6 +86,7 @@ impl FrecencyStore {
         if let Some(idx) = self.items.iter().position(|i| i.item == item) {
             self.items.remove(idx);
         }
+        self.check_changed();
     }
 
     /// Return a sorted vector of all the items in the store, sorted by `sort_method`
@@ -133,10 +146,13 @@ impl From<&FrecencyStoreSerializer> for FrecencyStore {
             .map(|s| s.to_item_stats(ref_time, half_life))
             .collect();
 
+        let size = items.len();
         FrecencyStore {
             reference_time: store.reference_time,
             half_life: store.half_life,
             items,
+            size,
+            changed: false,
         }
     }
 }

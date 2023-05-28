@@ -335,10 +335,11 @@ impl FrecencyHistory {
     pub fn save(&mut self) -> Result<()> {
         let file_path = self.path.clone().unwrap();
         if let Some(ref store) = self.store {
-            write_store(store, &file_path)
-        } else {
-            Ok(())
+            if store.changed {
+                return write_store(store, &file_path);
+            }
         }
+        Ok(())
     }
 
     pub fn add(&mut self, history: &str) {

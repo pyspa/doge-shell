@@ -98,10 +98,12 @@ impl<'a> Repl<'a> {
 
     fn save_history(&mut self) {
         if let Some(ref mut history) = self.shell.cmd_history {
-            let _ = history.save();
+            let mut history = history.lock().unwrap();
+            history.save().expect("failed save cmd history");
         }
         if let Some(ref mut history) = self.shell.path_history {
-            let _ = history.save();
+            let mut history = history.lock().unwrap();
+            history.save().expect("failed save path history");
         }
     }
 
@@ -137,6 +139,7 @@ impl<'a> Repl<'a> {
     fn stop_history_mode(&mut self) {
         self.history_search = None;
         if let Some(ref mut history) = self.shell.cmd_history {
+            let mut history = history.lock().unwrap();
             history.search_word = None;
             history.reset_index();
         }
@@ -144,6 +147,7 @@ impl<'a> Repl<'a> {
 
     fn set_completions(&mut self) {
         if let Some(ref mut history) = self.shell.cmd_history {
+            let history = history.lock().unwrap();
             let comps = if self.input.is_empty() {
                 history.sorted(&dsh_frecency::SortMethod::Recent)
             } else {
@@ -172,6 +176,7 @@ impl<'a> Repl<'a> {
 
     fn get_completion_from_history(&mut self, input: &str) -> Option<String> {
         if let Some(ref mut history) = self.shell.cmd_history {
+            let history = history.lock().unwrap();
             if let Some(entry) = history.search_prefix(input) {
                 self.input.completion = Some(entry.clone());
                 if entry.len() >= input.len() {
@@ -467,8 +472,22 @@ impl<'a> Repl<'a> {
             let mut event = reader.next().fuse();
             select! {
                 _ = save_history_delay => {
-                    self.save_history();
+                    if let Some(ref mut history) = self.shell.path_history {
+                        let history = history.clone();
+                        async_std::task::spawn(async move{
+                            let mut history = history.lock().unwrap();
+                            history.save().expect("failed save path history");
+                        });
+                    }
+                    if let Some(ref mut history) = self.shell.cmd_history {
+                        let history = history.clone();
+                        async_std::task::spawn(async move{
+                            let mut history = history.lock().unwrap();
+                            history.save().expect("failed save cmd history");
+                        });
+                    }
                 },
+
                 _ = check_background_delay => {
                     self.check_background_jobs();
                     if self.shell.wait_jobs.is_empty() {
@@ -506,8 +525,8 @@ impl<'a> Repl<'a> {
     pub fn select_history(&mut self) {
         let query = self.input.as_str();
         if let Some(ref mut history) = self.shell.cmd_history {
+            let mut history = history.lock().unwrap();
             let histories = history.sorted(&dsh_frecency::SortMethod::Frecent);
-
             if let Some(val) = completion::select_item(
                 histories
                     .iter()

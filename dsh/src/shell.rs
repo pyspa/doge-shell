@@ -24,6 +24,7 @@ use std::os::fd::RawFd;
 use std::os::unix::io::FromRawFd;
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::{Arc, Mutex};
 use std::{cell::RefCell, rc::Rc};
 use tracing::{debug, warn};
 
@@ -51,8 +52,8 @@ pub struct Shell {
     pub exited: Option<ExitStatus>,
     pub pid: Pid,
     pub pgid: Pid,
-    pub cmd_history: Option<FrecencyHistory>,
-    pub path_history: Option<FrecencyHistory>,
+    pub cmd_history: Option<Arc<Mutex<FrecencyHistory>>>,
+    pub path_history: Option<Arc<Mutex<FrecencyHistory>>>,
     pub wait_jobs: Vec<WaitJob>,
     pub lisp_engine: Rc<RefCell<lisp::LispEngine>>,
     pub wasm_engine: WasmEngine,
@@ -82,7 +83,11 @@ impl Shell {
 
         let _ = setpgid(pgid, pgid).context("failed setpgid");
         let cmd_history = FrecencyHistory::from_file("dsh_cmd_history").unwrap();
+        let cmd_history = Arc::new(Mutex::new(cmd_history));
+
         let path_history = FrecencyHistory::from_file("dsh_path_history").unwrap();
+        let path_history = Arc::new(Mutex::new(path_history));
+
         let wasm_engine = WasmEngine::new(APP_NAME);
         let lisp_engine = lisp::LispEngine::new(Rc::clone(&environment));
         if let Err(err) = lisp_engine.borrow().run_config_lisp() {
@@ -141,6 +146,7 @@ impl Shell {
     ) -> Result<ExitCode> {
         if ctx.save_history {
             if let Some(ref mut history) = self.cmd_history {
+                let mut history = history.lock().unwrap();
                 history.add(&input);
                 history.reset_index();
             }

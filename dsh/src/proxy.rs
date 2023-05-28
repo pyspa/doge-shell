@@ -30,6 +30,7 @@ impl ShellProxy for Shell {
 
     fn save_path_history(&mut self, path: &str) {
         if let Some(ref mut history) = self.path_history {
+            let mut history = history.lock().unwrap();
             history.add(path);
         }
     }
@@ -55,6 +56,7 @@ impl ShellProxy for Shell {
             }
             "history" => {
                 if let Some(ref mut history) = self.cmd_history {
+                    let mut history = history.lock().unwrap();
                     let fd = dup(ctx.outfile).expect("failed dup");
                     let mut file = unsafe { File::from_raw_fd(fd) };
                     let vec = history.sorted(&SortMethod::Recent);
@@ -67,6 +69,8 @@ impl ShellProxy for Shell {
             "z" => {
                 let path = argv.get(1).map(|s| s.as_str()).unwrap_or("");
                 if let Some(ref mut history) = self.path_history {
+                    let history = history.clone();
+                    let history = history.lock().unwrap();
                     let results = history.sort_by_match(path);
                     if !results.is_empty() {
                         let path = &results[0].item;

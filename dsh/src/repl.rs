@@ -466,8 +466,8 @@ impl<'a> Repl<'a> {
         // start repl loop
         self.print_prompt(&mut out);
 
+        let mut save_history_delay = Delay::new(Duration::from_millis(10_000)).fuse();
         loop {
-            let mut save_history_delay = Delay::new(Duration::from_millis(10_000)).fuse();
             let mut check_background_delay = Delay::new(Duration::from_millis(500)).fuse();
             let mut event = reader.next().fuse();
             select! {
@@ -486,6 +486,7 @@ impl<'a> Repl<'a> {
                             history.save().expect("failed save cmd history");
                         });
                     }
+                    save_history_delay = Delay::new(Duration::from_millis(10_000)).fuse();
                 },
 
                 _ = check_background_delay => {

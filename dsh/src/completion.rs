@@ -616,16 +616,17 @@ pub fn unquote(s: &str) -> String {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
 
     use super::*;
 
     fn init() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
     }
 
     #[test]
     fn test_completion() -> Result<()> {
+        init();
         let p = path_completion_prefix(".")?;
         assert_eq!(None, p);
 
@@ -662,6 +663,7 @@ mod test {
     #[test]
     #[ignore]
     fn test_select_item() {
+        init();
         let mut items: Vec<Candidate> = Vec::new();
         // items.push();
         items.push(Candidate::Basic("test1".to_string()));
@@ -673,6 +675,7 @@ mod test {
 
     #[test]
     fn test_replace_space() {
+        init();
         let a = replace_space("aa     bb");
         assert_eq!(a, "aa_bb")
     }

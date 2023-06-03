@@ -475,7 +475,7 @@ fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
     use pest::Parser;
     use std::cell::RefCell;
@@ -483,7 +483,7 @@ mod test {
     use tracing::debug;
 
     fn init() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
     }
 
     type JobLink = Rc<RefCell<Job>>;
@@ -502,6 +502,7 @@ mod test {
 
     #[test]
     fn parse_word() {
+        init();
         let pairs = ShellParser::parse(Rule::word, "a1bc").unwrap_or_else(|e| panic!("{}", e));
         for pair in pairs {
             assert_eq!(Rule::word, pair.as_rule());
@@ -510,6 +511,7 @@ mod test {
 
     #[test]
     fn parse_quoted() {
+        init();
         let pairs =
             ShellParser::parse(Rule::quoted, "\'a1bc\'").unwrap_or_else(|e| panic!("{}", e));
         for pair in pairs {
@@ -526,6 +528,7 @@ mod test {
 
     #[test]
     fn parse_argv0() {
+        init();
         let pairs = ShellParser::parse(Rule::argv0, "a1bc").unwrap_or_else(|e| panic!("{}", e));
         for pair in pairs {
             assert_eq!(Rule::argv0, pair.as_rule());
@@ -534,6 +537,7 @@ mod test {
 
     #[test]
     fn parse_args1() {
+        init();
         let pairs = ShellParser::parse(Rule::args, " a1bc b2").unwrap_or_else(|e| panic!("{}", e));
         for pair in pairs {
             assert_eq!(Rule::args, pair.as_rule());
@@ -547,6 +551,7 @@ mod test {
 
     #[test]
     fn parse_args2() {
+        init();
         let pairs =
             ShellParser::parse(Rule::args, r#"echo "test""#).unwrap_or_else(|e| panic!("{}", e));
         for pair in pairs {
@@ -567,6 +572,7 @@ mod test {
 
     #[test]
     fn parse_simple_command1() {
+        init();
         let pairs = ShellParser::parse(Rule::simple_command, "test --a1bc --b2=c3  ")
             .unwrap_or_else(|e| panic!("{}", e));
         for pair in pairs {
@@ -595,6 +601,7 @@ mod test {
 
     #[test]
     fn parse_simple_command2() {
+        init();
         let pairs = ShellParser::parse(Rule::simple_command, "  test   ")
             .unwrap_or_else(|e| panic!("{}", e));
         for pair in pairs {
@@ -613,6 +620,7 @@ mod test {
 
     #[test]
     fn parse_simple_command3() {
+        init();
         let pairs = ShellParser::parse(Rule::simple_command, r#"echo abc " test" '-vvv' --foo "#)
             .unwrap_or_else(|e| panic!("{}", e));
         for pair in pairs {
@@ -632,6 +640,7 @@ mod test {
 
     #[test]
     fn parse_simple_command4() {
+        init();
         let pairs = ShellParser::parse(Rule::simple_command, r#"sk -q "" "#)
             .unwrap_or_else(|e| panic!("{}", e));
 
@@ -662,6 +671,7 @@ mod test {
 
     #[test]
     fn parse_command1() {
+        init();
         let pairs = ShellParser::parse(Rule::command, "history | sk --ansi --inline-info ")
             .unwrap_or_else(|e| panic!("{}", e));
         for pair in pairs {
@@ -689,6 +699,7 @@ mod test {
 
     #[test]
     fn parse_command2() {
+        init();
         let pairs = ShellParser::parse(Rule::command, "history|test  --a1bc --b2=c3|dd  ")
             .unwrap_or_else(|e| panic!("{}", e));
         for pair in pairs {
@@ -723,6 +734,7 @@ mod test {
 
     #[test]
     fn parse_command3() {
+        init();
         let pairs =
             ShellParser::parse(Rule::command, "history").unwrap_or_else(|e| panic!("{}", e));
         for pair in pairs {
@@ -747,6 +759,7 @@ mod test {
 
     #[test]
     fn parse_command4() {
+        init();
         let pairs = ShellParser::parse(Rule::command, "history | sk | bash -s")
             .unwrap_or_else(|e| panic!("{}", e));
         for pair in pairs {
@@ -782,6 +795,7 @@ mod test {
 
     #[test]
     fn parse_command_sp() {
+        init();
         let pairs = ShellParser::parse(Rule::command, "   ").unwrap_or_else(|e| panic!("{}", e));
         for pair in pairs {
             assert_eq!(Rule::command, pair.as_rule());
@@ -792,6 +806,7 @@ mod test {
 
     #[test]
     fn parse_simple_command_bg1() {
+        init();
         let pairs = ShellParser::parse(Rule::simple_command_bg, "sleep 20 &")
             .unwrap_or_else(|e| panic!("{}", e));
         for pair in pairs {
@@ -813,6 +828,7 @@ mod test {
 
     #[test]
     fn parse_command_bg() {
+        init();
         let pairs = ShellParser::parse(Rule::command, "sleep 20 & sleep 30 &")
             .unwrap_or_else(|e| panic!("{}", e));
         for pair in pairs {
@@ -838,6 +854,7 @@ mod test {
 
     #[test]
     fn test_get_pos_word1() -> Result<()> {
+        init();
         let input = "sudo git st aaa &";
         let res = get_pos_word(input, 1)?;
         assert_eq!("sudo", res.unwrap().1.as_str());
@@ -862,6 +879,7 @@ mod test {
 
     #[test]
     fn test_get_pos_word2() -> Result<()> {
+        init();
         let input = "mv *.toml ";
         let res = get_pos_word(input, 9)?;
         println!("{:?}", res.unwrap().0);
@@ -872,6 +890,7 @@ mod test {
 
     #[test]
     fn test_expand_alias() -> Result<()> {
+        init();
         let env = crate::environment::Environment::new();
 
         env.borrow_mut()
@@ -928,6 +947,7 @@ mod test {
 
     #[test]
     fn parse_commands() {
+        init();
         let pairs = ShellParser::parse(Rule::commands, "sleep 10 ; echo 'test' ")
             .unwrap_or_else(|e| panic!("{}", e));
 
@@ -963,6 +983,7 @@ mod test {
 
     #[test]
     fn parse_subshell() {
+        init();
         let pairs = ShellParser::parse(Rule::commands, "sudo docker rm -v (sudo docker ps -a -q)")
             .unwrap_or_else(|e| panic!("{}", e));
 
@@ -1015,6 +1036,7 @@ mod test {
 
     #[test]
     fn test_exec_subshell() {
+        init();
         let pairs = ShellParser::parse(Rule::simple_command, r#"sleep (echo 1) "#)
             .unwrap_or_else(|e| panic!("{}", e));
 
@@ -1032,6 +1054,7 @@ mod test {
 
     #[test]
     fn test_variable() {
+        init();
         let mut find = false;
         let pairs = ShellParser::parse(Rule::simple_command, r#"sleep $foo "#)
             .unwrap_or_else(|e| panic!("{}", e));
@@ -1062,6 +1085,7 @@ mod test {
 
     #[test]
     fn test_redirect() {
+        init();
         let pairs = ShellParser::parse(Rule::simple_command, r#"echo "f" > test.log "#)
             .unwrap_or_else(|e| panic!("{}", e));
         let mut found = false;
@@ -1093,6 +1117,7 @@ mod test {
 
     #[test]
     fn test_redirect2() {
+        init();
         let pairs = ShellParser::parse(Rule::command, r#"ls -al | wc -l > test.log "#)
             .unwrap_or_else(|e| panic!("{}", e));
         let mut found = false;

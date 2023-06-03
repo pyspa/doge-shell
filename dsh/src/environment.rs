@@ -115,9 +115,9 @@ impl Environment {
             return val.map(|x| x.to_string());
         }
 
-        if key.starts_with("$") {
+        if let Some(var) = key.strip_prefix('$') {
             // expand env var
-            match std::env::var(&key[1..]) {
+            match std::env::var(var) {
                 Ok(val) => Some(val),
                 Err(_) => None,
             }
@@ -152,15 +152,16 @@ pub fn get_data_file(name: &str) -> Result<PathBuf> {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     fn init() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
     }
 
     #[test]
     fn test_lookup() {
+        init();
         let env = Environment::new();
         let p = env.borrow().lookup("touch");
         assert_eq!(Some("/usr/bin/touch".to_string()), p)
@@ -168,6 +169,7 @@ mod test {
 
     #[test]
     fn test_extend() {
+        init();
         let env = Environment::new();
         let env1 = Rc::clone(&env);
         env.borrow_mut()

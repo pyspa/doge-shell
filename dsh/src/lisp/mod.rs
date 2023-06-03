@@ -151,16 +151,17 @@ impl Applicable for Value {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
 
     use super::*;
 
     fn init() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
     }
 
     #[test]
     fn test_run_lisp() {
+        init();
         let env = Environment::new();
         let engine = LispEngine::new(env);
         let _res = engine.borrow().run("(alias \"e\" \"emacs\")");
@@ -168,6 +169,7 @@ mod test {
 
     #[test]
     fn test_apply_fn() {
+        init();
         let env = Environment::new();
         let engine = LispEngine::new(env);
         let res = engine.borrow().run(
@@ -186,6 +188,7 @@ mod test {
 
     #[test]
     fn test_call_fn() {
+        init();
         let env = Environment::new();
         let engine = LispEngine::new(env);
         let res = engine.borrow().run(

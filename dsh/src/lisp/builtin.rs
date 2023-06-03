@@ -18,7 +18,7 @@ pub fn set_env(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtime
         let mut path_vec = vec![];
         for val in &args[1..] {
             let val = val.to_string();
-            for val in val.split(":") {
+            for val in val.split(':') {
                 path_vec.push(val.to_string());
             }
         }
@@ -207,18 +207,19 @@ pub fn sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runti
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
 
     use super::*;
     use crate::environment::Environment;
     use crate::lisp::LispEngine;
 
     fn init() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
     }
 
     #[test]
     fn test_lisp_sh() {
+        init();
         let env = Environment::new();
         let engine = LispEngine::new(env);
 

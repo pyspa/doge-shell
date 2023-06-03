@@ -41,24 +41,26 @@ pub fn is_dir(input: &str) -> bool {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     fn init() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
     }
 
     #[test]
     fn test_is_dir() {
+        init();
         let b = is_dir("./");
-        assert_eq!(true, b);
+        assert!(b);
         let b = is_dir("../");
-        assert_eq!(true, b);
+        assert!(b);
     }
 
     #[test]
     #[ignore]
     fn test_search_file() {
+        init();
         let b = search_file("/bin", "g");
         println!("{:?}", b);
     }

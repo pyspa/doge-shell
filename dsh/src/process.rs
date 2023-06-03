@@ -1039,7 +1039,7 @@ fn handle_output_redirect(
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
 
     use nix::sys::termios::tcgetattr;
     use nix::unistd::getpgrp;
@@ -1047,11 +1047,12 @@ mod test {
     use super::*;
 
     fn init() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
     }
 
     #[test]
     fn test_find_job() {
+        init();
         let pgid1 = Pid::from_raw(1);
         let pgid2 = Pid::from_raw(2);
         let pgid3 = Pid::from_raw(3);
@@ -1076,6 +1077,7 @@ mod test {
 
     #[test]
     fn create_job() -> Result<()> {
+        init();
         let input = "/usr/bin/touch".to_string();
         let _path = input.clone();
         let _argv: Vec<String> = input.split_whitespace().map(|s| s.to_string()).collect();
@@ -1098,6 +1100,7 @@ mod test {
 
     #[test]
     fn is_stopped() {
+        init();
         let input = "/usr/bin/touch";
 
         let job = &mut Job::new(input.to_string());
@@ -1134,6 +1137,7 @@ mod test {
 
     #[test]
     fn is_completed() {
+        init();
         let input = "/usr/bin/touch";
 
         let job = &mut Job::new(input.to_string());

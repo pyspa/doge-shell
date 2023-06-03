@@ -249,7 +249,7 @@ pub fn default_env(environment: Rc<RefCell<Environment>>) -> Env {
                     if current == end {
                         None
                     } else {
-                        let res = Some(current.clone());
+                        let res = Some(current);
 
                         current += 1;
 
@@ -292,11 +292,7 @@ pub fn default_env(environment: Rc<RefCell<Environment>>) -> Env {
             let hash = require_typed_arg::<&HashMapRc>("hash_get", &args, 0)?;
             let key = require_arg("hash_get", &args, 1)?;
 
-            Ok(hash
-                .borrow()
-                .get(key)
-                .map(|v| v.clone())
-                .unwrap_or(Value::NIL))
+            Ok(hash.borrow().get(key).cloned().unwrap_or(Value::NIL))
         }),
     );
 
@@ -319,7 +315,7 @@ pub fn default_env(environment: Rc<RefCell<Environment>>) -> Env {
             let first_arg = require_arg("+", &args, 1)?;
 
             let mut total = match first_arg {
-                Value::Int(_) => Ok(Value::Int(0.into())),
+                Value::Int(_) => Ok(Value::Int(0)),
                 Value::Float(_) => Ok(Value::Float(0.0)),
                 Value::String(_) => Ok(Value::String("".into())),
                 _ => Err(RuntimeError {
@@ -358,7 +354,7 @@ pub fn default_env(environment: Rc<RefCell<Environment>>) -> Env {
     env.define(
         Symbol::from("*"),
         Value::NativeFunc(|_env, args| {
-            let mut product = Value::Int(1.into());
+            let mut product = Value::Int(1);
 
             for arg in args {
                 product = (&product * &arg).map_err(|_| RuntimeError {

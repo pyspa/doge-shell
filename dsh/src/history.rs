@@ -399,17 +399,18 @@ impl FrecencyHistory {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use crate::shell;
 
     use super::*;
 
     fn init() {
-        tracing_subscriber::fmt::init();
+        let _ = tracing_subscriber::fmt::try_init();
     }
 
     #[test]
     fn test_new() {
+        init();
         let history = History::from_file("dsh_cmd_history");
         let mut data_dir = dirs::data_dir().unwrap();
         data_dir.push(shell::APP_NAME);
@@ -420,6 +421,7 @@ mod test {
 
     #[test]
     fn test_open() -> Result<()> {
+        init();
         let mut history = History::from_file("dsh_cmd_history");
         let history = history.open()?;
         history.close()
@@ -428,6 +430,7 @@ mod test {
     #[test]
     #[ignore]
     fn test_load() -> Result<()> {
+        init();
         let mut history = History::from_file("dsh_cmd_history");
         let s = history.load()?;
         tracing::debug!("loaded {:?}", s);
@@ -437,6 +440,7 @@ mod test {
     #[test]
     #[ignore]
     fn test_back() -> Result<()> {
+        init();
         let cmd1 = "docker";
         let cmd2 = "docker-compose";
 
@@ -464,6 +468,7 @@ mod test {
 
     #[test]
     fn frecency() -> Result<()> {
+        init();
         let mut history = FrecencyHistory::from_file("dsh_frecency_history")?;
         history.add("git");
         history.add("git");
@@ -490,6 +495,7 @@ mod test {
 
     #[test]
     fn print_item() -> Result<()> {
+        init();
         let mut history = FrecencyHistory::from_file("dsh_frecency_history")?;
         history.add("git status");
         history.add("git checkout");

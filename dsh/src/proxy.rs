@@ -68,15 +68,23 @@ impl ShellProxy for Shell {
             }
             "z" => {
                 let path = argv.get(1).map(|s| s.as_str()).unwrap_or("");
-                if let Some(ref mut history) = self.path_history {
+                let path = if let Some(ref mut history) = self.path_history {
                     let history = history.clone();
                     let history = history.lock().unwrap();
                     let results = history.sort_by_match(path);
                     if !results.is_empty() {
-                        let path = &results[0].item;
-                        return self.changepwd(path);
+                        let path = results[0].item.to_string();
+                        Some(path)
+                    } else {
+                        None
                     }
-                }
+                } else {
+                    None
+                };
+
+                if let Some(ref path) = path {
+                    self.changepwd(path)?;
+                };
             }
             "jobs" => {
                 let jobs: Vec<Job> = self

@@ -10,12 +10,17 @@ use std::path::{Path, PathBuf};
 use std::{cell::RefCell, rc::Rc};
 use tracing::debug;
 
+pub trait ChangePwdHook {
+    fn call(&self, pwd: &Path, env: Rc<RefCell<Environment>>) -> Result<()>;
+}
+
 pub struct Environment {
     pub alias: HashMap<String, String>,
     pub autocompletion: Vec<AutoComplete>,
     pub paths: Vec<String>,
     pub variables: HashMap<String, String>,
     pub direnv_roots: Vec<DirEnvironment>,
+    pub chpwd_hooks: Vec<Box<dyn ChangePwdHook>>,
 }
 
 impl Environment {
@@ -37,6 +42,7 @@ impl Environment {
             variables: HashMap::new(),
             paths,
             direnv_roots: Vec::new(),
+            chpwd_hooks: Vec::new(),
         }))
     }
 
@@ -53,6 +59,7 @@ impl Environment {
             variables,
             paths,
             direnv_roots,
+            chpwd_hooks: Vec::new(),
         }))
     }
 

@@ -3,7 +3,7 @@ use crate::dirs;
 use crate::input::Input;
 use crate::parser::Rule;
 use crate::process::wait_any_job;
-use crate::prompt::print_preprompt;
+use crate::prompt::Prompt;
 use crate::shell::{Shell, SHELL_TERMINAL};
 use anyhow::Context as _;
 use anyhow::Result;
@@ -18,7 +18,9 @@ use futures_timer::Delay;
 use nix::sys::termios::{tcgetattr, Termios};
 use nix::unistd::tcsetpgrp;
 use std::io::{StdoutLock, Write};
+
 use std::time::Duration;
+use std::{cell::RefCell, rc::Rc};
 use tracing::{debug, warn};
 
 const NONE: KeyModifiers = KeyModifiers::NONE;
@@ -41,6 +43,7 @@ pub struct Repl<'a> {
     history_search: Option<String>,
     start_completion: bool,
     completion: Completion,
+    prompt: Rc<RefCell<Prompt>>,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -51,6 +54,16 @@ impl<'a> Drop for Repl<'a> {
 
 impl<'a> Repl<'a> {
     pub fn new(shell: &'a mut Shell) -> Self {
+        let current = std::env::current_dir().expect("failed get current dir");
+        let prompt = Prompt::new(current, "🐕 < ".to_string());
+
+        let prompt = Rc::new(RefCell::new(prompt));
+        shell
+            .environment
+            .borrow_mut()
+            .chpwd_hooks
+            .push(Box::new(Rc::clone(&prompt)));
+
         Repl {
             shell,
             input: Input::new(),
@@ -60,6 +73,7 @@ impl<'a> Repl<'a> {
             history_search: None,
             start_completion: false,
             completion: Completion::new(),
+            prompt,
         }
     }
 
@@ -70,10 +84,10 @@ impl<'a> Repl<'a> {
         enable_raw_mode().ok();
     }
 
-    fn get_prompt(&self) -> &str {
-        //"$"
-        "🐕 < "
-    }
+    // fn get_prompt(&self) -> &str {
+    //     //"$"
+    //     "🐕 < "
+    // }
 
     fn check_background_jobs(&mut self) {
         let mut out = std::io::stdout().lock();
@@ -108,7 +122,7 @@ impl<'a> Repl<'a> {
     }
 
     fn move_cursor_input_end(&self, out: &mut StdoutLock<'static>) {
-        let prompt_size = self.get_prompt().chars().count();
+        let prompt_size = self.prompt.borrow().mark.chars().count();
         queue!(
             out,
             ResetColor,
@@ -129,10 +143,11 @@ impl<'a> Repl<'a> {
     // }
 
     fn print_prompt(&mut self, out: &mut StdoutLock<'static>) {
-        let prompt = self.get_prompt();
-        print_preprompt(out);
+        let prompt = self.prompt.borrow();
+        let prompt_mark = &prompt.mark;
+        prompt.print_preprompt(out);
         out.write(b"\r").ok();
-        out.write(prompt.as_bytes()).ok();
+        out.write(prompt_mark.as_bytes()).ok();
         out.flush().ok();
     }
 
@@ -190,7 +205,7 @@ impl<'a> Repl<'a> {
     pub fn print_input(&mut self, out: &mut StdoutLock<'static>, reset_completion: bool) {
         queue!(out, cursor::Hide).ok();
         let input = self.input.to_string();
-        let prompt = self.get_prompt().chars().count();
+        let prompt_count = self.prompt.borrow_mut().mark.chars().count();
 
         let fg_color = Color::White;
         let mut completion: Option<String> = None;
@@ -265,7 +280,7 @@ impl<'a> Repl<'a> {
         queue!(
             out,
             Print("\r"),
-            cursor::MoveRight((prompt + 1) as u16),
+            cursor::MoveRight((prompt_count + 1) as u16),
             Clear(ClearType::UntilNewLine),
         )
         .ok();

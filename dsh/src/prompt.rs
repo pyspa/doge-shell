@@ -1,6 +1,12 @@
+use crate::environment::{ChangePwdHook, Environment};
+use anyhow::Result;
 use crossterm::style::Stylize;
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, BufWriter, StdoutLock, Write};
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::{cell::RefCell, rc::Rc};
+use tracing::debug;
 
 // TODO stash, rename, delete
 
@@ -13,8 +19,121 @@ const UNTRACKED: &str = "?";
 const MODIFIED: &str = "!";
 const NEW_FILE: &str = "+";
 
+impl ChangePwdHook for std::rc::Rc<RefCell<Prompt>> {
+    fn call(&self, pwd: &Path, _env: Rc<RefCell<Environment>>) -> Result<()> {
+        debug!("chpwd {:?}", pwd);
+        self.borrow_mut().set_current(pwd);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Prompt {
+    pub current_dir: PathBuf,
+    pub mark: String,
+    current_git_root: Option<PathBuf>,
+    git_root_cache: HashSet<String>,
+}
+
+impl Prompt {
+    pub fn new(current_dir: PathBuf, mark: String) -> Prompt {
+        Prompt {
+            current_dir,
+            mark,
+            current_git_root: None,
+            git_root_cache: HashSet::new(),
+        }
+    }
+
+    pub fn print_preprompt(&self, out: &mut StdoutLock<'static>) {
+        let mut out = BufWriter::new(out);
+        out.write_fmt(format_args!("{}", "\r".reset())).ok();
+
+        let (path, _is_git_root) = self.get_cwd();
+
+        let has_git = self.under_git();
+
+        if has_git {
+            out.write_fmt(format_args!("{}", path.cyan())).ok();
+
+            if let Some(ref git_status) = get_git_status() {
+                out.write_fmt(format_args!(" {} ", "on".reset())).ok();
+                out.write_fmt(format_args!(
+                    "{}",
+                    format!("{} {}", BRANCH_MARK, git_status.branch).magenta(),
+                ))
+                .ok();
+
+                if let Some(ref status) = &git_status.branch_status {
+                    out.write_fmt(format_args!(" [{}]", status.to_string().bold().red()))
+                        .ok();
+                }
+                out.write_fmt(format_args!("{}", "\r\n".reset(),)).ok();
+            } else {
+                out.write_fmt(format_args!("{}", "\r\n".reset(),)).ok();
+            }
+        } else {
+            out.write_fmt(format_args!("{}", path.white())).ok();
+            out.write_fmt(format_args!("{}", "\r\n".reset(),)).ok();
+        }
+    }
+
+    fn get_cwd(&self) -> (String, bool) {
+        let pathbuf = &self.current_dir;
+        let is_git_root = pathbuf.join(".git").exists();
+
+        let path = if is_git_root {
+            pathbuf
+                .file_name()
+                .map_or("".to_owned(), |s| s.to_string_lossy().into_owned())
+        } else {
+            let path = pathbuf.display().to_string();
+            let home = dirs::home_dir().map_or("".to_owned(), |p| p.display().to_string());
+            path.replace(&home, "~")
+        };
+        (path, is_git_root)
+    }
+
+    fn under_git(&self) -> bool {
+        if let Some(git_root) = &self.current_git_root {
+            self.current_dir.starts_with(git_root)
+        } else {
+            false
+        }
+    }
+
+    fn get_git_root(&self) -> Option<String> {
+        for git_root in &self.git_root_cache {
+            if self.current_dir.starts_with(git_root) {
+                return Some(git_root.to_string());
+            }
+        }
+
+        get_git_root()
+    }
+
+    pub fn set_current(&mut self, path: &Path) {
+        self.current_dir = path.to_path_buf();
+        debug!("set current dir {:?}", self.current_dir,);
+        if let Some(git_root) = &self.current_git_root {
+            let changed = !&self.current_dir.starts_with(git_root);
+            debug!("change_git_root: {:?}", changed);
+
+            if changed {
+                if let Some(root) = self.get_git_root() {
+                    self.current_git_root = Some(PathBuf::from(&root));
+                    self.git_root_cache.insert(root);
+                }
+            }
+        } else if let Some(root) = self.get_git_root() {
+            self.current_git_root = Some(PathBuf::from(&root));
+            self.git_root_cache.insert(root);
+        }
+    }
+}
+
 //
-pub fn print_preprompt(out: &mut StdoutLock<'static>) {
+fn print_preprompt(out: &mut StdoutLock<'static>) {
     let status = get_git_status();
     let has_git = status.is_some();
 
@@ -95,6 +214,7 @@ fn get_git_branch() -> (String, bool) {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitStatus {
     pub branch: String,
     pub branch_status: Option<String>,
@@ -107,6 +227,21 @@ impl GitStatus {
             branch_status: None,
         }
     }
+}
+
+fn get_git_root() -> Option<String> {
+    let result = Command::new("git")
+        .arg("rev-parse")
+        .arg("--show-toplevel")
+        .output();
+
+    if let Ok(output) = result {
+        if output.status.success() {
+            let out = String::from_utf8(output.stdout).expect("failed");
+            return Some(out.trim().to_string());
+        }
+    }
+    None
 }
 
 fn get_git_status() -> Option<GitStatus> {
@@ -189,5 +324,37 @@ fn get_git_status() -> Option<GitStatus> {
         }
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    fn init() {
+        let _ = tracing_subscriber::fmt::try_init();
+    }
+
+    #[test]
+    fn test_new() {
+        init();
+        let curr = PathBuf::from("~/");
+        let prompt = Prompt::new(curr, "$".to_string());
+        let (root, git) = prompt.get_cwd();
+        assert_eq!("~/", root);
+        assert!(!git);
+    }
+
+    #[test]
+    fn test_set_current() {
+        init();
+        let curr = PathBuf::from("~/");
+        let mut prompt = Prompt::new(curr, "$".to_string());
+        let git_root = PathBuf::from("~/");
+        prompt.current_git_root = Some(git_root);
+
+        let new_curr = PathBuf::from("./");
+        prompt.set_current(new_curr.as_path());
     }
 }

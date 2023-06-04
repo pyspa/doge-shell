@@ -30,7 +30,6 @@ use tracing::{debug, warn};
 
 pub const APP_NAME: &str = "dsh";
 pub const SHELL_TERMINAL: c_int = STDIN_FILENO;
-pub type CommandHook = fn(pwd: &Path, env: Rc<RefCell<Environment>>) -> Result<()>;
 
 #[derive(Debug)]
 struct ParseContext {
@@ -57,7 +56,6 @@ pub struct Shell {
     pub wait_jobs: Vec<WaitJob>,
     pub lisp_engine: Rc<RefCell<lisp::LispEngine>>,
     pub wasm_engine: WasmEngine,
-    pub chpwd_hooks: Vec<CommandHook>,
 }
 
 impl std::fmt::Debug for Shell {
@@ -94,8 +92,6 @@ impl Shell {
             eprintln!("failed load init lisp {err:?}");
         }
 
-        let chpwd_hooks: Vec<CommandHook> = Vec::new();
-
         Shell {
             environment,
             exited: None::<ExitStatus>,
@@ -106,13 +102,7 @@ impl Shell {
             wait_jobs: Vec::new(),
             lisp_engine,
             wasm_engine,
-            chpwd_hooks,
         }
-    }
-
-    pub fn install_chpwd_hooks(&mut self) {
-        self.chpwd_hooks.push(chpwd_update_env);
-        self.chpwd_hooks.push(check_direnv);
     }
 
     pub fn set_signals(&mut self) {
@@ -516,8 +506,12 @@ impl Shell {
 
     pub fn exec_chpwd_hooks(&mut self, pwd: &str) -> Result<()> {
         let pwd = Path::new(pwd);
-        for hook in &self.chpwd_hooks {
-            hook(pwd, Rc::clone(&self.environment))?;
+
+        chpwd_update_env(pwd, Rc::clone(&self.environment))?;
+        direnv::check_path(pwd, Rc::clone(&self.environment))?;
+
+        for hook in &self.environment.borrow().chpwd_hooks {
+            hook.call(pwd, Rc::clone(&self.environment))?;
         }
         Ok(())
     }
@@ -533,13 +527,9 @@ impl Shell {
 }
 
 fn chpwd_update_env(pwd: &Path, _env: Rc<RefCell<Environment>>) -> Result<()> {
-    debug!("chpwd {:?}", pwd);
+    debug!("chpwd update env {:?}", pwd);
     std::env::set_var("PWD", pwd);
     Ok(())
-}
-
-fn check_direnv(pwd: &Path, env: Rc<RefCell<Environment>>) -> Result<()> {
-    direnv::check_path(pwd, env)
 }
 
 fn read_fd(fd: RawFd) -> Result<String> {

@@ -71,15 +71,18 @@ fn execute_command(shell: &mut Shell, ctx: &mut Context, command: &str) -> ExitC
 fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
     debug!("start shell");
     shell.set_signals();
-    shell.install_chpwd_hooks();
     ctx.save_history = false;
 
-    if let Err(err) = shell.eval_str(ctx, "cd .".to_string(), true) {
+    // if let Err(err) = shell.eval_str(ctx, "cd .".to_string(), true) {
+    //     eprintln!("{:?}", err);
+    //     return ExitCode::FAILURE;
+    // }
+
+    let mut repl = Repl::new(shell);
+    if let Err(err) = repl.shell.eval_str(ctx, "cd .".to_string(), true) {
         eprintln!("{:?}", err);
         return ExitCode::FAILURE;
     }
-
-    let mut repl = Repl::new(shell);
     task::block_on(repl.run_interactive());
     ExitCode::from(0)
 }

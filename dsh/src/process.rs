@@ -75,6 +75,16 @@ fn copy_fd(src: RawFd, dst: RawFd) {
     }
 }
 
+fn get_job_id(shell: &Shell) -> usize {
+    if shell.wait_jobs.is_empty() {
+        1
+    } else if let Some(wait) = shell.wait_jobs.last() {
+        wait.wait_job_id + 1
+    } else {
+        1
+    }
+}
+
 #[derive(Debug)]
 pub struct WaitJob {
     pub job_id: String,
@@ -83,9 +93,29 @@ pub struct WaitJob {
     pub cmd: String,
     pub stdout: Option<RawFd>,
     pub stderr: Option<RawFd>,
+    pub foreground: bool,
 }
 
 impl WaitJob {
+    pub fn new(
+        job: &Job,
+        job_process: &JobProcess,
+        shell: &Shell,
+        pid: Pid,
+        foreground: bool,
+    ) -> Self {
+        let (stdout, stderr) = job_process.get_cap_out();
+        WaitJob {
+            job_id: job.id.clone(),
+            wait_job_id: get_job_id(shell),
+            pid,
+            cmd: job.cmd.clone(),
+            stdout,
+            stderr,
+            foreground,
+        }
+    }
+
     pub fn output(&self) {
         if let Some(fd) = self.stdout {
             let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
@@ -699,31 +729,10 @@ impl Job {
         }
 
         process.set_pid(Some(pid));
-        if !ctx.foreground {
-            let job_id = if shell.wait_jobs.is_empty() {
-                1
-            } else if let Some(wait) = shell.wait_jobs.last() {
-                wait.wait_job_id + 1
-            } else {
-                1
-            };
 
-            if process.next().is_none() {
-                // process is running?
-                if !process.is_completed() {
-                    // wait background process
-                    let (stdout, stderr) = process.get_cap_out();
-                    let wait_job = WaitJob {
-                        job_id: self.id.clone(),
-                        wait_job_id: job_id,
-                        pid,
-                        cmd: self.cmd.clone(),
-                        stdout,
-                        stderr,
-                    };
-                    shell.wait_jobs.push(wait_job);
-                }
-            }
+        if !process.is_completed() {
+            let wait_job = WaitJob::new(&self, &process, &shell, pid, ctx.foreground);
+            shell.wait_jobs.push(wait_job);
         }
 
         self.show_job_status();
@@ -876,8 +885,8 @@ impl Job {
     }
 }
 
-pub fn wait_any_job(no_block: bool) -> Option<(Pid, ProcessState)> {
-    let options = if no_block {
+pub fn wait_any_job(no_hang: bool) -> Option<(Pid, ProcessState)> {
+    let options = if no_hang {
         WaitPidFlag::WUNTRACED | WaitPidFlag::WNOHANG
     } else {
         WaitPidFlag::WUNTRACED
@@ -979,15 +988,20 @@ pub fn is_job_completed(job: &Job) -> bool {
     }
 }
 
-pub fn wait_pid(pid: Pid) -> Option<(Pid, ProcessState)> {
-    let options = WaitPidFlag::WUNTRACED;
+pub fn wait_pid(pid: Pid, no_hang: bool) -> Option<(Pid, ProcessState)> {
+    let options = if no_hang {
+        WaitPidFlag::WUNTRACED | WaitPidFlag::WNOHANG
+    } else {
+        WaitPidFlag::WUNTRACED
+    };
 
     let result = waitpid(pid, Some(options));
     let res = match result {
         Ok(WaitStatus::Exited(pid, status)) => (pid, ProcessState::Completed(status as u8)),
         Ok(WaitStatus::Signaled(pid, _signal, _)) => (pid, ProcessState::Completed(1)),
         Ok(WaitStatus::Stopped(pid, _signal)) => (pid, ProcessState::Stopped(pid)),
-        Err(nix::errno::Errno::ECHILD) | Ok(WaitStatus::StillAlive) => {
+        Err(nix::errno::Errno::ECHILD) => (pid, ProcessState::Completed(1)),
+        Ok(WaitStatus::StillAlive) => {
             return None;
         }
         status => {

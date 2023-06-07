@@ -2,7 +2,7 @@ use crate::completion::{self, Completion};
 use crate::dirs;
 use crate::input::Input;
 use crate::parser::Rule;
-use crate::process::wait_any_job;
+use crate::process::{wait_pid, ProcessState};
 use crate::prompt::Prompt;
 use crate::shell::{Shell, SHELL_TERMINAL};
 use anyhow::Context as _;
@@ -91,22 +91,31 @@ impl<'a> Repl<'a> {
 
     fn check_background_jobs(&mut self) {
         let mut out = std::io::stdout().lock();
-
-        // TODO thread
-        if let Some((pid, _state)) = wait_any_job(true) {
-            if let Some(index) = self.shell.wait_jobs.iter().position(|job| job.pid == pid) {
-                if let Some(job) = self.shell.wait_jobs.get(index) {
-                    job.output();
-                    // TODO fix message format
-                    out.write_fmt(format_args!(
-                        "\r\n[{:?}] done '{}' \r\n\r",
-                        job.wait_job_id, job.cmd
-                    ))
-                    .ok();
-                    self.shell.wait_jobs.remove(index);
-                    self.print_prompt(&mut out);
+        let mut need_print = false;
+        // check all
+        let mut i = 0;
+        while i < self.shell.wait_jobs.len() {
+            match wait_pid(self.shell.wait_jobs[i].pid, true) {
+                Some((_pid, ProcessState::Completed(_))) => {
+                    let removed = self.shell.wait_jobs.remove(i);
+                    if !removed.foreground {
+                        removed.output();
+                        out.write_fmt(format_args!(
+                            "\r\n[{:?}] done '{}' \r\n\r",
+                            removed.wait_job_id, removed.cmd
+                        ))
+                        .ok();
+                        need_print = true;
+                    }
+                }
+                _ => {
+                    i += 1;
                 }
             }
+        }
+
+        if need_print {
+            self.print_prompt(&mut out);
         }
     }
 

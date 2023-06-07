@@ -340,7 +340,7 @@ impl Shell {
             disable_raw_mode().ok();
             let pid = self.spawn_subshell(ctx, &mut job)?;
             debug!("spawned subshell pid: {:?}", pid);
-            let res = process::wait_pid(pid);
+            let res = process::wait_pid(pid, true);
             debug!("wait subshell pid: {:?}", res);
             enable_raw_mode().ok();
         }

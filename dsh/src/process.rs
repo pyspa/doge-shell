@@ -94,6 +94,7 @@ pub struct WaitJob {
     pub stdout: Option<RawFd>,
     pub stderr: Option<RawFd>,
     pub foreground: bool,
+    pub state: ProcessState,
 }
 
 impl WaitJob {
@@ -113,6 +114,7 @@ impl WaitJob {
             stdout,
             stderr,
             foreground,
+            state: ProcessState::Running,
         }
     }
 
@@ -490,6 +492,16 @@ pub enum ProcessState {
     Stopped(Pid),
 }
 
+impl std::fmt::Display for ProcessState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            ProcessState::Running => formatter.write_str("running"),
+            ProcessState::Completed(_) => formatter.write_str("completed"),
+            ProcessState::Stopped(_) => formatter.write_str("stopped"),
+        }
+    }
+}
+
 impl Process {
     pub fn new(cmd: String, argv: Vec<String>) -> Self {
         Process {
@@ -778,18 +790,24 @@ impl Job {
         }
 
         if !ctx.interactive {
-            self.wait_job(ctx, process);
+            self.wait_job(ctx, process, shell);
             Ok(())
         } else if ctx.foreground {
             // foreground
-            self.put_in_foreground(ctx, process)
+
+            self.put_in_foreground(ctx, process, shell)
         } else {
             // background
-            self.put_in_background(ctx, process)
+            self.put_in_background(ctx, process, shell)
         }
     }
 
-    fn put_in_foreground(&mut self, ctx: &Context, process: &mut JobProcess) -> Result<()> {
+    fn put_in_foreground(
+        &mut self,
+        ctx: &Context,
+        process: &mut JobProcess,
+        shell: &mut Shell,
+    ) -> Result<()> {
         debug!(
             "put_in_foreground: {:?} pgid {:?}",
             &process.get_cmd(),
@@ -802,7 +820,20 @@ impl Job {
 
         // TODO Send the job a continue signal, if necessary.
 
-        self.wait_job(ctx, process);
+        self.wait_job(ctx, process, shell);
+
+        if let Some(pid) = process.get_pid() {
+            let mut i = 0;
+            while i < shell.wait_jobs.len() {
+                if shell.wait_jobs[i].pid == pid {
+                    shell.wait_jobs[i].state = process.get_state();
+                    debug!("set process: {:?} {:?}", pid, &shell.wait_jobs[i].state);
+                    break;
+                } else {
+                    i += 1;
+                }
+            }
+        }
 
         tcsetpgrp(SHELL_TERMINAL, ctx.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
         // debug!("put_in_foreground: {:?} tcsetpgrp shell", &self.cmd);
@@ -816,7 +847,12 @@ impl Job {
         Ok(())
     }
 
-    fn put_in_background(&mut self, _ctx: &Context, process: &mut JobProcess) -> Result<()> {
+    fn put_in_background(
+        &mut self,
+        _ctx: &Context,
+        process: &mut JobProcess,
+        shell: &mut Shell,
+    ) -> Result<()> {
         debug!(
             "put_in_background {:?} pgid {:?}",
             process.get_cmd(),
@@ -834,7 +870,7 @@ impl Job {
 
     fn show_job_status(&self) {}
 
-    pub fn wait_job(&mut self, _ctx: &Context, process: &mut JobProcess) {
+    pub fn wait_job(&mut self, _ctx: &Context, process: &mut JobProcess, shell: &mut Shell) {
         debug!(
             "call wait_job: {:?} pgid: {:?} need_wait: {:?}",
             process.get_cmd(),
@@ -863,6 +899,7 @@ impl Job {
                 }
             };
             self.set_process_state(pid, state);
+            set_process_state(process, pid, state);
 
             debug!(
                 "fin wait_job: {:?} pid:{:?} complete:{:?} stopped:{:?}",

@@ -15,8 +15,10 @@ use tracing::debug;
 struct Job {
     job: usize,
     pid: i32,
+    state: String,
     command: String,
 }
+
 #[derive(Tabled)]
 struct Var {
     key: String,
@@ -93,6 +95,7 @@ impl ShellProxy for Shell {
                     .map(|job| Job {
                         job: job.wait_job_id,
                         pid: job.pid.as_raw(),
+                        state: format!("{}", job.state),
                         command: job.cmd.clone(),
                     })
                     .collect();

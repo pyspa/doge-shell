@@ -2,7 +2,6 @@ use crate::shell::{Shell, SHELL_TERMINAL};
 use anyhow::Context as _;
 use anyhow::Result;
 use async_std::{fs, io, task};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dsh_builtin::BuiltinCommand;
 use dsh_types::{Context, ExitStatus};
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
@@ -12,7 +11,6 @@ use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{close, dup2, execv, fork, getpid, pipe, setpgid, tcsetpgrp, ForkResult, Pid};
 use std::ffi::CString;
 use std::fmt::Debug;
-use std::io::{Read, Write};
 use std::os::unix::io::FromRawFd;
 use std::os::unix::io::RawFd;
 use tracing::{debug, error};
@@ -75,89 +73,90 @@ fn copy_fd(src: RawFd, dst: RawFd) {
     }
 }
 
-fn get_job_id(shell: &Shell) -> usize {
-    if shell.wait_jobs.is_empty() {
-        1
-    } else if let Some(wait) = shell.wait_jobs.last() {
-        wait.wait_job_id + 1
-    } else {
-        1
-    }
-}
+// fn get_job_id(shell: &Shell) -> usize {
+//     if shell.wait_jobs.is_empty() {
+//         1
+//     } else if let Some(wait) = shell.wait_jobs.last() {
+//         wait.wait_job_id + 1
+//     } else {
+//         1
+//     }
+// }
 
-#[derive(Debug)]
-pub struct WaitJob {
-    pub job_id: String,
-    pub wait_job_id: usize,
-    pub pid: Pid,
-    pub cmd: String,
-    pub stdout: Option<RawFd>,
-    pub stderr: Option<RawFd>,
-    pub foreground: bool,
-    pub state: ProcessState,
-}
+// #[derive(Debug)]
+// pub struct WaitJob {
+//     pub job_id: String,
+//     pub wait_job_id: usize,
+//     pub pid: Pid,
+//     pub cmd: String,
+//     pub stdout: Option<RawFd>,
+//     pub stderr: Option<RawFd>,
+//     pub foreground: bool,
+//     pub state: ProcessState,
+// }
 
-impl WaitJob {
-    pub fn new(
-        job: &Job,
-        job_process: &JobProcess,
-        shell: &Shell,
-        pid: Pid,
-        foreground: bool,
-    ) -> Self {
-        let (stdout, stderr) = job_process.get_cap_out();
-        WaitJob {
-            job_id: job.id.clone(),
-            wait_job_id: get_job_id(shell),
-            pid,
-            cmd: job.cmd.clone(),
-            stdout,
-            stderr,
-            foreground,
-            state: ProcessState::Running,
-        }
-    }
+// impl WaitJob {
+//     pub fn new(
+//         job: &Job,
+//         job_process: &JobProcess,
+//         shell: &Shell,
+//         pid: Pid,
+//         foreground: bool,
+//     ) -> Self {
+//         let (stdout, stderr) = job_process.get_cap_out();
+//         WaitJob {
+//             job_id: job.id.clone(),
+//             wait_job_id: 1,
+//             // wait_job_id: get_job_id(shell),
+//             pid,
+//             cmd: job.cmd.clone(),
+//             stdout,
+//             stderr,
+//             foreground,
+//             state: ProcessState::Running,
+//         }
+//     }
 
-    pub fn output(&self) {
-        if let Some(fd) = self.stdout {
-            let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
-            let mut buf = String::new();
-            let mut out = std::io::stdout().lock();
+//     pub fn output(&self) {
+//         if let Some(fd) = self.stdout {
+//             let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+//             let mut buf = String::new();
+//             let mut out = std::io::stdout().lock();
 
-            match file.read_to_string(&mut buf) {
-                Ok(size) => {
-                    if size > 0 {
-                        disable_raw_mode().ok();
-                        out.write(buf.as_bytes()).ok();
-                        enable_raw_mode().ok();
-                    }
-                }
+//             match file.read_to_string(&mut buf) {
+//                 Ok(size) => {
+//                     if size > 0 {
+//                         disable_raw_mode().ok();
+//                         out.write(buf.as_bytes()).ok();
+//                         enable_raw_mode().ok();
+//                     }
+//                 }
 
-                Err(_err) => {
-                    // break;
-                }
-            }
-        }
+//                 Err(_err) => {
+//                     // break;
+//                 }
+//             }
+//         }
 
-        // if let Some(fd) = self.stderr {
-        //     let mut file = unsafe { File::from_raw_fd(fd) };
-        //     let mut buf = String::new();
-        //     match file.read_to_string(&mut buf) {
-        //         Ok(size) => {
-        //             if size > 0 {
-        //                 disable_raw_mode().ok();
-        //                 eprint!("{}", buf);
-        //                 enable_raw_mode().ok();
-        //             }
-        //         }
+//         // if let Some(fd) = self.stderr {
+//         //     let mut file = unsafe { File::from_raw_fd(fd) };
+//         //     let mut buf = String::new();
+//         //     match file.read_to_string(&mut buf) {
+//         //         Ok(size) => {
+//         //             if size > 0 {
+//         //                 disable_raw_mode().ok();
+//         //                 eprint!("{}", buf);
+//         //                 enable_raw_mode().ok();
+//         //             }
+//         //         }
 
-        //         Err(_err) => {
-        //             // break;
-        //         }
-        //     }
-        // }
-    }
-}
+//         //         Err(_err) => {
+//         //             // break;
+//         //         }
+//         //     }
+//         // }
+//     }
+// }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListOp {
@@ -595,6 +594,7 @@ impl Process {
 pub struct Job {
     pub id: String,
     pub cmd: String,
+    pub pid: Option<Pid>,
     pub pgid: Option<Pid>,
     pub process: Option<Box<JobProcess>>,
     notified: bool,
@@ -608,6 +608,8 @@ pub struct Job {
     pub subshell: bool,
     pub redirect: Option<Redirect>,
     pub list_op: ListOp,
+    pub job_id: usize,
+    pub state: ProcessState,
 }
 
 impl Job {
@@ -617,6 +619,7 @@ impl Job {
         Job {
             id,
             cmd,
+            pid: None,
             pgid: None,
             process: Some(Box::new(process)),
             notified: false,
@@ -630,6 +633,8 @@ impl Job {
             subshell: false,
             redirect: None,
             list_op: ListOp::None,
+            job_id: 1,
+            state: ProcessState::Running,
         }
     }
 
@@ -638,6 +643,7 @@ impl Job {
         Job {
             id,
             cmd,
+            pid: None,
             pgid: None,
             process: None,
             notified: false,
@@ -651,6 +657,8 @@ impl Job {
             subshell: false,
             redirect: None,
             list_op: ListOp::None,
+            job_id: 1,
+            state: ProcessState::Running,
         }
     }
 
@@ -730,7 +738,8 @@ impl Job {
                 fork_process(ctx, self.pgid, process)?
             }
         };
-
+        self.pid = Some(pid);
+        self.state = process.get_state();
         if ctx.interactive {
             if self.pgid.is_none() {
                 self.pgid = Some(pid);
@@ -743,8 +752,8 @@ impl Job {
         process.set_pid(Some(pid));
 
         if !process.is_completed() {
-            let wait_job = WaitJob::new(&self, &process, &shell, pid, ctx.foreground);
-            shell.wait_jobs.push(wait_job);
+            // let wait_job = WaitJob::new(&self, &process, &shell, pid, ctx.foreground);
+            // shell.wait_jobs.push(wait_job);
         }
 
         self.show_job_status();
@@ -822,17 +831,17 @@ impl Job {
 
         self.wait_job(ctx, process, shell);
 
-        if let Some(pid) = process.get_pid() {
-            let mut i = 0;
-            while i < shell.wait_jobs.len() {
-                if shell.wait_jobs[i].pid == pid {
-                    shell.wait_jobs[i].state = process.get_state();
-                    debug!("set process: {:?} {:?}", pid, &shell.wait_jobs[i].state);
-                    break;
-                } else {
-                    i += 1;
-                }
-            }
+        if let Some(_pid) = process.get_pid() {
+            // let mut i = 0;
+            // while i < shell.wait_jobs.len() {
+            //     if shell.wait_jobs[i].pid == pid {
+            //         shell.wait_jobs[i].state = process.get_state();
+            //         debug!("set process: {:?} {:?}", pid, &shell.wait_jobs[i].state);
+            //         break;
+            //     } else {
+            //         i += 1;
+            //     }
+            // }
         }
 
         tcsetpgrp(SHELL_TERMINAL, ctx.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
@@ -851,7 +860,7 @@ impl Job {
         &mut self,
         _ctx: &Context,
         process: &mut JobProcess,
-        shell: &mut Shell,
+        _shell: &mut Shell,
     ) -> Result<()> {
         debug!(
             "put_in_background {:?} pgid {:?}",
@@ -870,7 +879,7 @@ impl Job {
 
     fn show_job_status(&self) {}
 
-    pub fn wait_job(&mut self, _ctx: &Context, process: &mut JobProcess, shell: &mut Shell) {
+    pub fn wait_job(&mut self, _ctx: &Context, process: &mut JobProcess, _shell: &mut Shell) {
         debug!(
             "call wait_job: {:?} pgid: {:?} need_wait: {:?}",
             process.get_cmd(),

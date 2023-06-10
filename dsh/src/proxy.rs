@@ -93,13 +93,12 @@ impl ShellProxy for Shell {
                     .wait_jobs
                     .iter()
                     .map(|job| Job {
-                        job: job.wait_job_id,
-                        pid: job.pid.as_raw(),
+                        job: job.job_id,
+                        pid: job.pid.unwrap().as_raw(),
                         state: format!("{}", job.state),
                         command: job.cmd.clone(),
                     })
                     .collect();
-
                 let table = Table::new(jobs).to_string();
                 self.print_stdout(table);
             }

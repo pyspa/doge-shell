@@ -4,8 +4,7 @@ use crate::environment::Environment;
 use crate::history::FrecencyHistory;
 use crate::lisp;
 use crate::parser::{self, Rule, ShellParser};
-use crate::process::Redirect;
-use crate::process::{self, Job, JobProcess, WaitJob};
+use crate::process::{self, wait_pid, Job, JobProcess, ProcessState, Redirect};
 use anyhow::Context as _;
 use anyhow::{anyhow, bail, Result};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
@@ -53,7 +52,8 @@ pub struct Shell {
     pub pgid: Pid,
     pub cmd_history: Option<Arc<Mutex<FrecencyHistory>>>,
     pub path_history: Option<Arc<Mutex<FrecencyHistory>>>,
-    pub wait_jobs: Vec<WaitJob>,
+    //pub wait_jobs: Vec<WaitJob>,
+    pub(crate) wait_jobs: Vec<Job>,
     pub lisp_engine: Rc<RefCell<lisp::LispEngine>>,
     pub wasm_engine: WasmEngine,
 }
@@ -158,14 +158,21 @@ impl Shell {
                 job.cmd, job.foreground, job.redirect, job.list_op,
             );
 
-            if let process::ProcessState::Completed(exit) = job.launch(ctx, self)? {
-                debug!("job '{}' exit code {:?}", job.cmd, exit);
-                last_exit_code = exit;
-                if job.list_op == process::ListOp::And && exit != 0 {
-                    break;
+            job.job_id = self.get_job_id(); // set job id
+            match job.launch(ctx, self)? {
+                process::ProcessState::Running => {
+                    self.wait_jobs.push(job);
                 }
-            } else {
-                // Stop next job
+                process::ProcessState::Stopped(_) => {
+                    self.wait_jobs.push(job);
+                }
+                process::ProcessState::Completed(exit) => {
+                    debug!("job '{}' exit code {:?}", job.cmd, exit);
+                    last_exit_code = exit;
+                    if job.list_op == process::ListOp::And && exit != 0 {
+                        break;
+                    }
+                }
             }
             enable_raw_mode().ok();
         }
@@ -340,7 +347,7 @@ impl Shell {
             disable_raw_mode().ok();
             let pid = self.spawn_subshell(ctx, &mut job)?;
             debug!("spawned subshell pid: {:?}", pid);
-            let res = process::wait_pid(pid, true);
+            let res = wait_pid(pid, true);
             debug!("wait subshell pid: {:?}", res);
             enable_raw_mode().ok();
         }
@@ -514,6 +521,41 @@ impl Shell {
             hook.call(pwd, Rc::clone(&self.environment))?;
         }
         Ok(())
+    }
+
+    pub fn get_job_id(&self) -> usize {
+        if self.wait_jobs.is_empty() {
+            1
+        } else if let Some(job) = self.wait_jobs.last() {
+            job.job_id + 1
+        } else {
+            1
+        }
+    }
+
+    pub fn check_job_state(&mut self) -> Vec<Job> {
+        let mut completed: Vec<Job> = Vec::new();
+        let mut i = 0;
+        while i < self.wait_jobs.len() {
+            if let Some(pid) = self.wait_jobs[i].pid {
+                match wait_pid(pid, true) {
+                    Some((_pid, ProcessState::Completed(_))) => {
+                        let removed_job = self.wait_jobs.remove(i);
+                        completed.push(removed_job);
+                    }
+                    Some((_pid, ProcessState::Stopped(_))) => {
+                        self.wait_jobs[i].state = ProcessState::Stopped(pid);
+                        i += 1;
+                    }
+                    _ => {
+                        i += 1;
+                    }
+                }
+            } else {
+                i += 1;
+            }
+        }
+        completed
     }
 
     // pub fn chpwd2(&mut self, pwd: &str) {

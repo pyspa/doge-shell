@@ -2,7 +2,6 @@ use crate::completion::{self, Completion};
 use crate::dirs;
 use crate::input::Input;
 use crate::parser::Rule;
-use crate::process::{wait_pid, ProcessState};
 use crate::prompt::Prompt;
 use crate::shell::{Shell, SHELL_TERMINAL};
 use anyhow::Context as _;
@@ -18,7 +17,6 @@ use futures_timer::Delay;
 use nix::sys::termios::{tcgetattr, Termios};
 use nix::unistd::tcsetpgrp;
 use std::io::{StdoutLock, Write};
-
 use std::time::Duration;
 use std::{cell::RefCell, rc::Rc};
 use tracing::{debug, warn};
@@ -90,32 +88,12 @@ impl<'a> Repl<'a> {
     // }
 
     fn check_background_jobs(&mut self) {
-        let mut out = std::io::stdout().lock();
-        let mut need_print = false;
-        // check all
-        let mut i = 0;
-        while i < self.shell.wait_jobs.len() {
-            match wait_pid(self.shell.wait_jobs[i].pid, true) {
-                Some((_pid, ProcessState::Completed(_))) => {
-                    let removed = self.shell.wait_jobs.remove(i);
-                    if !removed.foreground {
-                        removed.output();
-                        out.write_fmt(format_args!(
-                            "\r\n[{:?}] done '{}' \r\n\r",
-                            removed.wait_job_id, removed.cmd
-                        ))
-                        .ok();
-                        need_print = true;
-                    }
-                }
-                _ => {
-                    i += 1;
-                }
+        let _out = std::io::stdout().lock();
+        let jobs = self.shell.check_job_state();
+        for job in jobs {
+            if !job.foreground {
+                //
             }
-        }
-
-        if need_print {
-            self.print_prompt(&mut out);
         }
     }
 
@@ -492,7 +470,7 @@ impl<'a> Repl<'a> {
 
         let mut save_history_delay = Delay::new(Duration::from_millis(10_000)).fuse();
         loop {
-            let mut check_background_delay = Delay::new(Duration::from_millis(500)).fuse();
+            let mut check_background_delay = Delay::new(Duration::from_millis(1000)).fuse();
             let mut event = reader.next().fuse();
             select! {
                 _ = save_history_delay => {
@@ -515,9 +493,9 @@ impl<'a> Repl<'a> {
 
                 _ = check_background_delay => {
                     self.check_background_jobs();
-                    if self.shell.wait_jobs.is_empty() {
-                        enable_raw_mode().ok();
-                    }
+                    //if self.shell.wait_jobs.is_empty() {
+                    //    enable_raw_mode().ok();
+                    //}
                 },
                 maybe_event = event => {
                     match maybe_event {

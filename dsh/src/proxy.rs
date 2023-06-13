@@ -89,18 +89,22 @@ impl ShellProxy for Shell {
                 };
             }
             "jobs" => {
-                let jobs: Vec<Job> = self
-                    .wait_jobs
-                    .iter()
-                    .map(|job| Job {
-                        job: job.job_id,
-                        pid: job.pid.unwrap().as_raw(),
-                        state: format!("{}", job.state),
-                        command: job.cmd.clone(),
-                    })
-                    .collect();
-                let table = Table::new(jobs).to_string();
-                self.print_stdout(table);
+                if self.wait_jobs.is_empty() {
+                    self.print_stdout("jobs: There are no jobs");
+                } else {
+                    let jobs: Vec<Job> = self
+                        .wait_jobs
+                        .iter()
+                        .map(|job| Job {
+                            job: job.job_id,
+                            pid: job.pid.unwrap().as_raw(),
+                            state: format!("{}", job.state),
+                            command: job.cmd.clone(),
+                        })
+                        .collect();
+                    let table = Table::new(jobs).to_string();
+                    self.print_stdout(table.as_str());
+                }
             }
             "lisp" => match self.lisp_engine.borrow().run(argv[1].as_str()) {
                 Ok(val) => {
@@ -134,7 +138,7 @@ impl ShellProxy for Shell {
                     })
                     .collect();
                 let table = Table::new(vars).to_string();
-                self.print_stdout(table);
+                self.print_stdout(table.as_str());
             }
             "read" => {
                 let mut stdin = Vec::new();

@@ -467,6 +467,7 @@ impl<'a> Repl<'a> {
 
         // start repl loop
         self.print_prompt(&mut out);
+        self.check_background_jobs();
 
         let mut save_history_delay = Delay::new(Duration::from_millis(10_000)).fuse();
         loop {

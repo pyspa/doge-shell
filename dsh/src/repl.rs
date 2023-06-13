@@ -87,13 +87,32 @@ impl<'a> Repl<'a> {
     //     "🐕 < "
     // }
 
-    fn check_background_jobs(&mut self) {
-        let _out = std::io::stdout().lock();
+    fn check_background_jobs(&mut self, output: bool) {
+        let mut out = std::io::stdout().lock();
         let jobs = self.shell.check_job_state();
+        let exists = !jobs.is_empty();
+
+        if exists && output {
+            out.write(b"\r\n").ok();
+        }
+
         for job in jobs {
             if !job.foreground {
                 //
             }
+            if output {
+                out.write_fmt(format_args!(
+                    "\rdsh: job {} '{}' has ended\n",
+                    job.job_id, job.cmd
+                ))
+                .ok();
+            }
+        }
+
+        if exists && output {
+            // out.write(b"\r\n").ok();
+            self.print_prompt(&mut out);
+            out.flush().ok();
         }
     }
 
@@ -467,7 +486,7 @@ impl<'a> Repl<'a> {
 
         // start repl loop
         self.print_prompt(&mut out);
-        self.check_background_jobs();
+        self.shell.check_job_state();
 
         let mut save_history_delay = Delay::new(Duration::from_millis(10_000)).fuse();
         loop {
@@ -493,7 +512,7 @@ impl<'a> Repl<'a> {
                 },
 
                 _ = check_background_delay => {
-                    self.check_background_jobs();
+                    self.check_background_jobs(true);
                     //if self.shell.wait_jobs.is_empty() {
                     //    enable_raw_mode().ok();
                     //}

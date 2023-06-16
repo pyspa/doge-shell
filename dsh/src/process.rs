@@ -689,13 +689,12 @@ impl Job {
         }
     }
 
-    pub fn launch(&mut self, ctx: &mut Context, shell: &mut Shell) -> Result<ProcessState> {
+    pub async fn launch(&mut self, ctx: &mut Context, shell: &mut Shell) -> Result<ProcessState> {
         ctx.foreground = self.foreground;
 
-        self.process
-            .take()
-            .as_mut()
-            .map(|process| self.launch_process(ctx, shell, process));
+        if let Some(process) = self.process.take().as_mut() {
+            let _ = self.launch_process(ctx, shell, process);
+        }
 
         if ctx.foreground {
             Ok(self.last_process_state())
@@ -711,7 +710,9 @@ impl Job {
         shell: &mut Shell,
         process: &mut JobProcess,
     ) -> Result<()> {
-        let pipe_out = match process.next() {
+        // pipe ?
+        let mut next_process = process.next().take();
+        let pipe_out = match next_process {
             Some(_) => create_pipe(ctx)?,
             None => handle_output_redirect(ctx, &self.redirect, self.stdout)?,
         };
@@ -738,8 +739,10 @@ impl Job {
                 fork_process(ctx, self.pgid, process)?
             }
         };
+
         self.pid = Some(pid);
         self.state = process.get_state();
+
         if ctx.interactive {
             if self.pgid.is_none() {
                 self.pgid = Some(pid);
@@ -772,7 +775,6 @@ impl Job {
             close(stderr).context("failed close stderr")?;
         }
 
-        let mut next_process = process.next().take();
         self.set_process(process.to_owned());
 
         if let Some(ref redirect) = self.redirect {
@@ -803,7 +805,6 @@ impl Job {
             Ok(())
         } else if ctx.foreground {
             // foreground
-
             self.put_in_foreground(ctx, process, shell)
         } else {
             // background

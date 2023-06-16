@@ -7,6 +7,7 @@ use crate::parser::{self, Rule, ShellParser};
 use crate::process::{self, wait_pid, Job, JobProcess, ProcessState, Redirect};
 use anyhow::Context as _;
 use anyhow::{anyhow, bail, Result};
+use async_std::task;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dsh_types::{Context, ExitStatus};
 use dsh_wasm::WasmEngine;
@@ -128,7 +129,7 @@ impl Shell {
         std::io::stdout().flush().ok();
     }
 
-    pub fn eval_str(
+    pub async fn eval_str(
         &mut self,
         ctx: &mut Context,
         input: String,
@@ -159,7 +160,7 @@ impl Shell {
             );
 
             job.job_id = self.get_job_id(); // set job id
-            match job.launch(ctx, self)? {
+            match job.launch(ctx, self).await? {
                 process::ProcessState::Running => {
                     self.wait_jobs.push(job);
                 }
@@ -345,7 +346,7 @@ impl Shell {
     fn launch_subshell(&mut self, ctx: &mut Context, jobs: Vec<Job>) -> Result<()> {
         for mut job in jobs {
             disable_raw_mode().ok();
-            let pid = self.spawn_subshell(ctx, &mut job)?;
+            let pid = task::block_on(self.spawn_subshell(ctx, &mut job))?;
             debug!("spawned subshell pid: {:?}", pid);
             let res = wait_pid(pid, true);
             debug!("wait subshell pid: {:?}", res);
@@ -355,12 +356,12 @@ impl Shell {
         Ok(())
     }
 
-    fn spawn_subshell(&mut self, ctx: &mut Context, job: &mut Job) -> Result<Pid> {
+    async fn spawn_subshell(&mut self, ctx: &mut Context, job: &mut Job) -> Result<Pid> {
         let pid = unsafe { fork().context("failed fork")? };
         match pid {
             ForkResult::Parent { child } => Ok(child),
             ForkResult::Child => {
-                if let Ok(process::ProcessState::Completed(exit)) = job.launch(ctx, self) {
+                if let Ok(process::ProcessState::Completed(exit)) = job.launch(ctx, self).await {
                     if exit != 0 {
                         // TODO check
                         debug!("job exit code {:?}", exit);
@@ -452,7 +453,6 @@ impl Shell {
             match inner_pair.as_rule() {
                 Rule::simple_command => {
                     let mut job = Job::new(job_str.clone());
-
                     self.parse_command(ctx, &mut job, inner_pair)?;
                     if job.process.is_some() {
                         job.subshell = ctx.subshell;

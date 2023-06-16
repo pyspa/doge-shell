@@ -31,15 +31,19 @@ struct Cli {
 
 fn main() -> ExitCode {
     init_tracing();
+    task::block_on(run_shell())
+}
+
+async fn run_shell() -> ExitCode {
     let cli = Cli::parse();
     let env = Environment::new();
     let mut shell = Shell::new(env);
     let mut ctx = create_context(&shell);
 
     if let Some(command) = cli.command.as_deref() {
-        execute_command(&mut shell, &mut ctx, command)
+        execute_command(&mut shell, &mut ctx, command).await
     } else {
-        run_interactive(&mut shell, &mut ctx)
+        run_interactive(&mut shell, &mut ctx).await
     }
 }
 
@@ -52,11 +56,11 @@ fn create_context(shell: &Shell) -> Context {
     Context::new(shell.pid, shell.pgid, shell_tmode, true)
 }
 
-fn execute_command(shell: &mut Shell, ctx: &mut Context, command: &str) -> ExitCode {
+async fn execute_command(shell: &mut Shell, ctx: &mut Context, command: &str) -> ExitCode {
     debug!("start shell");
     shell.set_signals();
 
-    match shell.eval_str(ctx, command.to_string(), false) {
+    match shell.eval_str(ctx, command.to_string(), false).await {
         Ok(code) => {
             debug!("run command mode {:?} : {:?}", command, &code);
             code
@@ -68,7 +72,7 @@ fn execute_command(shell: &mut Shell, ctx: &mut Context, command: &str) -> ExitC
     }
 }
 
-fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
+async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
     debug!("start shell");
     shell.set_signals();
     ctx.save_history = false;
@@ -79,10 +83,10 @@ fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
     // }
 
     let mut repl = Repl::new(shell);
-    if let Err(err) = repl.shell.eval_str(ctx, "cd .".to_string(), true) {
+    if let Err(err) = repl.shell.eval_str(ctx, "cd .".to_string(), true).await {
         eprintln!("{:?}", err);
         return ExitCode::FAILURE;
     }
-    task::block_on(repl.run_interactive());
+    repl.run_interactive().await;
     ExitCode::from(0)
 }

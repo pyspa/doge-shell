@@ -1,6 +1,7 @@
 use crate::direnv::DirEnvironment;
 use crate::lisp::model::{Env, RuntimeError, Value};
 use crate::shell::Shell;
+use async_std::task;
 use dsh_types::Context;
 use nix::sys::termios::tcgetattr;
 use nix::unistd::pipe;
@@ -117,7 +118,11 @@ pub fn command(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
     }
 }
 
-pub fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+pub fn block_sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    task::block_on(sh(env, args))
+}
+
+pub async fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let mut cmd_args: Vec<String> = Vec::new();
 
     for arg in args {
@@ -150,7 +155,7 @@ pub fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError
     };
 
     ctx.captured_out = Some(pin);
-    if let Err(err) = shell.eval_str(&mut ctx, input, false) {
+    if let Err(err) = shell.eval_str(&mut ctx, input, false).await {
         eprintln!("error: {}", err);
         return Err(RuntimeError {
             msg: err.to_string(),
@@ -173,7 +178,11 @@ pub fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError
     Ok(Value::String(output))
 }
 
-pub fn sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+pub fn block_sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    task::block_on(sh_no_cap(env, args))
+}
+
+pub async fn sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let mut cmd_args: Vec<String> = Vec::new();
 
     for arg in args {
@@ -196,7 +205,7 @@ pub fn sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runti
 
     let mut ctx = Context::new(shell.pid, shell.pgid, shell_tmode, true);
     // ctx.captured_out = Some(pin);
-    if let Err(err) = shell.eval_str(&mut ctx, input, false) {
+    if let Err(err) = shell.eval_str(&mut ctx, input, false).await {
         eprintln!("error: {}", err);
         return Err(RuntimeError {
             msg: err.to_string(),
@@ -224,7 +233,7 @@ mod tests {
         let engine = LispEngine::new(env);
 
         let args = vec![Value::String("ls -al".to_string())];
-        let res = sh(Rc::clone(&engine.borrow().env), args.to_vec());
+        let res = block_sh(Rc::clone(&engine.borrow().env), args.to_vec());
         assert!(res.is_ok());
         println!("{}", res.unwrap());
 

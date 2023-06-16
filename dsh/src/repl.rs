@@ -178,11 +178,11 @@ impl<'a> Repl<'a> {
         }
     }
 
-    fn handle_event(&mut self, ev: ShellEvent) -> Result<()> {
+    async fn handle_event(&mut self, ev: ShellEvent) -> Result<()> {
         match ev {
             ShellEvent::Input(input) => {
                 if let Event::Key(key) = input {
-                    self.handle_key_event(&key)?
+                    self.handle_key_event(&key).await?
                 }
                 Ok(())
             }
@@ -303,7 +303,7 @@ impl<'a> Repl<'a> {
         queue!(out, cursor::Show).ok();
     }
 
-    fn handle_key_event(&mut self, ev: &KeyEvent) -> Result<()> {
+    async fn handle_key_event(&mut self, ev: &KeyEvent) -> Result<()> {
         let mut redraw = true;
         let mut reset_completion = false;
 
@@ -402,7 +402,11 @@ impl<'a> Repl<'a> {
                     self.completion.clear();
                     let shell_tmode = tcgetattr(0).expect("failed tcgetattr");
                     let mut ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);
-                    match self.shell.eval_str(&mut ctx, self.input.to_string(), false) {
+                    match self
+                        .shell
+                        .eval_str(&mut ctx, self.input.to_string(), false)
+                        .await
+                    {
                         Ok(code) => {
                             debug!("exit: {} : {:?}", self.input.as_str(), code);
                         }
@@ -424,7 +428,7 @@ impl<'a> Repl<'a> {
                     let input = self.input.to_string();
                     let shell_tmode = tcgetattr(0).expect("failed tcgetattr");
                     let mut ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);
-                    if let Err(err) = self.shell.eval_str(&mut ctx, input, true) {
+                    if let Err(err) = self.shell.eval_str(&mut ctx, input, true).await {
                         eprintln!("{:?}", err)
                     }
                     self.input.clear();
@@ -520,7 +524,7 @@ impl<'a> Repl<'a> {
                 maybe_event = event => {
                     match maybe_event {
                         Some(Ok(event)) => {
-                            if let Err(err) = self.handle_event(ShellEvent::Input(event)){
+                            if let Err(err) = self.handle_event(ShellEvent::Input(event)).await{
                                 self.shell.print_error(format!("Error: {:?}\r",err));
                                 break;
                             }

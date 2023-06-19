@@ -87,6 +87,12 @@ async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
         eprintln!("{:?}", err);
         return ExitCode::FAILURE;
     }
-    repl.run_interactive().await;
-    ExitCode::from(0)
+    match repl.run_interactive().await {
+        Err(err) => {
+            eprintln!("{:?}", err);
+            ExitCode::FAILURE
+        }
+        _ => ExitCode::from(0),
+    }
+    // ExitCode::from(0)
 }

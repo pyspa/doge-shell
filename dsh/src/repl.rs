@@ -87,13 +87,13 @@ impl<'a> Repl<'a> {
     //     "🐕 < "
     // }
 
-    fn check_background_jobs(&mut self, output: bool) {
+    async fn check_background_jobs(&mut self, output: bool) -> Result<()> {
         let mut out = std::io::stdout().lock();
-        let jobs = self.shell.check_job_state();
+        let jobs = self.shell.check_job_state().await?;
         let exists = !jobs.is_empty();
 
         if exists && output {
-            out.write(b"\r\n").ok();
+            out.write_all(b"\r\n")?;
         }
 
         for job in jobs {
@@ -104,16 +104,16 @@ impl<'a> Repl<'a> {
                 out.write_fmt(format_args!(
                     "\rdsh: job {} '{}' has ended\n",
                     job.job_id, job.cmd
-                ))
-                .ok();
+                ))?;
             }
         }
 
         if exists && output {
             // out.write(b"\r\n").ok();
             self.print_prompt(&mut out);
-            out.flush().ok();
+            out.flush()?;
         }
+        Ok(())
     }
 
     fn save_history(&mut self) {
@@ -475,7 +475,7 @@ impl<'a> Repl<'a> {
         Ok(())
     }
 
-    pub async fn run_interactive(&mut self) {
+    pub async fn run_interactive(&mut self) -> Result<()> {
         let mut reader = EventStream::new();
 
         self.setup();
@@ -490,7 +490,7 @@ impl<'a> Repl<'a> {
 
         // start repl loop
         self.print_prompt(&mut out);
-        self.shell.check_job_state();
+        self.shell.check_job_state().await?;
 
         let mut save_history_delay = Delay::new(Duration::from_millis(10_000)).fuse();
         loop {
@@ -516,10 +516,7 @@ impl<'a> Repl<'a> {
                 },
 
                 _ = check_background_delay => {
-                    self.check_background_jobs(true);
-                    //if self.shell.wait_jobs.is_empty() {
-                    //    enable_raw_mode().ok();
-                    //}
+                    self.check_background_jobs(true).await?;
                 },
                 maybe_event = event => {
                     match maybe_event {
@@ -547,6 +544,7 @@ impl<'a> Repl<'a> {
                 break;
             }
         }
+        Ok(())
     }
 
     pub fn select_history(&mut self) {

@@ -1,7 +1,9 @@
 use crate::shell::{Shell, SHELL_TERMINAL};
 use anyhow::Context as _;
 use anyhow::Result;
+use async_std::io::prelude::BufReadExt;
 use async_std::{fs, io, task};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dsh_builtin::BuiltinCommand;
 use dsh_types::{Context, ExitStatus};
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
@@ -929,6 +931,37 @@ impl Job {
         if let Some(process) = self.process.as_mut() {
             set_process_state(process, pid, state);
         }
+    }
+
+    pub async fn check_background_output(&mut self) -> Result<()> {
+        if let Some(process) = self.process.as_mut() {
+            let (stdout, stderr) = process.get_cap_out();
+            if let Some(stdout) = stdout {
+                let file = unsafe { fs::File::from_raw_fd(stdout) };
+                let mut reader = io::BufReader::new(file);
+                let mut len = 1;
+                while len != 0 {
+                    let mut line = String::new();
+                    len = reader.read_line(&mut line).await?;
+                    disable_raw_mode().ok();
+                    print!("{}", line);
+                    enable_raw_mode().ok();
+                }
+            }
+            if let Some(stderr) = stderr {
+                let file = unsafe { fs::File::from_raw_fd(stderr) };
+                let mut reader = io::BufReader::new(file);
+                let mut len = 1;
+                while len != 0 {
+                    let mut line = String::new();
+                    len = reader.read_line(&mut line).await?;
+                    disable_raw_mode().ok();
+                    print!("{}", line);
+                    enable_raw_mode().ok();
+                }
+            }
+        }
+        Ok(())
     }
 }
 

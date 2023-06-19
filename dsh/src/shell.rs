@@ -533,10 +533,13 @@ impl Shell {
         }
     }
 
-    pub fn check_job_state(&mut self) -> Vec<Job> {
+    pub async fn check_job_state(&mut self) -> Result<Vec<Job>> {
         let mut completed: Vec<Job> = Vec::new();
         let mut i = 0;
         while i < self.wait_jobs.len() {
+            if !self.wait_jobs[i].foreground {
+                self.wait_jobs[i].check_background_output().await?;
+            }
             if let Some(pid) = self.wait_jobs[i].pid {
                 match wait_pid(pid, true) {
                     Some((_pid, ProcessState::Completed(_))) => {
@@ -555,7 +558,7 @@ impl Shell {
                 i += 1;
             }
         }
-        completed
+        Ok(completed)
     }
 
     // pub fn chpwd2(&mut self, pwd: &str) {

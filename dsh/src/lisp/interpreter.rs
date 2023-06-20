@@ -214,7 +214,7 @@ fn eval_inner(
 
                     env.borrow_mut()
                         .shell_env
-                        .borrow_mut()
+                        .write()
                         .autocompletion
                         .push(entry);
 
@@ -293,7 +293,7 @@ fn eval_inner(
                         let_env
                             .borrow_mut()
                             .shell_env
-                            .borrow_mut()
+                            .write()
                             .variables
                             .insert(format!("${}", symbol), result.to_string());
                         let_env.borrow_mut().define(symbol.clone(), result);
@@ -308,7 +308,7 @@ fn eval_inner(
                     })?;
                     debug!(
                         "variables {:?}",
-                        let_env.borrow().shell_env.borrow().variables
+                        let_env.borrow().shell_env.read().variables
                     );
                     eval_block_inner(let_env, body.into_iter(), context)
                 }

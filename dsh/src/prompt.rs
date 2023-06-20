@@ -1,11 +1,13 @@
 use crate::environment::{ChangePwdHook, Environment};
 use anyhow::Result;
 use crossterm::style::Stylize;
+use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, BufWriter, StdoutLock, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::{cell::RefCell, rc::Rc};
+use std::sync::Arc;
+
 use tracing::debug;
 
 // TODO stash, rename, delete
@@ -19,10 +21,10 @@ const UNTRACKED: &str = "?";
 const MODIFIED: &str = "!";
 const NEW_FILE: &str = "+";
 
-impl ChangePwdHook for std::rc::Rc<RefCell<Prompt>> {
-    fn call(&self, pwd: &Path, _env: Rc<RefCell<Environment>>) -> Result<()> {
+impl ChangePwdHook for Arc<RwLock<Prompt>> {
+    fn call(&self, pwd: &Path, _env: Arc<RwLock<Environment>>) -> Result<()> {
         debug!("chpwd {:?}", pwd);
-        self.borrow_mut().set_current(pwd);
+        self.write().set_current(pwd);
         Ok(())
     }
 }

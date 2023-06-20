@@ -16,9 +16,11 @@ use futures::{future::FutureExt, select, StreamExt};
 use futures_timer::Delay;
 use nix::sys::termios::{tcgetattr, Termios};
 use nix::unistd::tcsetpgrp;
+use parking_lot::RwLock;
 use std::io::{StdoutLock, Write};
+use std::sync::Arc;
 use std::time::Duration;
-use std::{cell::RefCell, rc::Rc};
+
 use tracing::{debug, warn};
 
 const NONE: KeyModifiers = KeyModifiers::NONE;
@@ -41,7 +43,7 @@ pub struct Repl<'a> {
     history_search: Option<String>,
     start_completion: bool,
     completion: Completion,
-    prompt: Rc<RefCell<Prompt>>,
+    prompt: Arc<RwLock<Prompt>>,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -55,12 +57,12 @@ impl<'a> Repl<'a> {
         let current = std::env::current_dir().expect("failed get current dir");
         let prompt = Prompt::new(current, "🐕 < ".to_string());
 
-        let prompt = Rc::new(RefCell::new(prompt));
+        let prompt = Arc::new(RwLock::new(prompt));
         shell
             .environment
-            .borrow_mut()
+            .write()
             .chpwd_hooks
-            .push(Box::new(Rc::clone(&prompt)));
+            .push(Box::new(Arc::clone(&prompt)));
 
         Repl {
             shell,
@@ -128,7 +130,7 @@ impl<'a> Repl<'a> {
     }
 
     fn move_cursor_input_end(&self, out: &mut StdoutLock<'static>) {
-        let prompt_size = self.prompt.borrow().mark.chars().count();
+        let prompt_size = self.prompt.read().mark.chars().count();
         queue!(
             out,
             ResetColor,
@@ -149,7 +151,7 @@ impl<'a> Repl<'a> {
     // }
 
     fn print_prompt(&mut self, out: &mut StdoutLock<'static>) {
-        let prompt = self.prompt.borrow();
+        let prompt = self.prompt.write();
         let prompt_mark = &prompt.mark;
         prompt.print_preprompt(out);
         out.write(b"\r").ok();
@@ -211,7 +213,7 @@ impl<'a> Repl<'a> {
     pub fn print_input(&mut self, out: &mut StdoutLock<'static>, reset_completion: bool) {
         queue!(out, cursor::Hide).ok();
         let input = self.input.to_string();
-        let prompt_count = self.prompt.borrow_mut().mark.chars().count();
+        let prompt_count = self.prompt.write().mark.chars().count();
 
         let fg_color = Color::White;
         let mut completion: Option<String> = None;
@@ -230,7 +232,7 @@ impl<'a> Repl<'a> {
                     if word.is_empty() {
                         continue;
                     }
-                    if let Some(_found) = self.shell.environment.borrow().lookup(word) {
+                    if let Some(_found) = self.shell.environment.read().lookup(word) {
                         for pos in span.start()..span.end() {
                             // change color
                             match_index.push(pos);
@@ -243,7 +245,7 @@ impl<'a> Repl<'a> {
                     if current && completion.is_none() {
                         match rule {
                             Rule::argv0 => {
-                                if let Some(file) = self.shell.environment.borrow().search(word) {
+                                if let Some(file) = self.shell.environment.read().search(word) {
                                     if file.len() >= input.len() {
                                         completion = Some(file[input.len()..].to_string());
                                     }

@@ -1,12 +1,13 @@
 use crate::environment::Environment;
 use anyhow::{anyhow, ensure, Result};
+use parking_lot::RwLock;
 use pest::iterators::Pair;
 use pest::Parser;
 use pest::Span;
 use pest_derive::Parser;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::{cell::RefCell, rc::Rc};
+use std::sync::Arc;
 use tracing::debug;
 
 #[derive(Parser)]
@@ -256,13 +257,13 @@ fn expand_alias_tilde(
     Ok(argv)
 }
 
-pub fn expand_alias(input: String, environment: Rc<RefCell<Environment>>) -> Result<String> {
+pub fn expand_alias(input: String, environment: Arc<RwLock<Environment>>) -> Result<String> {
     let mut buf: Vec<String> = Vec::new();
     let pairs = ShellParser::parse(Rule::commands, &input).map_err(|e| anyhow!(e))?;
     let current_dir = std::env::current_dir()?;
     for pair in pairs {
         for pair in pair.into_inner() {
-            let mut commands = expand_command_alias(pair, Rc::clone(&environment), &current_dir)?;
+            let mut commands = expand_command_alias(pair, Arc::clone(&environment), &current_dir)?;
             buf.append(&mut commands);
         }
     }
@@ -271,7 +272,7 @@ pub fn expand_alias(input: String, environment: Rc<RefCell<Environment>>) -> Res
 
 fn expand_command_alias(
     pair: Pair<Rule>,
-    environment: Rc<RefCell<Environment>>,
+    environment: Arc<RwLock<Environment>>,
     current_dir: &PathBuf,
 ) -> Result<Vec<String>> {
     let mut buf: Vec<String> = Vec::new();
@@ -281,9 +282,9 @@ fn expand_command_alias(
             match inner_pair.as_rule() {
                 Rule::simple_command => {
                     let args =
-                        expand_alias_tilde(inner_pair, &environment.borrow().alias, current_dir)?;
+                        expand_alias_tilde(inner_pair, &environment.read().alias, current_dir)?;
                     for arg in args {
-                        if let Some(val) = environment.borrow().get_var(&arg) {
+                        if let Some(val) = environment.read().get_var(&arg) {
                             if val.is_empty() {
                                 buf.push("\"\"".to_string());
                             } else {
@@ -297,9 +298,9 @@ fn expand_command_alias(
                 }
                 Rule::simple_command_bg => {
                     let args =
-                        expand_alias_tilde(inner_pair, &environment.borrow().alias, current_dir)?;
+                        expand_alias_tilde(inner_pair, &environment.read().alias, current_dir)?;
                     for arg in args {
-                        if let Some(val) = environment.borrow().get_var(&arg) {
+                        if let Some(val) = environment.read().get_var(&arg) {
                             if val.is_empty() {
                                 buf.push("\"\"".to_string());
                             } else {
@@ -315,9 +316,9 @@ fn expand_command_alias(
                 Rule::pipe_command => {
                     buf.push("|".to_string());
                     let args =
-                        expand_alias_tilde(inner_pair, &environment.borrow().alias, current_dir)?;
+                        expand_alias_tilde(inner_pair, &environment.read().alias, current_dir)?;
                     for arg in args {
-                        if let Some(val) = environment.borrow().get_var(&arg) {
+                        if let Some(val) = environment.read().get_var(&arg) {
                             if val.is_empty() {
                                 buf.push("\"\"".to_string());
                             } else {
@@ -893,53 +894,53 @@ mod tests {
         init();
         let env = crate::environment::Environment::new();
 
-        env.borrow_mut()
+        env.write()
             .alias
             .insert("alias".to_string(), "echo 'test' | sk ".to_string());
-        env.borrow_mut()
+        env.write()
             .variables
             .insert("$FOO".to_string(), "BAR".to_string());
 
         let input = r#"alias abc " test" '-vvv' --foo "#.to_string();
-        let replaced = expand_alias(input, Rc::clone(&env))?;
+        let replaced = expand_alias(input, Arc::clone(&env))?;
         assert_eq!(
             replaced,
             r#"echo 'test' | sk abc " test" '-vvv' --foo"#.to_string()
         );
 
         let input = r#"alias abc " test" '-vvv' --foo &"#.to_string();
-        let replaced = expand_alias(input, Rc::clone(&env))?;
+        let replaced = expand_alias(input, Arc::clone(&env))?;
         assert_eq!(
             replaced,
             r#"echo 'test' | sk abc " test" '-vvv' --foo &"#.to_string()
         );
 
         let input = r#"alias | abc " test" '-vvv' --foo &"#.to_string();
-        let replaced = expand_alias(input, Rc::clone(&env))?;
+        let replaced = expand_alias(input, Arc::clone(&env))?;
         assert_eq!(
             replaced,
             r#"echo 'test' | sk | abc " test" '-vvv' --foo &"#.to_string()
         );
 
         let input = r#"sh -c | alias " test" '-vvv' --foo &"#.to_string();
-        let replaced = expand_alias(input, Rc::clone(&env))?;
+        let replaced = expand_alias(input, Arc::clone(&env))?;
         assert_eq!(
             replaced,
             r#"sh -c | echo 'test' | sk " test" '-vvv' --foo &"#.to_string()
         );
 
         let input = r#"echo (alias " test" '-vvv' --foo) "#.to_string();
-        let replaced = expand_alias(input, Rc::clone(&env))?;
+        let replaced = expand_alias(input, Arc::clone(&env))?;
         assert_eq!(
             replaced,
             r#"echo ( echo 'test' | sk " test" '-vvv' --foo )"#.to_string()
         );
         let input = r#"echo $FOO"#.to_string();
-        let replaced = expand_alias(input, Rc::clone(&env))?;
+        let replaced = expand_alias(input, Arc::clone(&env))?;
         assert_eq!(replaced, r#"echo BAR"#.to_string());
 
         let input = r#"echo 'test' > test.log"#.to_string();
-        let replaced = expand_alias(input, Rc::clone(&env))?;
+        let replaced = expand_alias(input, Arc::clone(&env))?;
         assert_eq!(replaced, r#"echo 'test' > test.log"#.to_string());
 
         Ok(())

@@ -4,6 +4,8 @@ use crate::lisp::interpreter::eval;
 pub use crate::lisp::model::Value;
 use crate::lisp::model::{Env, List, RuntimeError, Symbol};
 use crate::lisp::parser::parse;
+use parking_lot::RwLock;
+use std::sync::Arc;
 use std::{cell::RefCell, rc::Rc};
 
 mod builtin;
@@ -19,14 +21,14 @@ pub const CONFIG_FILE: &str = "config.lisp";
 #[derive(Debug)]
 pub struct LispEngine {
     pub env: Rc<RefCell<Env>>,
-    pub shell_env: Rc<RefCell<Environment>>,
+    pub shell_env: Arc<RwLock<Environment>>,
 }
 
 impl LispEngine {
-    pub fn new(shell_env: Rc<RefCell<Environment>>) -> Rc<RefCell<Self>> {
-        let env = make_env(Rc::clone(&shell_env));
+    pub fn new(shell_env: Arc<RwLock<Environment>>) -> Rc<RefCell<Self>> {
+        let env = make_env(Arc::clone(&shell_env));
         Rc::new(RefCell::new(LispEngine {
-            shell_env: Rc::clone(&shell_env),
+            shell_env: Arc::clone(&shell_env),
             env: Rc::clone(&env),
         }))
     }
@@ -105,7 +107,7 @@ impl LispEngine {
     }
 }
 
-pub fn make_env(environment: Rc<RefCell<Environment>>) -> Rc<RefCell<Env>> {
+pub fn make_env(environment: Arc<RwLock<Environment>>) -> Rc<RefCell<Env>> {
     let env = Rc::new(RefCell::new(default_env(environment)));
 
     // add builtin functions

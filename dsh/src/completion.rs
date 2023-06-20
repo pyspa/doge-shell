@@ -5,6 +5,7 @@ use crate::lisp::Value;
 use crate::repl::Repl;
 use anyhow::Result;
 use dsh_frecency::ItemStats;
+
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use skim::prelude::*;
@@ -276,10 +277,10 @@ pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String>
 fn completion_from_lisp(input: &Input, repl: &Repl, query: Option<&str>) -> Option<String> {
     // TODO convert input
     let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
-    let environment = Rc::clone(&lisp_engine.borrow().shell_env);
+    let environment = Arc::clone(&lisp_engine.borrow().shell_env);
 
     // 1. completion from autocomplete
-    for compl in environment.borrow().autocompletion.iter() {
+    for compl in environment.read().autocompletion.iter() {
         let cmd_str = compl.target.to_string();
         // debug!("match cmd:'{}' in:'{}'", cmd_str, replace_space(input));
         if replace_space(input.as_str()).starts_with(cmd_str.as_str()) {
@@ -325,7 +326,7 @@ fn completion_from_lisp(input: &Input, repl: &Repl, query: Option<&str>) -> Opti
 
 fn completion_from_current(_input: &Input, repl: &Repl, query: Option<&str>) -> Option<String> {
     let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
-    let environment = Rc::clone(&lisp_engine.borrow().shell_env);
+    let environment = Arc::clone(&lisp_engine.borrow().shell_env);
 
     // 2 . try completion
     if let Some(query_str) = query {
@@ -360,7 +361,7 @@ fn completion_from_current(_input: &Input, repl: &Repl, query: Option<&str>) -> 
         // path
         let mut items = get_file_completions(path_str.as_str(), path.to_str().unwrap());
         if !only_path {
-            let mut cmds_items = get_commands(&environment.borrow().paths, query_str);
+            let mut cmds_items = get_commands(&environment.read().paths, query_str);
             items.append(&mut cmds_items);
         }
         select_item(items, Some(path_query))
@@ -371,11 +372,11 @@ fn completion_from_current(_input: &Input, repl: &Repl, query: Option<&str>) -> 
 
 fn completion_from_chatgpt(input: &Input, repl: &Repl, _query: Option<&str>) -> Option<String> {
     let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
-    let environment = Rc::clone(&lisp_engine.borrow().shell_env);
+    let environment = Arc::clone(&lisp_engine.borrow().shell_env);
 
     // ChatGPT Completion
     if let Some(api_key) = environment
-        .borrow()
+        .read()
         .variables
         .get("OPEN_AI_API_KEY")
         .map(|val| val.to_string())

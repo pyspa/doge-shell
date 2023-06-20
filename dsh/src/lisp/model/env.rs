@@ -1,7 +1,9 @@
 use super::{RuntimeError, Symbol, Value};
 use crate::environment::Environment;
+use parking_lot::RwLock;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::{collections::HashMap, fmt::Debug};
 
 /// An environment of symbol bindings. Used for the base environment, for
@@ -10,12 +12,12 @@ use std::{collections::HashMap, fmt::Debug};
 pub struct Env {
     parent: Option<Rc<RefCell<Env>>>,
     entries: HashMap<Symbol, Value>,
-    pub shell_env: Rc<RefCell<Environment>>,
+    pub shell_env: Arc<RwLock<Environment>>,
 }
 
 impl Env {
     /// Create a new, empty environment
-    pub fn new(shell_env: Rc<RefCell<Environment>>) -> Self {
+    pub fn new(shell_env: Arc<RwLock<Environment>>) -> Self {
         Self {
             parent: None,
             entries: HashMap::new(),
@@ -25,7 +27,7 @@ impl Env {
 
     /// Create a new environment extending the given environment
     pub fn extend(parent: Rc<RefCell<Env>>) -> Self {
-        let shell_env = Rc::clone(&parent.borrow_mut().shell_env);
+        let shell_env = Arc::clone(&parent.borrow_mut().shell_env);
         Self {
             parent: Some(parent),
             entries: HashMap::new(),

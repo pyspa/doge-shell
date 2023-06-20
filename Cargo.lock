@@ -1130,6 +1130,7 @@ dependencies = [
  "libc",
  "nix 0.26.2",
  "once_cell",
+ "parking_lot 0.12.1",
  "pest",
  "pest_derive",
  "regex",

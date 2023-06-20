@@ -45,10 +45,7 @@ impl ShellProxy for Shell {
     }
 
     fn insert_path(&mut self, idx: usize, path: &str) {
-        self.environment
-            .borrow_mut()
-            .paths
-            .insert(idx, path.to_string());
+        self.environment.write().paths.insert(idx, path.to_string());
     }
 
     fn dispatch(&mut self, ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()> {
@@ -129,7 +126,7 @@ impl ShellProxy for Shell {
             "var" => {
                 let vars: Vec<Var> = self
                     .environment
-                    .borrow()
+                    .read()
                     .variables
                     .iter()
                     .map(|x| Var {
@@ -154,7 +151,7 @@ impl ShellProxy for Shell {
                     .trim_end_matches('\n')
                     .to_owned();
 
-                self.environment.borrow_mut().variables.insert(key, output);
+                self.environment.write().variables.insert(key, output);
             }
             _ => {}
         }
@@ -162,11 +159,11 @@ impl ShellProxy for Shell {
     }
 
     fn get_var(&mut self, key: &str) -> Option<String> {
-        self.environment.borrow().get_var(key)
+        self.environment.read().get_var(key)
     }
 
     fn set_var(&mut self, key: String, value: String) {
-        self.environment.borrow_mut().variables.insert(key, value);
+        self.environment.write().variables.insert(key, value);
     }
 
     fn set_env_var(&mut self, key: String, value: String) {
@@ -178,7 +175,7 @@ impl ShellProxy for Shell {
             let env_path = path_vec.join(":");
             std::env::set_var("PATH", &env_path);
             debug!("set env {} {}", &key, &env_path);
-            self.environment.borrow_mut().reload_path();
+            self.environment.write().reload_path();
         } else {
             std::env::set_var(&key, &value);
             debug!("set env {} {}", &key, &value);

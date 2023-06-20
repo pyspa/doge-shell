@@ -4,14 +4,15 @@ use crate::dirs::search_file;
 use crate::shell::APP_NAME;
 use anyhow::Context as _;
 use anyhow::Result;
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
-use std::{cell::RefCell, rc::Rc};
+use std::sync::Arc;
 use tracing::debug;
 
 pub trait ChangePwdHook {
-    fn call(&self, pwd: &Path, env: Rc<RefCell<Environment>>) -> Result<()>;
+    fn call(&self, pwd: &Path, env: Arc<RwLock<Environment>>) -> Result<()>;
 }
 
 pub struct Environment {
@@ -24,7 +25,7 @@ pub struct Environment {
 }
 
 impl Environment {
-    pub fn new() -> Rc<RefCell<Self>> {
+    pub fn new() -> Arc<RwLock<Self>> {
         let mut paths = ["/bin", "/usr/bin", "/sbin", "/usr/sbin"]
             .iter()
             .map(|s| s.to_string())
@@ -36,7 +37,7 @@ impl Environment {
 
         debug!("default path {:?}", &paths);
 
-        Rc::new(RefCell::new(Environment {
+        Arc::new(RwLock::new(Environment {
             alias: HashMap::new(),
             autocompletion: Vec::new(),
             variables: HashMap::new(),
@@ -46,14 +47,14 @@ impl Environment {
         }))
     }
 
-    pub fn extend(parent: Rc<RefCell<Environment>>) -> Rc<RefCell<Self>> {
-        let alias = parent.borrow().alias.clone();
-        let paths = parent.borrow().paths.clone();
-        let autocompletion = parent.borrow().autocompletion.clone();
-        let variables = parent.borrow().variables.clone();
-        let direnv_roots = parent.borrow().direnv_roots.clone();
+    pub fn extend(parent: Arc<RwLock<Environment>>) -> Arc<RwLock<Self>> {
+        let alias = parent.read().alias.clone();
+        let paths = parent.read().paths.clone();
+        let autocompletion = parent.read().autocompletion.clone();
+        let variables = parent.read().variables.clone();
+        let direnv_roots = parent.read().direnv_roots.clone();
 
-        Rc::new(RefCell::new(Environment {
+        Arc::new(RwLock::new(Environment {
             alias,
             autocompletion,
             variables,
@@ -170,7 +171,7 @@ mod tests {
     fn test_lookup() {
         init();
         let env = Environment::new();
-        let p = env.borrow().lookup("touch");
+        let p = env.read().lookup("touch");
         assert_eq!(Some("/usr/bin/touch".to_string()), p)
     }
 
@@ -178,19 +179,19 @@ mod tests {
     fn test_extend() {
         init();
         let env = Environment::new();
-        let env1 = Rc::clone(&env);
-        env.borrow_mut()
+        let env1 = Arc::clone(&env);
+        env.write()
             .variables
             .insert("test".to_string(), "value".to_string());
 
         let env2 = Environment::extend(env);
-        let env2_clone = Rc::clone(&env2);
+        let env2_clone = Arc::clone(&env2);
 
-        env2.borrow_mut()
+        env2.write()
             .variables
             .insert("test2".to_string(), "value2".to_string());
 
-        let env2_clone = env2_clone.borrow();
+        let env2_clone = env2_clone.read();
         let v = env2_clone.variables.get("test");
         assert_eq!("value".to_string(), *v.unwrap());
         assert_eq!(
@@ -198,6 +199,6 @@ mod tests {
             *env2_clone.variables.get("test2").unwrap()
         );
 
-        assert_eq!(1, env1.borrow().variables.len());
+        assert_eq!(1, env1.read().variables.len());
     }
 }

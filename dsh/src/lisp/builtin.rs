@@ -5,10 +5,12 @@ use async_std::task;
 use dsh_types::Context;
 use nix::sys::termios::tcgetattr;
 use nix::unistd::pipe;
+
 use std::fs::File;
 use std::io::prelude::*;
 use std::os::unix::io::FromRawFd;
 use std::process::Command;
+use std::sync::Arc;
 use std::{cell::RefCell, rc::Rc};
 use tracing::debug;
 
@@ -26,7 +28,7 @@ pub fn set_env(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtime
         let env_path = path_vec.join(":");
         std::env::set_var("PATH", &env_path);
         debug!("set env {} {}", &key, &env_path);
-        env.borrow().shell_env.borrow_mut().paths = path_vec;
+        env.borrow().shell_env.write().paths = path_vec;
     } else {
         let val = &args[1];
         std::env::set_var(&key, val.to_string());
@@ -41,7 +43,7 @@ pub fn set_variable(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
     debug!("set variable {} {}", &key, &val);
     env.borrow()
         .shell_env
-        .borrow_mut()
+        .write()
         .variables
         .insert(key.to_string(), val.to_string());
     Ok(Value::NIL)
@@ -52,7 +54,7 @@ pub fn alias(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeEr
     let command = &args[1];
     env.borrow()
         .shell_env
-        .borrow_mut()
+        .write()
         .alias
         .insert(alias.to_string(), command.to_string());
     Ok(Value::NIL)
@@ -64,11 +66,7 @@ pub fn allow_direnv(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
         let root = shellexpand::tilde(root.as_str());
         // TODO check error
         let direnv = DirEnvironment::new(root.to_string()).unwrap();
-        env.borrow()
-            .shell_env
-            .borrow_mut()
-            .direnv_roots
-            .push(direnv);
+        env.borrow().shell_env.write().direnv_roots.push(direnv);
     }
     Ok(Value::NIL)
 }
@@ -79,7 +77,7 @@ pub fn add_path(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
         let path = shellexpand::tilde(path.as_str());
         env.borrow()
             .shell_env
-            .borrow_mut()
+            .write()
             .paths
             .insert(0, path.to_string());
     }
@@ -131,7 +129,7 @@ pub async fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
     }
     let input = cmd_args.join(" ");
 
-    let mut shell = Shell::new(Rc::clone(&env.borrow().shell_env));
+    let mut shell = Shell::new(Arc::clone(&env.borrow().shell_env));
     shell.set_signals();
     let shell_tmode = match tcgetattr(0) {
         Ok(tmode) => tmode,
@@ -191,7 +189,7 @@ pub async fn sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value,
     }
     let input = cmd_args.join(" ");
 
-    let mut shell = Shell::new(Rc::clone(&env.borrow().shell_env));
+    let mut shell = Shell::new(Arc::clone(&env.borrow().shell_env));
     shell.set_signals();
     let shell_tmode = match tcgetattr(0) {
         Ok(tmode) => tmode,

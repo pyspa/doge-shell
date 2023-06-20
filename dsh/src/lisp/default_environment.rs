@@ -7,7 +7,6 @@ use crate::{
         utils::{require_arg, require_typed_arg},
     },
 };
-
 use cfg_if::cfg_if;
 use std::{cell::RefCell, collections::HashMap, convert::TryInto, rc::Rc};
 cfg_if! {
@@ -15,11 +14,13 @@ cfg_if! {
         use num_traits::ToPrimitive;
     }
 }
+use parking_lot::RwLock;
+use std::sync::Arc;
 
 /// Initialize an instance of `Env` with several core Lisp functions implemented
 /// in Rust. **Without this, you will only have access to the functions you
 /// implement yourself.**
-pub fn default_env(environment: Rc<RefCell<Environment>>) -> Env {
+pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
     let mut env = Env::new(environment);
 
     env.define(

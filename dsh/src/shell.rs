@@ -15,6 +15,7 @@ use libc::{c_int, STDIN_FILENO};
 use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::sys::termios::tcgetattr;
 use nix::unistd::{close, fork, getpid, pipe, setpgid, ForkResult, Pid};
+use parking_lot::RwLock;
 use pest::iterators::Pair;
 use pest::Parser;
 use std::fs::File;
@@ -47,7 +48,7 @@ impl ParseContext {
 }
 
 pub struct Shell {
-    pub environment: Rc<RefCell<Environment>>,
+    pub environment: Arc<RwLock<Environment>>,
     pub exited: Option<ExitStatus>,
     pub pid: Pid,
     pub pgid: Pid,
@@ -76,7 +77,7 @@ impl Drop for Shell {
 }
 
 impl Shell {
-    pub fn new(environment: Rc<RefCell<Environment>>) -> Self {
+    pub fn new(environment: Arc<RwLock<Environment>>) -> Self {
         let pid = getpid();
         let pgid = pid;
 
@@ -88,7 +89,7 @@ impl Shell {
         let path_history = Arc::new(Mutex::new(path_history));
 
         let wasm_engine = WasmEngine::new(APP_NAME);
-        let lisp_engine = lisp::LispEngine::new(Rc::clone(&environment));
+        let lisp_engine = lisp::LispEngine::new(Arc::clone(&environment));
         if let Err(err) = lisp_engine.borrow().run_config_lisp() {
             eprintln!("failed load init lisp {err:?}");
         }
@@ -185,7 +186,7 @@ impl Shell {
     fn get_jobs(&mut self, input: String) -> Result<Vec<Job>> {
         // TODO tests
 
-        let input = parser::expand_alias(input, Rc::clone(&self.environment))?;
+        let input = parser::expand_alias(input, Arc::clone(&self.environment))?;
 
         let mut pairs = ShellParser::parse(Rule::commands, &input).map_err(|e| anyhow!(e))?;
         let mut ctx = ParseContext::new(true);
@@ -417,7 +418,7 @@ impl Shell {
             let cmd_fn = dsh_builtin::lisp::run;
             let builtin = process::BuiltinProcess::new(cmd.to_string(), cmd_fn, argv);
             current_job.set_process(JobProcess::Builtin(builtin));
-        } else if let Some(cmd) = self.environment.borrow().lookup(cmd) {
+        } else if let Some(cmd) = self.environment.read().lookup(cmd) {
             let process = process::Process::new(cmd, argv);
             current_job.set_process(JobProcess::Command(process));
             current_job.foreground = ctx.foreground;
@@ -514,11 +515,11 @@ impl Shell {
     pub fn exec_chpwd_hooks(&mut self, pwd: &str) -> Result<()> {
         let pwd = Path::new(pwd);
 
-        chpwd_update_env(pwd, Rc::clone(&self.environment))?;
-        direnv::check_path(pwd, Rc::clone(&self.environment))?;
+        chpwd_update_env(pwd, Arc::clone(&self.environment))?;
+        direnv::check_path(pwd, Arc::clone(&self.environment))?;
 
-        for hook in &self.environment.borrow().chpwd_hooks {
-            hook.call(pwd, Rc::clone(&self.environment))?;
+        for hook in &self.environment.read().chpwd_hooks {
+            hook.call(pwd, Arc::clone(&self.environment))?;
         }
         Ok(())
     }
@@ -571,7 +572,7 @@ impl Shell {
     // }
 }
 
-fn chpwd_update_env(pwd: &Path, _env: Rc<RefCell<Environment>>) -> Result<()> {
+fn chpwd_update_env(pwd: &Path, _env: Arc<RwLock<Environment>>) -> Result<()> {
     debug!("chpwd update env {:?}", pwd);
     std::env::set_var("PWD", pwd);
     Ok(())

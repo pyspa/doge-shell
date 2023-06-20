@@ -1,9 +1,10 @@
 use crate::environment::Environment;
 use anyhow::Result;
+use parking_lot::RwLock;
 use std::fs;
 use std::io::{BufWriter, StdoutLock, Write};
 use std::path::{Path, PathBuf};
-use std::{cell::RefCell, rc::Rc};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub enum Entry {
@@ -153,8 +154,8 @@ fn read_envrc_config_file(file: &str) -> Result<Vec<Entry>> {
     Ok(ret)
 }
 
-pub fn check_path(pwd: &Path, environment: Rc<RefCell<Environment>>) -> Result<()> {
-    let environment = &mut environment.borrow_mut();
+pub fn check_path(pwd: &Path, environment: Arc<RwLock<Environment>>) -> Result<()> {
+    let environment = &mut environment.write();
     let entries = &mut environment.direnv_roots;
     let out = std::io::stdout().lock();
     let mut out = BufWriter::new(out);

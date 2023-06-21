@@ -15,6 +15,7 @@ use std::ffi::CString;
 use std::fmt::Debug;
 use std::os::unix::io::FromRawFd;
 use std::os::unix::io::RawFd;
+use std::time::Duration;
 
 use tracing::{debug, error};
 
@@ -796,16 +797,16 @@ impl Job {
         // let tmodes = tcgetattr(SHELL_TERMINAL).context("failed tcgetattr wait")?;
         // self.tmodes = Some(tmodes);
 
-        let (stdout, _stderr) = process.get_cap_out();
+        let (stdout, stderr) = process.get_cap_out();
         if let Some(stdout) = stdout {
             let monitor = OutputMonitor::new(stdout);
             self.monitors.push(monitor);
         }
 
-        // if let Some(stderr) = stderr {
-        //     let monitor = OutputMonitor::new(stderr);
-        //     self.monitors.push(monitor);
-        // }
+        if let Some(stderr) = stderr {
+            let monitor = OutputMonitor::new(stderr);
+            self.monitors.push(monitor);
+        }
 
         Ok(())
     }
@@ -936,26 +937,40 @@ impl OutputMonitor {
 
     pub async fn output(&mut self) -> Result<usize> {
         let mut line = String::new();
-        let len = self.reader.read_line(&mut line).await?;
-        disable_raw_mode().ok();
-        if self.outputed {
-            self.outputed = true;
-            print!("\r\n{}", line);
-        } else {
-            print!("{}", line);
+        match io::timeout(Duration::from_millis(500), self.reader.read_line(&mut line)).await {
+            Ok(len) => {
+                disable_raw_mode().ok();
+                if !self.outputed {
+                    self.outputed = true;
+                    print!("\n\r{}", line);
+                } else {
+                    print!("{}", line);
+                }
+                enable_raw_mode().ok();
+                Ok(len)
+            }
+            Err(_err) => Ok(0),
         }
-        enable_raw_mode().ok();
-        Ok(len)
     }
 
     pub async fn output_all(&mut self) -> Result<()> {
         let mut len = 1;
         while len != 0 {
             let mut line = String::new();
-            len = self.reader.read_line(&mut line).await?;
-            disable_raw_mode().ok();
-            print!("{}", line);
-            enable_raw_mode().ok();
+            match io::timeout(Duration::from_millis(500), self.reader.read_line(&mut line)).await {
+                Ok(readed) => {
+                    disable_raw_mode().ok();
+                    if !self.outputed {
+                        self.outputed = true;
+                        print!("\r{}", line);
+                    } else {
+                        print!("{}", line);
+                    }
+                    enable_raw_mode().ok();
+                    len = readed;
+                }
+                Err(_err) => {}
+            }
         }
         Ok(())
     }

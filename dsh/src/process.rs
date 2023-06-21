@@ -15,6 +15,7 @@ use std::ffi::CString;
 use std::fmt::Debug;
 use std::os::unix::io::FromRawFd;
 use std::os::unix::io::RawFd;
+
 use tracing::{debug, error};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,91 +75,6 @@ fn copy_fd(src: RawFd, dst: RawFd) {
         close(src).expect("failed close");
     }
 }
-
-// fn get_job_id(shell: &Shell) -> usize {
-//     if shell.wait_jobs.is_empty() {
-//         1
-//     } else if let Some(wait) = shell.wait_jobs.last() {
-//         wait.wait_job_id + 1
-//     } else {
-//         1
-//     }
-// }
-
-// #[derive(Debug)]
-// pub struct WaitJob {
-//     pub job_id: String,
-//     pub wait_job_id: usize,
-//     pub pid: Pid,
-//     pub cmd: String,
-//     pub stdout: Option<RawFd>,
-//     pub stderr: Option<RawFd>,
-//     pub foreground: bool,
-//     pub state: ProcessState,
-// }
-
-// impl WaitJob {
-//     pub fn new(
-//         job: &Job,
-//         job_process: &JobProcess,
-//         shell: &Shell,
-//         pid: Pid,
-//         foreground: bool,
-//     ) -> Self {
-//         let (stdout, stderr) = job_process.get_cap_out();
-//         WaitJob {
-//             job_id: job.id.clone(),
-//             wait_job_id: 1,
-//             // wait_job_id: get_job_id(shell),
-//             pid,
-//             cmd: job.cmd.clone(),
-//             stdout,
-//             stderr,
-//             foreground,
-//             state: ProcessState::Running,
-//         }
-//     }
-
-//     pub fn output(&self) {
-//         if let Some(fd) = self.stdout {
-//             let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
-//             let mut buf = String::new();
-//             let mut out = std::io::stdout().lock();
-
-//             match file.read_to_string(&mut buf) {
-//                 Ok(size) => {
-//                     if size > 0 {
-//                         disable_raw_mode().ok();
-//                         out.write(buf.as_bytes()).ok();
-//                         enable_raw_mode().ok();
-//                     }
-//                 }
-
-//                 Err(_err) => {
-//                     // break;
-//                 }
-//             }
-//         }
-
-//         // if let Some(fd) = self.stderr {
-//         //     let mut file = unsafe { File::from_raw_fd(fd) };
-//         //     let mut buf = String::new();
-//         //     match file.read_to_string(&mut buf) {
-//         //         Ok(size) => {
-//         //             if size > 0 {
-//         //                 disable_raw_mode().ok();
-//         //                 eprint!("{}", buf);
-//         //                 enable_raw_mode().ok();
-//         //             }
-//         //         }
-
-//         //         Err(_err) => {
-//         //             // break;
-//         //         }
-//         //     }
-//         // }
-//     }
-// }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListOp {
@@ -592,7 +508,7 @@ impl Process {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Job {
     pub id: String,
     pub cmd: String,
@@ -612,6 +528,7 @@ pub struct Job {
     pub list_op: ListOp,
     pub job_id: usize,
     pub state: ProcessState,
+    monitors: Vec<OutputMonitor>,
 }
 
 impl Job {
@@ -637,6 +554,7 @@ impl Job {
             list_op: ListOp::None,
             job_id: 1,
             state: ProcessState::Running,
+            monitors: Vec::new(),
         }
     }
 
@@ -661,6 +579,7 @@ impl Job {
             list_op: ListOp::None,
             job_id: 1,
             state: ProcessState::Running,
+            monitors: Vec::new(),
         }
     }
 
@@ -877,6 +796,17 @@ impl Job {
         // let tmodes = tcgetattr(SHELL_TERMINAL).context("failed tcgetattr wait")?;
         // self.tmodes = Some(tmodes);
 
+        let (stdout, _stderr) = process.get_cap_out();
+        if let Some(stdout) = stdout {
+            let monitor = OutputMonitor::new(stdout);
+            self.monitors.push(monitor);
+        }
+
+        // if let Some(stderr) = stderr {
+        //     let monitor = OutputMonitor::new(stderr);
+        //     self.monitors.push(monitor);
+        // }
+
         Ok(())
     }
 
@@ -934,32 +864,98 @@ impl Job {
     }
 
     pub async fn check_background_output(&mut self) -> Result<()> {
-        if let Some(process) = self.process.as_mut() {
-            let (stdout, stderr) = process.get_cap_out();
-            if let Some(stdout) = stdout {
-                let file = unsafe { fs::File::from_raw_fd(stdout) };
-                let mut reader = io::BufReader::new(file);
-                let mut len = 1;
-                while len != 0 {
-                    let mut line = String::new();
-                    len = reader.read_line(&mut line).await?;
-                    disable_raw_mode().ok();
-                    print!("{}", line);
-                    enable_raw_mode().ok();
-                }
-            }
-            if let Some(stderr) = stderr {
-                let file = unsafe { fs::File::from_raw_fd(stderr) };
-                let mut reader = io::BufReader::new(file);
-                let mut len = 1;
-                while len != 0 {
-                    let mut line = String::new();
-                    len = reader.read_line(&mut line).await?;
-                    disable_raw_mode().ok();
-                    print!("{}", line);
-                    enable_raw_mode().ok();
-                }
-            }
+        let mut i = 0;
+        while i < self.monitors.len() {
+            let _ = self.monitors[i].output().await?;
+            i += 1;
+        }
+        Ok(())
+    }
+
+    pub async fn check_background_all_output(&mut self) -> Result<()> {
+        let mut i = 0;
+        while i < self.monitors.len() {
+            self.monitors[i].output_all().await?;
+            i += 1;
+        }
+        Ok(())
+    }
+
+    // pub async fn check_background_output2(&self) -> Result<()> {
+    //     if let Some(ref process) = self.process {
+    //         let (stdout, stderr) = process.get_cap_out();
+    //         if let Some(stdout) = stdout {
+    //             let file = unsafe { fs::File::from_raw_fd(stdout) };
+    //             let mut reader = io::BufReader::new(file);
+    //             let mut len = 1;
+    //             while len != 0 {
+    //                 let mut line = String::new();
+    //                 len = reader.read_line(&mut line).await?;
+    //                 disable_raw_mode().ok();
+    //                 print!("{}", line);
+    //                 enable_raw_mode().ok();
+    //             }
+    //         }
+    //         if let Some(stderr) = stderr {
+    //             let file = unsafe { fs::File::from_raw_fd(stderr) };
+    //             let mut reader = io::BufReader::new(file);
+    //             let mut len = 1;
+    //             while len != 0 {
+    //                 let mut line = String::new();
+    //                 len = reader.read_line(&mut line).await?;
+    //                 disable_raw_mode().ok();
+    //                 print!("{}", line);
+    //                 enable_raw_mode().ok();
+    //             }
+    //         }
+    //     }
+    //     Ok(())
+    // }
+}
+
+pub struct OutputMonitor {
+    reader: io::BufReader<fs::File>,
+    outputed: bool,
+}
+
+impl std::fmt::Debug for OutputMonitor {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
+        f.debug_struct("OutputMonitor").finish()
+    }
+}
+
+impl OutputMonitor {
+    pub fn new(fd: RawFd) -> Self {
+        let file = unsafe { fs::File::from_raw_fd(fd) };
+        let reader = io::BufReader::new(file);
+        OutputMonitor {
+            reader,
+            outputed: false,
+        }
+    }
+
+    pub async fn output(&mut self) -> Result<usize> {
+        let mut line = String::new();
+        let len = self.reader.read_line(&mut line).await?;
+        disable_raw_mode().ok();
+        if self.outputed {
+            self.outputed = true;
+            print!("\r\n{}", line);
+        } else {
+            print!("{}", line);
+        }
+        enable_raw_mode().ok();
+        Ok(len)
+    }
+
+    pub async fn output_all(&mut self) -> Result<()> {
+        let mut len = 1;
+        while len != 0 {
+            let mut line = String::new();
+            len = self.reader.read_line(&mut line).await?;
+            disable_raw_mode().ok();
+            print!("{}", line);
+            enable_raw_mode().ok();
         }
         Ok(())
     }
@@ -1038,18 +1034,6 @@ fn fork_process(ctx: &Context, job_pgid: Option<Pid>, process: &mut Process) -> 
             unreachable!();
         }
     }
-}
-
-pub fn find_job(first_job: &Job, pgid: Pid) -> Option<Job> {
-    let mut job = first_job;
-    while let Some(ref bj) = job.next {
-        if bj.pgid == Some(pgid) {
-            let j = *bj.clone();
-            return Some(j);
-        }
-        job = bj;
-    }
-    None
 }
 
 pub fn is_job_stopped(job: &Job) -> bool {
@@ -1160,13 +1144,6 @@ mod tests {
 
         job2.link(job3);
         job1.link(job2);
-
-        let found = find_job(&job1, pgid2).unwrap();
-        assert_eq!(found.pgid.unwrap().as_raw(), pgid2.as_raw());
-
-        let pgid4 = Pid::from_raw(4);
-        let nt = find_job(&job1, pgid4);
-        assert_eq!(nt, None::<Job>);
     }
 
     #[test]

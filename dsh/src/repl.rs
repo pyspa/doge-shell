@@ -20,7 +20,6 @@ use parking_lot::RwLock;
 use std::io::{StdoutLock, Write};
 use std::sync::Arc;
 use std::time::Duration;
-
 use tracing::{debug, warn};
 
 const NONE: KeyModifiers = KeyModifiers::NONE;
@@ -84,23 +83,14 @@ impl<'a> Repl<'a> {
         enable_raw_mode().ok();
     }
 
-    // fn get_prompt(&self) -> &str {
-    //     //"$"
-    //     "🐕 < "
-    // }
-
     async fn check_background_jobs(&mut self, output: bool) -> Result<()> {
         let mut out = std::io::stdout().lock();
         let jobs = self.shell.check_job_state().await?;
         let exists = !jobs.is_empty();
 
-        if exists && output {
-            out.write_all(b"\r\n")?;
-        }
-
-        for job in jobs {
+        for mut job in jobs {
             if !job.foreground {
-                //
+                job.check_background_all_output().await?;
             }
             if output {
                 out.write_fmt(format_args!(

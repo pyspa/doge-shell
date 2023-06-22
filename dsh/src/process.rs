@@ -841,8 +841,8 @@ impl Job {
                     panic!("unexpected waitpid event: {:?}", status);
                 }
             };
-            self.set_process_state(pid, state);
             set_process_state(process, pid, state);
+            self.set_process_state(pid, state);
 
             debug!(
                 "fin wait_job: {:?} pid:{:?} complete:{:?} stopped:{:?}",
@@ -852,7 +852,11 @@ impl Job {
                 is_job_stopped(self),
             );
 
-            if is_job_completed(self) || is_job_stopped(self) {
+            if is_job_completed(self) {
+                break;
+            }
+            if is_job_stopped(self) {
+                println!("\rdsh: job {} '{}' has stopped", self.job_id, self.cmd);
                 break;
             }
         }
@@ -861,6 +865,7 @@ impl Job {
     fn set_process_state(&mut self, pid: Pid, state: ProcessState) {
         if let Some(process) = self.process.as_mut() {
             set_process_state(process, pid, state);
+            self.state = state;
         }
     }
 
@@ -1067,7 +1072,7 @@ pub fn is_job_completed(job: &Job) -> bool {
     }
 }
 
-pub fn wait_pid(pid: Pid, no_hang: bool) -> Option<(Pid, ProcessState)> {
+pub fn wait_pid_job(pid: Pid, no_hang: bool) -> Option<(Pid, ProcessState)> {
     let options = if no_hang {
         WaitPidFlag::WUNTRACED | WaitPidFlag::WNOHANG
     } else {
@@ -1078,7 +1083,10 @@ pub fn wait_pid(pid: Pid, no_hang: bool) -> Option<(Pid, ProcessState)> {
     let res = match result {
         Ok(WaitStatus::Exited(pid, status)) => (pid, ProcessState::Completed(status as u8)),
         Ok(WaitStatus::Signaled(pid, _signal, _)) => (pid, ProcessState::Completed(1)),
-        Ok(WaitStatus::Stopped(pid, _signal)) => (pid, ProcessState::Stopped(pid)),
+        Ok(WaitStatus::Stopped(pid, _signal)) => {
+            println!("****");
+            (pid, ProcessState::Stopped(pid))
+        }
         Err(nix::errno::Errno::ECHILD) => (pid, ProcessState::Completed(1)),
         Ok(WaitStatus::StillAlive) => {
             return None;

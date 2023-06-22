@@ -4,7 +4,7 @@ use crate::environment::Environment;
 use crate::history::FrecencyHistory;
 use crate::lisp;
 use crate::parser::{self, Rule, ShellParser};
-use crate::process::{self, wait_pid, Job, JobProcess, ProcessState, Redirect};
+use crate::process::{self, wait_pid_job, Job, JobProcess, ProcessState, Redirect};
 use anyhow::Context as _;
 use anyhow::{anyhow, bail, Result};
 use async_std::task;
@@ -349,7 +349,7 @@ impl Shell {
             disable_raw_mode().ok();
             let pid = task::block_on(self.spawn_subshell(ctx, &mut job))?;
             debug!("spawned subshell pid: {:?}", pid);
-            let res = wait_pid(pid, true);
+            let res = wait_pid_job(pid, true);
             debug!("wait subshell pid: {:?}", res);
             enable_raw_mode().ok();
         }
@@ -542,7 +542,7 @@ impl Shell {
                 self.wait_jobs[i].check_background_output().await?;
             }
             if let Some(pid) = self.wait_jobs[i].pid {
-                match wait_pid(pid, true) {
+                match wait_pid_job(pid, true) {
                     Some((_pid, ProcessState::Completed(_))) => {
                         let removed_job = self.wait_jobs.remove(i);
                         completed.push(removed_job);

@@ -1,7 +1,12 @@
+use anyhow::Result;
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::sys::termios::Termios;
 use nix::unistd::Pid;
 use std::fmt::Debug;
+use std::fs::File;
+use std::io::Write;
+use std::mem;
+use std::os::unix::io::FromRawFd;
 use std::os::unix::io::RawFd;
 
 #[derive(Clone)]
@@ -53,6 +58,22 @@ impl Debug for Context {
             .field("pid", &self.pid)
             .field("pgid", &self.pgid)
             .finish()
+    }
+}
+
+impl Context {
+    pub fn write_outfile(&self, msg: &str) -> Result<()> {
+        let mut file = unsafe { File::from_raw_fd(self.outfile) };
+        writeln!(&mut file, "{}", msg)?;
+        mem::forget(file);
+        Ok(())
+    }
+
+    pub fn write_errfile(&self, msg: &str) -> Result<()> {
+        let mut file = unsafe { File::from_raw_fd(self.errfile) };
+        writeln!(&mut file, "{}", msg)?;
+        mem::forget(file);
+        Ok(())
     }
 }
 

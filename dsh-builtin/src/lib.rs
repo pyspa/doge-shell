@@ -12,6 +12,7 @@ mod jobs;
 pub mod lisp;
 mod read;
 mod set;
+mod uuid;
 mod var;
 mod z;
 
@@ -45,6 +46,7 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, BuiltinCommand>>> = Lazy::n
     builtin.insert("chat", chatgpt::chat as BuiltinCommand);
     builtin.insert("chat_prompt", chatgpt::chat_prompt as BuiltinCommand);
     builtin.insert("add_path", add_path::command as BuiltinCommand);
+    builtin.insert("uuid", uuid::command as BuiltinCommand);
 
     Mutex::new(builtin)
 });

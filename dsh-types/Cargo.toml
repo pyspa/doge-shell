@@ -12,3 +12,4 @@ nix.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 cfg-if.workspace = true
+uuid.workspace = true

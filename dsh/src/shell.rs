@@ -54,7 +54,6 @@ pub struct Shell {
     pub pgid: Pid,
     pub cmd_history: Option<Arc<Mutex<FrecencyHistory>>>,
     pub path_history: Option<Arc<Mutex<FrecencyHistory>>>,
-    //pub wait_jobs: Vec<WaitJob>,
     pub(crate) wait_jobs: Vec<Job>,
     pub lisp_engine: Rc<RefCell<lisp::LispEngine>>,
     pub wasm_engine: WasmEngine,

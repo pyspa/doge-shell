@@ -84,168 +84,6 @@ pub enum ListOp {
     Or,
 }
 
-#[derive(Clone, PartialEq, Eq)]
-pub enum JobProcess {
-    Builtin(BuiltinProcess),
-    Wasm(WasmProcess),
-    Command(Process),
-}
-
-impl std::fmt::Debug for JobProcess {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
-        match self {
-            JobProcess::Builtin(jprocess) => f
-                .debug_struct("JobProcess::Builtin")
-                .field("cmd", &jprocess.argv)
-                .finish(),
-            JobProcess::Wasm(jprocess) => f
-                .debug_struct("JobProcess::WASM")
-                .field("wasm", jprocess)
-                .finish(),
-            JobProcess::Command(jprocess) => f
-                .debug_struct("JobProcess::Command")
-                .field("cmd", &jprocess.cmd)
-                .field("argv", &jprocess.argv)
-                .field("pid", &jprocess.pid)
-                .field("stdin", &jprocess.stdin)
-                .field("stdout", &jprocess.stdout)
-                .field("stderr", &jprocess.stderr)
-                .finish(),
-        }
-    }
-}
-
-impl JobProcess {
-    pub fn link(&mut self, process: JobProcess) {
-        match self {
-            JobProcess::Builtin(jprocess) => jprocess.link(process),
-            JobProcess::Wasm(jprocess) => jprocess.link(process),
-            JobProcess::Command(jprocess) => jprocess.link(process),
-        }
-    }
-
-    pub fn next(&self) -> Option<Box<JobProcess>> {
-        match self {
-            JobProcess::Builtin(jprocess) => jprocess.next.as_ref().cloned(),
-            JobProcess::Wasm(jprocess) => jprocess.next.as_ref().cloned(),
-            JobProcess::Command(jprocess) => jprocess.next.as_ref().cloned(),
-        }
-    }
-
-    pub fn set_io(&mut self, stdin: RawFd, stdout: RawFd, stderr: RawFd) {
-        match self {
-            JobProcess::Builtin(jprocess) => {
-                jprocess.stdin = stdin;
-                jprocess.stdout = stdout;
-                jprocess.stderr = stderr;
-            }
-            JobProcess::Wasm(jprocess) => {
-                jprocess.stdin = stdin;
-                jprocess.stdout = stdout;
-                jprocess.stderr = stderr;
-            }
-            JobProcess::Command(jprocess) => {
-                jprocess.stdin = stdin;
-                jprocess.stdout = stdout;
-                jprocess.stderr = stderr;
-            }
-        }
-    }
-
-    pub fn get_io(&self) -> (RawFd, RawFd, RawFd) {
-        match self {
-            JobProcess::Builtin(jprocess) => (jprocess.stdin, jprocess.stdout, jprocess.stderr),
-            JobProcess::Wasm(jprocess) => (jprocess.stdin, jprocess.stdout, jprocess.stderr),
-            JobProcess::Command(jprocess) => (jprocess.stdin, jprocess.stdout, jprocess.stderr),
-        }
-    }
-
-    pub fn set_pid(&mut self, pid: Option<Pid>) {
-        match self {
-            JobProcess::Builtin(_) => {
-                // noop
-            }
-            JobProcess::Wasm(_) => {
-                // noop
-            }
-            JobProcess::Command(process) => {
-                process.pid = pid;
-            }
-        }
-    }
-
-    pub fn get_pid(&self) -> Option<Pid> {
-        match self {
-            JobProcess::Builtin(_) => {
-                // noop
-                None
-            }
-            JobProcess::Wasm(_) => {
-                // noop
-                None
-            }
-            JobProcess::Command(process) => process.pid,
-        }
-    }
-
-    pub fn set_state(&mut self, state: ProcessState) {
-        match self {
-            JobProcess::Builtin(p) => p.state = state,
-            JobProcess::Wasm(p) => p.state = state,
-            JobProcess::Command(p) => p.state = state,
-        }
-    }
-
-    pub fn get_state(&self) -> ProcessState {
-        match self {
-            JobProcess::Builtin(p) => p.state,
-            JobProcess::Wasm(p) => p.state,
-            JobProcess::Command(p) => p.state,
-        }
-    }
-
-    fn is_stopped(&self) -> bool {
-        if self.get_state() == ProcessState::Running {
-            return false;
-        }
-        if let Some(p) = self.next() {
-            return p.is_stopped();
-        }
-        true
-    }
-
-    fn is_completed(&self) -> bool {
-        match self.get_state() {
-            ProcessState::Completed(_) => {
-                //ok
-                if let Some(p) = self.next() {
-                    return p.is_completed();
-                }
-            }
-            _ => {
-                return false;
-            }
-        };
-        true
-    }
-
-    pub fn get_cap_out(&self) -> (Option<RawFd>, Option<RawFd>) {
-        match self {
-            JobProcess::Builtin(_p) => (None, None),
-            JobProcess::Wasm(_p) => (None, None),
-            JobProcess::Command(p) => (p.cap_stdout, p.cap_stderr),
-        }
-    }
-
-    pub fn get_cmd(&self) -> &str {
-        match self {
-            JobProcess::Builtin(p) => &p.name,
-            JobProcess::Wasm(p) => &p.name,
-            JobProcess::Command(p) => &p.cmd,
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct BuiltinProcess {
     name: String,
@@ -291,6 +129,11 @@ impl BuiltinProcess {
             stdout: STDOUT_FILENO,
             stderr: STDERR_FILENO,
         }
+    }
+
+    pub fn set_state(&mut self, _pid: Pid, state: ProcessState) -> bool {
+        self.state = state;
+        return true;
     }
 
     pub fn link(&mut self, process: JobProcess) {
@@ -366,6 +209,11 @@ impl WasmProcess {
         }
     }
 
+    pub fn set_state(&mut self, _pid: Pid, state: ProcessState) -> bool {
+        self.state = state;
+        return true;
+    }
+
     pub fn link(&mut self, process: JobProcess) {
         match self.next {
             Some(ref mut p) => {
@@ -437,12 +285,28 @@ impl Process {
         }
     }
 
+    pub fn set_state(&mut self, pid: Pid, state: ProcessState) -> bool {
+        if let Some(ppid) = self.pid {
+            if ppid == pid {
+                self.state = state;
+                return true;
+            }
+        }
+        if let Some(ref mut next) = self.next {
+            if next.set_state_pid(pid, state) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     pub fn link(&mut self, process: JobProcess) {
         match self.next {
             Some(ref mut p) => {
                 p.link(process);
             }
             None => {
+                debug!("link:{} next:{}", self.cmd, process.get_cmd());
                 self.next = Some(Box::new(process));
             }
         }
@@ -509,6 +373,261 @@ impl Process {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub enum JobProcess {
+    Builtin(BuiltinProcess),
+    Wasm(WasmProcess),
+    Command(Process),
+}
+
+impl std::fmt::Debug for JobProcess {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
+        match self {
+            JobProcess::Builtin(jprocess) => f
+                .debug_struct("JobProcess::Builtin")
+                .field("cmd", &jprocess.argv)
+                .field("has_next", &jprocess.next.is_some())
+                .finish(),
+            JobProcess::Wasm(jprocess) => f
+                .debug_struct("JobProcess::WASM")
+                .field("wasm", jprocess)
+                .field("has_next", &jprocess.next.is_some())
+                .finish(),
+            JobProcess::Command(jprocess) => f
+                .debug_struct("JobProcess::Command")
+                .field("cmd", &jprocess.cmd)
+                .field("argv", &jprocess.argv)
+                .field("pid", &jprocess.pid)
+                .field("stdin", &jprocess.stdin)
+                .field("stdout", &jprocess.stdout)
+                .field("stderr", &jprocess.stderr)
+                .field("has_next", &jprocess.next.is_some())
+                .field("state", &jprocess.state)
+                .finish(),
+        }
+    }
+}
+
+impl JobProcess {
+    pub fn link(&mut self, process: JobProcess) {
+        match self {
+            JobProcess::Builtin(jprocess) => jprocess.link(process),
+            JobProcess::Wasm(jprocess) => jprocess.link(process),
+            JobProcess::Command(jprocess) => jprocess.link(process),
+        }
+    }
+
+    pub fn next(&self) -> Option<Box<JobProcess>> {
+        match self {
+            JobProcess::Builtin(jprocess) => jprocess.next.as_ref().cloned(),
+            JobProcess::Wasm(jprocess) => jprocess.next.as_ref().cloned(),
+            JobProcess::Command(jprocess) => jprocess.next.as_ref().cloned(),
+        }
+    }
+
+    pub fn mut_next(&self) -> Option<Box<JobProcess>> {
+        match self {
+            JobProcess::Builtin(jprocess) => jprocess.next.as_ref().cloned(),
+            JobProcess::Wasm(jprocess) => jprocess.next.as_ref().cloned(),
+            JobProcess::Command(jprocess) => jprocess.next.as_ref().cloned(),
+        }
+    }
+
+    pub fn take_next(&mut self) -> Option<Box<JobProcess>> {
+        match self {
+            JobProcess::Builtin(jprocess) => jprocess.next.take(),
+            JobProcess::Wasm(jprocess) => jprocess.next.take(),
+            JobProcess::Command(jprocess) => jprocess.next.take(),
+        }
+    }
+
+    pub fn set_io(&mut self, stdin: RawFd, stdout: RawFd, stderr: RawFd) {
+        match self {
+            JobProcess::Builtin(jprocess) => {
+                jprocess.stdin = stdin;
+                jprocess.stdout = stdout;
+                jprocess.stderr = stderr;
+            }
+            JobProcess::Wasm(jprocess) => {
+                jprocess.stdin = stdin;
+                jprocess.stdout = stdout;
+                jprocess.stderr = stderr;
+            }
+            JobProcess::Command(jprocess) => {
+                jprocess.stdin = stdin;
+                jprocess.stdout = stdout;
+                jprocess.stderr = stderr;
+            }
+        }
+    }
+
+    pub fn get_io(&self) -> (RawFd, RawFd, RawFd) {
+        match self {
+            JobProcess::Builtin(jprocess) => (jprocess.stdin, jprocess.stdout, jprocess.stderr),
+            JobProcess::Wasm(jprocess) => (jprocess.stdin, jprocess.stdout, jprocess.stderr),
+            JobProcess::Command(jprocess) => (jprocess.stdin, jprocess.stdout, jprocess.stderr),
+        }
+    }
+
+    pub fn set_pid(&mut self, pid: Option<Pid>) {
+        match self {
+            JobProcess::Builtin(_) => {
+                // noop
+            }
+            JobProcess::Wasm(_) => {
+                // noop
+            }
+            JobProcess::Command(process) => {
+                process.pid = pid;
+            }
+        }
+    }
+
+    pub fn get_pid(&self) -> Option<Pid> {
+        match self {
+            JobProcess::Builtin(_) => {
+                // noop
+                None
+            }
+            JobProcess::Wasm(_) => {
+                // noop
+                None
+            }
+            JobProcess::Command(process) => process.pid,
+        }
+    }
+
+    pub fn set_state(&mut self, state: ProcessState) {
+        match self {
+            JobProcess::Builtin(p) => p.state = state,
+            JobProcess::Wasm(p) => p.state = state,
+            JobProcess::Command(p) => p.state = state,
+        }
+    }
+
+    fn set_state_pid(&mut self, pid: Pid, state: ProcessState) -> bool {
+        match self {
+            JobProcess::Builtin(p) => p.set_state(pid, state),
+            JobProcess::Wasm(p) => p.set_state(pid, state),
+            JobProcess::Command(p) => p.set_state(pid, state),
+        }
+    }
+
+    pub fn get_state(&self) -> ProcessState {
+        match self {
+            JobProcess::Builtin(p) => p.state,
+            JobProcess::Wasm(p) => p.state,
+            JobProcess::Command(p) => p.state,
+        }
+    }
+
+    fn is_stopped(&self) -> bool {
+        if self.get_state() == ProcessState::Running {
+            return false;
+        }
+        if let Some(p) = self.next() {
+            return p.is_stopped();
+        }
+        true
+    }
+
+    fn is_completed(&self) -> bool {
+        match self.get_state() {
+            ProcessState::Completed(_) => {
+                //ok
+                if let Some(next) = self.next() {
+                    return next.is_completed();
+                }
+            }
+            _ => {
+                return false;
+            }
+        };
+        true
+    }
+
+    pub fn get_cap_out(&self) -> (Option<RawFd>, Option<RawFd>) {
+        match self {
+            JobProcess::Builtin(_p) => (None, None),
+            JobProcess::Wasm(_p) => (None, None),
+            JobProcess::Command(p) => (p.cap_stdout, p.cap_stderr),
+        }
+    }
+
+    pub fn get_cmd(&self) -> &str {
+        match self {
+            JobProcess::Builtin(p) => &p.name,
+            JobProcess::Wasm(p) => &p.name,
+            JobProcess::Command(p) => &p.cmd,
+        }
+    }
+
+    pub fn waitable(&self) -> bool {
+        match self {
+            JobProcess::Command(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn launch(
+        &mut self,
+        ctx: &mut Context,
+        shell: &mut Shell,
+        redirect: &Option<Redirect>,
+        stdout: RawFd,
+    ) -> Result<(Pid, Option<Box<JobProcess>>)> {
+        // has pipelines process ?
+        let next_process = self.take_next();
+
+        let pipe_out = match next_process {
+            Some(_) => create_pipe(ctx)?,                           // create pipe
+            None => handle_output_redirect(ctx, redirect, stdout)?, // check redirect
+        };
+
+        self.set_io(ctx.infile, ctx.outfile, ctx.errfile);
+
+        debug!("start process ctx {:?}", &ctx);
+        debug!("start process {:?}", &self);
+
+        // initial pid
+        let current_pid = getpid();
+
+        let pid = match self {
+            JobProcess::Builtin(process) => {
+                if ctx.foreground {
+                    process.launch(ctx, shell)?;
+                } else {
+                    // TODO fork
+                    process.launch(ctx, shell)?;
+                }
+                current_pid
+            }
+            JobProcess::Wasm(process) => {
+                if ctx.foreground {
+                    process.launch(ctx, shell)?;
+                } else {
+                    // TODO fork
+                    process.launch(ctx, shell)?;
+                }
+                current_pid
+            }
+            JobProcess::Command(process) => {
+                // fork
+                let pid = fork_process(ctx, ctx.pgid, process)?;
+                pid
+            }
+        };
+        self.set_pid(Some(pid));
+
+        // set pipe inout
+        if let Some(pipe_out) = pipe_out {
+            ctx.infile = pipe_out;
+        }
+        // return lauched process pid and pipeline process
+        Ok((pid, next_process))
+    }
+}
+
 #[derive(Debug)]
 pub struct Job {
     pub id: String,
@@ -523,7 +642,6 @@ pub struct Job {
     pub stderr: RawFd,
     pub next: Option<Box<Job>>,
     pub foreground: bool,
-    pub need_wait: bool,
     pub subshell: bool,
     pub redirect: Option<Redirect>,
     pub list_op: ListOp,
@@ -549,7 +667,6 @@ impl Job {
             stderr: STDERR_FILENO,
             next: None,
             foreground: true,
-            need_wait: false,
             subshell: false,
             redirect: None,
             list_op: ListOp::None,
@@ -574,7 +691,6 @@ impl Job {
             stderr: STDERR_FILENO,
             next: None,
             foreground: true,
-            need_wait: false,
             subshell: false,
             redirect: None,
             list_op: ListOp::None,
@@ -632,37 +748,9 @@ impl Job {
         shell: &mut Shell,
         process: &mut JobProcess,
     ) -> Result<()> {
-        // pipe ?
-        let mut next_process = process.next().take();
-        let pipe_out = match next_process {
-            Some(_) => create_pipe(ctx)?,
-            None => handle_output_redirect(ctx, &self.redirect, self.stdout)?,
-        };
+        let (pid, mut next_process) = process.launch(ctx, shell, &self.redirect, self.stdout)?;
 
-        process.set_io(ctx.infile, ctx.outfile, ctx.errfile);
-
-        debug!("start process ctx {:?}", &ctx);
-        debug!("start process {:?}", &process);
-
-        let pid = match process {
-            JobProcess::Builtin(process) => {
-                let pid = getpid();
-                process.launch(ctx, shell)?;
-                pid
-            }
-            JobProcess::Wasm(process) => {
-                let pid = getpid();
-                process.launch(ctx, shell)?;
-                pid
-            }
-            JobProcess::Command(process) => {
-                self.need_wait = true;
-                // fork
-                fork_process(ctx, self.pgid, process)?
-            }
-        };
-
-        self.pid = Some(pid);
+        self.pid = Some(pid); // set process pid
         self.state = process.get_state();
 
         if ctx.interactive {
@@ -674,18 +762,11 @@ impl Job {
             setpgid(pid, self.pgid.unwrap_or(pid))?;
         }
 
-        process.set_pid(Some(pid));
-
         if !process.is_completed() {
             // let wait_job = WaitJob::new(&self, &process, &shell, pid, ctx.foreground);
             // shell.wait_jobs.push(wait_job);
         }
 
-        self.show_job_status();
-
-        if let Some(pipe_out) = pipe_out {
-            ctx.infile = pipe_out;
-        }
         let (stdin, stdout, stderr) = process.get_io();
         if stdin != self.stdin {
             close(stdin).context("failed close")?;
@@ -698,22 +779,12 @@ impl Job {
         }
 
         self.set_process(process.to_owned());
+        self.show_job_status();
 
         if let Some(ref redirect) = self.redirect {
             redirect.process(ctx);
-            // // TODO refactor to function
-            // let infile = ctx.infile;
-            // let file = out.to_string();
-            // // spawn and io copy
-            // task::spawn(async move {
-            //     // copy io
-            //     let mut reader = unsafe { fs::File::from_raw_fd(infile) };
-            //     // TODO add append mode
-            //     let mut writer = fs::File::create(file.to_string()).await.unwrap(); // TODO check err
-            //     let _res = io::copy(&mut reader, &mut writer).await; // TODO check err
-            // });
         }
-
+        // run next pipeline process
         if let Some(Err(err)) = next_process
             .take()
             .as_mut()
@@ -748,24 +819,9 @@ impl Job {
         // Put the job into the foreground
 
         tcsetpgrp(SHELL_TERMINAL, self.pgid.unwrap()).context("failed tcsetpgrp")?;
-        // debug!("put_in_foreground: {:?} tcsetpgrp pgid", &self.cmd);
-
         // TODO Send the job a continue signal, if necessary.
 
         self.wait_job(ctx, process, shell);
-
-        if let Some(_pid) = process.get_pid() {
-            // let mut i = 0;
-            // while i < shell.wait_jobs.len() {
-            //     if shell.wait_jobs[i].pid == pid {
-            //         shell.wait_jobs[i].state = process.get_state();
-            //         debug!("set process: {:?} {:?}", pid, &shell.wait_jobs[i].state);
-            //         break;
-            //     } else {
-            //         i += 1;
-            //     }
-            // }
-        }
 
         tcsetpgrp(SHELL_TERMINAL, ctx.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
         // debug!("put_in_foreground: {:?} tcsetpgrp shell", &self.cmd);
@@ -815,13 +871,12 @@ impl Job {
 
     pub fn wait_job(&mut self, _ctx: &Context, process: &mut JobProcess, _shell: &mut Shell) {
         debug!(
-            "call wait_job: {:?} pgid: {:?} need_wait: {:?}",
+            "call wait_job: {:?} pgid: {:?} ",
             process.get_cmd(),
             self.pgid,
-            self.need_wait
         );
 
-        if !self.need_wait {
+        if !process.waitable() {
             return;
         }
 
@@ -841,16 +896,12 @@ impl Job {
                     panic!("unexpected waitpid event: {:?}", status);
                 }
             };
-            set_process_state(process, pid, state);
-            self.set_process_state(pid, state);
 
-            debug!(
-                "fin wait_job: {:?} pid:{:?} complete:{:?} stopped:{:?}",
-                process.get_cmd(),
-                pid,
-                is_job_completed(self),
-                is_job_stopped(self),
-            );
+            let _set = self.set_process_state(pid, state);
+
+            debug!("fin wait_job: pid:{:?}", pid,);
+
+            // show_process_state(&self.process); // debug
 
             if is_job_completed(self) {
                 break;
@@ -864,8 +915,7 @@ impl Job {
 
     fn set_process_state(&mut self, pid: Pid, state: ProcessState) {
         if let Some(process) = self.process.as_mut() {
-            set_process_state(process, pid, state);
-            self.state = state;
+            process.set_state_pid(pid, state);
         }
     }
 
@@ -1004,6 +1054,12 @@ pub fn wait_any_job(no_hang: bool) -> Option<(Pid, ProcessState)> {
 }
 
 fn last_process_state(process: JobProcess) -> ProcessState {
+    debug!(
+        "last_process_state:{} {} has_next: {}",
+        process.get_cmd(),
+        process.get_state(),
+        process.next().is_some(),
+    );
     if let Some(next_proc) = process.next() {
         last_process_state(*next_proc)
     } else {
@@ -1011,18 +1067,17 @@ fn last_process_state(process: JobProcess) -> ProcessState {
     }
 }
 
-fn set_process_state(process: &mut JobProcess, pid: Pid, state: ProcessState) {
-    if let Some(ppid) = process.get_pid() {
-        if ppid == pid {
-            debug!(
-                "set_process_state: {:?} pid:{:?} state:{:?}",
-                &process, pid, state
-            );
-            process.set_state(state);
+fn show_process_state(process: &Option<Box<JobProcess>>) {
+    if let Some(process) = process {
+        debug!(
+            "process_state: {:?} state:{:?}",
+            process.get_cmd(),
+            process.get_state(),
+        );
+
+        if let Some(_) = process.next() {
+            show_process_state(&process.next());
         }
-    }
-    if let Some(mut p) = process.next() {
-        set_process_state(&mut p, pid, state);
     }
 }
 
@@ -1065,8 +1120,13 @@ pub fn is_job_stopped(job: &Job) -> bool {
 }
 
 pub fn is_job_completed(job: &Job) -> bool {
-    if let Some(p) = &job.process {
-        p.is_completed()
+    if let Some(process) = &job.process {
+        debug!(
+            "is_job_completed {} {}",
+            process.get_cmd(),
+            process.get_state()
+        );
+        process.is_completed()
     } else {
         true
     }
@@ -1083,10 +1143,7 @@ pub fn wait_pid_job(pid: Pid, no_hang: bool) -> Option<(Pid, ProcessState)> {
     let res = match result {
         Ok(WaitStatus::Exited(pid, status)) => (pid, ProcessState::Completed(status as u8)),
         Ok(WaitStatus::Signaled(pid, _signal, _)) => (pid, ProcessState::Completed(1)),
-        Ok(WaitStatus::Stopped(pid, _signal)) => {
-            println!("****");
-            (pid, ProcessState::Stopped(pid))
-        }
+        Ok(WaitStatus::Stopped(pid, _signal)) => (pid, ProcessState::Stopped(pid)),
         Err(nix::errno::Errno::ECHILD) => (pid, ProcessState::Completed(1)),
         Ok(WaitStatus::StillAlive) => {
             return None;

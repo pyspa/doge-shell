@@ -16,6 +16,8 @@ pub struct Context {
     pub errfile: RawFd,
     pub captured_out: Option<RawFd>,
     pub save_history: bool,
+    pub pid: Option<Pid>,
+    pub pgid: Option<Pid>,
 }
 
 impl Context {
@@ -31,6 +33,8 @@ impl Context {
             errfile: STDERR_FILENO,
             captured_out: None,
             save_history: true,
+            pid: None,
+            pgid: None,
         }
     }
 }
@@ -46,6 +50,8 @@ impl Debug for Context {
             .field("outfile", &self.outfile)
             .field("errfile", &self.errfile)
             .field("captured_out", &self.captured_out)
+            .field("pid", &self.pid)
+            .field("pgid", &self.pgid)
             .finish()
     }
 }

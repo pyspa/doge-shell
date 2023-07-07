@@ -452,7 +452,7 @@ impl Shell {
             );
             match inner_pair.as_rule() {
                 Rule::simple_command => {
-                    let mut job = Job::new(job_str.clone());
+                    let mut job = Job::new(job_str.clone(), self.pgid);
                     self.parse_command(ctx, &mut job, inner_pair)?;
                     if job.process.is_some() {
                         job.subshell = ctx.subshell;
@@ -461,7 +461,7 @@ impl Shell {
                 }
                 Rule::simple_command_bg => {
                     // background job
-                    let mut job = Job::new(inner_pair.as_str().to_string());
+                    let mut job = Job::new(inner_pair.as_str().to_string(), self.pgid);
                     for bg_pair in inner_pair.into_inner() {
                         if let Rule::simple_command = bg_pair.as_rule() {
                             self.parse_command(ctx, &mut job, bg_pair)?;

@@ -7,7 +7,7 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dsh_builtin::BuiltinCommand;
 use dsh_types::{Context, ExitStatus};
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
-use nix::sys::signal::{kill, sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+use nix::sys::signal::{kill, killpg, sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::sys::termios::Termios;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{close, dup2, execv, fork, getpid, pipe, setpgid, tcsetpgrp, ForkResult, Pid};
@@ -330,6 +330,10 @@ impl Process {
         let pid = getpid();
 
         let pgid = pgid.unwrap_or(pid);
+        debug!(
+            "{} setpgid pid:{} pgid:{} foreground:{}",
+            &self.cmd, pid, pgid, foreground
+        );
         setpgid(pid, pgid).context("failed setpgid")?;
 
         if foreground {
@@ -581,8 +585,14 @@ impl JobProcess {
         let next_process = self.take_next();
 
         let pipe_out = match next_process {
-            Some(_) => create_pipe(ctx)?,                           // create pipe
-            None => handle_output_redirect(ctx, redirect, stdout)?, // check redirect
+            Some(_) => {
+                // ctx.foreground = false;
+                create_pipe(ctx)? // create pipe
+            }
+            None => {
+                // ctx.foreground = true;
+                handle_output_redirect(ctx, redirect, stdout)? // check redirect
+            }
         };
 
         self.set_io(ctx.infile, ctx.outfile, ctx.errfile);
@@ -624,7 +634,7 @@ impl JobProcess {
         if let Some(pipe_out) = pipe_out {
             ctx.infile = pipe_out;
         }
-        // return lauched process pid and pipeline process
+        // return launched process pid and pipeline process
         Ok((pid, next_process))
     }
 
@@ -747,6 +757,15 @@ impl Job {
 
         if let Some(process) = self.process.take().as_mut() {
             let _ = self.launch_process(ctx, shell, process);
+            if !ctx.interactive {
+                self.wait_job();
+            } else if ctx.foreground {
+                // foreground
+                let _ = self.put_in_foreground(ctx, shell);
+            } else {
+                // background
+                let _ = self.put_in_background(ctx, shell);
+            }
         }
 
         if ctx.foreground {
@@ -771,15 +790,27 @@ impl Job {
         if ctx.interactive {
             if self.pgid.is_none() {
                 self.pgid = Some(pid);
-                debug!("job pgid {:?}", self.pgid);
+                ctx.pgid = Some(pid);
+                debug!("set job pgid {:?}", self.pgid);
             }
-            // debug!("parent setpgid pid:{:?} pgid:{:?}", pid, self.pgid);
+            debug!(
+                "{} setpgid pid:{} pgid:{:?}",
+                process.get_cmd(),
+                pid,
+                self.pgid
+            );
             setpgid(pid, self.pgid.unwrap_or(pid))?;
         }
 
-        if !process.is_completed() {
-            // let wait_job = WaitJob::new(&self, &process, &shell, pid, ctx.foreground);
-            // shell.wait_jobs.push(wait_job);
+        let (stdout, stderr) = process.get_cap_out();
+        if let Some(stdout) = stdout {
+            let monitor = OutputMonitor::new(stdout);
+            self.monitors.push(monitor);
+        }
+
+        if let Some(stderr) = stderr {
+            let monitor = OutputMonitor::new(stderr);
+            self.monitors.push(monitor);
         }
 
         let (stdin, stdout, stderr) = process.get_io();
@@ -805,38 +836,21 @@ impl Job {
             .as_mut()
             .map(|process| self.launch_process(ctx, shell, process))
         {
+            debug!("err {:?}", err);
             return Err(err);
         }
 
-        if !ctx.interactive {
-            self.wait_job(ctx, process, shell);
-            Ok(())
-        } else if ctx.foreground {
-            // foreground
-            self.put_in_foreground(ctx, process, shell)
-        } else {
-            // background
-            self.put_in_background(ctx, process, shell)
-        }
+        Ok(())
     }
 
-    fn put_in_foreground(
-        &mut self,
-        ctx: &Context,
-        process: &mut JobProcess,
-        shell: &mut Shell,
-    ) -> Result<()> {
-        debug!(
-            "put_in_foreground: {:?} pgid {:?}",
-            &process.get_cmd(),
-            self.pgid
-        );
+    fn put_in_foreground(&mut self, ctx: &Context, _shell: &mut Shell) -> Result<()> {
+        debug!("put_in_foreground: pgid {:?}", self.pgid);
         // Put the job into the foreground
 
         tcsetpgrp(SHELL_TERMINAL, self.pgid.unwrap()).context("failed tcsetpgrp")?;
         // TODO Send the job a continue signal, if necessary.
 
-        self.wait_job(ctx, process, shell);
+        self.wait_job();
 
         tcsetpgrp(SHELL_TERMINAL, ctx.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
         // debug!("put_in_foreground: {:?} tcsetpgrp shell", &self.cmd);
@@ -850,17 +864,8 @@ impl Job {
         Ok(())
     }
 
-    fn put_in_background(
-        &mut self,
-        _ctx: &Context,
-        process: &mut JobProcess,
-        _shell: &mut Shell,
-    ) -> Result<()> {
-        debug!(
-            "put_in_background {:?} pgid {:?}",
-            process.get_cmd(),
-            self.pgid,
-        );
+    fn put_in_background(&mut self, _ctx: &Context, _shell: &mut Shell) -> Result<()> {
+        debug!("put_in_background pgid {:?}", self.pgid,);
 
         // TODO Send the job a continue signal, if necessary.
 
@@ -868,33 +873,13 @@ impl Job {
         // let tmodes = tcgetattr(SHELL_TERMINAL).context("failed tcgetattr wait")?;
         // self.tmodes = Some(tmodes);
 
-        let (stdout, stderr) = process.get_cap_out();
-        if let Some(stdout) = stdout {
-            let monitor = OutputMonitor::new(stdout);
-            self.monitors.push(monitor);
-        }
-
-        if let Some(stderr) = stderr {
-            let monitor = OutputMonitor::new(stderr);
-            self.monitors.push(monitor);
-        }
-
         Ok(())
     }
 
     fn show_job_status(&self) {}
 
-    pub fn wait_job(&mut self, _ctx: &Context, process: &mut JobProcess, _shell: &mut Shell) {
-        debug!(
-            "call wait_job: {:?} pgid: {:?} ",
-            process.get_cmd(),
-            self.pgid,
-        );
-
-        if !process.waitable() {
-            return;
-        }
-
+    pub fn wait_job(&mut self) {
+        let mut send_killpg = false;
         loop {
             // TODO other process waitpid
             let result = waitpid(None, Some(WaitPidFlag::WUNTRACED));
@@ -914,10 +899,20 @@ impl Job {
 
             let _set = self.set_process_state(pid, state);
 
-            debug!("fin wait_job: pid:{:?}", pid,);
+            debug!("fin wait: pid:{:?}", pid);
 
             // show_process_state(&self.process); // debug
 
+            if let ProcessState::Completed(code) = state {
+                if code != 0 && !send_killpg {
+                    if let Some(pgid) = self.pgid {
+                        debug!("killpg pgid: {}", pgid);
+                        let _ = killpg(pgid, Signal::SIGKILL);
+                        send_killpg = true;
+                    }
+                }
+            }
+            // break;
             if is_job_completed(self) {
                 break;
             }

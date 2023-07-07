@@ -16,8 +16,9 @@ use std::fmt::Debug;
 use std::os::unix::io::FromRawFd;
 use std::os::unix::io::RawFd;
 use std::time::Duration;
-
 use tracing::{debug, error};
+
+const MONITOR_TIMEOUT: u64 = 200;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Redirect {
@@ -992,7 +993,12 @@ impl OutputMonitor {
 
     pub async fn output(&mut self) -> Result<usize> {
         let mut line = String::new();
-        match io::timeout(Duration::from_millis(500), self.reader.read_line(&mut line)).await {
+        match io::timeout(
+            Duration::from_millis(MONITOR_TIMEOUT),
+            self.reader.read_line(&mut line),
+        )
+        .await
+        {
             Ok(len) => {
                 disable_raw_mode().ok();
                 if !self.outputed {
@@ -1012,7 +1018,12 @@ impl OutputMonitor {
         let mut len = 1;
         while len != 0 {
             let mut line = String::new();
-            match io::timeout(Duration::from_millis(500), self.reader.read_line(&mut line)).await {
+            match io::timeout(
+                Duration::from_millis(MONITOR_TIMEOUT),
+                self.reader.read_line(&mut line),
+            )
+            .await
+            {
                 Ok(readed) => {
                     disable_raw_mode().ok();
                     if !self.outputed {

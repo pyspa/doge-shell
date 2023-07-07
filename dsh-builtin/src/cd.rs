@@ -1,10 +1,6 @@
 use super::ShellProxy;
 use dirs;
 use dsh_types::{Context, ExitStatus};
-use std::fs::File;
-use std::io::Write;
-use std::mem;
-use std::os::unix::io::FromRawFd;
 use std::path::Path;
 
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
@@ -19,9 +15,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
             match res {
                 Ok(res) => res.to_string_lossy().into_owned(),
                 Err(err) => {
-                    let file = unsafe { File::from_raw_fd(ctx.outfile) };
-                    writeln!(&file, "cd: {}: {}", err, dir).ok();
-                    mem::forget(file);
+                    ctx.write_stderr(&format!("cd: {}: {}", err, dir)).ok();
                     return ExitStatus::ExitedWith(1);
                 }
             }
@@ -38,9 +32,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     match proxy.changepwd(&dir) {
         Ok(_) => ExitStatus::ExitedWith(0),
         Err(err) => {
-            let file = unsafe { File::from_raw_fd(ctx.outfile) };
-            writeln!(&file, "cd: {}: {}", err, dir).ok();
-            mem::forget(file);
+            ctx.write_stderr(&format!("cd: {}: {}", err, dir)).ok();
             ExitStatus::ExitedWith(1)
         }
     }

@@ -3,7 +3,7 @@ use dsh_types::{Context, ExitStatus};
 
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     if argv.len() < 2 {
-        println!("lisp: missing s-expression");
+        ctx.write_stderr("lisp: missing s-expression").ok();
     } else {
         proxy.dispatch(ctx, "lisp", argv).unwrap();
     }

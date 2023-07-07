@@ -2,26 +2,26 @@ use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
 use getopts::Options;
 
-fn print_usage(cmd_name: &str, opts: Options) {
+fn print_usage(ctx: &Context, cmd_name: &str, opts: Options) {
     let brief = format!("Usage: {} [OPTIONS] KEY VALUE", cmd_name);
-    print!("{}", opts.usage(&brief));
+    ctx.write_stdout(&opts.usage(&brief)).ok();
 }
 
-pub fn command(_ctx: &Context, args: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+pub fn command(ctx: &Context, args: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     let cmd_name = args[0].clone();
     let mut opts = Options::new();
     opts.optflag("x", "export", "exported environment variable");
     opts.optflag("h", "help", "print this help menu");
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
-        Err(f) => {
-            eprintln!("{}", f);
+        Err(err) => {
+            ctx.write_stderr(&format!("{}", err)).ok();
             return ExitStatus::ExitedWith(1);
         }
     };
 
     if matches.opt_present("h") && matches.free.len() != 2 {
-        print_usage(&cmd_name, opts);
+        print_usage(ctx, &cmd_name, opts);
         return ExitStatus::ExitedWith(0);
     }
 

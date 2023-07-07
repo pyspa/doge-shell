@@ -3,10 +3,8 @@ use anyhow::Result;
 use dsh_builtin::ShellProxy;
 use dsh_frecency::SortMethod;
 use dsh_types::Context;
-use nix::unistd::dup;
 use std::fs::File;
 use std::io::prelude::*;
-use std::io::Write;
 use std::os::unix::io::FromRawFd;
 use tabled::{Table, Tabled};
 use tracing::debug;
@@ -56,11 +54,9 @@ impl ShellProxy for Shell {
             "history" => {
                 if let Some(ref mut history) = self.cmd_history {
                     let mut history = history.lock().unwrap();
-                    let fd = dup(ctx.outfile).expect("failed dup");
-                    let mut file = unsafe { File::from_raw_fd(fd) };
                     let vec = history.sorted(&SortMethod::Recent);
                     for item in vec {
-                        writeln!(file, "{}", item.item).ok();
+                        ctx.write_stdout(&item.item)?;
                     }
                     history.reset_index();
                 }
@@ -87,7 +83,7 @@ impl ShellProxy for Shell {
             }
             "jobs" => {
                 if self.wait_jobs.is_empty() {
-                    self.print_stdout("jobs: There are no jobs");
+                    ctx.write_stdout("jobs: There are no jobs")?;
                 } else {
                     let jobs: Vec<Job> = self
                         .wait_jobs
@@ -100,7 +96,7 @@ impl ShellProxy for Shell {
                         })
                         .collect();
                     let table = Table::new(jobs).to_string();
-                    self.print_stdout(table.as_str());
+                    ctx.write_stdout(table.as_str())?;
                 }
             }
             "lisp" => match self.lisp_engine.borrow().run(argv[1].as_str()) {
@@ -108,7 +104,7 @@ impl ShellProxy for Shell {
                     debug!("{}", val);
                 }
                 Err(err) => {
-                    eprintln!("{}", err);
+                    ctx.write_stderr(&format!("{}", err))?;
                 }
             },
             "lisp-run" => {
@@ -119,7 +115,7 @@ impl ShellProxy for Shell {
                         debug!("{}", val);
                     }
                     Err(err) => {
-                        eprintln!("{}", err);
+                        ctx.write_stderr(&format!("{}", err))?;
                     }
                 }
             }
@@ -135,7 +131,7 @@ impl ShellProxy for Shell {
                     })
                     .collect();
                 let table = Table::new(vars).to_string();
-                self.print_stdout(table.as_str());
+                ctx.write_stdout(table.as_str())?;
             }
             "read" => {
                 let mut stdin = Vec::new();
@@ -144,7 +140,7 @@ impl ShellProxy for Shell {
                 let output = std::str::from_utf8(&stdin)
                     .map_err(|err| {
                         // TODO
-                        eprintln!("{:?}", err);
+                        ctx.write_stderr(&format!("{}", err)).ok();
                         err
                     })
                     .unwrap()

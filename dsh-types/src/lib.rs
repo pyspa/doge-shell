@@ -65,14 +65,14 @@ impl Debug for Context {
 }
 
 impl Context {
-    pub fn write_outfile(&self, msg: &str) -> Result<()> {
+    pub fn write_stdout(&self, msg: &str) -> Result<()> {
         let mut file = unsafe { File::from_raw_fd(self.outfile) };
         writeln!(&mut file, "{}", msg)?;
         mem::forget(file);
         Ok(())
     }
 
-    pub fn write_errfile(&self, msg: &str) -> Result<()> {
+    pub fn write_stderr(&self, msg: &str) -> Result<()> {
         let mut file = unsafe { File::from_raw_fd(self.errfile) };
         writeln!(&mut file, "{}", msg)?;
         mem::forget(file);

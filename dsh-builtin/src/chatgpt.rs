@@ -6,7 +6,7 @@ use termimad::MadSkin;
 
 const PROMPT_KEY: &str = "CHAT_PROMPT";
 
-pub fn chat(_ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+pub fn chat(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     if let Some(key) = proxy.get_var("OPEN_AI_API_KEY") {
         match ChatGptClient::new(key) {
             Ok(client) => {
@@ -20,25 +20,28 @@ pub fn chat(_ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> Ex
                         skin.code_block.set_fg(Color::White);
                         skin.inline_code.set_fg(Color::Yellow);
                         skin.print_text(res.trim());
+                        ExitStatus::ExitedWith(0)
                     }
                     Err(err) => {
-                        eprintln!("\r{:?}", err);
+                        ctx.write_stderr(&format!("\r{:?}", err)).ok();
+                        ExitStatus::ExitedWith(1)
                     }
                 }
             }
             Err(err) => {
-                eprintln!("\r{:?}", err)
+                ctx.write_stderr(&format!("\r{:?}", err)).ok();
+                ExitStatus::ExitedWith(1)
             }
         }
     } else {
-        eprintln!("OPEN_AI_API_KEY not found");
+        ctx.write_stderr("OPEN_AI_API_KEY not found").ok();
+        ExitStatus::ExitedWith(1)
     }
-    ExitStatus::ExitedWith(0)
 }
 
-pub fn chat_prompt(_ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+pub fn chat_prompt(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     if argv.len() < 2 {
-        println!("chat_prompt variable");
+        ctx.write_stderr("chat_prompt variable").ok();
     } else {
         let prompt = &argv[1];
         proxy.set_var(PROMPT_KEY.to_string(), prompt.to_string());

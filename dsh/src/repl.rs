@@ -533,9 +533,13 @@ impl<'a> Repl<'a> {
             }
             if let Some(_status) = self.shell.exited {
                 debug!("exited");
+                if !self.shell.wait_jobs.is_empty() {
+                    // TODO show message
+                }
                 break;
             }
         }
+        self.shell.kill_wait_jobs()?;
         Ok(())
     }
 

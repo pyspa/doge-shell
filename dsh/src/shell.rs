@@ -561,6 +561,15 @@ impl Shell {
         Ok(completed)
     }
 
+    pub fn kill_wait_jobs(&mut self) -> Result<()> {
+        let mut i = 0;
+        while i < self.wait_jobs.len() {
+            self.wait_jobs[i].kill()?;
+            i += 1;
+        }
+        Ok(())
+    }
+
     // pub fn chpwd2(&mut self, pwd: &str) {
     //     let env = Rc::clone(&self.environment);
     //     let hooks = env.borrow().chpwd_hooks.;

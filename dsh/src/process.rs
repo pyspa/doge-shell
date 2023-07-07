@@ -7,7 +7,7 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dsh_builtin::BuiltinCommand;
 use dsh_types::{Context, ExitStatus};
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
-use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+use nix::sys::signal::{kill, sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::sys::termios::Termios;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{close, dup2, execv, fork, getpid, pipe, setpgid, tcsetpgrp, ForkResult, Pid};
@@ -627,6 +627,20 @@ impl JobProcess {
         // return lauched process pid and pipeline process
         Ok((pid, next_process))
     }
+
+    pub fn kill(&self) -> Result<()> {
+        match self {
+            JobProcess::Builtin(_) => Ok(()),
+            JobProcess::Wasm(_) => Ok(()),
+            JobProcess::Command(process) => {
+                if let Some(pid) = process.pid {
+                    send_signal(pid, Signal::SIGKILL)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -938,6 +952,10 @@ impl Job {
         Ok(())
     }
 
+    pub fn kill(&mut self) -> Result<()> {
+        kill_process(&self.process)
+    }
+
     // pub async fn check_background_output2(&self) -> Result<()> {
     //     if let Some(ref process) = self.process {
     //         let (stdout, stderr) = process.get_cap_out();
@@ -1205,6 +1223,20 @@ fn handle_output_redirect(
         }
         Ok(None)
     }
+}
+
+fn send_signal(pid: Pid, signal: Signal) -> Result<()> {
+    Ok(kill(pid, signal)?)
+}
+
+fn kill_process(process: &Option<Box<JobProcess>>) -> Result<()> {
+    if let Some(process) = process {
+        process.kill();
+        if let Some(_) = process.next() {
+            kill_process(&process.next())?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

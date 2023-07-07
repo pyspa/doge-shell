@@ -134,9 +134,13 @@ impl BuiltinProcess {
         }
     }
 
-    pub fn set_state(&mut self, _pid: Pid, state: ProcessState) -> bool {
-        self.state = state;
-        return true;
+    pub fn set_state(&mut self, pid: Pid, state: ProcessState) -> bool {
+        if let Some(ref mut next) = self.next {
+            if next.set_state_pid(pid, state) {
+                return true;
+            }
+        }
+        return false;
     }
 
     pub fn link(&mut self, process: JobProcess) {
@@ -212,9 +216,13 @@ impl WasmProcess {
         }
     }
 
-    pub fn set_state(&mut self, _pid: Pid, state: ProcessState) -> bool {
-        self.state = state;
-        return true;
+    pub fn set_state(&mut self, pid: Pid, state: ProcessState) -> bool {
+        if let Some(ref mut next) = self.next {
+            if next.set_state_pid(pid, state) {
+                return true;
+            }
+        }
+        return false;
     }
 
     pub fn link(&mut self, process: JobProcess) {
@@ -777,6 +785,7 @@ impl Job {
             }
         }
 
+        debug!("lauched job context {:?}", ctx);
         if ctx.foreground {
             Ok(self.last_process_state())
         } else {
@@ -891,6 +900,7 @@ impl Job {
         let mut send_killpg = false;
         loop {
             // TODO other process waitpid
+            debug!("waitpid ...");
             let result = waitpid(None, Some(WaitPidFlag::WUNTRACED));
 
             let (pid, state) = match result {
@@ -906,11 +916,11 @@ impl Job {
                 }
             };
 
-            let _set = self.set_process_state(pid, state);
+            self.set_process_state(pid, state);
 
             debug!("fin wait: pid:{:?}", pid);
 
-            // show_process_state(&self.process); // debug
+            show_process_state(&self.process); // debug
 
             if let ProcessState::Completed(code) = state {
                 if code != 0 && !send_killpg {

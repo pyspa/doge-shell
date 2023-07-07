@@ -162,13 +162,15 @@ impl Shell {
             job.job_id = self.get_job_id(); // set job id
             match job.launch(ctx, self).await? {
                 process::ProcessState::Running => {
+                    debug!("job '{}' still running", job.cmd);
                     self.wait_jobs.push(job);
                 }
-                process::ProcessState::Stopped(_) => {
+                process::ProcessState::Stopped(pid) => {
+                    debug!("job '{}' stopped pid: {:?}", job.cmd, pid);
                     self.wait_jobs.push(job);
                 }
                 process::ProcessState::Completed(exit) => {
-                    debug!("job '{}' exit code {:?}", job.cmd, exit);
+                    debug!("job '{}' completed exit_code: {:?}", job.cmd, exit);
                     last_exit_code = exit;
                     if job.list_op == process::ListOp::And && exit != 0 {
                         break;

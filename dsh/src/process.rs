@@ -586,11 +586,9 @@ impl JobProcess {
 
         let pipe_out = match next_process {
             Some(_) => {
-                // ctx.foreground = false;
                 create_pipe(ctx)? // create pipe
             }
             None => {
-                // ctx.foreground = true;
                 handle_output_redirect(ctx, redirect, stdout)? // check redirect
             }
         };
@@ -623,11 +621,14 @@ impl JobProcess {
                 current_pid
             }
             JobProcess::Command(process) => {
+                ctx.process_count += 1;
                 // fork
                 let pid = fork_process(ctx, ctx.pgid, process)?;
+
                 pid
             }
         };
+
         self.set_pid(Some(pid));
 
         // set pipe inout
@@ -758,7 +759,7 @@ impl Job {
         if let Some(process) = self.process.take().as_mut() {
             let _ = self.launch_process(ctx, shell, process);
             if !ctx.interactive {
-                self.wait_job();
+                self.wait_job(ctx);
             } else if ctx.foreground {
                 // foreground
                 let _ = self.put_in_foreground(ctx, shell);
@@ -850,7 +851,7 @@ impl Job {
         tcsetpgrp(SHELL_TERMINAL, self.pgid.unwrap()).context("failed tcsetpgrp")?;
         // TODO Send the job a continue signal, if necessary.
 
-        self.wait_job();
+        self.wait_job(ctx);
 
         tcsetpgrp(SHELL_TERMINAL, ctx.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
         // debug!("put_in_foreground: {:?} tcsetpgrp shell", &self.cmd);
@@ -878,7 +879,10 @@ impl Job {
 
     fn show_job_status(&self) {}
 
-    pub fn wait_job(&mut self) {
+    pub fn wait_job(&mut self, ctx: &Context) {
+        if ctx.process_count == 0 {
+            return;
+        }
         let mut send_killpg = false;
         loop {
             // TODO other process waitpid
@@ -904,7 +908,7 @@ impl Job {
             // show_process_state(&self.process); // debug
 
             if let ProcessState::Completed(code) = state {
-                if code != 0 && !send_killpg {
+                if code != 0 && !send_killpg && ctx.process_count > 1 {
                     if let Some(pgid) = self.pgid {
                         debug!("killpg pgid: {}", pgid);
                         let _ = killpg(pgid, Signal::SIGKILL);

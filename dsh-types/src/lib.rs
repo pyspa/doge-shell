@@ -23,6 +23,7 @@ pub struct Context {
     pub save_history: bool,
     pub pid: Option<Pid>,
     pub pgid: Option<Pid>,
+    pub process_count: u32,
 }
 
 impl Context {
@@ -40,6 +41,7 @@ impl Context {
             save_history: true,
             pid: None,
             pgid: None,
+            process_count: 0,
         }
     }
 }
@@ -57,6 +59,7 @@ impl Debug for Context {
             .field("captured_out", &self.captured_out)
             .field("pid", &self.pid)
             .field("pgid", &self.pgid)
+            .field("process_count", &self.process_count)
             .finish()
     }
 }

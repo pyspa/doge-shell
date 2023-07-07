@@ -765,13 +765,15 @@ impl Job {
         if let Some(process) = self.process.take().as_mut() {
             let _ = self.launch_process(ctx, shell, process);
             if !ctx.interactive {
-                self.wait_job(ctx);
+                self.wait_job();
             } else if ctx.foreground {
                 // foreground
-                let _ = self.put_in_foreground(ctx, shell);
+                if ctx.process_count > 0 {
+                    let _ = self.put_in_foreground();
+                }
             } else {
                 // background
-                let _ = self.put_in_background(ctx, shell);
+                let _ = self.put_in_background();
             }
         }
 
@@ -850,14 +852,14 @@ impl Job {
         Ok(())
     }
 
-    fn put_in_foreground(&mut self, ctx: &Context, _shell: &mut Shell) -> Result<()> {
+    fn put_in_foreground(&mut self) -> Result<()> {
         debug!("put_in_foreground: pgid {:?}", self.pgid);
         // Put the job into the foreground
 
         tcsetpgrp(SHELL_TERMINAL, self.pgid.unwrap()).context("failed tcsetpgrp")?;
         // TODO Send the job a continue signal, if necessary.
 
-        self.wait_job(ctx);
+        self.wait_job();
 
         tcsetpgrp(SHELL_TERMINAL, self.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
         // debug!("put_in_foreground: {:?} tcsetpgrp shell", &self.cmd);
@@ -871,7 +873,7 @@ impl Job {
         Ok(())
     }
 
-    fn put_in_background(&mut self, _ctx: &Context, _shell: &mut Shell) -> Result<()> {
+    fn put_in_background(&mut self) -> Result<()> {
         debug!("put_in_background pgid {:?}", self.pgid,);
 
         // TODO Send the job a continue signal, if necessary.
@@ -885,10 +887,7 @@ impl Job {
 
     fn show_job_status(&self) {}
 
-    pub fn wait_job(&mut self, ctx: &Context) {
-        if ctx.process_count == 0 {
-            return;
-        }
+    pub fn wait_job(&mut self) {
         let mut send_killpg = false;
         loop {
             // TODO other process waitpid
@@ -914,7 +913,7 @@ impl Job {
             // show_process_state(&self.process); // debug
 
             if let ProcessState::Completed(code) = state {
-                if code != 0 && !send_killpg && ctx.process_count > 1 {
+                if code != 0 && !send_killpg {
                     if let Some(pgid) = self.pgid {
                         debug!("killpg pgid: {}", pgid);
                         let _ = killpg(pgid, Signal::SIGKILL);

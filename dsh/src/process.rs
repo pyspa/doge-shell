@@ -336,21 +336,26 @@ impl Process {
         }
     }
 
-    pub fn launch(&mut self, pgid: Option<Pid>, foreground: bool) -> Result<()> {
-        let pid = getpid();
+    pub fn launch(
+        &mut self,
+        pid: Pid,
+        pgid: Pid,
+        interactive: bool,
+        foreground: bool,
+    ) -> Result<()> {
+        if interactive {
+            debug!(
+                "setpgid child process {} pid:{} pgid:{} foreground:{}",
+                &self.cmd, pid, pgid, foreground
+            );
+            setpgid(pid, pgid).context("failed setpgid")?;
 
-        let pgid = pgid.unwrap_or(pid);
-        debug!(
-            "{} setpgid pid:{} pgid:{} foreground:{}",
-            &self.cmd, pid, pgid, foreground
-        );
-        setpgid(pid, pgid).context("failed setpgid")?;
+            if foreground {
+                tcsetpgrp(SHELL_TERMINAL, pgid).context("failed tcsetpgrp")?;
+            }
 
-        if foreground {
-            tcsetpgrp(SHELL_TERMINAL, pgid).context("failed tcsetpgrp")?;
+            self.set_signals();
         }
-
-        self.set_signals();
 
         let cmd = CString::new(self.cmd.clone()).context("failed new CString")?;
         let argv: Vec<CString> = self
@@ -812,7 +817,7 @@ impl Job {
                 debug!("set job pgid {:?}", self.pgid);
             }
             debug!(
-                "{} setpgid pid:{} pgid:{:?}",
+                "setpgid {} pid:{} pgid:{:?}",
                 process.get_cmd(),
                 pid,
                 self.pgid
@@ -1148,7 +1153,9 @@ fn fork_process(ctx: &Context, job_pgid: Option<Pid>, process: &mut Process) -> 
         }
         ForkResult::Child => {
             // This is the child process
-            process.launch(job_pgid, ctx.foreground)?;
+            let pid = getpid();
+            let pgid = job_pgid.unwrap_or(pid);
+            process.launch(pid, pgid, ctx.interactive, ctx.foreground)?;
             unreachable!();
         }
     }

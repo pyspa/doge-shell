@@ -94,8 +94,8 @@ impl<'a> Repl<'a> {
             }
             if output {
                 out.write_fmt(format_args!(
-                    "\rdsh: job {} '{}' has ended\n",
-                    job.job_id, job.cmd
+                    "\rdsh: job {} '{}' {}\n",
+                    job.job_id, job.cmd, job.state
                 ))?;
             }
         }

@@ -165,11 +165,11 @@ impl Shell {
                     debug!("job '{}' still running", job.cmd);
                     self.wait_jobs.push(job);
                 }
-                process::ProcessState::Stopped(pid) => {
+                process::ProcessState::Stopped(pid, _signal) => {
                     debug!("job '{}' stopped pid: {:?}", job.cmd, pid);
                     self.wait_jobs.push(job);
                 }
-                process::ProcessState::Completed(exit) => {
+                process::ProcessState::Completed(exit, _signal) => {
                     debug!("job '{}' completed exit_code: {:?}", job.cmd, exit);
                     last_exit_code = exit;
                     if job.list_op == process::ListOp::And && exit != 0 {
@@ -363,7 +363,9 @@ impl Shell {
         match pid {
             ForkResult::Parent { child } => Ok(child),
             ForkResult::Child => {
-                if let Ok(process::ProcessState::Completed(exit)) = job.launch(ctx, self).await {
+                if let Ok(process::ProcessState::Completed(exit, _signal)) =
+                    job.launch(ctx, self).await
+                {
                     if exit != 0 {
                         // TODO check
                         debug!("job exit code {:?}", exit);

@@ -162,16 +162,20 @@ impl BuiltinProcess {
         let exit = (self.cmd_fn)(ctx, self.argv.to_vec(), shell);
         if let ExitStatus::ExitedWith(code) = exit {
             if code >= 0 {
-                self.state = ProcessState::Completed(0);
+                self.state = ProcessState::Completed(1, None);
+            } else {
+                self.state = ProcessState::Completed(0, None);
             }
         }
         // TODO check exit
         Ok(())
     }
 
-    fn update_state(&mut self) {
+    fn update_state(&mut self) -> Option<ProcessState> {
         if let Some(next) = self.next.as_mut() {
-            next.update_state();
+            next.update_state()
+        } else {
+            None
         }
     }
 }
@@ -252,9 +256,11 @@ impl WasmProcess {
         shell.run_wasm(self.name.as_str(), self.argv.to_vec())
     }
 
-    fn update_state(&mut self) {
+    fn update_state(&mut self) -> Option<ProcessState> {
         if let Some(next) = self.next.as_mut() {
-            next.update_state();
+            next.update_state()
+        } else {
+            None
         }
     }
 }
@@ -277,16 +283,28 @@ pub struct Process {
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ProcessState {
     Running,
-    Completed(u8),
-    Stopped(Pid),
+    Completed(u8, Option<Signal>),
+    Stopped(Pid, Signal),
 }
 
 impl std::fmt::Display for ProcessState {
     fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             ProcessState::Running => formatter.write_str("running"),
-            ProcessState::Completed(_) => formatter.write_str("completed"),
-            ProcessState::Stopped(_) => formatter.write_str("stopped"),
+            ProcessState::Completed(_, signal) => {
+                if let Some(signal) = signal {
+                    if signal == &Signal::SIGKILL {
+                        formatter.write_str("killed")
+                    } else if signal == &Signal::SIGTERM {
+                        formatter.write_str("terminated")
+                    } else {
+                        formatter.write_str("done")
+                    }
+                } else {
+                    formatter.write_str("done")
+                }
+            }
+            ProcessState::Stopped(_, _) => formatter.write_str("stopped"),
         }
     }
 }
@@ -404,22 +422,17 @@ impl Process {
         }
     }
 
-    fn update_state(&mut self) {
+    fn update_state(&mut self) -> Option<ProcessState> {
         if let Some(pid) = self.pid {
-            match wait_pid_job(pid, true) {
-                Some((_pid, state @ ProcessState::Completed(_))) => {
-                    self.state = state;
-                }
-                Some((_pid, state @ ProcessState::Stopped(_))) => {
-                    self.state = state;
-                }
-                _ => {}
+            if let Some((_, state)) = wait_pid_job(pid, true) {
+                self.state = state;
             }
         }
 
         if let Some(next) = self.next.as_mut() {
             next.update_state();
         }
+        Some(self.state)
     }
 }
 
@@ -583,7 +596,7 @@ impl JobProcess {
 
     fn is_completed(&self) -> bool {
         match self.get_state() {
-            ProcessState::Completed(_) => {
+            ProcessState::Completed(_, _signal) => {
                 //ok
                 if let Some(next) = self.next() {
                     return next.is_completed();
@@ -693,17 +706,11 @@ impl JobProcess {
         }
     }
 
-    fn update_state(&mut self) {
+    fn update_state(&mut self) -> Option<ProcessState> {
         match self {
-            JobProcess::Builtin(process) => {
-                process.update_state();
-            }
-            JobProcess::Wasm(process) => {
-                process.update_state();
-            }
-            JobProcess::Command(process) => {
-                process.update_state();
-            }
+            JobProcess::Builtin(process) => process.update_state(),
+            JobProcess::Wasm(process) => process.update_state(),
+            JobProcess::Command(process) => process.update_state(),
         }
     }
 }
@@ -807,7 +814,7 @@ impl Job {
             last_process_state(*p.clone())
         } else {
             // not running
-            ProcessState::Completed(0)
+            ProcessState::Completed(0, None)
         }
     }
 
@@ -829,7 +836,6 @@ impl Job {
             }
         }
 
-        debug!("lauched job context {:?}", ctx);
         if ctx.foreground {
             Ok(self.last_process_state())
         } else {
@@ -950,9 +956,13 @@ impl Job {
             let result = waitpid(None, Some(WaitPidFlag::WUNTRACED));
 
             let (pid, state) = match result {
-                Ok(WaitStatus::Exited(pid, status)) => (pid, ProcessState::Completed(status as u8)), // ok??
-                Ok(WaitStatus::Signaled(pid, _signal, _)) => (pid, ProcessState::Completed(1)),
-                Ok(WaitStatus::Stopped(pid, _signal)) => (pid, ProcessState::Stopped(pid)),
+                Ok(WaitStatus::Exited(pid, status)) => {
+                    (pid, ProcessState::Completed(status as u8, None))
+                } // ok??
+                Ok(WaitStatus::Signaled(pid, signal, _)) => {
+                    (pid, ProcessState::Completed(1, Some(signal)))
+                }
+                Ok(WaitStatus::Stopped(pid, signal)) => (pid, ProcessState::Stopped(pid, signal)),
                 Err(nix::errno::Errno::ECHILD) | Ok(WaitStatus::StillAlive) => {
                     // break?
                     return;
@@ -968,7 +978,7 @@ impl Job {
 
             // show_process_state(&self.process); // debug
 
-            if let ProcessState::Completed(code) = state {
+            if let ProcessState::Completed(code, _) = state {
                 if code != 0 && !send_killpg {
                     if let Some(pgid) = self.pgid {
                         debug!("killpg pgid: {}", pgid);
@@ -1017,19 +1027,12 @@ impl Job {
     }
 
     pub fn update_status(&mut self) -> bool {
-        // TODO set state from process_state
         if let Some(process) = self.process.as_mut() {
-            process.update_state();
+            if let Some(state) = process.update_state() {
+                self.state = state;
+            }
         }
-        if is_job_stopped(self) {
-            self.state = ProcessState::Stopped(self.pid.unwrap());
-        }
-        if is_job_completed(self) {
-            self.state = ProcessState::Completed(0);
-            true
-        } else {
-            false
-        }
+        is_job_completed(self)
     }
 
     // pub async fn check_background_output2(&self) -> Result<()> {
@@ -1145,9 +1148,9 @@ pub fn wait_any_job(no_hang: bool) -> Option<(Pid, ProcessState)> {
 
     let result = waitpid(None, Some(options));
     let res = match result {
-        Ok(WaitStatus::Exited(pid, status)) => (pid, ProcessState::Completed(status as u8)),
-        Ok(WaitStatus::Signaled(pid, _signal, _)) => (pid, ProcessState::Completed(1)),
-        Ok(WaitStatus::Stopped(pid, _signal)) => (pid, ProcessState::Stopped(pid)),
+        Ok(WaitStatus::Exited(pid, status)) => (pid, ProcessState::Completed(status as u8, None)),
+        Ok(WaitStatus::Signaled(pid, signal, _)) => (pid, ProcessState::Completed(1, Some(signal))),
+        Ok(WaitStatus::Stopped(pid, signal)) => (pid, ProcessState::Stopped(pid, signal)),
         Err(nix::errno::Errno::ECHILD) | Ok(WaitStatus::StillAlive) => {
             return None;
         }
@@ -1248,10 +1251,10 @@ pub fn wait_pid_job(pid: Pid, no_hang: bool) -> Option<(Pid, ProcessState)> {
 
     let result = waitpid(pid, Some(options));
     let res = match result {
-        Ok(WaitStatus::Exited(pid, status)) => (pid, ProcessState::Completed(status as u8)),
-        Ok(WaitStatus::Signaled(pid, _signal, _)) => (pid, ProcessState::Completed(1)),
-        Ok(WaitStatus::Stopped(pid, _signal)) => (pid, ProcessState::Stopped(pid)),
-        Err(nix::errno::Errno::ECHILD) => (pid, ProcessState::Completed(1)),
+        Ok(WaitStatus::Exited(pid, status)) => (pid, ProcessState::Completed(status as u8, None)),
+        Ok(WaitStatus::Signaled(pid, signal, _)) => (pid, ProcessState::Completed(1, Some(signal))),
+        Ok(WaitStatus::Stopped(pid, signal)) => (pid, ProcessState::Stopped(pid, signal)),
+        Err(nix::errno::Errno::ECHILD) => (pid, ProcessState::Completed(1, None)),
         Ok(WaitStatus::StillAlive) => {
             return None;
         }
@@ -1377,11 +1380,11 @@ mod tests {
 
         let job = &mut Job::new(input.to_string(), getpgrp());
         let mut process = Process::new("1".to_string(), vec![]);
-        process.state = ProcessState::Completed(0);
+        process.state = ProcessState::Completed(0, None);
         job.set_process(JobProcess::Command(process));
 
         let mut process = Process::new("2".to_string(), vec![]);
-        process.state = ProcessState::Completed(0);
+        process.state = ProcessState::Completed(0, None);
         job.set_process(JobProcess::Command(process));
 
         let process = Process::new("3".to_string(), vec![]);
@@ -1392,15 +1395,15 @@ mod tests {
 
         let job = &mut Job::new(input.to_string(), getpgrp());
         let mut process = Process::new("1".to_string(), vec![]);
-        process.state = ProcessState::Completed(0);
+        process.state = ProcessState::Completed(0, None);
         job.set_process(JobProcess::Command(process));
 
         let mut process = Process::new("2".to_string(), vec![]);
-        process.state = ProcessState::Completed(0);
+        process.state = ProcessState::Completed(0, None);
         job.set_process(JobProcess::Command(process));
 
         let mut process = Process::new("3".to_string(), vec![]);
-        process.state = ProcessState::Stopped(Pid::from_raw(10));
+        process.state = ProcessState::Stopped(Pid::from_raw(10), Signal::SIGSTOP);
         job.set_process(JobProcess::Command(process));
 
         debug!("{:?}", job);
@@ -1414,15 +1417,15 @@ mod tests {
 
         let job = &mut Job::new(input.to_string(), getpgrp());
         let mut process = Process::new("1".to_string(), vec![]);
-        process.state = ProcessState::Completed(0);
+        process.state = ProcessState::Completed(0, None);
         job.set_process(JobProcess::Command(process));
 
         let mut process = Process::new("2".to_string(), vec![]);
-        process.state = ProcessState::Stopped(Pid::from_raw(0));
+        process.state = ProcessState::Stopped(Pid::from_raw(0), Signal::SIGSTOP);
         job.set_process(JobProcess::Command(process));
 
         let mut process = Process::new("3".to_string(), vec![]);
-        process.state = ProcessState::Completed(0);
+        process.state = ProcessState::Completed(0, None);
         job.set_process(JobProcess::Command(process));
 
         debug!("{:?}", job);
@@ -1430,15 +1433,15 @@ mod tests {
 
         let job = &mut Job::new(input.to_string(), getpgrp());
         let mut process = Process::new("1".to_string(), vec![]);
-        process.state = ProcessState::Completed(0);
+        process.state = ProcessState::Completed(0, None);
         job.set_process(JobProcess::Command(process));
 
         let mut process = Process::new("2".to_string(), vec![]);
-        process.state = ProcessState::Completed(0);
+        process.state = ProcessState::Completed(0, None);
         job.set_process(JobProcess::Command(process));
 
         let mut process = Process::new("3".to_string(), vec![]);
-        process.state = ProcessState::Completed(0);
+        process.state = ProcessState::Completed(0, None);
         job.set_process(JobProcess::Command(process));
 
         debug!("{:?}", job);

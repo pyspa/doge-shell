@@ -140,7 +140,7 @@ impl BuiltinProcess {
                 return true;
             }
         }
-        return false;
+        false
     }
 
     pub fn link(&mut self, process: JobProcess) {
@@ -228,7 +228,7 @@ impl WasmProcess {
                 return true;
             }
         }
-        return false;
+        false
     }
 
     pub fn link(&mut self, process: JobProcess) {
@@ -320,7 +320,7 @@ impl Process {
                 return true;
             }
         }
-        return false;
+        false
     }
 
     pub fn link(&mut self, process: JobProcess) {
@@ -613,10 +613,7 @@ impl JobProcess {
     }
 
     pub fn waitable(&self) -> bool {
-        match self {
-            JobProcess::Command(_) => true,
-            _ => false,
-        }
+        matches!(self, JobProcess::Command(_))
     }
 
     pub fn launch(
@@ -668,9 +665,7 @@ impl JobProcess {
             JobProcess::Command(process) => {
                 ctx.process_count += 1;
                 // fork
-                let pid = fork_process(ctx, ctx.pgid, process)?;
-
-                pid
+                fork_process(ctx, ctx.pgid, process)?
             }
         };
 
@@ -1185,7 +1180,7 @@ fn show_process_state(process: &Option<Box<JobProcess>>) {
             process.get_state(),
         );
 
-        if let Some(_) = process.next() {
+        if process.next().is_some() {
             show_process_state(&process.next());
         }
     }
@@ -1314,8 +1309,8 @@ fn send_signal(pid: Pid, signal: Signal) -> Result<()> {
 
 fn kill_process(process: &Option<Box<JobProcess>>) -> Result<()> {
     if let Some(process) = process {
-        process.kill();
-        if let Some(_) = process.next() {
+        process.kill()?;
+        if process.next().is_some() {
             kill_process(&process.next())?;
         }
     }

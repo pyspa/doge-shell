@@ -123,11 +123,11 @@ impl Shell {
         std::io::stderr().flush().ok();
     }
 
-    pub fn print_stdout(&self, msg: &str) {
-        // unknown command, etc
-        print!("\r{msg}\r\n");
-        std::io::stdout().flush().ok();
-    }
+    // pub fn print_stdout(&self, msg: &str) {
+    //     // unknown command, etc
+    //     print!("\r{msg}\r\n");
+    //     std::io::stdout().flush().ok();
+    // }
 
     pub async fn eval_str(
         &mut self,

@@ -134,44 +134,6 @@ impl Prompt {
     }
 }
 
-//
-fn print_preprompt(out: &mut StdoutLock<'static>) {
-    let status = get_git_status();
-    let has_git = status.is_some();
-
-    let (path, _is_git_root) = get_cwd();
-
-    let mut out = BufWriter::new(out);
-    out.write_fmt(format_args!("{}", "\r".reset())).ok();
-
-    if has_git {
-        out.write_fmt(format_args!("{}", path.cyan())).ok();
-    } else {
-        out.write_fmt(format_args!("{}", path.white())).ok();
-    }
-
-    if let Some(git_status) = status {
-        out.write_fmt(format_args!(" {} ", "on".reset())).ok();
-        out.write_fmt(format_args!(
-            "{}",
-            format!("{} {}", BRANCH_MARK, git_status.branch).magenta(),
-        ))
-        .ok();
-        if git_status.branch_status.is_some() {
-            out.write_fmt(format_args!(
-                "{}",
-                format!(" [{}]", git_status.branch_status.unwrap())
-                    .bold()
-                    .red()
-            ))
-            .ok();
-        }
-        out.write_fmt(format_args!("{}", "\r\n".reset(),)).ok();
-    } else {
-        out.write_fmt(format_args!("{}", "\r\n".reset(),)).ok();
-    }
-}
-
 fn get_cwd() -> (String, bool) {
     match std::env::current_dir() {
         Ok(pathbuf) => {

@@ -4,7 +4,7 @@ use crate::environment::Environment;
 use crate::history::FrecencyHistory;
 use crate::lisp;
 use crate::parser::{self, Rule, ShellParser};
-use crate::process::{self, wait_pid_job, Job, JobProcess, ProcessState, Redirect};
+use crate::process::{self, wait_pid_job, Job, JobProcess, Redirect};
 use anyhow::Context as _;
 use anyhow::{anyhow, bail, Result};
 use async_std::task;
@@ -542,20 +542,9 @@ impl Shell {
             if !self.wait_jobs[i].foreground {
                 self.wait_jobs[i].check_background_output().await?;
             }
-            if let Some(pid) = self.wait_jobs[i].pid {
-                match wait_pid_job(pid, true) {
-                    Some((_pid, ProcessState::Completed(_))) => {
-                        let removed_job = self.wait_jobs.remove(i);
-                        completed.push(removed_job);
-                    }
-                    Some((_pid, ProcessState::Stopped(_))) => {
-                        self.wait_jobs[i].state = ProcessState::Stopped(pid);
-                        i += 1;
-                    }
-                    _ => {
-                        i += 1;
-                    }
-                }
+            if self.wait_jobs[i].update_status() {
+                let removed_job = self.wait_jobs.remove(i);
+                completed.push(removed_job);
             } else {
                 i += 1;
             }

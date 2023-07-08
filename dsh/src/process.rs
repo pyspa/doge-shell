@@ -168,6 +168,12 @@ impl BuiltinProcess {
         // TODO check exit
         Ok(())
     }
+
+    fn update_state(&mut self) {
+        if let Some(next) = self.next.as_mut() {
+            next.update_state();
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -244,6 +250,12 @@ impl WasmProcess {
 
         // TODO check exit
         shell.run_wasm(self.name.as_str(), self.argv.to_vec())
+    }
+
+    fn update_state(&mut self) {
+        if let Some(next) = self.next.as_mut() {
+            next.update_state();
+        }
     }
 }
 
@@ -389,6 +401,24 @@ impl Process {
                 error!("Failed to exec {:?} ({})", cmd, err);
                 std::process::exit(1);
             }
+        }
+    }
+
+    fn update_state(&mut self) {
+        if let Some(pid) = self.pid {
+            match wait_pid_job(pid, true) {
+                Some((_pid, state @ ProcessState::Completed(_))) => {
+                    self.state = state;
+                }
+                Some((_pid, state @ ProcessState::Stopped(_))) => {
+                    self.state = state;
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(next) = self.next.as_mut() {
+            next.update_state();
         }
     }
 }
@@ -667,6 +697,20 @@ impl JobProcess {
             }
         }
     }
+
+    fn update_state(&mut self) {
+        match self {
+            JobProcess::Builtin(process) => {
+                process.update_state();
+            }
+            JobProcess::Wasm(process) => {
+                process.update_state();
+            }
+            JobProcess::Command(process) => {
+                process.update_state();
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -799,7 +843,7 @@ impl Job {
         }
     }
 
-    pub fn launch_process(
+    fn launch_process(
         &mut self,
         ctx: &mut Context,
         shell: &mut Shell,
@@ -807,7 +851,9 @@ impl Job {
     ) -> Result<()> {
         let (pid, mut next_process) = process.launch(ctx, shell, &self.redirect, self.stdout)?;
 
-        self.pid = Some(pid); // set process pid
+        if self.pid.is_none() {
+            self.pid = Some(pid); // set process pid
+        }
         self.state = process.get_state();
 
         if ctx.interactive {
@@ -901,7 +947,7 @@ impl Job {
 
     fn show_job_status(&self) {}
 
-    pub fn wait_job(&mut self) {
+    fn wait_job(&mut self) {
         let mut send_killpg = false;
         loop {
             // TODO other process waitpid
@@ -925,7 +971,7 @@ impl Job {
 
             debug!("fin wait: pid:{:?}", pid);
 
-            show_process_state(&self.process); // debug
+            // show_process_state(&self.process); // debug
 
             if let ProcessState::Completed(code) = state {
                 if code != 0 && !send_killpg {
@@ -973,6 +1019,22 @@ impl Job {
 
     pub fn kill(&mut self) -> Result<()> {
         kill_process(&self.process)
+    }
+
+    pub fn update_status(&mut self) -> bool {
+        // TODO set state from process_state
+        if let Some(process) = self.process.as_mut() {
+            process.update_state();
+        }
+        if is_job_stopped(self) {
+            self.state = ProcessState::Stopped(self.pid.unwrap());
+        }
+        if is_job_completed(self) {
+            self.state = ProcessState::Completed(0);
+            true
+        } else {
+            false
+        }
     }
 
     // pub async fn check_background_output2(&self) -> Result<()> {
@@ -1171,11 +1233,11 @@ pub fn is_job_stopped(job: &Job) -> bool {
 
 pub fn is_job_completed(job: &Job) -> bool {
     if let Some(process) = &job.process {
-        debug!(
-            "is_job_completed {} {}",
-            process.get_cmd(),
-            process.get_state()
-        );
+        // debug!(
+        //     "is_job_completed {} {}",
+        //     process.get_cmd(),
+        //     process.get_state()
+        // );
         process.is_completed()
     } else {
         true

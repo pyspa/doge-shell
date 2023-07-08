@@ -68,7 +68,7 @@ impl DirEnvironment {
         Ok(())
     }
 
-    pub fn remove_env(&self) {
+    pub fn remove_env(&mut self) {
         if !self.loaded {
             return;
         }
@@ -86,6 +86,7 @@ impl DirEnvironment {
         if require_reset {
             std::env::set_var("PATH", &self.env_path);
         }
+        self.entries = Vec::new();
     }
 
     pub fn read_env_file(&mut self) -> Result<()> {

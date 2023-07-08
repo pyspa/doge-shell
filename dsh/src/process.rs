@@ -423,16 +423,20 @@ impl Process {
     }
 
     fn update_state(&mut self) -> Option<ProcessState> {
-        if let Some(pid) = self.pid {
-            if let Some((_, state)) = wait_pid_job(pid, true) {
-                self.state = state;
+        if let ProcessState::Completed(_, _) = self.state {
+            Some(self.state)
+        } else {
+            if let Some(pid) = self.pid {
+                if let Some((_, state)) = wait_pid_job(pid, true) {
+                    self.state = state;
+                }
             }
-        }
 
-        if let Some(next) = self.next.as_mut() {
-            next.update_state();
+            if let Some(next) = self.next.as_mut() {
+                next.update_state();
+            }
+            Some(self.state)
         }
-        Some(self.state)
     }
 }
 

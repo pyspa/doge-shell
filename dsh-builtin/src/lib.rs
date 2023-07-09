@@ -7,6 +7,7 @@ use std::sync::Mutex;
 mod add_path;
 pub mod cd;
 mod chatgpt;
+mod fg;
 mod history;
 mod jobs;
 pub mod lisp;
@@ -47,6 +48,7 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, BuiltinCommand>>> = Lazy::n
     builtin.insert("chat_prompt", chatgpt::chat_prompt as BuiltinCommand);
     builtin.insert("add_path", add_path::command as BuiltinCommand);
     builtin.insert("uuid", uuid::command as BuiltinCommand);
+    builtin.insert("fg", fg::command as BuiltinCommand);
 
     Mutex::new(builtin)
 });

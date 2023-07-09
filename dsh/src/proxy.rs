@@ -1,4 +1,4 @@
-use crate::shell::Shell;
+use crate::{process::ProcessState, shell::Shell};
 use anyhow::Result;
 use dsh_builtin::ShellProxy;
 use dsh_frecency::SortMethod;
@@ -83,7 +83,7 @@ impl ShellProxy for Shell {
             }
             "jobs" => {
                 if self.wait_jobs.is_empty() {
-                    ctx.write_stdout("jobs: There are no jobs")?;
+                    ctx.write_stdout("jobs: there are no jobs")?;
                 } else {
                     let jobs: Vec<Job> = self
                         .wait_jobs
@@ -148,6 +148,26 @@ impl ShellProxy for Shell {
                     .to_owned();
 
                 self.environment.write().variables.insert(key, output);
+            }
+            "fg" => {
+                if self.wait_jobs.is_empty() {
+                    ctx.write_stdout("fg: there are no suitable jobs")?;
+                } else {
+                    // TODO selectable nth
+                    // TODO support continue
+                    if let Some(ref mut job) = self.wait_jobs.pop() {
+                        debug!("foreground job: {:?}", job);
+                        if let ProcessState::Stopped(_, _) = job.state {
+                            // send continue
+                        }
+                        match job.put_in_foreground(true) {
+                            Err(err) => {
+                                ctx.write_stderr(&format!("{}", err)).ok();
+                            }
+                            _ => {}
+                        }
+                    }
+                }
             }
             _ => {}
         }

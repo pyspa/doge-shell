@@ -542,7 +542,7 @@ impl Shell {
         let mut i = 0;
         while i < self.wait_jobs.len() {
             if !self.wait_jobs[i].foreground {
-                self.wait_jobs[i].check_background_output().await?;
+                self.wait_jobs[i].check_background_all_output().await?;
             }
             if self.wait_jobs[i].update_status() {
                 let removed_job = self.wait_jobs.remove(i);

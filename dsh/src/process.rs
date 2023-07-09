@@ -17,6 +17,7 @@ use std::ffi::CString;
 use std::fmt::Debug;
 use std::os::unix::io::FromRawFd;
 use std::os::unix::io::RawFd;
+use std::thread::sleep;
 use std::time::Duration;
 use tracing::{debug, error};
 
@@ -828,11 +829,11 @@ impl Job {
         if let Some(process) = self.process.take().as_mut() {
             let _ = self.launch_process(ctx, shell, process);
             if !ctx.interactive {
-                self.wait_job();
+                self.wait_job(false)?;
             } else if ctx.foreground {
                 // foreground
                 if ctx.process_count > 0 {
-                    let _ = self.put_in_foreground();
+                    let _ = self.put_in_foreground(false);
                 }
             } else {
                 // background
@@ -917,14 +918,14 @@ impl Job {
         Ok(())
     }
 
-    fn put_in_foreground(&mut self) -> Result<()> {
+    pub fn put_in_foreground(&mut self, no_hang: bool) -> Result<()> {
         debug!("put_in_foreground: pgid {:?}", self.pgid);
         // Put the job into the foreground
 
         tcsetpgrp(SHELL_TERMINAL, self.pgid.unwrap()).context("failed tcsetpgrp")?;
         // TODO Send the job a continue signal, if necessary.
 
-        self.wait_job();
+        self.wait_job(no_hang)?;
 
         tcsetpgrp(SHELL_TERMINAL, self.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
         // debug!("put_in_foreground: {:?} tcsetpgrp shell", &self.cmd);
@@ -938,12 +939,13 @@ impl Job {
         Ok(())
     }
 
-    fn put_in_background(&mut self) -> Result<()> {
+    pub fn put_in_background(&mut self) -> Result<()> {
         debug!("put_in_background pgid {:?}", self.pgid,);
 
         // TODO Send the job a continue signal, if necessary.
 
-        // let _ = tcsetpgrp(SHELL_TERMINAL, ctx.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
+        let _ =
+            tcsetpgrp(SHELL_TERMINAL, self.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
         // let tmodes = tcgetattr(SHELL_TERMINAL).context("failed tcgetattr wait")?;
         // self.tmodes = Some(tmodes);
 
@@ -952,24 +954,34 @@ impl Job {
 
     fn show_job_status(&self) {}
 
-    fn wait_job(&mut self) {
+    fn wait_job(&mut self, no_hang: bool) -> Result<()> {
+        if no_hang {
+            self.wait_process_no_hang()
+        } else {
+            self.wait_process()
+        }
+    }
+
+    fn wait_process(&mut self) -> Result<()> {
         let mut send_killpg = false;
         loop {
-            // TODO other process waitpid
             debug!("waitpid ...");
-            let result = waitpid(None, Some(WaitPidFlag::WUNTRACED));
 
-            let (pid, state) = match result {
+            let (pid, state) = match waitpid(None, Some(WaitPidFlag::WUNTRACED)) {
                 Ok(WaitStatus::Exited(pid, status)) => {
+                    debug!("wait_job exited {:?} {:?}", pid, status);
                     (pid, ProcessState::Completed(status as u8, None))
                 } // ok??
                 Ok(WaitStatus::Signaled(pid, signal, _)) => {
+                    debug!("wait_job signaled {:?} {:?}", pid, signal);
                     (pid, ProcessState::Completed(1, Some(signal)))
                 }
-                Ok(WaitStatus::Stopped(pid, signal)) => (pid, ProcessState::Stopped(pid, signal)),
+                Ok(WaitStatus::Stopped(pid, signal)) => {
+                    debug!("wait_job stopped {:?} {:?}", pid, signal);
+                    (pid, ProcessState::Stopped(pid, signal))
+                }
                 Err(nix::errno::Errno::ECHILD) | Ok(WaitStatus::StillAlive) => {
-                    // break?
-                    return;
+                    break;
                 }
                 status => {
                     panic!("unexpected waitpid event: {:?}", status);
@@ -1000,6 +1012,68 @@ impl Job {
                 break;
             }
         }
+        Ok(())
+    }
+
+    fn wait_process_no_hang(&mut self) -> Result<()> {
+        let mut send_killpg = false;
+        loop {
+            debug!("waitpid ...");
+            task::block_on(self.check_background_all_output())?;
+
+            let (pid, state) =
+                match waitpid(None, Some(WaitPidFlag::WUNTRACED | WaitPidFlag::WNOHANG)) {
+                    Ok(WaitStatus::Exited(pid, status)) => {
+                        debug!("wait_job exited {:?} {:?}", pid, status);
+                        (pid, ProcessState::Completed(status as u8, None))
+                    } // ok??
+                    Ok(WaitStatus::Signaled(pid, signal, _)) => {
+                        debug!("wait_job signaled {:?} {:?}", pid, signal);
+                        (pid, ProcessState::Completed(1, Some(signal)))
+                    }
+                    Ok(WaitStatus::Stopped(pid, signal)) => {
+                        debug!("wait_job stopped {:?} {:?}", pid, signal);
+                        (pid, ProcessState::Stopped(pid, signal))
+                    }
+                    Ok(WaitStatus::StillAlive) => {
+                        sleep(std::time::Duration::from_millis(1000));
+                        continue;
+                    }
+                    Err(nix::errno::Errno::ECHILD) => {
+                        task::block_on(self.check_background_all_output())?;
+                        break;
+                    }
+                    status => {
+                        panic!("unexpected waitpid event: {:?}", status);
+                    }
+                };
+
+            task::block_on(self.check_background_all_output())?;
+            self.set_process_state(pid, state);
+
+            debug!("fin wait: pid:{:?}", pid);
+
+            // show_process_state(&self.process); // debug
+
+            if let ProcessState::Completed(code, _) = state {
+                if code != 0 && !send_killpg {
+                    if let Some(pgid) = self.pgid {
+                        debug!("killpg pgid: {}", pgid);
+                        let _ = killpg(pgid, Signal::SIGKILL);
+                        send_killpg = true;
+                    }
+                }
+            }
+            // break;
+            if is_job_completed(self) {
+                break;
+            }
+            if is_job_stopped(self) {
+                println!("\rdsh: job {} '{}' has stopped", self.job_id, self.cmd);
+                break;
+            }
+        }
+        Ok(())
     }
 
     fn set_process_state(&mut self, pid: Pid, state: ProcessState) {
@@ -1020,7 +1094,7 @@ impl Job {
     pub async fn check_background_all_output(&mut self) -> Result<()> {
         let mut i = 0;
         while i < self.monitors.len() {
-            self.monitors[i].output_all().await?;
+            self.monitors[i].output_all(false).await?;
             i += 1;
         }
         Ok(())
@@ -1115,7 +1189,7 @@ impl OutputMonitor {
         }
     }
 
-    pub async fn output_all(&mut self) -> Result<()> {
+    pub async fn output_all(&mut self, block: bool) -> Result<()> {
         let mut len = 1;
         while len != 0 {
             let mut line = String::new();
@@ -1136,7 +1210,11 @@ impl OutputMonitor {
                     enable_raw_mode().ok();
                     len = readed;
                 }
-                Err(_err) => {}
+                Err(_err) => {
+                    if !block {
+                        break;
+                    }
+                }
             }
         }
         Ok(())

@@ -843,15 +843,15 @@ impl Job {
         if let Some(process) = self.process.take().as_mut() {
             let _ = self.launch_process(ctx, shell, process);
             if !ctx.interactive {
-                self.wait_job(false)?;
+                self.wait_job(false).await?;
             } else if ctx.foreground {
                 // foreground
                 if ctx.process_count > 0 {
-                    let _ = self.put_in_foreground(false);
+                    let _ = self.put_in_foreground(false).await;
                 }
             } else {
                 // background
-                let _ = self.put_in_background();
+                let _ = self.put_in_background().await;
             }
         }
 
@@ -932,14 +932,14 @@ impl Job {
         Ok(())
     }
 
-    pub fn put_in_foreground(&mut self, no_hang: bool) -> Result<()> {
+    pub async fn put_in_foreground(&mut self, no_hang: bool) -> Result<()> {
         debug!("put_in_foreground: pgid {:?}", self.pgid);
         // Put the job into the foreground
 
         tcsetpgrp(SHELL_TERMINAL, self.pgid.unwrap()).context("failed tcsetpgrp")?;
         // TODO Send the job a continue signal, if necessary.
 
-        self.wait_job(no_hang)?;
+        self.wait_job(no_hang).await?;
 
         tcsetpgrp(SHELL_TERMINAL, self.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
         // debug!("put_in_foreground: {:?} tcsetpgrp shell", &self.cmd);
@@ -953,7 +953,7 @@ impl Job {
         Ok(())
     }
 
-    pub fn put_in_background(&mut self) -> Result<()> {
+    pub async fn put_in_background(&mut self) -> Result<()> {
         debug!("put_in_background pgid {:?}", self.pgid,);
 
         // TODO Send the job a continue signal, if necessary.
@@ -968,39 +968,40 @@ impl Job {
 
     fn show_job_status(&self) {}
 
-    fn wait_job(&mut self, no_hang: bool) -> Result<()> {
+    async fn wait_job(&mut self, no_hang: bool) -> Result<()> {
         if no_hang {
-            self.wait_process_no_hang()
+            self.wait_process_no_hang().await
         } else {
-            self.wait_process()
+            self.wait_process().await
         }
     }
 
-    fn wait_process(&mut self) -> Result<()> {
+    async fn wait_process(&mut self) -> Result<()> {
         let mut send_killpg = false;
         loop {
             debug!("waitpid ...");
 
-            let (pid, state) = match waitpid(None, Some(WaitPidFlag::WUNTRACED)) {
-                Ok(WaitStatus::Exited(pid, status)) => {
-                    debug!("wait_job exited {:?} {:?}", pid, status);
-                    (pid, ProcessState::Completed(status as u8, None))
-                } // ok??
-                Ok(WaitStatus::Signaled(pid, signal, _)) => {
-                    debug!("wait_job signaled {:?} {:?}", pid, signal);
-                    (pid, ProcessState::Completed(1, Some(signal)))
-                }
-                Ok(WaitStatus::Stopped(pid, signal)) => {
-                    debug!("wait_job stopped {:?} {:?}", pid, signal);
-                    (pid, ProcessState::Stopped(pid, signal))
-                }
-                Err(nix::errno::Errno::ECHILD) | Ok(WaitStatus::StillAlive) => {
-                    break;
-                }
-                status => {
-                    panic!("unexpected waitpid event: {:?}", status);
-                }
-            };
+            let (pid, state) =
+                match task::spawn_blocking(|| waitpid(None, Some(WaitPidFlag::WUNTRACED))).await {
+                    Ok(WaitStatus::Exited(pid, status)) => {
+                        debug!("wait_job exited {:?} {:?}", pid, status);
+                        (pid, ProcessState::Completed(status as u8, None))
+                    } // ok??
+                    Ok(WaitStatus::Signaled(pid, signal, _)) => {
+                        debug!("wait_job signaled {:?} {:?}", pid, signal);
+                        (pid, ProcessState::Completed(1, Some(signal)))
+                    }
+                    Ok(WaitStatus::Stopped(pid, signal)) => {
+                        debug!("wait_job stopped {:?} {:?}", pid, signal);
+                        (pid, ProcessState::Stopped(pid, signal))
+                    }
+                    Err(nix::errno::Errno::ECHILD) | Ok(WaitStatus::StillAlive) => {
+                        break;
+                    }
+                    status => {
+                        panic!("unexpected waitpid event: {:?}", status);
+                    }
+                };
 
             self.set_process_state(pid, state);
 
@@ -1029,40 +1030,44 @@ impl Job {
         Ok(())
     }
 
-    fn wait_process_no_hang(&mut self) -> Result<()> {
+    async fn wait_process_no_hang(&mut self) -> Result<()> {
         let mut send_killpg = false;
         loop {
             debug!("waitpid ...");
-            task::block_on(self.check_background_all_output())?;
 
-            let (pid, state) =
-                match waitpid(None, Some(WaitPidFlag::WUNTRACED | WaitPidFlag::WNOHANG)) {
-                    Ok(WaitStatus::Exited(pid, status)) => {
-                        debug!("wait_job exited {:?} {:?}", pid, status);
-                        (pid, ProcessState::Completed(status as u8, None))
-                    } // ok??
-                    Ok(WaitStatus::Signaled(pid, signal, _)) => {
-                        debug!("wait_job signaled {:?} {:?}", pid, signal);
-                        (pid, ProcessState::Completed(1, Some(signal)))
-                    }
-                    Ok(WaitStatus::Stopped(pid, signal)) => {
-                        debug!("wait_job stopped {:?} {:?}", pid, signal);
-                        (pid, ProcessState::Stopped(pid, signal))
-                    }
-                    Ok(WaitStatus::StillAlive) => {
-                        sleep(std::time::Duration::from_millis(1000));
-                        continue;
-                    }
-                    Err(nix::errno::Errno::ECHILD) => {
-                        task::block_on(self.check_background_all_output())?;
-                        break;
-                    }
-                    status => {
-                        panic!("unexpected waitpid event: {:?}", status);
-                    }
-                };
+            self.check_background_all_output().await?;
 
-            task::block_on(self.check_background_all_output())?;
+            let (pid, state) = match task::spawn_blocking(|| {
+                waitpid(None, Some(WaitPidFlag::WUNTRACED | WaitPidFlag::WNOHANG))
+            })
+            .await
+            {
+                Ok(WaitStatus::Exited(pid, status)) => {
+                    debug!("wait_job exited {:?} {:?}", pid, status);
+                    (pid, ProcessState::Completed(status as u8, None))
+                } // ok??
+                Ok(WaitStatus::Signaled(pid, signal, _)) => {
+                    debug!("wait_job signaled {:?} {:?}", pid, signal);
+                    (pid, ProcessState::Completed(1, Some(signal)))
+                }
+                Ok(WaitStatus::Stopped(pid, signal)) => {
+                    debug!("wait_job stopped {:?} {:?}", pid, signal);
+                    (pid, ProcessState::Stopped(pid, signal))
+                }
+                Ok(WaitStatus::StillAlive) => {
+                    sleep(std::time::Duration::from_millis(1000));
+                    continue;
+                }
+                Err(nix::errno::Errno::ECHILD) => {
+                    task::block_on(self.check_background_all_output())?;
+                    break;
+                }
+                status => {
+                    panic!("unexpected waitpid event: {:?}", status);
+                }
+            };
+
+            self.check_background_all_output().await?;
             self.set_process_state(pid, state);
 
             debug!("fin wait: pid:{:?}", pid);

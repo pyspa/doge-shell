@@ -154,17 +154,24 @@ impl ShellProxy for Shell {
                     ctx.write_stdout("fg: there are no suitable jobs")?;
                 } else {
                     // TODO selectable nth
-                    // TODO support continue
                     if let Some(ref mut job) = self.wait_jobs.pop() {
                         debug!("foreground job: {:?}", job);
+                        ctx.write_stdout(&format!(
+                            "dsh: job {} '{}' to foreground",
+                            job.job_id, job.cmd
+                        ))
+                        .ok();
                         if let ProcessState::Stopped(_, _) = job.state {
                             // send continue
-                        }
-                        match job.put_in_foreground(true) {
-                            Err(err) => {
+                            debug!("send continue job: {:?}", job);
+                            if let Err(err) = job.cont() {
                                 ctx.write_stderr(&format!("{}", err)).ok();
+                                return Err(err);
                             }
-                            _ => {}
+                        }
+                        if let Err(err) = job.put_in_foreground(true) {
+                            ctx.write_stderr(&format!("{}", err)).ok();
+                            return Err(err);
                         }
                     }
                 }

@@ -15,9 +15,7 @@ use nix::unistd::{
 };
 use std::ffi::CString;
 use std::fmt::Debug;
-use std::os::unix::io::FromRawFd;
-use std::os::unix::io::RawFd;
-use std::thread::sleep;
+use std::os::unix::io::{FromRawFd, RawFd};
 use std::time::Duration;
 use tracing::{debug, error};
 
@@ -1055,7 +1053,7 @@ impl Job {
                     (pid, ProcessState::Stopped(pid, signal))
                 }
                 Ok(WaitStatus::StillAlive) => {
-                    sleep(std::time::Duration::from_millis(1000));
+                    task::sleep(Duration::from_millis(1000)).await;
                     continue;
                 }
                 Err(nix::errno::Errno::ECHILD) => {

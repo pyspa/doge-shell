@@ -731,6 +731,13 @@ impl JobProcess {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubshellType {
+    None,
+    Subshell,
+    ProcessSubstitution,
+}
+
 #[derive(Debug)]
 pub struct Job {
     pub id: String,
@@ -742,7 +749,7 @@ pub struct Job {
     stdout: RawFd,
     stderr: RawFd,
     pub foreground: bool,
-    pub subshell: bool,
+    pub subshell: SubshellType,
     pub redirect: Option<Redirect>,
     pub list_op: ListOp,
     pub job_id: usize,
@@ -769,7 +776,7 @@ impl Job {
             stderr: STDERR_FILENO,
             // next: None,
             foreground: true,
-            subshell: false,
+            subshell: SubshellType::None,
             redirect: None,
             list_op: ListOp::None,
             job_id: 1,
@@ -791,7 +798,7 @@ impl Job {
             stdout: STDOUT_FILENO,
             stderr: STDERR_FILENO,
             foreground: true,
-            subshell: false,
+            subshell: SubshellType::None,
             redirect: None,
             list_op: ListOp::None,
             job_id: 1,

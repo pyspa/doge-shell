@@ -56,6 +56,7 @@ fn search_pos_word(pair: Pair<Rule>, pos: usize) -> Option<(Rule, Span)> {
         | Rule::simple_command
         | Rule::simple_command_bg
         | Rule::span
+        | Rule::proc_subst
         | Rule::subshell => {
             for pair in pair.into_inner() {
                 let res = search_pos_word(pair, pos);
@@ -68,6 +69,12 @@ fn search_pos_word(pair: Pair<Rule>, pos: usize) -> Option<(Rule, Span)> {
             for pair in pair.into_inner() {
                 for pair in pair.into_inner() {
                     match pair.as_rule() {
+                        Rule::proc_subst => {
+                            let res = search_pos_word(pair, pos);
+                            if res.is_some() {
+                                return res;
+                            }
+                        }
                         Rule::subshell => {
                             let res = search_pos_word(pair, pos);
                             if res.is_some() {
@@ -87,6 +94,12 @@ fn search_pos_word(pair: Pair<Rule>, pos: usize) -> Option<(Rule, Span)> {
             for pair in pair.into_inner() {
                 for pair in pair.into_inner() {
                     match pair.as_rule() {
+                        Rule::proc_subst => {
+                            let res = search_pos_word(pair, pos);
+                            if res.is_some() {
+                                return res;
+                            }
+                        }
                         Rule::subshell => {
                             let res = search_pos_word(pair, pos);
                             if res.is_some() {
@@ -200,7 +213,17 @@ fn expand_alias_tilde(
                         }
                         argv.push("&".to_string());
                     }
+                    Rule::proc_subst => {
+                        debug!("expand proc_subst {}", inner_pair.as_str());
+                        argv.push("<(".to_string());
+                        for inner_pair in inner_pair.into_inner() {
+                            let mut v = expand_alias_tilde(inner_pair, alias, current_dir)?;
+                            argv.append(&mut v);
+                        }
+                        argv.push(")".to_string());
+                    }
                     Rule::subshell => {
+                        debug!("expand subshell {}", inner_pair.as_str());
                         argv.push("(".to_string());
                         for inner_pair in inner_pair.into_inner() {
                             let mut v = expand_alias_tilde(inner_pair, alias, current_dir)?;
@@ -451,7 +474,16 @@ fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {
                 }
             }
         }
-        Rule::s_quoted | Rule::d_quoted => {
+        Rule::s_quoted
+        | Rule::d_quoted
+        | Rule::argv0
+        | Rule::args
+        | Rule::proc_subst
+        | Rule::subshell
+        | Rule::simple_command
+        | Rule::simple_command_bg
+        | Rule::command
+        | Rule::commands => {
             for pair in pair.into_inner() {
                 let span = get_span(pair, pos);
                 if span.is_some() {
@@ -474,6 +506,10 @@ fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {
                 return Some((pair_span, false));
             }
         }
+        Rule::proc_subst_direction_in => {
+            // skip
+        }
+
         _ => {
             debug!("get_span missing {:?} {:?}", pair.as_rule(), pair.as_str());
         }
@@ -1048,6 +1084,62 @@ mod tests {
                                                                 match pair.as_rule() {
                                                                     Rule::subshell => {
                                                                         assert_eq!(pair.as_str(), "(sudo docker ps -a -q)")
+                                                                    }
+                                                                    _ => {}
+                                                                }
+                                                            }
+                                                        }
+
+                                                        _ => {}
+                                                    }
+                                                }
+                                            }
+
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    println!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        println!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn parse_proc_subst() {
+        init();
+        let pairs =
+            ShellParser::parse(Rule::commands, "echo <(ls)").unwrap_or_else(|e| panic!("{}", e));
+
+        for pair in pairs {
+            for pair in pair.into_inner() {
+                match pair.as_rule() {
+                    Rule::command => {
+                        for pair in pair.into_inner() {
+                            match pair.as_rule() {
+                                Rule::simple_command => {
+                                    for pair in pair.into_inner() {
+                                        match pair.as_rule() {
+                                            Rule::argv0 => {}
+                                            Rule::args => {
+                                                for pair in pair.into_inner() {
+                                                    match pair.as_rule() {
+                                                        Rule::span => {
+                                                            for pair in pair.into_inner() {
+                                                                match pair.as_rule() {
+                                                                    Rule::proc_subst => {
+                                                                        assert_eq!(
+                                                                            pair.as_str(),
+                                                                            "<(ls)"
+                                                                        )
                                                                     }
                                                                     _ => {}
                                                                 }

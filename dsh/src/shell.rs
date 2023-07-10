@@ -4,6 +4,7 @@ use crate::environment::Environment;
 use crate::history::FrecencyHistory;
 use crate::lisp;
 use crate::parser::{self, Rule, ShellParser};
+use crate::process::SubshellType;
 use crate::process::{self, wait_pid_job, Job, JobProcess, Redirect};
 use anyhow::Context as _;
 use anyhow::{anyhow, bail, Result};
@@ -35,6 +36,7 @@ pub const SHELL_TERMINAL: c_int = STDIN_FILENO;
 #[derive(Debug)]
 struct ParseContext {
     pub subshell: bool,
+    pub proc_subst: bool,
     pub foreground: bool,
 }
 
@@ -42,6 +44,7 @@ impl ParseContext {
     pub fn new(foreground: bool) -> Self {
         ParseContext {
             subshell: false,
+            proc_subst: false,
             foreground,
         }
     }
@@ -207,8 +210,8 @@ impl Shell {
         ctx: &mut ParseContext,
         current_job: &mut Job,
         pair: Pair<Rule>,
-    ) -> Result<Vec<(String, Option<Vec<process::Job>>)>> {
-        let mut argv: Vec<(String, Option<Vec<process::Job>>)> = vec![];
+    ) -> Result<Vec<(String, Option<(SubshellType, Vec<process::Job>)>)>> {
+        let mut argv: Vec<(String, Option<(SubshellType, Vec<process::Job>)>)> = vec![];
 
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
@@ -218,6 +221,7 @@ impl Shell {
                         for inner_pair in inner_pair.into_inner() {
                             match inner_pair.as_rule() {
                                 Rule::subshell => {
+                                    debug!("find subshell arg0");
                                     for inner_pair in inner_pair.into_inner() {
                                         // commands
                                         let cmd_str = inner_pair.as_str().to_string();
@@ -225,7 +229,20 @@ impl Shell {
                                         let mut ctx = ParseContext::new(ctx.foreground);
                                         ctx.subshell = true;
                                         let res = self.parse_commands(&mut ctx, inner_pair)?;
-                                        argv.push((cmd_str, Some(res)));
+                                        argv.push((cmd_str, Some((SubshellType::Subshell, res))));
+                                    }
+                                }
+                                Rule::proc_subst => {
+                                    for inner_pair in inner_pair.into_inner() {
+                                        // commands
+                                        let cmd_str = inner_pair.as_str().to_string();
+                                        let mut ctx = ParseContext::new(ctx.foreground);
+                                        ctx.proc_subst = true;
+                                        let res = self.parse_commands(&mut ctx, inner_pair)?;
+                                        argv.push((
+                                            cmd_str,
+                                            Some((SubshellType::ProcessSubstitution, res)),
+                                        ));
                                     }
                                 }
                                 _ => {
@@ -285,6 +302,7 @@ impl Shell {
                         for inner_pair in inner_pair.into_inner() {
                             match inner_pair.as_rule() {
                                 Rule::subshell => {
+                                    debug!("find subshell args");
                                     for inner_pair in inner_pair.into_inner() {
                                         // commands
                                         let cmd_str = inner_pair.as_str().to_string();
@@ -292,7 +310,20 @@ impl Shell {
                                         let mut ctx = ParseContext::new(ctx.foreground);
                                         ctx.subshell = true;
                                         let res = self.parse_commands(&mut ctx, inner_pair)?;
-                                        argv.push((cmd_str, Some(res)));
+                                        argv.push((cmd_str, Some((SubshellType::Subshell, res))));
+                                    }
+                                }
+                                Rule::proc_subst => {
+                                    for inner_pair in inner_pair.into_inner() {
+                                        // commands
+                                        let cmd_str = inner_pair.as_str().to_string();
+                                        let mut ctx = ParseContext::new(ctx.foreground);
+                                        ctx.proc_subst = true;
+                                        let res = self.parse_commands(&mut ctx, inner_pair)?;
+                                        argv.push((
+                                            cmd_str,
+                                            Some((SubshellType::ProcessSubstitution, res)),
+                                        ));
                                     }
                                 }
                                 _ => {
@@ -388,6 +419,7 @@ impl Shell {
         current_job: &mut Job,
         pair: Pair<Rule>,
     ) -> Result<()> {
+        debug!("start parse command: {}", pair.as_str());
         let parsed_argv = self.parse_argv(ctx, current_job, pair)?;
         if parsed_argv.is_empty() {
             return Ok(());
@@ -395,22 +427,40 @@ impl Shell {
 
         let mut argv: Vec<String> = Vec::new();
 
-        for (str, jobs) in parsed_argv {
-            if let Some(jobs) = jobs {
+        for (cmd_str, jobs) in parsed_argv {
+            if let Some((subshell_type, jobs)) = jobs {
+                if jobs.is_empty() {
+                    continue;
+                }
+                debug!("run subshell: {}", cmd_str);
+
                 let tmode = tcgetattr(0).expect("failed tcgetattr");
 
-                let mut ctx = Context::new(self.pid, self.pgid, tmode, false);
-                // make pipe
-                let (pout, pin) = pipe().context("failed pipe")?;
-                ctx.outfile = pin;
-
-                self.launch_subshell(&mut ctx, jobs)?;
-                close(pin).expect("failed close");
-
-                let output = read_fd(pout)?;
-                output.lines().for_each(|x| argv.push(x.to_owned()));
+                match subshell_type {
+                    SubshellType::Subshell => {
+                        let mut ctx = Context::new(self.pid, self.pgid, tmode, false);
+                        // make pipe
+                        let (pout, pin) = pipe().context("failed pipe")?;
+                        ctx.outfile = pin;
+                        self.launch_subshell(&mut ctx, jobs)?;
+                        close(pin).expect("failed close");
+                        let output = read_fd(pout)?;
+                        output.lines().for_each(|x| argv.push(x.to_owned()));
+                    }
+                    SubshellType::ProcessSubstitution => {
+                        let mut ctx = Context::new(self.pid, self.pgid, tmode, false);
+                        // make pipe
+                        let (pout, pin) = pipe().context("failed pipe")?;
+                        ctx.outfile = pin;
+                        self.launch_subshell(&mut ctx, jobs)?;
+                        close(pin).expect("failed close");
+                        let file_name = format!("/dev/fd/{}", pout);
+                        argv.push(file_name);
+                    }
+                    _ => {}
+                }
             } else {
-                argv.push(str);
+                argv.push(cmd_str);
             }
         }
 
@@ -463,7 +513,12 @@ impl Shell {
                     let mut job = Job::new(job_str.clone(), self.pgid);
                     self.parse_command(ctx, &mut job, inner_pair)?;
                     if job.has_process() {
-                        job.subshell = ctx.subshell;
+                        if ctx.subshell {
+                            job.subshell = SubshellType::Subshell;
+                        }
+                        if ctx.proc_subst {
+                            job.subshell = SubshellType::ProcessSubstitution;
+                        }
                         jobs.push(job);
                     }
                 }
@@ -474,7 +529,12 @@ impl Shell {
                         if let Rule::simple_command = bg_pair.as_rule() {
                             self.parse_command(ctx, &mut job, bg_pair)?;
                             if job.has_process() {
-                                job.subshell = ctx.subshell;
+                                if ctx.subshell {
+                                    job.subshell = SubshellType::Subshell;
+                                }
+                                if ctx.proc_subst {
+                                    job.subshell = SubshellType::ProcessSubstitution;
+                                }
                                 job.foreground = false; // background
                                 jobs.push(job);
                             }

@@ -154,7 +154,7 @@ fn expand_alias_tilde(
 
                     for path in paths {
                         debug!("glob match {}", path.display());
-                        argv.push(format!("{}", path.display()));
+                        argv.push(format!("\"{}\"", path.display()));
                     }
                 }
                 Err(err) => {

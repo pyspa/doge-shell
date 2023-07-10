@@ -446,7 +446,11 @@ impl<'a> Repl<'a> {
                 return Ok(());
             }
             (KeyCode::Char('d'), CTRL) => {
-                println!("use 'exit' to leave the shell");
+                let mut out = std::io::stdout().lock();
+                execute!(out, Print("\r\nuse 'exit' to leave the shell\n")).ok();
+                self.print_prompt(&mut out);
+                self.input.clear();
+                return Ok(());
             }
             (KeyCode::Char('r'), CTRL) => {
                 self.select_history();

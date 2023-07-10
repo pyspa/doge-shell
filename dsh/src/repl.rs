@@ -443,11 +443,10 @@ impl<'a> Repl<'a> {
                 execute!(out, Clear(ClearType::All), cursor::MoveTo(0, 0)).ok();
                 self.print_prompt(&mut out);
                 self.input.clear();
-                println!("zap");
                 return Ok(());
             }
             (KeyCode::Char('d'), CTRL) => {
-                self.shell.exit();
+                println!("use 'exit' to leave the shell");
             }
             (KeyCode::Char('r'), CTRL) => {
                 self.select_history();

@@ -652,8 +652,7 @@ impl JobProcess {
 
         self.set_io(ctx.infile, ctx.outfile, ctx.errfile);
 
-        debug!("start process ctx {:?}", &ctx);
-        debug!("start process {:?}", &self);
+        debug!("launch cmd:{} pgid:{:?}", self.get_cmd(), &ctx.pgid);
 
         // initial pid
         let current_pid = getpid();
@@ -743,7 +742,7 @@ pub struct Job {
     pub id: String,
     pub cmd: String,
     pub pid: Option<Pid>,
-    pgid: Option<Pid>,
+    pub pgid: Option<Pid>,
     process: Option<Box<JobProcess>>,
     stdin: RawFd,
     stdout: RawFd,
@@ -832,7 +831,8 @@ impl Job {
         ctx.foreground = self.foreground;
 
         if let Some(process) = self.process.take().as_mut() {
-            let _ = self.launch_process(ctx, shell, process);
+            self.launch_process(ctx, shell, process)?;
+
             if !ctx.interactive {
                 self.wait_job(false).await?;
             } else if ctx.foreground {
@@ -925,20 +925,14 @@ impl Job {
     pub async fn put_in_foreground(&mut self, no_hang: bool) -> Result<()> {
         debug!("put_in_foreground: id: {} pgid {:?}", self.id, self.pgid);
         // Put the job into the foreground
+
         if let Some(pgid) = self.pgid {
             tcsetpgrp(SHELL_TERMINAL, pgid).context("failed tcsetpgrp")?;
-            // TODO Send the job a continue signal, if necessary.
         }
+
         self.wait_job(no_hang).await?;
 
         tcsetpgrp(SHELL_TERMINAL, self.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
-        // debug!("put_in_foreground: {:?} tcsetpgrp shell", &self.cmd);
-
-        // let tmodes = tcgetattr(SHELL_TERMINAL).context("failed tcgetattr wait")?;
-        // self.tmodes = Some(tmodes);
-
-        // let _ = tcsetattr(SHELL_TERMINAL, TCSADRAIN, &ctx.shell_tmode)
-        //     .context("failed tcsetattr restore shell_mode")?;
 
         Ok(())
     }
@@ -946,10 +940,7 @@ impl Job {
     pub async fn put_in_background(&mut self) -> Result<()> {
         debug!("put_in_background pgid {:?}", self.pgid,);
 
-        // TODO Send the job a continue signal, if necessary.
-
-        let _ =
-            tcsetpgrp(SHELL_TERMINAL, self.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
+        tcsetpgrp(SHELL_TERMINAL, self.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
         // let tmodes = tcgetattr(SHELL_TERMINAL).context("failed tcgetattr wait")?;
         // self.tmodes = Some(tmodes);
 
@@ -958,44 +949,44 @@ impl Job {
 
     fn show_job_status(&self) {}
 
-    async fn wait_job(&mut self, no_hang: bool) -> Result<()> {
+    pub async fn wait_job(&mut self, no_hang: bool) -> Result<()> {
         if no_hang {
             self.wait_process_no_hang().await
         } else {
-            self.wait_process().await
+            self.wait_process()
         }
     }
 
-    async fn wait_process(&mut self) -> Result<()> {
+    fn wait_process(&mut self) -> Result<()> {
         let mut send_killpg = false;
         loop {
-            debug!("waitpid ...");
+            debug!("waitpid pgid:{:?} ...", self.pgid);
 
-            let (pid, state) =
-                match task::spawn_blocking(|| waitpid(None, Some(WaitPidFlag::WUNTRACED))).await {
-                    Ok(WaitStatus::Exited(pid, status)) => {
-                        debug!("wait_job exited {:?} {:?}", pid, status);
-                        (pid, ProcessState::Completed(status as u8, None))
-                    } // ok??
-                    Ok(WaitStatus::Signaled(pid, signal, _)) => {
-                        debug!("wait_job signaled {:?} {:?}", pid, signal);
-                        (pid, ProcessState::Completed(1, Some(signal)))
-                    }
-                    Ok(WaitStatus::Stopped(pid, signal)) => {
-                        debug!("wait_job stopped {:?} {:?}", pid, signal);
-                        (pid, ProcessState::Stopped(pid, signal))
-                    }
-                    Err(nix::errno::Errno::ECHILD) | Ok(WaitStatus::StillAlive) => {
-                        break;
-                    }
-                    status => {
-                        panic!("unexpected waitpid event: {:?}", status);
-                    }
-                };
+            // match task::spawn_blocking(|| waitpid(None, Some(WaitPidFlag::WUNTRACED))).await {
+            let (pid, state) = match waitpid(None, Some(WaitPidFlag::WUNTRACED)) {
+                Ok(WaitStatus::Exited(pid, status)) => {
+                    debug!("wait_job exited {:?} {:?}", pid, status);
+                    (pid, ProcessState::Completed(status as u8, None))
+                } // ok??
+                Ok(WaitStatus::Signaled(pid, signal, _)) => {
+                    debug!("wait_job signaled {:?} {:?}", pid, signal);
+                    (pid, ProcessState::Completed(1, Some(signal)))
+                }
+                Ok(WaitStatus::Stopped(pid, signal)) => {
+                    debug!("wait_job stopped {:?} {:?}", pid, signal);
+                    (pid, ProcessState::Stopped(pid, signal))
+                }
+                Err(nix::errno::Errno::ECHILD) | Ok(WaitStatus::StillAlive) => {
+                    break;
+                }
+                status => {
+                    panic!("unexpected waitpid event: {:?}", status);
+                }
+            };
 
             self.set_process_state(pid, state);
 
-            debug!("fin wait: pid:{:?}", pid);
+            debug!("fin waitpid pgid:{:?} pid:{:?}", self.pgid, pid);
 
             // show_process_state(&self.process); // debug
 
@@ -1285,6 +1276,8 @@ fn show_process_state(process: &Option<Box<JobProcess>>) {
 }
 
 fn fork_process(ctx: &Context, job_pgid: Option<Pid>, process: &mut Process) -> Result<Pid> {
+    debug!("fork_process pgid: {:?}", job_pgid);
+
     // capture
     if ctx.outfile == STDOUT_FILENO && !ctx.foreground {
         let (pout, pin) = pipe().context("failed pipe")?;

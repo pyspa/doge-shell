@@ -376,7 +376,7 @@ impl Shell {
             }
         }
 
-        debug!("jobs {}", jobs.len());
+        debug!("parsed jobs len: {}", jobs.len());
         Ok(jobs)
     }
 
@@ -384,9 +384,9 @@ impl Shell {
         for mut job in jobs {
             disable_raw_mode().ok();
             let pid = task::block_on(self.spawn_subshell(ctx, &mut job))?;
-            debug!("spawned subshell pid: {:?}", pid);
-            let res = wait_pid_job(pid, true);
-            debug!("wait subshell pid: {:?}", res);
+            debug!("spawned subshell cmd:{} pid: {:?}", job.cmd, pid);
+            let res = wait_pid_job(pid, false);
+            debug!("wait subshell exit:{:?}", res);
             enable_raw_mode().ok();
         }
 
@@ -395,12 +395,26 @@ impl Shell {
 
     async fn spawn_subshell(&mut self, ctx: &mut Context, job: &mut Job) -> Result<Pid> {
         let pid = unsafe { fork().context("failed fork")? };
+
         match pid {
-            ForkResult::Parent { child } => Ok(child),
+            ForkResult::Parent { child } => {
+                let pid = child;
+                debug!("subshell parent setpgid parent pid:{} pgid:{}", pid, pid);
+                setpgid(pid, pid).context("failed setpgid")?;
+                Ok(pid)
+            }
             ForkResult::Child => {
-                if let Ok(process::ProcessState::Completed(exit, _signal)) =
-                    job.launch(ctx, self).await
-                {
+                let pid = getpid();
+                debug!("subshell child setpgid pid:{} pgid:{}", pid, pid);
+                setpgid(pid, pid).context("failed setpgid")?;
+
+                job.pgid = Some(pid);
+                ctx.pgid = Some(pid);
+                debug!("subshell run context: {:?}", ctx);
+                let res = job.launch(ctx, self).await;
+                debug!("subshell process '{}' exit:{:?}", job.cmd, res);
+
+                if let Ok(process::ProcessState::Completed(exit, _)) = res {
                     if exit != 0 {
                         // TODO check
                         debug!("job exit code {:?}", exit);
@@ -439,6 +453,7 @@ impl Shell {
                 match subshell_type {
                     SubshellType::Subshell => {
                         let mut ctx = Context::new(self.pid, self.pgid, tmode, false);
+                        ctx.foreground = true;
                         // make pipe
                         let (pout, pin) = pipe().context("failed pipe")?;
                         ctx.outfile = pin;
@@ -449,6 +464,7 @@ impl Shell {
                     }
                     SubshellType::ProcessSubstitution => {
                         let mut ctx = Context::new(self.pid, self.pgid, tmode, false);
+                        ctx.foreground = true;
                         // make pipe
                         let (pout, pin) = pipe().context("failed pipe")?;
                         ctx.outfile = pin;

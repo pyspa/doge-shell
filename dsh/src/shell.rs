@@ -154,12 +154,13 @@ impl Shell {
                 job.foreground = false;
             }
 
+            job.job_id = self.get_job_id(); // set job id
+
             debug!(
-                "start job:'{:?}' foreground:{:?} redirect:{:?} list_op:{:?}",
+                "start job '{:?}' foreground:{:?} redirect:{:?} list_op:{:?}",
                 job.cmd, job.foreground, job.redirect, job.list_op,
             );
 
-            job.job_id = self.get_job_id(); // set job id
             match job.launch(ctx, self).await? {
                 process::ProcessState::Running => {
                     debug!("job '{}' still running", job.cmd);
@@ -177,6 +178,9 @@ impl Shell {
                     }
                 }
             }
+            // reset
+            ctx.pid = None;
+            ctx.pgid = None;
             enable_raw_mode().ok();
         }
 
@@ -321,7 +325,7 @@ impl Shell {
                     Rule::command_list_sep => {
                         if let Some(sep) = pair.into_inner().next() {
                             if let Some(ref mut last) = jobs.last_mut() {
-                                debug!("{:?}", &last);
+                                debug!("last job {:?}", &last.cmd);
                                 match sep.as_rule() {
                                     Rule::and_op => {
                                         last.list_op = process::ListOp::And;

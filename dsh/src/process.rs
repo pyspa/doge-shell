@@ -8,7 +8,6 @@ use dsh_builtin::BuiltinCommand;
 use dsh_types::{Context, ExitStatus};
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::sys::signal::{kill, killpg, sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
-use nix::sys::termios::Termios;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{
     close, dup2, execv, fork, getpgrp, getpid, pipe, setpgid, tcsetpgrp, ForkResult, Pid,
@@ -739,12 +738,9 @@ pub struct Job {
     pub pid: Option<Pid>,
     pgid: Option<Pid>,
     process: Option<Box<JobProcess>>,
-    notified: bool,
-    tmodes: Option<Termios>,
-    pub stdin: RawFd,
-    pub stdout: RawFd,
-    pub stderr: RawFd,
-    pub next: Option<Box<Job>>,
+    stdin: RawFd,
+    stdout: RawFd,
+    stderr: RawFd,
     pub foreground: bool,
     pub subshell: bool,
     pub redirect: Option<Redirect>,
@@ -766,12 +762,12 @@ impl Job {
             pid: None,
             pgid: None,
             process: Some(Box::new(process)),
-            notified: false,
-            tmodes: None,
+            // notified: false,
+            // tmodes: None,
             stdin: STDIN_FILENO,
             stdout: STDOUT_FILENO,
             stderr: STDERR_FILENO,
-            next: None,
+            // next: None,
             foreground: true,
             subshell: false,
             redirect: None,
@@ -791,12 +787,9 @@ impl Job {
             pid: None,
             pgid: None,
             process: None,
-            notified: false,
-            tmodes: None,
             stdin: STDIN_FILENO,
             stdout: STDOUT_FILENO,
             stderr: STDERR_FILENO,
-            next: None,
             foreground: true,
             subshell: false,
             redirect: None,
@@ -805,17 +798,6 @@ impl Job {
             state: ProcessState::Running,
             monitors: Vec::new(),
             shell_pgid,
-        }
-    }
-
-    pub fn link(&mut self, job: Job) {
-        match self.next {
-            Some(ref mut j) => {
-                j.link(job);
-            }
-            None => {
-                self.next = Some(Box::new(job));
-            }
         }
     }
 
@@ -872,7 +854,6 @@ impl Job {
         process: &mut JobProcess,
     ) -> Result<()> {
         let (pid, mut next_process) = process.launch(ctx, shell, &self.redirect, self.stdout)?;
-
         if self.pid.is_none() {
             self.pid = Some(pid); // set process pid
         }
@@ -882,7 +863,7 @@ impl Job {
             if self.pgid.is_none() {
                 self.pgid = Some(pid);
                 ctx.pgid = Some(pid);
-                debug!("set job pgid {:?}", self.pgid);
+                debug!("set job id: {} pgid: {:?}", self.id, self.pgid);
             }
             debug!(
                 "setpgid {} pid:{} pgid:{:?}",
@@ -935,12 +916,12 @@ impl Job {
     }
 
     pub async fn put_in_foreground(&mut self, no_hang: bool) -> Result<()> {
-        debug!("put_in_foreground: pgid {:?}", self.pgid);
+        debug!("put_in_foreground: id: {} pgid {:?}", self.id, self.pgid);
         // Put the job into the foreground
-
-        tcsetpgrp(SHELL_TERMINAL, self.pgid.unwrap()).context("failed tcsetpgrp")?;
-        // TODO Send the job a continue signal, if necessary.
-
+        if let Some(pgid) = self.pgid {
+            tcsetpgrp(SHELL_TERMINAL, pgid).context("failed tcsetpgrp")?;
+            // TODO Send the job a continue signal, if necessary.
+        }
         self.wait_job(no_hang).await?;
 
         tcsetpgrp(SHELL_TERMINAL, self.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
@@ -1462,9 +1443,6 @@ mod tests {
         job2.pgid = Some(pgid2);
         let mut job3 = Job::new_with_process("test3".to_owned(), "".to_owned(), vec![]);
         job3.pgid = Some(pgid3);
-
-        job2.link(job3);
-        job1.link(job2);
     }
 
     #[test]

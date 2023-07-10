@@ -78,6 +78,16 @@ impl Context {
         mem::forget(file);
         Ok(())
     }
+
+    pub fn reset(&mut self) {
+        self.infile = STDIN_FILENO;
+        self.outfile = STDOUT_FILENO;
+        self.errfile = STDERR_FILENO;
+        self.captured_out = None;
+        self.pid = None;
+        self.pgid = None;
+        self.process_count = 0;
+    }
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

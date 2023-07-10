@@ -151,6 +151,7 @@ impl ShellProxy for Shell {
                 self.environment.write().variables.insert(key, output);
             }
             "fg" => {
+                debug!("call fg");
                 if self.wait_jobs.is_empty() {
                     ctx.write_stdout("fg: there are no suitable jobs")?;
                 } else {

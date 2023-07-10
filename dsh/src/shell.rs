@@ -458,7 +458,7 @@ impl Shell {
                 Rule::simple_command => {
                     let mut job = Job::new(job_str.clone(), self.pgid);
                     self.parse_command(ctx, &mut job, inner_pair)?;
-                    if job.process.is_some() {
+                    if job.has_process() {
                         job.subshell = ctx.subshell;
                         jobs.push(job);
                     }
@@ -469,7 +469,7 @@ impl Shell {
                     for bg_pair in inner_pair.into_inner() {
                         if let Rule::simple_command = bg_pair.as_rule() {
                             self.parse_command(ctx, &mut job, bg_pair)?;
-                            if job.process.is_some() {
+                            if job.has_process() {
                                 job.subshell = ctx.subshell;
                                 job.foreground = false; // background
                                 jobs.push(job);

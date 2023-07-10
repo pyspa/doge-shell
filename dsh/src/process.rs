@@ -737,8 +737,8 @@ pub struct Job {
     pub id: String,
     pub cmd: String,
     pub pid: Option<Pid>,
-    pub pgid: Option<Pid>,
-    pub process: Option<Box<JobProcess>>,
+    pgid: Option<Pid>,
+    process: Option<Box<JobProcess>>,
     notified: bool,
     tmodes: Option<Termios>,
     pub stdin: RawFd,
@@ -817,6 +817,10 @@ impl Job {
                 self.next = Some(Box::new(job));
             }
         }
+    }
+
+    pub fn has_process(&self) -> bool {
+        self.process.is_some()
     }
 
     pub fn set_process(&mut self, process: JobProcess) {

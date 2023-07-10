@@ -1,12 +1,12 @@
 use crate::environment::Environment;
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 use parking_lot::RwLock;
 use pest::iterators::Pair;
 use pest::Parser;
 use pest::Span;
 use pest_derive::Parser;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::debug;
 
@@ -141,19 +141,27 @@ fn expand_alias_tilde(
     match pair.as_rule() {
         Rule::glob_word => {
             let pattern = shellexpand::tilde(pair.as_str()).to_string();
+            let (root, mut pattern) = find_glob_root(pattern.as_str());
+            if Path::new(&pattern).is_absolute() {
+                pattern = (&pattern[1..]).to_string();
+            }
+            debug!("glob pattern: root:{} {:?} ", root, pattern);
+            match globmatch::Builder::new(&pattern).build(root) {
+                Ok(builder) => {
+                    let paths: Vec<_> = builder.into_iter().flatten().collect();
+                    ensure!(
+                        !paths.is_empty(),
+                        "dsh: no matches for wildcard '{}'",
+                        &pattern
+                    );
 
-            let builder = globmatch::Builder::new(&pattern)
-                .build(".")
-                .expect("failed create globmatch");
-            let paths: Vec<_> = builder.into_iter().flatten().collect();
-            ensure!(
-                !paths.is_empty(),
-                "No matches for wildcard '{}'. ",
-                &pattern
-            );
-
-            for path in paths {
-                argv.push(format!("{}", path.display()));
+                    for path in paths {
+                        argv.push(format!("{}", path.display()));
+                    }
+                }
+                Err(err) => {
+                    bail!("dsh: failed resolve paths. {}", err);
+                }
             }
         }
         Rule::word
@@ -473,6 +481,35 @@ fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {
         }
     }
     None
+}
+
+fn find_glob_root(path: &str) -> (String, String) {
+    let mut root = Vec::new();
+    let mut glob = Vec::new();
+    let mut find_glob = false;
+    let path = Path::new(path);
+    if path.is_relative() {
+        return (".".to_string(), path.to_string_lossy().to_string());
+    }
+    for p in path.iter() {
+        let file = p.to_string_lossy();
+        if !find_glob && file.contains("*") {
+            find_glob = true;
+        }
+        if find_glob {
+            glob.push(file.to_string());
+        } else {
+            root.push(file.to_string());
+        }
+    }
+
+    let root = root.join(std::path::MAIN_SEPARATOR_STR);
+    let glob = glob.join(std::path::MAIN_SEPARATOR_STR);
+    if root.is_empty() {
+        (".".to_string(), glob.to_string())
+    } else {
+        (root.to_string(), glob.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -1162,5 +1199,38 @@ mod tests {
             }
         }
         assert!(found);
+    }
+
+    #[test]
+    fn parse_glob() {
+        init();
+        let pairs = ShellParser::parse(Rule::glob_word, "~/Downloads/*.pdf")
+            .unwrap_or_else(|e| panic!("{}", e));
+        for pair in pairs {
+            assert_eq!(Rule::glob_word, pair.as_rule());
+            assert_eq!("~/Downloads/*.pdf", get_string(pair).unwrap());
+        }
+
+        let pairs = ShellParser::parse(Rule::simple_command, "ls ~/Downloads/*.pdf")
+            .unwrap_or_else(|e| panic!("{}", e));
+        for pair in pairs {
+            debug!("{:?} {}", pair.as_rule(), pair.as_str());
+            assert_eq!(Rule::simple_command, pair.as_rule());
+            if Rule::simple_command == pair.as_rule() {
+                for pair in pair.into_inner() {
+                    debug!("{:?} {}", pair.as_rule(), pair.as_str());
+                    if Rule::args == pair.as_rule() {
+                        for pair in pair.into_inner() {
+                            debug!("{:?} {}", pair.as_rule(), pair.as_str());
+                            if Rule::span == pair.as_rule() {
+                                for pair in pair.into_inner() {
+                                    debug!("{:?} {}", pair.as_rule(), pair.as_str());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

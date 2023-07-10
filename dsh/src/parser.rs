@@ -141,10 +141,7 @@ fn expand_alias_tilde(
     match pair.as_rule() {
         Rule::glob_word => {
             let pattern = shellexpand::tilde(pair.as_str()).to_string();
-            let (root, mut pattern) = find_glob_root(pattern.as_str());
-            if Path::new(&pattern).is_absolute() {
-                pattern = (&pattern[1..]).to_string();
-            }
+            let (root, pattern) = find_glob_root(pattern.as_str());
             debug!("glob pattern: root:{} {:?} ", root, pattern);
             match globmatch::Builder::new(&pattern).build(root) {
                 Ok(builder) => {
@@ -156,6 +153,7 @@ fn expand_alias_tilde(
                     );
 
                     for path in paths {
+                        debug!("glob match {}", path.display());
                         argv.push(format!("{}", path.display()));
                     }
                 }
@@ -503,11 +501,18 @@ fn find_glob_root(path: &str) -> (String, String) {
         }
     }
 
-    let root = root.join(std::path::MAIN_SEPARATOR_STR);
-    let glob = glob.join(std::path::MAIN_SEPARATOR_STR);
+    let mut root = root.join(std::path::MAIN_SEPARATOR_STR);
+    let mut glob = glob.join(std::path::MAIN_SEPARATOR_STR);
+    if Path::new(&glob).is_absolute() {
+        glob = (&glob[1..]).to_string();
+    }
+
     if root.is_empty() {
         (".".to_string(), glob.to_string())
     } else {
+        if root.starts_with("//") {
+            root = (&root[1..]).to_string();
+        }
         (root.to_string(), glob.to_string())
     }
 }

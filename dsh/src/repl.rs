@@ -166,6 +166,7 @@ impl<'a> Repl<'a> {
             } else {
                 history.sort_by_match(self.input.as_str())
             };
+
             self.completion.set_completions(self.input.as_str(), comps);
         }
     }
@@ -550,7 +551,7 @@ impl<'a> Repl<'a> {
         let query = self.input.as_str();
         if let Some(ref mut history) = self.shell.cmd_history {
             let mut history = history.lock().unwrap();
-            let histories = history.sorted(&dsh_frecency::SortMethod::Frecent);
+            let histories = history.sorted(&dsh_frecency::SortMethod::Recent);
             if let Some(val) = completion::select_item(
                 histories
                     .iter()

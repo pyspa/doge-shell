@@ -44,7 +44,7 @@ impl ItemStats {
     pub fn cmp_match_score(&self, other: &ItemStats) -> Ordering {
         let order = self.match_score.cmp(&other.match_score);
         if order.is_eq() {
-            self.cmp_frecent(other)
+            self.cmp_recent(other)
         } else {
             order
         }

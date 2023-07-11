@@ -372,10 +372,12 @@ impl FrecencyHistory {
         if let Some(ref store) = self.store {
             for item in store.items.iter() {
                 if let Some((score, index)) = self.matcher.fuzzy_indices(&item.item, pattern) {
-                    let mut item = item.clone();
-                    item.match_score = score;
-                    item.match_index = index;
-                    results.push(item);
+                    if score > 25 {
+                        let mut item = item.clone();
+                        item.match_score = score;
+                        item.match_index = index;
+                        results.push(item);
+                    }
                 }
             }
         }

@@ -1113,10 +1113,6 @@ impl Job {
         kill_process(&self.process)
     }
 
-    pub fn cont(&mut self) -> Result<()> {
-        cont_process(&self.process)
-    }
-
     pub fn update_status(&mut self) -> bool {
         if let Some(process) = self.process.as_mut() {
             if let Some(state) = process.update_state() {
@@ -1412,16 +1408,6 @@ fn kill_process(process: &Option<Box<JobProcess>>) -> Result<()> {
         process.kill()?;
         if process.next().is_some() {
             kill_process(&process.next())?;
-        }
-    }
-    Ok(())
-}
-
-fn cont_process(process: &Option<Box<JobProcess>>) -> Result<()> {
-    if let Some(process) = process {
-        process.cont()?;
-        if process.next().is_some() {
-            cont_process(&process.next())?;
         }
     }
     Ok(())

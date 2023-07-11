@@ -27,7 +27,8 @@ literal_d_quoted = ${
 }
 
 proc_subst_direction_in = { "<(" }
-proc_subst = { proc_subst_direction_in ~ group_list ~ ")" }
+proc_subst_direction = { proc_subst_direction_in }
+proc_subst = { proc_subst_direction ~ group_list ~ ")" }
 subshell = { "(" ~ group_list ~ ")" }
 group_list = _{
     commands

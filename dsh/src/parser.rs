@@ -266,6 +266,7 @@ fn expand_alias_tilde(
                     | Rule::d_quoted
                     | Rule::literal_s_quoted
                     | Rule::literal_d_quoted
+                    | Rule::proc_subst_direction_in
                     | Rule::stdout_redirect_direction
                     | Rule::stderr_redirect_direction
                     | Rule::stdouterr_redirect_direction => {
@@ -496,6 +497,7 @@ fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {
         | Rule::variable
         | Rule::literal_s_quoted
         | Rule::literal_d_quoted
+        | Rule::proc_subst_direction
         | Rule::stdout_redirect_direction
         | Rule::stderr_redirect_direction
         | Rule::stdouterr_redirect_direction => {
@@ -1084,6 +1086,63 @@ mod tests {
                                                                 match pair.as_rule() {
                                                                     Rule::subshell => {
                                                                         assert_eq!(pair.as_str(), "(sudo docker ps -a -q)")
+                                                                    }
+                                                                    _ => {}
+                                                                }
+                                                            }
+                                                        }
+
+                                                        _ => {}
+                                                    }
+                                                }
+                                            }
+
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    println!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        println!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn parse_subshell2() {
+        init();
+        let sub = "(ls -al | wc -l )";
+        let cmd = format!("echo {}", &sub);
+        let pairs = ShellParser::parse(Rule::commands, &cmd).unwrap_or_else(|e| panic!("{}", e));
+
+        for pair in pairs {
+            for pair in pair.into_inner() {
+                match pair.as_rule() {
+                    Rule::command => {
+                        for pair in pair.into_inner() {
+                            match pair.as_rule() {
+                                Rule::simple_command => {
+                                    for pair in pair.into_inner() {
+                                        match pair.as_rule() {
+                                            Rule::argv0 => {}
+                                            Rule::args => {
+                                                for pair in pair.into_inner() {
+                                                    match pair.as_rule() {
+                                                        Rule::span => {
+                                                            for pair in pair.into_inner() {
+                                                                match pair.as_rule() {
+                                                                    Rule::subshell => {
+                                                                        assert_eq!(
+                                                                            pair.as_str(),
+                                                                            sub
+                                                                        )
                                                                     }
                                                                     _ => {}
                                                                 }

@@ -34,6 +34,21 @@ pub const APP_NAME: &str = "dsh";
 pub const SHELL_TERMINAL: c_int = STDIN_FILENO;
 
 #[derive(Debug)]
+struct ParsedJob {
+    subshell_type: SubshellType,
+    jobs: Vec<process::Job>,
+}
+
+impl ParsedJob {
+    fn new(subshell_type: SubshellType, jobs: Vec<process::Job>) -> Self {
+        ParsedJob {
+            subshell_type,
+            jobs,
+        }
+    }
+}
+
+#[derive(Debug)]
 struct ParseContext {
     pub subshell: bool,
     pub proc_subst: bool,
@@ -210,8 +225,8 @@ impl Shell {
         ctx: &mut ParseContext,
         current_job: &mut Job,
         pair: Pair<Rule>,
-    ) -> Result<Vec<(String, Option<(SubshellType, Vec<process::Job>)>)>> {
-        let mut argv: Vec<(String, Option<(SubshellType, Vec<process::Job>)>)> = vec![];
+    ) -> Result<Vec<(String, Option<ParsedJob>)>> {
+        let mut argv: Vec<(String, Option<ParsedJob>)> = vec![];
 
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
@@ -229,7 +244,10 @@ impl Shell {
                                         let mut ctx = ParseContext::new(ctx.foreground);
                                         ctx.subshell = true;
                                         let res = self.parse_commands(&mut ctx, inner_pair)?;
-                                        argv.push((cmd_str, Some((SubshellType::Subshell, res))));
+                                        argv.push((
+                                            cmd_str,
+                                            Some(ParsedJob::new(SubshellType::Subshell, res)),
+                                        ));
                                     }
                                 }
                                 Rule::proc_subst => {
@@ -241,7 +259,10 @@ impl Shell {
                                         let res = self.parse_commands(&mut ctx, inner_pair)?;
                                         argv.push((
                                             cmd_str,
-                                            Some((SubshellType::ProcessSubstitution, res)),
+                                            Some(ParsedJob::new(
+                                                SubshellType::ProcessSubstitution,
+                                                res,
+                                            )),
                                         ));
                                     }
                                 }
@@ -310,11 +331,18 @@ impl Shell {
                                         let mut ctx = ParseContext::new(ctx.foreground);
                                         ctx.subshell = true;
                                         let res = self.parse_commands(&mut ctx, inner_pair)?;
-                                        argv.push((cmd_str, Some((SubshellType::Subshell, res))));
+                                        argv.push((
+                                            cmd_str,
+                                            Some(ParsedJob::new(SubshellType::Subshell, res)),
+                                        ));
                                     }
                                 }
                                 Rule::proc_subst => {
+                                    debug!("find proc_subs args");
                                     for inner_pair in inner_pair.into_inner() {
+                                        if inner_pair.as_rule() == Rule::proc_subst_direction {
+                                            continue;
+                                        }
                                         // commands
                                         let cmd_str = inner_pair.as_str().to_string();
                                         let mut ctx = ParseContext::new(ctx.foreground);
@@ -322,7 +350,10 @@ impl Shell {
                                         let res = self.parse_commands(&mut ctx, inner_pair)?;
                                         argv.push((
                                             cmd_str,
-                                            Some((SubshellType::ProcessSubstitution, res)),
+                                            Some(ParsedJob::new(
+                                                SubshellType::ProcessSubstitution,
+                                                res,
+                                            )),
                                         ));
                                     }
                                 }
@@ -442,7 +473,12 @@ impl Shell {
         let mut argv: Vec<String> = Vec::new();
 
         for (cmd_str, jobs) in parsed_argv {
-            if let Some((subshell_type, jobs)) = jobs {
+            if let Some(ParsedJob {
+                subshell_type,
+                jobs,
+            }) = jobs
+            {
+                debug!("parsed job '{:?}' jobs:{:?}", cmd_str, jobs);
                 if jobs.is_empty() {
                     continue;
                 }

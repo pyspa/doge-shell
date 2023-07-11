@@ -163,16 +163,16 @@ impl ShellProxy for Shell {
                             job.job_id, job.cmd
                         ))
                         .ok();
-                        if let ProcessState::Stopped(_, _) = job.state {
-                            // send continue
-                            debug!("send continue job: {:?}", job);
-                            if let Err(err) = job.cont() {
-                                ctx.write_stderr(&format!("{}", err)).ok();
-                                return Err(err);
-                            }
-                        }
 
-                        if let Err(err) = task::block_on(job.put_in_foreground(true)) {
+                        let cont = if let ProcessState::Stopped(_, _) = job.state {
+                            //send continue
+                            true
+                        } else {
+                            false
+                        };
+                        job.state = ProcessState::Running;
+
+                        if let Err(err) = task::block_on(job.put_in_foreground(true, cont)) {
                             ctx.write_stderr(&format!("{}", err)).ok();
                             return Err(err);
                         }

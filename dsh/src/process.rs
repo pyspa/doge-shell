@@ -352,6 +352,7 @@ impl Process {
     }
 
     fn set_signals(&self) {
+        debug!("set signal action pid:{:?}", self.pid);
         // Accept job-control-related signals (refer https://www.gnu.org/software/libc/manual/html_node/Launching-Jobs.html)
         let action = SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
         unsafe {
@@ -713,6 +714,7 @@ impl JobProcess {
             JobProcess::Wasm(_) => Ok(()),
             JobProcess::Command(process) => {
                 if let Some(pid) = process.pid {
+                    debug!("send signal SIGCONT pid:{:?}", pid);
                     send_signal(pid, Signal::SIGCONT)
                 } else {
                     Ok(())
@@ -838,7 +840,7 @@ impl Job {
             } else if ctx.foreground {
                 // foreground
                 if ctx.process_count > 0 {
-                    let _ = self.put_in_foreground(false).await;
+                    let _ = self.put_in_foreground(false, false).await;
                 }
             } else {
                 // background
@@ -922,12 +924,16 @@ impl Job {
         Ok(())
     }
 
-    pub async fn put_in_foreground(&mut self, no_hang: bool) -> Result<()> {
+    pub async fn put_in_foreground(&mut self, no_hang: bool, cont: bool) -> Result<()> {
         debug!("put_in_foreground: id: {} pgid {:?}", self.id, self.pgid);
         // Put the job into the foreground
 
         if let Some(pgid) = self.pgid {
             tcsetpgrp(SHELL_TERMINAL, pgid).context("failed tcsetpgrp")?;
+
+            if cont {
+                send_signal(pgid, Signal::SIGCONT).context("failed send signal SIGCONT")?;
+            }
         }
 
         self.wait_job(no_hang).await?;
@@ -986,7 +992,10 @@ impl Job {
 
             self.set_process_state(pid, state);
 
-            debug!("fin waitpid pgid:{:?} pid:{:?}", self.pgid, pid);
+            debug!(
+                "fin waitpid pgid:{:?} pid:{:?} state:{:?}",
+                self.pgid, pid, state
+            );
 
             // show_process_state(&self.process); // debug
 

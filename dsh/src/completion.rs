@@ -5,7 +5,6 @@ use crate::lisp::Value;
 use crate::repl::Repl;
 use anyhow::Result;
 use dsh_frecency::ItemStats;
-
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use skim::prelude::*;
@@ -14,7 +13,6 @@ use std::fs::{create_dir_all, read_dir, remove_file, File};
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::{process::Command, sync::Arc};
-use terminal_spinners::{SpinnerBuilder, CLOCK};
 use tracing::debug;
 
 #[derive(Debug, Clone)]
@@ -569,11 +567,6 @@ Follow the above rules to print the subcommands and option lists for the "{}" co
             );
             let mut items: Vec<Candidate> = Vec::new();
 
-            let handle = SpinnerBuilder::new()
-                .spinner(&CLOCK)
-                .text("Query AI for command completion candidates...")
-                .start();
-
             let items = match client.send_message(&content, None, Some(0.1)) {
                 Ok(res) => {
                     for res in res.split('\n') {
@@ -594,7 +587,7 @@ Follow the above rules to print the subcommands and option lists for the "{}" co
                 }
                 _ => items,
             };
-            handle.stop_and_clear();
+
             items
         };
 

@@ -193,10 +193,21 @@ impl Input {
     }
 
     pub fn print_completion(&self, out: &mut StdoutLock<'static>, completion: String) {
+        let current = self.cursor;
+        let length = self.input.len();
+        let is_end = current == length;
+
         out.write_fmt(format_args!(
             "{}",
             completion.with(self.config.completion_color)
         ))
         .ok();
+
+        if !is_end {
+            let tmp = &self.input[current..];
+
+            out.write_fmt(format_args!("{}", tmp.with(self.config.fg_color)))
+                .ok();
+        }
     }
 }

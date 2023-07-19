@@ -161,7 +161,7 @@ pub fn check_path(pwd: &Path, environment: Arc<RwLock<Environment>>) -> Result<(
     let out = std::io::stdout().lock();
     let mut out = BufWriter::new(out);
 
-    for mut env in entries {
+    for env in entries {
         if pwd.starts_with(&env.path) {
             if !env.loaded {
                 env.read_env_file()?;

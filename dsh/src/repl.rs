@@ -1,6 +1,6 @@
 use crate::completion::{self, Completion};
 use crate::dirs;
-use crate::input::Input;
+use crate::input::{Input, InputConfig};
 use crate::parser::Rule;
 use crate::prompt::Prompt;
 use crate::shell::{Shell, SHELL_TERMINAL};
@@ -8,7 +8,7 @@ use anyhow::Context as _;
 use anyhow::Result;
 use crossterm::cursor;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
-use crossterm::style::{Color, Print, ResetColor, Stylize};
+use crossterm::style::{Print, ResetColor};
 use crossterm::terminal::{self, enable_raw_mode, Clear, ClearType};
 use crossterm::{execute, queue};
 use dsh_types::Context;
@@ -62,10 +62,11 @@ impl<'a> Repl<'a> {
             .write()
             .chpwd_hooks
             .push(Box::new(Arc::clone(&prompt)));
+        let input_config = InputConfig::default();
 
         Repl {
             shell,
-            input: Input::new(),
+            input: Input::new(input_config),
             columns: 0,
             lines: 0,
             tmode: None,
@@ -206,7 +207,6 @@ impl<'a> Repl<'a> {
         let input = self.input.to_string();
         let prompt_count = self.prompt.write().mark.chars().count();
 
-        let fg_color = Color::White;
         let mut completion: Option<String> = None;
         let mut can_execute = false;
         if input.is_empty() || reset_completion {
@@ -284,13 +284,12 @@ impl<'a> Repl<'a> {
         )
         .ok();
 
-        self.input.print(out, fg_color);
+        self.input.print(out);
 
         self.move_cursor_input_end(out);
 
         if let Some(completion) = completion {
-            out.write_fmt(format_args!("{}", completion.dark_grey()))
-                .ok();
+            self.input.print_completion(out, completion);
             self.move_cursor_input_end(out);
         }
         queue!(out, cursor::Show).ok();

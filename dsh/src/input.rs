@@ -5,8 +5,28 @@ use pest::Span;
 use std::cmp::min;
 use std::io::{BufWriter, StdoutLock, Write};
 
+const INITIAL_CAP: usize = 256;
+
+#[derive(Debug, Clone)]
+pub struct InputConfig {
+    pub fg_color: Color,
+    pub match_color: Color,
+    pub completion_color: Color,
+}
+
+impl Default for InputConfig {
+    fn default() -> InputConfig {
+        InputConfig {
+            fg_color: Color::White,
+            match_color: Color::Blue,
+            completion_color: Color::DarkGrey,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Input {
+    config: InputConfig,
     cursor: usize,
     input: String,
     indices: Vec<usize>,
@@ -15,11 +35,10 @@ pub struct Input {
     pub can_execute: bool,
 }
 
-const INITIAL_CAP: usize = 256;
-
 impl Input {
-    pub fn new() -> Input {
+    pub fn new(config: InputConfig) -> Input {
         Input {
+            config,
             cursor: 0,
             input: String::with_capacity(INITIAL_CAP),
             indices: Vec::with_capacity(INITIAL_CAP),
@@ -134,7 +153,7 @@ impl Input {
         parser::get_words(self.input.as_str(), self.cursor)
     }
 
-    pub fn print(&self, out: &mut StdoutLock<'static>, fg_color: Color) {
+    pub fn print(&self, out: &mut StdoutLock<'static>) {
         let mut out = BufWriter::new(out);
 
         if let Some(match_index) = &self.match_index {
@@ -145,19 +164,39 @@ impl Input {
                 let color = if let Some(idx) = match_index {
                     if *idx == i {
                         match_index = index_iter.next();
-                        Color::Blue
+                        self.config.match_color
                     } else {
-                        Color::White
+                        self.config.fg_color
                     }
                 } else {
-                    Color::White
+                    self.config.fg_color
                 };
 
                 out.write_fmt(format_args!("{}", ch.with(color))).ok();
             }
         } else {
-            out.write_fmt(format_args!("{}", self.as_str().with(fg_color)))
+            out.write_fmt(format_args!("{}", self.as_str().with(self.config.fg_color)))
                 .ok();
         }
+    }
+
+    pub fn fg_color(&self) -> Color {
+        self.config.fg_color
+    }
+
+    pub fn match_color(&self) -> Color {
+        self.config.match_color
+    }
+
+    pub fn completion_color(&self) -> Color {
+        self.config.completion_color
+    }
+
+    pub fn print_completion(&self, out: &mut StdoutLock<'static>, completion: String) {
+        out.write_fmt(format_args!(
+            "{}",
+            completion.with(self.config.completion_color)
+        ))
+        .ok();
     }
 }

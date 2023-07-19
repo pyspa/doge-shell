@@ -344,8 +344,24 @@ impl<'a> Repl<'a> {
                 return Ok(());
             }
             (KeyCode::Right, NONE) if self.input.completion.is_some() => {
-                if let Some(comp) = &self.input.completion.take() {
-                    self.input.reset(comp.to_string());
+                // TODO refactor
+                if let Some(comp) = &self.input.completion {
+                    let cursor = self.input.cursor();
+
+                    if cursor >= comp.len() {
+                        return Ok(());
+                    }
+
+                    if let Some((comp, post)) = comp[cursor..].split_once(' ') {
+                        let mut comp = self.input.as_str().to_owned() + &comp;
+                        if !post.is_empty() {
+                            comp = comp + " ";
+                        };
+                        self.input.reset(comp.to_string());
+                    } else {
+                        self.input.reset(comp.to_string());
+                        self.input.completion = None;
+                    }
                 }
                 self.completion.clear();
             }

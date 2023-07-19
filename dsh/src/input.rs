@@ -193,7 +193,7 @@ impl Input {
         self.config.completion_color
     }
 
-    pub fn print_completion(&mut self, out: &mut StdoutLock<'static>, completion: String) {
+    pub fn print_candidates(&mut self, out: &mut StdoutLock<'static>, completion: String) {
         let current = self.cursor;
         let length = self.input.len();
         let is_end = current == length;

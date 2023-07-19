@@ -295,7 +295,7 @@ impl<'a> Repl<'a> {
         self.move_cursor_input_end(out);
 
         if let Some(completion) = completion {
-            self.input.print_completion(out, completion);
+            self.input.print_candidates(out, completion);
             self.move_cursor_input_end(out);
         }
         queue!(out, cursor::Show).ok();

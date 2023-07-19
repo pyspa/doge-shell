@@ -260,7 +260,13 @@ impl<'a> Repl<'a> {
                                     if path.len() >= word.len() {
                                         let part = path[word.len()..].to_string();
                                         completion = Some(path[word.len()..].to_string());
-                                        self.input.completion = Some(input + &part);
+
+                                        if let Some((pre, post)) = self.input.split_current_pos() {
+                                            self.input.completion =
+                                                Some(pre.to_owned() + &part + post);
+                                        } else {
+                                            self.input.completion = Some(input + &part);
+                                        }
                                         break;
                                     }
                                 }

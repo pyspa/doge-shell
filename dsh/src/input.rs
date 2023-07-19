@@ -30,6 +30,7 @@ pub struct Input {
     cursor: usize,
     input: String,
     indices: Vec<usize>,
+
     pub completion: Option<String>,
     pub match_index: Option<Vec<usize>>,
     pub can_execute: bool,
@@ -192,7 +193,7 @@ impl Input {
         self.config.completion_color
     }
 
-    pub fn print_completion(&self, out: &mut StdoutLock<'static>, completion: String) {
+    pub fn print_completion(&mut self, out: &mut StdoutLock<'static>, completion: String) {
         let current = self.cursor;
         let length = self.input.len();
         let is_end = current == length;
@@ -208,6 +209,19 @@ impl Input {
 
             out.write_fmt(format_args!("{}", tmp.with(self.config.fg_color)))
                 .ok();
+        }
+    }
+
+    pub fn split_current_pos(&self) -> Option<(&str, &str)> {
+        let current = self.cursor;
+        let length = self.input.len();
+        let is_end = current == length;
+        if is_end {
+            None
+        } else {
+            let pre = &self.input[..current];
+            let post = &self.input[current..];
+            Some((pre, post))
         }
     }
 }

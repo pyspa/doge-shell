@@ -203,7 +203,16 @@ fn expand_alias_tilde(
                 }
             }
         }
+        Rule::pipe_command => {
+            debug!("expand pipe_command {}", pair.as_str());
+            argv.push("|".to_string());
+            for inner_pair in pair.into_inner() {
+                let mut v = expand_alias_tilde(inner_pair, alias, current_dir)?;
+                argv.append(&mut v);
+            }
+        }
         _ => {
+            debug!("@expand: {:?} : {:?}", pair.as_rule(), pair.as_str());
             for inner_pair in pair.into_inner() {
                 match inner_pair.as_rule() {
                     Rule::simple_command_bg => {
@@ -246,6 +255,13 @@ fn expand_alias_tilde(
                                     argv.push(arg.trim().to_string());
                                 }
                             }
+                        }
+                    }
+                    Rule::pipe_command => {
+                        argv.push("|".to_string());
+                        for inner_pair in inner_pair.into_inner() {
+                            let mut v = expand_alias_tilde(inner_pair, alias, current_dir)?;
+                            argv.append(&mut v);
                         }
                     }
                     Rule::commands
@@ -1118,7 +1134,7 @@ mod tests {
     #[test]
     fn parse_subshell2() {
         init();
-        let sub = "(ls -al | wc -l )";
+        let sub = "(ls -al | wc -l)";
         let cmd = format!("echo {}", &sub);
         let pairs = ShellParser::parse(Rule::commands, &cmd).unwrap_or_else(|e| panic!("{}", e));
 
@@ -1142,7 +1158,38 @@ mod tests {
                                                                         assert_eq!(
                                                                             pair.as_str(),
                                                                             sub
-                                                                        )
+                                                                        );
+                                                                        println!(
+                                                                            "{}",
+                                                                            pair.as_str()
+                                                                        );
+                                                                        for pair in
+                                                                            pair.into_inner()
+                                                                        {
+                                                                            println!(
+                                                                                "{:?} {:?}",
+                                                                                pair.as_rule(),
+                                                                                pair.as_str()
+                                                                            );
+                                                                            for pair in
+                                                                                pair.into_inner()
+                                                                            {
+                                                                                println!(
+                                                                                    "{:?} {:?}",
+                                                                                    pair.as_rule(),
+                                                                                    pair.as_str()
+                                                                                );
+                                                                                for pair in pair
+                                                                                    .into_inner()
+                                                                                {
+                                                                                    println!(
+                                                                                    "{:?} {:?}",
+                                                                                    pair.as_rule(),
+                                                                                    pair.as_str()
+                                                                                );
+                                                                                }
+                                                                            }
+                                                                        }
                                                                     }
                                                                     _ => {}
                                                                 }

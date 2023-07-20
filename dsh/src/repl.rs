@@ -453,6 +453,9 @@ impl<'a> Repl<'a> {
             (KeyCode::Char('a'), CTRL) => {
                 self.input.move_to_begin();
             }
+            (KeyCode::Char('e'), CTRL) => {
+                self.input.move_to_end();
+            }
             (KeyCode::Char('c'), CTRL) => {
                 let mut out = std::io::stdout().lock();
                 execute!(out, Print("\r\n")).ok();

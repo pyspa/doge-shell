@@ -516,6 +516,11 @@ impl Shell {
             }
         }
 
+        if argv.is_empty() {
+            // no main command
+            return Ok(());
+        }
+
         let cmd = argv[0].as_str();
         if let Some(cmd_fn) = dsh_builtin::get_command(cmd) {
             let builtin = process::BuiltinProcess::new(cmd.to_string(), cmd_fn, argv);

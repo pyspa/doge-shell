@@ -453,6 +453,12 @@ impl<'a> Repl<'a> {
             (KeyCode::Char('a'), CTRL) => {
                 self.input.move_to_begin();
             }
+            (KeyCode::Char('e'), CTRL) if self.input.completion.is_some() => {
+                if let Some(comp) = &self.input.completion.take() {
+                    self.input.reset(comp.to_string());
+                }
+                self.completion.clear();
+            }
             (KeyCode::Char('e'), CTRL) => {
                 self.input.move_to_end();
             }

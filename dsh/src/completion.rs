@@ -567,7 +567,7 @@ Follow the above rules to print the subcommands and option lists for the "{}" co
             );
             let mut items: Vec<Candidate> = Vec::new();
 
-            let items = match client.send_message(&content, None, Some(0.1)) {
+            match client.send_message(&content, None, Some(0.1)) {
                 Ok(res) => {
                     for res in res.split('\n') {
                         if res.starts_with('"') {
@@ -586,9 +586,7 @@ Follow the above rules to print the subcommands and option lists for the "{}" co
                     items
                 }
                 _ => items,
-            };
-
-            items
+            }
         };
 
         if items.is_empty() {

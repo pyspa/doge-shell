@@ -353,9 +353,9 @@ impl<'a> Repl<'a> {
                     }
 
                     if let Some((comp, post)) = comp[cursor..].split_once(' ') {
-                        let mut comp = self.input.as_str().to_owned() + &comp;
+                        let mut comp = self.input.as_str().to_owned() + comp;
                         if !post.is_empty() {
-                            comp = comp + " ";
+                            comp += " ";
                         };
                         self.input.reset(comp.to_string());
                     } else {

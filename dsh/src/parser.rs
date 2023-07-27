@@ -552,7 +552,7 @@ fn find_glob_root(path: &str) -> (String, String) {
     }
     for p in path.iter() {
         let file = p.to_string_lossy();
-        if !find_glob && file.contains("*") {
+        if !find_glob && file.contains('*') {
             find_glob = true;
         }
         if find_glob {
@@ -565,14 +565,14 @@ fn find_glob_root(path: &str) -> (String, String) {
     let mut root = root.join(std::path::MAIN_SEPARATOR_STR);
     let mut glob = glob.join(std::path::MAIN_SEPARATOR_STR);
     if Path::new(&glob).is_absolute() {
-        glob = (&glob[1..]).to_string();
+        glob = (glob[1..]).to_string();
     }
 
     if root.is_empty() {
         (".".to_string(), glob.to_string())
     } else {
         if root.starts_with("//") {
-            root = (&root[1..]).to_string();
+            root = (root[1..]).to_string();
         }
         (root.to_string(), glob.to_string())
     }

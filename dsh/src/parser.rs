@@ -150,8 +150,9 @@ fn expand_alias_tilde(
     current_dir: &PathBuf,
 ) -> Result<Vec<String>> {
     let mut argv: Vec<String> = vec![];
-
-    match pair.as_rule() {
+    let rule = pair.as_rule();
+    let cmd = pair.as_str();
+    match rule {
         Rule::glob_word => {
             let pattern = shellexpand::tilde(pair.as_str()).to_string();
             let (root, pattern) = find_glob_root(pattern.as_str());
@@ -204,12 +205,20 @@ fn expand_alias_tilde(
             }
         }
         Rule::pipe_command => {
-            debug!("expand pipe_command {}", pair.as_str());
             argv.push("|".to_string());
             for inner_pair in pair.into_inner() {
                 let mut v = expand_alias_tilde(inner_pair, alias, current_dir)?;
                 argv.append(&mut v);
             }
+            debug!("# expand pipe_command {:?} {:?}", cmd, argv);
+        }
+        Rule::simple_command_bg => {
+            for inner_pair in pair.into_inner() {
+                let mut v = expand_alias_tilde(inner_pair, alias, current_dir)?;
+                argv.append(&mut v);
+            }
+            argv.push("&".to_string());
+            debug!("# expand simple_command_bg {:?} {:?}", cmd, argv);
         }
         _ => {
             debug!("@expand: {:?} : {:?}", pair.as_rule(), pair.as_str());
@@ -300,6 +309,7 @@ fn expand_alias_tilde(
             }
         }
     }
+
     Ok(argv)
 }
 
@@ -357,10 +367,8 @@ fn expand_command_alias(
                             buf.push(arg);
                         }
                     }
-                    buf.push("&".to_string());
                 }
                 Rule::pipe_command => {
-                    buf.push("|".to_string());
                     let args =
                         expand_alias_tilde(inner_pair, &environment.read().alias, current_dir)?;
                     for arg in args {
@@ -388,7 +396,6 @@ fn expand_command_alias(
     } else if let Rule::command_list_sep = pair.as_rule() {
         buf.push(pair.as_str().to_string());
     }
-
     Ok(buf)
 }
 

@@ -343,7 +343,7 @@ impl<'a> Repl<'a> {
                 }
                 return Ok(());
             }
-            (KeyCode::Right, NONE) if self.input.completion.is_some() => {
+            (KeyCode::Right, SHIFT) if self.input.completion.is_some() => {
                 // TODO refactor
                 if let Some(comp) = &self.input.completion {
                     let cursor = self.input.cursor();
@@ -362,6 +362,12 @@ impl<'a> Repl<'a> {
                         self.input.reset(comp.to_string());
                         self.input.completion = None;
                     }
+                }
+                self.completion.clear();
+            }
+            (KeyCode::Right, NONE) if self.input.completion.is_some() => {
+                if let Some(comp) = &self.input.completion.take() {
+                    self.input.reset(comp.to_string());
                 }
                 self.completion.clear();
             }

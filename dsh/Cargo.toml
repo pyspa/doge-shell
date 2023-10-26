@@ -48,9 +48,9 @@ bincode.workspace = true
 parking_lot.workspace = true
 
 clap = { version="4", features = ["derive"] }
-globmatch = "0.2"
+globmatch = "0.3"
 regex = "1.5"
-toml = "0.7"
+toml = "0.8"
 chrono = "0.4"
 term_size = "0.3"
 termion = "*"

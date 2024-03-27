@@ -7,11 +7,18 @@ edition = "2021"
 
 [dependencies]
 anyhow.workspace = true
+anyhow.version = "1"
 tracing.workspace = true
+tracing.version = "0.1"
 tracing-subscriber.workspace = true
+tracing-subscriber.version = "0.3"
+tracing-subscriber.features = ["env-filter"]
 cfg-if.workspace = true
 serde.workspace = true
+serde.version = "1.0"
+serde.features = ["derive"]
 serde_json.workspace = true
+serde_json.version = "1.0"
 async-std.workspace = true
-
+async-std.version = "1.12"
 surf = "2.3"

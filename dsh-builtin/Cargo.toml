@@ -11,10 +11,16 @@ dsh-frecency = { path = "../dsh-frecency" }
 dsh-chatgpt = { path = "../dsh-chatgpt" }
 
 anyhow.workspace = true
+anyhow.version = "1"
 shellexpand.workspace = true
+shellexpand.version = "3"
 once_cell.workspace = true
+once_cell.version = "1"
 dirs.workspace = true
 tracing.workspace = true
+tracing.version = "0.1"
 uuid.workspace = true
+uuid.version = "1"
+uuid.features = ["fast-rng", "macro-diagnostics", "v4"]
 
 getopts = "0.2"

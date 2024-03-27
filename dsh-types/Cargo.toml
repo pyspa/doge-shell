@@ -7,9 +7,17 @@ version = "0.0.1"
 
 [dependencies]
 anyhow.workspace = true
+anyhow.version = "1"
 libc.workspace=true
+libc.version = "0.2"
 nix.workspace = true
+nix.version = "0.26"
 tracing.workspace = true
+tracing.version = "0.1"
 tracing-subscriber.workspace = true
+tracing-subscriber.version = "0.3"
+tracing-subscriber.features = ["env-filter"]
 cfg-if.workspace = true
 uuid.workspace = true
+uuid.version = "1"
+uuid.features = ["fast-rng", "macro-diagnostics", "v4"]

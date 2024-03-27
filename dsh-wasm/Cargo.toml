@@ -6,12 +6,19 @@ edition = "2021"
 version = "0.0.1"
 
 [dependencies]
-clap = { version="4", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
 anyhow.workspace = true
+anyhow.version = "1"
 xdg.workspace = true
 wasmer.workspace = true
+wasmer.version = "3.1.1"
 wasmer-compiler-cranelift.workspace = true
+wasmer-compiler-cranelift.version = "3.1.1"
 wasmer-wasi.workspace = true
+wasmer-wasi.version = "3.1.1"
 tracing.workspace = true
+tracing.version = "0.1"
 tracing-subscriber.workspace = true
+tracing-subscriber.version = "0.3"
+tracing-subscriber.features = ["env-filter"]
 cfg-if.workspace = true

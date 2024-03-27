@@ -28,26 +28,40 @@ dsh-builtin = { path = "../dsh-builtin" }
 dsh-chatgpt = { path = "../dsh-chatgpt" }
 
 anyhow.workspace = true
+anyhow.version = "1"
 libc.workspace=true
+libc.version = "0.2"
 nix.workspace = true
+nix.version = "0.26"
 tracing.workspace = true
+tracing.version = "0.1"
 tracing-subscriber.workspace = true
+tracing-subscriber.version = "0.3"
+tracing-subscriber.features = ["env-filter"]
 cfg-if.workspace = true
 serde.workspace = true
+serde.version = "1.0"
+serde.features = ["derive"]
 serde_json.workspace = true
+serde_json.version = "1.0"
 crossterm.workspace = true
+crossterm.version = "0"
+crossterm.features = ["event-stream"]
 xdg.workspace = true
 shellexpand.workspace = true
+shellexpand.version = "3"
 once_cell.workspace = true
+once_cell.version = "1"
 dirs.workspace = true
 async-std.workspace = true
+async-std.version = "1.12"
 futures.workspace = true
+futures.version = "0.3"
 futures-timer.workspace = true
 xid.workspace = true
 bincode.workspace = true
 parking_lot.workspace = true
-
-clap = { version="4", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
 globmatch = "0.3"
 regex = "1.5"
 toml = "0.8"

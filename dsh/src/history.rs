@@ -152,7 +152,6 @@ impl History {
         // TODO file lock
         if let Some(ref path) = self.path {
             let mut history_file = OpenOptions::new()
-                .write(true)
                 .create(true)
                 .append(true)
                 .open(path)
@@ -228,10 +227,7 @@ impl FrecencyHistory {
         let file_path = environment::get_data_file(name)?;
         let matcher = SkimMatcherV2::default();
 
-        let store = match read_store(&file_path) {
-            Ok(store) => store,
-            Err(_) => FrecencyStore::default(),
-        };
+        let store = read_store(&file_path).unwrap_or_default();
 
         let f = FrecencyHistory {
             path: Some(file_path),

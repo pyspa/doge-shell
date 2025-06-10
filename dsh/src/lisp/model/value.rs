@@ -109,7 +109,7 @@ impl TryFrom<&Value> for IntType {
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
         match value {
-            Value::Int(this) => Ok(this.clone()),
+            Value::Int(this) => Ok(*this),
             _ => Err(RuntimeError {
                 msg: format!("Expected int, got a {}", value),
             }),
@@ -278,8 +278,7 @@ impl std::fmt::Display for Value {
                 let entries = std::iter::once(lisp! { hash }).chain(
                     borrowed
                         .iter()
-                        .map(|(key, value)| [key.clone(), value.clone()].into_iter())
-                        .flatten(),
+                        .flat_map(|(key, value)| [key.clone(), value.clone()].into_iter()),
                 );
 
                 let list = Value::List(entries.collect());
@@ -390,10 +389,10 @@ impl Add<&Value> for &Value {
 
             // different numeric types
             (Value::Int(this), Value::Float(other)) => {
-                Ok(Value::from(int_type_to_float_type(&this) + other))
+                Ok(Value::from(int_type_to_float_type(this) + other))
             }
             (Value::Float(this), Value::Int(other)) => {
-                Ok(Value::from(this + int_type_to_float_type(&other)))
+                Ok(Value::from(this + int_type_to_float_type(other)))
             }
 
             // non-string + string
@@ -428,10 +427,10 @@ impl Sub<&Value> for &Value {
             (Value::Float(this), Value::Float(other)) => Ok(Value::from(this - other)),
 
             (Value::Int(this), Value::Float(other)) => {
-                Ok(Value::from(int_type_to_float_type(&this) - other))
+                Ok(Value::from(int_type_to_float_type(this) - other))
             }
             (Value::Float(this), Value::Int(other)) => {
-                Ok(Value::from(this - int_type_to_float_type(&other)))
+                Ok(Value::from(this - int_type_to_float_type(other)))
             }
 
             _ => Err(()),
@@ -456,10 +455,10 @@ impl Mul<&Value> for &Value {
             (Value::Float(this), Value::Float(other)) => Ok(Value::from(this * other)),
 
             (Value::Int(this), Value::Float(other)) => {
-                Ok(Value::from(int_type_to_float_type(&this) * other))
+                Ok(Value::from(int_type_to_float_type(this) * other))
             }
             (Value::Float(this), Value::Int(other)) => {
-                Ok(Value::from(this * int_type_to_float_type(&other)))
+                Ok(Value::from(this * int_type_to_float_type(other)))
             }
 
             _ => Err(()),
@@ -484,10 +483,10 @@ impl Div<&Value> for &Value {
             (Value::Float(this), Value::Float(other)) => Ok(Value::from(this / other)),
 
             (Value::Int(this), Value::Float(other)) => {
-                Ok(Value::from(int_type_to_float_type(&this) / other))
+                Ok(Value::from(int_type_to_float_type(this) / other))
             }
             (Value::Float(this), Value::Int(other)) => {
-                Ok(Value::from(this / int_type_to_float_type(&other)))
+                Ok(Value::from(this / int_type_to_float_type(other)))
             }
 
             _ => Err(()),
@@ -515,7 +514,7 @@ fn int_type_to_float_type(i: &IntType) -> FloatType {
                 }
             }
         } else {
-            return *i as FloatType;
+            *i as FloatType
         }
     }
 }

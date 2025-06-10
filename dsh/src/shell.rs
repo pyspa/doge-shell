@@ -705,10 +705,9 @@ fn read_fd(fd: RawFd) -> Result<String> {
     unsafe { File::from_raw_fd(fd).read_to_end(&mut raw_stdout).ok() };
 
     let output = std::str::from_utf8(&raw_stdout)
-        .map_err(|err| {
+        .inspect_err(|err| {
             // TODO
             eprintln!("binary in variable/expansion is not supported");
-            err
         })?
         .trim_end_matches('\n')
         .to_owned();

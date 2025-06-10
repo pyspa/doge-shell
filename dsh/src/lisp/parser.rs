@@ -64,7 +64,7 @@ pub struct ParseError {
 
 impl Display for ParseError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        return write!(formatter, "Parse error: {}", self.msg);
+        write!(formatter, "Parse error: {}", self.msg)
     }
 }
 
@@ -308,11 +308,11 @@ fn consume(code: &str, index: usize, s: &str) -> ConsumeResult {
         && slice
             .chars()
             .zip(s.chars())
-            .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+            .all(|(a, b)| a.eq_ignore_ascii_case(&b))
     {
-        return Some(index + s.len());
+        Some(index + s.len())
     } else {
-        return None;
+        None
     }
 }
 
@@ -326,7 +326,7 @@ fn consume_whitespace_and_comments(code: &str, index: usize) -> usize {
             semicolons = 0;
         }
 
-        return ch.is_whitespace() || ch == ';' || semicolons >= 2;
+        ch.is_whitespace() || ch == ';' || semicolons >= 2
     })
     .map(|(index, _)| index + 1)
     .unwrap_or(index)
@@ -350,14 +350,13 @@ fn is_symbol_start(c: char) -> bool {
 }
 
 fn is_symbolic(c: char) -> bool {
-    !c.is_whitespace() && !SPECIAL_TOKENS.iter().any(|t| *t == c)
+    !c.is_whitespace() && !SPECIAL_TOKENS.contains(&c)
 }
 
 fn next_char_is_break(code: &str, index: usize) -> bool {
     code.get(index..)
-        .map(|s| s.chars().next())
-        .flatten()
-        .map(|ch| ch.is_whitespace() || SPECIAL_TOKENS.iter().any(|t| *t == ch))
+        .and_then(|s| s.chars().next())
+        .map(|ch| ch.is_whitespace() || SPECIAL_TOKENS.contains(&ch))
         .unwrap_or(true)
 }
 

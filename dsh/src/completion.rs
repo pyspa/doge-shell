@@ -243,7 +243,7 @@ pub fn select_item(items: Vec<Candidate>, query: Option<&str>) -> Option<String>
             Key::Enter => out.selected_items,
             _ => Vec::new(),
         })
-        .unwrap_or_else(Vec::new);
+        .unwrap_or_default();
 
     if !selected.is_empty() {
         let val = selected[0].output().to_string();

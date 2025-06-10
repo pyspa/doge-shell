@@ -125,10 +125,7 @@ impl Environment {
 
         if let Some(var) = key.strip_prefix('$') {
             // expand env var
-            match std::env::var(var) {
-                Ok(val) => Some(val),
-                Err(_) => None,
-            }
+            std::env::var(var).ok()
         } else {
             None
         }

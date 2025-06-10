@@ -558,14 +558,14 @@ fn find_glob_root(path: &str) -> (String, String) {
     let mut root = root.join(std::path::MAIN_SEPARATOR_STR);
     let mut glob = glob.join(std::path::MAIN_SEPARATOR_STR);
     if Path::new(&glob).is_absolute() {
-        glob = (&glob[1..]).to_string();
+        glob = glob[1..].to_string();
     }
 
     if root.is_empty() {
         (".".to_string(), glob.to_string())
     } else {
         if root.starts_with("//") {
-            root = (&root[1..]).to_string();
+            root = root[1..].to_string();
         }
         (root.to_string(), glob.to_string())
     }
@@ -841,14 +841,11 @@ mod tests {
             assert_eq!(1, count);
 
             for (i, inner_pair) in pair.into_inner().enumerate() {
-                match inner_pair.as_rule() {
-                    Rule::simple_command => {
-                        let cmd = inner_pair.as_str();
-                        if i == 0 {
-                            assert_eq!("history", cmd);
-                        }
+                if inner_pair.as_rule() == Rule::simple_command {
+                    let cmd = inner_pair.as_str();
+                    if i == 0 {
+                        assert_eq!("history", cmd);
                     }
-                    _ => {}
                 }
             }
         }
@@ -912,12 +909,9 @@ mod tests {
             assert_eq!(1, count);
 
             for inner_pair in pair.into_inner() {
-                match inner_pair.as_rule() {
-                    Rule::simple_command => {
-                        let cmd = inner_pair.as_str();
-                        assert_eq!("sleep 20", cmd);
-                    }
-                    _ => {}
+                if inner_pair.as_rule() == Rule::simple_command {
+                    let cmd = inner_pair.as_str();
+                    assert_eq!("sleep 20", cmd);
                 }
             }
         }
@@ -933,17 +927,14 @@ mod tests {
             let count = pair.clone().into_inner().count();
             assert_eq!(2, count);
             for (i, inner_pair) in pair.into_inner().enumerate() {
-                match inner_pair.as_rule() {
-                    Rule::simple_command_bg => {
-                        let inner_pair = inner_pair.into_inner();
-                        let cmd = inner_pair.as_str();
-                        if i == 0 {
-                            assert_eq!("sleep 20", cmd);
-                        } else if i == 1 {
-                            assert_eq!("sleep 30", cmd);
-                        }
+                if inner_pair.as_rule() == Rule::simple_command_bg {
+                    let inner_pair = inner_pair.into_inner();
+                    let cmd = inner_pair.as_str();
+                    if i == 0 {
+                        assert_eq!("sleep 20", cmd);
+                    } else if i == 1 {
+                        assert_eq!("sleep 30", cmd);
                     }
-                    _ => {}
                 }
             }
         }
@@ -1096,19 +1087,15 @@ mod tests {
                                             Rule::argv0 => {}
                                             Rule::args => {
                                                 for pair in pair.into_inner() {
-                                                    match pair.as_rule() {
-                                                        Rule::span => {
-                                                            for pair in pair.into_inner() {
-                                                                match pair.as_rule() {
-                                                                    Rule::subshell => {
-                                                                        assert_eq!(pair.as_str(), "(sudo docker ps -a -q)")
-                                                                    }
-                                                                    _ => {}
-                                                                }
+                                                    if pair.as_rule() == Rule::span {
+                                                        for pair in pair.into_inner() {
+                                                            if pair.as_rule() == Rule::subshell {
+                                                                assert_eq!(
+                                                                    pair.as_str(),
+                                                                    "(sudo docker ps -a -q)"
+                                                                )
                                                             }
                                                         }
-
-                                                        _ => {}
                                                     }
                                                 }
                                             }
@@ -1150,17 +1137,21 @@ mod tests {
                                             Rule::argv0 => {}
                                             Rule::args => {
                                                 for pair in pair.into_inner() {
-                                                    match pair.as_rule() {
-                                                        Rule::span => {
-                                                            for pair in pair.into_inner() {
-                                                                match pair.as_rule() {
-                                                                    Rule::subshell => {
-                                                                        assert_eq!(
-                                                                            pair.as_str(),
-                                                                            sub
-                                                                        );
+                                                    if pair.as_rule() == Rule::span {
+                                                        for pair in pair.into_inner() {
+                                                            if pair.as_rule() == Rule::subshell {
+                                                                assert_eq!(pair.as_str(), sub);
+                                                                println!("{}", pair.as_str());
+                                                                for pair in pair.into_inner() {
+                                                                    println!(
+                                                                        "{:?} {:?}",
+                                                                        pair.as_rule(),
+                                                                        pair.as_str()
+                                                                    );
+                                                                    for pair in pair.into_inner() {
                                                                         println!(
-                                                                            "{}",
+                                                                            "{:?} {:?}",
+                                                                            pair.as_rule(),
                                                                             pair.as_str()
                                                                         );
                                                                         for pair in
@@ -1171,32 +1162,11 @@ mod tests {
                                                                                 pair.as_rule(),
                                                                                 pair.as_str()
                                                                             );
-                                                                            for pair in
-                                                                                pair.into_inner()
-                                                                            {
-                                                                                println!(
-                                                                                    "{:?} {:?}",
-                                                                                    pair.as_rule(),
-                                                                                    pair.as_str()
-                                                                                );
-                                                                                for pair in pair
-                                                                                    .into_inner()
-                                                                                {
-                                                                                    println!(
-                                                                                    "{:?} {:?}",
-                                                                                    pair.as_rule(),
-                                                                                    pair.as_str()
-                                                                                );
-                                                                                }
-                                                                            }
                                                                         }
                                                                     }
-                                                                    _ => {}
                                                                 }
                                                             }
                                                         }
-
-                                                        _ => {}
                                                     }
                                                 }
                                             }
@@ -1237,22 +1207,12 @@ mod tests {
                                             Rule::argv0 => {}
                                             Rule::args => {
                                                 for pair in pair.into_inner() {
-                                                    match pair.as_rule() {
-                                                        Rule::span => {
-                                                            for pair in pair.into_inner() {
-                                                                match pair.as_rule() {
-                                                                    Rule::proc_subst => {
-                                                                        assert_eq!(
-                                                                            pair.as_str(),
-                                                                            "<(ls)"
-                                                                        )
-                                                                    }
-                                                                    _ => {}
-                                                                }
+                                                    if pair.as_rule() == Rule::span {
+                                                        for pair in pair.into_inner() {
+                                                            if pair.as_rule() == Rule::proc_subst {
+                                                                assert_eq!(pair.as_str(), "<(ls)")
                                                             }
                                                         }
-
-                                                        _ => {}
                                                     }
                                                 }
                                             }
@@ -1305,18 +1265,15 @@ mod tests {
             let count = pair.clone().into_inner().count();
             assert_eq!(2, count);
             for pair in pair.into_inner() {
-                match pair.as_rule() {
-                    Rule::args => {
+                if pair.as_rule() == Rule::args {
+                    for pair in pair.into_inner() {
                         for pair in pair.into_inner() {
-                            for pair in pair.into_inner() {
-                                assert_eq!(Rule::variable, pair.as_rule());
-                                assert_eq!("$foo", pair.as_str());
+                            assert_eq!(Rule::variable, pair.as_rule());
+                            assert_eq!("$foo", pair.as_str());
 
-                                find = true;
-                            }
+                            find = true;
                         }
                     }
-                    _ => {}
                 }
             }
         }
@@ -1336,20 +1293,17 @@ mod tests {
             let count = pair.clone().into_inner().count();
             assert_eq!(2, count);
             for pair in pair.into_inner() {
-                match pair.as_rule() {
-                    Rule::args => {
-                        for pair in pair.into_inner() {
-                            // println!("** {:?} {:?}", pair.as_rule(), pair.as_str());
-                            let parent = pair.as_rule();
-                            if parent == Rule::redirect {
-                                for pair in pair.into_inner() {
-                                    println!("*** {:?} {:?}", pair.as_rule(), pair.as_str());
-                                    found = true;
-                                }
+                if pair.as_rule() == Rule::args {
+                    for pair in pair.into_inner() {
+                        // println!("** {:?} {:?}", pair.as_rule(), pair.as_str());
+                        let parent = pair.as_rule();
+                        if parent == Rule::redirect {
+                            for pair in pair.into_inner() {
+                                println!("*** {:?} {:?}", pair.as_rule(), pair.as_str());
+                                found = true;
                             }
                         }
                     }
-                    _ => {}
                 }
             }
         }
@@ -1368,35 +1322,29 @@ mod tests {
                 // println!("** {:?} {:?}", pair.as_rule(), pair.as_str());
                 for pair in pair.into_inner() {
                     // println!("*** {:?} {:?}", pair.as_rule(), pair.as_str());
-                    match pair.as_rule() {
-                        Rule::simple_command => {
-                            for pair in pair.into_inner() {
-                                match pair.as_rule() {
-                                    Rule::args => {
-                                        for pair in pair.into_inner() {
+                    if pair.as_rule() == Rule::simple_command {
+                        for pair in pair.into_inner() {
+                            if pair.as_rule() == Rule::args {
+                                for pair in pair.into_inner() {
+                                    // println!(
+                                    //     "**** {:?} {:?}",
+                                    //     pair.as_rule(),
+                                    //     pair.as_str()
+                                    // );
+                                    let parent = pair.as_rule();
+                                    if parent == Rule::redirect {
+                                        for _pair in pair.into_inner() {
                                             // println!(
                                             //     "**** {:?} {:?}",
                                             //     pair.as_rule(),
                                             //     pair.as_str()
                                             // );
-                                            let parent = pair.as_rule();
-                                            if parent == Rule::redirect {
-                                                for _pair in pair.into_inner() {
-                                                    // println!(
-                                                    //     "**** {:?} {:?}",
-                                                    //     pair.as_rule(),
-                                                    //     pair.as_str()
-                                                    // );
-                                                    found = true;
-                                                }
-                                            }
+                                            found = true;
                                         }
                                     }
-                                    _ => {}
                                 }
                             }
                         }
-                        _ => {}
                     }
                 }
             }

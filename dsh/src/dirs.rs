@@ -1,4 +1,3 @@
-pub use dirs;
 use std::fs::{read_dir, DirEntry};
 use std::os::unix::fs::PermissionsExt;
 use std::path;

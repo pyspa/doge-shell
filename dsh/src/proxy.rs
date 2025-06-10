@@ -139,10 +139,9 @@ impl ShellProxy for Shell {
                 unsafe { File::from_raw_fd(ctx.infile).read_to_end(&mut stdin).ok() };
                 let key = format!("${}", argv[1]);
                 let output = std::str::from_utf8(&stdin)
-                    .map_err(|err| {
+                    .inspect_err(|&err| {
                         // TODO
                         ctx.write_stderr(&format!("{}", err)).ok();
-                        err
                     })
                     .unwrap()
                     .trim_end_matches('\n')

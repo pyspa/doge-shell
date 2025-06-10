@@ -349,7 +349,7 @@ fn eval_inner(
                         eval_inner(env, then_expr, context)
                     } else {
                         else_expr
-                            .map(|expr| eval_inner(env, &expr, context))
+                            .map(|expr| eval_inner(env, expr, context))
                             .unwrap_or(Ok(Value::NIL))
                     }
                 }

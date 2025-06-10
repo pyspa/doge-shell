@@ -93,7 +93,7 @@ impl std::hash::Hash for List {
     }
 }
 
-impl<'a> IntoIterator for &'a List {
+impl IntoIterator for &List {
     type Item = Value;
     type IntoIter = ConsIterator;
 

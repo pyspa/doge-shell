@@ -230,7 +230,7 @@ mod tests {
         let env = Environment::new();
         let engine = LispEngine::new(env);
 
-        let args = vec![Value::String("ls -al".to_string())];
+        let args = [Value::String("ls -al".to_string())];
         let res = block_sh(Rc::clone(&engine.borrow().env), args.to_vec());
         assert!(res.is_ok());
         println!("{}", res.unwrap());

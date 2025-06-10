@@ -33,7 +33,7 @@ impl std::fmt::Display for Lambda {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let body_str = format!("{}", &self.body);
 
-        return write!(
+        write!(
             f,
             "({}) {}",
             self.argnames
@@ -42,6 +42,6 @@ impl std::fmt::Display for Lambda {
                 .collect::<Vec<&str>>()
                 .join(" "),
             &body_str[1..body_str.chars().count() - 1]
-        );
+        )
     }
 }

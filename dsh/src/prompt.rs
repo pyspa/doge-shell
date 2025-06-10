@@ -256,7 +256,6 @@ fn get_git_status() -> Option<GitStatus> {
                                 }
                             }
                         }
-                    } else {
                     }
                 } else if buf.starts_with('1') {
                     modified = true;

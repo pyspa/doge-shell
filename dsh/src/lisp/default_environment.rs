@@ -271,7 +271,7 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
             let mut hash = HashMap::new();
 
             for pair in chunks {
-                let key = pair.get(0).unwrap();
+                let key = pair.first().unwrap();
                 let value = pair.get(1);
 
                 if let Some(value) = value {

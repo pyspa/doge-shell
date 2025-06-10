@@ -312,14 +312,12 @@ impl<'a> Repl<'a> {
                     if let Some(item) = self.completion.backward() {
                         self.input
                             .reset_with_match_index(item.item, item.match_index);
-                    } else {
                     }
                 } else {
                     self.set_completions();
                     if let Some(item) = self.completion.backward() {
                         self.input
                             .reset_with_match_index(item.item, item.match_index);
-                    } else {
                     }
                 }
             }
@@ -353,9 +351,9 @@ impl<'a> Repl<'a> {
                     }
 
                     if let Some((comp, post)) = comp[cursor..].split_once(' ') {
-                        let mut comp = self.input.as_str().to_owned() + &comp;
+                        let mut comp = self.input.as_str().to_owned() + comp;
                         if !post.is_empty() {
-                            comp = comp + " ";
+                            comp += " ";
                         };
                         self.input.reset(comp.to_string());
                     } else {

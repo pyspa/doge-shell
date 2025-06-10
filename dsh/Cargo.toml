@@ -9,16 +9,6 @@ version = "0.0.1"
 path = "src/main.rs"
 name = "dsh"
 
-[profile.release]
-opt-level = 3
-debug = false
-rpath = false
-lto = true
-debug-assertions = false
-codegen-units = 1
-panic = 'unwind'
-incremental = true
-overflow-checks = false
 
 [dependencies]
 dsh-wasm = { path = "../dsh-wasm" }

@@ -41,6 +41,7 @@ wasmer-compiler-cranelift = "3.1.1"
 wasmer-wasi = "3.1.1"
 parking_lot = "0.12"
 uuid = { version = "1", features = ["v4", "fast-rng", "macro-diagnostics"] }
+wasm-bindgen = "0.2.88"
 
 [profile.dev]
 # https://jakedeichert.com/blog/reducing-rust-incremental-compilation-times-on-macos-by-70-percent/

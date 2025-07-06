@@ -31,29 +31,41 @@ pub struct AutoComplete {
 
 #[derive(Debug)]
 pub struct CompletionDisplay {
-    items: Vec<String>,
+    candidates: Vec<Candidate>,
     selected_index: usize,
     #[allow(dead_code)]
     terminal_width: usize,
+    column_width: usize,
     items_per_row: usize,
     total_rows: usize,
 }
 
 impl CompletionDisplay {
-    pub fn new(items: Vec<String>) -> Self {
+    pub fn new(candidates: Vec<Candidate>) -> Self {
         let terminal_width = term_size::dimensions().map(|(w, _)| w).unwrap_or(80);
-        let max_item_width = items.iter().map(|s| s.len()).max().unwrap_or(0);
-        let items_per_row = if max_item_width > 0 {
-            std::cmp::max(1, terminal_width / (max_item_width + 2))
+        
+        // Calculate the maximum display width needed
+        let max_display_width = candidates.iter()
+            .map(|c| c.get_display_name().len() + 3) // "C " + name + " "
+            .max()
+            .unwrap_or(10);
+        
+        // Limit column width to prevent extremely wide columns
+        let column_width = std::cmp::min(max_display_width, terminal_width / 3);
+        
+        let items_per_row = if column_width > 0 {
+            std::cmp::max(1, terminal_width / column_width)
         } else {
             1
         };
-        let total_rows = items.len().div_ceil(items_per_row);
+        
+        let total_rows = candidates.len().div_ceil(items_per_row);
 
         CompletionDisplay {
-            items,
+            candidates,
             selected_index: 0,
             terminal_width,
+            column_width,
             items_per_row,
             total_rows,
         }
@@ -66,7 +78,7 @@ impl CompletionDisplay {
     }
 
     pub fn move_down(&mut self) {
-        if self.selected_index + self.items_per_row < self.items.len() {
+        if self.selected_index + self.items_per_row < self.candidates.len() {
             self.selected_index += self.items_per_row;
         }
     }
@@ -78,13 +90,13 @@ impl CompletionDisplay {
     }
 
     pub fn move_right(&mut self) {
-        if self.selected_index + 1 < self.items.len() {
+        if self.selected_index + 1 < self.candidates.len() {
             self.selected_index += 1;
         }
     }
 
-    pub fn get_selected(&self) -> Option<&String> {
-        self.items.get(self.selected_index)
+    pub fn get_selected(&self) -> Option<&Candidate> {
+        self.candidates.get(self.selected_index)
     }
 
     pub fn display(&self) -> Result<()> {
@@ -96,20 +108,39 @@ impl CompletionDisplay {
         for row in 0..self.total_rows {
             for col in 0..self.items_per_row {
                 let index = row * self.items_per_row + col;
-                if index >= self.items.len() {
+                if index >= self.candidates.len() {
                     break;
                 }
                 
-                let item = &self.items[index];
-                if index == self.selected_index {
-                    queue!(stdout, SetForegroundColor(Color::Yellow), Print("> "), Print(item), ResetColor)?;
+                let candidate = &self.candidates[index];
+                let is_selected = index == self.selected_index;
+                
+                // Display with type character and proper formatting
+                if is_selected {
+                    queue!(stdout, SetForegroundColor(Color::Yellow))?;
+                    queue!(stdout, Print(">"))?;
                 } else {
-                    queue!(stdout, Print("  "), Print(item))?;
+                    queue!(stdout, Print(" "))?;
                 }
                 
-                // Add spacing between items
-                if col < self.items_per_row - 1 && index + 1 < self.items.len() {
-                    queue!(stdout, Print("  "))?;
+                // Add type-specific coloring
+                match candidate.get_type_char() {
+                    'C' => queue!(stdout, SetForegroundColor(Color::Green))?,      // Command
+                    'D' => queue!(stdout, SetForegroundColor(Color::Blue))?,       // Directory
+                    'F' => queue!(stdout, SetForegroundColor(Color::White))?,      // File
+                    'O' => queue!(stdout, SetForegroundColor(Color::Yellow))?,     // Option
+                    'P' => queue!(stdout, SetForegroundColor(Color::Cyan))?,       // Path
+                    'B' => queue!(stdout, SetForegroundColor(Color::DarkGrey))?,   // Basic
+                    _ => queue!(stdout, SetForegroundColor(Color::White))?,
+                }
+                
+                let formatted = candidate.get_formatted_display(self.column_width);
+                queue!(stdout, Print(formatted))?;
+                queue!(stdout, ResetColor)?;
+                
+                // Add spacing between columns
+                if col < self.items_per_row - 1 && index + 1 < self.candidates.len() {
+                    queue!(stdout, Print(" "))?;
                 }
             }
             if row < self.total_rows - 1 {
@@ -204,11 +235,63 @@ impl Completion {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, PartialOrd, Eq, Ord)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd, Eq, Ord)]
 pub enum Candidate {
     Item(String, String), // output, description
     Path(String),
     Basic(String),
+}
+
+impl Candidate {
+    /// Get the type character for display
+    pub fn get_type_char(&self) -> char {
+        match self {
+            Candidate::Item(_, desc) => {
+                if desc.contains("command") {
+                    'C'
+                } else if desc.contains("file") {
+                    'F'
+                } else if desc.contains("directory") {
+                    'D'
+                } else {
+                    'O' // Option or other
+                }
+            }
+            Candidate::Path(path) => {
+                if path.ends_with('/') {
+                    'D' // Directory
+                } else {
+                    'F' // File
+                }
+            }
+            Candidate::Basic(_) => 'B', // Basic
+        }
+    }
+
+    /// Get the display name (without description)
+    pub fn get_display_name(&self) -> String {
+        match self {
+            Candidate::Item(name, _) => name.clone(),
+            Candidate::Path(path) => path.clone(),
+            Candidate::Basic(basic) => basic.clone(),
+        }
+    }
+
+    /// Get formatted display string with type character
+    pub fn get_formatted_display(&self, width: usize) -> String {
+        let type_char = self.get_type_char();
+        let name = self.get_display_name();
+        
+        // Truncate name if too long
+        let max_name_width = width.saturating_sub(3); // "C " + " "
+        let display_name = if name.len() > max_name_width {
+            format!("{}…", &name[..max_name_width.saturating_sub(1)])
+        } else {
+            name
+        };
+        
+        format!("{} {:<width$}", type_char, display_name, width = max_name_width)
+    }
 }
 
 pub fn path_completion_prefix(input: &str) -> Result<Option<String>> {
@@ -369,16 +452,7 @@ pub fn select_completion_items(items: Vec<Candidate>, _query: Option<&str>) -> O
         return None;
     }
 
-    // Convert candidates to strings for display
-    let display_items: Vec<String> = items.iter().map(|item| {
-        match item {
-            Candidate::Item(name, desc) => format!("{} ({})", name, desc),
-            Candidate::Path(path) => path.clone(),
-            Candidate::Basic(basic) => basic.clone(),
-        }
-    }).collect();
-
-    let mut display = CompletionDisplay::new(display_items);
+    let mut display = CompletionDisplay::new(items.clone());
     
     // Show initial display
     if display.display().is_err() {
@@ -410,12 +484,8 @@ pub fn select_completion_items(items: Vec<Candidate>, _query: Option<&str>) -> O
                 }
                 (KeyCode::Enter, KeyModifiers::NONE) => {
                     let _ = display.clear_display();
-                    if let Some(_selected) = display.get_selected() {
-                        // Extract the original value from the display string
-                        let selected_index = display.selected_index;
-                        if let Some(original_item) = items.get(selected_index) {
-                            return Some(original_item.output().to_string());
-                        }
+                    if let Some(selected_candidate) = display.get_selected() {
+                        return Some(selected_candidate.output().to_string());
                     }
                     return None;
                 }

@@ -5,23 +5,23 @@ use crate::history::FrecencyHistory;
 use crate::lisp;
 use crate::parser::{self, Rule, ShellParser};
 use crate::process::SubshellType;
-use crate::process::{self, wait_pid_job, Job, JobProcess, Redirect};
+use crate::process::{self, Job, JobProcess, Redirect, wait_pid_job};
 use anyhow::Context as _;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use async_std::task;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dsh_types::{Context, ExitStatus};
 use dsh_wasm::WasmEngine;
-use libc::{c_int, STDIN_FILENO};
-use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+use libc::{STDIN_FILENO, c_int};
+use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 use nix::sys::termios::tcgetattr;
-use nix::unistd::{close, fork, getpid, pipe, setpgid, ForkResult, Pid};
+use nix::unistd::{ForkResult, Pid, close, fork, getpid, pipe, setpgid};
 use parking_lot::RwLock;
-use pest::iterators::Pair;
 use pest::Parser;
+use pest::iterators::Pair;
 use std::fs::File;
-use std::io::prelude::*;
 use std::io::Write;
+use std::io::prelude::*;
 use std::os::fd::RawFd;
 use std::os::unix::io::FromRawFd;
 use std::path::Path;
@@ -696,7 +696,7 @@ impl Shell {
 
 fn chpwd_update_env(pwd: &Path, _env: Arc<RwLock<Environment>>) -> Result<()> {
     debug!("chpwd update env {:?}", pwd);
-    std::env::set_var("PWD", pwd);
+    unsafe { std::env::set_var("PWD", pwd) };
     Ok(())
 }
 

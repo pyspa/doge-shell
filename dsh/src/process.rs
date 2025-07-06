@@ -1,4 +1,4 @@
-use crate::shell::{Shell, SHELL_TERMINAL};
+use crate::shell::{SHELL_TERMINAL, Shell};
 use anyhow::Context as _;
 use anyhow::Result;
 use async_std::io::prelude::BufReadExt;
@@ -7,10 +7,10 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dsh_builtin::BuiltinCommand;
 use dsh_types::{Context, ExitStatus};
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
-use nix::sys::signal::{kill, killpg, sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
-use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
+use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, kill, killpg, sigaction};
+use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::{
-    close, dup2, execv, fork, getpgrp, getpid, pipe, setpgid, tcsetpgrp, ForkResult, Pid,
+    ForkResult, Pid, close, dup2, execv, fork, getpgrp, getpid, pipe, setpgid, tcsetpgrp,
 };
 use std::ffi::CString;
 use std::fmt::Debug;
@@ -397,7 +397,7 @@ impl Process {
 
         debug!(
             "launch: execv cmd:{:?} argv:{:?} foreground:{:?} infile:{:?} outfile:{:?} pid:{:?} pgid:{:?}",
-            cmd, argv, foreground, self.stdin, self.stdout,pid, pgid,
+            cmd, argv, foreground, self.stdin, self.stdout, pid, pgid,
         );
 
         copy_fd(self.stdin, STDIN_FILENO);
@@ -828,7 +828,7 @@ impl Job {
     }
 
     pub fn last_process_state(&self) -> ProcessState {
-        if let Some(ref p) = &self.process {
+        if let Some(p) = &self.process {
             last_process_state(*p.clone())
         } else {
             // not running
@@ -1380,7 +1380,7 @@ fn handle_output_redirect(
     redirect: &Option<Redirect>,
     stdout: RawFd,
 ) -> Result<Option<RawFd>> {
-    if let Some(ref output) = redirect {
+    if let Some(output) = redirect {
         match output {
             Redirect::StdoutOutput(_) | Redirect::StdoutAppend(_) => {
                 let (pout, pin) = pipe().context("failed pipe")?;

@@ -68,7 +68,7 @@ impl Prompt {
                 ))
                 .ok();
 
-                if let Some(ref status) = &git_status.branch_status {
+                if let Some(status) = &git_status.branch_status {
                     out.write_fmt(format_args!(" [{}]", status.to_string().bold().red()))
                         .ok();
                 }

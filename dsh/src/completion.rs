@@ -9,7 +9,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use skim::prelude::*;
 use skim::{Skim, SkimItemReceiver, SkimItemSender};
-use std::fs::{create_dir_all, read_dir, remove_file, File};
+use std::fs::{File, create_dir_all, read_dir, remove_file};
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::{process::Command, sync::Arc};
@@ -129,7 +129,7 @@ pub fn path_completion_prefix(input: &str) -> Result<Option<String>> {
     };
 
     for cand in paths.iter() {
-        if let Candidate::Path(ref path) = cand {
+        if let Candidate::Path(path) = cand {
             let path_str = path.to_string();
             if path.starts_with(&search) {
                 return Ok(Some(path_str));
@@ -226,9 +226,9 @@ impl SkimItem for Candidate {
 
 pub fn select_item(items: Vec<Candidate>, query: Option<&str>) -> Option<String> {
     let options = SkimOptionsBuilder::default()
-        .select1(true)
-        .bind(vec!["Enter:accept"])
-        .query(query)
+        .select_1(true)
+        .bind(vec!["Enter:accept".to_string()])
+        .query(query.map(|s| s.to_string()))
         .build()
         .unwrap();
 
@@ -567,7 +567,7 @@ Follow the above rules to print the subcommands and option lists for the "{}" co
             );
             let mut items: Vec<Candidate> = Vec::new();
 
-            let items = match client.send_message(&content, None, Some(0.1)) {
+            match client.send_message(&content, None, Some(0.1)) {
                 Ok(res) => {
                     for res in res.split('\n') {
                         if res.starts_with('"') {
@@ -586,9 +586,7 @@ Follow the above rules to print the subcommands and option lists for the "{}" co
                     items
                 }
                 _ => items,
-            };
-
-            items
+            }
         };
 
         if items.is_empty() {

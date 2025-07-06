@@ -52,7 +52,7 @@ impl DirEnvironment {
         for entry in &self.entries {
             match entry {
                 Entry::Env(env_entry) => {
-                    std::env::set_var(&env_entry.key, &env_entry.value);
+                    unsafe { std::env::set_var(&env_entry.key, &env_entry.value) };
                     out.write_fmt(format_args!("+{} ", &env_entry.key)).ok();
                     // print!("+{} ", &env_entry.key);
                 }
@@ -63,7 +63,7 @@ impl DirEnvironment {
                 }
             }
         }
-        std::env::set_var("PATH", &env_path);
+        unsafe { std::env::set_var("PATH", &env_path) };
 
         Ok(())
     }
@@ -76,7 +76,7 @@ impl DirEnvironment {
         for entry in &self.entries {
             match entry {
                 Entry::Env(env_entry) => {
-                    std::env::remove_var(&env_entry.key);
+                    unsafe { std::env::remove_var(&env_entry.key) };
                 }
                 Entry::PathAdd(_) => {
                     require_reset = true;
@@ -84,7 +84,7 @@ impl DirEnvironment {
             }
         }
         if require_reset {
-            std::env::set_var("PATH", &self.env_path);
+            unsafe { std::env::set_var("PATH", &self.env_path) };
         }
         self.entries = Vec::new();
     }

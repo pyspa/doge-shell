@@ -1,4 +1,4 @@
-use std::fs::{read_dir, DirEntry};
+use std::fs::{DirEntry, read_dir};
 use std::os::unix::fs::PermissionsExt;
 use std::path;
 

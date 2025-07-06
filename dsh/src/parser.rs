@@ -1,9 +1,9 @@
 use crate::environment::Environment;
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::{Result, anyhow, bail, ensure};
 use parking_lot::RwLock;
-use pest::iterators::Pair;
 use pest::Parser;
 use pest::Span;
+use pest::iterators::Pair;
 use pest_derive::Parser;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

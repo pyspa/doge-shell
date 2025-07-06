@@ -198,11 +198,11 @@ impl ShellProxy for Shell {
                 path_vec.push(value.to_string());
             }
             let env_path = path_vec.join(":");
-            std::env::set_var("PATH", &env_path);
+            unsafe { std::env::set_var("PATH", &env_path) };
             debug!("set env {} {}", &key, &env_path);
             self.environment.write().reload_path();
         } else {
-            std::env::set_var(&key, &value);
+            unsafe { std::env::set_var(&key, &value) };
             debug!("set env {} {}", &key, &value);
         }
     }

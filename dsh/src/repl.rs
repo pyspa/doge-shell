@@ -581,7 +581,7 @@ impl<'a> Repl<'a> {
         if let Some(ref mut history) = self.shell.cmd_history {
             let mut history = history.lock().unwrap();
             let histories = history.sorted(&dsh_frecency::SortMethod::Recent);
-            if let Some(val) = completion::select_item(
+            if let Some(val) = completion::select_item_with_skim(
                 histories
                     .iter()
                     .map(|history| completion::Candidate::Basic(history.item.to_string()))

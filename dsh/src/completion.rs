@@ -4,14 +4,20 @@ use crate::input::Input;
 use crate::lisp::Value;
 use crate::repl::Repl;
 use anyhow::Result;
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, read};
+use crossterm::style::{Color, Print, ResetColor, SetForegroundColor};
+use crossterm::terminal::{Clear, ClearType};
+use crossterm::{cursor, execute, queue};
 use dsh_frecency::ItemStats;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use skim::prelude::*;
 use skim::{Skim, SkimItemReceiver, SkimItemSender};
+use std::borrow::Cow;
 use std::fs::{File, create_dir_all, read_dir, remove_file};
-use std::io::{BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, Write, stdout};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::{process::Command, sync::Arc};
 use tracing::debug;
 
@@ -21,6 +27,111 @@ pub struct AutoComplete {
     pub cmd: Option<String>,
     pub func: Option<Value>,
     pub candidates: Option<Vec<String>>,
+}
+
+#[derive(Debug)]
+pub struct CompletionDisplay {
+    items: Vec<String>,
+    selected_index: usize,
+    #[allow(dead_code)]
+    terminal_width: usize,
+    items_per_row: usize,
+    total_rows: usize,
+}
+
+impl CompletionDisplay {
+    pub fn new(items: Vec<String>) -> Self {
+        let terminal_width = term_size::dimensions().map(|(w, _)| w).unwrap_or(80);
+        let max_item_width = items.iter().map(|s| s.len()).max().unwrap_or(0);
+        let items_per_row = if max_item_width > 0 {
+            std::cmp::max(1, terminal_width / (max_item_width + 2))
+        } else {
+            1
+        };
+        let total_rows = items.len().div_ceil(items_per_row);
+
+        CompletionDisplay {
+            items,
+            selected_index: 0,
+            terminal_width,
+            items_per_row,
+            total_rows,
+        }
+    }
+
+    pub fn move_up(&mut self) {
+        if self.selected_index >= self.items_per_row {
+            self.selected_index -= self.items_per_row;
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        if self.selected_index + self.items_per_row < self.items.len() {
+            self.selected_index += self.items_per_row;
+        }
+    }
+
+    pub fn move_left(&mut self) {
+        if self.selected_index > 0 {
+            self.selected_index -= 1;
+        }
+    }
+
+    pub fn move_right(&mut self) {
+        if self.selected_index + 1 < self.items.len() {
+            self.selected_index += 1;
+        }
+    }
+
+    pub fn get_selected(&self) -> Option<&String> {
+        self.items.get(self.selected_index)
+    }
+
+    pub fn display(&self) -> Result<()> {
+        let mut stdout = stdout();
+        
+        // Move cursor to start of completion area
+        execute!(stdout, cursor::MoveToNextLine(1))?;
+        
+        for row in 0..self.total_rows {
+            for col in 0..self.items_per_row {
+                let index = row * self.items_per_row + col;
+                if index >= self.items.len() {
+                    break;
+                }
+                
+                let item = &self.items[index];
+                if index == self.selected_index {
+                    queue!(stdout, SetForegroundColor(Color::Yellow), Print("> "), Print(item), ResetColor)?;
+                } else {
+                    queue!(stdout, Print("  "), Print(item))?;
+                }
+                
+                // Add spacing between items
+                if col < self.items_per_row - 1 && index + 1 < self.items.len() {
+                    queue!(stdout, Print("  "))?;
+                }
+            }
+            if row < self.total_rows - 1 {
+                queue!(stdout, cursor::MoveToNextLine(1))?;
+            }
+        }
+        
+        stdout.flush()?;
+        Ok(())
+    }
+
+    pub fn clear_display(&self) -> Result<()> {
+        let mut stdout = stdout();
+        
+        // Move up to the start of completion area and clear
+        for _ in 0..self.total_rows {
+            execute!(stdout, cursor::MoveToPreviousLine(1), Clear(ClearType::CurrentLine))?;
+        }
+        
+        stdout.flush()?;
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -224,7 +335,7 @@ impl SkimItem for Candidate {
     }
 }
 
-pub fn select_item(items: Vec<Candidate>, query: Option<&str>) -> Option<String> {
+pub fn select_item_with_skim(items: Vec<Candidate>, query: Option<&str>) -> Option<String> {
     let options = SkimOptionsBuilder::default()
         .select_1(true)
         .bind(vec!["Enter:accept".to_string()])
@@ -253,6 +364,71 @@ pub fn select_item(items: Vec<Candidate>, query: Option<&str>) -> Option<String>
     None
 }
 
+pub fn select_completion_items(items: Vec<Candidate>, _query: Option<&str>) -> Option<String> {
+    if items.is_empty() {
+        return None;
+    }
+
+    // Convert candidates to strings for display
+    let display_items: Vec<String> = items.iter().map(|item| {
+        match item {
+            Candidate::Item(name, desc) => format!("{} ({})", name, desc),
+            Candidate::Path(path) => path.clone(),
+            Candidate::Basic(basic) => basic.clone(),
+        }
+    }).collect();
+
+    let mut display = CompletionDisplay::new(display_items);
+    
+    // Show initial display
+    if display.display().is_err() {
+        return None;
+    }
+
+    loop {
+        if let Ok(Event::Key(KeyEvent { code, modifiers, .. })) = read() {
+            match (code, modifiers) {
+                (KeyCode::Up, KeyModifiers::NONE) => {
+                    let _ = display.clear_display();
+                    display.move_up();
+                    let _ = display.display();
+                }
+                (KeyCode::Down, KeyModifiers::NONE) => {
+                    let _ = display.clear_display();
+                    display.move_down();
+                    let _ = display.display();
+                }
+                (KeyCode::Left, KeyModifiers::NONE) => {
+                    let _ = display.clear_display();
+                    display.move_left();
+                    let _ = display.display();
+                }
+                (KeyCode::Right, KeyModifiers::NONE) => {
+                    let _ = display.clear_display();
+                    display.move_right();
+                    let _ = display.display();
+                }
+                (KeyCode::Enter, KeyModifiers::NONE) => {
+                    let _ = display.clear_display();
+                    if let Some(_selected) = display.get_selected() {
+                        // Extract the original value from the display string
+                        let selected_index = display.selected_index;
+                        if let Some(original_item) = items.get(selected_index) {
+                            return Some(original_item.output().to_string());
+                        }
+                    }
+                    return None;
+                }
+                (KeyCode::Esc, KeyModifiers::NONE) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                    let _ = display.clear_display();
+                    return None;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String> {
     debug!("{} ", &input);
     match Command::new("sh").arg("-c").arg(input).output() {
@@ -264,7 +440,7 @@ pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String>
                     .map(|x| Candidate::Basic(x.trim().to_string()))
                     .collect();
 
-                return select_item(items, query);
+                return select_completion_items(items, query);
             }
             None
         }
@@ -290,7 +466,7 @@ fn completion_from_lisp(input: &Input, repl: &Repl, query: Option<&str>) -> Opti
                         for val in list.into_iter() {
                             items.push(Candidate::Basic(val.to_string()));
                         }
-                        return select_item(items, query);
+                        return select_completion_items(items, query);
                     }
                     Ok(Value::String(str)) => {
                         return Some(str);
@@ -314,7 +490,7 @@ fn completion_from_lisp(input: &Input, repl: &Repl, query: Option<&str>) -> Opti
                     .iter()
                     .map(|x| Candidate::Basic(x.trim().to_string()))
                     .collect();
-                return select_item(items, query);
+                return select_completion_items(items, query);
             }
             return None;
         }
@@ -362,7 +538,7 @@ fn completion_from_current(_input: &Input, repl: &Repl, query: Option<&str>) -> 
             let mut cmds_items = get_commands(&environment.read().paths, query_str);
             items.append(&mut cmds_items);
         }
-        select_item(items, Some(path_query))
+        select_completion_items(items, Some(path_query))
     } else {
         None
     }
@@ -592,7 +768,7 @@ Follow the above rules to print the subcommands and option lists for the "{}" co
         if items.is_empty() {
             remove_file(&completion_file_path)?;
         }
-        let res = select_item(items, None);
+        let res = select_completion_items(items, None);
         Ok(res)
     }
 }
@@ -663,7 +839,7 @@ mod tests {
         items.push(Candidate::Basic("test1".to_string()));
         items.push(Candidate::Basic("test2".to_string()));
 
-        let a = select_item(items, Some("test"));
+        let a = select_completion_items(items, Some("test"));
         assert_eq!("test1", a.unwrap());
     }
 

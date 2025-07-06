@@ -15,6 +15,7 @@ pub fn eval(env: Rc<RefCell<Env>>, expression: &Value) -> Result<Value, RuntimeE
 
 /// Evaluate a series of s-expressions. Each expression is evaluated in
 /// order and the final one's return value is returned.
+#[allow(dead_code)]
 pub fn eval_block(
     env: Rc<RefCell<Env>>,
     clauses: impl Iterator<Item = Value>,
@@ -380,14 +381,13 @@ fn eval_inner(
 
                 // function call or macro expand
                 _ => {
-                    let mut func_or_macro =
+                    let func_or_macro =
                         eval_inner(env.clone(), &list.car()?, context.found_tail(true))?;
 
                     if matches!(func_or_macro, Value::Macro(_)) {
                         let args = list.into_iter().skip(1).collect::<Vec<Value>>();
 
-                        let expanded =
-                            call_function_or_macro(env.clone(), &mut func_or_macro, args)?;
+                        let expanded = call_function_or_macro(env.clone(), &func_or_macro, args)?;
 
                         eval_inner(env.clone(), &expanded, Context::new())
                     } else {
@@ -403,8 +403,7 @@ fn eval_inner(
                                 args,
                             })
                         } else {
-                            let mut res =
-                                call_function_or_macro(env.clone(), &mut func_or_macro, args);
+                            let mut res = call_function_or_macro(env.clone(), &func_or_macro, args);
 
                             while let Ok(Value::TailCall { func, args }) = res {
                                 res = call_function_or_macro(env.clone(), func.as_ref(), args);

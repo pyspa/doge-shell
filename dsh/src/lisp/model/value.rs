@@ -15,6 +15,9 @@ cfg_if! {
 use super::{Env, FloatType, IntType, Lambda, List, RuntimeError, Symbol};
 use crate::lisp;
 
+pub type NativeClosureType =
+    Rc<RefCell<dyn FnMut(Rc<RefCell<Env>>, Vec<Value>) -> Result<Value, RuntimeError>>>;
+
 /// `Value` encompasses all possible Lisp values, including atoms, lists, and
 /// others.
 #[derive(Clone)]
@@ -33,9 +36,7 @@ pub enum Value {
 
     /// A native Rust closure that can be called from lisp code (the closure
     /// can capture things from its Rust environment)
-    NativeClosure(
-        Rc<RefCell<dyn FnMut(Rc<RefCell<Env>>, Vec<Value>) -> Result<Value, RuntimeError>>>,
-    ),
+    NativeClosure(NativeClosureType),
 
     /// A lisp function defined in lisp
     Lambda(Lambda),
@@ -355,25 +356,7 @@ impl Eq for Value {}
 
 impl PartialOrd for Value {
     fn partial_cmp(&self, other: &Value) -> Option<Ordering> {
-        if self == other {
-            return Some(Ordering::Equal);
-        }
-
-        match (self, other) {
-            (Value::True, Value::False) => Some(Ordering::Less),
-            (Value::False, Value::True) => Some(Ordering::Greater),
-            (Value::String(this), Value::String(other)) => this.partial_cmp(other),
-            (Value::Symbol(Symbol(this)), Value::Symbol(Symbol(other))) => this.partial_cmp(other),
-            (Value::Int(this), Value::Int(other)) => this.partial_cmp(other),
-            (Value::Float(this), Value::Float(other)) => this.partial_cmp(other),
-            (Value::Int(this), Value::Float(other)) => {
-                int_type_to_float_type(this).partial_cmp(other)
-            }
-            (Value::Float(this), Value::Int(other)) => {
-                this.partial_cmp(&int_type_to_float_type(other))
-            }
-            _ => None,
-        }
+        Some(self.cmp(other))
     }
 }
 

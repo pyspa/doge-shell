@@ -167,9 +167,9 @@ pub fn check_path(pwd: &Path, environment: Arc<RwLock<Environment>>) -> Result<(
                 env.read_env_file()?;
                 out.write_fmt(format_args!("direnv: loading {}\n", env.path))
                     .ok();
-                out.write(b"direnv: export ").ok();
+                out.write_all(b"direnv: export ").ok();
                 env.set_env(&mut out)?;
-                out.write(b"\n").ok();
+                out.write_all(b"\n").ok();
                 env.loaded = true;
             }
             // env.set_env();

@@ -87,11 +87,13 @@ impl TypeName for &Rc<dyn Any> {
     }
 }
 
+#[allow(dead_code)]
 pub fn make_list(vec: Vec<String>) -> Value {
     let lst = vec.iter().map(|x| Value::String(x.to_string()));
     Value::List(List::from_iter(lst))
 }
 
+#[allow(dead_code)]
 pub fn unquote(s: &str) -> String {
     let quote = s.chars().next().unwrap();
 

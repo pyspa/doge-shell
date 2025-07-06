@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::{cell::RefCell, rc::Rc};
 use tracing::debug;
 
+#[allow(dead_code)]
 pub fn set_env(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let key = &args[0];
     let key = key.to_string();

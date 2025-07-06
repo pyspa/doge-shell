@@ -21,6 +21,7 @@ use tracing::{debug, error};
 const MONITOR_TIMEOUT: u64 = 200;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum Redirect {
     StdoutOutput(String),
     StdoutAppend(String),
@@ -491,6 +492,7 @@ impl JobProcess {
         }
     }
 
+    #[allow(dead_code)]
     pub fn mut_next(&self) -> Option<Box<JobProcess>> {
         match self {
             JobProcess::Builtin(jprocess) => jprocess.next.as_ref().cloned(),
@@ -549,6 +551,7 @@ impl JobProcess {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_pid(&self) -> Option<Pid> {
         match self {
             JobProcess::Builtin(_) => {
@@ -563,6 +566,7 @@ impl JobProcess {
         }
     }
 
+    #[allow(dead_code)]
     pub fn set_state(&mut self, state: ProcessState) {
         match self {
             JobProcess::Builtin(p) => p.state = state,
@@ -628,6 +632,7 @@ impl JobProcess {
         }
     }
 
+    #[allow(dead_code)]
     pub fn waitable(&self) -> bool {
         matches!(self, JobProcess::Command(_))
     }
@@ -708,6 +713,7 @@ impl JobProcess {
         }
     }
 
+    #[allow(dead_code)]
     pub fn cont(&self) -> Result<()> {
         match self {
             JobProcess::Builtin(_) => Ok(()),
@@ -760,6 +766,7 @@ pub struct Job {
 }
 
 impl Job {
+    #[allow(dead_code)]
     pub fn new_with_process(cmd: String, path: String, argv: Vec<String>) -> Self {
         let process = JobProcess::Command(Process::new(path, argv));
         let id = format!("{}", xid::new());
@@ -1091,6 +1098,7 @@ impl Job {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn check_background_output(&mut self) -> Result<()> {
         let mut i = 0;
         while i < self.monitors.len() {
@@ -1175,6 +1183,7 @@ impl OutputMonitor {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn output(&mut self) -> Result<usize> {
         let mut line = String::new();
         match io::timeout(
@@ -1230,6 +1239,7 @@ impl OutputMonitor {
     }
 }
 
+#[allow(dead_code)]
 pub fn wait_any_job(no_hang: bool) -> Option<(Pid, ProcessState)> {
     let options = if no_hang {
         WaitPidFlag::WUNTRACED | WaitPidFlag::WNOHANG
@@ -1266,6 +1276,7 @@ fn last_process_state(process: JobProcess) -> ProcessState {
     }
 }
 
+#[allow(dead_code)]
 fn show_process_state(process: &Option<Box<JobProcess>>) {
     if let Some(process) = process {
         debug!(

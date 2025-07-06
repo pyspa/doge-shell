@@ -28,6 +28,7 @@ const ALT: KeyModifiers = KeyModifiers::ALT;
 const SHIFT: KeyModifiers = KeyModifiers::SHIFT;
 
 #[derive(Eq, PartialEq)]
+#[allow(dead_code)]
 pub enum ShellEvent {
     Input(Event),
     ScreenResized,
@@ -145,8 +146,8 @@ impl<'a> Repl<'a> {
         let prompt = self.prompt.write();
         let prompt_mark = &prompt.mark;
         prompt.print_preprompt(out);
-        out.write(b"\r").ok();
-        out.write(prompt_mark.as_bytes()).ok();
+        out.write_all(b"\r").ok();
+        out.write_all(prompt_mark.as_bytes()).ok();
         out.flush().ok();
     }
 

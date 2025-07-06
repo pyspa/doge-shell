@@ -18,6 +18,7 @@ struct Entry {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct History {
     pub path: Option<String>,
     open_file: Option<File>,
@@ -27,6 +28,7 @@ pub struct History {
     pub search_word: Option<String>,
 }
 
+#[allow(dead_code)]
 impl History {
     pub fn new() -> Self {
         History {
@@ -209,6 +211,7 @@ impl std::fmt::Debug for FrecencyHistory {
     }
 }
 
+#[allow(dead_code)]
 impl FrecencyHistory {
     pub fn new() -> Self {
         let matcher = SkimMatcherV2::default();

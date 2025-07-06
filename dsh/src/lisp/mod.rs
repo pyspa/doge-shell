@@ -90,6 +90,7 @@ impl LispEngine {
         Ok(res)
     }
 
+    #[allow(dead_code)]
     pub fn has(&self, name: &str) -> bool {
         if let Ok(v) = self.run(name) {
             v != Value::NIL

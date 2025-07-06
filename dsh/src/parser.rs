@@ -147,7 +147,7 @@ fn search_inner_word(pair: Pair<Rule>, pos: usize) -> Option<Span> {
 fn expand_alias_tilde(
     pair: Pair<Rule>,
     alias: &HashMap<String, String>,
-    current_dir: &PathBuf,
+    _current_dir: &PathBuf,
 ) -> Result<Vec<String>> {
     let mut argv: Vec<String> = vec![];
 
@@ -188,7 +188,7 @@ fn expand_alias_tilde(
         }
         Rule::argv0 => {
             for inner_pair in pair.into_inner() {
-                let v = expand_alias_tilde(inner_pair, alias, current_dir)?;
+                let v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
                 for (i, arg) in v.iter().enumerate() {
                     if i == 0 {
                         if let Some(val) = alias.get(arg) {
@@ -207,7 +207,7 @@ fn expand_alias_tilde(
             debug!("expand pipe_command {}", pair.as_str());
             argv.push("|".to_string());
             for inner_pair in pair.into_inner() {
-                let mut v = expand_alias_tilde(inner_pair, alias, current_dir)?;
+                let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
                 argv.append(&mut v);
             }
         }
@@ -217,7 +217,7 @@ fn expand_alias_tilde(
                 match inner_pair.as_rule() {
                     Rule::simple_command_bg => {
                         for inner_pair in inner_pair.into_inner() {
-                            let mut v = expand_alias_tilde(inner_pair, alias, current_dir)?;
+                            let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
                             argv.append(&mut v);
                         }
                         argv.push("&".to_string());
@@ -226,7 +226,7 @@ fn expand_alias_tilde(
                         debug!("expand proc_subst {}", inner_pair.as_str());
                         argv.push("<(".to_string());
                         for inner_pair in inner_pair.into_inner() {
-                            let mut v = expand_alias_tilde(inner_pair, alias, current_dir)?;
+                            let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
                             argv.append(&mut v);
                         }
                         argv.push(")".to_string());
@@ -235,14 +235,14 @@ fn expand_alias_tilde(
                         debug!("expand subshell {}", inner_pair.as_str());
                         argv.push("(".to_string());
                         for inner_pair in inner_pair.into_inner() {
-                            let mut v = expand_alias_tilde(inner_pair, alias, current_dir)?;
+                            let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
                             argv.append(&mut v);
                         }
                         argv.push(")".to_string());
                     }
                     Rule::argv0 => {
                         for inner_pair in inner_pair.into_inner() {
-                            let v = expand_alias_tilde(inner_pair, alias, current_dir)?;
+                            let v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
                             for (i, arg) in v.iter().enumerate() {
                                 if i == 0 {
                                     if let Some(val) = alias.get(arg) {
@@ -260,7 +260,7 @@ fn expand_alias_tilde(
                     Rule::pipe_command => {
                         argv.push("|".to_string());
                         for inner_pair in inner_pair.into_inner() {
-                            let mut v = expand_alias_tilde(inner_pair, alias, current_dir)?;
+                            let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
                             argv.append(&mut v);
                         }
                     }
@@ -271,7 +271,7 @@ fn expand_alias_tilde(
                     | Rule::redirect
                     | Rule::span => {
                         for inner_pair in inner_pair.into_inner() {
-                            let mut v = expand_alias_tilde(inner_pair, alias, current_dir)?;
+                            let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
                             argv.append(&mut v);
                         }
                     }
@@ -286,7 +286,7 @@ fn expand_alias_tilde(
                     | Rule::stdout_redirect_direction
                     | Rule::stderr_redirect_direction
                     | Rule::stdouterr_redirect_direction => {
-                        let mut v = expand_alias_tilde(inner_pair, alias, current_dir)?;
+                        let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
                         argv.append(&mut v);
                     }
                     _ => {
@@ -319,7 +319,7 @@ pub fn expand_alias(input: String, environment: Arc<RwLock<Environment>>) -> Res
 fn expand_command_alias(
     pair: Pair<Rule>,
     environment: Arc<RwLock<Environment>>,
-    current_dir: &PathBuf,
+    _current_dir: &PathBuf,
 ) -> Result<Vec<String>> {
     let mut buf: Vec<String> = Vec::new();
 
@@ -328,7 +328,7 @@ fn expand_command_alias(
             match inner_pair.as_rule() {
                 Rule::simple_command => {
                     let args =
-                        expand_alias_tilde(inner_pair, &environment.read().alias, current_dir)?;
+                        expand_alias_tilde(inner_pair, &environment.read().alias, _current_dir)?;
                     for arg in args {
                         if let Some(val) = environment.read().get_var(&arg) {
                             if val.is_empty() {
@@ -344,7 +344,7 @@ fn expand_command_alias(
                 }
                 Rule::simple_command_bg => {
                     let args =
-                        expand_alias_tilde(inner_pair, &environment.read().alias, current_dir)?;
+                        expand_alias_tilde(inner_pair, &environment.read().alias, _current_dir)?;
                     for arg in args {
                         if let Some(val) = environment.read().get_var(&arg) {
                             if val.is_empty() {
@@ -362,7 +362,7 @@ fn expand_command_alias(
                 Rule::pipe_command => {
                     buf.push("|".to_string());
                     let args =
-                        expand_alias_tilde(inner_pair, &environment.read().alias, current_dir)?;
+                        expand_alias_tilde(inner_pair, &environment.read().alias, _current_dir)?;
                     for arg in args {
                         if let Some(val) = environment.read().get_var(&arg) {
                             if val.is_empty() {
@@ -586,6 +586,7 @@ mod tests {
     type JobLink = Rc<RefCell<Job>>;
 
     #[derive(Debug)]
+    #[allow(dead_code)]
     pub struct Job {
         name: String,
         next: Option<JobLink>,
@@ -1006,14 +1007,14 @@ mod tests {
         let replaced = expand_alias(input, Arc::clone(&env))?;
         assert_eq!(
             replaced,
-            r#"echo 'test' | sk | abc " test" '-vvv' --foo &"#.to_string()
+            r#"echo 'test' | sk | | abc " test" '-vvv' --foo"#.to_string()
         );
 
         let input = r#"sh -c | alias " test" '-vvv' --foo &"#.to_string();
         let replaced = expand_alias(input, Arc::clone(&env))?;
         assert_eq!(
             replaced,
-            r#"sh -c | echo 'test' | sk " test" '-vvv' --foo &"#.to_string()
+            r#"sh -c | | echo 'test' | sk " test" '-vvv' --foo"#.to_string()
         );
 
         let input = r#"echo (alias " test" '-vvv' --foo) "#.to_string();

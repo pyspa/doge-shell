@@ -525,7 +525,7 @@ impl Shell {
         if let Some(cmd_fn) = dsh_builtin::get_command(cmd) {
             let builtin = process::BuiltinProcess::new(cmd.to_string(), cmd_fn, argv);
             current_job.set_process(JobProcess::Builtin(builtin));
-        } else if self.wasm_engine.modules.get(cmd).is_some() {
+        } else if self.wasm_engine.modules.contains_key(cmd) {
             let wasm = process::WasmProcess::new(cmd.to_string(), argv);
             current_job.set_process(JobProcess::Wasm(wasm));
         } else if self.lisp_engine.borrow().is_export(cmd) {
@@ -705,7 +705,7 @@ fn read_fd(fd: RawFd) -> Result<String> {
     unsafe { File::from_raw_fd(fd).read_to_end(&mut raw_stdout).ok() };
 
     let output = std::str::from_utf8(&raw_stdout)
-        .inspect_err(|err| {
+        .inspect_err(|_err| {
             // TODO
             eprintln!("binary in variable/expansion is not supported");
         })?

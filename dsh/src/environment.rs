@@ -37,6 +37,7 @@ impl Environment {
 
         debug!("default path {:?}", &paths);
 
+        #[allow(clippy::arc_with_non_send_sync)]
         Arc::new(RwLock::new(Environment {
             alias: HashMap::new(),
             autocompletion: Vec::new(),
@@ -54,6 +55,7 @@ impl Environment {
         let variables = parent.read().variables.clone();
         let direnv_roots = parent.read().direnv_roots.clone();
 
+        #[allow(clippy::arc_with_non_send_sync)]
         Arc::new(RwLock::new(Environment {
             alias,
             autocompletion,

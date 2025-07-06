@@ -268,6 +268,7 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
         Value::NativeFunc(|_env, args| {
             let chunks = args.chunks(2);
 
+            #[allow(clippy::mutable_key_type)]
             let mut hash = HashMap::new();
 
             for pair in chunks {

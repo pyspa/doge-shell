@@ -16,9 +16,11 @@ const BRANCH_MARK: &str = "🐾";
 const BRANCH_AHEAD: &str = "🦮";
 const BRANCH_BEHIND: &str = "🐩";
 const BRANCH_DIVERGED: &str = "🦖";
+#[allow(dead_code)]
 const BRANCH_CONFLICT: &str = "🏴‍☠️";
 const UNTRACKED: &str = "?";
 const MODIFIED: &str = "!";
+#[allow(dead_code)]
 const NEW_FILE: &str = "+";
 
 impl ChangePwdHook for Arc<RwLock<Prompt>> {
@@ -134,6 +136,7 @@ impl Prompt {
     }
 }
 
+#[allow(dead_code)]
 fn get_cwd() -> (String, bool) {
     match std::env::current_dir() {
         Ok(pathbuf) => {
@@ -154,6 +157,7 @@ fn get_cwd() -> (String, bool) {
     }
 }
 
+#[allow(dead_code)]
 fn get_git_branch() -> (String, bool) {
     let result = Command::new("git")
         .arg("symbolic-ref")

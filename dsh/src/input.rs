@@ -3,6 +3,7 @@ use anyhow::Result;
 use crossterm::style::{Color, Stylize};
 use pest::Span;
 use std::cmp::min;
+use std::fmt;
 use std::io::{BufWriter, StdoutLock, Write};
 
 const INITIAL_CAP: usize = 256;
@@ -61,10 +62,6 @@ impl Input {
         self.update_indices();
         self.move_to_end();
         self.match_index = Some(match_index);
-    }
-
-    pub fn to_string(&self) -> String {
-        self.input.as_str().to_string()
     }
 
     pub fn as_str(&self) -> &str {
@@ -181,14 +178,17 @@ impl Input {
         }
     }
 
+    #[allow(dead_code)]
     pub fn fg_color(&self) -> Color {
         self.config.fg_color
     }
 
+    #[allow(dead_code)]
     pub fn match_color(&self) -> Color {
         self.config.match_color
     }
 
+    #[allow(dead_code)]
     pub fn completion_color(&self) -> Color {
         self.config.completion_color
     }
@@ -223,5 +223,11 @@ impl Input {
             let post = &self.input[current..];
             Some((pre, post))
         }
+    }
+}
+
+impl fmt::Display for Input {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.input.as_str())
     }
 }

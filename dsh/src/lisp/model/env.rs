@@ -55,15 +55,21 @@ impl Env {
     /// Find the environment where this key is defined, and update its value.
     /// Returns an Err if the symbol has not been defined anywhere in the hierarchy.
     pub fn set(&mut self, key: Symbol, value: Value) -> Result<(), RuntimeError> {
-        if self.entries.contains_key(&key) {
-            self.entries.insert(key, value);
-            Ok(())
-        } else if let Some(parent) = &self.parent {
-            parent.borrow_mut().set(key, value)
-        } else {
-            Err(RuntimeError {
-                msg: format!("Tried to set value of undefined symbol \"{}\"", key),
-            })
+        use std::collections::hash_map::Entry;
+        match self.entries.entry(key.clone()) {
+            Entry::Occupied(mut entry) => {
+                entry.insert(value);
+                Ok(())
+            }
+            Entry::Vacant(_) => {
+                if let Some(parent) = &self.parent {
+                    parent.borrow_mut().set(key, value)
+                } else {
+                    Err(RuntimeError {
+                        msg: format!("Tried to set value of undefined symbol \"{}\"", key),
+                    })
+                }
+            }
         }
     }
 

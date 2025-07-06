@@ -713,3 +713,22 @@ fn read_fd(fd: RawFd) -> Result<String> {
         .to_owned();
     Ok(output)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_chpwd_update_env() {
+        let test_path = PathBuf::from("/tmp/test");
+        let env = Environment::new();
+
+        let result = chpwd_update_env(&test_path, env);
+        assert!(result.is_ok());
+
+        // PWD環境変数が設定されていることを確認
+        let pwd = std::env::var("PWD").unwrap_or_default();
+        assert!(pwd.contains("test") || pwd == "/tmp/test");
+    }
+}

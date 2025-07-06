@@ -231,3 +231,34 @@ impl fmt::Display for Input {
         write!(f, "{}", self.input.as_str())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_input_creation_and_display() {
+        let config = InputConfig::default();
+        let input = Input::new(config);
+
+        assert_eq!(input.as_str(), "");
+        assert_eq!(input.cursor(), 0);
+        assert_eq!(format!("{}", input), "");
+    }
+
+    #[test]
+    fn test_input_operations() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+
+        // 文字入力テスト（実際のメソッド名を使用）
+        input.insert('h');
+        input.insert('i');
+        assert_eq!(input.as_str(), "hi");
+        assert_eq!(input.cursor(), 2);
+
+        // カーソル移動テスト
+        input.move_to_end();
+        assert_eq!(input.cursor(), 2);
+    }
+}

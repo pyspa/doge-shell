@@ -184,3 +184,30 @@ pub fn check_path(pwd: &Path, environment: Arc<RwLock<Environment>>) -> Result<(
     environment.reload_path();
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dir_environment_creation() -> Result<()> {
+        let path = "/tmp/test".to_string();
+
+        let dir_env = DirEnvironment::new(path.clone())?;
+        assert_eq!(dir_env.path, path);
+        assert!(dir_env.entries.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_dir_environment_basic_functionality() -> Result<()> {
+        let dir_env = DirEnvironment::new("/tmp/test".to_string())?;
+
+        // 基本的な機能テスト
+        assert_eq!(dir_env.path, "/tmp/test");
+        assert!(dir_env.entries.is_empty());
+
+        Ok(())
+    }
+}

@@ -1548,4 +1548,36 @@ mod tests {
         debug!("{:?}", job);
         assert!(is_job_completed(job));
     }
+
+    #[test]
+    fn test_process_state_transitions() {
+        init();
+        let mut process = Process::new("test_cmd".to_string(), vec!["arg1".to_string()]);
+
+        // 初期状態はRunning
+        assert!(matches!(process.state, ProcessState::Running));
+
+        // 状態変更テスト
+        process.state = ProcessState::Completed(0, None);
+        assert!(matches!(process.state, ProcessState::Completed(0, None)));
+
+        process.state = ProcessState::Stopped(Pid::from_raw(1234), Signal::SIGSTOP);
+        assert!(matches!(
+            process.state,
+            ProcessState::Stopped(_, Signal::SIGSTOP)
+        ));
+    }
+
+    #[test]
+    fn test_job_process_variants() {
+        init();
+        let process = Process::new("test".to_string(), vec![]);
+        let job_process = JobProcess::Command(process);
+
+        // JobProcessの型チェック
+        match job_process {
+            JobProcess::Command(_) => assert!(true),
+            _ => assert!(false, "Expected Command variant"),
+        }
+    }
 }

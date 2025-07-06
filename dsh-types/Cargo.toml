@@ -2,7 +2,7 @@
 name = "dsh-types"
 description = "The simple shell"
 authors = ["mopemope <yutaka.matsubara@gmail.com>"]
-edition = "2021"
+edition = "2024"
 version = "0.0.1"
 
 [dependencies]

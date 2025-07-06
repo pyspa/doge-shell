@@ -1,6 +1,6 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_std::task;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Duration;
 use surf::{Client, Config, RequestBuilder, Url};
 use tracing::debug;

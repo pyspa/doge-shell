@@ -1,6 +1,6 @@
 use anyhow::Result;
-use nix::fcntl::{flock, FlockArg};
-use std::fs::{create_dir_all, File};
+use nix::fcntl::{FlockArg, flock};
+use std::fs::{File, create_dir_all};
 use std::io::{BufReader, BufWriter};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;

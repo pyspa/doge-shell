@@ -525,14 +525,14 @@ impl<'a> Repl<'a> {
                 _ = save_history_delay => {
                     if let Some(ref mut history) = self.shell.path_history {
                         let history = history.clone();
-                        async_std::task::spawn(async move{
+                        tokio::spawn(async move{
                             let mut history = history.lock().unwrap();
                             history.save().expect("failed save path history");
                         });
                     }
                     if let Some(ref mut history) = self.shell.cmd_history {
                         let history = history.clone();
-                        async_std::task::spawn(async move{
+                        tokio::spawn(async move{
                             let mut history = history.lock().unwrap();
                             history.save().expect("failed save cmd history");
                         });

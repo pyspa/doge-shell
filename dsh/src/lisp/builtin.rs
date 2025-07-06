@@ -1,7 +1,6 @@
 use crate::direnv::DirEnvironment;
 use crate::lisp::model::{Env, RuntimeError, Value};
 use crate::shell::Shell;
-use async_std::task;
 use dsh_types::Context;
 use nix::sys::termios::tcgetattr;
 use nix::unistd::pipe;
@@ -118,7 +117,7 @@ pub fn command(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
 }
 
 pub fn block_sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    task::block_on(sh(env, args))
+    tokio::runtime::Handle::current().block_on(sh(env, args))
 }
 
 pub async fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -178,7 +177,7 @@ pub async fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
 }
 
 pub fn block_sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    task::block_on(sh_no_cap(env, args))
+    tokio::runtime::Handle::current().block_on(sh_no_cap(env, args))
 }
 
 pub async fn sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -225,14 +224,14 @@ mod tests {
         let _ = tracing_subscriber::fmt::try_init();
     }
 
-    #[test]
-    fn test_lisp_sh() {
+    #[tokio::test]
+    async fn test_lisp_sh() {
         init();
         let env = Environment::new();
         let engine = LispEngine::new(env);
 
         let args = [Value::String("ls -al".to_string())];
-        let res = block_sh(Rc::clone(&engine.borrow().env), args.to_vec());
+        let res = sh(Rc::clone(&engine.borrow().env), args.to_vec()).await;
         assert!(res.is_ok());
         println!("{}", res.unwrap());
 

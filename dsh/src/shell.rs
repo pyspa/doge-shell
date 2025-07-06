@@ -8,7 +8,6 @@ use crate::process::SubshellType;
 use crate::process::{self, Job, JobProcess, Redirect, wait_pid_job};
 use anyhow::Context as _;
 use anyhow::{Result, anyhow, bail};
-use async_std::task;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dsh_types::{Context, ExitStatus};
 use dsh_wasm::WasmEngine;
@@ -414,7 +413,8 @@ impl Shell {
     fn launch_subshell(&mut self, ctx: &mut Context, jobs: Vec<Job>) -> Result<()> {
         for mut job in jobs {
             disable_raw_mode().ok();
-            let pid = task::block_on(self.spawn_subshell(ctx, &mut job))?;
+            let pid =
+                tokio::runtime::Handle::current().block_on(self.spawn_subshell(ctx, &mut job))?;
             debug!("spawned subshell cmd:{} pid: {:?}", job.cmd, pid);
             let res = wait_pid_job(pid, false);
             debug!("wait subshell exit:{:?}", res);

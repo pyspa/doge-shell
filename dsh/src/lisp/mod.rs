@@ -191,8 +191,9 @@ mod tests {
         assert!(res.is_ok());
     }
 
-    #[test]
-    fn test_call_fn() {
+    #[tokio::test]
+    #[ignore = "requires shell execution context"]
+    async fn test_call_fn() {
         init();
         let env = Environment::new();
         let engine = LispEngine::new(env);

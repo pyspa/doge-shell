@@ -12,6 +12,6 @@ tracing-subscriber.workspace = true
 cfg-if.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-async-std.workspace = true
+tokio.workspace = true
 
-surf = "2.3.2"
+reqwest = { version = "0.11", features = ["json", "rustls-tls"] }

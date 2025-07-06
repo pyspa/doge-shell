@@ -1,8 +1,7 @@
 use anyhow::{Result, anyhow};
-use async_std::task;
+use reqwest::{Client, RequestBuilder};
 use serde_json::{Value, json};
 use std::time::Duration;
-use surf::{Client, Config, RequestBuilder, Url};
 use tracing::debug;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -28,7 +27,7 @@ impl ChatGptClient {
         temperature: Option<f64>,
     ) -> Result<String> {
         let f = self.send_message_inner(input, prompt, temperature);
-        task::block_on(f)
+        tokio::runtime::Handle::current().block_on(f)
     }
 
     async fn send_message_inner(
@@ -39,8 +38,8 @@ impl ChatGptClient {
     ) -> Result<String> {
         let builder = self.request_builder(content, prompt, temperature)?;
 
-        let mut res = builder.await.unwrap();
-        let data: Value = res.body_json().await.unwrap();
+        let res = builder.send().await?;
+        let data: Value = res.json().await?;
         let output = data["choices"][0]["message"]["content"]
             .as_str()
             .ok_or_else(|| anyhow!("Unexpected response {data}"))?;
@@ -49,11 +48,7 @@ impl ChatGptClient {
     }
 
     fn build_client(&self) -> Result<Client> {
-        let config = Config::new();
-        let client = config
-            .set_base_url(Url::parse(API_URL)?)
-            .set_timeout(Some(CONNECT_TIMEOUT))
-            .try_into()?;
+        let client = Client::builder().timeout(CONNECT_TIMEOUT).build()?;
         Ok(client)
     }
 
@@ -91,8 +86,7 @@ impl ChatGptClient {
             .build_client()?
             .post(API_URL)
             .header("Authorization", header_value)
-            .body_json(&body)
-            .unwrap(); // TODO check err
+            .json(&body);
 
         Ok(builder)
     }

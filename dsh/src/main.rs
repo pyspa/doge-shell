@@ -1,7 +1,6 @@
 use crate::environment::Environment;
 use crate::repl::Repl;
 use crate::shell::Shell;
-use async_std::task;
 use clap::Parser;
 use dsh_types::Context;
 use nix::sys::termios::tcgetattr;
@@ -31,7 +30,8 @@ struct Cli {
 
 fn main() -> ExitCode {
     init_tracing();
-    task::block_on(run_shell())
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(run_shell())
 }
 
 async fn run_shell() -> ExitCode {

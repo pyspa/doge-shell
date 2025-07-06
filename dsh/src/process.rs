@@ -1,8 +1,6 @@
 use crate::shell::{SHELL_TERMINAL, Shell};
 use anyhow::Context as _;
 use anyhow::Result;
-use async_std::io::prelude::BufReadExt;
-use async_std::{fs, io, task};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dsh_builtin::BuiltinCommand;
 use dsh_types::{Context, ExitStatus};
@@ -16,6 +14,8 @@ use std::ffi::CString;
 use std::fmt::Debug;
 use std::os::unix::io::{FromRawFd, RawFd};
 use std::time::Duration;
+use tokio::io::AsyncBufReadExt;
+use tokio::{fs, io, time};
 use tracing::{debug, error};
 
 const MONITOR_TIMEOUT: u64 = 200;
@@ -41,7 +41,7 @@ impl Redirect {
                 let infile = ctx.infile;
                 let file = out.to_string();
                 // spawn and io copy
-                task::spawn(async move {
+                tokio::spawn(async move {
                     // copy io
                     let mut reader = unsafe { fs::File::from_raw_fd(infile) };
                     let mut writer = fs::File::create(file.to_string()).await.unwrap(); // TODO check err
@@ -55,7 +55,7 @@ impl Redirect {
                 let infile = ctx.infile;
                 let file = out.to_string();
                 // spawn and io copy
-                task::spawn(async move {
+                tokio::spawn(async move {
                     // copy io
                     let mut reader = unsafe { fs::File::from_raw_fd(infile) };
                     let mut writer = fs::OpenOptions::new()
@@ -1034,29 +1034,29 @@ impl Job {
 
             self.check_background_all_output().await?;
 
-            let (pid, state) = match task::spawn_blocking(|| {
+            let (pid, state) = match tokio::task::spawn_blocking(|| {
                 waitpid(None, Some(WaitPidFlag::WUNTRACED | WaitPidFlag::WNOHANG))
             })
             .await
             {
-                Ok(WaitStatus::Exited(pid, status)) => {
+                Ok(Ok(WaitStatus::Exited(pid, status))) => {
                     debug!("wait_job exited {:?} {:?}", pid, status);
                     (pid, ProcessState::Completed(status as u8, None))
                 } // ok??
-                Ok(WaitStatus::Signaled(pid, signal, _)) => {
+                Ok(Ok(WaitStatus::Signaled(pid, signal, _))) => {
                     debug!("wait_job signaled {:?} {:?}", pid, signal);
                     (pid, ProcessState::Completed(1, Some(signal)))
                 }
-                Ok(WaitStatus::Stopped(pid, signal)) => {
+                Ok(Ok(WaitStatus::Stopped(pid, signal))) => {
                     debug!("wait_job stopped {:?} {:?}", pid, signal);
                     (pid, ProcessState::Stopped(pid, signal))
                 }
-                Ok(WaitStatus::StillAlive) => {
-                    task::sleep(Duration::from_millis(1000)).await;
+                Ok(Ok(WaitStatus::StillAlive)) => {
+                    time::sleep(Duration::from_millis(1000)).await;
                     continue;
                 }
-                Err(nix::errno::Errno::ECHILD) => {
-                    task::block_on(self.check_background_all_output())?;
+                Ok(Err(nix::errno::Errno::ECHILD)) => {
+                    self.check_background_all_output().await?;
                     break;
                 }
                 status => {
@@ -1186,13 +1186,13 @@ impl OutputMonitor {
     #[allow(dead_code)]
     pub async fn output(&mut self) -> Result<usize> {
         let mut line = String::new();
-        match io::timeout(
+        match time::timeout(
             Duration::from_millis(MONITOR_TIMEOUT),
             self.reader.read_line(&mut line),
         )
         .await
         {
-            Ok(len) => {
+            Ok(Ok(len)) => {
                 disable_raw_mode().ok();
                 if !self.outputed {
                     self.outputed = true;
@@ -1203,7 +1203,7 @@ impl OutputMonitor {
                 enable_raw_mode().ok();
                 Ok(len)
             }
-            Err(_err) => Ok(0),
+            Ok(Err(_)) | Err(_) => Ok(0),
         }
     }
 
@@ -1211,13 +1211,13 @@ impl OutputMonitor {
         let mut len = 1;
         while len != 0 {
             let mut line = String::new();
-            match io::timeout(
+            match time::timeout(
                 Duration::from_millis(MONITOR_TIMEOUT),
                 self.reader.read_line(&mut line),
             )
             .await
             {
-                Ok(readed) => {
+                Ok(Ok(readed)) => {
                     disable_raw_mode().ok();
                     if !self.outputed {
                         self.outputed = true;
@@ -1228,7 +1228,7 @@ impl OutputMonitor {
                     enable_raw_mode().ok();
                     len = readed;
                 }
-                Err(_err) => {
+                Ok(Err(_)) | Err(_) => {
                     if !block {
                         break;
                     }

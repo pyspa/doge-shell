@@ -1,6 +1,5 @@
 use crate::{process::ProcessState, shell::Shell};
 use anyhow::Result;
-use async_std::task;
 use dsh_builtin::ShellProxy;
 use dsh_frecency::SortMethod;
 use dsh_types::Context;
@@ -171,7 +170,9 @@ impl ShellProxy for Shell {
                         };
                         job.state = ProcessState::Running;
 
-                        if let Err(err) = task::block_on(job.put_in_foreground(true, cont)) {
+                        if let Err(err) = tokio::runtime::Handle::current()
+                            .block_on(job.put_in_foreground(true, cont))
+                        {
                             ctx.write_stderr(&format!("{}", err)).ok();
                             return Err(err);
                         }

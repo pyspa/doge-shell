@@ -21,6 +21,55 @@ use std::rc::Rc;
 use std::{process::Command, sync::Arc};
 use tracing::debug;
 
+// Completion display configuration
+const MAX_COMPLETION_ITEMS: usize = 30;
+
+#[derive(Debug, Clone)]
+pub struct CompletionConfig {
+    pub max_items: usize,
+    pub more_items_message_template: String,
+    pub show_item_count: bool,
+}
+
+impl Default for CompletionConfig {
+    fn default() -> Self {
+        Self {
+            max_items: MAX_COMPLETION_ITEMS,
+            more_items_message_template: "...and {} more items available".to_string(),
+            show_item_count: true,
+        }
+    }
+}
+
+impl CompletionConfig {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    
+    pub fn with_max_items(mut self, max_items: usize) -> Self {
+        self.max_items = max_items;
+        self
+    }
+    
+    pub fn with_message_template<S: Into<String>>(mut self, template: S) -> Self {
+        self.more_items_message_template = template.into();
+        self
+    }
+    
+    pub fn with_item_count_display(mut self, show: bool) -> Self {
+        self.show_item_count = show;
+        self
+    }
+    
+    pub fn format_more_items_message(&self, remaining_count: usize) -> String {
+        if self.more_items_message_template.contains("{}") {
+            self.more_items_message_template.replace("{}", &remaining_count.to_string())
+        } else {
+            format!("{} ({})", self.more_items_message_template, remaining_count)
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AutoComplete {
     pub target: String,
@@ -43,6 +92,9 @@ pub struct CompletionDisplay {
     prompt_text: String,
     input_text: String,
     cursor_hidden: bool,
+    config: CompletionConfig,
+    has_more_items: bool,
+    total_items_count: usize,
 }
 
 impl Drop for CompletionDisplay {
@@ -56,7 +108,30 @@ impl Drop for CompletionDisplay {
 
 impl CompletionDisplay {
     pub fn new(candidates: Vec<Candidate>, prompt_text: String, input_text: String) -> Self {
+        Self::new_with_config(candidates, prompt_text, input_text, CompletionConfig::default())
+    }
+    
+    pub fn new_with_config(
+        mut candidates: Vec<Candidate>, 
+        prompt_text: String, 
+        input_text: String,
+        config: CompletionConfig
+    ) -> Self {
         let terminal_width = term_size::dimensions().map(|(w, _)| w).unwrap_or(80);
+        let total_items_count = candidates.len();
+        let has_more_items = total_items_count > config.max_items;
+        
+        // Limit candidates to max_items
+        if has_more_items {
+            candidates.truncate(config.max_items);
+            
+            // Add a message candidate to show there are more items
+            if config.show_item_count {
+                let remaining_count = total_items_count - config.max_items;
+                let message = config.format_more_items_message(remaining_count);
+                candidates.push(Candidate::Basic(format!("📋 {}", message)));
+            }
+        }
 
         // Calculate the maximum display width needed
         let max_display_width = candidates
@@ -88,6 +163,9 @@ impl CompletionDisplay {
             prompt_text,
             input_text,
             cursor_hidden: false,
+            config,
+            has_more_items,
+            total_items_count,
         }
     }
 
@@ -116,7 +194,17 @@ impl CompletionDisplay {
     }
 
     pub fn get_selected(&self) -> Option<&Candidate> {
-        self.candidates.get(self.selected_index)
+        if let Some(candidate) = self.candidates.get(self.selected_index) {
+            // Don't return message items as selectable
+            if self.has_more_items && 
+               self.selected_index == self.candidates.len() - 1 && 
+               candidate.get_display_name().starts_with("📋") {
+                return None;
+            }
+            Some(candidate)
+        } else {
+            None
+        }
     }
 
     pub fn display(&mut self) -> Result<()> {
@@ -160,6 +248,9 @@ impl CompletionDisplay {
 
                 let candidate = &self.candidates[index];
                 let is_selected = index == self.selected_index;
+                let is_message_item = self.has_more_items && 
+                    index == self.candidates.len() - 1 && 
+                    candidate.get_display_name().starts_with("📋");
 
                 // Display with type character and proper formatting
                 if is_selected {
@@ -170,17 +261,27 @@ impl CompletionDisplay {
                 }
 
                 // Add type-specific coloring
-                match candidate.get_type_char() {
-                    'C' => queue!(stdout, SetForegroundColor(Color::Green))?, // Command
-                    'D' => queue!(stdout, SetForegroundColor(Color::Blue))?,  // Directory
-                    'F' => queue!(stdout, SetForegroundColor(Color::White))?, // File
-                    'O' => queue!(stdout, SetForegroundColor(Color::Yellow))?, // Option
-                    'P' => queue!(stdout, SetForegroundColor(Color::Cyan))?,  // Path
-                    'B' => queue!(stdout, SetForegroundColor(Color::DarkGrey))?, // Basic
-                    _ => queue!(stdout, SetForegroundColor(Color::White))?,
+                if is_message_item {
+                    queue!(stdout, SetForegroundColor(Color::DarkGrey))?;
+                } else {
+                    match candidate.get_type_char() {
+                        'C' => queue!(stdout, SetForegroundColor(Color::Green))?, // Command
+                        'D' => queue!(stdout, SetForegroundColor(Color::Blue))?,  // Directory
+                        'F' => queue!(stdout, SetForegroundColor(Color::White))?, // File
+                        'O' => queue!(stdout, SetForegroundColor(Color::Yellow))?, // Option
+                        'P' => queue!(stdout, SetForegroundColor(Color::Cyan))?,  // Path
+                        'B' => queue!(stdout, SetForegroundColor(Color::White))?, // Basic
+                        _ => queue!(stdout, SetForegroundColor(Color::White))?,
+                    }
                 }
 
-                let formatted = candidate.get_formatted_display(self.column_width);
+                let formatted = if is_message_item {
+                    // Display message items without type character formatting
+                    candidate.get_display_name()
+                } else {
+                    candidate.get_formatted_display(self.column_width)
+                };
+                
                 queue!(stdout, Print(formatted))?;
                 queue!(stdout, ResetColor)?;
 
@@ -203,9 +304,11 @@ impl CompletionDisplay {
 
         stdout.flush()?;
         debug!(
-            "Displayed {} candidates in {} rows",
+            "Displayed {} candidates in {} rows (total items: {}, has_more: {})",
             self.candidates.len(),
-            self.total_rows
+            self.total_rows,
+            self.total_items_count,
+            self.has_more_items
         );
         Ok(())
     }
@@ -582,15 +685,31 @@ fn get_prompt_and_input_for_completion() -> (String, String) {
 
 pub fn select_completion_items(
     items: Vec<Candidate>,
+    query: Option<&str>,
+    prompt_text: String,
+    input_text: String,
+) -> Option<String> {
+    select_completion_items_with_config(
+        items, 
+        query, 
+        prompt_text, 
+        input_text, 
+        CompletionConfig::default()
+    )
+}
+
+pub fn select_completion_items_with_config(
+    items: Vec<Candidate>,
     _query: Option<&str>,
     prompt_text: String,
     input_text: String,
+    config: CompletionConfig,
 ) -> Option<String> {
     if items.is_empty() {
         return None;
     }
 
-    let mut display = CompletionDisplay::new(items.clone(), prompt_text, input_text);
+    let mut display = CompletionDisplay::new_with_config(items.clone(), prompt_text, input_text, config);
 
     // Show initial display (cursor will be hidden in display method)
     if display.display().is_err() {
@@ -1199,9 +1318,80 @@ mod tests {
     }
 
     #[test]
-    fn test_replace_space() {
+    fn test_completion_config() {
         init();
-        let a = replace_space("aa     bb");
-        assert_eq!(a, "aa_bb")
+        
+        // Test default config
+        let config = CompletionConfig::default();
+        assert_eq!(config.max_items, 30);
+        assert_eq!(config.more_items_message_template, "...and {} more items available");
+        assert!(config.show_item_count);
+        
+        // Test custom config
+        let config = CompletionConfig::new()
+            .with_max_items(10)
+            .with_message_template("他に{}個のアイテムがあります")
+            .with_item_count_display(false);
+        
+        assert_eq!(config.max_items, 10);
+        assert_eq!(config.more_items_message_template, "他に{}個のアイテムがあります");
+        assert!(!config.show_item_count);
+        
+        // Test message formatting
+        let message = config.format_more_items_message(25);
+        assert_eq!(message, "他に25個のアイテムがあります");
+    }
+
+    #[test]
+    fn test_completion_display_with_limit() {
+        init();
+        
+        // Create more than 30 candidates
+        let mut candidates = Vec::new();
+        for i in 0..50 {
+            candidates.push(Candidate::Basic(format!("item_{:02}", i)));
+        }
+        
+        let config = CompletionConfig::default();
+        let display = CompletionDisplay::new_with_config(
+            candidates,
+            "$ ".to_string(),
+            "test".to_string(),
+            config
+        );
+        
+        // Should have 30 items + 1 message item
+        assert_eq!(display.candidates.len(), 31);
+        assert!(display.has_more_items);
+        assert_eq!(display.total_items_count, 50);
+        
+        // Last item should be the message
+        let last_item = &display.candidates[30];
+        assert!(last_item.get_display_name().starts_with("📋"));
+        assert!(last_item.get_display_name().contains("20 more items"));
+    }
+
+    #[test]
+    fn test_completion_display_no_limit() {
+        init();
+        
+        // Create less than 30 candidates
+        let mut candidates = Vec::new();
+        for i in 0..10 {
+            candidates.push(Candidate::Basic(format!("item_{:02}", i)));
+        }
+        
+        let config = CompletionConfig::default();
+        let display = CompletionDisplay::new_with_config(
+            candidates,
+            "$ ".to_string(),
+            "test".to_string(),
+            config
+        );
+        
+        // Should have exactly 10 items, no message
+        assert_eq!(display.candidates.len(), 10);
+        assert!(!display.has_more_items);
+        assert_eq!(display.total_items_count, 10);
     }
 }

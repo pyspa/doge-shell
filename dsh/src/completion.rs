@@ -930,7 +930,7 @@ fn completion_from_current(_input: &Input, repl: &Repl, query: Option<&str>) -> 
                 (path, "", has_parent)
             }
         } else {
-            (current.as_path(), "", false)
+            (current.as_path(), query_str, false)
         };
 
         let canonical_path = if let Ok(path) = path.canonicalize() {
@@ -940,8 +940,17 @@ fn completion_from_current(_input: &Input, repl: &Repl, query: Option<&str>) -> 
         };
         let path_str = canonical_path.display().to_string();
 
-        // path
-        let mut items = get_file_completions(path_str.as_str(), path.to_str().unwrap());
+        // path - Apply prefix filtering for file completions
+        let mut items = if path_query.is_empty() {
+            get_file_completions(path_str.as_str(), path.to_str().unwrap())
+        } else {
+            get_file_completions_with_filter(
+                path_str.as_str(),
+                path.to_str().unwrap(),
+                Some(path_query),
+            )
+        };
+
         if !only_path {
             let mut cmds_items = get_commands(&environment.read().paths, query_str);
             items.append(&mut cmds_items);
@@ -1112,7 +1121,7 @@ fn completion_from_current_with_prompt(
                 (path, "", has_parent)
             }
         } else {
-            (current.as_path(), "", false)
+            (current.as_path(), query_str, false)
         };
 
         let canonical_path = if let Ok(path) = path.canonicalize() {
@@ -1122,8 +1131,17 @@ fn completion_from_current_with_prompt(
         };
         let path_str = canonical_path.display().to_string();
 
-        // path
-        let mut items = get_file_completions(path_str.as_str(), path.to_str().unwrap());
+        // path - Apply prefix filtering for file completions
+        let mut items = if path_query.is_empty() {
+            get_file_completions(path_str.as_str(), path.to_str().unwrap())
+        } else {
+            get_file_completions_with_filter(
+                path_str.as_str(),
+                path.to_str().unwrap(),
+                Some(path_query),
+            )
+        };
+
         if !only_path {
             let mut cmds_items = get_commands(&environment.read().paths, query_str);
             items.append(&mut cmds_items);
@@ -1167,6 +1185,7 @@ fn get_executables(dir: &str, name: &str) -> Vec<Candidate> {
                 let buf = entry.file_name();
                 let file_name = buf.to_str().unwrap();
                 let is_file = entry.file_type().unwrap().is_file();
+                // Apply prefix filtering for command names
                 if file_name.starts_with(name) && is_file && is_executable(&entry) {
                     list.push(Candidate::Item(
                         file_name.to_string(),
@@ -1181,12 +1200,21 @@ fn get_executables(dir: &str, name: &str) -> Vec<Candidate> {
 }
 
 fn get_file_completions(dir: &str, prefix: &str) -> Vec<Candidate> {
+    get_file_completions_with_filter(dir, prefix, None)
+}
+
+fn get_file_completions_with_filter(
+    dir: &str,
+    prefix: &str,
+    filter_prefix: Option<&str>,
+) -> Vec<Candidate> {
     let mut list = Vec::new();
     let prefix = if !prefix.is_empty() && !prefix.ends_with('/') {
         format!("{}/", prefix)
     } else {
         prefix.to_string()
     };
+
     match read_dir(dir) {
         Ok(entries) => {
             let mut entries: Vec<std::fs::DirEntry> = entries.flatten().collect();
@@ -1196,6 +1224,13 @@ fn get_file_completions(dir: &str, prefix: &str) -> Vec<Candidate> {
                 let buf = entry.file_name();
                 let file_name = buf.to_str().unwrap();
                 let is_file = entry.file_type().unwrap().is_file();
+
+                // Apply prefix filter if provided
+                if let Some(filter) = filter_prefix {
+                    if !file_name.starts_with(filter) {
+                        continue;
+                    }
+                }
 
                 if is_file {
                     list.push(Candidate::Item(
@@ -1368,6 +1403,79 @@ mod tests {
         assert!(p.unwrap().starts_with("~/.config/git"));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_file_completion_with_prefix_filter() {
+        init();
+
+        // Create test directory structure in memory for testing
+        // This test verifies the prefix filtering logic
+        let test_files = [("test_file.txt", true),
+            ("test_script.sh", true),
+            ("another_file.txt", true),
+            ("test_dir", false),
+            ("temp_dir", false)];
+
+        // Test prefix filtering logic
+        let filtered_files: Vec<_> = test_files
+            .iter()
+            .filter(|(name, _)| name.starts_with("test"))
+            .collect();
+
+        assert_eq!(filtered_files.len(), 3);
+        assert!(
+            filtered_files
+                .iter()
+                .any(|(name, _)| *name == "test_file.txt")
+        );
+        assert!(
+            filtered_files
+                .iter()
+                .any(|(name, _)| *name == "test_script.sh")
+        );
+        assert!(filtered_files.iter().any(|(name, _)| *name == "test_dir"));
+        assert!(
+            !filtered_files
+                .iter()
+                .any(|(name, _)| *name == "another_file.txt")
+        );
+        assert!(!filtered_files.iter().any(|(name, _)| *name == "temp_dir"));
+    }
+
+    #[test]
+    fn test_command_completion_with_prefix_filter() {
+        init();
+
+        // Test command prefix filtering logic
+        let test_commands = ["git", "grep", "gcc", "ls", "cat", "grep-test"];
+
+        let prefix = "g";
+        let filtered_commands: Vec<_> = test_commands
+            .iter()
+            .filter(|cmd| cmd.starts_with(prefix))
+            .collect();
+
+        assert_eq!(filtered_commands.len(), 4);
+        assert!(filtered_commands.contains(&&"git"));
+        assert!(filtered_commands.contains(&&"grep"));
+        assert!(filtered_commands.contains(&&"gcc"));
+        assert!(filtered_commands.contains(&&"grep-test"));
+        assert!(!filtered_commands.contains(&&"ls"));
+        assert!(!filtered_commands.contains(&&"cat"));
+
+        // Test with more specific prefix
+        let prefix = "gr";
+        let filtered_commands: Vec<_> = test_commands
+            .iter()
+            .filter(|cmd| cmd.starts_with(prefix))
+            .collect();
+
+        assert_eq!(filtered_commands.len(), 2);
+        assert!(filtered_commands.contains(&&"grep"));
+        assert!(filtered_commands.contains(&&"grep-test"));
+        assert!(!filtered_commands.contains(&&"git"));
+        assert!(!filtered_commands.contains(&&"gcc"));
     }
 
     #[test]

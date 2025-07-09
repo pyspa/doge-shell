@@ -43,22 +43,23 @@ pub struct CompletionDisplay {
 impl CompletionDisplay {
     pub fn new(candidates: Vec<Candidate>) -> Self {
         let terminal_width = term_size::dimensions().map(|(w, _)| w).unwrap_or(80);
-        
+
         // Calculate the maximum display width needed
-        let max_display_width = candidates.iter()
+        let max_display_width = candidates
+            .iter()
             .map(|c| c.get_display_name().len() + 3) // "C " + name + " "
             .max()
             .unwrap_or(10);
-        
+
         // Limit column width to prevent extremely wide columns
         let column_width = std::cmp::min(max_display_width, terminal_width / 3);
-        
+
         let items_per_row = if column_width > 0 {
             std::cmp::max(1, terminal_width / column_width)
         } else {
             1
         };
-        
+
         let total_rows = candidates.len().div_ceil(items_per_row);
 
         CompletionDisplay {
@@ -101,20 +102,20 @@ impl CompletionDisplay {
 
     pub fn display(&self) -> Result<()> {
         let mut stdout = stdout();
-        
+
         // Move cursor to start of completion area
         execute!(stdout, cursor::MoveToNextLine(1))?;
-        
+
         for row in 0..self.total_rows {
             for col in 0..self.items_per_row {
                 let index = row * self.items_per_row + col;
                 if index >= self.candidates.len() {
                     break;
                 }
-                
+
                 let candidate = &self.candidates[index];
                 let is_selected = index == self.selected_index;
-                
+
                 // Display with type character and proper formatting
                 if is_selected {
                     queue!(stdout, SetForegroundColor(Color::Yellow))?;
@@ -122,22 +123,22 @@ impl CompletionDisplay {
                 } else {
                     queue!(stdout, Print(" "))?;
                 }
-                
+
                 // Add type-specific coloring
                 match candidate.get_type_char() {
-                    'C' => queue!(stdout, SetForegroundColor(Color::Green))?,      // Command
-                    'D' => queue!(stdout, SetForegroundColor(Color::Blue))?,       // Directory
-                    'F' => queue!(stdout, SetForegroundColor(Color::White))?,      // File
-                    'O' => queue!(stdout, SetForegroundColor(Color::Yellow))?,     // Option
-                    'P' => queue!(stdout, SetForegroundColor(Color::Cyan))?,       // Path
-                    'B' => queue!(stdout, SetForegroundColor(Color::DarkGrey))?,   // Basic
+                    'C' => queue!(stdout, SetForegroundColor(Color::Green))?, // Command
+                    'D' => queue!(stdout, SetForegroundColor(Color::Blue))?,  // Directory
+                    'F' => queue!(stdout, SetForegroundColor(Color::White))?, // File
+                    'O' => queue!(stdout, SetForegroundColor(Color::Yellow))?, // Option
+                    'P' => queue!(stdout, SetForegroundColor(Color::Cyan))?,  // Path
+                    'B' => queue!(stdout, SetForegroundColor(Color::DarkGrey))?, // Basic
                     _ => queue!(stdout, SetForegroundColor(Color::White))?,
                 }
-                
+
                 let formatted = candidate.get_formatted_display(self.column_width);
                 queue!(stdout, Print(formatted))?;
                 queue!(stdout, ResetColor)?;
-                
+
                 // Add spacing between columns
                 if col < self.items_per_row - 1 && index + 1 < self.candidates.len() {
                     queue!(stdout, Print(" "))?;
@@ -147,19 +148,23 @@ impl CompletionDisplay {
                 queue!(stdout, cursor::MoveToNextLine(1))?;
             }
         }
-        
+
         stdout.flush()?;
         Ok(())
     }
 
     pub fn clear_display(&self) -> Result<()> {
         let mut stdout = stdout();
-        
+
         // Move up to the start of completion area and clear
         for _ in 0..self.total_rows {
-            execute!(stdout, cursor::MoveToPreviousLine(1), Clear(ClearType::CurrentLine))?;
+            execute!(
+                stdout,
+                cursor::MoveToPreviousLine(1),
+                Clear(ClearType::CurrentLine)
+            )?;
         }
-        
+
         stdout.flush()?;
         Ok(())
     }
@@ -281,7 +286,7 @@ impl Candidate {
     pub fn get_formatted_display(&self, width: usize) -> String {
         let type_char = self.get_type_char();
         let name = self.get_display_name();
-        
+
         // Truncate name if too long
         let max_name_width = width.saturating_sub(3); // "C " + " "
         let display_name = if name.len() > max_name_width {
@@ -289,8 +294,13 @@ impl Candidate {
         } else {
             name
         };
-        
-        format!("{} {:<width$}", type_char, display_name, width = max_name_width)
+
+        format!(
+            "{} {:<width$}",
+            type_char,
+            display_name,
+            width = max_name_width
+        )
     }
 }
 
@@ -453,14 +463,17 @@ pub fn select_completion_items(items: Vec<Candidate>, _query: Option<&str>) -> O
     }
 
     let mut display = CompletionDisplay::new(items.clone());
-    
+
     // Show initial display
     if display.display().is_err() {
         return None;
     }
 
     loop {
-        if let Ok(Event::Key(KeyEvent { code, modifiers, .. })) = read() {
+        if let Ok(Event::Key(KeyEvent {
+            code, modifiers, ..
+        })) = read()
+        {
             match (code, modifiers) {
                 (KeyCode::Up, KeyModifiers::NONE) => {
                     let _ = display.clear_display();
@@ -489,7 +502,8 @@ pub fn select_completion_items(items: Vec<Candidate>, _query: Option<&str>) -> O
                     }
                     return None;
                 }
-                (KeyCode::Esc, KeyModifiers::NONE) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                (KeyCode::Esc, KeyModifiers::NONE)
+                | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                     let _ = display.clear_display();
                     return None;
                 }

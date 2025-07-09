@@ -19,7 +19,7 @@ use nix::unistd::tcsetpgrp;
 use parking_lot::RwLock;
 use std::io::{StdoutLock, Write};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
 const NONE: KeyModifiers = KeyModifiers::NONE;
@@ -34,6 +34,54 @@ pub enum ShellEvent {
     ScreenResized,
 }
 
+/// Ctrl+C二回押し検出用の状態管理
+#[derive(Debug)]
+struct CtrlCState {
+    first_press_time: Option<Instant>,
+    press_count: u8,
+}
+
+impl CtrlCState {
+    fn new() -> Self {
+        Self {
+            first_press_time: None,
+            press_count: 0,
+        }
+    }
+
+    /// Ctrl+Cが押された時の処理。二回目の場合はtrueを返す
+    fn on_ctrl_c_pressed(&mut self) -> bool {
+        let now = Instant::now();
+
+        match self.first_press_time {
+            None => {
+                // 初回押下
+                self.first_press_time = Some(now);
+                self.press_count = 1;
+                false
+            }
+            Some(first_time) => {
+                if now.duration_since(first_time) <= Duration::from_secs(3) {
+                    // 3秒以内の二回目押下
+                    self.press_count = 2;
+                    true
+                } else {
+                    // 3秒を超えているので初回扱い
+                    self.first_press_time = Some(now);
+                    self.press_count = 1;
+                    false
+                }
+            }
+        }
+    }
+
+    /// 状態をリセット
+    fn reset(&mut self) {
+        self.first_press_time = None;
+        self.press_count = 0;
+    }
+}
+
 pub struct Repl<'a> {
     pub shell: &'a mut Shell,
     input: Input,
@@ -44,6 +92,7 @@ pub struct Repl<'a> {
     start_completion: bool,
     completion: Completion,
     prompt: Arc<RwLock<Prompt>>,
+    ctrl_c_state: CtrlCState,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -75,6 +124,7 @@ impl<'a> Repl<'a> {
             start_completion: false,
             completion: Completion::new(),
             prompt,
+            ctrl_c_state: CtrlCState::new(),
         }
     }
 
@@ -306,6 +356,11 @@ impl<'a> Repl<'a> {
         let mut redraw = true;
         let mut reset_completion = false;
 
+        // Ctrl+C以外のキー入力時はCtrl+C状態をリセット
+        if !matches!((ev.code, ev.modifiers), (KeyCode::Char('c'), CTRL)) {
+            self.ctrl_c_state.reset();
+        }
+
         match (ev.code, ev.modifiers) {
             // history
             (KeyCode::Up, NONE) => {
@@ -463,10 +518,22 @@ impl<'a> Repl<'a> {
             }
             (KeyCode::Char('c'), CTRL) => {
                 let mut out = std::io::stdout().lock();
-                execute!(out, Print("\r\n")).ok();
-                self.print_prompt(&mut out);
-                self.input.clear();
-                return Ok(());
+
+                if self.ctrl_c_state.on_ctrl_c_pressed() {
+                    // 二回目のCtrl+C - シェルを終了
+                    execute!(out, Print("\r\nExiting shell...\r\n")).ok();
+                    return Err(anyhow::anyhow!("Shell terminated by double Ctrl+C"));
+                } else {
+                    // 初回のCtrl+C - プロンプトリセット + メッセージ表示
+                    execute!(
+                        out,
+                        Print("\r\n(Press Ctrl+C again within 3 seconds to exit)\r\n")
+                    )
+                    .ok();
+                    self.print_prompt(&mut out);
+                    self.input.clear();
+                    return Ok(());
+                }
             }
             (KeyCode::Char('l'), CTRL) => {
                 let mut out = std::io::stdout().lock();
@@ -592,5 +659,64 @@ impl<'a> Repl<'a> {
             }
             history.reset_index();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+
+    #[test]
+    fn test_ctrl_c_state_single_press() {
+        let mut state = CtrlCState::new();
+
+        // 初回押下は false を返す
+        assert!(!state.on_ctrl_c_pressed());
+        assert_eq!(state.press_count, 1);
+        assert!(state.first_press_time.is_some());
+    }
+
+    #[test]
+    fn test_ctrl_c_state_double_press_within_timeout() {
+        let mut state = CtrlCState::new();
+
+        // 初回押下
+        assert!(!state.on_ctrl_c_pressed());
+
+        // 短時間後の二回目押下
+        thread::sleep(std::time::Duration::from_millis(100));
+        assert!(state.on_ctrl_c_pressed());
+        assert_eq!(state.press_count, 2);
+    }
+
+    #[test]
+    fn test_ctrl_c_state_double_press_after_timeout() {
+        let mut state = CtrlCState::new();
+
+        // 初回押下
+        assert!(!state.on_ctrl_c_pressed());
+
+        // 3秒以上後の押下（新しい初回扱い）
+        thread::sleep(std::time::Duration::from_secs(4));
+        assert!(!state.on_ctrl_c_pressed());
+        assert_eq!(state.press_count, 1);
+    }
+
+    #[test]
+    fn test_ctrl_c_state_reset() {
+        let mut state = CtrlCState::new();
+
+        // 初回押下
+        assert!(!state.on_ctrl_c_pressed());
+
+        // リセット
+        state.reset();
+        assert_eq!(state.press_count, 0);
+        assert!(state.first_press_time.is_none());
+
+        // リセット後の押下は初回扱い
+        assert!(!state.on_ctrl_c_pressed());
+        assert_eq!(state.press_count, 1);
     }
 }

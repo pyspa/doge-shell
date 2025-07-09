@@ -176,6 +176,9 @@ impl Input {
             out.write_fmt(format_args!("{}", self.as_str().with(self.config.fg_color)))
                 .ok();
         }
+
+        // Ensure all buffered output is written immediately
+        out.flush().ok();
     }
 
     #[allow(dead_code)]
@@ -194,6 +197,7 @@ impl Input {
     }
 
     pub fn print_candidates(&mut self, out: &mut StdoutLock<'static>, completion: String) {
+        let mut out = BufWriter::new(out);
         let current = self.cursor;
         let length = self.input.len();
         let is_end = current == length;
@@ -210,6 +214,9 @@ impl Input {
             out.write_fmt(format_args!("{}", tmp.with(self.config.fg_color)))
                 .ok();
         }
+
+        // Ensure all buffered output is written immediately
+        out.flush().ok();
     }
 
     pub fn split_current_pos(&self) -> Option<(&str, &str)> {

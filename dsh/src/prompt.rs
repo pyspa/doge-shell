@@ -83,6 +83,9 @@ impl Prompt {
             out.write_fmt(format_args!("{}", path.white())).ok();
             out.write_fmt(format_args!("{}", "\r\n".reset(),)).ok();
         }
+
+        // Ensure all buffered output is written immediately
+        out.flush().ok();
     }
 
     fn get_cwd(&self) -> (String, bool) {

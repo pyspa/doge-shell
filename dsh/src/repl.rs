@@ -193,8 +193,8 @@ impl<'a> Repl<'a> {
     // }
 
     fn print_prompt(&mut self, out: &mut StdoutLock<'static>) {
-        let prompt = self.prompt.write();
-        let prompt_mark = &prompt.mark;
+        let mut prompt = self.prompt.write();
+        let prompt_mark = prompt.mark.clone();
         prompt.print_preprompt(out);
         out.write_all(b"\r").ok();
         out.write_all(prompt_mark.as_bytes()).ok();

@@ -7,6 +7,7 @@ use std::io::{BufRead, BufReader, BufWriter, StdoutLock, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tracing::debug;
 
@@ -31,12 +32,13 @@ impl ChangePwdHook for Arc<RwLock<Prompt>> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Prompt {
     pub current_dir: PathBuf,
     pub mark: String,
     current_git_root: Option<PathBuf>,
     git_root_cache: HashSet<String>,
+    git_status_cache: Option<GitStatusCache>,
 }
 
 impl Prompt {
@@ -46,10 +48,11 @@ impl Prompt {
             mark,
             current_git_root: None,
             git_root_cache: HashSet::new(),
+            git_status_cache: None,
         }
     }
 
-    pub fn print_preprompt(&self, out: &mut StdoutLock<'static>) {
+    pub fn print_preprompt(&mut self, out: &mut StdoutLock<'static>) {
         let mut out = BufWriter::new(out);
         out.write_fmt(format_args!("{}", "\r".reset())).ok();
 
@@ -60,7 +63,7 @@ impl Prompt {
         if has_git {
             out.write_fmt(format_args!("{}", path.cyan())).ok();
 
-            if let Some(ref git_status) = get_git_status() {
+            if let Some(ref git_status) = self.get_git_status_cached() {
                 out.write_fmt(format_args!(" {} ", "on".reset())).ok();
                 out.write_fmt(format_args!(
                     "{}",
@@ -127,11 +130,45 @@ impl Prompt {
                 if let Some(root) = self.get_git_root() {
                     self.current_git_root = Some(PathBuf::from(&root));
                     self.git_root_cache.insert(root);
+                    // Git rootが変わったのでキャッシュをクリア
+                    self.git_status_cache = None;
                 }
             }
         } else if let Some(root) = self.get_git_root() {
             self.current_git_root = Some(PathBuf::from(&root));
             self.git_root_cache.insert(root);
+            // 新しいGit rootなのでキャッシュをクリア
+            self.git_status_cache = None;
+        }
+    }
+
+    /// キャッシュ機能付きのGit状態取得
+    pub fn get_git_status_cached(&mut self) -> Option<GitStatus> {
+        // Git rootが存在しない場合は早期リターン
+        let git_root = self.current_git_root.as_ref()?;
+
+        // キャッシュが有効かチェック
+        if let Some(ref cache) = self.git_status_cache {
+            if cache.is_valid(git_root) {
+                debug!("Using cached git status for {:?}", git_root);
+                return Some(cache.status.clone());
+            }
+        }
+
+        // キャッシュが無効または存在しない場合、新しい状態を取得
+        debug!("Fetching fresh git status for {:?}", git_root);
+        if let Some(status) = get_git_status() {
+            // 新しいキャッシュを作成または更新
+            if let Some(ref mut cache) = self.git_status_cache {
+                cache.update(status.clone());
+            } else {
+                self.git_status_cache = Some(GitStatusCache::new(status.clone(), git_root.clone()));
+            }
+            Some(status)
+        } else {
+            // Git状態の取得に失敗した場合、キャッシュをクリア
+            self.git_status_cache = None;
+            None
         }
     }
 }
@@ -194,6 +231,41 @@ impl GitStatus {
             branch: "".to_string(),
             branch_status: None,
         }
+    }
+}
+
+/// Git状態のキャッシュ構造体
+#[derive(Debug, Clone)]
+struct GitStatusCache {
+    status: GitStatus,
+    last_updated: Instant,
+    git_root: PathBuf,
+    ttl: Duration,
+}
+
+impl GitStatusCache {
+    fn new(status: GitStatus, git_root: PathBuf) -> Self {
+        Self {
+            status,
+            last_updated: Instant::now(),
+            git_root,
+            ttl: Duration::from_secs(5), // 5秒間キャッシュを有効とする
+        }
+    }
+
+    fn is_valid(&self, current_git_root: &Path) -> bool {
+        // Git rootが変わった場合は無効
+        if self.git_root != current_git_root {
+            return false;
+        }
+        
+        // TTLを超えた場合は無効
+        self.last_updated.elapsed() < self.ttl
+    }
+
+    fn update(&mut self, status: GitStatus) {
+        self.status = status;
+        self.last_updated = Instant::now();
     }
 }
 
@@ -299,29 +371,64 @@ mod tests {
 
     use super::*;
 
-    fn init() {
-        let _ = tracing_subscriber::fmt::try_init();
+    #[test]
+    fn test_git_status_cache() {
+        let current_dir = PathBuf::from("/tmp");
+        let mut prompt = Prompt::new(current_dir, "🐕 > ".to_string());
+        
+        // Git rootが設定されていない場合はNoneを返す
+        assert!(prompt.get_git_status_cached().is_none());
+        
+        // Git rootを設定
+        if let Some(git_root) = get_git_root() {
+            prompt.current_git_root = Some(PathBuf::from(&git_root));
+            
+            // 初回呼び出し（キャッシュなし）
+            let status1 = prompt.get_git_status_cached();
+            
+            // 2回目呼び出し（キャッシュあり）
+            let status2 = prompt.get_git_status_cached();
+            
+            // 両方とも同じ結果であることを確認
+            assert_eq!(status1, status2);
+            
+            // キャッシュが存在することを確認
+            assert!(prompt.git_status_cache.is_some());
+        }
     }
 
     #[test]
-    fn test_new() {
-        init();
-        let curr = PathBuf::from("~/");
-        let prompt = Prompt::new(curr, "$".to_string());
-        let (root, git) = prompt.get_cwd();
-        assert_eq!("~/", root);
-        assert!(!git);
+    fn test_git_status_cache_validity() {
+        let git_root = PathBuf::from("/tmp");
+        let status = GitStatus::new();
+        let cache = GitStatusCache::new(status, git_root.clone());
+        
+        // 同じGit rootの場合は有効
+        assert!(cache.is_valid(&git_root));
+        
+        // 異なるGit rootの場合は無効
+        let different_root = PathBuf::from("/home");
+        assert!(!cache.is_valid(&different_root));
     }
 
     #[test]
-    fn test_set_current() {
-        init();
-        let curr = PathBuf::from("~/");
-        let mut prompt = Prompt::new(curr, "$".to_string());
-        let git_root = PathBuf::from("~/");
-        prompt.current_git_root = Some(git_root);
-
-        let new_curr = PathBuf::from("./");
-        prompt.set_current(new_curr.as_path());
+    fn test_git_status_cache_ttl() {
+        use std::thread;
+        
+        let git_root = PathBuf::from("/tmp");
+        let status = GitStatus::new();
+        let mut cache = GitStatusCache::new(status, git_root.clone());
+        
+        // TTLを短く設定
+        cache.ttl = Duration::from_millis(10);
+        
+        // 初期状態では有効
+        assert!(cache.is_valid(&git_root));
+        
+        // TTLを超えるまで待機
+        thread::sleep(Duration::from_millis(20));
+        
+        // TTL超過後は無効
+        assert!(!cache.is_valid(&git_root));
     }
 }

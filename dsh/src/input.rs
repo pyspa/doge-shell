@@ -155,23 +155,9 @@ impl Input {
         let mut out = BufWriter::new(out);
 
         if let Some(match_index) = &self.match_index {
-            let mut index_iter = match_index.iter();
-            let mut match_index = index_iter.next();
-
-            for (i, ch) in self.as_str().chars().enumerate() {
-                let color = if let Some(idx) = match_index {
-                    if *idx == i {
-                        match_index = index_iter.next();
-                        self.config.match_color
-                    } else {
-                        self.config.fg_color
-                    }
-                } else {
-                    self.config.fg_color
-                };
-
-                out.write_fmt(format_args!("{}", ch.with(color))).ok();
-            }
+            // Build colored segments to reduce write_fmt calls
+            let colored_output = self.build_colored_string(match_index);
+            out.write_fmt(format_args!("{}", colored_output)).ok();
         } else {
             out.write_fmt(format_args!("{}", self.as_str().with(self.config.fg_color)))
                 .ok();
@@ -179,6 +165,48 @@ impl Input {
 
         // Ensure all buffered output is written immediately
         out.flush().ok();
+    }
+
+    /// Build a colored string by grouping consecutive characters with the same color
+    fn build_colored_string(&self, match_index: &[usize]) -> String {
+        use crossterm::style::Stylize;
+
+        let mut result = String::new();
+        let mut current_segment = String::new();
+        let mut current_color = self.config.fg_color;
+        let mut match_iter = match_index.iter();
+        let mut next_match_idx = match_iter.next();
+
+        for (i, ch) in self.as_str().chars().enumerate() {
+            let color = if let Some(&idx) = next_match_idx {
+                if idx == i {
+                    next_match_idx = match_iter.next();
+                    self.config.match_color
+                } else {
+                    self.config.fg_color
+                }
+            } else {
+                self.config.fg_color
+            };
+
+            // If color changes, flush current segment and start new one
+            if color != current_color {
+                if !current_segment.is_empty() {
+                    result.push_str(&format!("{}", current_segment.clone().with(current_color)));
+                    current_segment.clear();
+                }
+                current_color = color;
+            }
+
+            current_segment.push(ch);
+        }
+
+        // Flush remaining segment
+        if !current_segment.is_empty() {
+            result.push_str(&format!("{}", current_segment.with(current_color)));
+        }
+
+        result
     }
 
     #[allow(dead_code)]
@@ -202,18 +230,20 @@ impl Input {
         let length = self.input.len();
         let is_end = current == length;
 
-        out.write_fmt(format_args!(
+        // Build the complete output string to reduce write_fmt calls
+        let mut output = String::new();
+        output.push_str(&format!(
             "{}",
             completion.with(self.config.completion_color)
-        ))
-        .ok();
+        ));
 
         if !is_end {
             let tmp = &self.input[current..];
-
-            out.write_fmt(format_args!("{}", tmp.with(self.config.fg_color)))
-                .ok();
+            output.push_str(&format!("{}", tmp.with(self.config.fg_color)));
         }
+
+        // Single write operation
+        out.write_fmt(format_args!("{}", output)).ok();
 
         // Ensure all buffered output is written immediately
         out.flush().ok();

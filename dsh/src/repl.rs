@@ -456,14 +456,14 @@ impl<'a> Repl<'a> {
             }
             (KeyCode::Left, NONE) => {
                 if self.input.cursor() > 0 {
-                    let mut out = std::io::stdout().lock();
                     self.input.completion = None;
                     self.input.move_by(-1);
-                    queue!(out, cursor::MoveLeft(1)).ok();
-                    out.flush().ok();
+                    // Cursor movement will be handled in the unified output section
+                    redraw = false; // Set flag to handle cursor movement separately
                     self.completion.clear();
+                } else {
+                    return Ok(());
                 }
-                return Ok(());
             }
             (KeyCode::Right, NONE) if self.input.completion.is_some() => {
                 // TODO refactor
@@ -489,13 +489,13 @@ impl<'a> Repl<'a> {
             }
             (KeyCode::Right, NONE) => {
                 if self.input.cursor() < self.input.len() {
-                    let mut out = std::io::stdout().lock();
                     self.input.move_by(1);
-                    queue!(out, cursor::MoveRight(1)).ok();
-                    out.flush().ok();
+                    // Cursor movement will be handled in the unified output section
+                    redraw = false; // Set flag to handle cursor movement separately
                     self.completion.clear();
+                } else {
+                    return Ok(());
                 }
-                return Ok(());
             }
             (KeyCode::Char(ch), NONE) => {
                 self.input.insert(ch);
@@ -673,6 +673,7 @@ impl<'a> Repl<'a> {
             }
         }
 
+        // Unified output handling - single stdout lock for all output operations
         let mut out = std::io::stdout().lock();
         if redraw {
             debug!("Redrawing input, reset_completion: {}", reset_completion);
@@ -681,6 +682,9 @@ impl<'a> Repl<'a> {
             debug!("Printing prompt only");
             self.print_prompt(&mut out);
         }
+
+        // Handle cursor positioning after output
+        self.move_cursor_input_end(&mut out);
         out.flush().ok();
         Ok(())
     }

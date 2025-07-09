@@ -8,6 +8,15 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, read};
 use crossterm::style::{Color, Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{Clear, ClearType};
 use crossterm::{cursor, execute, queue};
+
+// Advanced completion modules
+pub mod context;
+pub mod fuzzy;
+pub mod history;
+
+pub use self::context::{ContextCompletion, CommandCompleter};
+pub use self::fuzzy::{FuzzyCompletion, SmartCompletion, ScoredCandidate};
+pub use self::history::{HistoryCompletion, CompletionContext};
 use dsh_frecency::ItemStats;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -536,6 +545,13 @@ pub enum Candidate {
     Item(String, String), // output, description
     Path(String),
     Basic(String),
+    // Context-aware completion types
+    Command { name: String, description: String },
+    Option { name: String, description: String },
+    File { path: String, is_dir: bool },
+    GitBranch { name: String, is_current: bool },
+    NpmScript { name: String },
+    History { command: String, frequency: u32, last_used: i64 },
 }
 
 impl Candidate {
@@ -561,6 +577,12 @@ impl Candidate {
                 }
             }
             Candidate::Basic(_) => 'B', // Basic
+            Candidate::Command { .. } => 'C', // Command
+            Candidate::Option { .. } => 'O', // Option
+            Candidate::File { is_dir, .. } => if *is_dir { 'D' } else { 'F' },
+            Candidate::GitBranch { .. } => 'G', // Git branch
+            Candidate::NpmScript { .. } => 'S', // Script
+            Candidate::History { .. } => 'H', // History
         }
     }
 
@@ -570,6 +592,12 @@ impl Candidate {
             Candidate::Item(name, _) => name.clone(),
             Candidate::Path(path) => path.clone(),
             Candidate::Basic(basic) => basic.clone(),
+            Candidate::Command { name, .. } => name.clone(),
+            Candidate::Option { name, .. } => name.clone(),
+            Candidate::File { path, .. } => path.clone(),
+            Candidate::GitBranch { name, .. } => name.clone(),
+            Candidate::NpmScript { name } => name.clone(),
+            Candidate::History { command, .. } => command.clone(),
         }
     }
 
@@ -707,6 +735,12 @@ impl SkimItem for Candidate {
             Candidate::Item(x, _) => Cow::Borrowed(x),
             Candidate::Path(p) => Cow::Borrowed(p),
             Candidate::Basic(x) => Cow::Borrowed(x),
+            Candidate::Command { name, .. } => Cow::Borrowed(name),
+            Candidate::Option { name, .. } => Cow::Borrowed(name),
+            Candidate::File { path, .. } => Cow::Borrowed(path),
+            Candidate::GitBranch { name, .. } => Cow::Borrowed(name),
+            Candidate::NpmScript { name } => Cow::Borrowed(name),
+            Candidate::History { command, .. } => Cow::Borrowed(command),
         }
     }
 
@@ -718,6 +752,29 @@ impl SkimItem for Candidate {
             }
             Candidate::Path(p) => Cow::Borrowed(p),
             Candidate::Basic(x) => Cow::Borrowed(x),
+            Candidate::Command { name, description } => {
+                let desc = format!("{0:<30} {1}", name, description);
+                Cow::Owned(desc)
+            }
+            Candidate::Option { name, description } => {
+                let desc = format!("{0:<30} {1}", name, description);
+                Cow::Owned(desc)
+            }
+            Candidate::File { path, is_dir } => {
+                let type_indicator = if *is_dir { "/" } else { "" };
+                Cow::Owned(format!("{}{}", path, type_indicator))
+            }
+            Candidate::GitBranch { name, is_current } => {
+                let indicator = if *is_current { " (current)" } else { "" };
+                Cow::Owned(format!("{}{}", name, indicator))
+            }
+            Candidate::NpmScript { name } => {
+                Cow::Owned(format!("{0:<30} npm script", name))
+            }
+            Candidate::History { command, frequency, .. } => {
+                let desc = format!("{0:<30} used {1} times", command, frequency);
+                Cow::Owned(desc)
+            }
         }
     }
 }
@@ -1399,6 +1456,110 @@ pub fn unquote(s: &str) -> String {
     }
     let s = &s[1..s.len() - 1];
     s.to_string()
+}
+
+/// Advanced completion engine that combines multiple completion strategies
+#[allow(dead_code)]
+pub struct AdvancedCompletion {
+    context_completion: ContextCompletion,
+    fuzzy_completion: FuzzyCompletion,
+    history_completion: HistoryCompletion,
+    smart_completion: SmartCompletion,
+}
+
+#[allow(dead_code)]
+impl AdvancedCompletion {
+    pub fn new() -> Self {
+        Self {
+            context_completion: ContextCompletion::new(),
+            fuzzy_completion: FuzzyCompletion::new(),
+            history_completion: HistoryCompletion::new(),
+            smart_completion: SmartCompletion::new(),
+        }
+    }
+    
+    /// Initialize with history data
+    pub fn load_history(&mut self, history_path: &std::path::Path) -> Result<()> {
+        self.history_completion.load_history(history_path)
+    }
+    
+    /// Perform advanced completion combining all strategies
+    pub fn complete(
+        &self,
+        input: &str,
+        cursor_pos: usize,
+        current_dir: &std::path::Path,
+        max_results: usize,
+    ) -> Vec<Candidate> {
+        debug!("Advanced completion for: '{}' at position {}", input, cursor_pos);
+        
+        let parts: Vec<&str> = input.split_whitespace().collect();
+        if parts.is_empty() {
+            return vec![];
+        }
+        
+        let command = parts[0];
+        let args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
+        
+        let mut all_candidates = Vec::new();
+        
+        // 1. Context-aware completion (highest priority)
+        let context_candidates = self.context_completion.complete(
+            command,
+            &args,
+            cursor_pos,
+            current_dir,
+        );
+        all_candidates.extend(context_candidates);
+        
+        // 2. History-based completion
+        let context = CompletionContext::new(current_dir.to_string_lossy().to_string());
+        let history_candidates = self.history_completion.complete_command(input, &context);
+        all_candidates.extend(history_candidates);
+        
+        // 3. Apply fuzzy matching and smart sorting
+        let query = if let Some(last_part) = parts.last() {
+            if cursor_pos >= input.len() - last_part.len() {
+                last_part
+            } else {
+                ""
+            }
+        } else {
+            ""
+        };
+        
+        let final_candidates = self.smart_completion.complete(all_candidates, query);
+        
+        // Limit results
+        final_candidates.into_iter().take(max_results).collect()
+    }
+    
+    /// Get completion for a specific command
+    pub fn complete_command(
+        &self,
+        command: &str,
+        args: &[String],
+        current_dir: &std::path::Path,
+    ) -> Vec<Candidate> {
+        self.context_completion.complete(command, args, 0, current_dir)
+    }
+    
+    /// Update history with executed command
+    pub fn update_history(&mut self, command: &str, current_dir: &std::path::Path) -> Result<()> {
+        let context = CompletionContext::new(current_dir.to_string_lossy().to_string());
+        self.history_completion.update_history(command, &context)
+    }
+    
+    /// Get fuzzy matches for a query
+    pub fn fuzzy_search(&self, candidates: Vec<Candidate>, query: &str) -> Vec<ScoredCandidate> {
+        self.fuzzy_completion.filter_candidates(candidates, query)
+    }
+}
+
+impl Default for AdvancedCompletion {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]

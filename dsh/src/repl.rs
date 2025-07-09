@@ -359,20 +359,20 @@ impl<'a> Repl<'a> {
                                     }
                                     self.input.completion = Some(file);
                                     break;
-                                } else if let Ok(Some(ref dir)) =
+                                } else if let Ok(Some(dir)) =
                                     completion::path_completion_prefix(word)
                                 {
-                                    if dirs::is_dir(dir) {
+                                    if dirs::is_dir(&dir) {
                                         if dir.len() >= input.len() {
                                             completion = Some(dir[input.len()..].to_string());
                                         }
-                                        self.input.completion = Some(dir.clone());
+                                        self.input.completion = Some(dir.to_string());
                                         break;
                                     }
                                 }
                             }
                             Rule::args => {
-                                if let Ok(Some(ref path)) = completion::path_completion_prefix(word)
+                                if let Ok(Some(path)) = completion::path_completion_prefix(word)
                                 {
                                     if path.len() >= word.len() {
                                         let part = path[word.len()..].to_string();

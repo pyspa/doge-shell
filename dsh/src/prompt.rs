@@ -43,13 +43,17 @@ pub struct Prompt {
 
 impl Prompt {
     pub fn new(current_dir: PathBuf, mark: String) -> Prompt {
-        Prompt {
-            current_dir,
+        let mut prompt = Prompt {
+            current_dir: current_dir.clone(),
             mark,
             current_git_root: None,
             git_root_cache: HashSet::new(),
             git_status_cache: None,
-        }
+        };
+
+        // 初期化時にGitルートを設定
+        prompt.set_current(&current_dir);
+        prompt
     }
 
     pub fn print_preprompt(&mut self, out: &mut StdoutLock<'static>) {
@@ -59,11 +63,19 @@ impl Prompt {
         let (path, _is_git_root) = self.get_cwd();
 
         let has_git = self.under_git();
+        debug!(
+            "print_preprompt: path={}, has_git={}, current_git_root={:?}",
+            path, has_git, self.current_git_root
+        );
 
         if has_git {
             out.write_fmt(format_args!("{}", path.cyan())).ok();
 
             if let Some(ref git_status) = self.get_git_status_cached() {
+                debug!(
+                    "Git status found: branch={}, status={:?}",
+                    git_status.branch, git_status.branch_status
+                );
                 out.write_fmt(format_args!(" {} ", "on".reset())).ok();
                 out.write_fmt(format_args!(
                     "{}",
@@ -77,9 +89,11 @@ impl Prompt {
                 }
                 out.write_fmt(format_args!("{}", "\r\n".reset(),)).ok();
             } else {
+                debug!("No git status found");
                 out.write_fmt(format_args!("{}", "\r\n".reset(),)).ok();
             }
         } else {
+            debug!("Not under git");
             out.write_fmt(format_args!("{}", path.white())).ok();
             out.write_fmt(format_args!("{}", "\r\n".reset(),)).ok();
         }
@@ -131,17 +145,24 @@ impl Prompt {
 
             if changed {
                 if let Some(root) = self.get_git_root() {
+                    debug!("Found new git root: {}", root);
                     self.current_git_root = Some(PathBuf::from(&root));
                     self.git_root_cache.insert(root);
                     // Git rootが変わったのでキャッシュをクリア
                     self.git_status_cache = None;
+                } else {
+                    debug!("No git root found, clearing current_git_root");
+                    self.current_git_root = None;
                 }
             }
         } else if let Some(root) = self.get_git_root() {
+            debug!("Setting initial git root: {}", root);
             self.current_git_root = Some(PathBuf::from(&root));
             self.git_root_cache.insert(root);
             // 新しいGit rootなのでキャッシュをクリア
             self.git_status_cache = None;
+        } else {
+            debug!("No git root found for initial setup");
         }
     }
 
@@ -294,6 +315,7 @@ fn get_git_root() -> Option<String> {
 }
 
 fn get_git_status() -> Option<GitStatus> {
+    debug!("get_git_status: Starting git status check");
     let result = Command::new("git")
         .arg("-C")
         .arg(".")
@@ -304,6 +326,10 @@ fn get_git_status() -> Option<GitStatus> {
         .output();
 
     if let Ok(output) = result {
+        debug!(
+            "get_git_status: Command executed, success={}",
+            output.status.success()
+        );
         if output.status.success() {
             let mut status = GitStatus::new();
             let mut reader = BufReader::new(output.stdout.as_slice());
@@ -317,6 +343,7 @@ fn get_git_status() -> Option<GitStatus> {
                 if size == 0 {
                     break;
                 }
+                debug!("get_git_status: Processing line: {}", buf.trim());
 
                 let splited: Vec<&str> = buf.split_whitespace().collect();
 
@@ -325,6 +352,7 @@ fn get_git_status() -> Option<GitStatus> {
                     if buf.starts_with("# branch.head") {
                         if let Some(branch) = splited.get(2) {
                             status.branch = branch.to_string();
+                            debug!("get_git_status: Found branch: {}", status.branch);
                         }
                     } else if buf.starts_with("# branch.ab") {
                         if let Some(val) = splited.get(2) {
@@ -366,11 +394,23 @@ fn get_git_status() -> Option<GitStatus> {
                 status.branch_status = Some(git_status);
             }
 
+            debug!(
+                "get_git_status: Final status - branch: {}, status: {:?}",
+                status.branch, status.branch_status
+            );
             Some(status)
         } else {
+            debug!(
+                "get_git_status: Command failed with status: {}",
+                output.status
+            );
             None
         }
     } else {
+        debug!(
+            "get_git_status: Failed to execute git command: {:?}",
+            result
+        );
         None
     }
 }

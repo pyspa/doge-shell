@@ -150,23 +150,28 @@ impl<'a> Repl<'a> {
     }
 
     async fn check_background_jobs(&mut self, output: bool) -> Result<()> {
-        let mut out = std::io::stdout().lock();
         let jobs = self.shell.check_job_state().await?;
         let exists = !jobs.is_empty();
 
-        for mut job in jobs {
-            if !job.foreground {
-                job.check_background_all_output().await?;
+        if output && exists {
+            // Process jobs first without holding stdout lock
+            for mut job in jobs {
+                if !job.foreground {
+                    job.check_background_all_output().await?;
+                }
             }
-            if output {
-                out.write_fmt(format_args!(
-                    "\rdsh: job {} '{}' {}\n",
-                    job.job_id, job.cmd, job.state
-                ))?;
-            }
-        }
 
-        if exists && output {
+            // Then output results with lock
+            let mut out = std::io::stdout().lock();
+            for job in &self.shell.wait_jobs {
+                if !job.foreground && output {
+                    out.write_fmt(format_args!(
+                        "\rdsh: job {} '{}' {}\n",
+                        job.job_id, job.cmd, job.state
+                    ))?;
+                }
+            }
+
             // out.write(b"\r\n").ok();
             self.print_prompt(&mut out);
             out.flush()?;
@@ -176,27 +181,21 @@ impl<'a> Repl<'a> {
 
     fn save_history(&mut self) {
         if let Some(ref mut history) = self.shell.cmd_history {
-            match history.lock() {
-                Ok(mut history) => {
-                    if let Err(e) = history.save() {
-                        warn!("Failed to save command history: {}", e);
-                    }
+            if let Ok(mut history) = history.try_lock() {
+                if let Err(e) = history.save() {
+                    warn!("Failed to save command history: {}", e);
                 }
-                Err(e) => {
-                    warn!("Failed to acquire command history lock for saving: {}", e);
-                }
+            } else {
+                debug!("Command history is locked, skipping save");
             }
         }
         if let Some(ref mut history) = self.shell.path_history {
-            match history.lock() {
-                Ok(mut history) => {
-                    if let Err(e) = history.save() {
-                        warn!("Failed to save path history: {}", e);
-                    }
+            if let Ok(mut history) = history.try_lock() {
+                if let Err(e) = history.save() {
+                    warn!("Failed to save path history: {}", e);
                 }
-                Err(e) => {
-                    warn!("Failed to acquire path history lock for saving: {}", e);
-                }
+            } else {
+                debug!("Path history is locked, skipping save");
             }
         }
     }
@@ -703,10 +702,11 @@ impl<'a> Repl<'a> {
                 None
             }
         };
-        let mut out = std::io::stdout().lock();
-
-        // start repl loop
-        self.print_prompt(&mut out);
+        {
+            let mut out = std::io::stdout().lock();
+            // start repl loop
+            self.print_prompt(&mut out);
+        }
         self.shell.check_job_state().await?;
 
         let mut save_history_delay = Delay::new(Duration::from_millis(10_000)).fuse();

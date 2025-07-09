@@ -301,11 +301,10 @@ impl Shell {
 
         let mut pairs = ShellParser::parse(Rule::commands, &input).map_err(|e| anyhow!(e))?;
         let mut ctx = ParseContext::new(true);
-        if let Some(pair) = pairs.next() {
-            self.parse_commands(&mut ctx, pair)
-        } else {
-            Ok(Vec::new())
-        }
+        pairs.next().map_or_else(
+            || Ok(Vec::new()),
+            |pair| self.parse_commands(&mut ctx, pair),
+        )
     }
 
     fn parse_argv(
@@ -621,21 +620,24 @@ impl Shell {
             let cmd_fn = dsh_builtin::lisp::run;
             let builtin = process::BuiltinProcess::new(cmd.to_string(), cmd_fn, argv);
             current_job.set_process(JobProcess::Builtin(builtin));
-        } else if let Some(cmd) = self.environment.read().lookup(cmd) {
-            let process = process::Process::new(cmd, argv);
-            current_job.set_process(JobProcess::Command(process));
-            current_job.foreground = ctx.foreground;
-        } else if dirs::is_dir(cmd) {
-            if let Some(cmd_fn) = dsh_builtin::get_command("cd") {
-                let builtin = process::BuiltinProcess::new(
-                    cmd.to_string(),
-                    cmd_fn,
-                    vec!["cd".to_string(), cmd.to_string()],
-                );
-                current_job.set_process(JobProcess::Builtin(builtin));
-            }
         } else {
-            bail!("unknown command: {}", cmd);
+            let cmd_lookup = self.environment.read().lookup(cmd);
+            if let Some(cmd) = cmd_lookup {
+                let process = process::Process::new(cmd, argv);
+                current_job.set_process(JobProcess::Command(process));
+                current_job.foreground = ctx.foreground;
+            } else if dirs::is_dir(cmd) {
+                if let Some(cmd_fn) = dsh_builtin::get_command("cd") {
+                    let builtin = process::BuiltinProcess::new(
+                        cmd.to_string(),
+                        cmd_fn,
+                        vec!["cd".to_string(), cmd.to_string()],
+                    );
+                    current_job.set_process(JobProcess::Builtin(builtin));
+                }
+            } else {
+                bail!("unknown command: {}", cmd);
+            }
         }
         Ok(())
     }
@@ -731,8 +733,11 @@ impl Shell {
         chpwd_update_env(pwd, Arc::clone(&self.environment))?;
         direnv::check_path(pwd, Arc::clone(&self.environment))?;
 
-        for hook in &self.environment.read().chpwd_hooks {
-            hook.call(pwd, Arc::clone(&self.environment))?;
+        {
+            let env_guard = self.environment.read();
+            for hook in &env_guard.chpwd_hooks {
+                hook.call(pwd, Arc::clone(&self.environment))?;
+            }
         }
         Ok(())
     }

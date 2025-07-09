@@ -9,6 +9,32 @@ use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Environment change notification mechanism
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct EnvironmentVersion {
+    version: Arc<AtomicU64>,
+}
+
+#[allow(dead_code)]
+impl EnvironmentVersion {
+    pub fn new() -> Self {
+        Self {
+            version: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    pub fn increment(&self) {
+        self.version.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn get(&self) -> u64 {
+        self.version.load(Ordering::Relaxed)
+    }
+}
+
 use tracing::debug;
 
 pub trait ChangePwdHook {

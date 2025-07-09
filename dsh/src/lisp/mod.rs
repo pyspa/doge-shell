@@ -4,6 +4,7 @@ use crate::lisp::interpreter::eval;
 pub use crate::lisp::model::Value;
 use crate::lisp::model::{Env, List, RuntimeError, Symbol};
 use crate::lisp::parser::parse;
+use anyhow::Context;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::{cell::RefCell, rc::Rc};
@@ -35,7 +36,10 @@ impl LispEngine {
 
     pub fn run_config_lisp(&self) -> anyhow::Result<()> {
         let file_path = environment::get_config_file(CONFIG_FILE)?;
-        let config_lisp: String = std::fs::read_to_string(file_path)?.trim().to_string();
+        let config_lisp: String = std::fs::read_to_string(&file_path)
+            .with_context(|| format!("Failed to read config file: {}", file_path.display()))?
+            .trim()
+            .to_string();
         let _ = self.run(format!("(begin {} )", config_lisp).as_str());
 
         Ok(())

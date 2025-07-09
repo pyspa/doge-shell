@@ -136,7 +136,7 @@ impl Shell {
         let wasm_engine = WasmEngine::new(APP_NAME);
         let lisp_engine = lisp::LispEngine::new(Arc::clone(&environment));
         if let Err(err) = lisp_engine.borrow().run_config_lisp() {
-            eprintln!("failed load init lisp {err:?}");
+            eprintln!("Failed to load init lisp: {err:#}");
         }
 
         Shell {

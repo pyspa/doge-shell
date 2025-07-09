@@ -15,18 +15,27 @@ pub struct ContextCompletion {
 impl ContextCompletion {
     pub fn new() -> Self {
         let mut completers: HashMap<String, Box<dyn CommandCompleter>> = HashMap::new();
-        
+
         // Register built-in completers
         completers.insert("git".to_string(), Box::new(GitCompleter::new()));
         completers.insert("cargo".to_string(), Box::new(CargoCompleter::new()));
         completers.insert("npm".to_string(), Box::new(NpmCompleter::new()));
-        
+
         Self { completers }
     }
-    
-    pub fn complete(&self, cmd: &str, args: &[String], cursor_pos: usize, current_dir: &Path) -> Vec<Candidate> {
-        debug!("Context completion for command: {} with args: {:?}", cmd, args);
-        
+
+    pub fn complete(
+        &self,
+        cmd: &str,
+        args: &[String],
+        cursor_pos: usize,
+        current_dir: &Path,
+    ) -> Vec<Candidate> {
+        debug!(
+            "Context completion for command: {} with args: {:?}",
+            cmd, args
+        );
+
         if let Some(completer) = self.completers.get(cmd) {
             match completer.complete(args, cursor_pos, current_dir) {
                 Ok(candidates) => candidates,
@@ -40,13 +49,19 @@ impl ContextCompletion {
             self.complete_generic_options(cmd, args)
         }
     }
-    
+
     fn complete_generic_options(&self, cmd: &str, args: &[String]) -> Vec<Candidate> {
         // Common options for most commands
         let common_options = vec![
-            "--help", "-h", "--version", "-v", "--verbose", "--quiet", "-q"
+            "--help",
+            "-h",
+            "--version",
+            "-v",
+            "--verbose",
+            "--quiet",
+            "-q",
         ];
-        
+
         let empty_string = String::new();
         let current_arg = args.last().unwrap_or(&empty_string);
         if current_arg.starts_with('-') {
@@ -66,7 +81,12 @@ impl ContextCompletion {
 
 /// Trait for command-specific completers
 pub trait CommandCompleter: Send + Sync {
-    fn complete(&self, args: &[String], cursor_pos: usize, current_dir: &Path) -> Result<Vec<Candidate>>;
+    fn complete(
+        &self,
+        args: &[String],
+        cursor_pos: usize,
+        current_dir: &Path,
+    ) -> Result<Vec<Candidate>>;
 }
 
 /// Git command completer
@@ -127,7 +147,8 @@ impl GitCompleter {
             },
             GitSubcommand {
                 name: "diff".to_string(),
-                description: "Show changes between commits, commit and working tree, etc".to_string(),
+                description: "Show changes between commits, commit and working tree, etc"
+                    .to_string(),
                 aliases: vec![],
             },
             GitSubcommand {
@@ -136,16 +157,16 @@ impl GitCompleter {
                 aliases: vec![],
             },
         ];
-        
+
         Self { subcommands }
     }
-    
+
     fn get_git_branches(&self, current_dir: &Path) -> Result<Vec<String>> {
         let output = Command::new("git")
             .args(["branch", "--all", "--format=%(refname:short)"])
             .current_dir(current_dir)
             .output()?;
-        
+
         if output.status.success() {
             let branches = String::from_utf8_lossy(&output.stdout)
                 .lines()
@@ -157,13 +178,13 @@ impl GitCompleter {
             Ok(vec![])
         }
     }
-    
+
     fn get_modified_files(&self, current_dir: &Path) -> Result<Vec<String>> {
         let output = Command::new("git")
             .args(["status", "--porcelain"])
             .current_dir(current_dir)
             .output()?;
-        
+
         if output.status.success() {
             let files = String::from_utf8_lossy(&output.stdout)
                 .lines()
@@ -183,10 +204,16 @@ impl GitCompleter {
 }
 
 impl CommandCompleter for GitCompleter {
-    fn complete(&self, args: &[String], _cursor_pos: usize, current_dir: &Path) -> Result<Vec<Candidate>> {
+    fn complete(
+        &self,
+        args: &[String],
+        _cursor_pos: usize,
+        current_dir: &Path,
+    ) -> Result<Vec<Candidate>> {
         if args.is_empty() {
             // Complete git subcommands
-            Ok(self.subcommands
+            Ok(self
+                .subcommands
                 .iter()
                 .map(|subcmd| Candidate::Command {
                     name: subcmd.name.clone(),
@@ -222,11 +249,20 @@ impl CommandCompleter for GitCompleter {
                     // Complete commit options
                     let options = vec![
                         ("-m", "Use the given message as the commit message"),
-                        ("-a", "Automatically stage files that have been modified and deleted"),
-                        ("--amend", "Replace the tip of the current branch by creating a new commit"),
-                        ("--no-edit", "Use the selected commit message without launching an editor"),
+                        (
+                            "-a",
+                            "Automatically stage files that have been modified and deleted",
+                        ),
+                        (
+                            "--amend",
+                            "Replace the tip of the current branch by creating a new commit",
+                        ),
+                        (
+                            "--no-edit",
+                            "Use the selected commit message without launching an editor",
+                        ),
                     ];
-                    
+
                     Ok(options
                         .into_iter()
                         .map(|(opt, desc)| Candidate::Option {
@@ -296,16 +332,22 @@ impl CargoCompleter {
                 description: "Upload a package to the registry".to_string(),
             },
         ];
-        
+
         Self { subcommands }
     }
 }
 
 impl CommandCompleter for CargoCompleter {
-    fn complete(&self, args: &[String], _cursor_pos: usize, _current_dir: &Path) -> Result<Vec<Candidate>> {
+    fn complete(
+        &self,
+        args: &[String],
+        _cursor_pos: usize,
+        _current_dir: &Path,
+    ) -> Result<Vec<Candidate>> {
         if args.is_empty() {
             // Complete cargo subcommands
-            Ok(self.subcommands
+            Ok(self
+                .subcommands
                 .iter()
                 .map(|subcmd| Candidate::Command {
                     name: subcmd.name.clone(),
@@ -321,11 +363,17 @@ impl CommandCompleter for CargoCompleter {
                         ("--release", "Build artifacts in release mode"),
                         ("--dev", "Build artifacts in development mode"),
                         ("--target", "Build for the target triple"),
-                        ("--features", "Space or comma separated list of features to activate"),
+                        (
+                            "--features",
+                            "Space or comma separated list of features to activate",
+                        ),
                         ("--all-features", "Activate all available features"),
-                        ("--no-default-features", "Do not activate the default feature"),
+                        (
+                            "--no-default-features",
+                            "Do not activate the default feature",
+                        ),
                     ];
-                    
+
                     Ok(options
                         .into_iter()
                         .map(|(opt, desc)| Candidate::Option {
@@ -387,19 +435,19 @@ impl NpmCompleter {
                 description: "Remove a package".to_string(),
             },
         ];
-        
+
         Self { subcommands }
     }
-    
+
     fn get_npm_scripts(&self, current_dir: &Path) -> Result<Vec<String>> {
         let package_json_path = current_dir.join("package.json");
         if !package_json_path.exists() {
             return Ok(vec![]);
         }
-        
+
         let content = std::fs::read_to_string(package_json_path)?;
         let json: serde_json::Value = serde_json::from_str(&content)?;
-        
+
         if let Some(scripts) = json.get("scripts").and_then(|s| s.as_object()) {
             Ok(scripts.keys().cloned().collect())
         } else {
@@ -409,10 +457,16 @@ impl NpmCompleter {
 }
 
 impl CommandCompleter for NpmCompleter {
-    fn complete(&self, args: &[String], _cursor_pos: usize, current_dir: &Path) -> Result<Vec<Candidate>> {
+    fn complete(
+        &self,
+        args: &[String],
+        _cursor_pos: usize,
+        current_dir: &Path,
+    ) -> Result<Vec<Candidate>> {
         if args.is_empty() {
             // Complete npm subcommands
-            Ok(self.subcommands
+            Ok(self
+                .subcommands
                 .iter()
                 .map(|subcmd| Candidate::Command {
                     name: subcmd.name.clone(),
@@ -427,9 +481,7 @@ impl CommandCompleter for NpmCompleter {
                     let scripts = self.get_npm_scripts(current_dir)?;
                     Ok(scripts
                         .into_iter()
-                        .map(|script| Candidate::NpmScript {
-                            name: script,
-                        })
+                        .map(|script| Candidate::NpmScript { name: script })
                         .collect())
                 }
                 _ => Ok(vec![]),
@@ -442,7 +494,7 @@ impl CommandCompleter for NpmCompleter {
 mod tests {
     use super::*;
     use std::env;
-    
+
     #[test]
     fn test_context_completion_creation() {
         let completion = ContextCompletion::new();
@@ -450,43 +502,49 @@ mod tests {
         assert!(completion.completers.contains_key("cargo"));
         assert!(completion.completers.contains_key("npm"));
     }
-    
+
     #[test]
     fn test_git_completer_subcommands() {
         let completer = GitCompleter::new();
         let current_dir = env::current_dir().unwrap();
         let result = completer.complete(&[], 0, &current_dir).unwrap();
-        
+
         assert!(!result.is_empty());
         // Check if common git subcommands are present
-        let names: Vec<String> = result.iter().filter_map(|c| {
-            if let Candidate::Command { name, .. } = c {
-                Some(name.clone())
-            } else {
-                None
-            }
-        }).collect();
-        
+        let names: Vec<String> = result
+            .iter()
+            .filter_map(|c| {
+                if let Candidate::Command { name, .. } = c {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         assert!(names.contains(&"add".to_string()));
         assert!(names.contains(&"commit".to_string()));
         assert!(names.contains(&"checkout".to_string()));
     }
-    
+
     #[test]
     fn test_cargo_completer_subcommands() {
         let completer = CargoCompleter::new();
         let current_dir = env::current_dir().unwrap();
         let result = completer.complete(&[], 0, &current_dir).unwrap();
-        
+
         assert!(!result.is_empty());
-        let names: Vec<String> = result.iter().filter_map(|c| {
-            if let Candidate::Command { name, .. } = c {
-                Some(name.clone())
-            } else {
-                None
-            }
-        }).collect();
-        
+        let names: Vec<String> = result
+            .iter()
+            .filter_map(|c| {
+                if let Candidate::Command { name, .. } = c {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         assert!(names.contains(&"build".to_string()));
         assert!(names.contains(&"test".to_string()));
         assert!(names.contains(&"run".to_string()));

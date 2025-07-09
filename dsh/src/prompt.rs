@@ -422,27 +422,33 @@ mod tests {
 
     #[test]
     fn test_git_status_cache() {
-        let current_dir = PathBuf::from("/tmp");
-        let mut prompt = Prompt::new(current_dir, "🐕 > ".to_string());
+        // 非Gitディレクトリでテスト
+        let non_git_dir = PathBuf::from("/tmp");
+        let mut prompt = Prompt::new(non_git_dir, "🐕 > ".to_string());
+
+        // Git rootを明示的にクリア（テスト環境では自動設定される可能性があるため）
+        prompt.current_git_root = None;
 
         // Git rootが設定されていない場合はNoneを返す
         assert!(prompt.get_git_status_cached().is_none());
 
-        // Git rootを設定
+        // 実際のGitリポジトリでテスト
         if let Some(git_root) = get_git_root() {
-            prompt.current_git_root = Some(PathBuf::from(&git_root));
+            let git_dir = PathBuf::from(&git_root);
+            let mut git_prompt = Prompt::new(git_dir, "🐕 > ".to_string());
+            git_prompt.current_git_root = Some(PathBuf::from(&git_root));
 
             // 初回呼び出し（キャッシュなし）
-            let status1 = prompt.get_git_status_cached();
+            let status1 = git_prompt.get_git_status_cached();
 
             // 2回目呼び出し（キャッシュあり）
-            let status2 = prompt.get_git_status_cached();
+            let status2 = git_prompt.get_git_status_cached();
 
             // 両方とも同じ結果であることを確認
             assert_eq!(status1, status2);
 
             // キャッシュが存在することを確認
-            assert!(prompt.git_status_cache.is_some());
+            assert!(git_prompt.git_status_cache.is_some());
         }
     }
 

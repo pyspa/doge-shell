@@ -14,9 +14,9 @@ pub mod context;
 pub mod fuzzy;
 pub mod history;
 
-pub use self::context::{ContextCompletion, CommandCompleter};
-pub use self::fuzzy::{FuzzyCompletion, SmartCompletion, ScoredCandidate};
-pub use self::history::{HistoryCompletion, CompletionContext};
+pub use self::context::{CommandCompleter, ContextCompletion};
+pub use self::fuzzy::{FuzzyCompletion, ScoredCandidate, SmartCompletion};
+pub use self::history::{CompletionContext, HistoryCompletion};
 use dsh_frecency::ItemStats;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -546,12 +546,30 @@ pub enum Candidate {
     Path(String),
     Basic(String),
     // Context-aware completion types
-    Command { name: String, description: String },
-    Option { name: String, description: String },
-    File { path: String, is_dir: bool },
-    GitBranch { name: String, is_current: bool },
-    NpmScript { name: String },
-    History { command: String, frequency: u32, last_used: i64 },
+    Command {
+        name: String,
+        description: String,
+    },
+    Option {
+        name: String,
+        description: String,
+    },
+    File {
+        path: String,
+        is_dir: bool,
+    },
+    GitBranch {
+        name: String,
+        is_current: bool,
+    },
+    NpmScript {
+        name: String,
+    },
+    History {
+        command: String,
+        frequency: u32,
+        last_used: i64,
+    },
 }
 
 impl Candidate {
@@ -576,13 +594,19 @@ impl Candidate {
                     'F' // File
                 }
             }
-            Candidate::Basic(_) => 'B', // Basic
+            Candidate::Basic(_) => 'B',       // Basic
             Candidate::Command { .. } => 'C', // Command
-            Candidate::Option { .. } => 'O', // Option
-            Candidate::File { is_dir, .. } => if *is_dir { 'D' } else { 'F' },
+            Candidate::Option { .. } => 'O',  // Option
+            Candidate::File { is_dir, .. } => {
+                if *is_dir {
+                    'D'
+                } else {
+                    'F'
+                }
+            }
             Candidate::GitBranch { .. } => 'G', // Git branch
             Candidate::NpmScript { .. } => 'S', // Script
-            Candidate::History { .. } => 'H', // History
+            Candidate::History { .. } => 'H',   // History
         }
     }
 
@@ -768,10 +792,10 @@ impl SkimItem for Candidate {
                 let indicator = if *is_current { " (current)" } else { "" };
                 Cow::Owned(format!("{}{}", name, indicator))
             }
-            Candidate::NpmScript { name } => {
-                Cow::Owned(format!("{0:<30} npm script", name))
-            }
-            Candidate::History { command, frequency, .. } => {
+            Candidate::NpmScript { name } => Cow::Owned(format!("{0:<30} npm script", name)),
+            Candidate::History {
+                command, frequency, ..
+            } => {
                 let desc = format!("{0:<30} used {1} times", command, frequency);
                 Cow::Owned(desc)
             }
@@ -1477,12 +1501,12 @@ impl AdvancedCompletion {
             smart_completion: SmartCompletion::new(),
         }
     }
-    
+
     /// Initialize with history data
     pub fn load_history(&mut self, history_path: &std::path::Path) -> Result<()> {
         self.history_completion.load_history(history_path)
     }
-    
+
     /// Perform advanced completion combining all strategies
     pub fn complete(
         &self,
@@ -1491,32 +1515,32 @@ impl AdvancedCompletion {
         current_dir: &std::path::Path,
         max_results: usize,
     ) -> Vec<Candidate> {
-        debug!("Advanced completion for: '{}' at position {}", input, cursor_pos);
-        
+        debug!(
+            "Advanced completion for: '{}' at position {}",
+            input, cursor_pos
+        );
+
         let parts: Vec<&str> = input.split_whitespace().collect();
         if parts.is_empty() {
             return vec![];
         }
-        
+
         let command = parts[0];
         let args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
-        
+
         let mut all_candidates = Vec::new();
-        
+
         // 1. Context-aware completion (highest priority)
-        let context_candidates = self.context_completion.complete(
-            command,
-            &args,
-            cursor_pos,
-            current_dir,
-        );
+        let context_candidates =
+            self.context_completion
+                .complete(command, &args, cursor_pos, current_dir);
         all_candidates.extend(context_candidates);
-        
+
         // 2. History-based completion
         let context = CompletionContext::new(current_dir.to_string_lossy().to_string());
         let history_candidates = self.history_completion.complete_command(input, &context);
         all_candidates.extend(history_candidates);
-        
+
         // 3. Apply fuzzy matching and smart sorting
         let query = if let Some(last_part) = parts.last() {
             if cursor_pos >= input.len() - last_part.len() {
@@ -1527,13 +1551,13 @@ impl AdvancedCompletion {
         } else {
             ""
         };
-        
+
         let final_candidates = self.smart_completion.complete(all_candidates, query);
-        
+
         // Limit results
         final_candidates.into_iter().take(max_results).collect()
     }
-    
+
     /// Get completion for a specific command
     pub fn complete_command(
         &self,
@@ -1541,15 +1565,16 @@ impl AdvancedCompletion {
         args: &[String],
         current_dir: &std::path::Path,
     ) -> Vec<Candidate> {
-        self.context_completion.complete(command, args, 0, current_dir)
+        self.context_completion
+            .complete(command, args, 0, current_dir)
     }
-    
+
     /// Update history with executed command
     pub fn update_history(&mut self, command: &str, current_dir: &std::path::Path) -> Result<()> {
         let context = CompletionContext::new(current_dir.to_string_lossy().to_string());
         self.history_completion.update_history(command, &context)
     }
-    
+
     /// Get fuzzy matches for a query
     pub fn fuzzy_search(&self, candidates: Vec<Candidate>, query: &str) -> Vec<ScoredCandidate> {
         self.fuzzy_completion.filter_candidates(candidates, query)

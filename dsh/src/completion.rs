@@ -38,10 +38,24 @@ pub struct CompletionDisplay {
     column_width: usize,
     items_per_row: usize,
     total_rows: usize,
+    display_start_row: Option<u16>,
+    display_start_col: Option<u16>,
+    prompt_text: String,
+    input_text: String,
+    cursor_hidden: bool,
+}
+
+impl Drop for CompletionDisplay {
+    fn drop(&mut self) {
+        // Ensure cursor is shown when CompletionDisplay is dropped
+        if self.cursor_hidden {
+            let _ = execute!(stdout(), cursor::Show);
+        }
+    }
 }
 
 impl CompletionDisplay {
-    pub fn new(candidates: Vec<Candidate>) -> Self {
+    pub fn new(candidates: Vec<Candidate>, prompt_text: String, input_text: String) -> Self {
         let terminal_width = term_size::dimensions().map(|(w, _)| w).unwrap_or(80);
 
         // Calculate the maximum display width needed
@@ -69,6 +83,11 @@ impl CompletionDisplay {
             column_width,
             items_per_row,
             total_rows,
+            display_start_row: None,
+            display_start_col: None,
+            prompt_text,
+            input_text,
+            cursor_hidden: false,
         }
     }
 
@@ -100,8 +119,34 @@ impl CompletionDisplay {
         self.candidates.get(self.selected_index)
     }
 
-    pub fn display(&self) -> Result<()> {
+    pub fn display(&mut self) -> Result<()> {
         let mut stdout = stdout();
+
+        // Hide cursor during completion display (only once)
+        if !self.cursor_hidden {
+            execute!(stdout, cursor::Hide)?;
+            self.cursor_hidden = true;
+        }
+
+        // Record current cursor position before displaying
+        if self.display_start_row.is_none() {
+            if let Ok((col, row)) = cursor::position() {
+                debug!("Recording display start position: col={}, row={}", col, row);
+                self.display_start_row = Some(row);
+                self.display_start_col = Some(col);
+            } else {
+                debug!("Failed to get cursor position");
+            }
+        }
+
+        // Clear the current line and redraw prompt + input
+        execute!(
+            stdout,
+            cursor::MoveToColumn(0),
+            Clear(ClearType::CurrentLine)
+        )?;
+        queue!(stdout, Print(&self.prompt_text))?;
+        queue!(stdout, Print(&self.input_text))?;
 
         // Move cursor to start of completion area
         execute!(stdout, cursor::MoveToNextLine(1))?;
@@ -149,23 +194,94 @@ impl CompletionDisplay {
             }
         }
 
-        stdout.flush()?;
-        Ok(())
-    }
-
-    pub fn clear_display(&self) -> Result<()> {
-        let mut stdout = stdout();
-
-        // Move up to the start of completion area and clear
-        for _ in 0..self.total_rows {
-            execute!(
-                stdout,
-                cursor::MoveToPreviousLine(1),
-                Clear(ClearType::CurrentLine)
-            )?;
+        // Move cursor back to the end of input line (but keep it hidden)
+        if let (Some(start_row), Some(start_col)) = (self.display_start_row, self.display_start_col)
+        {
+            let input_end_col = start_col + self.input_text.chars().count() as u16;
+            execute!(stdout, cursor::MoveTo(input_end_col, start_row))?;
         }
 
         stdout.flush()?;
+        debug!(
+            "Displayed {} candidates in {} rows",
+            self.candidates.len(),
+            self.total_rows
+        );
+        Ok(())
+    }
+
+    pub fn clear_display(&mut self) -> Result<()> {
+        let mut stdout = stdout();
+
+        debug!("Clearing completion display with {} rows", self.total_rows);
+
+        // If we have recorded position, move back to it first
+        if let (Some(start_row), Some(start_col)) = (self.display_start_row, self.display_start_col)
+        {
+            debug!(
+                "Using recorded position: col={}, row={}",
+                start_col, start_row
+            );
+
+            // Move to the start position
+            execute!(stdout, cursor::MoveTo(start_col, start_row))?;
+
+            // Clear from the start position down to the end of completion area
+            // Clear the current line first
+            execute!(stdout, Clear(ClearType::CurrentLine))?;
+
+            // Then clear each subsequent line
+            for i in 0..self.total_rows {
+                execute!(
+                    stdout,
+                    cursor::MoveToNextLine(1),
+                    Clear(ClearType::CurrentLine)
+                )?;
+                debug!("Cleared completion line {}", i + 1);
+            }
+
+            // Move back to the original position and redraw prompt + input
+            execute!(stdout, cursor::MoveTo(start_col, start_row))?;
+            queue!(stdout, Print(&self.prompt_text))?;
+            queue!(stdout, Print(&self.input_text))?;
+
+            // Position cursor at the end of input
+            let input_end_col = start_col + self.input_text.chars().count() as u16;
+            execute!(stdout, cursor::MoveTo(input_end_col, start_row))?;
+        } else {
+            debug!("Using fallback clear method");
+
+            // Fallback: clear using the old method with additional safety
+            // First, try to clear the current line
+            execute!(stdout, Clear(ClearType::CurrentLine))?;
+
+            // Then move up and clear each line
+            for i in 0..self.total_rows {
+                execute!(
+                    stdout,
+                    cursor::MoveToPreviousLine(1),
+                    Clear(ClearType::CurrentLine)
+                )?;
+                debug!("Cleared line {} (moving up)", i + 1);
+            }
+
+            // Redraw prompt + input
+            queue!(stdout, Print(&self.prompt_text))?;
+            queue!(stdout, Print(&self.input_text))?;
+        }
+
+        // Show cursor again after clearing completion display
+        if self.cursor_hidden {
+            execute!(stdout, cursor::Show)?;
+            self.cursor_hidden = false;
+        }
+
+        // Reset the recorded position
+        self.display_start_row = None;
+        self.display_start_col = None;
+
+        stdout.flush()?;
+        debug!("Completion display cleared successfully");
         Ok(())
     }
 }
@@ -457,15 +573,29 @@ pub fn select_item_with_skim(items: Vec<Candidate>, query: Option<&str>) -> Opti
     None
 }
 
-pub fn select_completion_items(items: Vec<Candidate>, _query: Option<&str>) -> Option<String> {
+// Helper function to get current prompt and input for completion display
+fn get_prompt_and_input_for_completion() -> (String, String) {
+    // For backward compatibility, return reasonable defaults
+    // In practice, the main completion path should use the version with explicit parameters
+    ("$ ".to_string(), "".to_string())
+}
+
+pub fn select_completion_items(
+    items: Vec<Candidate>,
+    _query: Option<&str>,
+    prompt_text: String,
+    input_text: String,
+) -> Option<String> {
     if items.is_empty() {
         return None;
     }
 
-    let mut display = CompletionDisplay::new(items.clone());
+    let mut display = CompletionDisplay::new(items.clone(), prompt_text, input_text);
 
-    // Show initial display
+    // Show initial display (cursor will be hidden in display method)
     if display.display().is_err() {
+        // If display fails, make sure cursor is shown
+        let _ = execute!(stdout(), cursor::Show);
         return None;
     }
 
@@ -513,6 +643,15 @@ pub fn select_completion_items(items: Vec<Candidate>, _query: Option<&str>) -> O
     }
 }
 
+// Backward compatibility function
+pub fn select_completion_items_simple(
+    items: Vec<Candidate>,
+    query: Option<&str>,
+) -> Option<String> {
+    let (prompt_text, input_text) = get_prompt_and_input_for_completion();
+    select_completion_items(items, query, prompt_text, input_text)
+}
+
 pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String> {
     debug!("{} ", &input);
     match Command::new("sh").arg("-c").arg(input).output() {
@@ -524,7 +663,7 @@ pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String>
                     .map(|x| Candidate::Basic(x.trim().to_string()))
                     .collect();
 
-                return select_completion_items(items, query);
+                return select_completion_items_simple(items, query);
             }
             None
         }
@@ -550,7 +689,7 @@ fn completion_from_lisp(input: &Input, repl: &Repl, query: Option<&str>) -> Opti
                         for val in list.into_iter() {
                             items.push(Candidate::Basic(val.to_string()));
                         }
-                        return select_completion_items(items, query);
+                        return select_completion_items_simple(items, query);
                     }
                     Ok(Value::String(str)) => {
                         return Some(str);
@@ -574,7 +713,7 @@ fn completion_from_lisp(input: &Input, repl: &Repl, query: Option<&str>) -> Opti
                     .iter()
                     .map(|x| Candidate::Basic(x.trim().to_string()))
                     .collect();
-                return select_completion_items(items, query);
+                return select_completion_items_simple(items, query);
             }
             return None;
         }
@@ -622,7 +761,7 @@ fn completion_from_current(_input: &Input, repl: &Repl, query: Option<&str>) -> 
             let mut cmds_items = get_commands(&environment.read().paths, query_str);
             items.append(&mut cmds_items);
         }
-        select_completion_items(items, Some(path_query))
+        select_completion_items_simple(items, Some(path_query))
     } else {
         None
     }
@@ -660,12 +799,30 @@ fn completion_from_chatgpt(input: &Input, repl: &Repl, _query: Option<&str>) -> 
     None
 }
 
-pub fn input_completion(input: &Input, repl: &Repl, query: Option<&str>) -> Option<String> {
-    let res = completion_from_lisp(input, repl, query);
+pub fn input_completion(
+    input: &Input,
+    repl: &Repl,
+    query: Option<&str>,
+    prompt_text: String,
+    input_text: String,
+) -> Option<String> {
+    let res = completion_from_lisp_with_prompt(
+        input,
+        repl,
+        query,
+        prompt_text.clone(),
+        input_text.clone(),
+    );
     if res.is_some() {
         return res;
     }
-    let res = completion_from_current(input, repl, query);
+    let res = completion_from_current_with_prompt(
+        input,
+        repl,
+        query,
+        prompt_text.clone(),
+        input_text.clone(),
+    );
     if res.is_some() {
         return res;
     }
@@ -676,6 +833,120 @@ pub fn input_completion(input: &Input, repl: &Repl, query: Option<&str>) -> Opti
         }
     }
     None
+}
+
+// Backward compatibility function
+pub fn input_completion_simple(input: &Input, repl: &Repl, query: Option<&str>) -> Option<String> {
+    let (prompt_text, input_text) = get_prompt_and_input_for_completion();
+    input_completion(input, repl, query, prompt_text, input_text)
+}
+
+fn completion_from_lisp_with_prompt(
+    input: &Input,
+    repl: &Repl,
+    query: Option<&str>,
+    prompt_text: String,
+    input_text: String,
+) -> Option<String> {
+    // TODO convert input
+    let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
+    let environment = Arc::clone(&lisp_engine.borrow().shell_env);
+
+    // 1. completion from autocomplete
+    for compl in environment.read().autocompletion.iter() {
+        let cmd_str = compl.target.to_string();
+        // debug!("match cmd:'{}' in:'{}'", cmd_str, replace_space(input));
+        if replace_space(input.as_str()).starts_with(cmd_str.as_str()) {
+            if let Some(func) = &compl.func {
+                // run lisp func
+                match lisp_engine.borrow().apply_func(func.to_owned(), vec![]) {
+                    Ok(Value::List(list)) => {
+                        let mut items: Vec<Candidate> = Vec::new();
+                        for val in list.into_iter() {
+                            items.push(Candidate::Basic(val.to_string()));
+                        }
+                        return select_completion_items(items, query, prompt_text, input_text);
+                    }
+                    Ok(Value::String(str)) => {
+                        return Some(str);
+                    }
+                    Err(err) => {
+                        println!("{:?}", err);
+                    }
+                    _ => {}
+                }
+            } else if let Some(cmd) = &compl.cmd {
+                // run command
+                if let Some(val) = completion_from_cmd(cmd.to_string(), query) {
+                    if val.starts_with('*') {
+                        return Some(val[2..].to_string());
+                    } else {
+                        return Some(val);
+                    }
+                }
+            } else if let Some(items) = &compl.candidates {
+                let items: Vec<Candidate> = items
+                    .iter()
+                    .map(|x| Candidate::Basic(x.trim().to_string()))
+                    .collect();
+                return select_completion_items(items, query, prompt_text, input_text);
+            }
+            return None;
+        }
+    }
+    None
+}
+
+fn completion_from_current_with_prompt(
+    _input: &Input,
+    repl: &Repl,
+    query: Option<&str>,
+    prompt_text: String,
+    input_text: String,
+) -> Option<String> {
+    let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
+    let environment = Arc::clone(&lisp_engine.borrow().shell_env);
+
+    // 2 . try completion
+    if let Some(query_str) = query {
+        // check path
+        let current = std::env::current_dir().expect("fail get current_dir");
+
+        let expand_path = shellexpand::tilde(&query_str);
+        let expand = expand_path.as_ref();
+        let path = Path::new(expand);
+
+        let (path, path_query, only_path) = if path.is_dir() {
+            (path, "", true)
+        } else if let Some(parent) = path.parent() {
+            let parent = Path::new(parent);
+            let has_parent = !parent.as_os_str().is_empty();
+            if let Some(file_name) = &path.file_name() {
+                (parent, file_name.to_str().unwrap(), has_parent)
+            } else {
+                (path, "", has_parent)
+            }
+        } else {
+            (current.as_path(), "", false)
+        };
+
+        let canonical_path = if let Ok(path) = path.canonicalize() {
+            path
+        } else {
+            std::env::current_dir().expect("fail get current_dir")
+        };
+        let path_str = canonical_path.display().to_string();
+
+        // path
+        let mut items = get_file_completions(path_str.as_str(), path.to_str().unwrap());
+        if !only_path {
+            let mut cmds_items = get_commands(&environment.read().paths, query_str);
+            items.append(&mut cmds_items);
+        }
+        select_completion_items(items, Some(path_query), prompt_text, input_text)
+    } else {
+        None
+    }
 }
 
 fn get_commands(paths: &Vec<String>, cmd: &str) -> Vec<Candidate> {
@@ -852,7 +1123,7 @@ Follow the above rules to print the subcommands and option lists for the "{}" co
         if items.is_empty() {
             remove_file(&completion_file_path)?;
         }
-        let res = select_completion_items(items, None);
+        let res = select_completion_items_simple(items, None);
         Ok(res)
     }
 }
@@ -923,7 +1194,7 @@ mod tests {
         items.push(Candidate::Basic("test1".to_string()));
         items.push(Candidate::Basic("test2".to_string()));
 
-        let a = select_completion_items(items, Some("test"));
+        let a = select_completion_items_simple(items, Some("test"));
         assert_eq!("test1", a.unwrap());
     }
 

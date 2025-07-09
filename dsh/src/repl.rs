@@ -254,9 +254,11 @@ impl<'a> Repl<'a> {
     }
 
     pub fn print_input(&mut self, out: &mut StdoutLock<'static>, reset_completion: bool) {
+        debug!("print_input called, reset_completion: {}", reset_completion);
         queue!(out, cursor::Hide).ok();
         let input = self.input.to_string();
         let prompt_count = self.prompt.write().mark.chars().count();
+        debug!("Current input: '{}', prompt_count: {}", input, prompt_count);
 
         let mut completion: Option<String> = None;
         let mut can_execute = false;
@@ -333,14 +335,16 @@ impl<'a> Repl<'a> {
 
         self.input.can_execute = can_execute;
 
-        queue!(
-            out,
-            Print("\r"),
-            cursor::MoveRight((prompt_count + 1) as u16),
-            Clear(ClearType::UntilNewLine),
-        )
-        .ok();
+        // Clear the current line and redraw prompt mark + input
+        queue!(out, Print("\r"), Clear(ClearType::CurrentLine)).ok();
 
+        // Only redraw the prompt mark (not the full preprompt)
+        let prompt = self.prompt.read();
+        let prompt_mark = &prompt.mark;
+        debug!("Redrawing prompt mark: '{}'", prompt_mark);
+        queue!(out, Print(prompt_mark)).ok();
+
+        // Print the input
         self.input.print(out);
 
         self.move_cursor_input_end(out);
@@ -452,15 +456,37 @@ impl<'a> Repl<'a> {
                     Ok(Some((_rule, span))) => Some(span.as_str()),
                     _ => None,
                 };
-                if let Some(val) = completion::input_completion(&self.input, self, completion_query)
-                {
+
+                // Get prompt and input text for completion display
+                let prompt_text = self.prompt.read().mark.clone();
+                let input_text = self.input.to_string();
+
+                debug!(
+                    "Starting completion with prompt: '{}', input: '{}'",
+                    prompt_text, input_text
+                );
+
+                if let Some(val) = completion::input_completion(
+                    &self.input,
+                    self,
+                    completion_query,
+                    prompt_text,
+                    input_text,
+                ) {
+                    debug!("Completion selected: '{}'", val);
                     if let Some(q) = completion_query {
                         self.input.backspacen(q.len());
                     }
                     self.input.insert_str(val.as_str());
+                    debug!("Input after completion: '{}'", self.input.to_string());
+                } else {
+                    debug!("No completion selected");
                 }
 
+                // Force redraw after completion
+                reset_completion = true;
                 self.start_completion = true;
+                debug!("Set start_completion flag to true and reset_completion to true");
             }
             (KeyCode::Enter, NONE) => {
                 self.input.completion.take();
@@ -559,8 +585,10 @@ impl<'a> Repl<'a> {
 
         let mut out = std::io::stdout().lock();
         if redraw {
+            debug!("Redrawing input, reset_completion: {}", reset_completion);
             self.print_input(&mut out, reset_completion);
         } else {
+            debug!("Printing prompt only");
             self.print_prompt(&mut out);
         }
         out.flush().ok();

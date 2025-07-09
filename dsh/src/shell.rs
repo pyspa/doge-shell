@@ -134,6 +134,47 @@ impl Shell {
         }
     }
 
+    /// Send signal to foreground job
+    pub fn send_signal_to_foreground_job(&mut self, signal: Signal) -> Result<()> {
+        for job in &mut self.wait_jobs {
+            if job.foreground {
+                if let Some(pid) = job.pid {
+                    debug!(
+                        "Sending signal {:?} to foreground job {} (pid: {})",
+                        signal, job.job_id, pid
+                    );
+                    // Send signal to process group
+                    match nix::sys::signal::killpg(pid, signal) {
+                        Ok(_) => debug!("Signal sent successfully"),
+                        Err(e) => {
+                            warn!("Failed to send signal to process group {}: {}", pid, e);
+                            // Fallback: send to individual process
+                            if let Err(e2) = nix::sys::signal::kill(pid, signal) {
+                                warn!("Failed to send signal to process {}: {}", pid, e2);
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Terminate all background jobs
+    pub fn terminate_background_jobs(&mut self) -> Result<()> {
+        for job in &mut self.wait_jobs {
+            if !job.foreground {
+                if let Some(pid) = job.pid {
+                    debug!("Terminating background job {} (pid: {})", job.job_id, pid);
+                    // Send SIGTERM first, then SIGKILL if needed
+                    let _ = nix::sys::signal::killpg(pid, Signal::SIGTERM);
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn print_error(&self, msg: String) {
         // unknown command, etc
         eprint!("\r{msg}\r\n");

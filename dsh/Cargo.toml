@@ -64,3 +64,4 @@ fuzzy-matcher = "0.3"  # "*" → "0.3"
 skim = "0.20"      # 0.10 → 0.20
 tabled = "0.20"    # "*" → "0.20"
 num-bigint = { version = "0.4", optional = true }
+num-traits = "0.2"

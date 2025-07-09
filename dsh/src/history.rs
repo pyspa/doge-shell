@@ -151,13 +151,17 @@ impl History {
     }
 
     pub fn write_history(&mut self, history: &str) -> Result<()> {
-        // TODO file lock
         if let Some(ref path) = self.path {
+            // Use file lock to prevent concurrent access
+            let lock_path = format!("{}.lock", path);
+            let _lock = file_lock::FileLock::lock(&lock_path, true, file_lock::FileOptions::new())
+                .context("Failed to acquire history file lock")?;
+
             let mut history_file = OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(path)
-                .context("failed open file")?;
+                .with_context(|| format!("Failed to open history file: {}", path))?;
 
             let now = Local::now();
             let entry = Entry {
@@ -165,12 +169,24 @@ impl History {
                 when: now.timestamp(),
             };
 
-            let json = serde_json::to_string(&entry)? + "\n";
-            let _size = history_file
-                .write(json.as_bytes())
-                .context("failed write entry")?;
-            history_file.flush().context("failed flush")?;
+            let json =
+                serde_json::to_string(&entry).context("Failed to serialize history entry")?;
+            let json_line = json + "\n";
 
+            history_file
+                .write_all(json_line.as_bytes())
+                .with_context(|| format!("Failed to write to history file: {}", path))?;
+
+            history_file
+                .flush()
+                .with_context(|| format!("Failed to flush history file: {}", path))?;
+
+            // Lock is automatically released when _lock goes out of scope
+
+            let entry = Entry {
+                entry: history.to_string(),
+                when: now.timestamp(),
+            };
             self.histories.push(entry);
             self.reset_index();
 

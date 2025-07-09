@@ -8,6 +8,44 @@ use std::io::Write;
 use std::mem;
 use std::os::unix::io::FromRawFd;
 use std::os::unix::io::RawFd;
+use thiserror::Error;
+
+/// Doge Shell specific error types
+#[derive(Error, Debug)]
+pub enum DshError {
+    #[error("IO operation failed: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("Process execution failed: {message}")]
+    Process { message: String },
+
+    #[error("File operation failed: {operation} on {path}: {source}")]
+    File {
+        operation: String,
+        path: String,
+        source: std::io::Error,
+    },
+
+    #[error("History operation failed: {0}")]
+    History(String),
+
+    #[error("Lisp evaluation failed: {0}")]
+    Lisp(String),
+
+    #[error("Configuration error: {0}")]
+    Config(String),
+
+    #[error("Lock operation failed: {0}")]
+    Lock(String),
+
+    #[error("Parse error: {0}")]
+    Parse(String),
+
+    #[error("System call failed: {0}")]
+    System(String),
+}
+
+pub type DshResult<T> = std::result::Result<T, DshError>;
 
 #[derive(Clone)]
 pub struct Context {

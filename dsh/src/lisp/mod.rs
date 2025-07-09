@@ -55,11 +55,14 @@ impl LispEngine {
                     return Ok(res);
                 }
                 Err(err) => {
-                    eprintln!("{}", err)
+                    tracing::error!("Lisp evaluation error: {}", err);
+                    eprintln!("{}", err);
+                    // Return error value instead of continuing
+                    return Ok(Value::String(format!("Error: {}", err)));
                 }
             }
         }
-        // TODO return value
+        // Return NIL if no expressions were evaluated
         Ok(Value::NIL)
     }
 

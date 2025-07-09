@@ -85,8 +85,16 @@ impl Redirect {
                 tokio::spawn(async move {
                     // copy io
                     let mut reader = unsafe { fs::File::from_raw_fd(infile) };
-                    let mut writer = fs::File::create(file.to_string()).await.unwrap(); // TODO check err
-                    let _res = io::copy(&mut reader, &mut writer).await; // TODO check err
+                    match fs::File::create(&file).await {
+                        Ok(mut writer) => {
+                            if let Err(e) = io::copy(&mut reader, &mut writer).await {
+                                tracing::error!("Failed to copy to file {}: {}", file, e);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to create file {}: {}", file, e);
+                        }
+                    }
                 });
             }
 
@@ -99,13 +107,21 @@ impl Redirect {
                 tokio::spawn(async move {
                     // copy io
                     let mut reader = unsafe { fs::File::from_raw_fd(infile) };
-                    let mut writer = fs::OpenOptions::new()
+                    match fs::OpenOptions::new()
                         .write(true)
                         .append(true)
-                        .open(file.to_string())
+                        .open(&file)
                         .await
-                        .unwrap();
-                    let _res = io::copy(&mut reader, &mut writer).await; // TODO check err
+                    {
+                        Ok(mut writer) => {
+                            if let Err(e) = io::copy(&mut reader, &mut writer).await {
+                                tracing::error!("Failed to append to file {}: {}", file, e);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to open file {} for append: {}", file, e);
+                        }
+                    }
                 });
             }
             Redirect::Input => {}
@@ -200,14 +216,27 @@ impl BuiltinProcess {
             &self.name, self.stdin, self.stdout
         );
         let exit = (self.cmd_fn)(ctx, self.argv.to_vec(), shell);
-        if let ExitStatus::ExitedWith(code) = exit {
-            if code >= 0 {
-                self.state = ProcessState::Completed(1, None);
-            } else {
+        match exit {
+            ExitStatus::ExitedWith(code) => {
+                if code >= 0 {
+                    self.state = ProcessState::Completed(1, None);
+                } else {
+                    self.state = ProcessState::Completed(0, None);
+                }
+                debug!("Builtin process {} exited with code: {}", self.name, code);
+            }
+            ExitStatus::Running(_pid) => {
+                self.state = ProcessState::Running;
+                debug!("Builtin process {} is running", self.name);
+            }
+            ExitStatus::Break | ExitStatus::Continue | ExitStatus::Return => {
                 self.state = ProcessState::Completed(0, None);
+                debug!(
+                    "Builtin process {} completed with control flow: {:?}",
+                    self.name, exit
+                );
             }
         }
-        // TODO check exit
         Ok(())
     }
 
@@ -292,8 +321,18 @@ impl WasmProcess {
             self.stdin, self.stdout
         );
 
-        // TODO check exit
-        shell.run_wasm(self.name.as_str(), self.argv.to_vec())
+        match shell.run_wasm(self.name.as_str(), self.argv.to_vec()) {
+            Ok(_) => {
+                debug!("WASM process {} completed successfully", self.name);
+                self.state = ProcessState::Completed(0, None);
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!("WASM process {} failed: {}", self.name, e);
+                self.state = ProcessState::Completed(1, None);
+                Err(e)
+            }
+        }
     }
 
     fn update_state(&mut self) -> Option<ProcessState> {
@@ -1727,7 +1766,7 @@ mod tests {
         }
 
         match running {
-            ProcessState::Running => assert!(true),
+            ProcessState::Running => {} // Expected state
             _ => panic!("Unexpected process state"),
         }
 
@@ -1748,8 +1787,8 @@ mod tests {
 
         // JobProcessの型チェック
         match job_process {
-            JobProcess::Command(_) => assert!(true),
-            _ => assert!(false, "Expected Command variant"),
+            JobProcess::Command(_) => {} // Expected variant
+            _ => panic!("Expected Command variant"),
         }
     }
 }

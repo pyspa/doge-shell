@@ -231,7 +231,8 @@ mod tests {
         let engine = LispEngine::new(env);
 
         let args = [Value::String("ls -al".to_string())];
-        let res = sh(Rc::clone(&engine.borrow().env), args.to_vec()).await;
+        let env_clone = Rc::clone(&engine.borrow().env);
+        let res = sh(env_clone, args.to_vec()).await;
         assert!(res.is_ok());
         println!("{}", res.unwrap());
 

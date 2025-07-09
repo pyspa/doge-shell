@@ -1527,10 +1527,10 @@ mod tests {
     #[ignore]
     fn test_select_item() {
         init();
-        let mut items: Vec<Candidate> = Vec::new();
-        // items.push();
-        items.push(Candidate::Basic("test1".to_string()));
-        items.push(Candidate::Basic("test2".to_string()));
+        let items: Vec<Candidate> = vec![
+            Candidate::Basic("test1".to_string()),
+            Candidate::Basic("test2".to_string()),
+        ];
 
         let a = select_completion_items_simple(items, Some("test"));
         assert_eq!("test1", a.unwrap());

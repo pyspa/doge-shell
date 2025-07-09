@@ -42,20 +42,24 @@ impl Default for CompletionConfig {
 }
 
 impl CompletionConfig {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[allow(dead_code)]
     pub fn with_max_items(mut self, max_items: usize) -> Self {
         self.max_items = max_items;
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_message_template<S: Into<String>>(mut self, template: S) -> Self {
         self.more_items_message_template = template.into();
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_item_count_display(mut self, show: bool) -> Self {
         self.show_item_count = show;
         self
@@ -93,6 +97,7 @@ pub struct CompletionDisplay {
     prompt_text: String,
     input_text: String,
     cursor_hidden: bool,
+    #[allow(dead_code)]
     config: CompletionConfig,
     has_more_items: bool,
     total_items_count: usize,
@@ -108,6 +113,7 @@ impl Drop for CompletionDisplay {
 }
 
 impl CompletionDisplay {
+    #[allow(dead_code)]
     pub fn new(candidates: Vec<Candidate>, prompt_text: String, input_text: String) -> Self {
         Self::new_with_config(
             candidates,
@@ -856,6 +862,7 @@ pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String>
     }
 }
 
+#[allow(dead_code)]
 fn completion_from_lisp(input: &Input, repl: &Repl, query: Option<&str>) -> Option<String> {
     // TODO convert input
     let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
@@ -906,6 +913,7 @@ fn completion_from_lisp(input: &Input, repl: &Repl, query: Option<&str>) -> Opti
     None
 }
 
+#[allow(dead_code)]
 fn completion_from_current(_input: &Input, repl: &Repl, query: Option<&str>) -> Option<String> {
     let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
     let environment = Arc::clone(&lisp_engine.borrow().shell_env);
@@ -1030,6 +1038,7 @@ pub fn input_completion(
 }
 
 // Backward compatibility function
+#[allow(dead_code)]
 pub fn input_completion_simple(input: &Input, repl: &Repl, query: Option<&str>) -> Option<String> {
     let (prompt_text, input_text) = get_prompt_and_input_for_completion();
     input_completion(input, repl, query, prompt_text, input_text)
@@ -1411,11 +1420,13 @@ mod tests {
 
         // Create test directory structure in memory for testing
         // This test verifies the prefix filtering logic
-        let test_files = [("test_file.txt", true),
+        let test_files = [
+            ("test_file.txt", true),
             ("test_script.sh", true),
             ("another_file.txt", true),
             ("test_dir", false),
-            ("temp_dir", false)];
+            ("temp_dir", false),
+        ];
 
         // Test prefix filtering logic
         let filtered_files: Vec<_> = test_files

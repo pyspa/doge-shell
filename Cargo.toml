@@ -19,6 +19,7 @@ members = [
 
 [workspace.dependencies]
 anyhow = "1.0.98"
+thiserror = "2"
 libc = "0.2"
 nix = { version = "0.26", features = ["signal"] }
 xdg = "2"

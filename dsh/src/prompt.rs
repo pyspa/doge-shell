@@ -225,6 +225,12 @@ pub struct GitStatus {
     pub branch_status: Option<String>,
 }
 
+impl Default for GitStatus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GitStatus {
     pub fn new() -> Self {
         GitStatus {
@@ -258,7 +264,7 @@ impl GitStatusCache {
         if self.git_root != current_git_root {
             return false;
         }
-        
+
         // TTLを超えた場合は無効
         self.last_updated.elapsed() < self.ttl
     }
@@ -375,23 +381,23 @@ mod tests {
     fn test_git_status_cache() {
         let current_dir = PathBuf::from("/tmp");
         let mut prompt = Prompt::new(current_dir, "🐕 > ".to_string());
-        
+
         // Git rootが設定されていない場合はNoneを返す
         assert!(prompt.get_git_status_cached().is_none());
-        
+
         // Git rootを設定
         if let Some(git_root) = get_git_root() {
             prompt.current_git_root = Some(PathBuf::from(&git_root));
-            
+
             // 初回呼び出し（キャッシュなし）
             let status1 = prompt.get_git_status_cached();
-            
+
             // 2回目呼び出し（キャッシュあり）
             let status2 = prompt.get_git_status_cached();
-            
+
             // 両方とも同じ結果であることを確認
             assert_eq!(status1, status2);
-            
+
             // キャッシュが存在することを確認
             assert!(prompt.git_status_cache.is_some());
         }
@@ -402,10 +408,10 @@ mod tests {
         let git_root = PathBuf::from("/tmp");
         let status = GitStatus::new();
         let cache = GitStatusCache::new(status, git_root.clone());
-        
+
         // 同じGit rootの場合は有効
         assert!(cache.is_valid(&git_root));
-        
+
         // 異なるGit rootの場合は無効
         let different_root = PathBuf::from("/home");
         assert!(!cache.is_valid(&different_root));
@@ -414,20 +420,20 @@ mod tests {
     #[test]
     fn test_git_status_cache_ttl() {
         use std::thread;
-        
+
         let git_root = PathBuf::from("/tmp");
         let status = GitStatus::new();
         let mut cache = GitStatusCache::new(status, git_root.clone());
-        
+
         // TTLを短く設定
         cache.ttl = Duration::from_millis(10);
-        
+
         // 初期状態では有効
         assert!(cache.is_valid(&git_root));
-        
+
         // TTLを超えるまで待機
         thread::sleep(Duration::from_millis(20));
-        
+
         // TTL超過後は無効
         assert!(!cache.is_valid(&git_root));
     }

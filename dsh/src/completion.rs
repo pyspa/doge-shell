@@ -45,25 +45,26 @@ impl CompletionConfig {
     pub fn new() -> Self {
         Self::default()
     }
-    
+
     pub fn with_max_items(mut self, max_items: usize) -> Self {
         self.max_items = max_items;
         self
     }
-    
+
     pub fn with_message_template<S: Into<String>>(mut self, template: S) -> Self {
         self.more_items_message_template = template.into();
         self
     }
-    
+
     pub fn with_item_count_display(mut self, show: bool) -> Self {
         self.show_item_count = show;
         self
     }
-    
+
     pub fn format_more_items_message(&self, remaining_count: usize) -> String {
         if self.more_items_message_template.contains("{}") {
-            self.more_items_message_template.replace("{}", &remaining_count.to_string())
+            self.more_items_message_template
+                .replace("{}", &remaining_count.to_string())
         } else {
             format!("{} ({})", self.more_items_message_template, remaining_count)
         }
@@ -108,23 +109,28 @@ impl Drop for CompletionDisplay {
 
 impl CompletionDisplay {
     pub fn new(candidates: Vec<Candidate>, prompt_text: String, input_text: String) -> Self {
-        Self::new_with_config(candidates, prompt_text, input_text, CompletionConfig::default())
+        Self::new_with_config(
+            candidates,
+            prompt_text,
+            input_text,
+            CompletionConfig::default(),
+        )
     }
-    
+
     pub fn new_with_config(
-        mut candidates: Vec<Candidate>, 
-        prompt_text: String, 
+        mut candidates: Vec<Candidate>,
+        prompt_text: String,
         input_text: String,
-        config: CompletionConfig
+        config: CompletionConfig,
     ) -> Self {
         let terminal_width = term_size::dimensions().map(|(w, _)| w).unwrap_or(80);
         let total_items_count = candidates.len();
         let has_more_items = total_items_count > config.max_items;
-        
+
         // Limit candidates to max_items
         if has_more_items {
             candidates.truncate(config.max_items);
-            
+
             // Add a message candidate to show there are more items
             if config.show_item_count {
                 let remaining_count = total_items_count - config.max_items;
@@ -169,6 +175,61 @@ impl CompletionDisplay {
         }
     }
 
+    /// Ensure there's enough space below the cursor for completion display
+    fn ensure_display_space(&mut self) -> Result<()> {
+        let mut stdout = stdout();
+
+        // Get current terminal size and cursor position
+        let terminal_size = crossterm::terminal::size()?;
+        let terminal_height = terminal_size.1;
+
+        let current_row = if let Some(row) = self.display_start_row {
+            row
+        } else if let Ok((_, row)) = cursor::position() {
+            row
+        } else {
+            return Ok(()); // Can't determine position, skip space creation
+        };
+
+        let available_rows = terminal_height.saturating_sub(current_row + 1);
+        let needed_rows = self.total_rows as u16;
+
+        debug!(
+            "Space check - Terminal height: {}, current row: {}, available: {}, needed: {}",
+            terminal_height, current_row, available_rows, needed_rows
+        );
+
+        // If we don't have enough space, create it
+        if needed_rows > available_rows {
+            let rows_to_create = needed_rows - available_rows;
+            debug!(
+                "Creating {} rows of space for completion display",
+                rows_to_create
+            );
+
+            // Save current cursor position
+            let (original_col, original_row) = cursor::position().unwrap_or((0, current_row));
+
+            // Create space by moving to the bottom and adding newlines
+            // This will cause the terminal to scroll up naturally
+            execute!(stdout, cursor::MoveTo(0, terminal_height - 1))?;
+            for _ in 0..rows_to_create {
+                execute!(stdout, Print("\n"))?;
+            }
+
+            // Update our recorded position since content has shifted up
+            let new_row = original_row.saturating_sub(rows_to_create);
+
+            self.display_start_row = Some(new_row);
+            debug!("Updated display start position to row: {}", new_row);
+
+            // Move cursor back to the updated position
+            execute!(stdout, cursor::MoveTo(original_col, new_row))?;
+        }
+
+        Ok(())
+    }
+
     pub fn move_up(&mut self) {
         if self.selected_index >= self.items_per_row {
             self.selected_index -= self.items_per_row;
@@ -196,9 +257,10 @@ impl CompletionDisplay {
     pub fn get_selected(&self) -> Option<&Candidate> {
         if let Some(candidate) = self.candidates.get(self.selected_index) {
             // Don't return message items as selectable
-            if self.has_more_items && 
-               self.selected_index == self.candidates.len() - 1 && 
-               candidate.get_display_name().starts_with("📋") {
+            if self.has_more_items
+                && self.selected_index == self.candidates.len() - 1
+                && candidate.get_display_name().starts_with("📋")
+            {
                 return None;
             }
             Some(candidate)
@@ -227,6 +289,9 @@ impl CompletionDisplay {
             }
         }
 
+        // Ensure we have enough space for the completion display
+        self.ensure_display_space()?;
+
         // Clear the current line and redraw prompt + input
         execute!(
             stdout,
@@ -248,9 +313,9 @@ impl CompletionDisplay {
 
                 let candidate = &self.candidates[index];
                 let is_selected = index == self.selected_index;
-                let is_message_item = self.has_more_items && 
-                    index == self.candidates.len() - 1 && 
-                    candidate.get_display_name().starts_with("📋");
+                let is_message_item = self.has_more_items
+                    && index == self.candidates.len() - 1
+                    && candidate.get_display_name().starts_with("📋");
 
                 // Display with type character and proper formatting
                 if is_selected {
@@ -281,7 +346,7 @@ impl CompletionDisplay {
                 } else {
                     candidate.get_formatted_display(self.column_width)
                 };
-                
+
                 queue!(stdout, Print(formatted))?;
                 queue!(stdout, ResetColor)?;
 
@@ -690,11 +755,11 @@ pub fn select_completion_items(
     input_text: String,
 ) -> Option<String> {
     select_completion_items_with_config(
-        items, 
-        query, 
-        prompt_text, 
-        input_text, 
-        CompletionConfig::default()
+        items,
+        query,
+        prompt_text,
+        input_text,
+        CompletionConfig::default(),
     )
 }
 
@@ -709,7 +774,8 @@ pub fn select_completion_items_with_config(
         return None;
     }
 
-    let mut display = CompletionDisplay::new_with_config(items.clone(), prompt_text, input_text, config);
+    let mut display =
+        CompletionDisplay::new_with_config(items.clone(), prompt_text, input_text, config);
 
     // Show initial display (cursor will be hidden in display method)
     if display.display().is_err() {
@@ -1320,23 +1386,29 @@ mod tests {
     #[test]
     fn test_completion_config() {
         init();
-        
+
         // Test default config
         let config = CompletionConfig::default();
         assert_eq!(config.max_items, 30);
-        assert_eq!(config.more_items_message_template, "...and {} more items available");
+        assert_eq!(
+            config.more_items_message_template,
+            "...and {} more items available"
+        );
         assert!(config.show_item_count);
-        
+
         // Test custom config
         let config = CompletionConfig::new()
             .with_max_items(10)
             .with_message_template("他に{}個のアイテムがあります")
             .with_item_count_display(false);
-        
+
         assert_eq!(config.max_items, 10);
-        assert_eq!(config.more_items_message_template, "他に{}個のアイテムがあります");
+        assert_eq!(
+            config.more_items_message_template,
+            "他に{}個のアイテムがあります"
+        );
         assert!(!config.show_item_count);
-        
+
         // Test message formatting
         let message = config.format_more_items_message(25);
         assert_eq!(message, "他に25個のアイテムがあります");
@@ -1345,28 +1417,28 @@ mod tests {
     #[test]
     fn test_completion_display_with_limit() {
         init();
-        
+
         // Create more than 30 candidates
         let mut candidates = Vec::new();
         for i in 0..50 {
             candidates.push(Candidate::Basic(format!("item_{:02}", i)));
         }
-        
+
         let config = CompletionConfig::default();
-        let display = CompletionDisplay::new_with_config(
+        let comp_display = CompletionDisplay::new_with_config(
             candidates,
             "$ ".to_string(),
             "test".to_string(),
-            config
+            config,
         );
-        
+
         // Should have 30 items + 1 message item
-        assert_eq!(display.candidates.len(), 31);
-        assert!(display.has_more_items);
-        assert_eq!(display.total_items_count, 50);
-        
+        assert_eq!(comp_display.candidates.len(), 31);
+        assert!(comp_display.has_more_items);
+        assert_eq!(comp_display.total_items_count, 50);
+
         // Last item should be the message
-        let last_item = &display.candidates[30];
+        let last_item = &comp_display.candidates[30];
         assert!(last_item.get_display_name().starts_with("📋"));
         assert!(last_item.get_display_name().contains("20 more items"));
     }
@@ -1374,24 +1446,87 @@ mod tests {
     #[test]
     fn test_completion_display_no_limit() {
         init();
-        
+
         // Create less than 30 candidates
         let mut candidates = Vec::new();
         for i in 0..10 {
             candidates.push(Candidate::Basic(format!("item_{:02}", i)));
         }
-        
+
         let config = CompletionConfig::default();
-        let display = CompletionDisplay::new_with_config(
+        let comp_display = CompletionDisplay::new_with_config(
             candidates,
             "$ ".to_string(),
             "test".to_string(),
-            config
+            config,
         );
-        
+
         // Should have exactly 10 items, no message
-        assert_eq!(display.candidates.len(), 10);
-        assert!(!display.has_more_items);
-        assert_eq!(display.total_items_count, 10);
+        assert_eq!(comp_display.candidates.len(), 10);
+        assert!(!comp_display.has_more_items);
+        assert_eq!(comp_display.total_items_count, 10);
+    }
+
+    #[test]
+    fn test_completion_display_space_calculation() {
+        init();
+
+        // Create many candidates to test space requirements
+        let mut candidates = Vec::new();
+        for i in 0..100 {
+            candidates.push(Candidate::Basic(format!("item_{:03}", i)));
+        }
+
+        let config = CompletionConfig::default().with_max_items(50);
+        let comp_display = CompletionDisplay::new_with_config(
+            candidates,
+            "$ ".to_string(),
+            "test_command".to_string(),
+            config,
+        );
+
+        // Should limit to 50 items + 1 message
+        assert_eq!(comp_display.candidates.len(), 51);
+        assert!(comp_display.has_more_items);
+        assert_eq!(comp_display.total_items_count, 100);
+
+        // Check that total_rows is calculated correctly
+        let expected_rows = comp_display
+            .candidates
+            .len()
+            .div_ceil(comp_display.items_per_row);
+        assert_eq!(comp_display.total_rows, expected_rows);
+
+        debug!(
+            "Display has {} rows with {} items per row",
+            comp_display.total_rows, comp_display.items_per_row
+        );
+    }
+
+    #[test]
+    fn test_completion_display_small_terminal() {
+        init();
+
+        // Test with a scenario that would require space creation
+        let mut candidates = Vec::new();
+        for i in 0..20 {
+            candidates.push(Candidate::Basic(format!("command_{}", i)));
+        }
+
+        let config = CompletionConfig::default();
+        let comp_display = CompletionDisplay::new_with_config(
+            candidates,
+            "user@host:~/project$ ".to_string(),
+            "git ".to_string(),
+            config,
+        );
+
+        // Verify the display is properly configured
+        assert_eq!(comp_display.candidates.len(), 20);
+        assert!(!comp_display.has_more_items);
+        assert!(comp_display.total_rows > 0);
+
+        // The ensure_display_space method should handle space creation
+        // This is mainly tested through integration testing
     }
 }

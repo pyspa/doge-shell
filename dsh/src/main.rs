@@ -66,7 +66,7 @@ async fn execute_command(shell: &mut Shell, ctx: &mut Context, command: &str) ->
             code
         }
         Err(err) => {
-            eprintln!("{:?}", err);
+            eprintln!("{err:?}");
             ExitCode::FAILURE
         }
     }
@@ -78,18 +78,18 @@ async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
     ctx.save_history = false;
 
     // if let Err(err) = shell.eval_str(ctx, "cd .".to_string(), true) {
-    //     eprintln!("{:?}", err);
+    //     eprintln!("{err:?}");
     //     return ExitCode::FAILURE;
     // }
 
     let mut repl = Repl::new(shell);
     if let Err(err) = repl.shell.eval_str(ctx, "cd .".to_string(), true).await {
-        eprintln!("{:?}", err);
+        eprintln!("{err:?}");
         return ExitCode::FAILURE;
     }
     match repl.run_interactive().await {
         Err(err) => {
-            eprintln!("{:?}", err);
+            eprintln!("{err:?}");
             ExitCode::FAILURE
         }
         _ => ExitCode::from(0),

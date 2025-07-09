@@ -103,7 +103,18 @@ impl<'a> Drop for Repl<'a> {
 
 impl<'a> Repl<'a> {
     pub fn new(shell: &'a mut Shell) -> Self {
-        let current = std::env::current_dir().expect("failed get current dir");
+        let current = std::env::current_dir().unwrap_or_else(|e| {
+            warn!(
+                "Failed to get current directory: {}, using home directory",
+                e
+            );
+            std::env::var("HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| {
+                    warn!("Failed to get home directory, using root");
+                    std::path::PathBuf::from("/")
+                })
+        });
         let prompt = Prompt::new(current, "🐕 < ".to_string());
 
         let prompt = Arc::new(RwLock::new(prompt));
@@ -129,7 +140,10 @@ impl<'a> Repl<'a> {
     }
 
     fn setup(&mut self) {
-        let screen_size = terminal::size().unwrap();
+        let screen_size = terminal::size().unwrap_or_else(|e| {
+            warn!("Failed to get terminal size: {}, using default 80x24", e);
+            (80, 24)
+        });
         self.columns = screen_size.0 as usize;
         self.lines = screen_size.1 as usize;
         enable_raw_mode().ok();
@@ -162,12 +176,28 @@ impl<'a> Repl<'a> {
 
     fn save_history(&mut self) {
         if let Some(ref mut history) = self.shell.cmd_history {
-            let mut history = history.lock().unwrap();
-            history.save().expect("failed save cmd history");
+            match history.lock() {
+                Ok(mut history) => {
+                    if let Err(e) = history.save() {
+                        warn!("Failed to save command history: {}", e);
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to acquire command history lock for saving: {}", e);
+                }
+            }
         }
         if let Some(ref mut history) = self.shell.path_history {
-            let mut history = history.lock().unwrap();
-            history.save().expect("failed save path history");
+            match history.lock() {
+                Ok(mut history) => {
+                    if let Err(e) = history.save() {
+                        warn!("Failed to save path history: {}", e);
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to acquire path history lock for saving: {}", e);
+                }
+            }
         }
     }
 
@@ -204,22 +234,42 @@ impl<'a> Repl<'a> {
     fn stop_history_mode(&mut self) {
         self.history_search = None;
         if let Some(ref mut history) = self.shell.cmd_history {
-            let mut history = history.lock().unwrap();
-            history.search_word = None;
-            history.reset_index();
+            match history.lock() {
+                Ok(mut history) => {
+                    history.search_word = None;
+                    history.reset_index();
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to acquire command history lock for stopping history mode: {}",
+                        e
+                    );
+                }
+            }
         }
     }
 
     fn set_completions(&mut self) {
         if let Some(ref mut history) = self.shell.cmd_history {
-            let history = history.lock().unwrap();
-            let comps = if self.input.is_empty() {
-                history.sorted(&dsh_frecency::SortMethod::Recent)
-            } else {
-                history.sort_by_match(self.input.as_str())
-            };
+            match history.lock() {
+                Ok(history) => {
+                    let comps = if self.input.is_empty() {
+                        history.sorted(&dsh_frecency::SortMethod::Recent)
+                    } else {
+                        history.sort_by_match(self.input.as_str())
+                    };
 
-            self.completion.set_completions(self.input.as_str(), comps);
+                    self.completion.set_completions(self.input.as_str(), comps);
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to acquire command history lock for completions: {}",
+                        e
+                    );
+                    // Set empty completions as fallback
+                    self.completion.set_completions(self.input.as_str(), vec![]);
+                }
+            }
         }
     }
 
@@ -232,7 +282,13 @@ impl<'a> Repl<'a> {
                 Ok(())
             }
             ShellEvent::ScreenResized => {
-                let screen_size = terminal::size().unwrap();
+                let screen_size = terminal::size().unwrap_or_else(|e| {
+                    warn!(
+                        "Failed to get terminal size on resize: {}, keeping current size",
+                        e
+                    );
+                    (self.columns as u16, self.lines as u16)
+                });
                 self.columns = screen_size.0 as usize;
                 self.lines = screen_size.1 as usize;
                 Ok(())
@@ -242,11 +298,20 @@ impl<'a> Repl<'a> {
 
     fn get_completion_from_history(&mut self, input: &str) -> Option<String> {
         if let Some(ref mut history) = self.shell.cmd_history {
-            let history = history.lock().unwrap();
-            if let Some(entry) = history.search_prefix(input) {
-                self.input.completion = Some(entry.clone());
-                if entry.len() >= input.len() {
-                    return Some(entry[input.len()..].to_string());
+            match history.lock() {
+                Ok(history) => {
+                    if let Some(entry) = history.search_prefix(input) {
+                        self.input.completion = Some(entry.clone());
+                        if entry.len() >= input.len() {
+                            return Some(entry[input.len()..].to_string());
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to acquire command history lock for completion: {}",
+                        e
+                    );
                 }
             }
         }
@@ -494,7 +559,21 @@ impl<'a> Repl<'a> {
                 print!("\r\n");
                 if !self.input.is_empty() {
                     self.completion.clear();
-                    let shell_tmode = tcgetattr(0).expect("failed tcgetattr");
+                    let shell_tmode = match tcgetattr(0) {
+                        Ok(tmode) => tmode,
+                        Err(e) => {
+                            warn!(
+                                "Failed to get terminal attributes: {}, using stored mode",
+                                e
+                            );
+                            self.tmode.clone().unwrap_or_else(|| {
+                                warn!("No stored terminal mode available, using default");
+                                // Create a default Termios - this is a fallback that may not work perfectly
+                                // but prevents crashes
+                                unsafe { std::mem::zeroed() }
+                            })
+                        }
+                    };
                     let mut ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);
                     match self
                         .shell
@@ -520,7 +599,19 @@ impl<'a> Repl<'a> {
                 if !self.input.is_empty() {
                     self.completion.clear();
                     let input = self.input.to_string();
-                    let shell_tmode = tcgetattr(0).expect("failed tcgetattr");
+                    let shell_tmode = match tcgetattr(0) {
+                        Ok(tmode) => tmode,
+                        Err(e) => {
+                            warn!(
+                                "Failed to get terminal attributes: {}, using stored mode",
+                                e
+                            );
+                            self.tmode.clone().unwrap_or_else(|| {
+                                warn!("No stored terminal mode available, using default");
+                                unsafe { std::mem::zeroed() }
+                            })
+                        }
+                    };
                     let mut ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);
                     if let Err(err) = self.shell.eval_str(&mut ctx, input, true).await {
                         eprintln!("{:?}", err)
@@ -605,7 +696,13 @@ impl<'a> Repl<'a> {
             self.shell.pid, self.shell.pgid
         );
         let _ = tcsetpgrp(SHELL_TERMINAL, self.shell.pgid).context("failed tcsetpgrp");
-        self.tmode = Some(tcgetattr(SHELL_TERMINAL).expect("failed cgetattr"));
+        self.tmode = match tcgetattr(SHELL_TERMINAL) {
+            Ok(tmode) => Some(tmode),
+            Err(e) => {
+                warn!("Failed to get terminal attributes: {}", e);
+                None
+            }
+        };
         let mut out = std::io::stdout().lock();
 
         // start repl loop
@@ -621,15 +718,31 @@ impl<'a> Repl<'a> {
                     if let Some(ref mut history) = self.shell.path_history {
                         let history = history.clone();
                         tokio::spawn(async move{
-                            let mut history = history.lock().unwrap();
-                            history.save().expect("failed save path history");
+                            match history.lock() {
+                                Ok(mut history) => {
+                                    if let Err(e) = history.save() {
+                                        warn!("Failed to save path history in background: {}", e);
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("Failed to acquire path history lock in background: {}", e);
+                                }
+                            }
                         });
                     }
                     if let Some(ref mut history) = self.shell.cmd_history {
                         let history = history.clone();
                         tokio::spawn(async move{
-                            let mut history = history.lock().unwrap();
-                            history.save().expect("failed save cmd history");
+                            match history.lock() {
+                                Ok(mut history) => {
+                                    if let Err(e) = history.save() {
+                                        warn!("Failed to save command history in background: {}", e);
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("Failed to acquire command history lock in background: {}", e);
+                                }
+                            }
                         });
                     }
                     save_history_delay = Delay::new(Duration::from_millis(10_000)).fuse();
@@ -674,18 +787,27 @@ impl<'a> Repl<'a> {
     pub fn select_history(&mut self) {
         let query = self.input.as_str();
         if let Some(ref mut history) = self.shell.cmd_history {
-            let mut history = history.lock().unwrap();
-            let histories = history.sorted(&dsh_frecency::SortMethod::Recent);
-            if let Some(val) = completion::select_item_with_skim(
-                histories
-                    .iter()
-                    .map(|history| completion::Candidate::Basic(history.item.to_string()))
-                    .collect(),
-                Some(query),
-            ) {
-                self.input.insert_str(val.as_str());
+            match history.lock() {
+                Ok(mut history) => {
+                    let histories = history.sorted(&dsh_frecency::SortMethod::Recent);
+                    if let Some(val) = completion::select_item_with_skim(
+                        histories
+                            .iter()
+                            .map(|history| completion::Candidate::Basic(history.item.to_string()))
+                            .collect(),
+                        Some(query),
+                    ) {
+                        self.input.insert_str(val.as_str());
+                    }
+                    history.reset_index();
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to acquire command history lock for history selection: {}",
+                        e
+                    );
+                }
             }
-            history.reset_index();
         }
     }
 }

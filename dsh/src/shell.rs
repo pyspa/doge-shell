@@ -98,11 +98,40 @@ impl Shell {
         let pgid = pid;
 
         let _ = setpgid(pgid, pgid).context("failed setpgid");
-        let cmd_history = FrecencyHistory::from_file("dsh_cmd_history").unwrap();
-        let cmd_history = Arc::new(Mutex::new(cmd_history));
 
-        let path_history = FrecencyHistory::from_file("dsh_path_history").unwrap();
-        let path_history = Arc::new(Mutex::new(path_history));
+        // Initialize command history with error handling
+        let cmd_history = match FrecencyHistory::from_file("dsh_cmd_history") {
+            Ok(history) => {
+                debug!("Successfully loaded command history");
+                Some(Arc::new(Mutex::new(history)))
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to load command history, starting with empty history: {}",
+                    e
+                );
+                // Create a new empty history instead of crashing
+                let history = FrecencyHistory::new();
+                Some(Arc::new(Mutex::new(history)))
+            }
+        };
+
+        // Initialize path history with error handling
+        let path_history = match FrecencyHistory::from_file("dsh_path_history") {
+            Ok(history) => {
+                debug!("Successfully loaded path history");
+                Some(Arc::new(Mutex::new(history)))
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to load path history, starting with empty history: {}",
+                    e
+                );
+                // Create a new empty history instead of crashing
+                let history = FrecencyHistory::new();
+                Some(Arc::new(Mutex::new(history)))
+            }
+        };
 
         let wasm_engine = WasmEngine::new(APP_NAME);
         let lisp_engine = lisp::LispEngine::new(Arc::clone(&environment));
@@ -115,8 +144,8 @@ impl Shell {
             exited: None::<ExitStatus>,
             pid,
             pgid,
-            cmd_history: Some(cmd_history),
-            path_history: Some(path_history),
+            cmd_history,
+            path_history,
             wait_jobs: Vec::new(),
             lisp_engine,
             wasm_engine,
@@ -126,15 +155,27 @@ impl Shell {
     pub fn set_signals(&mut self) {
         let action = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
         unsafe {
-            sigaction(Signal::SIGINT, &action).expect("failed sigaction");
-            sigaction(Signal::SIGQUIT, &action).expect("failed sigaction");
-            sigaction(Signal::SIGTSTP, &action).expect("failed sigaction");
-            sigaction(Signal::SIGTTIN, &action).expect("failed sigaction");
-            sigaction(Signal::SIGTTOU, &action).expect("failed sigaction");
+            if let Err(e) = sigaction(Signal::SIGINT, &action) {
+                warn!("Failed to set SIGINT handler: {}", e);
+            }
+            if let Err(e) = sigaction(Signal::SIGQUIT, &action) {
+                warn!("Failed to set SIGQUIT handler: {}", e);
+            }
+            if let Err(e) = sigaction(Signal::SIGTSTP, &action) {
+                warn!("Failed to set SIGTSTP handler: {}", e);
+            }
+            if let Err(e) = sigaction(Signal::SIGTTIN, &action) {
+                warn!("Failed to set SIGTTIN handler: {}", e);
+            }
+            if let Err(e) = sigaction(Signal::SIGTTOU, &action) {
+                warn!("Failed to set SIGTTOU handler: {}", e);
+            }
         }
+        debug!("Signal handlers setup completed");
     }
 
     /// Send signal to foreground job
+    #[allow(dead_code)]
     pub fn send_signal_to_foreground_job(&mut self, signal: Signal) -> Result<()> {
         for job in &mut self.wait_jobs {
             if job.foreground {
@@ -162,6 +203,7 @@ impl Shell {
     }
 
     /// Terminate all background jobs
+    #[allow(dead_code)]
     pub fn terminate_background_jobs(&mut self) -> Result<()> {
         for job in &mut self.wait_jobs {
             if !job.foreground {
@@ -195,9 +237,15 @@ impl Shell {
     ) -> Result<ExitCode> {
         if ctx.save_history {
             if let Some(ref mut history) = self.cmd_history {
-                let mut history = history.lock().unwrap();
-                history.add(&input);
-                history.reset_index();
+                match history.lock() {
+                    Ok(mut history) => {
+                        history.add(&input);
+                        history.reset_index();
+                    }
+                    Err(e) => {
+                        warn!("Failed to acquire command history lock: {}", e);
+                    }
+                }
             }
         }
         // TODO refactor context
@@ -491,7 +539,7 @@ impl Shell {
                         // TODO check
                         debug!("job exit code {:?}", exit);
                     }
-                    std::process::exit(exit as i32);
+                    std::process::exit(i32::from(exit));
                 } else {
                     std::process::exit(-1);
                 }
@@ -547,10 +595,10 @@ impl Shell {
                         ctx.outfile = pin;
                         self.launch_subshell(&mut ctx, jobs)?;
                         close(pin).expect("failed close");
-                        let file_name = format!("/dev/fd/{}", pout);
+                        let file_name = format!("/dev/fd/{pout}");
                         argv.push(file_name);
                     }
-                    _ => {}
+                    SubshellType::None => {}
                 }
             } else {
                 argv.push(cmd_str);

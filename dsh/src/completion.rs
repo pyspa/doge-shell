@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::{process::Command, sync::Arc};
 use tracing::debug;
+use tracing::warn;
 
 // Completion display configuration
 const MAX_COMPLETION_ITEMS: usize = 30;
@@ -665,7 +666,10 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
     let exp_str = shellexpand::tilde(&path_str).to_string();
     let expand = path_str != exp_str;
 
-    let home = dirs::home_dir().unwrap();
+    let home = std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .ok()
+        .unwrap();
     let path = PathBuf::from(exp_str);
 
     let dir = read_dir(&path)?;
@@ -921,7 +925,19 @@ fn completion_from_current(_input: &Input, repl: &Repl, query: Option<&str>) -> 
     // 2 . try completion
     if let Some(query_str) = query {
         // check path
-        let current = std::env::current_dir().expect("fail get current_dir");
+        let current = std::env::current_dir().unwrap_or_else(|e| {
+            warn!(
+                "Failed to get current directory: {}, using home directory",
+                e
+            );
+            std::env::var("HOME")
+                .map(std::path::PathBuf::from)
+                .ok()
+                .unwrap_or_else(|| {
+                    warn!("Failed to get home directory, using root");
+                    std::path::PathBuf::from("/")
+                })
+        });
 
         let expand_path = shellexpand::tilde(&query_str);
         let expand = expand_path.as_ref();
@@ -944,7 +960,13 @@ fn completion_from_current(_input: &Input, repl: &Repl, query: Option<&str>) -> 
         let canonical_path = if let Ok(path) = path.canonicalize() {
             path
         } else {
-            std::env::current_dir().expect("fail get current_dir")
+            std::env::current_dir().unwrap_or_else(|e| {
+                warn!("Failed to get current directory for canonicalization: {}, using home directory", e);
+                std::env::var("HOME").map(std::path::PathBuf::from).ok().unwrap_or_else(|| {
+                    warn!("Failed to get home directory, using root");
+                    std::path::PathBuf::from("/")
+                })
+            })
         };
         let path_str = canonical_path.display().to_string();
 
@@ -1113,7 +1135,19 @@ fn completion_from_current_with_prompt(
     // 2 . try completion
     if let Some(query_str) = query {
         // check path
-        let current = std::env::current_dir().expect("fail get current_dir");
+        let current = std::env::current_dir().unwrap_or_else(|e| {
+            warn!(
+                "Failed to get current directory: {}, using home directory",
+                e
+            );
+            std::env::var("HOME")
+                .map(std::path::PathBuf::from)
+                .ok()
+                .unwrap_or_else(|| {
+                    warn!("Failed to get home directory, using root");
+                    std::path::PathBuf::from("/")
+                })
+        });
 
         let expand_path = shellexpand::tilde(&query_str);
         let expand = expand_path.as_ref();

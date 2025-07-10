@@ -149,13 +149,17 @@ impl ShellProxy for Shell {
                 self.environment.write().variables.insert(key, output);
             }
             "fg" => {
-                debug!("call fg");
+                debug!("call fg - wait_jobs.len(): {}", self.wait_jobs.len());
                 if self.wait_jobs.is_empty() {
                     ctx.write_stdout("fg: there are no suitable jobs")?;
                 } else {
                     // TODO selectable nth
+                    debug!("About to pop job from wait_jobs");
                     if let Some(ref mut job) = self.wait_jobs.pop() {
                         debug!("foreground job: {:?}", job);
+                        debug!("Job state before fg: {:?}", job.state);
+                        debug!("Job pgid: {:?}, pid: {:?}", job.pgid, job.pid);
+
                         ctx.write_stdout(&format!(
                             "dsh: job {} '{}' to foreground",
                             job.job_id, job.cmd
@@ -163,19 +167,27 @@ impl ShellProxy for Shell {
                         .ok();
 
                         let cont = if let ProcessState::Stopped(_, _) = job.state {
-                            //send continue
+                            debug!("Job is stopped, will send SIGCONT");
                             true
                         } else {
+                            debug!("Job is not stopped, no SIGCONT needed");
                             false
                         };
                         job.state = ProcessState::Running;
+                        debug!("Set job state to Running");
 
-                        if let Err(err) = tokio::runtime::Handle::current()
-                            .block_on(job.put_in_foreground(true, cont))
-                        {
+                        debug!(
+                            "About to call put_in_foreground_sync with no_hang=true, cont={}",
+                            cont
+                        );
+                        if let Err(err) = job.put_in_foreground_sync(true, cont) {
+                            debug!("put_in_foreground_sync failed with error: {:?}", err);
                             ctx.write_stderr(&format!("{}", err)).ok();
                             return Err(err);
                         }
+                        debug!("put_in_foreground_sync completed successfully");
+                    } else {
+                        debug!("Failed to pop job from wait_jobs - this should not happen");
                     }
                 }
             }

@@ -8,7 +8,7 @@ use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, kill, killpg, sigaction};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::{
-    ForkResult, Pid, close, dup2, execv, fork, getpgrp, getpid, pipe, setpgid, tcsetpgrp,
+    ForkResult, Pid, close, dup2, execv, fork, getpgrp, getpid, isatty, pipe, setpgid, tcsetpgrp,
 };
 use std::ffi::CString;
 use std::fmt::Debug;
@@ -149,6 +149,7 @@ pub struct BuiltinProcess {
     cmd_fn: BuiltinCommand,
     argv: Vec<String>,
     state: ProcessState, // completed, stopped,
+    pub pid: Option<Pid>,
     pub next: Option<Box<JobProcess>>,
     pub stdin: RawFd,
     pub stdout: RawFd,
@@ -168,6 +169,7 @@ impl std::fmt::Debug for BuiltinProcess {
         f.debug_struct("BuiltinProcess")
             .field("argv", &self.argv)
             .field("state", &self.state)
+            .field("pid", &self.pid)
             .field("next", &self.next)
             .field("stdin", &self.stdin)
             .field("stdout", &self.stdout)
@@ -183,6 +185,7 @@ impl BuiltinProcess {
             cmd_fn,
             argv,
             state: ProcessState::Running,
+            pid: None,
             next: None,
             stdin: STDIN_FILENO,
             stdout: STDOUT_FILENO,
@@ -194,6 +197,17 @@ impl BuiltinProcess {
         if let Some(ref mut next) = self.next {
             if next.set_state_pid(pid, state) {
                 return true;
+            }
+            // Check if this process matches the PID
+            if let Some(self_pid) = self.pid {
+                if self_pid == pid {
+                    debug!(
+                        "BuiltinProcess::set_state: updating state for pid {} from {:?} to {:?}",
+                        pid, self.state, state
+                    );
+                    self.state = state;
+                    return true;
+                }
             }
         }
         false
@@ -746,11 +760,14 @@ impl JobProcess {
         let pid = match self {
             JobProcess::Builtin(process) => {
                 if ctx.foreground {
+                    process.pid = Some(current_pid);
                     process.launch(ctx, shell)?;
                     current_pid
                 } else {
                     // Fork for background execution
-                    fork_builtin_process(ctx, process, shell)?
+                    let child_pid = fork_builtin_process(ctx, process, shell)?;
+                    process.pid = Some(child_pid);
+                    child_pid
                 }
             }
             JobProcess::Wasm(process) => {
@@ -1012,28 +1029,136 @@ impl Job {
     }
 
     pub async fn put_in_foreground(&mut self, no_hang: bool, cont: bool) -> Result<()> {
-        debug!("put_in_foreground: id: {} pgid {:?}", self.id, self.pgid);
-        // Put the job into the foreground
+        debug!(
+            "put_in_foreground: id: {} pgid {:?} no_hang: {} cont: {}",
+            self.id, self.pgid, no_hang, cont
+        );
 
-        if let Some(pgid) = self.pgid {
-            tcsetpgrp(SHELL_TERMINAL, pgid).context("failed tcsetpgrp")?;
-
-            if cont {
-                send_signal(pgid, Signal::SIGCONT).context("failed send signal SIGCONT")?;
-            }
+        // ターミナル環境でない場合はプロセスグループ制御をスキップ
+        if !isatty(SHELL_TERMINAL).unwrap_or(false) {
+            debug!("Not a terminal environment, skipping process group control");
+            debug!("About to call wait_job with no_hang: {}", no_hang);
+            self.wait_job(no_hang).await?;
+            debug!("wait_job completed in non-terminal mode");
+            return Ok(());
         }
 
+        debug!("Terminal environment detected, proceeding with process group control");
+
+        // Put the job into the foreground
+        if let Some(pgid) = self.pgid {
+            debug!("Setting foreground process group to {}", pgid);
+            if let Err(err) = tcsetpgrp(SHELL_TERMINAL, pgid) {
+                debug!(
+                    "tcsetpgrp failed: {}, continuing without terminal control",
+                    err
+                );
+            } else {
+                debug!("Successfully set foreground process group to {}", pgid);
+            }
+
+            if cont {
+                debug!("Sending SIGCONT to process group {}", pgid);
+                send_signal(pgid, Signal::SIGCONT).context("failed send signal SIGCONT")?;
+                debug!("SIGCONT sent successfully");
+            }
+        } else {
+            debug!("No pgid available, skipping process group operations");
+        }
+
+        debug!("About to call wait_job with no_hang: {}", no_hang);
         self.wait_job(no_hang).await?;
+        debug!("wait_job completed");
 
-        tcsetpgrp(SHELL_TERMINAL, self.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
+        debug!("Restoring shell process group {}", self.shell_pgid);
+        if let Err(err) = tcsetpgrp(SHELL_TERMINAL, self.shell_pgid) {
+            debug!("tcsetpgrp shell_pgid failed: {}, continuing anyway", err);
+        } else {
+            debug!(
+                "Successfully restored shell process group {}",
+                self.shell_pgid
+            );
+        }
 
+        debug!("put_in_foreground completed successfully");
+        Ok(())
+    }
+
+    /// Synchronous version of put_in_foreground for use in non-async contexts
+    /// This method uses spawn_blocking to handle the async operations safely
+    pub fn put_in_foreground_sync(&mut self, no_hang: bool, cont: bool) -> Result<()> {
+        debug!(
+            "put_in_foreground_sync: id: {} pgid {:?} no_hang: {} cont: {}",
+            self.id, self.pgid, no_hang, cont
+        );
+
+        // ターミナル環境でない場合はプロセスグループ制御をスキップ
+        if !isatty(SHELL_TERMINAL).unwrap_or(false) {
+            debug!("Not a terminal environment, skipping process group control");
+            debug!("About to call wait_job_sync with no_hang: {}", no_hang);
+            self.wait_job_sync(no_hang)?;
+            debug!("wait_job_sync completed in non-terminal mode");
+            return Ok(());
+        }
+
+        debug!("Terminal environment detected, proceeding with process group control");
+
+        // Put the job into the foreground
+        if let Some(pgid) = self.pgid {
+            debug!("Setting foreground process group to {}", pgid);
+            if let Err(err) = tcsetpgrp(SHELL_TERMINAL, pgid) {
+                debug!(
+                    "tcsetpgrp failed: {}, continuing without terminal control",
+                    err
+                );
+            } else {
+                debug!("Successfully set foreground process group to {}", pgid);
+            }
+
+            if cont {
+                debug!("Sending SIGCONT to process group {}", pgid);
+                send_signal(pgid, Signal::SIGCONT).context("failed send signal SIGCONT")?;
+                debug!("SIGCONT sent successfully");
+            }
+        } else {
+            debug!("No pgid available, skipping process group operations");
+        }
+
+        debug!("About to call wait_job_sync with no_hang: {}", no_hang);
+        self.wait_job_sync(no_hang)?;
+        debug!("wait_job_sync completed");
+
+        debug!("Restoring shell process group {}", self.shell_pgid);
+        if let Err(err) = tcsetpgrp(SHELL_TERMINAL, self.shell_pgid) {
+            debug!("tcsetpgrp shell_pgid failed: {}, continuing anyway", err);
+        } else {
+            debug!(
+                "Successfully restored shell process group {}",
+                self.shell_pgid
+            );
+        }
+
+        debug!("put_in_foreground_sync completed successfully");
         Ok(())
     }
 
     pub async fn put_in_background(&mut self) -> Result<()> {
         debug!("put_in_background pgid {:?}", self.pgid,);
 
-        tcsetpgrp(SHELL_TERMINAL, self.shell_pgid).context("failed tcsetpgrp shell_pgid")?;
+        // ターミナル環境でない場合はプロセスグループ制御をスキップ
+        if !isatty(SHELL_TERMINAL).unwrap_or(false) {
+            debug!("Not a terminal environment, skipping process group control");
+            return Ok(());
+        }
+
+        if let Err(err) = tcsetpgrp(SHELL_TERMINAL, self.shell_pgid) {
+            debug!("tcsetpgrp shell_pgid failed: {}, continuing anyway", err);
+        } else {
+            debug!(
+                "Successfully set background process group to shell {}",
+                self.shell_pgid
+            );
+        }
         // let tmodes = tcgetattr(SHELL_TERMINAL).context("failed tcgetattr wait")?;
         // self.tmodes = Some(tmodes);
 
@@ -1043,9 +1168,24 @@ impl Job {
     fn show_job_status(&self) {}
 
     pub async fn wait_job(&mut self, no_hang: bool) -> Result<()> {
+        debug!("wait_job called with no_hang: {}", no_hang);
         if no_hang {
+            debug!("Calling wait_process_no_hang");
             self.wait_process_no_hang().await
         } else {
+            debug!("Calling wait_process (blocking)");
+            self.wait_process()
+        }
+    }
+
+    /// Synchronous version of wait_job for use in non-async contexts
+    pub fn wait_job_sync(&mut self, no_hang: bool) -> Result<()> {
+        debug!("wait_job_sync called with no_hang: {}", no_hang);
+        if no_hang {
+            debug!("Calling wait_process_no_hang_sync");
+            self.wait_process_no_hang_sync()
+        } else {
+            debug!("Calling wait_process (blocking)");
             self.wait_process()
         }
     }
@@ -1109,9 +1249,10 @@ impl Job {
     }
 
     async fn wait_process_no_hang(&mut self) -> Result<()> {
+        debug!("wait_process_no_hang started for job: {}", self.id);
         let mut send_killpg = false;
         loop {
-            debug!("waitpid ...");
+            debug!("waitpid loop iteration...");
 
             self.check_background_all_output().await?;
 
@@ -1164,16 +1305,84 @@ impl Job {
             }
             // break;
             if is_job_completed(self) {
+                debug!("Job completed, breaking from wait_process_no_hang loop");
                 break;
             }
             if is_job_stopped(self) {
                 println!("\rdsh: job {} '{}' has stopped", self.job_id, self.cmd);
+                debug!("Job stopped, breaking from wait_process_no_hang loop");
                 break;
             }
         }
+        debug!("wait_process_no_hang completed for job: {}", self.id);
         Ok(())
     }
 
+    /// Synchronous version of wait_process_no_hang for use in non-async contexts
+    fn wait_process_no_hang_sync(&mut self) -> Result<()> {
+        debug!("wait_process_no_hang_sync started for job: {}", self.id);
+        let mut send_killpg = false;
+        loop {
+            debug!("waitpid loop iteration...");
+
+            // Synchronous version - check background output if needed
+            // Note: This is a simplified version that doesn't handle background output
+            // For full functionality, consider using the async version
+
+            let (pid, state) =
+                match waitpid(None, Some(WaitPidFlag::WUNTRACED | WaitPidFlag::WNOHANG)) {
+                    Ok(WaitStatus::Exited(pid, status)) => {
+                        debug!("wait_job exited {:?} {:?}", pid, status);
+                        (pid, ProcessState::Completed(status as u8, None))
+                    }
+                    Ok(WaitStatus::Signaled(pid, signal, _)) => {
+                        debug!("wait_job signaled {:?} {:?}", pid, signal);
+                        (pid, ProcessState::Completed(1, Some(signal)))
+                    }
+                    Ok(WaitStatus::Stopped(pid, signal)) => {
+                        debug!("wait_job stopped {:?} {:?}", pid, signal);
+                        (pid, ProcessState::Stopped(pid, signal))
+                    }
+                    Ok(WaitStatus::StillAlive) => {
+                        std::thread::sleep(Duration::from_millis(100));
+                        continue;
+                    }
+                    Err(nix::errno::Errno::ECHILD) => {
+                        break;
+                    }
+                    status => {
+                        error!("unexpected waitpid event: {:?}", status);
+                        break;
+                    }
+                };
+
+            self.set_process_state(pid, state);
+
+            debug!("fin wait: pid:{:?}", pid);
+
+            if let ProcessState::Completed(code, _) = state {
+                if code != 0 && !send_killpg {
+                    if let Some(pgid) = self.pgid {
+                        debug!("killpg pgid: {}", pgid);
+                        let _ = killpg(pgid, Signal::SIGKILL);
+                        send_killpg = true;
+                    }
+                }
+            }
+
+            if is_job_completed(self) {
+                debug!("Job completed, breaking from wait_process_no_hang_sync loop");
+                break;
+            }
+            if is_job_stopped(self) {
+                println!("\rdsh: job {} '{}' has stopped", self.job_id, self.cmd);
+                debug!("Job stopped, breaking from wait_process_no_hang_sync loop");
+                break;
+            }
+        }
+        debug!("wait_process_no_hang_sync completed for job: {}", self.id);
+        Ok(())
+    }
     fn set_process_state(&mut self, pid: Pid, state: ProcessState) {
         if let Some(process) = self.process.as_mut() {
             process.set_state_pid(pid, state);
@@ -1191,11 +1400,17 @@ impl Job {
     }
 
     pub async fn check_background_all_output(&mut self) -> Result<()> {
+        debug!(
+            "check_background_all_output: monitors.len() = {}",
+            self.monitors.len()
+        );
         let mut i = 0;
         while i < self.monitors.len() {
+            debug!("Processing monitor {}", i);
             self.monitors[i].output_all(false).await?;
             i += 1;
         }
+        debug!("check_background_all_output completed");
         Ok(())
     }
 
@@ -1493,21 +1708,32 @@ fn fork_process(ctx: &Context, job_pgid: Option<Pid>, process: &mut Process) -> 
 
 pub fn is_job_stopped(job: &Job) -> bool {
     if let Some(p) = &job.process {
-        p.is_stopped()
+        let stopped = p.is_stopped();
+        debug!(
+            "is_job_stopped {} {} -> {}",
+            p.get_cmd(),
+            p.get_state(),
+            stopped
+        );
+        stopped
     } else {
+        debug!("is_job_stopped: no process -> true");
         true
     }
 }
 
 pub fn is_job_completed(job: &Job) -> bool {
     if let Some(process) = &job.process {
-        // debug!(
-        //     "is_job_completed {} {}",
-        //     process.get_cmd(),
-        //     process.get_state()
-        // );
-        process.is_completed()
+        let completed = process.is_completed();
+        debug!(
+            "is_job_completed {} {} -> {}",
+            process.get_cmd(),
+            process.get_state(),
+            completed
+        );
+        completed
     } else {
+        debug!("is_job_completed: no process -> true");
         true
     }
 }

@@ -1,6 +1,8 @@
 use crate::environment::{self, Environment};
 use crate::lisp::default_environment::default_env;
 use crate::lisp::interpreter::eval;
+#[cfg(test)]
+use crate::lisp::model::IntType;
 pub use crate::lisp::model::Value;
 use crate::lisp::model::{Env, List, RuntimeError, Symbol};
 use crate::lisp::parser::parse;
@@ -222,7 +224,7 @@ mod tests {
         let res = engine.borrow().run_func("log", args);
         assert!(res.is_ok());
 
-        let args = vec![Value::Int(1), Value::Int(2)];
+        let args = vec![Value::Int(IntType::from(1)), Value::Int(IntType::from(2))];
         let res = engine.borrow().run_func_values("adder", args);
         assert!(res.is_ok());
         println!("{:?}", res);

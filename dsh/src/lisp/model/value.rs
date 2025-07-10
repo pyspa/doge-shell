@@ -5,9 +5,8 @@ use std::rc::Rc;
 use std::{cell::RefCell, cmp::Ordering};
 use std::{collections::HashMap, fmt::Debug};
 
-cfg_if! {
+cfg_if::cfg_if! {
     if #[cfg(feature = "bigint")] {
-        use num_bigint::BigInt;
         use num_traits::ToPrimitive;
     }
 }
@@ -110,7 +109,12 @@ impl TryFrom<&Value> for IntType {
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
         match value {
-            Value::Int(this) => Ok(*this),
+            Value::Int(this) => {
+                #[cfg(feature = "bigint")]
+                return Ok(this.clone());
+                #[cfg(not(feature = "bigint"))]
+                return Ok(*this);
+            }
             _ => Err(RuntimeError {
                 msg: format!("Expected int, got a {}", value),
             }),
@@ -491,9 +495,9 @@ fn int_type_to_float_type(i: &IntType) -> FloatType {
         if #[cfg(feature = "bigint")] {
             cfg_if! {
                 if #[cfg(feature = "f64")] {
-                    return i.to_f64().unwrap_or(f64::NAN);
+                    i.to_f64().unwrap_or(f64::NAN)
                 } else {
-                    return i.to_f32().unwrap_or(f32::NAN);
+                    i.to_f32().unwrap_or(f32::NAN)
                 }
             }
         } else {

@@ -7,6 +7,26 @@ use dsh_types::Context;
 use std::process::ExitCode;
 use tracing::debug;
 
+/// 正常終了を表すカスタムエラー型
+#[derive(Debug)]
+pub enum ShellExit {
+    Normal,
+    CtrlC,
+    ExitCommand,
+}
+
+impl std::fmt::Display for ShellExit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ShellExit::Normal => write!(f, "Normal exit"),
+            ShellExit::CtrlC => write!(f, "Exit by Ctrl+C"),
+            ShellExit::ExitCommand => write!(f, "Exit by exit command"),
+        }
+    }
+}
+
+impl std::error::Error for ShellExit {}
+
 mod completion;
 mod direnv;
 mod dirs;
@@ -79,6 +99,17 @@ fn setup_panic_handler() {
         } else {
             "Unknown panic payload".to_string()
         };
+
+        // 正常終了に関連するパニックの場合はstacktraceを表示しない
+        if payload.contains("Shell terminated by double Ctrl+C")
+            || payload.contains("Normal exit")
+            || payload.contains("Exit by")
+            || payload.contains("exit command")
+        {
+            // 正常終了の場合は簡潔なメッセージのみ
+            debug!("Shell exiting normally: {}", payload);
+            return;
+        }
 
         let location = if let Some(location) = panic_info.location() {
             format!(
@@ -182,11 +213,21 @@ async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
         // Interactive mode
         debug!("Running in interactive mode");
         match repl.run_interactive().await {
+            Ok(_) => ExitCode::from(0),
             Err(err) => {
-                eprintln!("{err:?}");
-                ExitCode::FAILURE
+                // 正常終了の場合はエラーメッセージを表示しない
+                let err_str = err.to_string();
+                if err_str.contains("Shell terminated by double Ctrl+C")
+                    || err_str.contains("Normal exit")
+                    || err_str.contains("Exit by")
+                {
+                    debug!("Shell exiting normally: {}", err_str);
+                    ExitCode::from(0)
+                } else {
+                    eprintln!("{err:?}");
+                    ExitCode::FAILURE
+                }
             }
-            _ => ExitCode::from(0),
         }
     } else {
         // Pipe mode - read from stdin

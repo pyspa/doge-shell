@@ -95,6 +95,7 @@ pub struct Repl<'a> {
     git_completer: GitCompleter,
     prompt: Arc<RwLock<Prompt>>,
     ctrl_c_state: CtrlCState,
+    should_exit: bool,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -139,6 +140,7 @@ impl<'a> Repl<'a> {
             git_completer: GitCompleter::new(),
             prompt,
             ctrl_c_state: CtrlCState::new(),
+            should_exit: false,
         }
     }
 
@@ -708,9 +710,10 @@ impl<'a> Repl<'a> {
                 let mut out = std::io::stdout().lock();
 
                 if self.ctrl_c_state.on_ctrl_c_pressed() {
-                    // 二回目のCtrl+C - シェルを終了
+                    // 二回目のCtrl+C - シェルを正常終了
                     execute!(out, Print("\r\nExiting shell...\r\n")).ok();
-                    return Err(anyhow::anyhow!("Shell terminated by double Ctrl+C"));
+                    self.should_exit = true;
+                    return Ok(());
                 } else {
                     // 初回のCtrl+C - プロンプトリセット + メッセージ表示
                     execute!(
@@ -848,8 +851,8 @@ impl<'a> Repl<'a> {
                 // show completion
                 self.start_completion = false;
             }
-            if let Some(_status) = self.shell.exited {
-                debug!("exited");
+            if self.should_exit || self.shell.exited.is_some() {
+                debug!("Shell exiting normally");
                 if !self.shell.wait_jobs.is_empty() {
                     // TODO show message
                 }

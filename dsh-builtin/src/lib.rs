@@ -3,6 +3,7 @@ use dsh_types::{Context, ExitStatus};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use tracing::debug;
 
 mod add_path;
 pub mod cd;
@@ -61,7 +62,8 @@ pub fn get_command(name: &str) -> Option<BuiltinCommand> {
     }
 }
 
-pub fn exit(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
-    let _ret = proxy.dispatch(ctx, "exit", Vec::new());
+pub fn exit(_ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    debug!("Exit command called - initiating normal shell exit");
+    proxy.exit_shell();
     ExitStatus::ExitedWith(0)
 }

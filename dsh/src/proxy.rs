@@ -7,7 +7,7 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::os::unix::io::FromRawFd;
 use tabled::{Table, Tabled};
-use tracing::debug;
+use tracing::{debug, error, warn};
 
 #[derive(Tabled)]
 struct Job {
@@ -198,18 +198,38 @@ impl ShellProxy for Shell {
                 self.environment.write().variables.insert(key, output);
             }
             "fg" => {
-                debug!("call fg - wait_jobs.len(): {}", self.wait_jobs.len());
+                debug!(
+                    "FG_CMD_START: Starting fg command - wait_jobs.len(): {}, args: {:?}",
+                    self.wait_jobs.len(),
+                    argv
+                );
+
                 if self.wait_jobs.is_empty() {
+                    debug!("FG_CMD_NO_JOBS: No jobs available for fg command");
                     ctx.write_stdout("fg: there are no suitable jobs")?;
                 } else {
-                    // Parse job specification from arguments
                     let job_spec = argv.get(1).map(|s| s.as_str()).unwrap_or("");
+                    debug!("FG_CMD_SPEC: Job specification: '{}'", job_spec);
+
+                    // Log current job list for debugging
+                    debug!("FG_CMD_AVAILABLE_JOBS: Current job list:");
+                    for (i, job) in self.wait_jobs.iter().enumerate() {
+                        debug!(
+                            "FG_CMD_JOB[{}]: id={}, pid={:?}, state={:?}, foreground={}, cmd='{}'",
+                            i, job.job_id, job.pid, job.state, job.foreground, job.cmd
+                        );
+                    }
 
                     if let Some(job_index) = parse_job_spec(job_spec, &self.wait_jobs) {
                         let mut job = self.wait_jobs.remove(job_index);
-                        debug!("foreground job: {:?}", job);
-                        debug!("Job state before fg: {:?}", job.state);
-                        debug!("Job pgid: {:?}, pid: {:?}", job.pgid, job.pid);
+                        debug!(
+                            "FG_CMD_SELECTED: Selected job {} at index {} for foreground",
+                            job.job_id, job_index
+                        );
+                        debug!(
+                            "FG_CMD_JOB_DETAILS: Job details before fg - state: {:?}, pgid: {:?}, pid: {:?}",
+                            job.state, job.pgid, job.pid
+                        );
 
                         ctx.write_stdout(&format!(
                             "dsh: job {} '{}' to foreground",
@@ -218,74 +238,134 @@ impl ShellProxy for Shell {
                         .ok();
 
                         let cont = if let ProcessState::Stopped(_, _) = job.state {
-                            debug!("Job is stopped, will send SIGCONT");
+                            debug!(
+                                "FG_CMD_STOPPED: Job {} is stopped, will send SIGCONT",
+                                job.job_id
+                            );
                             true
                         } else {
-                            debug!("Job is not stopped, no SIGCONT needed");
+                            debug!(
+                                "FG_CMD_NOT_STOPPED: Job {} is not stopped, no SIGCONT needed (state: {:?})",
+                                job.job_id, job.state
+                            );
                             false
                         };
+
+                        let old_state = job.state;
                         job.state = ProcessState::Running;
-                        debug!("Set job state to Running");
+                        debug!(
+                            "FG_CMD_STATE_CHANGE: Set job {} state from {:?} to Running",
+                            job.job_id, old_state
+                        );
 
                         debug!(
-                            "About to call put_in_foreground_sync with no_hang=true, cont={}",
-                            cont
+                            "FG_CMD_FOREGROUND_CALL: About to call put_in_foreground_sync for job {} with no_hang=true, cont={}",
+                            job.job_id, cont
                         );
-                        if let Err(err) = job.put_in_foreground_sync(true, cont) {
-                            debug!("put_in_foreground_sync failed with error: {:?}", err);
-                            ctx.write_stderr(&format!("{}", err)).ok();
-                            return Err(err);
+
+                        match job.put_in_foreground_sync(true, cont) {
+                            Ok(_) => {
+                                debug!(
+                                    "FG_CMD_SUCCESS: put_in_foreground_sync completed successfully for job {}",
+                                    job.job_id
+                                );
+                            }
+                            Err(err) => {
+                                error!(
+                                    "FG_CMD_ERROR: put_in_foreground_sync failed for job {} with error: {:?}",
+                                    job.job_id, err
+                                );
+                                ctx.write_stderr(&format!("{}", err)).ok();
+                                return Err(err);
+                            }
                         }
-                        debug!("put_in_foreground_sync completed successfully");
                     } else {
                         let error_msg = if job_spec.is_empty() {
                             "fg: no current job".to_string()
                         } else {
                             format!("fg: job not found: {}", job_spec)
                         };
+                        debug!("FG_CMD_NOT_FOUND: {}", error_msg);
                         ctx.write_stderr(&error_msg)?;
                         return Err(anyhow::anyhow!(error_msg));
                     }
                 }
             }
             "bg" => {
-                debug!("call bg - wait_jobs.len(): {}", self.wait_jobs.len());
+                debug!(
+                    "BG_CMD_START: Starting bg command - wait_jobs.len(): {}, args: {:?}",
+                    self.wait_jobs.len(),
+                    argv
+                );
+
                 if self.wait_jobs.is_empty() {
+                    debug!("BG_CMD_NO_JOBS: No jobs available for bg command");
                     ctx.write_stdout("bg: there are no suitable jobs")?;
                 } else {
-                    // Parse job specification from arguments
                     let job_spec = argv.get(1).map(|s| s.as_str()).unwrap_or("");
+                    debug!("BG_CMD_SPEC: Job specification: '{}'", job_spec);
+
+                    // Log current job list for debugging
+                    debug!("BG_CMD_AVAILABLE_JOBS: Current job list:");
+                    for (i, job) in self.wait_jobs.iter().enumerate() {
+                        debug!(
+                            "BG_CMD_JOB[{}]: id={}, pid={:?}, state={:?}, foreground={}, cmd='{}'",
+                            i, job.job_id, job.pid, job.state, job.foreground, job.cmd
+                        );
+                    }
 
                     // Find job by specification or default to most recent stopped job
                     let job_index = if job_spec.is_empty() {
+                        debug!("BG_CMD_FIND_STOPPED: Looking for most recent stopped job");
                         // Find the most recent stopped job
                         let mut found_index = None;
                         for (i, job) in self.wait_jobs.iter().enumerate().rev() {
+                            debug!(
+                                "BG_CMD_CHECK_STOPPED: Checking job {} (index: {}, state: {:?})",
+                                job.job_id, i, job.state
+                            );
                             if matches!(job.state, ProcessState::Stopped(_, _)) {
+                                debug!(
+                                    "BG_CMD_FOUND_STOPPED: Found stopped job {} at index {}",
+                                    job.job_id, i
+                                );
                                 found_index = Some(i);
                                 break;
                             }
                         }
+                        if found_index.is_none() {
+                            debug!("BG_CMD_NO_STOPPED: No stopped jobs found");
+                        }
                         found_index
                     } else {
+                        debug!(
+                            "BG_CMD_PARSE_SPEC: Parsing job specification: '{}'",
+                            job_spec
+                        );
                         // Parse job specification
                         parse_job_spec(job_spec, &self.wait_jobs)
                     };
 
                     if let Some(index) = job_index {
                         let job = &self.wait_jobs[index];
+                        debug!(
+                            "BG_CMD_SELECTED: Selected job {} at index {} for background",
+                            job.job_id, index
+                        );
 
                         // Check if job is actually stopped
                         if !matches!(job.state, ProcessState::Stopped(_, _)) {
                             let error_msg = format!("bg: job {} is already running", job.job_id);
+                            debug!("BG_CMD_ALREADY_RUNNING: {}", error_msg);
                             ctx.write_stderr(&error_msg)?;
                             return Err(anyhow::anyhow!(error_msg));
                         }
 
                         let mut job = self.wait_jobs.remove(index);
-                        debug!("background job: {:?}", job);
-                        debug!("Job state before bg: {:?}", job.state);
-                        debug!("Job pgid: {:?}, pid: {:?}", job.pgid, job.pid);
+                        debug!(
+                            "BG_CMD_JOB_DETAILS: Job details before bg - state: {:?}, pgid: {:?}, pid: {:?}",
+                            job.state, job.pgid, job.pid
+                        );
 
                         ctx.write_stdout(&format!(
                             "dsh: job {} '{}' to background",
@@ -294,31 +374,54 @@ impl ShellProxy for Shell {
                         .ok();
 
                         // Set job state to running and send SIGCONT
+                        let old_state = job.state;
                         job.state = ProcessState::Running;
-                        debug!("Set job state to Running");
+                        debug!(
+                            "BG_CMD_STATE_CHANGE: Set job {} state from {:?} to Running",
+                            job.job_id, old_state
+                        );
 
                         // Send SIGCONT to resume the job
                         if let Some(pgid) = job.pgid {
-                            debug!("Sending SIGCONT to process group {}", pgid);
+                            debug!(
+                                "BG_CMD_SIGCONT: Sending SIGCONT to process group {} for job {}",
+                                pgid, job.job_id
+                            );
                             use nix::sys::signal::{Signal, killpg};
-                            if let Err(err) = killpg(pgid, Signal::SIGCONT) {
-                                debug!("Failed to send SIGCONT: {}", err);
-                                ctx.write_stderr(&format!("bg: failed to resume job: {}", err))
-                                    .ok();
-                                return Err(err.into());
+                            match killpg(pgid, Signal::SIGCONT) {
+                                Ok(_) => {
+                                    debug!(
+                                        "BG_CMD_SIGCONT_SUCCESS: SIGCONT sent successfully to job {}",
+                                        job.job_id
+                                    );
+                                }
+                                Err(err) => {
+                                    error!(
+                                        "BG_CMD_SIGCONT_ERROR: Failed to send SIGCONT to job {}: {}",
+                                        job.job_id, err
+                                    );
+                                    ctx.write_stderr(&format!("bg: failed to resume job: {}", err))
+                                        .ok();
+                                    return Err(err.into());
+                                }
                             }
-                            debug!("SIGCONT sent successfully");
+                        } else {
+                            warn!(
+                                "BG_CMD_NO_PGID: Job {} has no process group ID, cannot send SIGCONT",
+                                job.job_id
+                            );
                         }
 
                         // Put the job back in the background jobs list
                         self.wait_jobs.push(job);
-                        debug!("Job moved to background successfully");
+                        debug!("BG_CMD_SUCCESS: Job moved to background successfully");
                     } else {
                         let error_msg = if job_spec.is_empty() {
                             "bg: no stopped jobs".to_string()
                         } else {
                             format!("bg: job not found: {}", job_spec)
                         };
+                        debug!("BG_CMD_NOT_FOUND: {}", error_msg);
                         ctx.write_stderr(&error_msg)?;
                         return Err(anyhow::anyhow!(error_msg));
                     }

@@ -5,7 +5,7 @@ use crate::history::FrecencyHistory;
 use crate::lisp;
 use crate::parser::{self, Rule, ShellParser};
 use crate::process::SubshellType;
-use crate::process::{self, Job, JobProcess, Redirect, wait_pid_job};
+use crate::process::{self, Job, JobProcess, Redirect, is_job_completed, wait_pid_job};
 use anyhow::Context as _;
 use anyhow::{Result, anyhow, bail};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
@@ -27,7 +27,7 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::{cell::RefCell, rc::Rc};
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 pub const APP_NAME: &str = "dsh";
 pub const SHELL_TERMINAL: c_int = STDIN_FILENO;
@@ -185,28 +185,97 @@ impl Shell {
     /// Send signal to foreground job
     #[allow(dead_code)]
     pub fn send_signal_to_foreground_job(&mut self, signal: Signal) -> Result<()> {
+        debug!(
+            "SIGNAL_TO_FG_START: Attempting to send signal {:?} to foreground jobs (total jobs: {})",
+            signal,
+            self.wait_jobs.len()
+        );
+
+        let mut sent_count = 0;
+        let mut foreground_jobs = Vec::new();
+
+        // First, collect information about foreground jobs
+        for job in &self.wait_jobs {
+            if job.foreground {
+                foreground_jobs.push((job.job_id, job.pid, job.cmd.clone()));
+            }
+        }
+
+        debug!(
+            "SIGNAL_TO_FG_TARGETS: Found {} foreground jobs to signal",
+            foreground_jobs.len()
+        );
+
+        for (job_id, pid_opt, cmd) in &foreground_jobs {
+            debug!(
+                "SIGNAL_TO_FG_TARGET: Job {} (pid: {:?}, cmd: '{}')",
+                job_id, pid_opt, cmd
+            );
+        }
+
         for job in &mut self.wait_jobs {
             if job.foreground {
                 if let Some(pid) = job.pid {
                     debug!(
-                        "Sending signal {:?} to foreground job {} (pid: {})",
-                        signal, job.job_id, pid
+                        "SIGNAL_TO_FG_SENDING: Sending signal {:?} to foreground job {} (pid: {}, cmd: '{}')",
+                        signal, job.job_id, pid, job.cmd
                     );
                     // Send signal to process group
                     match nix::sys::signal::killpg(pid, signal) {
-                        Ok(_) => debug!("Signal sent successfully"),
+                        Ok(_) => {
+                            debug!(
+                                "SIGNAL_TO_FG_SUCCESS: Successfully sent signal {:?} to process group {} (job {})",
+                                signal, pid, job.job_id
+                            );
+                            sent_count += 1;
+                        }
                         Err(e) => {
-                            warn!("Failed to send signal to process group {}: {}", pid, e);
+                            warn!(
+                                "SIGNAL_TO_FG_FALLBACK: Failed to send signal to process group {}: {}, trying individual process",
+                                pid, e
+                            );
                             // Fallback: send to individual process
-                            if let Err(e2) = nix::sys::signal::kill(pid, signal) {
-                                warn!("Failed to send signal to process {}: {}", pid, e2);
+                            match nix::sys::signal::kill(pid, signal) {
+                                Ok(_) => {
+                                    debug!(
+                                        "SIGNAL_TO_FG_FALLBACK_SUCCESS: Successfully sent signal {:?} to individual process {} (job {})",
+                                        signal, pid, job.job_id
+                                    );
+                                    sent_count += 1;
+                                }
+                                Err(e2) => {
+                                    error!(
+                                        "SIGNAL_TO_FG_FALLBACK_ERROR: Failed to send signal to individual process {}: {}",
+                                        pid, e2
+                                    );
+                                }
                             }
                         }
                     }
+                } else {
+                    warn!(
+                        "SIGNAL_TO_FG_NO_PID: Foreground job {} has no PID, cannot send signal (cmd: '{}')",
+                        job.job_id, job.cmd
+                    );
                 }
                 break;
             }
         }
+
+        debug!(
+            "SIGNAL_TO_FG_COMPLETE: Signal {:?} processing complete, {} signals sent out of {} foreground jobs",
+            signal,
+            sent_count,
+            foreground_jobs.len()
+        );
+
+        if sent_count == 0 && !foreground_jobs.is_empty() {
+            warn!(
+                "SIGNAL_TO_FG_WARNING: No signals were sent despite having {} foreground jobs",
+                foreground_jobs.len()
+            );
+        }
+
         Ok(())
     }
 
@@ -776,19 +845,90 @@ impl Shell {
     }
 
     pub async fn check_job_state(&mut self) -> Result<Vec<Job>> {
+        let start_time = std::time::Instant::now();
+
+        debug!(
+            "CHECK_JOB_STATE_START: Starting job state check, total jobs: {}",
+            self.wait_jobs.len()
+        );
+
+        // Log current job states before checking
+        for (i, job) in self.wait_jobs.iter().enumerate() {
+            debug!(
+                "CHECK_JOB_STATE_INITIAL: Job[{}] id={}, pid={:?}, state={:?}, foreground={}, cmd='{}'",
+                i, job.job_id, job.pid, job.state, job.foreground, job.cmd
+            );
+        }
+
         let mut completed: Vec<Job> = Vec::new();
         let mut i = 0;
+
         while i < self.wait_jobs.len() {
-            if !self.wait_jobs[i].foreground {
-                self.wait_jobs[i].check_background_all_output().await?;
+            let job = &mut self.wait_jobs[i];
+
+            debug!(
+                "CHECK_JOB_STATE_CHECKING: Checking job {} (index: {}, pid: {:?}, state: {:?}, foreground: {})",
+                job.job_id, i, job.pid, job.state, job.foreground
+            );
+
+            if !job.foreground {
+                debug!(
+                    "CHECK_JOB_STATE_BACKGROUND: Checking background output for job {}",
+                    job.job_id
+                );
+                if let Err(e) = job.check_background_all_output().await {
+                    error!(
+                        "CHECK_JOB_STATE_BG_ERROR: Failed to check background output for job {}: {}",
+                        job.job_id, e
+                    );
+                }
             }
-            if self.wait_jobs[i].update_status() {
+
+            let was_completed_before = is_job_completed(job);
+            let is_completed_now = job.update_status();
+
+            debug!(
+                "CHECK_JOB_STATE_STATUS: Job {} completion status: before={}, after={}, current_state={:?}",
+                job.job_id, was_completed_before, is_completed_now, job.state
+            );
+
+            if is_completed_now {
                 let removed_job = self.wait_jobs.remove(i);
+                debug!(
+                    "CHECK_JOB_STATE_COMPLETED: Job {} completed and removed (final state: {:?}, exit_code: {})",
+                    removed_job.job_id,
+                    removed_job.state,
+                    match removed_job.state {
+                        crate::process::ProcessState::Completed(code, _) => code.to_string(),
+                        _ => "unknown".to_string(),
+                    }
+                );
                 completed.push(removed_job);
             } else {
+                debug!(
+                    "CHECK_JOB_STATE_ACTIVE: Job {} still active, continuing (state: {:?})",
+                    job.job_id, job.state
+                );
                 i += 1;
             }
         }
+
+        let elapsed = start_time.elapsed();
+        debug!(
+            "CHECK_JOB_STATE_COMPLETE: Completed check in {}ms, {} jobs completed, {} jobs remaining",
+            elapsed.as_millis(),
+            completed.len(),
+            self.wait_jobs.len()
+        );
+
+        if elapsed.as_millis() > 10 {
+            debug!(
+                "CHECK_JOB_STATE_PERF: Job state check took {}ms for {} jobs (may indicate performance issue)",
+                elapsed.as_millis(),
+                self.wait_jobs.len() + completed.len()
+            );
+        }
+
         Ok(completed)
     }
 

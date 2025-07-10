@@ -547,18 +547,54 @@ impl Process {
     }
 
     fn update_state(&mut self) -> Option<ProcessState> {
+        debug!(
+            "PROCESS_UPDATE_STATE: Checking state for process '{}' (current: {:?}, pid: {:?})",
+            self.cmd, self.state, self.pid
+        );
+
         if let ProcessState::Completed(_, _) = self.state {
+            debug!(
+                "PROCESS_UPDATE_STATE: Process '{}' already completed, returning existing state",
+                self.cmd
+            );
             Some(self.state)
         } else {
             if let Some(pid) = self.pid {
-                if let Some((_, state)) = wait_pid_job(pid, true) {
+                debug!(
+                    "PROCESS_UPDATE_STATE: Calling wait_pid_job for process '{}' pid: {}",
+                    self.cmd, pid
+                );
+                if let Some((waited_pid, state)) = wait_pid_job(pid, true) {
+                    debug!(
+                        "PROCESS_UPDATE_STATE: Process '{}' state updated from {:?} to {:?} (waited_pid: {})",
+                        self.cmd, self.state, state, waited_pid
+                    );
                     self.state = state;
+                } else {
+                    debug!(
+                        "PROCESS_UPDATE_STATE: No state change for process '{}' (still {:?})",
+                        self.cmd, self.state
+                    );
                 }
+            } else {
+                debug!(
+                    "PROCESS_UPDATE_STATE: Process '{}' has no PID, cannot check state",
+                    self.cmd
+                );
             }
 
             if let Some(next) = self.next.as_mut() {
+                debug!(
+                    "PROCESS_UPDATE_STATE: Checking next process in pipeline for '{}'",
+                    self.cmd
+                );
                 next.update_state();
             }
+
+            debug!(
+                "PROCESS_UPDATE_STATE: Final state for process '{}': {:?}",
+                self.cmd, self.state
+            );
             Some(self.state)
         }
     }
@@ -1011,30 +1047,114 @@ impl Job {
     }
 
     pub async fn launch(&mut self, ctx: &mut Context, shell: &mut Shell) -> Result<ProcessState> {
+        debug!(
+            "JOB_LAUNCH_START: Starting job {} launch (cmd: '{}', foreground: {}, pid: {:?})",
+            self.job_id, self.cmd, self.foreground, self.pid
+        );
+
         ctx.foreground = self.foreground;
 
         if let Some(process) = self.process.take().as_mut() {
-            self.launch_process(ctx, shell, process)?;
+            debug!(
+                "JOB_LAUNCH_PROCESS: Launching process for job {} (process_type: {})",
+                self.job_id,
+                process.get_cmd()
+            );
+
+            match self.launch_process(ctx, shell, process) {
+                Ok(_) => {
+                    debug!(
+                        "JOB_LAUNCH_PROCESS_SUCCESS: Process launched successfully for job {}",
+                        self.job_id
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        "JOB_LAUNCH_PROCESS_ERROR: Failed to launch process for job {}: {}",
+                        self.job_id, e
+                    );
+                    return Err(e);
+                }
+            }
 
             if !ctx.interactive {
+                debug!(
+                    "JOB_LAUNCH_NON_INTERACTIVE: Non-interactive mode, waiting for job {} completion",
+                    self.job_id
+                );
                 self.wait_job(false).await?;
             } else if ctx.foreground {
+                debug!(
+                    "JOB_LAUNCH_FOREGROUND: Foreground job {}, process_count: {}",
+                    self.job_id, ctx.process_count
+                );
                 // foreground
                 if ctx.process_count > 0 {
-                    let _ = self.put_in_foreground(false, false).await;
+                    debug!(
+                        "JOB_LAUNCH_PUT_FOREGROUND: Putting job {} in foreground",
+                        self.job_id
+                    );
+                    match self.put_in_foreground(false, false).await {
+                        Ok(_) => {
+                            debug!(
+                                "JOB_LAUNCH_FOREGROUND_SUCCESS: Job {} put in foreground successfully",
+                                self.job_id
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                "JOB_LAUNCH_FOREGROUND_ERROR: Failed to put job {} in foreground: {}",
+                                self.job_id, e
+                            );
+                        }
+                    }
+                } else {
+                    debug!(
+                        "JOB_LAUNCH_NO_PROCESSES: Job {} has no processes to put in foreground",
+                        self.job_id
+                    );
                 }
             } else {
+                debug!(
+                    "JOB_LAUNCH_BACKGROUND: Background job {}, putting in background",
+                    self.job_id
+                );
                 // background
-                let _ = self.put_in_background().await;
+                match self.put_in_background().await {
+                    Ok(_) => {
+                        debug!(
+                            "JOB_LAUNCH_BACKGROUND_SUCCESS: Job {} put in background successfully",
+                            self.job_id
+                        );
+                    }
+                    Err(e) => {
+                        error!(
+                            "JOB_LAUNCH_BACKGROUND_ERROR: Failed to put job {} in background: {}",
+                            self.job_id, e
+                        );
+                    }
+                }
             }
+        } else {
+            debug!(
+                "JOB_LAUNCH_NO_PROCESS: Job {} has no process to launch",
+                self.job_id
+            );
         }
 
-        if ctx.foreground {
-            Ok(self.last_process_state())
+        let final_state = if ctx.foreground {
+            self.last_process_state()
         } else {
             // background
-            Ok(ProcessState::Running)
-        }
+            ProcessState::Running
+        };
+
+        debug!(
+            "JOB_LAUNCH_RESULT: Job {} launch result - state: {:?}, foreground: {}",
+            self.job_id, final_state, ctx.foreground
+        );
+
+        Ok(final_state)
     }
 
     fn launch_process(
@@ -1540,12 +1660,66 @@ impl Job {
     }
 
     pub fn update_status(&mut self) -> bool {
+        let old_state = self.state;
+
         if let Some(process) = self.process.as_mut() {
             if let Some(state) = process.update_state() {
                 self.state = state;
+
+                // Log state changes with detailed information
+                if old_state != self.state {
+                    debug!(
+                        "JOB_STATE_CHANGE: Job {} state changed: {:?} -> {:?} (pid: {:?}, pgid: {:?})",
+                        self.job_id, old_state, self.state, self.pid, self.pgid
+                    );
+
+                    // Log specific state transitions
+                    match (&old_state, &self.state) {
+                        (ProcessState::Running, ProcessState::Stopped(pid, signal)) => {
+                            debug!(
+                                "JOB_STOPPED: Job {} stopped by signal {:?} (pid: {:?})",
+                                self.job_id, signal, pid
+                            );
+                        }
+                        (ProcessState::Stopped(_, _), ProcessState::Running) => {
+                            debug!(
+                                "JOB_RESUMED: Job {} resumed from stopped state",
+                                self.job_id
+                            );
+                        }
+                        (ProcessState::Running, ProcessState::Completed(exit_code, signal)) => {
+                            debug!(
+                                "JOB_COMPLETED: Job {} completed with exit_code: {}, signal: {:?}",
+                                self.job_id, exit_code, signal
+                            );
+                        }
+                        (
+                            ProcessState::Stopped(_, _),
+                            ProcessState::Completed(exit_code, signal),
+                        ) => {
+                            debug!(
+                                "JOB_COMPLETED_FROM_STOP: Job {} completed from stopped state with exit_code: {}, signal: {:?}",
+                                self.job_id, exit_code, signal
+                            );
+                        }
+                        _ => {
+                            debug!(
+                                "JOB_STATE_OTHER: Job {} other state transition: {:?} -> {:?}",
+                                self.job_id, old_state, self.state
+                            );
+                        }
+                    }
+                }
             }
         }
-        is_job_completed(self)
+
+        let is_completed = is_job_completed(self);
+        debug!(
+            "JOB_COMPLETION_CHECK: Job {} completion check result: {} (current state: {:?})",
+            self.job_id, is_completed, self.state
+        );
+
+        is_completed
     }
 
     // pub async fn check_background_output2(&self) -> Result<()> {
@@ -1908,17 +2082,55 @@ pub fn is_job_stopped(job: &Job) -> bool {
 }
 
 pub fn is_job_completed(job: &Job) -> bool {
+    debug!(
+        "JOB_COMPLETION_CHECK_START: Checking completion for job {} (state: {:?}, cmd: '{}')",
+        job.job_id, job.state, job.cmd
+    );
+
     if let Some(process) = &job.process {
+        let process_state = process.get_state();
         let completed = process.is_completed();
+
         debug!(
-            "is_job_completed {} {} -> {}",
+            "JOB_COMPLETION_CHECK_PROCESS: Job {} process '{}' state: {:?}, completed: {}",
+            job.job_id,
             process.get_cmd(),
-            process.get_state(),
+            process_state,
             completed
+        );
+
+        // Additional logging for specific states
+        match process_state {
+            ProcessState::Running => {
+                debug!(
+                    "JOB_COMPLETION_CHECK_RUNNING: Job {} is still running",
+                    job.job_id
+                );
+            }
+            ProcessState::Stopped(pid, signal) => {
+                debug!(
+                    "JOB_COMPLETION_CHECK_STOPPED: Job {} is stopped (pid: {}, signal: {:?})",
+                    job.job_id, pid, signal
+                );
+            }
+            ProcessState::Completed(exit_code, signal) => {
+                debug!(
+                    "JOB_COMPLETION_CHECK_COMPLETED: Job {} completed (exit_code: {}, signal: {:?})",
+                    job.job_id, exit_code, signal
+                );
+            }
+        }
+
+        debug!(
+            "JOB_COMPLETION_CHECK_RESULT: Job {} completion result: {}",
+            job.job_id, completed
         );
         completed
     } else {
-        debug!("is_job_completed: no process -> true");
+        debug!(
+            "JOB_COMPLETION_CHECK_NO_PROCESS: Job {} has no process, treating as completed",
+            job.job_id
+        );
         true
     }
 }
@@ -1930,20 +2142,62 @@ pub fn wait_pid_job(pid: Pid, no_hang: bool) -> Option<(Pid, ProcessState)> {
         WaitPidFlag::WUNTRACED
     };
 
+    debug!(
+        "WAIT_PID_START: Starting waitpid for pid: {}, no_hang: {}, options: {:?}",
+        pid, no_hang, options
+    );
+
     let result = waitpid(pid, Some(options));
     let res = match result {
-        Ok(WaitStatus::Exited(pid, status)) => (pid, ProcessState::Completed(status as u8, None)),
-        Ok(WaitStatus::Signaled(pid, signal, _)) => (pid, ProcessState::Completed(1, Some(signal))),
-        Ok(WaitStatus::Stopped(pid, signal)) => (pid, ProcessState::Stopped(pid, signal)),
-        Err(nix::errno::Errno::ECHILD) => (pid, ProcessState::Completed(1, None)),
+        Ok(WaitStatus::Exited(pid, status)) => {
+            debug!(
+                "WAIT_PID_EXITED: Process {} exited normally with status: {}",
+                pid, status
+            );
+            (pid, ProcessState::Completed(status as u8, None))
+        }
+        Ok(WaitStatus::Signaled(pid, signal, core_dumped)) => {
+            debug!(
+                "WAIT_PID_SIGNALED: Process {} killed by signal: {:?}, core_dumped: {}",
+                pid, signal, core_dumped
+            );
+            (pid, ProcessState::Completed(1, Some(signal)))
+        }
+        Ok(WaitStatus::Stopped(pid, signal)) => {
+            debug!(
+                "WAIT_PID_STOPPED: Process {} stopped by signal: {:?}",
+                pid, signal
+            );
+            (pid, ProcessState::Stopped(pid, signal))
+        }
+        Err(nix::errno::Errno::ECHILD) => {
+            debug!(
+                "WAIT_PID_ECHILD: No child process {} (ECHILD) - treating as completed",
+                pid
+            );
+            (pid, ProcessState::Completed(1, None))
+        }
         Ok(WaitStatus::StillAlive) => {
+            debug!("WAIT_PID_ALIVE: Process {} still alive (WNOHANG)", pid);
+            return None;
+        }
+        Ok(WaitStatus::Continued(pid)) => {
+            debug!("WAIT_PID_CONTINUED: Process {} continued", pid);
             return None;
         }
         status => {
-            error!("unexpected waitpid event: {:?}", status);
+            error!(
+                "WAIT_PID_UNEXPECTED: Unexpected waitpid status for pid {}: {:?}",
+                pid, status
+            );
             return None;
         }
     };
+
+    debug!(
+        "WAIT_PID_RESULT: Returning result for pid {}: state={:?}",
+        pid, res.1
+    );
     Some(res)
 }
 

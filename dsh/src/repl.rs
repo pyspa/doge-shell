@@ -207,12 +207,14 @@ impl<'a> Repl<'a> {
 
     fn move_cursor_input_end(&self, out: &mut StdoutLock<'static>) {
         let prompt_size = self.prompt.read().mark.chars().count();
-        queue!(
-            out,
-            ResetColor,
-            cursor::MoveToColumn((prompt_size + self.input.cursor() + 1) as u16),
-        )
-        .ok();
+        let cursor_pos = prompt_size + self.input.cursor() + 1;
+        debug!(
+            "move_cursor_input_end: prompt_size={}, input_cursor={}, final_pos={}",
+            prompt_size,
+            self.input.cursor(),
+            cursor_pos
+        );
+        queue!(out, ResetColor, cursor::MoveToColumn(cursor_pos as u16),).ok();
     }
 
     // fn move_cursor(&self, len: usize) {
@@ -227,6 +229,7 @@ impl<'a> Repl<'a> {
     // }
 
     fn print_prompt(&mut self, out: &mut StdoutLock<'static>) {
+        debug!("print_prompt called - this will trigger full prompt redraw");
         let mut prompt = self.prompt.write();
         let prompt_mark = prompt.mark.clone();
         prompt.print_preprompt(out);
@@ -425,7 +428,7 @@ impl<'a> Repl<'a> {
     }
 
     async fn handle_key_event(&mut self, ev: &KeyEvent) -> Result<()> {
-        let mut redraw = true;
+        let redraw = true;
         let mut reset_completion = false;
 
         // Ctrl+C以外のキー入力時はCtrl+C状態をリセット
@@ -462,9 +465,13 @@ impl<'a> Repl<'a> {
                 if self.input.cursor() > 0 {
                     self.input.completion = None;
                     self.input.move_by(-1);
-                    // Cursor movement will be handled in the unified output section
-                    redraw = false; // Set flag to handle cursor movement separately
                     self.completion.clear();
+
+                    // Only move cursor, don't redraw entire prompt
+                    let mut out = std::io::stdout().lock();
+                    self.move_cursor_input_end(&mut out);
+                    out.flush().ok();
+                    return Ok(());
                 } else {
                     return Ok(());
                 }
@@ -494,9 +501,13 @@ impl<'a> Repl<'a> {
             (KeyCode::Right, NONE) => {
                 if self.input.cursor() < self.input.len() {
                     self.input.move_by(1);
-                    // Cursor movement will be handled in the unified output section
-                    redraw = false; // Set flag to handle cursor movement separately
                     self.completion.clear();
+
+                    // Only move cursor, don't redraw entire prompt
+                    let mut out = std::io::stdout().lock();
+                    self.move_cursor_input_end(&mut out);
+                    out.flush().ok();
+                    return Ok(());
                 } else {
                     return Ok(());
                 }
@@ -662,8 +673,10 @@ impl<'a> Repl<'a> {
                     }
                     self.input.clear();
                 }
-                redraw = false;
-                // self.print_prompt();
+                // After command execution, show new prompt
+                let mut out = std::io::stdout().lock();
+                self.print_prompt(&mut out);
+                return Ok(());
             }
             (KeyCode::Enter, ALT) => {
                 self.input.completion.take();
@@ -691,8 +704,10 @@ impl<'a> Repl<'a> {
                     }
                     self.input.clear();
                 }
-                redraw = false;
-                // self.print_prompt();
+                // After command execution, show new prompt
+                let mut out = std::io::stdout().lock();
+                self.print_prompt(&mut out);
+                return Ok(());
             }
             (KeyCode::Char('a'), CTRL) => {
                 self.input.move_to_begin();
@@ -753,13 +768,12 @@ impl<'a> Repl<'a> {
         if redraw {
             debug!("Redrawing input, reset_completion: {}", reset_completion);
             self.print_input(&mut out, reset_completion);
-        } else {
-            debug!("Printing prompt only");
-            self.print_prompt(&mut out);
+            // Handle cursor positioning after output
+            self.move_cursor_input_end(&mut out);
         }
+        // Note: For cursor-only movements (redraw=false), cursor positioning
+        // is handled directly in the key event handlers to avoid full redraw
 
-        // Handle cursor positioning after output
-        self.move_cursor_input_end(&mut out);
         out.flush().ok();
         Ok(())
     }

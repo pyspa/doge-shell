@@ -130,12 +130,26 @@ impl Redirect {
 }
 
 fn copy_fd(src: RawFd, dst: RawFd) -> Result<()> {
+    debug!("📋 COPY_FD: copy_fd called with src={}, dst={}", src, dst);
+
     if src != dst && src >= 0 && dst >= 0 {
+        debug!("📋 COPY_FD: Performing dup2({} -> {})", src, dst);
         dup2(src, dst).map_err(|e| anyhow::anyhow!("dup2 failed: {}", e))?;
+        debug!("📋 COPY_FD: dup2 successful");
+
         // Only close if it's not a standard file descriptor
         if src > 2 {
+            debug!("📋 COPY_FD: Closing source fd {} (non-standard fd)", src);
             close(src).map_err(|e| anyhow::anyhow!("close failed: {}", e))?;
+            debug!("📋 COPY_FD: Successfully closed fd {}", src);
+        } else {
+            debug!("📋 COPY_FD: Not closing fd {} (standard fd)", src);
         }
+    } else {
+        debug!(
+            "📋 COPY_FD: No action needed (src={}, dst={}) - same fd or invalid",
+            src, dst
+        );
     }
     Ok(())
 }
@@ -686,11 +700,26 @@ impl JobProcess {
     }
 
     fn set_state_pid(&mut self, pid: Pid, state: ProcessState) -> bool {
-        match self {
-            JobProcess::Builtin(p) => p.set_state(pid, state),
-            JobProcess::Wasm(p) => p.set_state(pid, state),
-            JobProcess::Command(p) => p.set_state(pid, state),
-        }
+        debug!(
+            "🔄 STATE: set_state_pid called for pid: {}, state: {:?}",
+            pid, state
+        );
+        let result = match self {
+            JobProcess::Builtin(p) => {
+                debug!("🔄 STATE: Setting state for builtin process: {}", p.name);
+                p.set_state(pid, state)
+            }
+            JobProcess::Wasm(p) => {
+                debug!("🔄 STATE: Setting state for wasm process: {}", p.name);
+                p.set_state(pid, state)
+            }
+            JobProcess::Command(p) => {
+                debug!("🔄 STATE: Setting state for command process: {}", p.cmd);
+                p.set_state(pid, state)
+            }
+        };
+        debug!("🔄 STATE: set_state_pid result: {}", result);
+        result
     }
 
     pub fn get_state(&self) -> ProcessState {
@@ -757,18 +786,42 @@ impl JobProcess {
         // has pipelines process ?
         let next_process = self.take_next();
 
+        debug!("🚀 LAUNCH: Starting process launch");
+        debug!(
+            "🚀 LAUNCH: Initial I/O - ctx.infile={}, ctx.outfile={}, ctx.errfile={}",
+            ctx.infile, ctx.outfile, ctx.errfile
+        );
+        debug!(
+            "🚀 LAUNCH: next_process={:?}, redirect={:?}",
+            next_process.is_some(),
+            redirect
+        );
+
         let pipe_out = match next_process {
             Some(_) => {
+                debug!("🚀 LAUNCH: Has next process - creating pipe");
                 create_pipe(ctx)? // create pipe
             }
             None => {
+                debug!("🚀 LAUNCH: No next process - handling redirect");
                 handle_output_redirect(ctx, redirect, stdout)? // check redirect
             }
         };
 
+        debug!(
+            "🚀 LAUNCH: After pipe/redirect - ctx.infile={}, ctx.outfile={}, ctx.errfile={}",
+            ctx.infile, ctx.outfile, ctx.errfile
+        );
+        debug!("🚀 LAUNCH: pipe_out={:?}", pipe_out);
+
         self.set_io(ctx.infile, ctx.outfile, ctx.errfile);
 
-        debug!("launch cmd:{} pgid:{:?}", self.get_cmd(), &ctx.pgid);
+        debug!("🚀 LAUNCH: After set_io - process I/O configured");
+        debug!(
+            "🚀 LAUNCH: launch cmd:{} pgid:{:?}",
+            self.get_cmd(),
+            &ctx.pgid
+        );
 
         // initial pid
         let current_pid = getpid();
@@ -806,7 +859,15 @@ impl JobProcess {
 
         // set pipe inout
         if let Some(pipe_out) = pipe_out {
+            debug!(
+                "🔗 PIPE_CHAIN: Setting pipe read end {} as input for next process",
+                pipe_out
+            );
+            debug!("🔗 PIPE_CHAIN: Before - ctx.infile={}", ctx.infile);
             ctx.infile = pipe_out;
+            debug!("🔗 PIPE_CHAIN: After - ctx.infile={}", ctx.infile);
+        } else {
+            debug!("🔗 PIPE_CHAIN: No pipe output to chain");
         }
         // return launched process pid and pipeline process
         Ok((pid, next_process))
@@ -994,13 +1055,30 @@ impl Job {
                 ctx.pgid = Some(pid);
                 debug!("set job id: {} pgid: {:?}", self.id, self.pgid);
             }
+            debug!("🔧 PGID: Setting process group for {}", process.get_cmd());
             debug!(
-                "setpgid {} pid:{} pgid:{:?}",
+                "🔧 PGID: setpgid {} pid:{} pgid:{:?}",
                 process.get_cmd(),
                 pid,
                 self.pgid
             );
-            setpgid(pid, self.pgid.unwrap_or(pid))?;
+
+            let target_pgid = self.pgid.unwrap_or(pid);
+            debug!("🔧 PGID: Target pgid: {}", target_pgid);
+
+            match setpgid(pid, target_pgid) {
+                Ok(_) => debug!(
+                    "🔧 PGID: Successfully set pgid {} for pid {}",
+                    target_pgid, pid
+                ),
+                Err(e) => {
+                    error!(
+                        "🔧 PGID: Failed to set pgid {} for pid {}: {}",
+                        target_pgid, pid, e
+                    );
+                    return Err(e.into());
+                }
+            }
         }
 
         let (stdout, stderr) = process.get_cap_out();
@@ -1207,25 +1285,34 @@ impl Job {
     }
 
     fn wait_process(&mut self) -> Result<()> {
+        debug!("⏳ WAIT: Starting wait_process for job: {}", self.id);
+        debug!("⏳ WAIT: Job pgid: {:?}", self.pgid);
         let mut send_killpg = false;
         loop {
-            debug!("waitpid pgid:{:?} ...", self.pgid);
+            debug!("⏳ WAIT: waitpid loop iteration for pgid:{:?}", self.pgid);
 
             // match task::spawn_blocking(|| waitpid(None, Some(WaitPidFlag::WUNTRACED))).await {
             let (pid, state) = match waitpid(None, Some(WaitPidFlag::WUNTRACED)) {
                 Ok(WaitStatus::Exited(pid, status)) => {
-                    debug!("wait_job exited {:?} {:?}", pid, status);
+                    debug!("⏳ WAIT: Process exited - pid: {}, status: {}", pid, status);
                     (pid, ProcessState::Completed(status as u8, None))
                 } // ok??
                 Ok(WaitStatus::Signaled(pid, signal, _)) => {
-                    debug!("wait_job signaled {:?} {:?}", pid, signal);
+                    debug!(
+                        "⏳ WAIT: Process signaled - pid: {}, signal: {:?}",
+                        pid, signal
+                    );
                     (pid, ProcessState::Completed(1, Some(signal)))
                 }
                 Ok(WaitStatus::Stopped(pid, signal)) => {
-                    debug!("wait_job stopped {:?} {:?}", pid, signal);
+                    debug!(
+                        "⏳ WAIT: Process stopped - pid: {}, signal: {:?}",
+                        pid, signal
+                    );
                     (pid, ProcessState::Stopped(pid, signal))
                 }
                 Err(nix::errno::Errno::ECHILD) | Ok(WaitStatus::StillAlive) => {
+                    debug!("⏳ WAIT: No more children to wait for (ECHILD or StillAlive)");
                     break;
                 }
                 status => {
@@ -1243,20 +1330,38 @@ impl Job {
 
             // show_process_state(&self.process); // debug
 
-            if let ProcessState::Completed(code, _) = state {
+            if let ProcessState::Completed(code, signal) = state {
+                debug!(
+                    "⏳ WAIT: Process completed - pid: {}, code: {}, signal: {:?}",
+                    pid, code, signal
+                );
                 if code != 0 && !send_killpg {
                     if let Some(pgid) = self.pgid {
-                        debug!("killpg pgid: {}", pgid);
-                        let _ = killpg(pgid, Signal::SIGKILL);
+                        debug!(
+                            "⏳ WAIT: Process failed (code: {}), sending SIGKILL to pgid: {}",
+                            code, pgid
+                        );
+                        match killpg(pgid, Signal::SIGKILL) {
+                            Ok(_) => debug!("⏳ WAIT: Successfully sent SIGKILL to pgid: {}", pgid),
+                            Err(e) => {
+                                debug!("⏳ WAIT: Failed to send SIGKILL to pgid {}: {}", pgid, e)
+                            }
+                        }
                         send_killpg = true;
+                    } else {
+                        debug!("⏳ WAIT: Process failed but no pgid to kill");
                     }
+                } else if code == 0 {
+                    debug!("⏳ WAIT: Process completed successfully");
                 }
             }
             // break;
             if is_job_completed(self) {
+                debug!("⏳ WAIT: Job completed, breaking from wait_process loop");
                 break;
             }
             if is_job_stopped(self) {
+                debug!("⏳ WAIT: Job stopped");
                 println!("\rdsh: job {} '{}' has stopped", self.job_id, self.cmd);
                 break;
             }
@@ -1612,19 +1717,30 @@ fn fork_builtin_process(
 ) -> Result<Pid> {
     debug!("fork_builtin_process for background execution");
 
+    debug!(
+        "🍴 BUILTIN: About to fork builtin process: {}",
+        process.name
+    );
     let pid = unsafe { fork().context("failed fork for builtin")? };
 
     match pid {
         ForkResult::Parent { child } => {
-            debug!("Parent: forked builtin process with pid {}", child);
+            debug!(
+                "🍴 BUILTIN: Parent process - forked builtin {} with child pid {}",
+                process.name, child
+            );
             Ok(child)
         }
         ForkResult::Child => {
             // Child process: execute builtin command
             let pid = getpid();
             debug!(
-                "Child: executing builtin command {} with pid {}",
+                "🍴 BUILTIN: Child process - executing builtin command {} with pid {}",
                 process.name, pid
+            );
+            debug!(
+                "🍴 BUILTIN: Child process I/O - stdin={}, stdout={}, stderr={}",
+                process.stdin, process.stdout, process.stderr
             );
 
             // Set process group for job control
@@ -1651,19 +1767,27 @@ fn fork_wasm_process(
 ) -> Result<Pid> {
     debug!("fork_wasm_process for background execution");
 
+    debug!("🍴 WASM: About to fork wasm process: {}", process.name);
     let pid = unsafe { fork().context("failed fork for wasm")? };
 
     match pid {
         ForkResult::Parent { child } => {
-            debug!("Parent: forked wasm process with pid {}", child);
+            debug!(
+                "🍴 WASM: Parent process - forked wasm {} with child pid {}",
+                process.name, child
+            );
             Ok(child)
         }
         ForkResult::Child => {
             // Child process: execute wasm command
             let pid = getpid();
             debug!(
-                "Child: executing wasm command {} with pid {}",
+                "🍴 WASM: Child process - executing wasm command {} with pid {}",
                 process.name, pid
+            );
+            debug!(
+                "🍴 WASM: Child process I/O - stdin={}, stdout={}, stderr={}",
+                process.stdin, process.stdout, process.stderr
             );
 
             // Set process group for job control
@@ -1684,24 +1808,65 @@ fn fork_wasm_process(
 }
 
 fn fork_process(ctx: &Context, job_pgid: Option<Pid>, process: &mut Process) -> Result<Pid> {
-    debug!("fork_process pgid: {:?}", job_pgid);
+    debug!("🍴 FORK: Starting fork_process");
+    debug!(
+        "🍴 FORK: pgid: {:?}, foreground: {}",
+        job_pgid, ctx.foreground
+    );
+    debug!(
+        "🍴 FORK: Process I/O before capture - stdin={}, stdout={}, stderr={}",
+        process.stdin, process.stdout, process.stderr
+    );
+    debug!(
+        "🍴 FORK: Context I/O - infile={}, outfile={}, errfile={}",
+        ctx.infile, ctx.outfile, ctx.errfile
+    );
 
     // capture
     if ctx.outfile == STDOUT_FILENO && !ctx.foreground {
+        debug!("🍴 FORK: Creating capture pipe for stdout (background process)");
         let (pout, pin) = pipe().context("failed pipe")?;
         process.stdout = pin;
         process.cap_stdout = Some(pout);
+        debug!(
+            "🍴 FORK: Created capture pipe for stdout: read={}, write={}",
+            pout, pin
+        );
+    } else {
+        debug!(
+            "🍴 FORK: No capture pipe needed for stdout (ctx.outfile={}, foreground={})",
+            ctx.outfile, ctx.foreground
+        );
     }
+
     if ctx.errfile == STDERR_FILENO && !ctx.foreground {
+        debug!("🍴 FORK: Creating capture pipe for stderr (background process)");
         let (pout, pin) = pipe().context("failed pipe")?;
         process.stderr = pin;
         process.cap_stderr = Some(pout);
+        debug!(
+            "🍴 FORK: Created capture pipe for stderr: read={}, write={}",
+            pout, pin
+        );
+    } else {
+        debug!(
+            "🍴 FORK: No capture pipe needed for stderr (ctx.errfile={}, foreground={})",
+            ctx.errfile, ctx.foreground
+        );
     }
 
+    debug!(
+        "🍴 FORK: Final process I/O - stdin={}, stdout={}, stderr={}",
+        process.stdin, process.stdout, process.stderr
+    );
+
+    debug!("🍴 FORK: About to fork external process");
     let pid = unsafe { fork().context("failed fork")? };
 
     match pid {
         ForkResult::Parent { child } => {
+            debug!("🍴 FORK: Parent process - child pid: {}", child);
+            debug!("🍴 FORK: Parent process continuing with child management");
             // if process.stdout != STDOUT_FILENO {
             //     close(process.stdout).context("failed close")?;
             // }
@@ -1711,12 +1876,16 @@ fn fork_process(ctx: &Context, job_pgid: Option<Pid>, process: &mut Process) -> 
             // This is the child process
             let pid = getpid();
             let pgid = job_pgid.unwrap_or(pid);
+            debug!("🍴 FORK: Child process - pid: {}, pgid: {}", pid, pgid);
+            debug!("🍴 FORK: Child process about to launch");
+
             if let Err(e) = process.launch(pid, pgid, ctx.interactive, ctx.foreground) {
-                error!("Failed to launch process: {}", e);
+                error!("🍴 FORK: Child process launch failed: {}", e);
                 std::process::exit(1);
             }
             // execv成功時は新プログラムに置き換わり、失敗時はexitするため、ここには到達しない
             // 念のための安全策として明示的にexit
+            debug!("🍴 FORK: Child process launch completed unexpectedly, exiting");
             std::process::exit(1);
         }
     }
@@ -1780,7 +1949,24 @@ pub fn wait_pid_job(pid: Pid, no_hang: bool) -> Option<(Pid, ProcessState)> {
 
 fn create_pipe(ctx: &mut Context) -> Result<Option<RawFd>> {
     let (pout, pin) = pipe().context("failed pipe")?;
+
+    debug!(
+        "🔧 PIPE: Created pipe - read_end={}, write_end={}",
+        pout, pin
+    );
+    debug!(
+        "🔧 PIPE: Before - ctx.infile={}, ctx.outfile={}, ctx.errfile={}",
+        ctx.infile, ctx.outfile, ctx.errfile
+    );
+
     ctx.outfile = pin;
+
+    debug!(
+        "🔧 PIPE: After - ctx.infile={}, ctx.outfile={}, ctx.errfile={}",
+        ctx.infile, ctx.outfile, ctx.errfile
+    );
+    debug!("🔧 PIPE: Returning read_end={} for next process", pout);
+
     Ok(Some(pout))
 }
 
@@ -1789,25 +1975,57 @@ fn handle_output_redirect(
     redirect: &Option<Redirect>,
     stdout: RawFd,
 ) -> Result<Option<RawFd>> {
+    debug!("🔀 REDIRECT: Starting output redirect processing");
+    debug!(
+        "🔀 REDIRECT: Input - ctx.infile={}, ctx.outfile={}, ctx.errfile={}",
+        ctx.infile, ctx.outfile, ctx.errfile
+    );
+    debug!("🔀 REDIRECT: stdout={}, redirect={:?}", stdout, redirect);
+
     if let Some(output) = redirect {
+        debug!("🔀 REDIRECT: Processing redirect: {:?}", output);
         match output {
-            Redirect::StdoutOutput(_) | Redirect::StdoutAppend(_) => {
+            Redirect::StdoutOutput(file) | Redirect::StdoutAppend(file) => {
+                debug!("🔀 REDIRECT: StdoutOutput/Append to file: {}", file);
                 let (pout, pin) = pipe().context("failed pipe")?;
+                debug!(
+                    "🔀 REDIRECT: Created redirect pipe - read_end={}, write_end={}",
+                    pout, pin
+                );
                 ctx.outfile = pin;
+                debug!("🔀 REDIRECT: Set ctx.outfile={}", ctx.outfile);
                 Ok(Some(pout))
             }
-            Redirect::StderrOutput(_) | Redirect::StderrAppend(_) => {
+            Redirect::StderrOutput(file) | Redirect::StderrAppend(file) => {
+                debug!("🔀 REDIRECT: StderrOutput/Append to file: {}", file);
                 let (pout, pin) = pipe().context("failed pipe")?;
+                debug!(
+                    "🔀 REDIRECT: Created redirect pipe - read_end={}, write_end={}",
+                    pout, pin
+                );
                 ctx.errfile = pin;
+                debug!("🔀 REDIRECT: Set ctx.errfile={}", ctx.errfile);
                 Ok(Some(pout))
             }
-            Redirect::StdouterrOutput(_) | Redirect::StdouterrAppend(_) => {
+            Redirect::StdouterrOutput(file) | Redirect::StdouterrAppend(file) => {
+                debug!("🔀 REDIRECT: StdouterrOutput/Append to file: {}", file);
                 let (pout, pin) = pipe().context("failed pipe")?;
+                debug!(
+                    "🔀 REDIRECT: Created redirect pipe - read_end={}, write_end={}",
+                    pout, pin
+                );
                 ctx.outfile = pin;
                 ctx.errfile = pin;
+                debug!(
+                    "🔀 REDIRECT: Set ctx.outfile={}, ctx.errfile={}",
+                    ctx.outfile, ctx.errfile
+                );
                 Ok(Some(pout))
             }
-            _ => Ok(None),
+            _ => {
+                debug!("🔀 REDIRECT: No matching redirect pattern");
+                Ok(None)
+            }
         }
     } else {
         if let Some(out) = ctx.captured_out {
@@ -1820,16 +2038,51 @@ fn handle_output_redirect(
 }
 
 fn send_signal(pid: Pid, signal: Signal) -> Result<()> {
-    Ok(kill(pid, signal)?)
+    debug!("📡 SIGNAL: Sending signal {:?} to pid {}", signal, pid);
+    match kill(pid, signal) {
+        Ok(_) => {
+            debug!(
+                "📡 SIGNAL: Successfully sent signal {:?} to pid {}",
+                signal, pid
+            );
+            Ok(())
+        }
+        Err(e) => {
+            error!(
+                "📡 SIGNAL: Failed to send signal {:?} to pid {}: {}",
+                signal, pid, e
+            );
+            Err(e.into())
+        }
+    }
 }
 
 fn kill_process(process: &Option<Box<JobProcess>>) -> Result<()> {
+    debug!("💀 KILL: Starting kill_process");
     if let Some(process) = process {
-        process.kill()?;
-        if process.next().is_some() {
-            kill_process(&process.next())?;
+        debug!("💀 KILL: Killing process: {}", process.get_cmd());
+        match process.kill() {
+            Ok(_) => debug!(
+                "💀 KILL: Successfully killed process: {}",
+                process.get_cmd()
+            ),
+            Err(e) => error!(
+                "💀 KILL: Failed to kill process {}: {}",
+                process.get_cmd(),
+                e
+            ),
         }
+
+        if process.next().is_some() {
+            debug!("💀 KILL: Killing next process in pipeline");
+            kill_process(&process.next())?;
+        } else {
+            debug!("💀 KILL: No next process to kill");
+        }
+    } else {
+        debug!("💀 KILL: No process to kill");
     }
+    debug!("💀 KILL: kill_process completed");
     Ok(())
 }
 

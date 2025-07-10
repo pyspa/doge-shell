@@ -205,7 +205,7 @@ fn expand_alias_tilde(
         }
         Rule::pipe_command => {
             debug!("expand pipe_command {}", pair.as_str());
-            argv.push("|".to_string());
+            // パイプ文字は expand_alias 関数で追加されるため、ここでは追加しない
             for inner_pair in pair.into_inner() {
                 let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
                 argv.append(&mut v);
@@ -1007,14 +1007,14 @@ mod tests {
         let replaced = expand_alias(input, Arc::clone(&env))?;
         assert_eq!(
             replaced,
-            r#"echo 'test' | sk | | abc " test" '-vvv' --foo"#.to_string()
+            r#"echo 'test' | sk | abc " test" '-vvv' --foo"#.to_string()
         );
 
         let input = r#"sh -c | alias " test" '-vvv' --foo &"#.to_string();
         let replaced = expand_alias(input, Arc::clone(&env))?;
         assert_eq!(
             replaced,
-            r#"sh -c | | echo 'test' | sk " test" '-vvv' --foo"#.to_string()
+            r#"sh -c | echo 'test' | sk " test" '-vvv' --foo"#.to_string()
         );
 
         let input = r#"echo (alias " test" '-vvv' --foo) "#.to_string();

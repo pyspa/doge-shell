@@ -701,6 +701,19 @@ impl Shell {
                     }
                 }
                 Rule::pipe_command => {
+                    // パイプコマンドの場合、既存のジョブがない場合は新しいジョブを作成
+                    if jobs.is_empty() {
+                        let mut job = Job::new(job_str.clone(), self.pgid);
+                        job.job_id = self.get_next_job_id();
+                        if ctx.subshell {
+                            job.subshell = SubshellType::Subshell;
+                        }
+                        if ctx.proc_subst {
+                            job.subshell = SubshellType::ProcessSubstitution;
+                        }
+                        jobs.push(job);
+                    }
+
                     if let Some(job) = jobs.last_mut() {
                         for inner_pair in inner_pair.into_inner() {
                             let _cmd = inner_pair.as_str();

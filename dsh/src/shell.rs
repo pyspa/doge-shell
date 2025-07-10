@@ -74,6 +74,7 @@ pub struct Shell {
     pub(crate) wait_jobs: Vec<Job>,
     pub lisp_engine: Rc<RefCell<lisp::LispEngine>>,
     pub wasm_engine: WasmEngine,
+    next_job_id: usize,
 }
 
 impl std::fmt::Debug for Shell {
@@ -149,7 +150,14 @@ impl Shell {
             wait_jobs: Vec::new(),
             lisp_engine,
             wasm_engine,
+            next_job_id: 1,
         }
+    }
+
+    pub fn get_next_job_id(&mut self) -> usize {
+        let id = self.next_job_id;
+        self.next_job_id += 1;
+        id
     }
 
     pub fn set_signals(&mut self) {
@@ -572,7 +580,7 @@ impl Shell {
                 }
                 debug!("run subshell: {}", cmd_str);
 
-                let tmode = tcgetattr(0).expect("failed tcgetattr");
+                let tmode = tcgetattr(0).map_err(|e| anyhow::anyhow!("failed tcgetattr: {}", e))?;
 
                 match subshell_type {
                     SubshellType::Subshell => {
@@ -582,7 +590,7 @@ impl Shell {
                         let (pout, pin) = pipe().context("failed pipe")?;
                         ctx.outfile = pin;
                         self.launch_subshell(&mut ctx, jobs)?;
-                        close(pin).expect("failed close");
+                        close(pin).map_err(|e| anyhow::anyhow!("failed to close pipe: {}", e))?;
                         let output = read_fd(pout)?;
                         output.lines().for_each(|x| argv.push(x.to_owned()));
                     }
@@ -593,7 +601,7 @@ impl Shell {
                         let (pout, pin) = pipe().context("failed pipe")?;
                         ctx.outfile = pin;
                         self.launch_subshell(&mut ctx, jobs)?;
-                        close(pin).expect("failed close");
+                        close(pin).map_err(|e| anyhow::anyhow!("failed to close pipe: {}", e))?;
                         let file_name = format!("/dev/fd/{pout}");
                         argv.push(file_name);
                     }
@@ -659,6 +667,7 @@ impl Shell {
             match inner_pair.as_rule() {
                 Rule::simple_command => {
                     let mut job = Job::new(job_str.clone(), self.pgid);
+                    job.job_id = self.get_next_job_id();
                     self.parse_command(ctx, &mut job, inner_pair)?;
                     if job.has_process() {
                         if ctx.subshell {
@@ -673,6 +682,7 @@ impl Shell {
                 Rule::simple_command_bg => {
                     // background job
                     let mut job = Job::new(inner_pair.as_str().to_string(), self.pgid);
+                    job.job_id = self.get_next_job_id();
                     for bg_pair in inner_pair.into_inner() {
                         if let Rule::simple_command = bg_pair.as_rule() {
                             self.parse_command(ctx, &mut job, bg_pair)?;

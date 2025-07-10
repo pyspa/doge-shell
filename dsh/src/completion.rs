@@ -1472,7 +1472,10 @@ fn completion_from_current_with_prompt(
         let canonical_path = if let Ok(path) = path.canonicalize() {
             path
         } else {
-            std::env::current_dir().expect("fail get current_dir")
+            match std::env::current_dir() {
+                Ok(dir) => dir,
+                Err(_) => return None, // Return None if we can't get current directory
+            }
         };
         let path_str = canonical_path.display().to_string();
 

@@ -23,6 +23,55 @@ struct Var {
     value: String,
 }
 
+/// Parse job specification (e.g., "%1", "1", "%+", "%-")
+/// Returns the job index in wait_jobs vector, or None if not found
+fn parse_job_spec(spec: &str, wait_jobs: &[crate::process::Job]) -> Option<usize> {
+    if spec.is_empty() {
+        // Default to most recent job
+        return if wait_jobs.is_empty() {
+            None
+        } else {
+            Some(wait_jobs.len() - 1)
+        };
+    }
+
+    let spec = spec.trim();
+
+    // Handle %+ (current job) and %- (previous job)
+    if spec == "%+" || spec == "+" {
+        return if wait_jobs.is_empty() {
+            None
+        } else {
+            Some(wait_jobs.len() - 1)
+        };
+    }
+    if spec == "%-" || spec == "-" {
+        return if wait_jobs.len() < 2 {
+            None
+        } else {
+            Some(wait_jobs.len() - 2)
+        };
+    }
+
+    // Handle %n or n format (job number)
+    let job_num_str = if let Some(stripped) = spec.strip_prefix('%') {
+        stripped
+    } else {
+        spec
+    };
+
+    if let Ok(job_num) = job_num_str.parse::<usize>() {
+        // Find job by job_id
+        for (index, job) in wait_jobs.iter().enumerate() {
+            if job.job_id == job_num {
+                return Some(index);
+            }
+        }
+    }
+
+    None
+}
+
 impl ShellProxy for Shell {
     fn exit_shell(&mut self) {
         self.exit();
@@ -137,14 +186,14 @@ impl ShellProxy for Shell {
                 let mut stdin = Vec::new();
                 unsafe { File::from_raw_fd(ctx.infile).read_to_end(&mut stdin).ok() };
                 let key = format!("${}", argv[1]);
-                let output = std::str::from_utf8(&stdin)
-                    .inspect_err(|&err| {
-                        // TODO
-                        ctx.write_stderr(&format!("{}", err)).ok();
-                    })
-                    .unwrap()
-                    .trim_end_matches('\n')
-                    .to_owned();
+                let output = match std::str::from_utf8(&stdin) {
+                    Ok(s) => s.trim_end_matches('\n').to_owned(),
+                    Err(err) => {
+                        ctx.write_stderr(&format!("read: invalid UTF-8 input: {}", err))
+                            .ok();
+                        return Err(anyhow::anyhow!("invalid UTF-8 input: {}", err));
+                    }
+                };
 
                 self.environment.write().variables.insert(key, output);
             }
@@ -153,9 +202,11 @@ impl ShellProxy for Shell {
                 if self.wait_jobs.is_empty() {
                     ctx.write_stdout("fg: there are no suitable jobs")?;
                 } else {
-                    // TODO selectable nth
-                    debug!("About to pop job from wait_jobs");
-                    if let Some(ref mut job) = self.wait_jobs.pop() {
+                    // Parse job specification from arguments
+                    let job_spec = argv.get(1).map(|s| s.as_str()).unwrap_or("");
+
+                    if let Some(job_index) = parse_job_spec(job_spec, &self.wait_jobs) {
+                        let mut job = self.wait_jobs.remove(job_index);
                         debug!("foreground job: {:?}", job);
                         debug!("Job state before fg: {:?}", job.state);
                         debug!("Job pgid: {:?}, pid: {:?}", job.pgid, job.pid);
@@ -187,7 +238,89 @@ impl ShellProxy for Shell {
                         }
                         debug!("put_in_foreground_sync completed successfully");
                     } else {
-                        debug!("Failed to pop job from wait_jobs - this should not happen");
+                        let error_msg = if job_spec.is_empty() {
+                            "fg: no current job".to_string()
+                        } else {
+                            format!("fg: job not found: {}", job_spec)
+                        };
+                        ctx.write_stderr(&error_msg)?;
+                        return Err(anyhow::anyhow!(error_msg));
+                    }
+                }
+            }
+            "bg" => {
+                debug!("call bg - wait_jobs.len(): {}", self.wait_jobs.len());
+                if self.wait_jobs.is_empty() {
+                    ctx.write_stdout("bg: there are no suitable jobs")?;
+                } else {
+                    // Parse job specification from arguments
+                    let job_spec = argv.get(1).map(|s| s.as_str()).unwrap_or("");
+
+                    // Find job by specification or default to most recent stopped job
+                    let job_index = if job_spec.is_empty() {
+                        // Find the most recent stopped job
+                        let mut found_index = None;
+                        for (i, job) in self.wait_jobs.iter().enumerate().rev() {
+                            if matches!(job.state, ProcessState::Stopped(_, _)) {
+                                found_index = Some(i);
+                                break;
+                            }
+                        }
+                        found_index
+                    } else {
+                        // Parse job specification
+                        parse_job_spec(job_spec, &self.wait_jobs)
+                    };
+
+                    if let Some(index) = job_index {
+                        let job = &self.wait_jobs[index];
+
+                        // Check if job is actually stopped
+                        if !matches!(job.state, ProcessState::Stopped(_, _)) {
+                            let error_msg = format!("bg: job {} is already running", job.job_id);
+                            ctx.write_stderr(&error_msg)?;
+                            return Err(anyhow::anyhow!(error_msg));
+                        }
+
+                        let mut job = self.wait_jobs.remove(index);
+                        debug!("background job: {:?}", job);
+                        debug!("Job state before bg: {:?}", job.state);
+                        debug!("Job pgid: {:?}, pid: {:?}", job.pgid, job.pid);
+
+                        ctx.write_stdout(&format!(
+                            "dsh: job {} '{}' to background",
+                            job.job_id, job.cmd
+                        ))
+                        .ok();
+
+                        // Set job state to running and send SIGCONT
+                        job.state = ProcessState::Running;
+                        debug!("Set job state to Running");
+
+                        // Send SIGCONT to resume the job
+                        if let Some(pgid) = job.pgid {
+                            debug!("Sending SIGCONT to process group {}", pgid);
+                            use nix::sys::signal::{Signal, killpg};
+                            if let Err(err) = killpg(pgid, Signal::SIGCONT) {
+                                debug!("Failed to send SIGCONT: {}", err);
+                                ctx.write_stderr(&format!("bg: failed to resume job: {}", err))
+                                    .ok();
+                                return Err(err.into());
+                            }
+                            debug!("SIGCONT sent successfully");
+                        }
+
+                        // Put the job back in the background jobs list
+                        self.wait_jobs.push(job);
+                        debug!("Job moved to background successfully");
+                    } else {
+                        let error_msg = if job_spec.is_empty() {
+                            "bg: no stopped jobs".to_string()
+                        } else {
+                            format!("bg: job not found: {}", job_spec)
+                        };
+                        ctx.write_stderr(&error_msg)?;
+                        return Err(anyhow::anyhow!(error_msg));
                     }
                 }
             }

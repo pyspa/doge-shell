@@ -10,12 +10,14 @@ pub fn search_file(dir: &str, name: &str) -> Option<String> {
 
             for entry in entries {
                 let buf = entry.file_name();
-                let file_name = buf.to_str().unwrap();
-                if file_name.starts_with(name)
-                    && entry.file_type().unwrap().is_file()
-                    && is_executable(&entry)
-                {
-                    return Some(file_name.to_string());
+                if let Some(file_name) = buf.to_str() {
+                    if file_name.starts_with(name) {
+                        if let Ok(file_type) = entry.file_type() {
+                            if file_type.is_file() && is_executable(&entry) {
+                                return Some(file_name.to_string());
+                            }
+                        }
+                    }
                 }
             }
             None

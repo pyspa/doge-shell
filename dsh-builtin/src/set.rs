@@ -20,7 +20,7 @@ pub fn command(ctx: &Context, args: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         }
     };
 
-    if matches.opt_present("h") && matches.free.len() != 2 {
+    if matches.opt_present("h") || matches.free.len() != 2 {
         print_usage(ctx, &cmd_name, opts);
         return ExitStatus::ExitedWith(0);
     }

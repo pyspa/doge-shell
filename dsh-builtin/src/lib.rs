@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use tracing::debug;
 
 mod add_path;
+mod bg;
 pub mod cd;
 mod chatgpt;
 mod fg;
@@ -50,6 +51,7 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, BuiltinCommand>>> = Lazy::n
     builtin.insert("add_path", add_path::command as BuiltinCommand);
     builtin.insert("uuid", uuid::command as BuiltinCommand);
     builtin.insert("fg", fg::command as BuiltinCommand);
+    builtin.insert("bg", bg::command as BuiltinCommand);
 
     Mutex::new(builtin)
 });

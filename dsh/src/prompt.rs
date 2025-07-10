@@ -307,8 +307,9 @@ fn get_git_root() -> Option<String> {
 
     if let Ok(output) = result {
         if output.status.success() {
-            let out = String::from_utf8(output.stdout).expect("failed");
-            return Some(out.trim().to_string());
+            if let Ok(out) = String::from_utf8(output.stdout) {
+                return Some(out.trim().to_string());
+            }
         }
     }
     None

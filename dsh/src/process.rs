@@ -129,11 +129,15 @@ impl Redirect {
     }
 }
 
-fn copy_fd(src: RawFd, dst: RawFd) {
-    if src != dst {
-        dup2(src, dst).expect("failed dup2");
-        close(src).expect("failed close");
+fn copy_fd(src: RawFd, dst: RawFd) -> Result<()> {
+    if src != dst && src >= 0 && dst >= 0 {
+        dup2(src, dst).map_err(|e| anyhow::anyhow!("dup2 failed: {}", e))?;
+        // Only close if it's not a standard file descriptor
+        if src > 2 {
+            close(src).map_err(|e| anyhow::anyhow!("close failed: {}", e))?;
+        }
     }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -446,18 +450,25 @@ impl Process {
         }
     }
 
-    fn set_signals(&self) {
+    fn set_signals(&self) -> Result<()> {
         debug!("set signal action pid:{:?}", self.pid);
         // Accept job-control-related signals (refer https://www.gnu.org/software/libc/manual/html_node/Launching-Jobs.html)
         let action = SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
         unsafe {
-            sigaction(Signal::SIGINT, &action).expect("failed to sigaction");
-            sigaction(Signal::SIGQUIT, &action).expect("failed to sigaction");
-            sigaction(Signal::SIGTSTP, &action).expect("failed to sigaction");
-            sigaction(Signal::SIGTTIN, &action).expect("failed to sigaction");
-            sigaction(Signal::SIGTTOU, &action).expect("failed to sigaction");
-            sigaction(Signal::SIGCHLD, &action).expect("failed to sigaction");
+            sigaction(Signal::SIGINT, &action)
+                .map_err(|e| anyhow::anyhow!("failed to set SIGINT handler: {}", e))?;
+            sigaction(Signal::SIGQUIT, &action)
+                .map_err(|e| anyhow::anyhow!("failed to set SIGQUIT handler: {}", e))?;
+            sigaction(Signal::SIGTSTP, &action)
+                .map_err(|e| anyhow::anyhow!("failed to set SIGTSTP handler: {}", e))?;
+            sigaction(Signal::SIGTTIN, &action)
+                .map_err(|e| anyhow::anyhow!("failed to set SIGTTIN handler: {}", e))?;
+            sigaction(Signal::SIGTTOU, &action)
+                .map_err(|e| anyhow::anyhow!("failed to set SIGTTOU handler: {}", e))?;
+            sigaction(Signal::SIGCHLD, &action)
+                .map_err(|e| anyhow::anyhow!("failed to set SIGCHLD handler: {}", e))?;
         }
+        Ok(())
     }
 
     pub fn launch(
@@ -478,30 +489,35 @@ impl Process {
                 tcsetpgrp(SHELL_TERMINAL, pgid).context("failed tcsetpgrp")?;
             }
 
-            self.set_signals();
+            self.set_signals()?;
         }
 
         let cmd = CString::new(self.cmd.clone()).context("failed new CString")?;
-        let argv: Vec<CString> = self
+        let argv: Result<Vec<CString>> = self
             .argv
             .clone()
             .into_iter()
-            .map(|a| CString::new(a).expect("failed new CString"))
+            .map(|a| {
+                CString::new(a).map_err(|e| anyhow::anyhow!("failed to create CString: {}", e))
+            })
             .collect();
+        let argv = argv?;
 
         debug!(
             "launch: execv cmd:{:?} argv:{:?} foreground:{:?} infile:{:?} outfile:{:?} pid:{:?} pgid:{:?}",
             cmd, argv, foreground, self.stdin, self.stdout, pid, pgid,
         );
 
-        copy_fd(self.stdin, STDIN_FILENO);
+        copy_fd(self.stdin, STDIN_FILENO)?;
         if self.stdout == self.stderr {
-            dup2(self.stdout, STDOUT_FILENO).expect("failed dup2");
-            dup2(self.stderr, STDERR_FILENO).expect("failed dup2");
-            close(self.stdout).expect("failed close");
+            dup2(self.stdout, STDOUT_FILENO)
+                .map_err(|e| anyhow::anyhow!("dup2 stdout failed: {}", e))?;
+            dup2(self.stderr, STDERR_FILENO)
+                .map_err(|e| anyhow::anyhow!("dup2 stderr failed: {}", e))?;
+            close(self.stdout).map_err(|e| anyhow::anyhow!("close stdout failed: {}", e))?;
         } else {
-            copy_fd(self.stdout, STDOUT_FILENO);
-            copy_fd(self.stderr, STDERR_FILENO);
+            copy_fd(self.stdout, STDOUT_FILENO)?;
+            copy_fd(self.stderr, STDERR_FILENO)?;
         }
         match execv(&cmd, &argv) {
             Ok(_) => Ok(()),

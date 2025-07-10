@@ -64,9 +64,15 @@ pub fn allow_direnv(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
     for arg in args {
         let root = arg.to_string();
         let root = shellexpand::tilde(root.as_str());
-        // TODO check error
-        let direnv = DirEnvironment::new(root.to_string()).unwrap();
-        env.borrow().shell_env.write().direnv_roots.push(direnv);
+        // Create DirEnvironment with error handling
+        match DirEnvironment::new(root.to_string()) {
+            Ok(direnv) => {
+                env.borrow().shell_env.write().direnv_roots.push(direnv);
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to create direnv for {}: {}", root, e);
+            }
+        }
     }
     Ok(Value::NIL)
 }
@@ -234,7 +240,9 @@ mod tests {
         let env_clone = Rc::clone(&engine.borrow().env);
         let res = sh(env_clone, args.to_vec()).await;
         assert!(res.is_ok());
-        println!("{}", res.unwrap());
+        if let Ok(result) = res {
+            println!("{}", result);
+        }
 
         // let args = vec![Value::String("cargo build".to_string())];
         // let res = sh(Rc::clone(&engine.borrow().env), args.as_slice());

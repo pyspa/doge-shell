@@ -4,7 +4,14 @@ use dsh_types::{Context, ExitStatus};
 use std::path::Path;
 
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
-    let current_dir = std::env::current_dir().expect("failed to getcwd()");
+    let current_dir = match std::env::current_dir() {
+        Ok(dir) => dir,
+        Err(err) => {
+            ctx.write_stderr(&format!("cd: failed to get current directory: {}", err))
+                .ok();
+            return ExitStatus::ExitedWith(1);
+        }
+    };
 
     let dir = match argv.get(1).map(|s| s.as_str()) {
         Some(dir) if dir.starts_with('/') => dir.to_string(),

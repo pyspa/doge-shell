@@ -1111,6 +1111,14 @@ pub fn input_completion(
     prompt_text: String,
     input_text: String,
 ) -> Option<String> {
+    // Try fuzzy completion first for better user experience
+    let fuzzy_res =
+        input_completion_with_fuzzy(input, repl, query, prompt_text.clone(), input_text.clone());
+    if fuzzy_res.is_some() {
+        return fuzzy_res;
+    }
+
+    // Fallback to original completion logic
     let res = completion_from_lisp_with_prompt(
         input,
         repl,
@@ -1140,11 +1148,226 @@ pub fn input_completion(
     None
 }
 
+/// Enhanced completion with fuzzy matching support
+pub fn input_completion_with_fuzzy(
+    input: &Input,
+    repl: &Repl,
+    query: Option<&str>,
+    _prompt_text: String,
+    _input_text: String,
+) -> Option<String> {
+    let query_str = query.unwrap_or("");
+
+    // Skip fuzzy completion for very short queries to avoid noise
+    if query_str.len() < 2 {
+        return None;
+    }
+
+    debug!("Starting fuzzy completion for query: '{}'", query_str);
+
+    // Collect all possible completion candidates
+    let mut all_candidates = Vec::new();
+
+    // 1. Get command candidates from PATH
+    if let Some(word) = get_current_word(input) {
+        if is_command_position(input) {
+            let command_candidates = get_command_candidates(&word);
+            all_candidates.extend(command_candidates);
+        }
+    }
+
+    // 2. Get file/directory candidates
+    if let Some(word) = get_current_word(input) {
+        let file_candidates = get_file_candidates(&word);
+        all_candidates.extend(file_candidates);
+    }
+
+    // 3. Get history candidates
+    if let Some(ref history) = repl.shell.cmd_history {
+        if let Ok(history) = history.lock() {
+            let history_candidates: Vec<Candidate> = history
+                .sorted(&dsh_frecency::SortMethod::Frecent)
+                .iter()
+                .take(50) // Limit history candidates for performance
+                .map(|item| Candidate::Basic(item.item.clone()))
+                .collect();
+            all_candidates.extend(history_candidates);
+        }
+    }
+
+    // 4. Apply fuzzy matching with smart completion
+    if !all_candidates.is_empty() {
+        let smart_completion = SmartCompletion::new();
+        let filtered_candidates = smart_completion.complete(all_candidates, query_str);
+
+        debug!(
+            "Found {} fuzzy completion candidates",
+            filtered_candidates.len()
+        );
+
+        if !filtered_candidates.is_empty() {
+            // Use skim to display and select from fuzzy-matched candidates
+            return select_item_with_skim(filtered_candidates, Some(query_str));
+        }
+    }
+
+    None
+}
+
 // Backward compatibility function
 #[allow(dead_code)]
 pub fn input_completion_simple(input: &Input, repl: &Repl, query: Option<&str>) -> Option<String> {
     let (prompt_text, input_text) = get_prompt_and_input_for_completion();
     input_completion(input, repl, query, prompt_text, input_text)
+}
+
+/// Get the current word being typed for completion
+fn get_current_word(input: &Input) -> Option<String> {
+    let text = input.as_str();
+    let cursor = input.cursor();
+
+    if cursor == 0 || text.is_empty() {
+        return None;
+    }
+
+    // Find word boundaries
+    let mut start = cursor;
+    let chars: Vec<char> = text.chars().collect();
+
+    // Move back to find start of current word
+    while start > 0 && !chars[start - 1].is_whitespace() {
+        start -= 1;
+    }
+
+    // Extract the current word
+    if start < chars.len() {
+        let word: String = chars[start..cursor.min(chars.len())].iter().collect();
+        if !word.is_empty() {
+            return Some(word);
+        }
+    }
+
+    None
+}
+
+/// Check if the cursor is at a command position (beginning of line or after pipe/semicolon)
+fn is_command_position(input: &Input) -> bool {
+    let text = input.as_str();
+    let cursor = input.cursor();
+
+    if cursor == 0 {
+        return true;
+    }
+
+    // Look for command separators before current position
+    let before_cursor = &text[..cursor];
+
+    // Find the last non-whitespace character before cursor
+    if let Some(last_char) = before_cursor.chars().rev().find(|c| !c.is_whitespace()) {
+        // Command position if after pipe, semicolon, or ampersand
+        last_char == '|' || last_char == ';' || last_char == '&'
+    } else {
+        // If only whitespace before cursor, it's a command position
+        true
+    }
+}
+
+/// Get command candidates from PATH
+fn get_command_candidates(_query: &str) -> Vec<Candidate> {
+    let mut candidates = Vec::new();
+
+    // Get commands from PATH
+    if let Ok(path_var) = std::env::var("PATH") {
+        for path_dir in path_var.split(':') {
+            if let Ok(entries) = read_dir(path_dir) {
+                for entry in entries.flatten() {
+                    if let Ok(file_type) = entry.file_type() {
+                        if file_type.is_file() {
+                            let file_name = entry.file_name().to_string_lossy().to_string();
+                            if is_executable(&entry) {
+                                candidates.push(Candidate::Command {
+                                    name: file_name,
+                                    description: "executable".to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Add built-in commands
+    let builtins = vec![
+        "cd", "pwd", "ls", "echo", "exit", "help", "history", "alias", "export", "unset", "source",
+        ".", "exec", "eval", "test", "[",
+    ];
+
+    for builtin in builtins {
+        candidates.push(Candidate::Command {
+            name: builtin.to_string(),
+            description: "built-in command".to_string(),
+        });
+    }
+
+    candidates
+}
+
+/// Get file and directory candidates
+fn get_file_candidates(query: &str) -> Vec<Candidate> {
+    let mut candidates = Vec::new();
+
+    // Determine the directory to search in
+    let (search_dir, prefix) = if query.contains('/') {
+        let path = Path::new(query);
+        if let Some(parent) = path.parent() {
+            (
+                parent.to_path_buf(),
+                path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
+            )
+        } else {
+            (PathBuf::from("."), query.to_string())
+        }
+    } else {
+        (PathBuf::from("."), query.to_string())
+    };
+
+    // Read directory entries
+    if let Ok(entries) = read_dir(&search_dir) {
+        for entry in entries.flatten() {
+            let file_name = entry.file_name().to_string_lossy().to_string();
+
+            // Skip hidden files unless query starts with dot
+            if file_name.starts_with('.') && !prefix.starts_with('.') {
+                continue;
+            }
+
+            if let Ok(file_type) = entry.file_type() {
+                let full_path = if search_dir == Path::new(".") {
+                    file_name.clone()
+                } else {
+                    search_dir.join(&file_name).to_string_lossy().to_string()
+                };
+
+                if file_type.is_dir() {
+                    candidates.push(Candidate::File {
+                        path: full_path,
+                        is_dir: true,
+                    });
+                } else {
+                    candidates.push(Candidate::File {
+                        path: full_path,
+                        is_dir: false,
+                    });
+                }
+            }
+        }
+    }
+
+    candidates
 }
 
 fn completion_from_lisp_with_prompt(
@@ -1867,5 +2090,88 @@ mod tests {
 
         // The ensure_display_space method should handle space creation
         // This is mainly tested through integration testing
+    }
+}
+#[cfg(test)]
+mod fuzzy_integration_tests {
+    use super::*;
+    use crate::input::InputConfig;
+
+    #[test]
+    fn test_get_current_word() {
+        // Test basic word extraction
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+        input.reset("git commit".to_string());
+        input.move_to_end();
+
+        let word = get_current_word(&input);
+        assert_eq!(word, Some("commit".to_string()));
+    }
+
+    #[test]
+    fn test_get_current_word_partial() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+        input.reset("git com".to_string());
+        input.move_to_end();
+
+        let word = get_current_word(&input);
+        assert_eq!(word, Some("com".to_string()));
+    }
+
+    #[test]
+    fn test_is_command_position() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+
+        // Test beginning of line
+        input.reset("git".to_string());
+        input.move_to_begin();
+        assert!(is_command_position(&input));
+
+        // Test in middle of command (not command position)
+        input.move_to_end();
+        assert!(!is_command_position(&input)); // "git" is not a command position at the end
+
+        // Test after pipe
+        input.reset("ls | grep".to_string());
+        input.move_to_end();
+        assert!(!is_command_position(&input)); // At end of "grep", not command position
+
+        // Test right after pipe character
+        input.reset("ls | ".to_string());
+        input.move_to_end();
+        assert!(is_command_position(&input)); // After pipe and space, is command position
+    }
+
+    #[test]
+    fn test_get_command_candidates() {
+        let candidates = get_command_candidates("g");
+
+        // Should contain built-in commands
+        let names: Vec<String> = candidates.iter().map(|c| c.get_display_name()).collect();
+
+        assert!(names.contains(&"cd".to_string()));
+        assert!(names.contains(&"echo".to_string()));
+    }
+
+    #[test]
+    fn test_get_file_candidates() {
+        let candidates = get_file_candidates(".");
+
+        // Should find some files/directories in current directory
+        assert!(!candidates.is_empty());
+
+        // Check that we have both files and directories
+        let has_files = candidates
+            .iter()
+            .any(|c| matches!(c, Candidate::File { is_dir: false, .. }));
+        let has_dirs = candidates
+            .iter()
+            .any(|c| matches!(c, Candidate::File { is_dir: true, .. }));
+
+        // At least one should be true (current directory should have some content)
+        assert!(has_files || has_dirs);
     }
 }

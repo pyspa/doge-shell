@@ -1,6 +1,7 @@
 use crate::environment::Environment;
 use crate::repl::Repl;
 use crate::shell::Shell;
+use anyhow::Result;
 use clap::Parser;
 use dsh_types::Context;
 use nix::sys::termios::tcgetattr;
@@ -29,7 +30,10 @@ struct Cli {
 }
 
 fn main() -> ExitCode {
-    init_tracing();
+    if let Err(err) = init_tracing() {
+        eprintln!("Failed to initialize tracing: {err}");
+        return ExitCode::FAILURE;
+    }
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(run_shell())
 }
@@ -47,8 +51,17 @@ async fn run_shell() -> ExitCode {
     }
 }
 
-fn init_tracing() {
-    tracing_subscriber::fmt::init();
+fn init_tracing() -> Result<()> {
+    let log_file = std::sync::Arc::new(std::fs::File::create("./debug.log")?);
+    tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::DEBUG)
+        .with_file(true)
+        .with_line_number(true)
+        .with_writer(log_file)
+        .init();
+    // tracing_subscriber::fmt::init();
+    Ok(())
 }
 
 fn create_context(shell: &Shell) -> Context {

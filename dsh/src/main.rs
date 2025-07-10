@@ -27,6 +27,30 @@ impl std::fmt::Display for ShellExit {
 
 impl std::error::Error for ShellExit {}
 
+/// Display error in a user-friendly format without stack traces
+fn display_user_error(err: &anyhow::Error) {
+    let error_msg = err.to_string();
+
+    // Check if it's a command not found error
+    if error_msg.contains("unknown command:") {
+        if let Some(cmd_start) = error_msg.find("unknown command: ") {
+            let cmd = &error_msg[cmd_start + 17..]; // Skip "unknown command: "
+            eprintln!("dsh: {}: command not found", cmd.trim());
+        } else {
+            eprintln!("dsh: command not found");
+        }
+    } else if error_msg.contains("Shell terminated by double Ctrl+C")
+        || error_msg.contains("Normal exit")
+        || error_msg.contains("Exit by")
+    {
+        // Don't display normal exit messages
+        debug!("Shell exiting normally: {}", error_msg);
+    } else {
+        // For other errors, display the root cause without debug info
+        eprintln!("dsh: {}", error_msg);
+    }
+}
+
 mod completion;
 mod direnv;
 mod dirs;
@@ -40,6 +64,9 @@ mod prompt;
 mod proxy;
 mod repl;
 mod shell;
+
+#[cfg(test)]
+mod error_handling_tests;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -189,7 +216,7 @@ async fn execute_command(shell: &mut Shell, ctx: &mut Context, command: &str) ->
             code
         }
         Err(err) => {
-            eprintln!("{err:?}");
+            display_user_error(&err);
             ExitCode::FAILURE
         }
     }
@@ -202,7 +229,7 @@ async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
 
     let mut repl = Repl::new(shell);
     if let Err(err) = repl.shell.eval_str(ctx, "cd .".to_string(), false).await {
-        eprintln!("{err:?}");
+        display_user_error(&err);
         return ExitCode::FAILURE;
     }
 
@@ -224,7 +251,7 @@ async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
                     debug!("Shell exiting normally: {}", err_str);
                     ExitCode::from(0)
                 } else {
-                    eprintln!("{err:?}");
+                    display_user_error(&err);
                     ExitCode::FAILURE
                 }
             }
@@ -250,12 +277,13 @@ async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
                     match repl.shell.eval_str(ctx, input.to_string(), false).await {
                         Ok(_) => {}
                         Err(err) => {
-                            eprintln!("Error executing '{}': {:?}", input, err);
+                            eprint!("Error executing '{}': ", input);
+                            display_user_error(&err);
                         }
                     }
                 }
                 Err(err) => {
-                    eprintln!("Error reading input: {:?}", err);
+                    eprintln!("Error reading input: {}", err);
                     break;
                 }
             }

@@ -158,7 +158,7 @@ impl CompletionDisplay {
         // Calculate the maximum display width needed
         let max_display_width = candidates
             .iter()
-            .map(|c| c.get_display_name().len() + 3) // "C " + name + " "
+            .map(|c| c.get_display_name().len() + 4) // "🔹 " + name + " " (emoji takes 2 chars)
             .max()
             .unwrap_or(10);
 
@@ -346,12 +346,14 @@ impl CompletionDisplay {
                     queue!(stdout, SetForegroundColor(Color::DarkGrey))?;
                 } else {
                     match candidate.get_type_char() {
-                        'C' => queue!(stdout, SetForegroundColor(Color::Green))?, // Command
-                        'D' => queue!(stdout, SetForegroundColor(Color::Blue))?,  // Directory
-                        'F' => queue!(stdout, SetForegroundColor(Color::White))?, // File
-                        'O' => queue!(stdout, SetForegroundColor(Color::Yellow))?, // Option
-                        'P' => queue!(stdout, SetForegroundColor(Color::Cyan))?,  // Path
-                        'B' => queue!(stdout, SetForegroundColor(Color::White))?, // Basic
+                        '⚡' => queue!(stdout, SetForegroundColor(Color::Green))?, // Command - lightning bolt
+                        '📁' => queue!(stdout, SetForegroundColor(Color::Blue))?, // Directory - folder
+                        '📄' => queue!(stdout, SetForegroundColor(Color::White))?, // File - document
+                        '⚙' => queue!(stdout, SetForegroundColor(Color::Yellow))?, // Option - gear
+                        '🔹' => queue!(stdout, SetForegroundColor(Color::White))?, // Basic - small blue diamond
+                        '🌿' => queue!(stdout, SetForegroundColor(Color::Green))?, // Git branch - herb/branch
+                        '📜' => queue!(stdout, SetForegroundColor(Color::Cyan))?, // Script - scroll
+                        '🕒' => queue!(stdout, SetForegroundColor(Color::Magenta))?, // History - clock
                         _ => queue!(stdout, SetForegroundColor(Color::White))?,
                     }
                 }
@@ -578,35 +580,35 @@ impl Candidate {
         match self {
             Candidate::Item(_, desc) => {
                 if desc.contains("command") {
-                    'C'
+                    '⚡' // Command - lightning bolt
                 } else if desc.contains("file") {
-                    'F'
+                    '📄' // File - document
                 } else if desc.contains("directory") {
-                    'D'
+                    '📁' // Directory - folder
                 } else {
-                    'O' // Option or other
+                    '⚙' // Option or other - gear
                 }
             }
             Candidate::Path(path) => {
                 if path.ends_with('/') {
-                    'D' // Directory
+                    '📁' // Directory - folder
                 } else {
-                    'F' // File
+                    '📄' // File - document
                 }
             }
-            Candidate::Basic(_) => 'B',       // Basic
-            Candidate::Command { .. } => 'C', // Command
-            Candidate::Option { .. } => 'O',  // Option
+            Candidate::Basic(_) => '🔹', // Basic - small blue diamond
+            Candidate::Command { .. } => '⚡', // Command - lightning bolt
+            Candidate::Option { .. } => '⚙', // Option - gear
             Candidate::File { is_dir, .. } => {
                 if *is_dir {
-                    'D'
+                    '📁' // Directory - folder
                 } else {
-                    'F'
+                    '📄' // File - document
                 }
             }
-            Candidate::GitBranch { .. } => 'G', // Git branch
-            Candidate::NpmScript { .. } => 'S', // Script
-            Candidate::History { .. } => 'H',   // History
+            Candidate::GitBranch { .. } => '🌿', // Git branch - herb/branch
+            Candidate::NpmScript { .. } => '📜', // Script - scroll
+            Candidate::History { .. } => '🕒',   // History - clock
         }
     }
 
@@ -631,7 +633,8 @@ impl Candidate {
         let name = self.get_display_name();
 
         // Truncate name if too long
-        let max_name_width = width.saturating_sub(3); // "C " + " "
+        // Emoji takes 2 character widths, so we need to account for that
+        let max_name_width = width.saturating_sub(4); // "🔹 " + " " (emoji + space + space)
         let display_name = if name.len() > max_name_width {
             format!("{}…", &name[..max_name_width.saturating_sub(1)])
         } else {

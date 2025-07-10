@@ -1111,14 +1111,7 @@ pub fn input_completion(
     prompt_text: String,
     input_text: String,
 ) -> Option<String> {
-    // Try fuzzy completion first for better user experience
-    let fuzzy_res =
-        input_completion_with_fuzzy(input, repl, query, prompt_text.clone(), input_text.clone());
-    if fuzzy_res.is_some() {
-        return fuzzy_res;
-    }
-
-    // Fallback to original completion logic
+    // Use original completion logic only (fuzzy completion removed)
     let res = completion_from_lisp_with_prompt(
         input,
         repl,
@@ -1149,6 +1142,7 @@ pub fn input_completion(
 }
 
 /// Enhanced completion with fuzzy matching support
+#[allow(dead_code)]
 pub fn input_completion_with_fuzzy(
     input: &Input,
     repl: &Repl,
@@ -1222,6 +1216,7 @@ pub fn input_completion_simple(input: &Input, repl: &Repl, query: Option<&str>) 
 }
 
 /// Get the current word being typed for completion
+#[allow(dead_code)]
 fn get_current_word(input: &Input) -> Option<String> {
     let text = input.as_str();
     let cursor = input.cursor();
@@ -1251,6 +1246,7 @@ fn get_current_word(input: &Input) -> Option<String> {
 }
 
 /// Check if the cursor is at a command position (beginning of line or after pipe/semicolon)
+#[allow(dead_code)]
 fn is_command_position(input: &Input) -> bool {
     let text = input.as_str();
     let cursor = input.cursor();
@@ -1273,6 +1269,7 @@ fn is_command_position(input: &Input) -> bool {
 }
 
 /// Get command candidates from PATH
+#[allow(dead_code)]
 fn get_command_candidates(_query: &str) -> Vec<Candidate> {
     let mut candidates = Vec::new();
 
@@ -1314,6 +1311,7 @@ fn get_command_candidates(_query: &str) -> Vec<Candidate> {
 }
 
 /// Get file and directory candidates
+#[allow(dead_code)]
 fn get_file_candidates(query: &str) -> Vec<Candidate> {
     let mut candidates = Vec::new();
 

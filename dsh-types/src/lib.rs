@@ -93,15 +93,15 @@ impl Context {
         }
     }
 
-    /// 安全なContext作成（ターミナル検出付き）
+    /// Safe Context creation (with terminal detection)
     pub fn new_safe(shell_pid: Pid, shell_pgid: Pid, foreground: bool) -> Self {
         let terminal_state = TerminalState::detect(STDIN_FILENO);
         let shell_mode = ShellMode::detect();
 
-        // ターミナル設定を安全に取得
+        // Safely get terminal settings
         let shell_tmode = terminal_state.get_tmodes().cloned().unwrap_or_else(|| {
-            // デフォルトのTermios値を作成
-            // 実際の実装では適切なデフォルト値を設定
+            // Create default Termios value
+            // In actual implementation, set appropriate default values
             unsafe { std::mem::zeroed() }
         });
 

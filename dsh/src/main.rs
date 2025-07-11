@@ -149,7 +149,7 @@ fn setup_panic_handler() {
             "Unknown location".to_string()
         };
 
-        // バックトレースを取得（RUST_BACKTRACE=1が設定されている場合）
+        // Get backtrace (if RUST_BACKTRACE=1 is set)
         let backtrace = std::backtrace::Backtrace::capture();
         let backtrace_str = match backtrace.status() {
             std::backtrace::BacktraceStatus::Captured => format!("\nBacktrace:\n{}", backtrace),
@@ -172,8 +172,8 @@ fn setup_panic_handler() {
             timestamp, thread_name, location, payload, backtrace_str
         );
 
-        // 複数の方法でログを記録
-        // 1. ログファイルに直接書き込み
+        // Record logs in multiple ways
+        // 1. Write directly to log file
         let log_files = ["./debug.log", "./panic.log"];
         for log_file in &log_files {
             if let Ok(mut file) = std::fs::OpenOptions::new()
@@ -187,10 +187,10 @@ fn setup_panic_handler() {
             }
         }
 
-        // 2. tracingログにも出力を試行（初期化されている場合）
+        // 2. Also try to output to tracing log (if initialized)
         tracing::error!("PANIC OCCURRED: {} at {}", payload, location);
 
-        // 3. 標準エラー出力にも出力（デフォルトの動作を維持）
+        // 3. Also output to stderr (maintain default behavior)
         eprintln!("\n=== doge-shell PANIC ===");
         eprintln!("Message: {}", payload);
         eprintln!("Location: {}", location);
@@ -202,7 +202,7 @@ fn setup_panic_handler() {
 }
 
 fn create_context(shell: &Shell) -> Context {
-    // 安全なContext作成を使用（パニックを回避）
+    // Use safe Context creation (avoid panics)
     Context::new_safe(shell.pid, shell.pgid, true)
 }
 
@@ -242,7 +242,7 @@ async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
         match repl.run_interactive().await {
             Ok(_) => ExitCode::from(0),
             Err(err) => {
-                // 正常終了の場合はエラーメッセージを表示しない
+                // Don't display error message for normal exit
                 let err_str = err.to_string();
                 if err_str.contains("Shell terminated by double Ctrl+C")
                     || err_str.contains("Normal exit")

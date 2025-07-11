@@ -1852,18 +1852,18 @@ mod fuzzy_integration_tests {
     //     fn test_unicode_display_width() {
     //         init();
     //
-    //         // ASCII文字のテスト
+    //         // ASCII character test
     //         assert_eq!(unicode_display_width("hello"), 5);
     //
-    //         // 日本語文字のテスト（全角文字は2文字幅）
+    //         // Japanese character test (full-width characters are 2 character widths)
     //         assert_eq!(unicode_display_width("こんにちは"), 10);
     //
-    //         // 絵文字のテスト
+    //         // Emoji test
     //         assert_eq!(unicode_display_width("🐕"), 2);
     //         assert_eq!(unicode_display_width("⚡"), 2);
     //         assert_eq!(unicode_display_width("📁"), 2);
     //
-    //         // 混在のテスト
+    //         // Mixed test
     //         assert_eq!(unicode_display_width("hello世界🐕"), 5 + 4 + 2); // 11
     //     }
 
@@ -1871,18 +1871,18 @@ mod fuzzy_integration_tests {
     //     fn test_truncate_to_width() {
     //         init();
     //
-    //         // ASCII文字の切り詰めテスト
+    //         // ASCII character truncation test
     //         assert_eq!(truncate_to_width("hello_world", 5), "hell…");
     //         assert_eq!(truncate_to_width("hello", 10), "hello");
     //
-    //         // 日本語文字の切り詰めテスト
-    //         assert_eq!(truncate_to_width("こんにちは", 6), "こん…"); // 4文字幅 + 1文字幅（…）= 5文字幅
+    //         // Japanese character truncation test
+    //         assert_eq!(truncate_to_width("こんにちは", 6), "こん…"); // 4 char width + 1 char width (…) = 5 char width
     //
-    //         // 絵文字の切り詰めテスト
-    //         assert_eq!(truncate_to_width("🐕🚀⚡", 4), "🐕…"); // 2文字幅 + 1文字幅（…）= 3文字幅
+    //         // Emoji truncation test
+    //         assert_eq!(truncate_to_width("🐕🚀⚡", 4), "🐕…"); // 2 char width + 1 char width (…) = 3 char width
     //
-    //         // 混在の切り詰めテスト
-    //         assert_eq!(truncate_to_width("hello世界", 8), "hello世…"); // 5文字幅 + 2文字幅 + 1文字幅（…）= 8文字幅
+    //         // Mixed truncation test
+    //         assert_eq!(truncate_to_width("hello世界", 8), "hello世…"); // 5 char width + 2 char width + 1 char width (…) = 8 char width
     //     }
 
     //     #[test]

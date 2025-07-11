@@ -2,16 +2,16 @@
 use super::command::ArgumentType;
 use std::collections::VecDeque;
 
-/// コマンドライン解析の結果
+/// Command line parsing result
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedCommand {
-    /// メインコマンド名
+    /// Main command name
     pub command: String,
-    /// サブコマンドのパス（例: ["remote", "add"]）
+    /// Subcommand path (e.g., ["remote", "add"])
     pub subcommand_path: Vec<String>,
-    /// 現在解析中のトークン
+    /// Currently parsing token
     pub current_token: String,
-    /// 補完コンテキスト
+    /// Completion context
     pub completion_context: CompletionContext,
     /// 既に指定されたオプション
     pub specified_options: Vec<String>,

@@ -3,50 +3,50 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// コマンド補完情報の全体構造
+/// Overall structure for command completion information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandCompletion {
-    /// コマンド名（例: "git", "cargo", "docker"）
+    /// Command name (e.g., "git", "cargo", "docker")
     pub command: String,
-    /// コマンドの説明
+    /// Command description
     pub description: Option<String>,
-    /// サブコマンドのリスト
+    /// List of subcommands
     pub subcommands: Vec<SubCommand>,
-    /// グローバルオプション（全サブコマンドで共通）
+    /// Global options (common to all subcommands)
     pub global_options: Vec<CommandOption>,
 }
 
-/// サブコマンドの定義
+/// Subcommand definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubCommand {
-    /// サブコマンド名（例: "add", "commit", "push"）
+    /// Subcommand name (e.g., "add", "commit", "push")
     pub name: String,
-    /// サブコマンドの説明
+    /// Subcommand description
     pub description: Option<String>,
-    /// このサブコマンド固有のオプション
+    /// Options specific to this subcommand
     pub options: Vec<CommandOption>,
-    /// このサブコマンドが受け取る引数
+    /// Arguments that this subcommand accepts
     pub arguments: Vec<Argument>,
-    /// ネストしたサブコマンド（例: git remote add）
+    /// Nested subcommands (e.g., git remote add)
     pub subcommands: Vec<SubCommand>,
-    /// エイリアス（短縮形）
+    /// Aliases (short forms)
     pub aliases: Vec<String>,
 }
 
-/// オプションの定義
+/// Option definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandOption {
-    /// 短いオプション（例: "-v"）
+    /// Short option (e.g., "-v")
     pub short: Option<String>,
-    /// 長いオプション（例: "--verbose"）
+    /// Long option (e.g., "--verbose")
     pub long: Option<String>,
-    /// オプションの説明
+    /// Option description
     pub description: Option<String>,
-    /// 値を取るかどうか（フラグかパラメータか）
+    /// Whether it takes a value (flag or parameter)
     pub takes_value: bool,
-    /// 値の型（takes_valueがtrueの場合）
+    /// Value type (when takes_value is true)
     pub value_type: Option<ArgumentType>,
-    /// 必須オプションかどうか
+    /// Whether it's a required option
     pub required: bool,
     /// 複数回指定可能かどうか
     pub multiple: bool,
@@ -67,42 +67,42 @@ pub struct Argument {
     pub multiple: bool,
 }
 
-/// 引数・値の型
+/// Argument/value types
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", content = "data")]
 pub enum ArgumentType {
-    /// ファイルパス
+    /// File path
     File {
-        /// ファイル拡張子のフィルタ（例: [".rs", ".toml"]）
+        /// File extension filter (e.g., [".rs", ".toml"])
         extensions: Option<Vec<String>>,
     },
-    /// ディレクトリパス
+    /// Directory path
     Directory,
-    /// 任意の文字列
+    /// Arbitrary string
     String,
-    /// 数値
+    /// Number
     Number,
-    /// 選択肢から選ぶ
+    /// Choice from options
     Choice(Vec<String>),
-    /// 既存のコマンド名
+    /// Existing command name
     Command,
-    /// 環境変数名
+    /// Environment variable name
     Environment,
     /// URL
     Url,
-    /// 正規表現パターン
+    /// Regular expression pattern
     Regex,
 }
 
-/// コマンド補完データベース
+/// Command completion database
 #[derive(Debug, Clone)]
 pub struct CommandCompletionDatabase {
-    /// コマンド名 -> 補完情報のマップ
+    /// Map of command name -> completion information
     commands: HashMap<String, CommandCompletion>,
 }
 
 impl CommandCompletionDatabase {
-    /// 新しい空のデータベースを作成
+    /// Create a new empty database
     pub fn new() -> Self {
         Self {
             commands: HashMap::new(),

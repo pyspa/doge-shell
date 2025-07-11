@@ -58,7 +58,7 @@ pub enum ShellEvent {
     ScreenResized,
 }
 
-/// Ctrl+C二回押し検出用の状態管理
+/// State management for detecting double Ctrl+C press
 #[derive(Debug)]
 struct CtrlCState {
     first_press_time: Option<Instant>,
@@ -73,7 +73,7 @@ impl CtrlCState {
         }
     }
 
-    /// Ctrl+Cが押された時の処理。二回目の場合はtrueを返す
+    /// Handle Ctrl+C press. Returns true if it's the second press
     fn on_ctrl_c_pressed(&mut self) -> bool {
         let now = Instant::now();
 
@@ -86,11 +86,11 @@ impl CtrlCState {
             }
             Some(first_time) => {
                 if now.duration_since(first_time) <= Duration::from_secs(3) {
-                    // 3秒以内の二回目押下
+                    // Second press within 3 seconds
                     self.press_count = 2;
                     true
                 } else {
-                    // 3秒を超えているので初回扱い
+                    // More than 3 seconds passed, treat as first press
                     self.first_press_time = Some(now);
                     self.press_count = 1;
                     false
@@ -462,7 +462,7 @@ impl<'a> Repl<'a> {
         let redraw = true;
         let mut reset_completion = false;
 
-        // Ctrl+C以外のキー入力時はCtrl+C状態をリセット
+        // Reset Ctrl+C state on any key input other than Ctrl+C
         if !matches!((ev.code, ev.modifiers), (KeyCode::Char('c'), CTRL)) {
             self.ctrl_c_state.reset();
         }
@@ -723,12 +723,12 @@ impl<'a> Repl<'a> {
                 let mut out = std::io::stdout().lock();
 
                 if self.ctrl_c_state.on_ctrl_c_pressed() {
-                    // 二回目のCtrl+C - シェルを正常終了
+                    // Second Ctrl+C - exit shell normally
                     execute!(out, Print("\r\nExiting shell...\r\n")).ok();
                     self.should_exit = true;
                     return Ok(());
                 } else {
-                    // 初回のCtrl+C - プロンプトリセット + メッセージ表示
+                    // First Ctrl+C - reset prompt + show message
                     execute!(
                         out,
                         Print("\r\n(Press Ctrl+C again within 3 seconds to exit)\r\n")
@@ -935,10 +935,10 @@ mod tests {
     fn test_ctrl_c_state_double_press_after_timeout() {
         let mut state = CtrlCState::new();
 
-        // 初回押下
+        // First press
         assert!(!state.on_ctrl_c_pressed());
 
-        // 3秒以上後の押下（新しい初回扱い）
+        // Press after more than 3 seconds (treated as new first press)
         thread::sleep(std::time::Duration::from_secs(4));
         assert!(!state.on_ctrl_c_pressed());
         assert_eq!(state.press_count, 1);

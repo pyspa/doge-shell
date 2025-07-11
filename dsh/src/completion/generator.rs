@@ -375,7 +375,7 @@ impl CompletionGenerator {
     ) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::new();
 
-        // 一般的なコマンドのリスト（実際の実装ではPATHから取得）
+        // List of common commands (in actual implementation, get from PATH)
         let common_commands = [
             "ls", "cd", "pwd", "mkdir", "rmdir", "rm", "cp", "mv", "cat", "less", "more", "grep",
             "find", "which", "whereis", "man", "help", "echo", "printf", "git", "cargo", "rustc",

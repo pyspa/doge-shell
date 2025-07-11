@@ -11,13 +11,13 @@ use anyhow::Result;
 use std::path::Path;
 use tracing::{debug, warn};
 
-/// 統合補完エンジン - 全ての補完機能を統合
+/// Integrated completion engine - integrates all completion features
 pub struct IntegratedCompletionEngine {
-    /// JSONベースのコマンド補完
+    /// JSON-based command completion
     command_generator: Option<CompletionGenerator>,
-    /// コマンドライン解析器
+    /// Command line parser
     parser: CommandLineParser,
-    /// 既存の補完システム
+    /// Existing completion systems
     context_completion: ContextCompletion,
     fuzzy_completion: FuzzyCompletion,
     history_completion: HistoryCompletion,
@@ -37,7 +37,7 @@ impl IntegratedCompletionEngine {
         }
     }
 
-    /// JSON補完データを初期化
+    /// Initialize JSON completion data
     pub fn initialize_command_completion(&mut self) -> Result<()> {
         debug!("Initializing command completion system...");
 
@@ -58,7 +58,7 @@ impl IntegratedCompletionEngine {
                         command_count
                     );
 
-                    // デバッグ: 読み込まれたコマンドをリスト表示
+                    // Debug: List loaded commands
                     if let Some(ref generator) = self.command_generator {
                         debug!(
                             "Available commands in database: {:?}",
@@ -98,7 +98,7 @@ impl IntegratedCompletionEngine {
 
         let mut all_candidates = Vec::new();
 
-        // 1. 新しいコマンド補完システム（最高優先度）
+        // 1. New command completion system (highest priority)
         if let Some(ref generator) = self.command_generator {
             debug!("Using JSON completion generator for input: '{}'", input);
             let parsed = self.parser.parse(input, cursor_pos);
@@ -126,7 +126,7 @@ impl IntegratedCompletionEngine {
             debug!("No JSON completion generator available - skipping JSON completion");
         }
 
-        // 2. 既存のコンテキスト補完
+        // 2. Existing context completion
         let parts: Vec<&str> = input.split_whitespace().collect();
         if !parts.is_empty() {
             let command = parts[0];
@@ -144,7 +144,7 @@ impl IntegratedCompletionEngine {
             all_candidates.extend(enhanced_candidates);
         }
 
-        // 3. 履歴ベース補完
+        // 3. History-based completion
         let context = CompletionContext::new(current_dir.to_string_lossy().to_string());
         let history_candidates = self.history_completion.complete_command(input, &context);
         let enhanced_candidates = history_candidates
@@ -155,11 +155,11 @@ impl IntegratedCompletionEngine {
         debug!("Generated {} history candidates", enhanced_candidates.len());
         all_candidates.extend(enhanced_candidates);
 
-        // 4. 重複除去とソート
+        // 4. Deduplication and sorting
         self.deduplicate_and_sort(all_candidates, max_results)
     }
 
-    /// CompletionCandidateをEnhancedCandidateに変換
+    /// Convert CompletionCandidate to EnhancedCandidate
     fn convert_to_enhanced_candidate(
         &self,
         candidate: CompletionCandidate,
@@ -181,7 +181,7 @@ impl IntegratedCompletionEngine {
         }
     }
 
-    /// 既存のCandidateをEnhancedCandidateに変換
+    /// Convert existing Candidate to EnhancedCandidate
     fn convert_legacy_candidate(
         &self,
         candidate: Candidate,
@@ -247,7 +247,7 @@ impl IntegratedCompletionEngine {
             }
         });
 
-        // 最終ソート（優先度 -> 種類 -> アルファベット順）
+        // Final sorting (priority -> type -> alphabetical order)
         candidates.sort_by(|a, b| {
             b.priority
                 .cmp(&a.priority)

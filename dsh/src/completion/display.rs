@@ -12,13 +12,13 @@ pub struct DisplayConfig {
     pub max_rows: usize,
     /// 最大表示列数
     pub max_columns: usize,
-    /// 説明文を表示するかどうか
+    /// Whether to show descriptions
     pub show_descriptions: bool,
-    /// アイコンを表示するかどうか
+    /// Whether to show icons
     pub show_icons: bool,
-    /// 色分けを行うかどうか
+    /// Whether to use color coding
     pub use_colors: bool,
-    /// 1行あたりの最大文字数
+    /// Maximum characters per line
     pub max_width_per_item: usize,
 }
 
@@ -174,7 +174,7 @@ impl CompletionDisplay {
         Ok(())
     }
 
-    /// 候補の1行を表示
+    /// Display one row of candidates
     fn display_candidate_row(
         &self,
         stdout: &mut std::io::Stdout,
@@ -236,7 +236,7 @@ impl CompletionDisplay {
         Ok(())
     }
 
-    /// 1行あたりの候補数を計算
+    /// Calculate number of candidates per row
     fn calculate_items_per_row(
         &self,
         candidates: &[&EnhancedCandidate],
@@ -261,12 +261,12 @@ impl CompletionDisplay {
                 .map(|d| d.width())
                 .max()
                 .unwrap_or(0)
-                .min(20) // 説明文は最大20文字
+                .min(20) // Description text is max 20 characters
         } else {
             0
         };
 
-        let estimated_item_width = max_text_width + max_desc_width + 6; // マージンとアイコン分
+        let estimated_item_width = max_text_width + max_desc_width + 6; // Margin and icon space
         let items_per_row = (available_width / estimated_item_width.max(1)).max(1);
 
         items_per_row.min(self.config.max_columns)

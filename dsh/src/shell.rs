@@ -984,7 +984,7 @@ mod tests {
         let result = chpwd_update_env(&test_path, env);
         assert!(result.is_ok());
 
-        // PWD環境変数が設定されていることを確認
+        // Verify that PWD environment variable is set
         let pwd = std::env::var("PWD").unwrap_or_default();
         assert!(pwd.contains("test") || pwd == "/tmp/test");
     }

@@ -51,7 +51,7 @@ impl Prompt {
             git_status_cache: None,
         };
 
-        // 初期化時にGitルートを設定
+        // Set Git root during initialization
         prompt.set_current(&current_dir);
         prompt
     }
@@ -148,7 +148,7 @@ impl Prompt {
                     debug!("Found new git root: {}", root);
                     self.current_git_root = Some(PathBuf::from(&root));
                     self.git_root_cache.insert(root);
-                    // Git rootが変わったのでキャッシュをクリア
+                    // Git root changed, so clear cache
                     self.git_status_cache = None;
                 } else {
                     debug!("No git root found, clearing current_git_root");
@@ -159,16 +159,16 @@ impl Prompt {
             debug!("Setting initial git root: {}", root);
             self.current_git_root = Some(PathBuf::from(&root));
             self.git_root_cache.insert(root);
-            // 新しいGit rootなのでキャッシュをクリア
+            // New Git root, so clear cache
             self.git_status_cache = None;
         } else {
             debug!("No git root found for initial setup");
         }
     }
 
-    /// キャッシュ機能付きのGit状態取得
+    /// Get Git status with caching functionality
     pub fn get_git_status_cached(&mut self) -> Option<GitStatus> {
-        // Git rootが存在しない場合は早期リターン
+        // Early return if Git root doesn't exist
         let git_root = self.current_git_root.as_ref()?;
 
         // キャッシュが有効かチェック
@@ -182,7 +182,7 @@ impl Prompt {
         // キャッシュが無効または存在しない場合、新しい状態を取得
         debug!("Fetching fresh git status for {:?}", git_root);
         if let Some(status) = get_git_status() {
-            // 新しいキャッシュを作成または更新
+            // Create or update new cache
             if let Some(ref mut cache) = self.git_status_cache {
                 cache.update(status.clone());
             } else {
@@ -190,7 +190,7 @@ impl Prompt {
             }
             Some(status)
         } else {
-            // Git状態の取得に失敗した場合、キャッシュをクリア
+            // If Git status retrieval fails, clear cache
             self.git_status_cache = None;
             None
         }
@@ -264,7 +264,7 @@ impl GitStatus {
     }
 }
 
-/// Git状態のキャッシュ構造体
+/// Git status cache structure
 #[derive(Debug, Clone)]
 struct GitStatusCache {
     status: GitStatus,
@@ -279,17 +279,17 @@ impl GitStatusCache {
             status,
             last_updated: Instant::now(),
             git_root,
-            ttl: Duration::from_secs(5), // 5秒間キャッシュを有効とする
+            ttl: Duration::from_secs(5), // Cache valid for 5 seconds
         }
     }
 
     fn is_valid(&self, current_git_root: &Path) -> bool {
-        // Git rootが変わった場合は無効
+        // Invalid if Git root changed
         if self.git_root != current_git_root {
             return false;
         }
 
-        // TTLを超えた場合は無効
+        // Invalid if TTL exceeded
         self.last_updated.elapsed() < self.ttl
     }
 
@@ -423,26 +423,26 @@ mod tests {
 
     #[test]
     fn test_git_status_cache() {
-        // 非Gitディレクトリでテスト
+        // Test with non-Git directory
         let non_git_dir = PathBuf::from("/tmp");
         let mut prompt = Prompt::new(non_git_dir, "🐕 > ".to_string());
 
-        // Git rootを明示的にクリア（テスト環境では自動設定される可能性があるため）
+        // Explicitly clear Git root (may be auto-set in test environment)
         prompt.current_git_root = None;
 
-        // Git rootが設定されていない場合はNoneを返す
+        // Should return None when Git root is not set
         assert!(prompt.get_git_status_cached().is_none());
 
-        // 実際のGitリポジトリでテスト
+        // Test with actual Git repository
         if let Some(git_root) = get_git_root() {
             let git_dir = PathBuf::from(&git_root);
             let mut git_prompt = Prompt::new(git_dir, "🐕 > ".to_string());
             git_prompt.current_git_root = Some(PathBuf::from(&git_root));
 
-            // 初回呼び出し（キャッシュなし）
+            // First call (no cache)
             let status1 = git_prompt.get_git_status_cached();
 
-            // 2回目呼び出し（キャッシュあり）
+            // Second call (with cache)
             let status2 = git_prompt.get_git_status_cached();
 
             // 両方とも同じ結果であることを確認
@@ -459,10 +459,10 @@ mod tests {
         let status = GitStatus::new();
         let cache = GitStatusCache::new(status, git_root.clone());
 
-        // 同じGit rootの場合は有効
+        // Valid for same Git root
         assert!(cache.is_valid(&git_root));
 
-        // 異なるGit rootの場合は無効
+        // Invalid for different Git root
         let different_root = PathBuf::from("/home");
         assert!(!cache.is_valid(&different_root));
     }
@@ -475,16 +475,16 @@ mod tests {
         let status = GitStatus::new();
         let mut cache = GitStatusCache::new(status, git_root.clone());
 
-        // TTLを短く設定
+        // Set short TTL
         cache.ttl = Duration::from_millis(10);
 
-        // 初期状態では有効
+        // Initially valid
         assert!(cache.is_valid(&git_root));
 
-        // TTLを超えるまで待機
+        // Wait until TTL expires
         thread::sleep(Duration::from_millis(20));
 
-        // TTL超過後は無効
+        // Invalid after TTL expiration
         assert!(!cache.is_valid(&git_root));
     }
 }

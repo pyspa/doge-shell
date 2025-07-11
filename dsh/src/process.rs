@@ -2470,10 +2470,10 @@ mod tests {
         init();
         let mut process = Process::new("test_cmd".to_string(), vec!["arg1".to_string()]);
 
-        // 初期状態はRunning
+        // Initial state is Running
         assert!(matches!(process.state, ProcessState::Running));
 
-        // 状態変更テスト
+        // State change test
         process.state = ProcessState::Completed(0, None);
         assert!(matches!(process.state, ProcessState::Completed(0, None)));
 
@@ -2534,7 +2534,7 @@ mod tests {
         let process = Process::new("test".to_string(), vec![]);
         let job_process = JobProcess::Command(process);
 
-        // JobProcessの型チェック
+        // JobProcess type check
         match job_process {
             JobProcess::Command(_) => {} // Expected variant
             _ => panic!("Expected Command variant"),

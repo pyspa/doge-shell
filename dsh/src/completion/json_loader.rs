@@ -411,7 +411,7 @@ mod tests {
     fn test_list_available_completions() {
         let temp_dir = TempDir::new().unwrap();
 
-        // テスト用のJSONファイルを作成
+        // Create test JSON files
         fs::write(temp_dir.path().join("git.json"), "{}").unwrap();
         fs::write(temp_dir.path().join("cargo.json"), "{}").unwrap();
         fs::write(temp_dir.path().join("not_json.txt"), "{}").unwrap();
@@ -469,7 +469,7 @@ mod tests {
                 assert!(completion.description.is_some());
                 assert!(!completion.subcommands.is_empty());
 
-                // "build"サブコマンドが存在することを確認
+                // Verify that "build" subcommand exists
                 let build_subcommand = completion.subcommands.iter().find(|sc| sc.name == "build");
                 assert!(build_subcommand.is_some());
 

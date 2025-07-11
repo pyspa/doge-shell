@@ -69,16 +69,16 @@ impl TerminalState {
     }
 }
 
-/// シェルの実行モードを表現する列挙型
+/// Enumeration representing shell execution modes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellMode {
-    /// 対話モード（stdin, stdout両方がターミナル）
+    /// Interactive mode (both stdin and stdout are terminals)
     Interactive,
-    /// パイプラインモード（stdinがターミナル、stdoutが非ターミナル）
+    /// Pipeline mode (stdin is terminal, stdout is non-terminal)
     Pipeline,
-    /// スクリプトモード（stdin, stdout両方が非ターミナル）
+    /// Script mode (both stdin and stdout are non-terminals)
     Script,
-    /// バックグラウンドモード
+    /// Background mode
     Background,
 }
 

@@ -171,7 +171,7 @@ impl Prompt {
         // Early return if Git root doesn't exist
         let git_root = self.current_git_root.as_ref()?;
 
-        // キャッシュが有効かチェック
+        // Check if cache is valid
         if let Some(ref cache) = self.git_status_cache {
             if cache.is_valid(git_root) {
                 debug!("Using cached git status for {:?}", git_root);
@@ -179,7 +179,7 @@ impl Prompt {
             }
         }
 
-        // キャッシュが無効または存在しない場合、新しい状態を取得
+        // Get new status if cache is invalid or doesn't exist
         debug!("Fetching fresh git status for {:?}", git_root);
         if let Some(status) = get_git_status() {
             // Create or update new cache
@@ -445,10 +445,10 @@ mod tests {
             // Second call (with cache)
             let status2 = git_prompt.get_git_status_cached();
 
-            // 両方とも同じ結果であることを確認
+            // Confirm both results are the same
             assert_eq!(status1, status2);
 
-            // キャッシュが存在することを確認
+            // Confirm cache exists
             assert!(git_prompt.git_status_cache.is_some());
         }
     }

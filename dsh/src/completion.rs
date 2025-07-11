@@ -1532,7 +1532,7 @@ mod tests {
     //         assert_eq!(Some("~/.local/".to_string()), p);
     //
     //         let p = path_completion_prefix("~/.config/gi")?;
-    //         // 環境依存のため、git関連のディレクトリが存在することを確認
+    //         // Environment-dependent, so verify git-related directory exists
     //         assert!(p.is_some());
     //         assert!(p.unwrap().starts_with("~/.config/git"));
     //
@@ -1643,19 +1643,19 @@ mod tests {
     //         // Test custom config
     //         let config = CompletionConfig::new()
     //             .with_max_items(10)
-    //             .with_message_template("他に{}個のアイテムがあります")
+    //             .with_message_template("There are {} more items")
     //             .with_item_count_display(false);
     //
     //         assert_eq!(config.max_items, 10);
     //         assert_eq!(
     //             config.more_items_message_template,
-    //             "他に{}個のアイテムがあります"
+    //             "There are {} more items"
     //         );
     //         assert!(!config.show_item_count);
     //
     //         // Test message formatting
     //         let message = config.format_more_items_message(25);
-    //         assert_eq!(message, "他に25個のアイテムがあります");
+    //         assert_eq!(message, "There are 25 more items");
     //     }
 
     //     #[test]
@@ -1885,19 +1885,19 @@ mod fuzzy_integration_tests {
     //     fn test_candidate_formatted_display_unicode() {
     //         init();
     //
-    //         // 日本語ファイル名のテスト
+    //         // Test Japanese filename
     //         let candidate = Candidate::File {
-    //             path: "日本語ファイル.txt".to_string(),
+    //             path: "japanese_file.txt".to_string(),
     //             is_dir: false,
     //         };
     //
     //         let formatted = candidate.get_formatted_display(20);
     //         let display_width = unicode_display_width(&formatted);
     //
-    //         // 表示幅が指定した幅以下であることを確認
+    //         // Verify display width is within specified width
     //         assert!(display_width <= 20);
     //
-    //         // 絵文字が含まれていることを確認
+    //         // Verify emoji is included
     //         assert!(formatted.contains("📄"));
     //     }
 }

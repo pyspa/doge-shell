@@ -8,19 +8,19 @@ use anyhow::Result;
 use std::fs;
 use std::path::Path;
 
-/// 補完候補生成器
+/// Completion candidate generator
 pub struct CompletionGenerator {
-    /// コマンド補完データベース
+    /// Command completion database
     database: CommandCompletionDatabase,
 }
 
 impl CompletionGenerator {
-    /// 新しい生成器を作成
+    /// Create a new generator
     pub fn new(database: CommandCompletionDatabase) -> Self {
         Self { database }
     }
 
-    /// 利用可能なコマンド一覧を取得（デバッグ用）
+    /// Get available command list (for debugging)
     pub fn get_available_commands(&self) -> Vec<String> {
         self.database
             .get_command_names()
@@ -29,7 +29,7 @@ impl CompletionGenerator {
             .collect()
     }
 
-    /// 解析されたコマンドから補完候補を生成
+    /// Generate completion candidates from parsed command
     pub fn generate_candidates(&self, parsed: &ParsedCommand) -> Result<Vec<CompletionCandidate>> {
         match &parsed.completion_context {
             CompletionContext::Command => self.generate_command_candidates(&parsed.current_token),
@@ -48,11 +48,11 @@ impl CompletionGenerator {
         }
     }
 
-    /// コマンド名の補完候補を生成
+    /// Generate command name completion candidates
     fn generate_command_candidates(&self, current_token: &str) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::new();
 
-        // データベースに登録されているコマンド
+        // Commands registered in database
         for command_name in self.database.get_command_names() {
             if command_name.starts_with(current_token) {
                 if let Some(completion) = self.database.get_command(command_name) {
@@ -64,13 +64,13 @@ impl CompletionGenerator {
             }
         }
 
-        // システムのコマンドも追加（簡易版）
+        // Also add system commands (simplified version)
         candidates.extend(self.generate_system_command_candidates(current_token)?);
 
         Ok(candidates)
     }
 
-    /// サブコマンドの補完候補を生成
+    /// Generate subcommand completion candidates
     fn generate_subcommand_candidates(
         &self,
         parsed: &ParsedCommand,
@@ -82,7 +82,7 @@ impl CompletionGenerator {
                 self.find_current_subcommand(command_completion, &parsed.subcommand_path);
 
             if let Some(subcommand) = current_subcommand {
-                // ネストしたサブコマンドの候補
+                // Nested subcommand candidates
                 for sub in &subcommand.subcommands {
                     if sub.name.starts_with(&parsed.current_token) {
                         candidates.push(CompletionCandidate::subcommand(
@@ -91,7 +91,7 @@ impl CompletionGenerator {
                         ));
                     }
 
-                    // エイリアスも含める
+                    // Include aliases too
                     for alias in &sub.aliases {
                         if alias.starts_with(&parsed.current_token) {
                             candidates.push(CompletionCandidate::subcommand(
@@ -102,7 +102,7 @@ impl CompletionGenerator {
                     }
                 }
             } else {
-                // トップレベルのサブコマンド
+                // Top-level subcommands
                 for subcommand in &command_completion.subcommands {
                     if subcommand.name.starts_with(&parsed.current_token) {
                         candidates.push(CompletionCandidate::subcommand(
@@ -111,7 +111,7 @@ impl CompletionGenerator {
                         ));
                     }
 
-                    // エイリアスも含める
+                    // Include aliases too
                     for alias in &subcommand.aliases {
                         if alias.starts_with(&parsed.current_token) {
                             candidates.push(CompletionCandidate::subcommand(
@@ -127,7 +127,7 @@ impl CompletionGenerator {
         Ok(candidates)
     }
 
-    /// 短いオプションの補完候補を生成
+    /// Generate short option completion candidates
     fn generate_short_option_candidates(
         &self,
         parsed: &ParsedCommand,
@@ -155,7 +155,7 @@ impl CompletionGenerator {
         Ok(candidates)
     }
 
-    /// 長いオプションの補完候補を生成
+    /// Generate long option completion candidates
     fn generate_long_option_candidates(
         &self,
         parsed: &ParsedCommand,
@@ -183,7 +183,7 @@ impl CompletionGenerator {
         Ok(candidates)
     }
 
-    /// オプション値の補完候補を生成
+    /// Generate option value completion candidates
     fn generate_option_value_candidates(
         &self,
         parsed: &ParsedCommand,
@@ -192,7 +192,7 @@ impl CompletionGenerator {
     ) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::new();
 
-        // 実際の値の型を取得
+        // Get actual value type
         let actual_value_type = if let Some(vt) = value_type {
             Some(vt)
         } else {
@@ -206,7 +206,7 @@ impl CompletionGenerator {
         Ok(candidates)
     }
 
-    /// 引数の補完候補を生成
+    /// Generate argument completion candidates
     fn generate_argument_candidates(
         &self,
         parsed: &ParsedCommand,
@@ -215,7 +215,7 @@ impl CompletionGenerator {
     ) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::new();
 
-        // 実際の引数の型を取得
+        // Get actual argument type
         let actual_arg_type = if let Some(at) = arg_type {
             Some(at)
         } else {
@@ -225,14 +225,14 @@ impl CompletionGenerator {
         if let Some(arg_type) = actual_arg_type {
             candidates.extend(self.generate_candidates_for_type(arg_type, &parsed.current_token)?);
         } else {
-            // デフォルトでファイル補完
+            // Default to file completion
             candidates.extend(self.generate_file_candidates(&parsed.current_token)?);
         }
 
         Ok(candidates)
     }
 
-    /// 型に基づいて補完候補を生成
+    /// Generate completion candidates based on type
     fn generate_candidates_for_type(
         &self,
         arg_type: &ArgumentType,
@@ -256,12 +256,12 @@ impl CompletionGenerator {
         }
     }
 
-    /// ファイル補完候補を生成
+    /// Generate file completion candidates
     fn generate_file_candidates(&self, current_token: &str) -> Result<Vec<CompletionCandidate>> {
         self.generate_file_candidates_with_filter(current_token, None)
     }
 
-    /// フィルタ付きファイル補完候補を生成
+    /// Generate file completion candidates with filter
     fn generate_file_candidates_with_filter(
         &self,
         current_token: &str,
@@ -293,7 +293,7 @@ impl CompletionGenerator {
                 if file_name.starts_with(&file_prefix) {
                     let path = entry.path();
 
-                    // 拡張子フィルタ
+                    // Extension filter
                     if let Some(exts) = extensions {
                         if path.is_file() {
                             if let Some(ext) = path.extension() {
@@ -325,7 +325,7 @@ impl CompletionGenerator {
         Ok(candidates)
     }
 
-    /// ディレクトリ補完候補を生成
+    /// Generate directory completion candidates
     fn generate_directory_candidates(
         &self,
         current_token: &str,
@@ -368,7 +368,7 @@ impl CompletionGenerator {
         Ok(candidates)
     }
 
-    /// システムコマンドの補完候補を生成（簡易版）
+    /// Generate system command completion candidates (simplified version)
     fn generate_system_command_candidates(
         &self,
         current_token: &str,
@@ -392,7 +392,7 @@ impl CompletionGenerator {
         Ok(candidates)
     }
 
-    /// 環境変数の補完候補を生成
+    /// Generate environment variable completion candidates
     fn generate_environment_variable_candidates(
         &self,
         current_token: &str,
@@ -408,7 +408,7 @@ impl CompletionGenerator {
         Ok(candidates)
     }
 
-    /// 現在のサブコマンドを見つける
+    /// Find current subcommand
     fn find_current_subcommand<'a>(
         &self,
         command_completion: &'a CommandCompletion,
@@ -436,7 +436,7 @@ impl CompletionGenerator {
         current_subcommand
     }
 
-    /// 利用可能なオプションを収集
+    /// Collect available options
     fn collect_available_options<'a>(
         &self,
         command_completion: &'a CommandCompletion,
@@ -444,10 +444,10 @@ impl CompletionGenerator {
     ) -> Vec<&'a CommandOption> {
         let mut options = Vec::new();
 
-        // グローバルオプション
+        // Global options
         options.extend(&command_completion.global_options);
 
-        // サブコマンドのオプション
+        // Subcommand options
         if let Some(subcommand) = self.find_current_subcommand(command_completion, subcommand_path)
         {
             options.extend(&subcommand.options);
@@ -456,7 +456,7 @@ impl CompletionGenerator {
         options
     }
 
-    /// オプションの値の型を取得
+    /// Get option value type
     fn get_option_value_type(
         &self,
         command: &str,
@@ -477,7 +477,7 @@ impl CompletionGenerator {
         None
     }
 
-    /// 引数の型を取得
+    /// Get argument type
     fn get_argument_type(
         &self,
         command: &str,

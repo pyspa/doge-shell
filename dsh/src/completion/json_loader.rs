@@ -101,7 +101,7 @@ impl JsonCompletionLoader {
         Ok(database)
     }
 
-    /// 指定されたディレクトリから補完データを読み込み
+    /// Load completion data from specified directory
     fn load_from_directory(
         &self,
         dir: &Path,
@@ -122,7 +122,7 @@ impl JsonCompletionLoader {
 
             debug!("Found file: {:?}", path);
 
-            // .jsonファイルのみを処理
+            // Process only .json files
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
                 debug!("Skipping non-JSON file: {:?}", path);
                 continue;
@@ -156,7 +156,7 @@ impl JsonCompletionLoader {
         Ok(loaded_count)
     }
 
-    /// 単一の補完ファイルを読み込み
+    /// Load a single completion file
     fn load_completion_file(&self, path: &Path) -> Result<CommandCompletion> {
         debug!("Reading file content from: {:?}", path);
         let content =
@@ -183,7 +183,7 @@ impl JsonCompletionLoader {
             completion.command
         );
 
-        // 基本的な検証
+        // Basic validation
         debug!("Validating completion data for: {}", completion.command);
         self.validate_completion(&completion)
             .with_context(|| format!("Validation failed for file: {:?}", path))?;
@@ -192,13 +192,13 @@ impl JsonCompletionLoader {
         Ok(completion)
     }
 
-    /// 補完データの基本的な検証
+    /// Basic validation of completion data
     fn validate_completion(&self, completion: &CommandCompletion) -> Result<()> {
         if completion.command.is_empty() {
             anyhow::bail!("Command name cannot be empty");
         }
 
-        // コマンド名に不正な文字が含まれていないかチェック
+        // Check if command name contains invalid characters
         if completion.command.contains(char::is_whitespace) {
             anyhow::bail!(
                 "Command name cannot contain whitespace: '{}'",
@@ -206,12 +206,12 @@ impl JsonCompletionLoader {
             );
         }
 
-        // サブコマンドの検証
+        // Validate subcommands
         for subcommand in &completion.subcommands {
             self.validate_subcommand(subcommand, &completion.command)?;
         }
 
-        // グローバルオプションの検証
+        // Validate global options
         for option in &completion.global_options {
             self.validate_option(option, &completion.command)?;
         }
@@ -219,7 +219,7 @@ impl JsonCompletionLoader {
         Ok(())
     }
 
-    /// サブコマンドの検証
+    /// Validate subcommand
     fn validate_subcommand(
         &self,
         subcommand: &super::command::SubCommand,
@@ -240,12 +240,12 @@ impl JsonCompletionLoader {
             );
         }
 
-        // オプションの検証
+        // Validate options
         for option in &subcommand.options {
             self.validate_option(option, &format!("{} {}", parent_command, subcommand.name))?;
         }
 
-        // ネストしたサブコマンドの検証
+        // Validate nested subcommands
         for nested_subcommand in &subcommand.subcommands {
             self.validate_subcommand(
                 nested_subcommand,
@@ -256,7 +256,7 @@ impl JsonCompletionLoader {
         Ok(())
     }
 
-    /// オプションの検証
+    /// Validate option
     fn validate_option(&self, option: &super::command::CommandOption, context: &str) -> Result<()> {
         if option.short.is_none() && option.long.is_none() {
             anyhow::bail!(
@@ -280,7 +280,7 @@ impl JsonCompletionLoader {
         Ok(())
     }
 
-    /// 特定のコマンドの補完データを読み込み
+    /// Load completion data for specific command
     pub fn load_command_completion(&self, command_name: &str) -> Result<Option<CommandCompletion>> {
         let filename = format!("{}.json", command_name);
 
@@ -302,7 +302,7 @@ impl JsonCompletionLoader {
         Ok(None)
     }
 
-    /// 利用可能な補完ファイルの一覧を取得
+    /// Get list of available completion files
     pub fn list_available_completions(&self) -> Result<Vec<String>> {
         let mut commands = Vec::new();
 
@@ -435,7 +435,7 @@ mod tests {
                 assert!(completion.description.is_some());
                 assert!(!completion.subcommands.is_empty());
 
-                // "add"サブコマンドが存在することを確認
+                // Verify that "add" subcommand exists
                 let add_subcommand = completion.subcommands.iter().find(|sc| sc.name == "add");
                 assert!(add_subcommand.is_some());
 

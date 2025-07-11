@@ -3,19 +3,19 @@ use nix::unistd::isatty;
 use std::os::unix::io::RawFd;
 use tracing::{debug, warn};
 
-/// ターミナル状態を表現する構造体
+/// Structure representing terminal state
 #[derive(Debug, Clone)]
 pub struct TerminalState {
-    /// 指定されたファイルディスクリプタがターミナルかどうか
+    /// Whether the specified file descriptor is a terminal
     pub is_terminal: bool,
-    /// ターミナルの設定（ターミナルの場合のみ）
+    /// Terminal settings (only if terminal)
     pub tmodes: Option<Termios>,
-    /// ジョブ制御がサポートされているかどうか
+    /// Whether job control is supported
     pub supports_job_control: bool,
 }
 
 impl TerminalState {
-    /// 指定されたファイルディスクリプタのターミナル状態を検出
+    /// Detect terminal state for the specified file descriptor
     pub fn detect(fd: RawFd) -> Self {
         let is_terminal = isatty(fd).unwrap_or(false);
         debug!("Terminal detection for fd {}: {}", fd, is_terminal);
@@ -49,7 +49,7 @@ impl TerminalState {
         }
     }
 
-    /// デフォルトのターミナル状態（非ターミナル環境用）
+    /// Default terminal state (for non-terminal environments)
     pub fn non_terminal() -> Self {
         Self {
             is_terminal: false,
@@ -58,12 +58,12 @@ impl TerminalState {
         }
     }
 
-    /// ターミナル設定を取得（存在する場合）
+    /// Get terminal settings (if they exist)
     pub fn get_tmodes(&self) -> Option<&Termios> {
         self.tmodes.as_ref()
     }
 
-    /// ジョブ制御が利用可能かチェック
+    /// Check if job control is available
     pub fn can_control_jobs(&self) -> bool {
         self.supports_job_control
     }
@@ -83,7 +83,7 @@ pub enum ShellMode {
 }
 
 impl ShellMode {
-    /// 現在の環境からシェルモードを検出
+    /// Detect shell mode from current environment
     pub fn detect() -> Self {
         let stdin_is_tty = isatty(libc::STDIN_FILENO).unwrap_or(false);
         let stdout_is_tty = isatty(libc::STDOUT_FILENO).unwrap_or(false);
@@ -95,12 +95,12 @@ impl ShellMode {
         }
     }
 
-    /// このモードでジョブ制御がサポートされているか
+    /// Whether job control is supported in this mode
     pub fn supports_job_control(&self) -> bool {
         matches!(self, ShellMode::Interactive)
     }
 
-    /// このモードで対話的な操作が可能か
+    /// Whether interactive operations are possible in this mode
     pub fn is_interactive(&self) -> bool {
         matches!(self, ShellMode::Interactive)
     }
@@ -121,11 +121,11 @@ mod tests {
 
     #[test]
     fn test_shell_mode_detection() {
-        // この テストは実際の環境に依存するため、
-        // 基本的な動作のみをテスト
+        // This test depends on the actual environment,
+        // so only test basic functionality
         let mode = ShellMode::detect();
 
-        // モードが有効な値であることを確認
+        // Confirm that mode is a valid value
         match mode {
             ShellMode::Interactive
             | ShellMode::Pipeline

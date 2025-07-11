@@ -79,7 +79,7 @@ impl CtrlCState {
 
         match self.first_press_time {
             None => {
-                // 初回押下
+                // First press
                 self.first_press_time = Some(now);
                 self.press_count = 1;
                 false
@@ -99,7 +99,7 @@ impl CtrlCState {
         }
     }
 
-    /// 状態をリセット
+    /// Reset state
     fn reset(&mut self) {
         self.first_press_time = None;
         self.press_count = 0;
@@ -912,7 +912,7 @@ mod tests {
     fn test_ctrl_c_state_single_press() {
         let mut state = CtrlCState::new();
 
-        // 初回押下は false を返す
+        // First press returns false
         assert!(!state.on_ctrl_c_pressed());
         assert_eq!(state.press_count, 1);
         assert!(state.first_press_time.is_some());
@@ -922,10 +922,10 @@ mod tests {
     fn test_ctrl_c_state_double_press_within_timeout() {
         let mut state = CtrlCState::new();
 
-        // 初回押下
+        // First press
         assert!(!state.on_ctrl_c_pressed());
 
-        // 短時間後の二回目押下
+        // Second press after short time
         thread::sleep(std::time::Duration::from_millis(100));
         assert!(state.on_ctrl_c_pressed());
         assert_eq!(state.press_count, 2);
@@ -948,15 +948,15 @@ mod tests {
     fn test_ctrl_c_state_reset() {
         let mut state = CtrlCState::new();
 
-        // 初回押下
+        // First press
         assert!(!state.on_ctrl_c_pressed());
 
-        // リセット
+        // Reset
         state.reset();
         assert_eq!(state.press_count, 0);
         assert!(state.first_press_time.is_none());
 
-        // リセット後の押下は初回扱い
+        // Press after reset is treated as first press
         assert!(!state.on_ctrl_c_pressed());
         assert_eq!(state.press_count, 1);
     }

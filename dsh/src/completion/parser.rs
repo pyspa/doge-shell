@@ -13,47 +13,47 @@ pub struct ParsedCommand {
     pub current_token: String,
     /// Completion context
     pub completion_context: CompletionContext,
-    /// 既に指定されたオプション
+    /// Already specified options
     pub specified_options: Vec<String>,
-    /// 既に指定された引数
+    /// Already specified arguments
     pub specified_arguments: Vec<String>,
 }
 
-/// 補完のコンテキスト（現在どの部分を補完しようとしているか）
+/// Completion context (which part is currently being completed)
 #[derive(Debug, Clone, PartialEq)]
 pub enum CompletionContext {
-    /// コマンド名を補完
+    /// Complete command name
     Command,
-    /// サブコマンドを補完
+    /// Complete subcommand
     SubCommand,
-    /// オプションを補完（短い形式 -x）
+    /// Complete option (short form -x)
     ShortOption,
-    /// オプションを補完（長い形式 --xxx）
+    /// Complete option (long form --xxx)
     LongOption,
-    /// オプションの値を補完
+    /// Complete option value
     OptionValue {
         option_name: String,
         value_type: Option<ArgumentType>,
     },
-    /// 引数を補完
+    /// Complete argument
     Argument {
         arg_index: usize,
         arg_type: Option<ArgumentType>,
     },
-    /// 不明（エラー状態）
+    /// Unknown (error state)
     Unknown,
 }
 
-/// コマンドライン解析器
+/// Command line parser
 pub struct CommandLineParser;
 
 impl CommandLineParser {
-    /// 新しいパーサーを作成
+    /// Create a new parser
     pub fn new() -> Self {
         Self
     }
 
-    /// コマンドラインを解析
+    /// Parse command line
     pub fn parse(&self, input: &str, cursor_pos: usize) -> ParsedCommand {
         let tokens = self.tokenize(input);
         let cursor_token_index = self.find_cursor_token_index(&tokens, input, cursor_pos);
@@ -61,7 +61,7 @@ impl CommandLineParser {
         self.analyze_tokens(tokens, cursor_token_index)
     }
 
-    /// 入力文字列をトークンに分割
+    /// Split input string into tokens
     fn tokenize(&self, input: &str) -> Vec<String> {
         let mut tokens = Vec::new();
         let mut current_token = String::new();
@@ -98,12 +98,12 @@ impl CommandLineParser {
         tokens
     }
 
-    /// カーソル位置に対応するトークンのインデックスを見つける
+    /// Find token index corresponding to cursor position
     fn find_cursor_token_index(&self, tokens: &[String], input: &str, cursor_pos: usize) -> usize {
         let mut pos = 0;
 
         for (i, token) in tokens.iter().enumerate() {
-            // トークンの開始位置を見つける
+            // Find token start position
             while pos < input.len() && input.chars().nth(pos).unwrap().is_whitespace() {
                 pos += 1;
             }
@@ -118,10 +118,10 @@ impl CommandLineParser {
             pos = token_end;
         }
 
-        tokens.len() // カーソルが最後にある場合
+        tokens.len() // When cursor is at the end
     }
 
-    /// トークンを解析して補完コンテキストを決定
+    /// Analyze tokens to determine completion context
     fn analyze_tokens(&self, tokens: Vec<String>, cursor_token_index: usize) -> ParsedCommand {
         if tokens.is_empty() {
             return ParsedCommand {
@@ -140,24 +140,24 @@ impl CommandLineParser {
         let mut specified_arguments = Vec::new();
         let mut tokens_queue: VecDeque<String> = tokens.into_iter().skip(1).collect();
 
-        // サブコマンドを解析
+        // Parse subcommands
         let mut subcommand_count = 0;
         while let Some(token) = tokens_queue.front() {
             if token.starts_with('-') {
-                break; // オプションが始まったらサブコマンド解析終了
+                break; // End subcommand parsing when options start
             }
 
-            // 引数かサブコマンドかを判定（簡易版）
-            // 最初の数個のトークンのみサブコマンドとして扱う
+            // Determine if it's an argument or subcommand (simplified version)
+            // Only treat the first few tokens as subcommands
             if subcommand_count < 2 && self.looks_like_subcommand(token) {
                 subcommand_path.push(tokens_queue.pop_front().unwrap());
                 subcommand_count += 1;
             } else {
-                break; // 引数が始まったらサブコマンド解析終了
+                break; // End subcommand parsing when arguments start
             }
         }
 
-        // オプションと引数を解析
+        // Parse options and arguments
         let mut skip_next = false;
         for (i, token) in tokens_queue.iter().enumerate() {
             if skip_next {
@@ -168,7 +168,7 @@ impl CommandLineParser {
             if token.starts_with('-') {
                 specified_options.push(token.clone());
 
-                // 次のトークンがオプションの値かチェック
+                // Check if next token is option value
                 if let Some(next_token) = tokens_queue.get(i + 1) {
                     if !next_token.starts_with('-') && self.option_takes_value(token) {
                         skip_next = true;
@@ -179,7 +179,7 @@ impl CommandLineParser {
             }
         }
 
-        // 現在のトークンと補完コンテキストを決定
+        // Determine current token and completion context
         let (current_token, completion_context) = if cursor_token_index == 0 {
             (command.clone(), CompletionContext::Command)
         } else {
@@ -216,14 +216,14 @@ impl CommandLineParser {
         }
     }
 
-    /// トークンがサブコマンドらしいかどうかを判定
+    /// Determine if token looks like a subcommand
     fn looks_like_subcommand(&self, token: &str) -> bool {
-        // 簡易的な判定：オプションでなく、ファイルパスでもない
+        // Simple determination: not an option and not a file path
         if token.starts_with('-') {
             return false;
         }
 
-        // ファイル拡張子がある場合はファイルとみなす
+        // Consider as file if it has file extension
         if token.contains('.')
             && token
                 .rfind('.')
@@ -232,12 +232,12 @@ impl CommandLineParser {
             return false;
         }
 
-        // パスセパレータがある場合はファイルパスとみなす
+        // Consider as file path if it has path separator
         if token.contains('/') || token.contains('\\') {
             return false;
         }
 
-        // 一般的なサブコマンド名のパターン（厳密版）
+        // Common subcommand name patterns (strict version)
         let common_subcommands = [
             "add",
             "remove",
@@ -298,11 +298,11 @@ impl CommandLineParser {
             "verify-project",
         ];
 
-        // 既知のサブコマンドのみ許可（より厳密）
+        // Only allow known subcommands (more strict)
         common_subcommands.contains(&token)
     }
 
-    /// 補完コンテキストを決定
+    /// Determine completion context
     fn determine_completion_context(
         &self,
         cursor_token_index: usize,
@@ -316,30 +316,30 @@ impl CommandLineParser {
             return CompletionContext::Command;
         }
 
-        // 現在のトークンがオプションの場合
+        // If current token is an option
         if current_token.starts_with("--") {
             return CompletionContext::LongOption;
         } else if current_token.starts_with('-') && current_token.len() == 2 {
             return CompletionContext::ShortOption;
         }
 
-        // 直前のトークンがオプションで値を取る場合
+        // If previous token is an option that takes a value
         if cursor_token_index > 0 {
             let prev_token = &all_tokens[cursor_token_index - 1];
             if prev_token.starts_with('-') && self.option_takes_value(prev_token) {
                 return CompletionContext::OptionValue {
                     option_name: prev_token.clone(),
-                    value_type: None, // 実際の実装では補完データから取得
+                    value_type: None, // In actual implementation, get from completion data
                 };
             }
         }
 
-        // サブコマンドまたは引数
+        // Subcommand or argument
         if subcommand_path.is_empty() || self.looks_like_subcommand(current_token) {
             CompletionContext::SubCommand
         } else {
-            // 現在のトークンが引数の場合、そのインデックスを計算
-            // 現在のトークンは含めない（補完対象なので）
+            // If current token is an argument, calculate its index
+            // Don't include current token (since it's the completion target)
             let arg_index = specified_arguments.len().saturating_sub(
                 if specified_arguments.contains(&current_token.to_string()) {
                     1
@@ -349,14 +349,14 @@ impl CommandLineParser {
             );
             CompletionContext::Argument {
                 arg_index,
-                arg_type: None, // 実際の実装では補完データから取得
+                arg_type: None, // In actual implementation, get from completion data
             }
         }
     }
 
-    /// オプションが値を取るかどうかを判定（簡易版）
+    /// Determine if option takes a value (simplified version)
     fn option_takes_value(&self, option: &str) -> bool {
-        // 一般的に値を取るオプション
+        // Options that commonly take values
         matches!(
             option,
             "--message" | "-m" | "--target" | "--features" | "--git" | "--path" | "--name"

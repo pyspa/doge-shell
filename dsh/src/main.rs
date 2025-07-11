@@ -7,7 +7,7 @@ use dsh_types::Context;
 use std::process::ExitCode;
 use tracing::debug;
 
-/// 正常終了を表すカスタムエラー型
+/// Custom error type representing normal exit
 #[derive(Debug)]
 pub enum ShellExit {
     Normal,
@@ -81,7 +81,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    // パニックハンドラーを設定
+    // Set up panic handler
     setup_panic_handler();
 
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -127,13 +127,13 @@ fn setup_panic_handler() {
             "Unknown panic payload".to_string()
         };
 
-        // 正常終了に関連するパニックの場合はstacktraceを表示しない
+        // Don't show stacktrace for panics related to normal exit
         if payload.contains("Shell terminated by double Ctrl+C")
             || payload.contains("Normal exit")
             || payload.contains("Exit by")
             || payload.contains("exit command")
         {
-            // 正常終了の場合は簡潔なメッセージのみ
+            // Show only brief message for normal exit
             debug!("Shell exiting normally: {}", payload);
             return;
         }
@@ -160,7 +160,7 @@ fn setup_panic_handler() {
             _ => "\nBacktrace: unknown status".to_string(),
         };
 
-        // ログファイルに直接書き込み（tracingが初期化されていない可能性があるため）
+        // Write directly to log file (tracing may not be initialized)
         let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f UTC");
         let panic_log = format!(
             "\n=== PANIC OCCURRED ===\n\
@@ -300,31 +300,31 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    #[ignore] // 通常のテスト実行では無視（手動実行用）
+    #[ignore] // Ignore in normal test runs (for manual execution)
     fn test_panic_handler() {
-        // テスト用のログファイルを使用
+        // Use test log files
         let test_log_files = ["./debug.log", "./panic.log"];
 
-        // 既存のログファイルを削除
+        // Remove existing log files
         for log_file in &test_log_files {
             let _ = fs::remove_file(log_file);
         }
 
-        // パニックハンドラーを設定
+        // Set up panic handler
         setup_panic_handler();
 
-        // 別スレッドでパニックを発生させる
+        // Trigger panic in separate thread
         let handle = thread::spawn(|| {
             panic!("Test panic for logging verification");
         });
 
-        // パニックを待つ
+        // Wait for panic
         let _ = handle.join();
 
-        // 少し待ってからログファイルをチェック
+        // Wait a bit then check log files
         thread::sleep(Duration::from_millis(200));
 
-        // ログファイルが作成され、パニック情報が記録されているかチェック
+        // Check if log files are created and panic info is recorded
         let mut found_panic_log = false;
         for log_file in &test_log_files {
             if let Ok(content) = fs::read_to_string(log_file) {

@@ -124,12 +124,12 @@ impl Context {
         }
     }
 
-    /// ジョブ制御がサポートされているかチェック
+    /// Check if job control is supported
     pub fn supports_job_control(&self) -> bool {
         self.terminal_state.supports_job_control && self.shell_mode.supports_job_control()
     }
 
-    /// 対話的モードかチェック
+    /// Check if in interactive mode
     pub fn is_interactive_mode(&self) -> bool {
         self.shell_mode.is_interactive()
     }

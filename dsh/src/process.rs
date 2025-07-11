@@ -1248,7 +1248,7 @@ impl Job {
             self.id, self.pgid, no_hang, cont
         );
 
-        // ターミナル環境でない場合はプロセスグループ制御をスキップ
+        // Skip process group control if not in terminal environment
         if !isatty(SHELL_TERMINAL).unwrap_or(false) {
             debug!("Not a terminal environment, skipping process group control");
             debug!("About to call wait_job with no_hang: {}", no_hang);
@@ -1306,7 +1306,7 @@ impl Job {
             self.id, self.pgid, no_hang, cont
         );
 
-        // ターミナル環境でない場合はプロセスグループ制御をスキップ
+        // Skip process group control if not in terminal environment
         if !isatty(SHELL_TERMINAL).unwrap_or(false) {
             debug!("Not a terminal environment, skipping process group control");
             debug!("About to call wait_job_sync with no_hang: {}", no_hang);
@@ -1359,7 +1359,7 @@ impl Job {
     pub async fn put_in_background(&mut self) -> Result<()> {
         debug!("put_in_background pgid {:?}", self.pgid,);
 
-        // ターミナル環境でない場合はプロセスグループ制御をスキップ
+        // Skip process group control if not in terminal environment
         if !isatty(SHELL_TERMINAL).unwrap_or(false) {
             debug!("Not a terminal environment, skipping process group control");
             return Ok(());
@@ -2057,8 +2057,8 @@ fn fork_process(ctx: &Context, job_pgid: Option<Pid>, process: &mut Process) -> 
                 error!("🍴 FORK: Child process launch failed: {}", e);
                 std::process::exit(1);
             }
-            // execv成功時は新プログラムに置き換わり、失敗時はexitするため、ここには到達しない
-            // 念のための安全策として明示的にexit
+            // When execv succeeds, it replaces with new program; when it fails, it exits, so this point is never reached
+            // Explicit exit as a safety measure just in case
             debug!("🍴 FORK: Child process launch completed unexpectedly, exiting");
             std::process::exit(1);
         }

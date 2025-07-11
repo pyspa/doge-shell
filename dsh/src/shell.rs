@@ -770,7 +770,7 @@ impl Shell {
                     }
                 }
                 Rule::pipe_command => {
-                    // パイプコマンドの場合、既存のジョブがない場合は新しいジョブを作成
+                    // For pipe commands, create a new job if no existing job
                     if jobs.is_empty() {
                         let mut job = Job::new(job_str.clone(), self.pgid);
                         job.job_id = self.get_next_job_id();

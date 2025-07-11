@@ -205,7 +205,7 @@ fn expand_alias_tilde(
         }
         Rule::pipe_command => {
             debug!("expand pipe_command {}", pair.as_str());
-            // パイプ文字は expand_alias 関数で追加されるため、ここでは追加しない
+            // Pipe character is added by expand_alias function, so don't add it here
             for inner_pair in pair.into_inner() {
                 let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
                 argv.append(&mut v);

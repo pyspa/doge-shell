@@ -5,12 +5,12 @@ use crossterm::{queue, terminal};
 use std::io::{Result as IoResult, Write, stdout};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-/// 補完候補の表示設定
+/// Completion candidate display settings
 #[derive(Debug, Clone)]
 pub struct DisplayConfig {
-    /// 最大表示行数
+    /// Maximum display rows
     pub max_rows: usize,
-    /// 最大表示列数
+    /// Maximum display columns
     pub max_columns: usize,
     /// Whether to show descriptions
     pub show_descriptions: bool,
@@ -35,23 +35,23 @@ impl Default for DisplayConfig {
     }
 }
 
-/// 補完候補表示器
+/// Completion candidate display
 pub struct CompletionDisplay {
     config: DisplayConfig,
 }
 
 impl CompletionDisplay {
-    /// 新しい表示器を作成
+    /// Create a new display
     pub fn new(config: DisplayConfig) -> Self {
         Self { config }
     }
 
-    /// デフォルト設定で表示器を作成
+    /// Create display with default settings
     pub fn with_default_config() -> Self {
         Self::new(DisplayConfig::default())
     }
 
-    /// 補完候補を表示
+    /// Display completion candidates
     pub fn display_candidates(&self, candidates: &[EnhancedCandidate]) -> IoResult<()> {
         if candidates.is_empty() {
             return Ok(());
@@ -59,26 +59,26 @@ impl CompletionDisplay {
 
         let mut stdout = stdout();
 
-        // ターミナルサイズを取得
+        // Get terminal size
         let (terminal_width, _) = terminal::size()?;
         let available_width = terminal_width as usize;
 
-        // 候補を種類別にグループ化
+        // Group candidates by type
         let grouped = self.group_candidates_by_type(candidates);
 
-        // 各グループを表示
+        // Display each group
         for (candidate_type, group_candidates) in grouped {
             if group_candidates.is_empty() {
                 continue;
             }
 
-            // グループヘッダーを表示
+            // Display group header
             self.display_group_header(&mut stdout, &candidate_type)?;
 
-            // 候補を表示
+            // Display candidates
             self.display_candidate_group(&mut stdout, &group_candidates, available_width)?;
 
-            // グループ間の空行
+            // Empty line between groups
             queue!(stdout, Print("\n"))?;
         }
 
@@ -86,7 +86,7 @@ impl CompletionDisplay {
         Ok(())
     }
 
-    /// 候補を種類別にグループ化
+    /// Group candidates by type
     fn group_candidates_by_type<'a>(
         &self,
         candidates: &'a [EnhancedCandidate],
@@ -106,7 +106,7 @@ impl CompletionDisplay {
         groups.into_values().collect()
     }
 
-    /// グループヘッダーを表示
+    /// Display group header
     fn display_group_header(
         &self,
         stdout: &mut std::io::Stdout,
@@ -146,7 +146,7 @@ impl CompletionDisplay {
         Ok(())
     }
 
-    /// 候補グループを表示
+    /// Display candidate group
     fn display_candidate_group(
         &self,
         stdout: &mut std::io::Stdout,
@@ -161,7 +161,7 @@ impl CompletionDisplay {
             self.display_candidate_row(stdout, chunk, available_width)?;
         }
 
-        // 省略された候補がある場合の表示
+        // Display when candidates are truncated
         if candidates.len() > max_items {
             queue!(
                 stdout,
@@ -185,7 +185,7 @@ impl CompletionDisplay {
 
         for (i, candidate) in candidates.iter().enumerate() {
             if i > 0 {
-                queue!(stdout, Print("  "))?; // 列間のスペース
+                queue!(stdout, Print("  "))?; // Space between columns
             }
 
             self.display_single_candidate(stdout, candidate, column_width)?;
@@ -195,7 +195,7 @@ impl CompletionDisplay {
         Ok(())
     }
 
-    /// 単一の候補を表示
+    /// Display single candidate
     fn display_single_candidate(
         &self,
         stdout: &mut std::io::Stdout,
@@ -209,7 +209,7 @@ impl CompletionDisplay {
             return Ok(());
         }
 
-        // 色付きで表示
+        // Display with color
         queue!(
             stdout,
             SetForegroundColor(candidate.candidate_type.color()),
@@ -217,7 +217,7 @@ impl CompletionDisplay {
             ResetColor
         )?;
 
-        // 説明文がある場合は薄い色で表示
+        // Display description in dim color if available
         if self.config.show_descriptions {
             if let Some(ref description) = candidate.description {
                 let desc_text =
@@ -246,14 +246,14 @@ impl CompletionDisplay {
             return 1;
         }
 
-        // 最長の候補テキストの幅を計算
+        // Calculate width of longest candidate text
         let max_text_width = candidates
             .iter()
             .map(|c| c.text.width())
             .max()
             .unwrap_or(10);
 
-        // 説明文も考慮
+        // Also consider description text
         let max_desc_width = if self.config.show_descriptions {
             candidates
                 .iter()
@@ -272,7 +272,7 @@ impl CompletionDisplay {
         items_per_row.min(self.config.max_columns)
     }
 
-    /// テキストを指定幅に切り詰め
+    /// Truncate text to specified width
     fn truncate_text(&self, text: &str, max_width: usize) -> String {
         if text.width() <= max_width {
             text.to_string()
@@ -283,7 +283,7 @@ impl CompletionDisplay {
             for ch in text.chars() {
                 let ch_width = ch.width().unwrap_or(0);
                 if current_width + ch_width + 3 > max_width {
-                    // "..." 分を考慮
+                    // Consider space for "..."
                     result.push_str("...");
                     break;
                 }
@@ -295,7 +295,7 @@ impl CompletionDisplay {
         }
     }
 
-    /// 候補種類の名前を取得
+    /// Get candidate type name
     fn get_type_name(&self, candidate_type: &CandidateType) -> &'static str {
         match candidate_type {
             CandidateType::SubCommand => "Subcommands",
@@ -308,7 +308,7 @@ impl CompletionDisplay {
         }
     }
 
-    /// インタラクティブな候補選択を表示
+    /// Display interactive candidate selection
     pub fn display_interactive_selection(
         &self,
         candidates: &[EnhancedCandidate],
@@ -316,14 +316,14 @@ impl CompletionDisplay {
     ) -> IoResult<()> {
         let mut stdout = stdout();
 
-        // 画面をクリア
+        // Clear screen
         queue!(stdout, terminal::Clear(terminal::ClearType::FromCursorDown))?;
 
         for (i, candidate) in candidates.iter().enumerate() {
             let is_selected = i == selected_index;
 
             if is_selected {
-                // 選択された候補をハイライト
+                // Highlight selected candidate
                 queue!(
                     stdout,
                     SetForegroundColor(Color::Black),
@@ -332,7 +332,7 @@ impl CompletionDisplay {
                     ResetColor
                 )?;
             } else {
-                // 通常の候補
+                // Normal candidate
                 queue!(
                     stdout,
                     SetForegroundColor(candidate.candidate_type.color()),
@@ -341,7 +341,7 @@ impl CompletionDisplay {
                 )?;
             }
 
-            // 説明文を表示
+            // Display description
             if let Some(ref description) = candidate.description {
                 queue!(
                     stdout,
@@ -359,7 +359,7 @@ impl CompletionDisplay {
     }
 }
 
-/// 簡易表示関数（既存システムとの互換性のため）
+/// Simple display function (for compatibility with existing systems)
 pub fn display_candidates_simple(candidates: &[EnhancedCandidate]) -> IoResult<()> {
     let display = CompletionDisplay::with_default_config();
     display.display_candidates(candidates)
@@ -402,11 +402,11 @@ mod tests {
 
         let grouped = display.group_candidates_by_type(&candidates);
 
-        // サブコマンドが最初に来る
+        // Subcommands come first
         assert_eq!(grouped[0].0, CandidateType::SubCommand);
         assert_eq!(grouped[0].1.len(), 1);
 
-        // オプションが次に来る
+        // Options come next
         assert_eq!(grouped[1].0, CandidateType::LongOption);
         assert_eq!(grouped[1].1.len(), 1);
     }

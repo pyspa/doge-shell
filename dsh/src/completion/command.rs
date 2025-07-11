@@ -48,22 +48,22 @@ pub struct CommandOption {
     pub value_type: Option<ArgumentType>,
     /// Whether it's a required option
     pub required: bool,
-    /// 複数回指定可能かどうか
+    /// Whether it can be specified multiple times
     pub multiple: bool,
 }
 
-/// 引数の定義
+/// Argument definition
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Argument {
-    /// 引数名
+    /// Argument name
     pub name: String,
-    /// 引数の説明
+    /// Argument description
     pub description: Option<String>,
-    /// 引数の型
+    /// Argument type
     pub arg_type: ArgumentType,
-    /// 必須引数かどうか
+    /// Whether it's a required argument
     pub required: bool,
-    /// 複数の値を受け取るかどうか
+    /// Whether it accepts multiple values
     pub multiple: bool,
 }
 
@@ -109,27 +109,27 @@ impl CommandCompletionDatabase {
         }
     }
 
-    /// コマンド補完情報を追加
+    /// Add command completion information
     pub fn add_command(&mut self, completion: CommandCompletion) {
         self.commands.insert(completion.command.clone(), completion);
     }
 
-    /// コマンド名から補完情報を取得
+    /// Get completion information from command name
     pub fn get_command(&self, command: &str) -> Option<&CommandCompletion> {
         self.commands.get(command)
     }
 
-    /// 登録されているコマンド名の一覧を取得
+    /// Get list of registered command names
     pub fn get_command_names(&self) -> Vec<&String> {
         self.commands.keys().collect()
     }
 
-    /// データベースが空かどうか
+    /// Whether the database is empty
     pub fn is_empty(&self) -> bool {
         self.commands.is_empty()
     }
 
-    /// 登録されているコマンド数
+    /// Number of registered commands
     pub fn len(&self) -> usize {
         self.commands.len()
     }
@@ -141,38 +141,38 @@ impl Default for CommandCompletionDatabase {
     }
 }
 
-/// 補完候補の種類
+/// Completion candidate type
 #[derive(Debug, Clone, PartialEq)]
 pub enum CompletionType {
-    /// サブコマンド
+    /// Subcommand
     SubCommand,
-    /// オプション（短い形式）
+    /// Option (short form)
     ShortOption,
-    /// オプション（長い形式）
+    /// Option (long form)
     LongOption,
-    /// 引数値
+    /// Argument value
     Argument,
-    /// ファイル
+    /// File
     File,
-    /// ディレクトリ
+    /// Directory
     Directory,
 }
 
-/// 補完候補
+/// Completion candidate
 #[derive(Debug, Clone)]
 pub struct CompletionCandidate {
-    /// 候補文字列
+    /// Candidate string
     pub text: String,
-    /// 説明
+    /// Description
     pub description: Option<String>,
-    /// 補完の種類
+    /// Completion type
     pub completion_type: CompletionType,
-    /// 優先度（高いほど上位に表示）
+    /// Priority (higher values displayed first)
     pub priority: u32,
 }
 
 impl CompletionCandidate {
-    /// 新しい補完候補を作成
+    /// Create a new completion candidate
     pub fn new(
         text: String,
         description: Option<String>,
@@ -187,32 +187,32 @@ impl CompletionCandidate {
         }
     }
 
-    /// サブコマンド候補を作成
+    /// Create subcommand candidate
     pub fn subcommand(name: String, description: Option<String>) -> Self {
         Self::new(name, description, CompletionType::SubCommand, 100)
     }
 
-    /// 短いオプション候補を作成
+    /// Create short option candidate
     pub fn short_option(option: String, description: Option<String>) -> Self {
         Self::new(option, description, CompletionType::ShortOption, 80)
     }
 
-    /// 長いオプション候補を作成
+    /// Create long option candidate
     pub fn long_option(option: String, description: Option<String>) -> Self {
         Self::new(option, description, CompletionType::LongOption, 80)
     }
 
-    /// 引数候補を作成
+    /// Create argument candidate
     pub fn argument(value: String, description: Option<String>) -> Self {
         Self::new(value, description, CompletionType::Argument, 60)
     }
 
-    /// ファイル候補を作成
+    /// Create file candidate
     pub fn file(path: String) -> Self {
         Self::new(path, None, CompletionType::File, 40)
     }
 
-    /// ディレクトリ候補を作成
+    /// Create directory candidate
     pub fn directory(path: String) -> Self {
         Self::new(path, None, CompletionType::Directory, 50)
     }

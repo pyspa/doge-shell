@@ -204,7 +204,7 @@ mod tests {
     fn test_dir_environment_basic_functionality() -> Result<()> {
         let dir_env = DirEnvironment::new("/tmp/test".to_string())?;
 
-        // 基本的な機能テスト
+        // Basic functionality test
         assert_eq!(dir_env.path, "/tmp/test");
         assert!(dir_env.entries.is_empty());
 

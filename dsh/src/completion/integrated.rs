@@ -23,7 +23,7 @@ pub struct IntegratedCompletionEngine {
 }
 
 impl IntegratedCompletionEngine {
-    /// 新しい統合補完エンジンを作成
+    /// Create a new integrated completion engine
     pub fn new() -> Self {
         Self {
             command_generator: None,
@@ -75,12 +75,12 @@ impl IntegratedCompletionEngine {
         Ok(())
     }
 
-    /// 履歴データを読み込み
+    /// Load history data
     pub fn load_history(&mut self, history_path: &Path) -> Result<()> {
         self.history_completion.load_history(history_path)
     }
 
-    /// 統合補完を実行
+    /// Execute integrated completion
     pub fn complete(
         &self,
         input: &str,
@@ -210,13 +210,13 @@ impl IntegratedCompletionEngine {
         }
     }
 
-    /// 重複除去とソート
+    /// Deduplication and sorting
     fn deduplicate_and_sort(
         &self,
         mut candidates: Vec<EnhancedCandidate>,
         max_results: usize,
     ) -> Vec<EnhancedCandidate> {
-        // テキストベースで重複除去（優先度の高いものを残す）
+        // Text-based deduplication (keep higher priority ones)
         candidates.sort_by(|a, b| {
             b.priority
                 .cmp(&a.priority)
@@ -256,42 +256,42 @@ impl Default for IntegratedCompletionEngine {
     }
 }
 
-/// 拡張された補完候補
+/// Enhanced completion candidate
 #[derive(Debug, Clone)]
 pub struct EnhancedCandidate {
-    /// 候補テキスト
+    /// Candidate text
     pub text: String,
-    /// 説明
+    /// Description
     pub description: Option<String>,
-    /// 候補の種類
+    /// Candidate type
     pub candidate_type: CandidateType,
-    /// 優先度
+    /// Priority
     pub priority: u32,
-    /// 候補の生成元
+    /// Candidate source
     pub source: CandidateSource,
 }
 
-/// 候補の種類
+/// Candidate type
 #[derive(Debug, Clone, PartialEq)]
 pub enum CandidateType {
-    /// サブコマンド
+    /// Subcommand
     SubCommand,
-    /// 短いオプション
+    /// Short option
     ShortOption,
-    /// 長いオプション
+    /// Long option
     LongOption,
-    /// 引数
+    /// Argument
     Argument,
-    /// ファイル
+    /// File
     File,
-    /// ディレクトリ
+    /// Directory
     Directory,
-    /// 汎用
+    /// Generic
     Generic,
 }
 
 impl CandidateType {
-    /// ソート順序を取得
+    /// Get sort order
     pub fn sort_order(&self) -> u8 {
         match self {
             CandidateType::SubCommand => 1,
@@ -304,7 +304,7 @@ impl CandidateType {
         }
     }
 
-    /// 表示用のアイコンを取得
+    /// Get display icon
     pub fn icon(&self) -> &'static str {
         match self {
             CandidateType::SubCommand => "⚡",
@@ -317,7 +317,7 @@ impl CandidateType {
         }
     }
 
-    /// 表示用の色を取得
+    /// Get display color
     pub fn color(&self) -> crossterm::style::Color {
         use crossterm::style::Color;
         match self {
@@ -331,14 +331,14 @@ impl CandidateType {
     }
 }
 
-/// 候補の生成元
+/// Candidate source
 #[derive(Debug, Clone, PartialEq)]
 pub enum CandidateSource {
-    /// コマンド補完システム
+    /// Command completion system
     Command,
-    /// コンテキスト補完
+    /// Context completion
     Context,
-    /// 履歴補完
+    /// History completion
     History,
 }
 
@@ -408,7 +408,7 @@ mod tests {
         let result = engine.deduplicate_and_sort(candidates, 10);
 
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].priority, 100); // 高い優先度が残る
+        assert_eq!(result[0].priority, 100); // Higher priority remains
         assert_eq!(result[0].source, CandidateSource::Command);
     }
 }

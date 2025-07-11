@@ -1,0 +1,275 @@
+{
+  "command": "git",
+  "description": "Git version control system",
+  "global_options": [
+    {
+      "long": "--version",
+      "description": "Show Git version",
+      "takes_value": false,
+      "required": false,
+      "multiple": false
+    },
+    {
+      "long": "--help",
+      "short": "-h",
+      "description": "Show help information",
+      "takes_value": false,
+      "required": false,
+      "multiple": false
+    },
+    {
+      "long": "--git-dir",
+      "description": "Set the path to the repository",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      },
+      "required": false,
+      "multiple": false
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "add",
+      "description": "Add file contents to the index",
+      "aliases": ["a"],
+      "options": [
+        {
+          "short": "-A",
+          "long": "--all",
+          "description": "Add all files in the working tree",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-u",
+          "long": "--update",
+          "description": "Update tracked files",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-n",
+          "long": "--dry-run",
+          "description": "Don't actually add files, just show what would be done",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "pathspec",
+          "description": "Files to add to the index",
+          "arg_type": {
+            "type": "File",
+            "data": {
+              "extensions": null
+            }
+          },
+          "required": false,
+          "multiple": true
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "commit",
+      "description": "Record changes to the repository",
+      "aliases": ["ci"],
+      "options": [
+        {
+          "short": "-m",
+          "long": "--message",
+          "description": "Use the given message as the commit message",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-a",
+          "long": "--all",
+          "description": "Automatically stage modified and deleted files",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--amend",
+          "description": "Replace the tip of the current branch",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [],
+      "subcommands": []
+    },
+    {
+      "name": "push",
+      "description": "Update remote refs along with associated objects",
+      "aliases": [],
+      "options": [
+        {
+          "short": "-u",
+          "long": "--set-upstream",
+          "description": "Set upstream for git pull/status",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-f",
+          "long": "--force",
+          "description": "Force push",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "repository",
+          "description": "Remote repository name",
+          "arg_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": false
+        },
+        {
+          "name": "refspec",
+          "description": "Branch or tag to push",
+          "arg_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": true
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "remote",
+      "description": "Manage set of tracked repositories",
+      "aliases": [],
+      "options": [
+        {
+          "short": "-v",
+          "long": "--verbose",
+          "description": "Show remote url after name",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [],
+      "subcommands": [
+        {
+          "name": "add",
+          "description": "Add a remote named <name> for the repository at <url>",
+          "aliases": [],
+          "options": [
+            {
+              "short": "-t",
+              "long": "--track",
+              "description": "Track only specified branch",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              },
+              "required": false,
+              "multiple": true
+            }
+          ],
+          "arguments": [
+            {
+              "name": "name",
+              "description": "Remote name",
+              "arg_type": {
+                "type": "String"
+              },
+              "required": true,
+              "multiple": false
+            },
+            {
+              "name": "url",
+              "description": "Remote URL",
+              "arg_type": {
+                "type": "Url"
+              },
+              "required": true,
+              "multiple": false
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "remove",
+          "description": "Remove the remote named <name>",
+          "aliases": ["rm"],
+          "options": [],
+          "arguments": [
+            {
+              "name": "name",
+              "description": "Remote name to remove",
+              "arg_type": {
+                "type": "String"
+              },
+              "required": true,
+              "multiple": false
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "name": "branch",
+      "description": "List, create, or delete branches",
+      "aliases": [],
+      "options": [
+        {
+          "short": "-a",
+          "long": "--all",
+          "description": "List both remote-tracking and local branches",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-d",
+          "long": "--delete",
+          "description": "Delete a branch",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-D",
+          "description": "Force delete a branch",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "branchname",
+          "description": "Branch name",
+          "arg_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "subcommands": []
+    }
+  ]
+}

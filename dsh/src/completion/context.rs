@@ -37,16 +37,23 @@ impl ContextCompletion {
         );
 
         if let Some(completer) = self.completers.get(cmd) {
+            debug!("Found built-in completer for command: {}", cmd);
             match completer.complete(args, cursor_pos, current_dir) {
-                Ok(candidates) => candidates,
+                Ok(candidates) => {
+                    debug!("Built-in completer returned {} candidates for {}", candidates.len(), cmd);
+                    candidates
+                },
                 Err(e) => {
                     warn!("Context completion failed for {}: {}", cmd, e);
                     vec![]
                 }
             }
         } else {
+            debug!("No built-in completer found for command: {}, trying generic options", cmd);
             // Fallback to generic option completion
-            self.complete_generic_options(cmd, args)
+            let generic_candidates = self.complete_generic_options(cmd, args);
+            debug!("Generic options returned {} candidates for {}", generic_candidates.len(), cmd);
+            generic_candidates
         }
     }
 

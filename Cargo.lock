@@ -835,6 +835,7 @@ dependencies = [
  "shellexpand",
  "skim",
  "tabled",
+ "tempfile",
  "term_size",
  "termion",
  "termios",

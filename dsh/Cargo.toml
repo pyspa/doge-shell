@@ -66,3 +66,6 @@ skim = "0.20"      # 0.10 → 0.20
 tabled = "0.20"    # "*" → "0.20"
 num-bigint = { version = "0.4", optional = true }
 num-traits = "0.2"
+
+[dev-dependencies]
+tempfile = "3.0"

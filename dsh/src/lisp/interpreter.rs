@@ -560,8 +560,8 @@ mod tests {
         let env = create_test_env();
 
         // Test integers
-        let result = eval(env.clone(), &Value::Int(42)).unwrap();
-        assert_eq!(result, Value::Int(42));
+        let result = eval(env.clone(), &Value::Int(42.into())).unwrap();
+        assert_eq!(result, Value::Int(42.into()));
 
         // Test strings
         let result = eval(env.clone(), &Value::String("hello".to_string())).unwrap();
@@ -585,11 +585,11 @@ mod tests {
 
         // Define a symbol
         env.borrow_mut()
-            .define(Symbol::from("test-var"), Value::Int(123));
+            .define(Symbol::from("test-var"), Value::Int(123.into()));
 
         // Look it up
         let result = eval(env.clone(), &Value::Symbol(Symbol::from("test-var"))).unwrap();
-        assert_eq!(result, Value::Int(123));
+        assert_eq!(result, Value::Int(123.into()));
 
         // Test undefined symbol
         let result = eval(env.clone(), &Value::Symbol(Symbol::from("undefined")));
@@ -605,36 +605,36 @@ mod tests {
             vec![
                 Value::Symbol(Symbol::from("define")),
                 Value::Symbol(Symbol::from("x")),
-                Value::Int(42),
+                Value::Int(42.into()),
             ]
             .into_iter()
             .collect(),
         );
 
         let result = eval(env.clone(), &define_expr).unwrap();
-        assert_eq!(result, Value::Int(42));
+        assert_eq!(result, Value::Int(42.into()));
 
         // Verify the symbol was defined
         let lookup = eval(env.clone(), &Value::Symbol(Symbol::from("x"))).unwrap();
-        assert_eq!(lookup, Value::Int(42));
+        assert_eq!(lookup, Value::Int(42.into()));
 
         // Test set
         let set_expr = Value::List(
             vec![
                 Value::Symbol(Symbol::from("set")),
                 Value::Symbol(Symbol::from("x")),
-                Value::Int(100),
+                Value::Int(100.into()),
             ]
             .into_iter()
             .collect(),
         );
 
         let result = eval(env.clone(), &set_expr).unwrap();
-        assert_eq!(result, Value::Int(100));
+        assert_eq!(result, Value::Int(100.into()));
 
         // Verify the symbol was updated
         let lookup = eval(env.clone(), &Value::Symbol(Symbol::from("x"))).unwrap();
-        assert_eq!(lookup, Value::Int(100));
+        assert_eq!(lookup, Value::Int(100.into()));
     }
 
     #[test]
@@ -644,7 +644,7 @@ mod tests {
         // This test ensures that basic operations don't perform unnecessary clones
         // We'll define a large structure and ensure it's handled efficiently
 
-        let large_list = Value::List((0..1000).map(Value::Int).collect());
+        let large_list = Value::List((0..1000).map(|i| Value::Int(i.into())).collect());
 
         // Store it
         env.borrow_mut()
@@ -668,14 +668,14 @@ mod tests {
                 vec![
                     Value::Symbol(Symbol::from("define")),
                     Value::Symbol(Symbol::from(var_name.as_str())),
-                    Value::Int(i),
+                    Value::Int(i.into()),
                 ]
                 .into_iter()
                 .collect(),
             );
 
             let result = eval(env.clone(), &define_expr).unwrap();
-            assert_eq!(result, Value::Int(i));
+            assert_eq!(result, Value::Int(i.into()));
         }
 
         // Verify all variables are accessible
@@ -683,7 +683,7 @@ mod tests {
             let var_name = format!("var-{}", i);
             let lookup =
                 eval(env.clone(), &Value::Symbol(Symbol::from(var_name.as_str()))).unwrap();
-            assert_eq!(lookup, Value::Int(i));
+            assert_eq!(lookup, Value::Int(i.into()));
         }
     }
 
@@ -726,15 +726,15 @@ mod tests {
             let call_expr = Value::List(
                 vec![
                     Value::Symbol(Symbol::from("add-two")),
-                    Value::Int(i),
-                    Value::Int(i + 1),
+                    Value::Int(i.into()),
+                    Value::Int((i + 1).into()),
                 ]
                 .into_iter()
                 .collect(),
             );
 
             let result = eval(env.clone(), &call_expr).unwrap();
-            assert_eq!(result, Value::Int(i + i + 1));
+            assert_eq!(result, Value::Int((i + i + 1).into()));
         }
     }
 
@@ -749,12 +749,12 @@ mod tests {
                 Value::List(
                     vec![
                         Value::List(
-                            vec![Value::Symbol(Symbol::from("x")), Value::Int(10)]
+                            vec![Value::Symbol(Symbol::from("x")), Value::Int(10.into())]
                                 .into_iter()
                                 .collect(),
                         ),
                         Value::List(
-                            vec![Value::Symbol(Symbol::from("y")), Value::Int(20)]
+                            vec![Value::Symbol(Symbol::from("y")), Value::Int(20.into())]
                                 .into_iter()
                                 .collect(),
                         ),
@@ -789,7 +789,7 @@ mod tests {
                             vec![
                                 Value::Symbol(Symbol::from("*")),
                                 Value::Symbol(Symbol::from("z")),
-                                Value::Int(2),
+                                Value::Int(2.into()),
                             ]
                             .into_iter()
                             .collect(),
@@ -804,6 +804,6 @@ mod tests {
         );
 
         let result = eval(env.clone(), &nested_let).unwrap();
-        assert_eq!(result, Value::Int(60)); // ((10 + 20) * 2) = 60
+        assert_eq!(result, Value::Int(60.into())); // ((10 + 20) * 2) = 60
     }
 }

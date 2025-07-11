@@ -1,4 +1,3 @@
-use crate::completion::context::{CommandCompleter, GitCompleter};
 use crate::completion::{self, Completion};
 use crate::dirs;
 use crate::input::{Input, InputConfig};
@@ -19,9 +18,9 @@ use nix::sys::termios::{Termios, tcgetattr};
 use nix::unistd::tcsetpgrp;
 use parking_lot::RwLock;
 use std::io::{StdoutLock, Write};
+use tracing::{debug, info, warn};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{debug, warn};
 
 /// Display error in a user-friendly format without stack traces
 fn display_user_error(err: &anyhow::Error) {
@@ -116,7 +115,7 @@ pub struct Repl<'a> {
     history_search: Option<String>,
     start_completion: bool,
     completion: Completion,
-    git_completer: GitCompleter,
+    integrated_completion: completion::IntegratedCompletionEngine,
     prompt: Arc<RwLock<Prompt>>,
     ctrl_c_state: CtrlCState,
     should_exit: bool,
@@ -161,7 +160,7 @@ impl<'a> Repl<'a> {
             history_search: None,
             start_completion: false,
             completion: Completion::new(),
-            git_completer: GitCompleter::new(),
+            integrated_completion: completion::IntegratedCompletionEngine::new(),
             prompt,
             ctrl_c_state: CtrlCState::new(),
             should_exit: false,
@@ -174,6 +173,14 @@ impl<'a> Repl<'a> {
             (80, 24)
         });
         self.columns = screen_size.0 as usize;
+        
+        // Initialize integrated completion engine
+        info!("Initializing integrated completion engine...");
+        if let Err(e) = self.integrated_completion.initialize_command_completion() {
+            warn!("Failed to initialize command completion: {}", e);
+        } else {
+            info!("Integrated completion engine initialized successfully");
+        }
         self.lines = screen_size.1 as usize;
         enable_raw_mode().ok();
     }
@@ -569,73 +576,40 @@ impl<'a> Repl<'a> {
                     prompt_text, input_text
                 );
 
-                // Try Git completion first
-                let mut git_completion_result = None;
-                if input_text.trim_start().starts_with("git ") {
-                    debug!("Attempting Git completion for input: '{}'", input_text);
+                // Use the new integrated completion engine
+                let current_dir = std::env::current_dir().unwrap_or_default();
+                let cursor_pos = self.input.cursor();
 
-                    let current_dir = std::env::current_dir().unwrap_or_default();
-                    let parts: Vec<String> = input_text
-                        .split_whitespace()
-                        .map(|s| s.to_string())
+                debug!(
+                    "Using IntegratedCompletionEngine for input: '{}' at position {}",
+                    input_text, cursor_pos
+                );
+
+                let candidates = self.integrated_completion.complete(
+                    &input_text,
+                    cursor_pos,
+                    &current_dir,
+                    10, // max candidates
+                );
+
+                debug!(
+                    "IntegratedCompletionEngine returned {} candidates",
+                    candidates.len()
+                );
+
+                let completion_result = if !candidates.is_empty() {
+                    // Convert to completion format and show with skim
+                    let completion_candidates: Vec<completion::Candidate> = candidates
+                        .into_iter()
+                        .map(|candidate| completion::Candidate::Basic(candidate.text))
                         .collect();
-                    let args: Vec<String> = if parts.len() > 1 {
-                        parts[1..].to_vec()
-                    } else {
-                        vec![]
-                    };
 
-                    match self
-                        .git_completer
-                        .complete(&args, input_text.len(), &current_dir)
-                    {
-                        Ok(git_candidates) => {
-                            if !git_candidates.is_empty() {
-                                debug!("Found {} Git completion candidates", git_candidates.len());
-
-                                // Convert to completion format
-                                let git_completion_candidates: Vec<completion::Candidate> =
-                                    git_candidates
-                                        .into_iter()
-                                        .map(|candidate| match candidate {
-                                            completion::Candidate::Command { name, .. } => {
-                                                completion::Candidate::Basic(name)
-                                            }
-                                            completion::Candidate::GitBranch { name, .. } => {
-                                                completion::Candidate::Basic(name)
-                                            }
-                                            completion::Candidate::File { path, .. } => {
-                                                completion::Candidate::Basic(path)
-                                            }
-                                            _ => completion::Candidate::Basic(
-                                                candidate.get_display_name().to_string(),
-                                            ),
-                                        })
-                                        .collect();
-
-                                // Show Git completion candidates using skim
-                                if let Some(selected) = completion::select_item_with_skim(
-                                    git_completion_candidates,
-                                    completion_query,
-                                ) {
-                                    git_completion_result = Some(selected);
-                                    debug!(
-                                        "Git completion selected: '{:?}'",
-                                        git_completion_result
-                                    );
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            debug!("Git completion failed: {}", e);
-                        }
-                    }
-                }
-
-                // If Git completion didn't provide a result, fall back to existing completion
-                let completion_result = if let Some(git_result) = git_completion_result {
-                    Some(git_result)
+                    completion::select_item_with_skim(completion_candidates, completion_query)
                 } else {
+                    // Fall back to existing completion if no candidates from integrated engine
+                    debug!(
+                        "No candidates from IntegratedCompletionEngine, falling back to legacy completion"
+                    );
                     completion::input_completion(
                         &self.input,
                         self,

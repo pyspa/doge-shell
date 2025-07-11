@@ -1,0 +1,287 @@
+{
+  "command": "cargo",
+  "description": "Rust package manager",
+  "global_options": [
+    {
+      "long": "--version",
+      "short": "-V",
+      "description": "Print version info and exit",
+      "takes_value": false,
+      "required": false,
+      "multiple": false
+    },
+    {
+      "long": "--help",
+      "short": "-h",
+      "description": "Print help information",
+      "takes_value": false,
+      "required": false,
+      "multiple": false
+    },
+    {
+      "long": "--verbose",
+      "short": "-v",
+      "description": "Use verbose output",
+      "takes_value": false,
+      "required": false,
+      "multiple": true
+    },
+    {
+      "long": "--quiet",
+      "short": "-q",
+      "description": "No output printed to stdout",
+      "takes_value": false,
+      "required": false,
+      "multiple": false
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "build",
+      "description": "Compile the current package",
+      "aliases": ["b"],
+      "options": [
+        {
+          "long": "--release",
+          "description": "Build artifacts in release mode, with optimizations",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--target",
+          "description": "Build for the target triple",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--features",
+          "description": "Space or comma separated list of features to activate",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [],
+      "subcommands": []
+    },
+    {
+      "name": "run",
+      "description": "Run a binary or example of the local package",
+      "aliases": ["r"],
+      "options": [
+        {
+          "long": "--release",
+          "description": "Build artifacts in release mode, with optimizations",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--bin",
+          "description": "Name of the bin target to run",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--example",
+          "description": "Name of the example target to run",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "args",
+          "description": "Arguments to pass to the program",
+          "arg_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": true
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "test",
+      "description": "Run the tests",
+      "aliases": ["t"],
+      "options": [
+        {
+          "long": "--release",
+          "description": "Build artifacts in release mode, with optimizations",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--lib",
+          "description": "Test only this package's library unit tests",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--doc",
+          "description": "Test only this library's documentation",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "testname",
+          "description": "Test name filter",
+          "arg_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "new",
+      "description": "Create a new cargo package",
+      "aliases": [],
+      "options": [
+        {
+          "long": "--bin",
+          "description": "Use a binary (application) template",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--lib",
+          "description": "Use a library template",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--name",
+          "description": "Set the resulting package name",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "path",
+          "description": "Directory path for the new package",
+          "arg_type": {
+            "type": "Directory"
+          },
+          "required": true,
+          "multiple": false
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "add",
+      "description": "Add dependencies to a Cargo.toml manifest file",
+      "aliases": [],
+      "options": [
+        {
+          "long": "--dev",
+          "description": "Add as development dependency",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--build",
+          "description": "Add as build dependency",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--features",
+          "description": "Space or comma separated list of features to activate",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "crate",
+          "description": "Crate name to add",
+          "arg_type": {
+            "type": "String"
+          },
+          "required": true,
+          "multiple": true
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "install",
+      "description": "Install a Rust binary",
+      "aliases": [],
+      "options": [
+        {
+          "long": "--git",
+          "description": "Git URL to install the specified crate from",
+          "takes_value": true,
+          "value_type": {
+            "type": "Url"
+          },
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--path",
+          "description": "Filesystem path to local crate to install",
+          "takes_value": true,
+          "value_type": {
+            "type": "Directory"
+          },
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "crate",
+          "description": "Crate name to install",
+          "arg_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": true
+        }
+      ],
+      "subcommands": []
+    }
+  ]
+}

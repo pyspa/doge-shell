@@ -30,9 +30,39 @@ use std::rc::Rc;
 use std::{process::Command, sync::Arc};
 use tracing::debug;
 use tracing::warn;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 // Completion display configuration
 const MAX_COMPLETION_ITEMS: usize = 30;
+
+/// Calculate the display width of a Unicode string
+/// This accounts for wide characters (like CJK characters and emojis)
+fn unicode_display_width(s: &str) -> usize {
+    s.width()
+}
+
+/// Truncate a Unicode string to fit within the specified display width
+fn truncate_to_width(s: &str, max_width: usize) -> String {
+    if unicode_display_width(s) <= max_width {
+        return s.to_string();
+    }
+
+    let mut result = String::new();
+    let mut current_width = 0;
+
+    for ch in s.chars() {
+        let char_width = ch.width().unwrap_or(0);
+        if current_width + char_width > max_width.saturating_sub(1) {
+            // Reserve space for ellipsis
+            result.push('…');
+            break;
+        }
+        result.push(ch);
+        current_width += char_width;
+    }
+
+    result
+}
 
 #[derive(Debug, Clone)]
 pub struct CompletionConfig {
@@ -158,11 +188,15 @@ impl CompletionDisplay {
         // Calculate the maximum display width needed
         let max_display_width = candidates
             .iter()
-            .map(|c| c.get_display_name().len() + 4) // "🔹 " + name + " " (emoji takes 2 chars)
+            .map(|c| {
+                let name_width = unicode_display_width(&c.get_display_name());
+                let type_char_width = c.get_type_char().width().unwrap_or(2); // Most emojis are 2 chars wide
+                name_width + type_char_width + 2 // type_char + " " + name + " "
+            })
             .max()
             .unwrap_or(10);
 
-        // Limit column width to prevent extremely wide columns
+        // Limit column width to prevent extremely wide columns and ensure no wrapping
         let column_width = std::cmp::min(max_display_width, terminal_width / 3);
 
         let items_per_row = if column_width > 0 {
@@ -317,10 +351,17 @@ impl CompletionDisplay {
         queue!(stdout, Print(&self.prompt_text))?;
         queue!(stdout, Print(&self.input_text))?;
 
+        // Calculate the total display width of prompt + input for cursor positioning
         // Move cursor to start of completion area
         execute!(stdout, cursor::MoveToNextLine(1))?;
 
+        // Get terminal width to prevent wrapping
+        let (terminal_width, _) = crossterm::terminal::size()?;
+        let terminal_width = terminal_width as usize;
+
         for row in 0..self.total_rows {
+            let mut current_line_width = 0;
+
             for col in 0..self.items_per_row {
                 let index = row * self.items_per_row + col;
                 if index >= self.candidates.len() {
@@ -332,6 +373,27 @@ impl CompletionDisplay {
                 let is_message_item = self.has_more_items
                     && index == self.candidates.len() - 1
                     && candidate.get_display_name().starts_with("📋");
+
+                // Calculate the width this item will take
+                let formatted = if is_message_item {
+                    candidate.get_display_name()
+                } else {
+                    candidate.get_formatted_display(self.column_width)
+                };
+
+                let item_width = 1 + unicode_display_width(&formatted); // ">" or " " + formatted
+                let spacing_width =
+                    if col < self.items_per_row - 1 && index + 1 < self.candidates.len() {
+                        1
+                    } else {
+                        0
+                    };
+                let total_item_width = item_width + spacing_width;
+
+                // Check if adding this item would cause wrapping
+                if current_line_width + total_item_width > terminal_width {
+                    break; // Skip this item to prevent wrapping
+                }
 
                 // Display with type character and proper formatting
                 if is_selected {
@@ -358,19 +420,15 @@ impl CompletionDisplay {
                     }
                 }
 
-                let formatted = if is_message_item {
-                    // Display message items without type character formatting
-                    candidate.get_display_name()
-                } else {
-                    candidate.get_formatted_display(self.column_width)
-                };
-
                 queue!(stdout, Print(formatted))?;
                 queue!(stdout, ResetColor)?;
+
+                current_line_width += item_width;
 
                 // Add spacing between columns
                 if col < self.items_per_row - 1 && index + 1 < self.candidates.len() {
                     queue!(stdout, Print(" "))?;
+                    current_line_width += spacing_width;
                 }
             }
             if row < self.total_rows - 1 {
@@ -381,7 +439,9 @@ impl CompletionDisplay {
         // Move cursor back to the end of input line (but keep it hidden)
         if let (Some(start_row), Some(start_col)) = (self.display_start_row, self.display_start_col)
         {
-            let input_end_col = start_col + self.input_text.chars().count() as u16;
+            let prompt_width = unicode_display_width(&self.prompt_text);
+            let input_width = unicode_display_width(&self.input_text);
+            let input_end_col = start_col + prompt_width as u16 + input_width as u16;
             execute!(stdout, cursor::MoveTo(input_end_col, start_row))?;
         }
 
@@ -432,7 +492,9 @@ impl CompletionDisplay {
             queue!(stdout, Print(&self.input_text))?;
 
             // Position cursor at the end of input
-            let input_end_col = start_col + self.input_text.chars().count() as u16;
+            let prompt_width = unicode_display_width(&self.prompt_text);
+            let input_width = unicode_display_width(&self.input_text);
+            let input_end_col = start_col + prompt_width as u16 + input_width as u16;
             execute!(stdout, cursor::MoveTo(input_end_col, start_row))?;
         } else {
             debug!("Using fallback clear method");
@@ -632,20 +694,30 @@ impl Candidate {
         let type_char = self.get_type_char();
         let name = self.get_display_name();
 
-        // Truncate name if too long
-        // Emoji takes 2 character widths, so we need to account for that
-        let max_name_width = width.saturating_sub(4); // "🔹 " + " " (emoji + space + space)
-        let display_name = if name.len() > max_name_width {
-            format!("{}…", &name[..max_name_width.saturating_sub(1)])
+        // Calculate the width needed for the type character (emoji)
+        let type_char_width = type_char.width().unwrap_or(2);
+
+        // Calculate maximum width available for the name
+        // Format: "emoji name" with proper spacing
+        let max_name_width = width.saturating_sub(type_char_width + 1); // type_char + " "
+
+        // Truncate name if it's too long for the available width
+        let display_name = if unicode_display_width(&name) > max_name_width {
+            truncate_to_width(&name, max_name_width)
         } else {
             name
         };
 
+        // Calculate padding needed to align columns properly
+        let name_display_width = unicode_display_width(&display_name);
+        let total_content_width = type_char_width + 1 + name_display_width; // type_char + " " + name
+        let padding_needed = width.saturating_sub(total_content_width);
+
         format!(
-            "{} {:<width$}",
+            "{} {}{}",
             type_char,
             display_name,
-            width = max_name_width
+            " ".repeat(padding_needed)
         )
     }
 }
@@ -2101,6 +2173,10 @@ mod fuzzy_integration_tests {
     use super::*;
     use crate::input::InputConfig;
 
+    fn init() {
+        let _ = tracing_subscriber::fmt::try_init();
+    }
+
     #[test]
     fn test_get_current_word() {
         // Test basic word extraction
@@ -2177,5 +2253,62 @@ mod fuzzy_integration_tests {
 
         // At least one should be true (current directory should have some content)
         assert!(has_files || has_dirs);
+    }
+
+    #[test]
+    fn test_unicode_display_width() {
+        init();
+
+        // ASCII文字のテスト
+        assert_eq!(unicode_display_width("hello"), 5);
+
+        // 日本語文字のテスト（全角文字は2文字幅）
+        assert_eq!(unicode_display_width("こんにちは"), 10);
+
+        // 絵文字のテスト
+        assert_eq!(unicode_display_width("🐕"), 2);
+        assert_eq!(unicode_display_width("⚡"), 2);
+        assert_eq!(unicode_display_width("📁"), 2);
+
+        // 混在のテスト
+        assert_eq!(unicode_display_width("hello世界🐕"), 5 + 4 + 2); // 11
+    }
+
+    #[test]
+    fn test_truncate_to_width() {
+        init();
+
+        // ASCII文字の切り詰めテスト
+        assert_eq!(truncate_to_width("hello_world", 5), "hell…");
+        assert_eq!(truncate_to_width("hello", 10), "hello");
+
+        // 日本語文字の切り詰めテスト
+        assert_eq!(truncate_to_width("こんにちは", 6), "こん…"); // 4文字幅 + 1文字幅（…）= 5文字幅
+
+        // 絵文字の切り詰めテスト
+        assert_eq!(truncate_to_width("🐕🚀⚡", 4), "🐕…"); // 2文字幅 + 1文字幅（…）= 3文字幅
+
+        // 混在の切り詰めテスト
+        assert_eq!(truncate_to_width("hello世界", 8), "hello世…"); // 5文字幅 + 2文字幅 + 1文字幅（…）= 8文字幅
+    }
+
+    #[test]
+    fn test_candidate_formatted_display_unicode() {
+        init();
+
+        // 日本語ファイル名のテスト
+        let candidate = Candidate::File {
+            path: "日本語ファイル.txt".to_string(),
+            is_dir: false,
+        };
+
+        let formatted = candidate.get_formatted_display(20);
+        let display_width = unicode_display_width(&formatted);
+
+        // 表示幅が指定した幅以下であることを確認
+        assert!(display_width <= 20);
+
+        // 絵文字が含まれていることを確認
+        assert!(formatted.contains("📄"));
     }
 }

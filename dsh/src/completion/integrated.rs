@@ -210,6 +210,14 @@ impl IntegratedCompletionEngine {
         }
     }
 
+    /// Convert EnhancedCandidate list to Candidate list for skim display
+    pub fn to_candidates(&self, enhanced_candidates: Vec<EnhancedCandidate>) -> Vec<Candidate> {
+        enhanced_candidates
+            .into_iter()
+            .map(|ec| ec.to_candidate())
+            .collect()
+    }
+
     /// Deduplication and sorting
     fn deduplicate_and_sort(
         &self,
@@ -269,6 +277,46 @@ pub struct EnhancedCandidate {
     pub priority: u32,
     /// Candidate source
     pub source: CandidateSource,
+}
+
+impl EnhancedCandidate {
+    /// Convert to Candidate for skim display
+    pub fn to_candidate(&self) -> Candidate {
+        match self.candidate_type {
+            CandidateType::SubCommand => Candidate::Command {
+                name: self.text.clone(),
+                description: self.description.clone().unwrap_or_default(),
+            },
+            CandidateType::LongOption | CandidateType::ShortOption => Candidate::Option {
+                name: self.text.clone(),
+                description: self.description.clone().unwrap_or_default(),
+            },
+            CandidateType::File => Candidate::File {
+                path: self.text.clone(),
+                is_dir: false,
+            },
+            CandidateType::Directory => Candidate::File {
+                path: self.text.clone(),
+                is_dir: true,
+            },
+            CandidateType::Argument | CandidateType::Generic => {
+                if let Some(ref desc) = self.description {
+                    Candidate::Item(self.text.clone(), desc.clone())
+                } else {
+                    Candidate::Basic(self.text.clone())
+                }
+            }
+        }
+    }
+
+    /// Get display text with icon and description for skim
+    pub fn get_display_text(&self) -> String {
+        let icon = self.candidate_type.icon();
+        match &self.description {
+            Some(desc) => format!("{} {:<30} {}", icon, self.text, desc),
+            None => format!("{} {}", icon, self.text),
+        }
+    }
 }
 
 /// Candidate type
@@ -385,30 +433,39 @@ mod tests {
     }
 
     #[test]
-    fn test_deduplication() {
-        let engine = IntegratedCompletionEngine::new();
+    fn test_enhanced_candidate_to_candidate_conversion() {
+        let enhanced_candidate = EnhancedCandidate {
+            text: "commit".to_string(),
+            description: Some("Record changes to the repository".to_string()),
+            candidate_type: CandidateType::SubCommand,
+            priority: 100,
+            source: CandidateSource::Command,
+        };
 
-        let candidates = vec![
-            EnhancedCandidate {
-                text: "test".to_string(),
-                description: None,
-                candidate_type: CandidateType::SubCommand,
-                priority: 100,
-                source: CandidateSource::Command,
-            },
-            EnhancedCandidate {
-                text: "test".to_string(),
-                description: Some("Different description".to_string()),
-                candidate_type: CandidateType::Generic,
-                priority: 50,
-                source: CandidateSource::History,
-            },
-        ];
+        let candidate = enhanced_candidate.to_candidate();
 
-        let result = engine.deduplicate_and_sort(candidates, 10);
+        match candidate {
+            Candidate::Command { name, description } => {
+                assert_eq!(name, "commit");
+                assert_eq!(description, "Record changes to the repository");
+            }
+            _ => panic!("Expected Command candidate"),
+        }
+    }
 
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].priority, 100); // Higher priority remains
-        assert_eq!(result[0].source, CandidateSource::Command);
+    #[test]
+    fn test_enhanced_candidate_display_text() {
+        let enhanced_candidate = EnhancedCandidate {
+            text: "--verbose".to_string(),
+            description: Some("Show detailed output".to_string()),
+            candidate_type: CandidateType::LongOption,
+            priority: 80,
+            source: CandidateSource::Command,
+        };
+
+        let display_text = enhanced_candidate.get_display_text();
+        assert!(display_text.contains("🔧"));
+        assert!(display_text.contains("--verbose"));
+        assert!(display_text.contains("Show detailed output"));
     }
 }

@@ -448,12 +448,20 @@ impl SkimItem for Candidate {
             Candidate::Path(p) => Cow::Borrowed(p),
             Candidate::Basic(x) => Cow::Borrowed(x),
             Candidate::Command { name, description } => {
-                let desc = format!("{0:<30} {1}", name, description);
-                Cow::Owned(desc)
+                let icon = "⚡"; // Command icon
+                if description.is_empty() {
+                    Cow::Owned(format!("{} {}", icon, name))
+                } else {
+                    Cow::Owned(format!("{} {:<30} {}", icon, name, description))
+                }
             }
             Candidate::Option { name, description } => {
-                let desc = format!("{0:<30} {1}", name, description);
-                Cow::Owned(desc)
+                let icon = "🔧"; // Option icon
+                if description.is_empty() {
+                    Cow::Owned(format!("{} {}", icon, name))
+                } else {
+                    Cow::Owned(format!("{} {:<30} {}", icon, name, description))
+                }
             }
             Candidate::File { path, is_dir } => {
                 let type_indicator = if *is_dir { "/" } else { "" };

@@ -599,10 +599,8 @@ impl<'a> Repl<'a> {
 
                 let completion_result = if !candidates.is_empty() {
                     // Convert to completion format and show with skim
-                    let completion_candidates: Vec<completion::Candidate> = candidates
-                        .into_iter()
-                        .map(|candidate| completion::Candidate::Basic(candidate.text))
-                        .collect();
+                    let completion_candidates: Vec<completion::Candidate> =
+                        self.integrated_completion.to_candidates(candidates);
 
                     completion::select_item_with_skim(completion_candidates, completion_query)
                 } else {

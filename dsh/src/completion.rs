@@ -7,7 +7,6 @@ use anyhow::Result;
 
 // Advanced completion modules
 pub mod command;
-pub mod context;
 pub mod display;
 pub mod fuzzy;
 pub mod generator;
@@ -16,7 +15,6 @@ pub mod integrated;
 pub mod json_loader;
 pub mod parser;
 
-pub use self::context::CommandCompleter;
 pub use self::display::CompletionDisplay;
 pub use self::fuzzy::{ScoredCandidate, SmartCompletion};
 pub use self::integrated::IntegratedCompletionEngine;
@@ -1328,9 +1326,7 @@ pub fn unquote(s: &str) -> String {
 /// This is the new integrated completion system that replaces the old AdvancedCompletion.
 /// It provides enhanced functionality with JSON-based command completion, improved UI,
 /// and better integration between different completion sources.
-#[allow(dead_code)]
-pub type AdvancedCompletion = IntegratedCompletionEngine;
-
+///
 /// Legacy compatibility functions for AdvancedCompletion
 impl IntegratedCompletionEngine {
     /// Get completion for a specific command (legacy compatibility)

@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 use super::command::CompletionCandidate;
-use super::context::ContextCompletion;
 use super::fuzzy::{FuzzyCompletion, SmartCompletion};
 use super::generator::CompletionGenerator;
 use super::history::{CompletionContext, HistoryCompletion};
@@ -18,7 +17,6 @@ pub struct IntegratedCompletionEngine {
     /// Command line parser
     parser: CommandLineParser,
     /// Existing completion systems
-    context_completion: ContextCompletion,
     fuzzy_completion: FuzzyCompletion,
     history_completion: HistoryCompletion,
     smart_completion: SmartCompletion,
@@ -30,7 +28,6 @@ impl IntegratedCompletionEngine {
         Self {
             command_generator: None,
             parser: CommandLineParser::new(),
-            context_completion: ContextCompletion::new(),
             fuzzy_completion: FuzzyCompletion::new(),
             history_completion: HistoryCompletion::new(),
             smart_completion: SmartCompletion::new(),
@@ -129,19 +126,8 @@ impl IntegratedCompletionEngine {
         // 2. Existing context completion
         let parts: Vec<&str> = input.split_whitespace().collect();
         if !parts.is_empty() {
-            let command = parts[0];
-            let args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
-
-            let context_candidates =
-                self.context_completion
-                    .complete(command, &args, cursor_pos, current_dir);
-            let enhanced_candidates = context_candidates
-                .into_iter()
-                .map(|c| self.convert_legacy_candidate(c, CandidateSource::Context))
-                .collect::<Vec<_>>();
-
-            debug!("Generated {} context candidates", enhanced_candidates.len());
-            all_candidates.extend(enhanced_candidates);
+            let _command = parts[0];
+            let _args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
         }
 
         // 3. History-based completion

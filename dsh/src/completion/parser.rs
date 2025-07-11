@@ -473,11 +473,10 @@ mod tests {
     fn test_parse_double_dash_option() {
         let parser = CommandLineParser::new();
         let result = parser.parse("git add --", 10);
-        
+
         assert_eq!(result.command, "git");
         assert_eq!(result.subcommand_path, vec!["add"]);
         assert_eq!(result.current_token, "--");
         assert_eq!(result.completion_context, CompletionContext::LongOption);
     }
 }
-

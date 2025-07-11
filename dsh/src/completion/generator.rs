@@ -22,7 +22,11 @@ impl CompletionGenerator {
 
     /// 利用可能なコマンド一覧を取得（デバッグ用）
     pub fn get_available_commands(&self) -> Vec<String> {
-        self.database.get_command_names().into_iter().cloned().collect()
+        self.database
+            .get_command_names()
+            .into_iter()
+            .cloned()
+            .collect()
     }
 
     /// 解析されたコマンドから補完候補を生成

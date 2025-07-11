@@ -5,64 +5,55 @@ use super::command::{CommandCompletion, CommandCompletionDatabase};
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
-/// JSON補完データローダー
 pub struct JsonCompletionLoader {
-    /// 補完データディレクトリのパス
     completion_dirs: Vec<PathBuf>,
 }
 
 impl JsonCompletionLoader {
-    /// 新しいローダーを作成
     pub fn new() -> Self {
         Self {
             completion_dirs: Self::get_default_completion_dirs(),
         }
     }
 
-    /// カスタムディレクトリを指定してローダーを作成
     pub fn with_dirs(dirs: Vec<PathBuf>) -> Self {
         Self {
             completion_dirs: dirs,
         }
     }
 
-    /// デフォルトの補完データディレクトリを取得
     fn get_default_completion_dirs() -> Vec<PathBuf> {
         let mut dirs = Vec::new();
 
-        // ユーザー設定ディレクトリ
         if let Some(config_dir) = dirs::config_dir() {
             let user_dir = config_dir.join(APP_NAME).join("completions");
             debug!("Adding user config completion dir: {:?}", user_dir);
             dirs.push(user_dir);
         }
 
-        // ホームディレクトリの.config
         if let Some(home_dir) = dirs::home_dir() {
             let home_config_dir = home_dir.join(".config").join(APP_NAME).join("completions");
             debug!("Adding home config completion dir: {:?}", home_config_dir);
             dirs.push(home_config_dir);
         }
 
-        // プロジェクトローカルの補完データ
         let local_dir = PathBuf::from("./completions");
         debug!("Adding local completion dir: {:?}", local_dir);
         dirs.push(local_dir);
 
-        info!("Initialized completion directories: {:?}", dirs);
+        debug!("Initialized completion directories: {:?}", dirs);
         dirs
     }
 
-    /// 補完データベースを読み込み
     pub fn load_database(&self) -> Result<CommandCompletionDatabase> {
-        info!("Starting completion database loading...");
+        debug!("Starting completion database loading...");
         let mut database = CommandCompletionDatabase::new();
         let mut loaded_count = 0;
         let mut error_count = 0;
 
-        info!(
+        debug!(
             "Checking {} completion directories",
             self.completion_dirs.len()
         );
@@ -80,12 +71,12 @@ impl JsonCompletionLoader {
                 continue;
             }
 
-            info!("Loading completions from existing directory: {:?}", dir);
+            debug!("Loading completions from existing directory: {:?}", dir);
             match self.load_from_directory(dir, &mut database) {
                 Ok(count) => {
                     loaded_count += count;
                     if count > 0 {
-                        info!(
+                        debug!(
                             "Successfully loaded {} completion files from {:?}",
                             count, dir
                         );
@@ -100,7 +91,7 @@ impl JsonCompletionLoader {
             }
         }
 
-        info!(
+        debug!(
             "Completion loading complete: {} files loaded, {} errors from {} directories",
             loaded_count,
             error_count,
@@ -137,10 +128,10 @@ impl JsonCompletionLoader {
                 continue;
             }
 
-            info!("Processing JSON completion file: {:?}", path);
+            debug!("Processing JSON completion file: {:?}", path);
             match self.load_completion_file(&path) {
                 Ok(completion) => {
-                    info!(
+                    debug!(
                         "Successfully loaded completion for command: {} from {:?}",
                         completion.command, path
                     );
@@ -158,7 +149,7 @@ impl JsonCompletionLoader {
             }
         }
 
-        info!(
+        debug!(
             "Directory scan complete: found {} files, loaded {} JSON completion files from {:?}",
             file_count, loaded_count, dir
         );
@@ -179,7 +170,11 @@ impl JsonCompletionLoader {
             Err(e) => {
                 warn!("JSON parse error in {:?}: {}", path, e);
                 debug!("JSON parse error details: {:?}", e);
-                return Err(anyhow::anyhow!("Failed to parse JSON in file: {:?}: {}", path, e));
+                return Err(anyhow::anyhow!(
+                    "Failed to parse JSON in file: {:?}: {}",
+                    path,
+                    e
+                ));
             }
         };
 

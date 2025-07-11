@@ -18,9 +18,9 @@ use nix::sys::termios::{Termios, tcgetattr};
 use nix::unistd::tcsetpgrp;
 use parking_lot::RwLock;
 use std::io::{StdoutLock, Write};
-use tracing::{debug, info, warn};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tracing::{debug, warn};
 
 /// Display error in a user-friendly format without stack traces
 fn display_user_error(err: &anyhow::Error) {
@@ -173,13 +173,13 @@ impl<'a> Repl<'a> {
             (80, 24)
         });
         self.columns = screen_size.0 as usize;
-        
+
         // Initialize integrated completion engine
-        info!("Initializing integrated completion engine...");
+        debug!("Initializing integrated completion engine...");
         if let Err(e) = self.integrated_completion.initialize_command_completion() {
             warn!("Failed to initialize command completion: {}", e);
         } else {
-            info!("Integrated completion engine initialized successfully");
+            debug!("Integrated completion engine initialized successfully");
         }
         self.lines = screen_size.1 as usize;
         enable_raw_mode().ok();

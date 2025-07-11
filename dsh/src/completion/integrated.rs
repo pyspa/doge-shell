@@ -9,7 +9,7 @@ use super::parser::CommandLineParser;
 use crate::completion::Candidate;
 use anyhow::Result;
 use std::path::Path;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 /// 統合補完エンジン - 全ての補完機能を統合
 pub struct IntegratedCompletionEngine {
@@ -39,28 +39,31 @@ impl IntegratedCompletionEngine {
 
     /// JSON補完データを初期化
     pub fn initialize_command_completion(&mut self) -> Result<()> {
-        info!("Initializing command completion system...");
+        debug!("Initializing command completion system...");
 
         debug!("Creating JsonCompletionLoader...");
         let loader = JsonCompletionLoader::new();
-        
+
         debug!("Loading completion database...");
         match loader.load_database() {
             Ok(database) => {
                 let command_count = database.len();
-                info!("Loaded completion database with {} commands", command_count);
-                
+                debug!("Loaded completion database with {} commands", command_count);
+
                 if command_count > 0 {
                     debug!("Creating CompletionGenerator with database...");
                     self.command_generator = Some(CompletionGenerator::new(database));
-                    info!(
+                    debug!(
                         "Command completion initialized successfully with {} commands",
                         command_count
                     );
-                    
+
                     // デバッグ: 読み込まれたコマンドをリスト表示
                     if let Some(ref generator) = self.command_generator {
-                        debug!("Available commands in database: {:?}", generator.get_available_commands());
+                        debug!(
+                            "Available commands in database: {:?}",
+                            generator.get_available_commands()
+                        );
                     }
                 } else {
                     warn!("No command completion data found - completion database is empty");
@@ -108,7 +111,11 @@ impl IntegratedCompletionEngine {
                         .map(|c| self.convert_to_enhanced_candidate(c, CandidateSource::Command))
                         .collect::<Vec<_>>();
 
-                    info!("JSON completion generated {} candidates for '{}'", enhanced_candidates.len(), input);
+                    debug!(
+                        "JSON completion generated {} candidates for '{}'",
+                        enhanced_candidates.len(),
+                        input
+                    );
                     all_candidates.extend(enhanced_candidates);
                 }
                 Err(e) => {

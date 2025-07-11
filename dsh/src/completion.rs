@@ -157,16 +157,16 @@ impl CompletionDisplay {
     pub fn new(candidates: Vec<Candidate>, prompt_text: String, input_text: String) -> Self {
         Self::new_with_config(
             candidates,
-            prompt_text,
-            input_text,
+            &prompt_text,
+            &input_text,
             CompletionConfig::default(),
         )
     }
 
     pub fn new_with_config(
         mut candidates: Vec<Candidate>,
-        prompt_text: String,
-        input_text: String,
+        prompt_text: &str,
+        input_text: &str,
         config: CompletionConfig,
     ) -> Self {
         let terminal_width = term_size::dimensions().map(|(w, _)| w).unwrap_or(80);
@@ -189,7 +189,7 @@ impl CompletionDisplay {
         let max_display_width = candidates
             .iter()
             .map(|c| {
-                let name_width = unicode_display_width(&c.get_display_name());
+                let name_width = unicode_display_width(c.get_display_name());
                 let type_char_width = c.get_type_char().width().unwrap_or(2); // Most emojis are 2 chars wide
                 name_width + type_char_width + 2 // type_char + " " + name + " "
             })
@@ -216,8 +216,8 @@ impl CompletionDisplay {
             total_rows,
             display_start_row: None,
             display_start_col: None,
-            prompt_text,
-            input_text,
+            prompt_text: prompt_text.to_string(),
+            input_text: input_text.to_string(),
             cursor_hidden: false,
             config,
             has_more_items,
@@ -376,7 +376,7 @@ impl CompletionDisplay {
 
                 // Calculate the width this item will take
                 let formatted = if is_message_item {
-                    candidate.get_display_name()
+                    candidate.get_display_name().to_string()
                 } else {
                     candidate.get_formatted_display(self.column_width)
                 };
@@ -581,23 +581,23 @@ impl Completion {
         self.current_index = 0;
     }
 
-    pub fn backward(&mut self) -> Option<ItemStats> {
+    pub fn backward(&mut self) -> Option<&ItemStats> {
         if self.completions.is_empty() {
             return None;
         }
 
         if self.completions.len() - 1 > self.current_index {
             self.current_index += 1;
-            Some(self.completions[self.current_index].clone())
+            Some(&self.completions[self.current_index])
         } else {
             None
         }
     }
 
-    pub fn forward(&mut self) -> Option<ItemStats> {
+    pub fn forward(&mut self) -> Option<&ItemStats> {
         if self.current_index > 0 {
             self.current_index -= 1;
-            Some(self.completions[self.current_index].clone())
+            Some(&self.completions[self.current_index])
         } else {
             None
         }
@@ -675,17 +675,17 @@ impl Candidate {
     }
 
     /// Get the display name (without description)
-    pub fn get_display_name(&self) -> String {
+    pub fn get_display_name(&self) -> &str {
         match self {
-            Candidate::Item(name, _) => name.clone(),
-            Candidate::Path(path) => path.clone(),
-            Candidate::Basic(basic) => basic.clone(),
-            Candidate::Command { name, .. } => name.clone(),
-            Candidate::Option { name, .. } => name.clone(),
-            Candidate::File { path, .. } => path.clone(),
-            Candidate::GitBranch { name, .. } => name.clone(),
-            Candidate::NpmScript { name } => name.clone(),
-            Candidate::History { command, .. } => command.clone(),
+            Candidate::Item(name, _) => name,
+            Candidate::Path(path) => path,
+            Candidate::Basic(basic) => basic,
+            Candidate::Command { name, .. } => name,
+            Candidate::Option { name, .. } => name,
+            Candidate::File { path, .. } => path,
+            Candidate::GitBranch { name, .. } => name,
+            Candidate::NpmScript { name } => name,
+            Candidate::History { command, .. } => command,
         }
     }
 
@@ -702,10 +702,10 @@ impl Candidate {
         let max_name_width = width.saturating_sub(type_char_width + 1); // type_char + " "
 
         // Truncate name if it's too long for the available width
-        let display_name = if unicode_display_width(&name) > max_name_width {
-            truncate_to_width(&name, max_name_width)
+        let display_name = if unicode_display_width(name) > max_name_width {
+            truncate_to_width(name, max_name_width)
         } else {
-            name
+            name.to_string()
         };
 
         // Calculate padding needed to align columns properly
@@ -917,8 +917,8 @@ fn get_prompt_and_input_for_completion() -> (String, String) {
 pub fn select_completion_items(
     items: Vec<Candidate>,
     query: Option<&str>,
-    prompt_text: String,
-    input_text: String,
+    prompt_text: &str,
+    input_text: &str,
 ) -> Option<String> {
     select_completion_items_with_config(
         items,
@@ -932,8 +932,8 @@ pub fn select_completion_items(
 pub fn select_completion_items_with_config(
     items: Vec<Candidate>,
     _query: Option<&str>,
-    prompt_text: String,
-    input_text: String,
+    prompt_text: &str,
+    input_text: &str,
     config: CompletionConfig,
 ) -> Option<String> {
     if items.is_empty() {
@@ -1000,7 +1000,7 @@ pub fn select_completion_items_simple(
     query: Option<&str>,
 ) -> Option<String> {
     let (prompt_text, input_text) = get_prompt_and_input_for_completion();
-    select_completion_items(items, query, prompt_text, input_text)
+    select_completion_items(items, query, &prompt_text, &input_text)
 }
 
 pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String> {
@@ -1183,27 +1183,15 @@ pub fn input_completion(
     input: &Input,
     repl: &Repl,
     query: Option<&str>,
-    prompt_text: String,
-    input_text: String,
+    prompt_text: &str,
+    input_text: &str,
 ) -> Option<String> {
     // Use original completion logic only (fuzzy completion removed)
-    let res = completion_from_lisp_with_prompt(
-        input,
-        repl,
-        query,
-        prompt_text.clone(),
-        input_text.clone(),
-    );
+    let res = completion_from_lisp_with_prompt(input, repl, query, prompt_text, input_text);
     if res.is_some() {
         return res;
     }
-    let res = completion_from_current_with_prompt(
-        input,
-        repl,
-        query,
-        prompt_text.clone(),
-        input_text.clone(),
-    );
+    let res = completion_from_current_with_prompt(input, repl, query, prompt_text, input_text);
     if res.is_some() {
         return res;
     }
@@ -1287,7 +1275,7 @@ pub fn input_completion_with_fuzzy(
 #[allow(dead_code)]
 pub fn input_completion_simple(input: &Input, repl: &Repl, query: Option<&str>) -> Option<String> {
     let (prompt_text, input_text) = get_prompt_and_input_for_completion();
-    input_completion(input, repl, query, prompt_text, input_text)
+    input_completion(input, repl, query, &prompt_text, &input_text)
 }
 
 /// Get the current word being typed for completion
@@ -1447,8 +1435,8 @@ fn completion_from_lisp_with_prompt(
     input: &Input,
     repl: &Repl,
     query: Option<&str>,
-    prompt_text: String,
-    input_text: String,
+    prompt_text: &str,
+    input_text: &str,
 ) -> Option<String> {
     // TODO convert input
     let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
@@ -1503,8 +1491,8 @@ fn completion_from_current_with_prompt(
     _input: &Input,
     repl: &Repl,
     query: Option<&str>,
-    prompt_text: String,
-    input_text: String,
+    prompt_text: &str,
+    input_text: &str,
 ) -> Option<String> {
     let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
     let environment = Arc::clone(&lisp_engine.borrow().shell_env);
@@ -2063,12 +2051,7 @@ mod tests {
         }
 
         let config = CompletionConfig::default();
-        let comp_display = CompletionDisplay::new_with_config(
-            candidates,
-            "$ ".to_string(),
-            "test".to_string(),
-            config,
-        );
+        let comp_display = CompletionDisplay::new_with_config(candidates, "$ ", "test", config);
 
         // Should have 30 items + 1 message item
         assert_eq!(comp_display.candidates.len(), 31);
@@ -2092,12 +2075,7 @@ mod tests {
         }
 
         let config = CompletionConfig::default();
-        let comp_display = CompletionDisplay::new_with_config(
-            candidates,
-            "$ ".to_string(),
-            "test".to_string(),
-            config,
-        );
+        let comp_display = CompletionDisplay::new_with_config(candidates, "$ ", "test", config);
 
         // Should have exactly 10 items, no message
         assert_eq!(comp_display.candidates.len(), 10);
@@ -2116,12 +2094,8 @@ mod tests {
         }
 
         let config = CompletionConfig::default().with_max_items(50);
-        let comp_display = CompletionDisplay::new_with_config(
-            candidates,
-            "$ ".to_string(),
-            "test_command".to_string(),
-            config,
-        );
+        let comp_display =
+            CompletionDisplay::new_with_config(candidates, "$ ", "test_command", config);
 
         // Should limit to 50 items + 1 message
         assert_eq!(comp_display.candidates.len(), 51);
@@ -2152,12 +2126,8 @@ mod tests {
         }
 
         let config = CompletionConfig::default();
-        let comp_display = CompletionDisplay::new_with_config(
-            candidates,
-            "user@host:~/project$ ".to_string(),
-            "git ".to_string(),
-            config,
-        );
+        let comp_display =
+            CompletionDisplay::new_with_config(candidates, "user@host:~/project$ ", "git ", config);
 
         // Verify the display is properly configured
         assert_eq!(comp_display.candidates.len(), 20);
@@ -2230,7 +2200,10 @@ mod fuzzy_integration_tests {
         let candidates = get_command_candidates("g");
 
         // Should contain built-in commands
-        let names: Vec<String> = candidates.iter().map(|c| c.get_display_name()).collect();
+        let names: Vec<String> = candidates
+            .iter()
+            .map(|c| c.get_display_name().to_string())
+            .collect();
 
         assert!(names.contains(&"cd".to_string()));
         assert!(names.contains(&"echo".to_string()));

@@ -45,7 +45,7 @@ impl FuzzyCompletion {
             .into_iter()
             .filter_map(|candidate| {
                 let text = candidate.get_display_name();
-                if let Some((score, indices)) = self.matcher.fuzzy_indices(&text, query) {
+                if let Some((score, indices)) = self.matcher.fuzzy_indices(text, query) {
                     Some(ScoredCandidate {
                         candidate,
                         score,
@@ -145,7 +145,7 @@ impl SmartCompletion {
             } else if text_lower.starts_with(&query_lower) {
                 // Prefix match (medium priority)
                 prefix_matches.push(candidate);
-            } else if let Some((score, _)) = self.fuzzy.matcher.fuzzy_indices(&text, query) {
+            } else if let Some((score, _)) = self.fuzzy.matcher.fuzzy_indices(text, query) {
                 // Fuzzy match (lowest priority)
                 fuzzy_matches.push(ScoredCandidate {
                     candidate,
@@ -194,7 +194,7 @@ mod tests {
         // Should match git commands
         let names: Vec<String> = results
             .iter()
-            .map(|sc| sc.candidate.get_display_name())
+            .map(|sc| sc.candidate.get_display_name().to_string())
             .collect();
         assert!(names.iter().any(|name| name.contains("git")));
     }

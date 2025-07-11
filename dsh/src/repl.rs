@@ -466,13 +466,13 @@ impl<'a> Repl<'a> {
                 if self.completion.completion_mode() {
                     if let Some(item) = self.completion.backward() {
                         self.input
-                            .reset_with_match_index(item.item, item.match_index);
+                            .reset_with_match_index(item.item.clone(), item.match_index.clone());
                     }
                 } else {
                     self.set_completions();
                     if let Some(item) = self.completion.backward() {
                         self.input
-                            .reset_with_match_index(item.item, item.match_index);
+                            .reset_with_match_index(item.item.clone(), item.match_index.clone());
                     }
                 }
             }
@@ -481,7 +481,7 @@ impl<'a> Repl<'a> {
                 if self.completion.completion_mode() {
                     if let Some(item) = self.completion.forward() {
                         self.input
-                            .reset_with_match_index(item.item, item.match_index);
+                            .reset_with_match_index(item.item.clone(), item.match_index.clone());
                     }
                 }
             }
@@ -608,7 +608,7 @@ impl<'a> Repl<'a> {
                                                 completion::Candidate::Basic(path)
                                             }
                                             _ => completion::Candidate::Basic(
-                                                candidate.get_display_name(),
+                                                candidate.get_display_name().to_string(),
                                             ),
                                         })
                                         .collect();
@@ -640,8 +640,8 @@ impl<'a> Repl<'a> {
                         &self.input,
                         self,
                         completion_query,
-                        prompt_text,
-                        input_text,
+                        &prompt_text,
+                        &input_text,
                     )
                 };
 

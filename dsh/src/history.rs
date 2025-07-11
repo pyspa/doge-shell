@@ -196,10 +196,10 @@ impl History {
         }
     }
 
-    pub fn search_first(&self, word: &str) -> Option<String> {
+    pub fn search_first(&self, word: &str) -> Option<&str> {
         for hist in self.histories.iter().rev() {
             if hist.entry.starts_with(word) {
-                return Some(hist.entry.clone());
+                return Some(&hist.entry);
             }
         }
         None
@@ -365,11 +365,7 @@ impl FrecencyHistory {
 
     pub fn search_fuzzy_first(&self, pattern: &str) -> Option<String> {
         let results = self.sort_by_match(pattern);
-        if results.is_empty() {
-            None
-        } else {
-            Some(results[0].item.clone())
-        }
+        results.into_iter().next().map(|item| item.item)
     }
 
     pub fn search_prefix(&self, pattern: &str) -> Option<String> {

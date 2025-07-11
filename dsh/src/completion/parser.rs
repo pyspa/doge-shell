@@ -319,8 +319,13 @@ impl CommandLineParser {
         // If current token is an option
         if current_token.starts_with("--") {
             return CompletionContext::LongOption;
-        } else if current_token.starts_with('-') && current_token.len() == 2 {
-            return CompletionContext::ShortOption;
+        } else if current_token.starts_with('-') {
+            // Support both short options (-x) and long options starting with single dash (-xxx)
+            if current_token.len() == 2 {
+                return CompletionContext::ShortOption;
+            } else {
+                return CompletionContext::LongOption;
+            }
         }
 
         // If previous token is an option that takes a value
@@ -436,6 +441,17 @@ mod tests {
         assert_eq!(result.command, "git");
         assert_eq!(result.subcommand_path, vec!["commit"]);
         assert_eq!(result.completion_context, CompletionContext::ShortOption);
+    }
+
+    #[test]
+    fn test_parse_single_dash_long_option() {
+        let parser = CommandLineParser::new();
+        let result = parser.parse("git commit -message", 19);
+
+        assert_eq!(result.command, "git");
+        assert_eq!(result.subcommand_path, vec!["commit"]);
+        assert_eq!(result.completion_context, CompletionContext::LongOption);
+        assert!(result.specified_options.contains(&"-message".to_string()));
     }
 
     #[test]

@@ -589,12 +589,13 @@ impl<'a> Repl<'a> {
                     &input_text,
                     cursor_pos,
                     &current_dir,
-                    10, // max candidates
+                    20, // max candidates
                 );
 
                 debug!(
-                    "IntegratedCompletionEngine returned {} candidates",
-                    candidates.len()
+                    "IntegratedCompletionEngine returned {} candidates. {:?}",
+                    candidates.len(),
+                    candidates,
                 );
 
                 let completion_result = if !candidates.is_empty() {

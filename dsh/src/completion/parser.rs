@@ -58,7 +58,7 @@ impl CommandLineParser {
         let tokens = self.tokenize(input);
         let cursor_token_index = self.find_cursor_token_index(&tokens, input, cursor_pos);
 
-        self.analyze_tokens(tokens, cursor_token_index)
+        self.analyze_tokens(tokens, cursor_token_index, input, cursor_pos)
     }
 
     /// Split input string into tokens
@@ -122,7 +122,7 @@ impl CommandLineParser {
     }
 
     /// Analyze tokens to determine completion context
-    fn analyze_tokens(&self, tokens: Vec<String>, cursor_token_index: usize) -> ParsedCommand {
+    fn analyze_tokens(&self, tokens: Vec<String>, cursor_token_index: usize, input: &str, _cursor_pos: usize) -> ParsedCommand {
         if tokens.is_empty() {
             return ParsedCommand {
                 command: String::new(),
@@ -139,6 +139,9 @@ impl CommandLineParser {
         let mut specified_options = Vec::new();
         let mut specified_arguments = Vec::new();
         let mut tokens_queue: VecDeque<String> = tokens.into_iter().skip(1).collect();
+
+        // Check if there's a space after the command
+        let has_space_after_command = self.has_space_after_command(input, &command);
 
         // Parse subcommands
         let mut subcommand_count = 0;
@@ -201,6 +204,7 @@ impl CommandLineParser {
                 &specified_options,
                 &specified_arguments,
                 &all_tokens,
+                has_space_after_command,
             );
 
             (current_token, context)
@@ -214,6 +218,18 @@ impl CommandLineParser {
             specified_options,
             specified_arguments,
         }
+    }
+
+    /// Check if there's a space after the command
+    fn has_space_after_command(&self, input: &str, command: &str) -> bool {
+        if let Some(command_end_pos) = input.find(command) {
+            let after_command_pos = command_end_pos + command.len();
+            if after_command_pos < input.len() {
+                let char_after_command = input.chars().nth(after_command_pos);
+                return char_after_command.map_or(false, |c| c.is_whitespace());
+            }
+        }
+        false
     }
 
     /// Determine if token looks like a subcommand
@@ -311,6 +327,7 @@ impl CommandLineParser {
         _specified_options: &[String],
         specified_arguments: &[String],
         all_tokens: &[String],
+        has_space_after_command: bool,
     ) -> CompletionContext {
         if cursor_token_index == 0 {
             return CompletionContext::Command;
@@ -339,9 +356,21 @@ impl CommandLineParser {
             }
         }
 
+        // Subcommand completion only if there's a space after the command
+        if cursor_token_index == 1 && !has_space_after_command {
+            // If we're at the first position after command but there's no space,
+            // treat it as command completion (not subcommand)
+            return CompletionContext::Command;
+        }
+
         // Subcommand or argument
         if subcommand_path.is_empty() || self.looks_like_subcommand(current_token) {
-            CompletionContext::SubCommand
+            // Only allow subcommand completion if there's a space after the command
+            if has_space_after_command {
+                CompletionContext::SubCommand
+            } else {
+                CompletionContext::Command
+            }
         } else {
             // If current token is an argument, calculate its index
             // Don't include current token (since it's the completion target)
@@ -397,19 +426,42 @@ mod tests {
     fn test_parse_command_only() {
         let parser = CommandLineParser::new();
         let result = parser.parse("git", 3);
-
         assert_eq!(result.command, "git");
         assert_eq!(result.completion_context, CompletionContext::Command);
     }
 
     #[test]
-    fn test_parse_subcommand() {
+    fn test_parse_command_with_space() {
+        let parser = CommandLineParser::new();
+        let result = parser.parse("git ", 4);
+        assert_eq!(result.command, "git");
+        assert_eq!(result.completion_context, CompletionContext::SubCommand);
+    }
+
+    #[test]
+    fn test_parse_command_without_space() {
+        let parser = CommandLineParser::new();
+        let result = parser.parse("git", 3);
+        assert_eq!(result.command, "git");
+        assert_eq!(result.completion_context, CompletionContext::Command);
+    }
+
+    #[test]
+    fn test_parse_subcommand_with_space() {
         let parser = CommandLineParser::new();
         let result = parser.parse("git add", 7);
-
         assert_eq!(result.command, "git");
         assert_eq!(result.subcommand_path, vec!["add"]);
         assert_eq!(result.completion_context, CompletionContext::SubCommand);
+    }
+
+    #[test]
+    fn test_has_space_after_command() {
+        let parser = CommandLineParser::new();
+        assert!(parser.has_space_after_command("git ", "git"));
+        assert!(parser.has_space_after_command("git add", "git"));
+        assert!(!parser.has_space_after_command("git", "git"));
+        assert!(!parser.has_space_after_command("gitadd", "git"));
     }
 
     #[test]
@@ -494,5 +546,46 @@ mod tests {
         assert_eq!(result.subcommand_path, vec!["add"]);
         assert_eq!(result.current_token, "--");
         assert_eq!(result.completion_context, CompletionContext::LongOption);
+    }
+
+    #[test]
+    fn test_space_detection_edge_cases() {
+        let parser = CommandLineParser::new();
+        
+        // Test with tab character
+        let result = parser.parse("git\t", 4);
+        assert_eq!(result.completion_context, CompletionContext::SubCommand);
+        
+        // Test with multiple spaces
+        let result = parser.parse("git   ", 6);
+        assert_eq!(result.completion_context, CompletionContext::SubCommand);
+        
+        // Test cursor at different positions
+        let result = parser.parse("git ", 3); // cursor at end of command
+        assert_eq!(result.completion_context, CompletionContext::Command);
+        
+        let result = parser.parse("git ", 4); // cursor at space
+        assert_eq!(result.completion_context, CompletionContext::SubCommand);
+    }
+
+    #[test]
+    fn test_subcommand_completion_requires_space() {
+        let parser = CommandLineParser::new();
+        
+        // Without space - should be command completion
+        let result = parser.parse("git", 3);
+        assert_eq!(result.completion_context, CompletionContext::Command);
+        
+        // With space - should be subcommand completion
+        let result = parser.parse("git ", 4);
+        assert_eq!(result.completion_context, CompletionContext::SubCommand);
+        
+        // Partial subcommand without space after command - should be command completion
+        let result = parser.parse("gita", 4);
+        assert_eq!(result.completion_context, CompletionContext::Command);
+        
+        // Partial subcommand with space after command - should be subcommand completion
+        let result = parser.parse("git a", 5);
+        assert_eq!(result.completion_context, CompletionContext::SubCommand);
     }
 }

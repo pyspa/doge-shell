@@ -4,7 +4,7 @@ use super::fuzzy::{FuzzyCompletion, SmartCompletion};
 use super::generator::CompletionGenerator;
 use super::history::{CompletionContext, HistoryCompletion};
 use super::json_loader::JsonCompletionLoader;
-use super::parser::CommandLineParser;
+use super::parser::{self, CommandLineParser};
 use crate::completion::Candidate;
 use anyhow::Result;
 use std::path::Path;
@@ -100,6 +100,11 @@ impl IntegratedCompletionEngine {
             debug!("Using JSON completion generator for input: '{}'", input);
             let parsed = self.parser.parse(input, cursor_pos);
             debug!("Parsed command: {:?}", parsed);
+
+            if parsed.completion_context == parser::CompletionContext::Command {
+                debug!("No completion context found - skipping JSON completion");
+                return all_candidates;
+            }
 
             match generator.generate_candidates(&parsed) {
                 Ok(command_candidates) => {

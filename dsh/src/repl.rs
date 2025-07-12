@@ -607,7 +607,8 @@ impl<'a> Repl<'a> {
                 } else {
                     // Fall back to existing completion if no candidates from integrated engine
                     debug!(
-                        "No candidates from IntegratedCompletionEngine, falling back to legacy completion"
+                        "No candidates from IntegratedCompletionEngine, falling back to legacy completion. {:?} {:?}",
+                        &self.input, &completion_query
                     );
                     completion::input_completion(
                         &self.input,

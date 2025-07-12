@@ -1,4 +1,4 @@
-use crate::completion::Candidate;
+use crate::completion::display::Candidate;
 use anyhow::Result;
 use chrono::Timelike;
 use dsh_frecency::{FrecencyStore, SortMethod};

@@ -1,4 +1,4 @@
-use crate::completion::Candidate;
+use crate::completion::display::Candidate;
 use fuzzy_matcher::{FuzzyMatcher, skim::SkimMatcherV2};
 use std::cmp::Ordering;
 

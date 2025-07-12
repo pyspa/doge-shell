@@ -4,8 +4,23 @@ use crate::input::Input;
 use crate::lisp::Value;
 use crate::repl::Repl;
 use anyhow::Result;
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, read};
+use crossterm::{cursor, execute};
+use display::CompletionConfig;
+use dsh_frecency::ItemStats;
+use regex::Regex;
+use skim::prelude::*;
+use skim::{Skim, SkimItemReceiver, SkimItemSender};
+use std::borrow::Cow;
+use std::fs::{File, create_dir_all, read_dir, remove_file};
+use std::io::{BufReader, BufWriter, Write, stdout};
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::{process::Command, sync::Arc};
+use tracing::debug;
+use tracing::warn;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-// Advanced completion modules
 pub mod command;
 pub mod display;
 pub mod fuzzy;
@@ -18,23 +33,7 @@ pub mod parser;
 pub use self::display::CompletionDisplay;
 pub use self::fuzzy::{ScoredCandidate, SmartCompletion};
 pub use self::integrated::IntegratedCompletionEngine;
-use dsh_frecency::ItemStats;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use skim::prelude::*;
-use skim::{Skim, SkimItemReceiver, SkimItemSender};
-use std::borrow::Cow;
-use std::fs::{File, create_dir_all, read_dir, remove_file};
-use std::io::{BufReader, BufWriter};
-use std::path::{Path, PathBuf};
-use std::rc::Rc;
-use std::{process::Command, sync::Arc};
-use tracing::debug;
-use tracing::warn;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-
-// Completion display configuration
-const MAX_COMPLETION_ITEMS: usize = 30;
+pub use crate::completion::display::Candidate;
 
 /// Calculate the display width of a Unicode string
 /// This accounts for wide characters (like CJK characters and emojis)
@@ -65,58 +64,6 @@ fn truncate_to_width(s: &str, max_width: usize) -> String {
     }
 
     result
-}
-
-#[derive(Debug, Clone)]
-pub struct CompletionConfig {
-    pub max_items: usize,
-    pub more_items_message_template: String,
-    pub show_item_count: bool,
-}
-
-impl Default for CompletionConfig {
-    fn default() -> Self {
-        Self {
-            max_items: MAX_COMPLETION_ITEMS,
-            more_items_message_template: "...and {} more items available".to_string(),
-            show_item_count: true,
-        }
-    }
-}
-
-impl CompletionConfig {
-    #[allow(dead_code)]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    #[allow(dead_code)]
-    pub fn with_max_items(mut self, max_items: usize) -> Self {
-        self.max_items = max_items;
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn with_message_template<S: Into<String>>(mut self, template: S) -> Self {
-        self.more_items_message_template = template.into();
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn with_item_count_display(mut self, show: bool) -> Self {
-        self.show_item_count = show;
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn format_more_items_message(&self, remaining_count: usize) -> String {
-        if self.more_items_message_template.contains("{}") {
-            self.more_items_message_template
-                .replace("{}", &remaining_count.to_string())
-        } else {
-            format!("{} ({})", self.more_items_message_template, remaining_count)
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -195,126 +142,6 @@ impl Completion {
         } else {
             None
         }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd, Eq, Ord)]
-pub enum Candidate {
-    Item(String, String), // output, description
-    Path(String),
-    Basic(String),
-    // Context-aware completion types
-    Command {
-        name: String,
-        description: String,
-    },
-    Option {
-        name: String,
-        description: String,
-    },
-    File {
-        path: String,
-        is_dir: bool,
-    },
-    GitBranch {
-        name: String,
-        is_current: bool,
-    },
-    NpmScript {
-        name: String,
-    },
-    History {
-        command: String,
-        frequency: u32,
-        last_used: i64,
-    },
-}
-
-impl Candidate {
-    /// Get the type character for display
-    #[allow(dead_code)]
-    pub fn get_type_char(&self) -> char {
-        match self {
-            Candidate::Item(_, desc) => {
-                if desc.contains("command") {
-                    '⚡' // Command - lightning bolt
-                } else if desc.contains("file") {
-                    '📄' // File - document
-                } else if desc.contains("directory") {
-                    '📁' // Directory - folder
-                } else {
-                    '⚙' // Option or other - gear
-                }
-            }
-            Candidate::Path(path) => {
-                if path.ends_with('/') {
-                    '📁' // Directory - folder
-                } else {
-                    '📄' // File - document
-                }
-            }
-            Candidate::Basic(_) => '🔹', // Basic - small blue diamond
-            Candidate::Command { .. } => '⚡', // Command - lightning bolt
-            Candidate::Option { .. } => '⚙', // Option - gear
-            Candidate::File { is_dir, .. } => {
-                if *is_dir {
-                    '📁' // Directory - folder
-                } else {
-                    '📄' // File - document
-                }
-            }
-            Candidate::GitBranch { .. } => '🌿', // Git branch - herb/branch
-            Candidate::NpmScript { .. } => '📜', // Script - scroll
-            Candidate::History { .. } => '🕒',   // History - clock
-        }
-    }
-
-    /// Get the display name (without description)
-    pub fn get_display_name(&self) -> &str {
-        match self {
-            Candidate::Item(name, _) => name,
-            Candidate::Path(path) => path,
-            Candidate::Basic(basic) => basic,
-            Candidate::Command { name, .. } => name,
-            Candidate::Option { name, .. } => name,
-            Candidate::File { path, .. } => path,
-            Candidate::GitBranch { name, .. } => name,
-            Candidate::NpmScript { name } => name,
-            Candidate::History { command, .. } => command,
-        }
-    }
-
-    /// Get formatted display string with type character
-    #[allow(dead_code)]
-    pub fn get_formatted_display(&self, width: usize) -> String {
-        let type_char = self.get_type_char();
-        let name = self.get_display_name();
-
-        // Calculate the width needed for the type character (emoji)
-        let type_char_width = type_char.width().unwrap_or(2);
-
-        // Calculate maximum width available for the name
-        // Format: "emoji name" with proper spacing
-        let max_name_width = width.saturating_sub(type_char_width + 1); // type_char + " "
-
-        // Truncate name if it's too long for the available width
-        let display_name = if unicode_display_width(name) > max_name_width {
-            truncate_to_width(name, max_name_width)
-        } else {
-            name.to_string()
-        };
-
-        // Calculate padding needed to align columns properly
-        let name_display_width = unicode_display_width(&display_name);
-        let total_content_width = type_char_width + 1 + name_display_width; // type_char + " " + name
-        let padding_needed = width.saturating_sub(total_content_width);
-
-        format!(
-            "{} {}{}",
-            type_char,
-            display_name,
-            " ".repeat(padding_needed)
-        )
     }
 }
 
@@ -434,7 +261,6 @@ impl SkimItem for Candidate {
             Candidate::Option { name, .. } => Cow::Borrowed(name),
             Candidate::File { path, .. } => Cow::Borrowed(path),
             Candidate::GitBranch { name, .. } => Cow::Borrowed(name),
-            Candidate::NpmScript { name } => Cow::Borrowed(name),
             Candidate::History { command, .. } => Cow::Borrowed(command),
         }
     }
@@ -471,7 +297,6 @@ impl SkimItem for Candidate {
                 let indicator = if *is_current { " (current)" } else { "" };
                 Cow::Owned(format!("{}{}", name, indicator))
             }
-            Candidate::NpmScript { name } => Cow::Owned(format!("{0:<30} npm script", name)),
             Candidate::History {
                 command, frequency, ..
             } => {
@@ -524,6 +349,13 @@ pub fn select_completion_items(
     prompt_text: &str,
     input_text: &str,
 ) -> Option<String> {
+    debug!(
+        "select_completion_items: items={}, query={:?}, prompt_text='{}', input_text='{}'",
+        items.len(),
+        query,
+        prompt_text,
+        input_text
+    );
     select_completion_items_with_config(
         items,
         query,
@@ -535,22 +367,74 @@ pub fn select_completion_items(
 
 pub fn select_completion_items_with_config(
     items: Vec<Candidate>,
-    _query: Option<&str>,
-    _prompt_text: &str,
-    _input_text: &str,
-    _config: CompletionConfig,
+    query: Option<&str>,
+    prompt_text: &str,
+    input_text: &str,
+    config: CompletionConfig,
 ) -> Option<String> {
+    debug!(
+        "select_completion_items_with_config: items={}, query={:?}, prompt_text='{}', input_text='{}'",
+        items.len(),
+        query,
+        prompt_text,
+        input_text
+    );
     if items.is_empty() {
         return None;
     }
 
-    let _display = CompletionDisplay::with_default_config();
+    let mut display =
+        CompletionDisplay::new_with_config(items.clone(), prompt_text, input_text, config);
 
-    // TODO: Implement interactive display with new CompletionDisplay API
-    // For now, return None to disable interactive completion
-    None
+    // Show initial display (cursor will be hidden in display method)
+    if display.display().is_err() {
+        // If display fails, make sure cursor is shown
+        let _ = execute!(stdout(), cursor::Show);
+        return None;
+    }
 
-    // TODO: Implement interactive completion loop with new API
+    loop {
+        if let Ok(Event::Key(KeyEvent {
+            code, modifiers, ..
+        })) = read()
+        {
+            match (code, modifiers) {
+                (KeyCode::Up, KeyModifiers::NONE) => {
+                    let _ = display.clear_display();
+                    display.move_up();
+                    let _ = display.display();
+                }
+                (KeyCode::Down, KeyModifiers::NONE) => {
+                    let _ = display.clear_display();
+                    display.move_down();
+                    let _ = display.display();
+                }
+                (KeyCode::Left, KeyModifiers::NONE) => {
+                    let _ = display.clear_display();
+                    display.move_left();
+                    let _ = display.display();
+                }
+                (KeyCode::Right, KeyModifiers::NONE) => {
+                    let _ = display.clear_display();
+                    display.move_right();
+                    let _ = display.display();
+                }
+                (KeyCode::Enter, KeyModifiers::NONE) => {
+                    let _ = display.clear_display();
+                    if let Some(selected_candidate) = display.get_selected() {
+                        return Some(selected_candidate.output().to_string());
+                    }
+                    return None;
+                }
+                (KeyCode::Esc, KeyModifiers::NONE)
+                | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                    let _ = display.clear_display();
+                    return None;
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 // Backward compatibility function
@@ -1055,7 +939,7 @@ fn completion_from_current_with_prompt(
 ) -> Option<String> {
     let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
     let environment = Arc::clone(&lisp_engine.borrow().shell_env);
-
+    debug!("completion_from_current_with_prompt: query={:?}", query);
     // 2 . try completion
     if let Some(query_str) = query {
         // check path
@@ -1170,6 +1054,7 @@ fn get_executables(dir: &str, name: &str) -> Vec<Candidate> {
 }
 
 fn get_file_completions(dir: &str, prefix: &str) -> Vec<Candidate> {
+    debug!("get_file_completions: dir={}, prefix={}", dir, prefix);
     get_file_completions_with_filter(dir, prefix, None)
 }
 
@@ -1178,6 +1063,10 @@ fn get_file_completions_with_filter(
     prefix: &str,
     filter_prefix: Option<&str>,
 ) -> Vec<Candidate> {
+    debug!(
+        "get_file_completions_with_filter: dir={}, prefix={}, filter_prefix={:?}",
+        dir, prefix, filter_prefix
+    );
     let mut list = Vec::new();
     let prefix = if !prefix.is_empty() && !prefix.ends_with('/') {
         format!("{}/", prefix)
@@ -1450,13 +1339,6 @@ impl IntegratedCompletionEngine {
                     description: None,
                     candidate_type: CandidateType::Generic,
                     priority: 60,
-                    source: CandidateSource::Context,
-                },
-                Candidate::NpmScript { name } => EnhancedCandidate {
-                    text: name,
-                    description: None,
-                    candidate_type: CandidateType::Generic,
-                    priority: 50,
                     source: CandidateSource::Context,
                 },
                 Candidate::History { command, .. } => EnhancedCandidate {

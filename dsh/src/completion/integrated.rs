@@ -5,7 +5,7 @@ use super::generator::CompletionGenerator;
 use super::history::{CompletionContext, HistoryCompletion};
 use super::json_loader::JsonCompletionLoader;
 use super::parser::{self, CommandLineParser};
-use crate::completion::Candidate;
+use crate::completion::display::Candidate;
 use anyhow::Result;
 use std::path::Path;
 use tracing::{debug, warn};
@@ -194,12 +194,11 @@ impl IntegratedCompletionEngine {
             Candidate::Command { name, description } => {
                 (name, Some(description), CandidateType::SubCommand)
             }
+            Candidate::History { command, .. } => (command, None, CandidateType::Generic),
+            Candidate::GitBranch { name, .. } => (name, None, CandidateType::Generic),
             Candidate::Option { name, description } => {
                 (name, Some(description), CandidateType::LongOption)
             }
-            Candidate::GitBranch { name, .. } => (name, None, CandidateType::Generic),
-            Candidate::NpmScript { name } => (name, None, CandidateType::Generic),
-            Candidate::History { command, .. } => (command, None, CandidateType::Generic),
         };
 
         EnhancedCandidate {

@@ -122,7 +122,13 @@ impl CommandLineParser {
     }
 
     /// Analyze tokens to determine completion context
-    fn analyze_tokens(&self, tokens: Vec<String>, cursor_token_index: usize, input: &str, _cursor_pos: usize) -> ParsedCommand {
+    fn analyze_tokens(
+        &self,
+        tokens: Vec<String>,
+        cursor_token_index: usize,
+        input: &str,
+        _cursor_pos: usize,
+    ) -> ParsedCommand {
         if tokens.is_empty() {
             return ParsedCommand {
                 command: String::new(),
@@ -226,7 +232,7 @@ impl CommandLineParser {
             let after_command_pos = command_end_pos + command.len();
             if after_command_pos < input.len() {
                 let char_after_command = input.chars().nth(after_command_pos);
-                return char_after_command.map_or(false, |c| c.is_whitespace());
+                return char_after_command.is_some_and(|c| c.is_whitespace());
             }
         }
         false
@@ -551,19 +557,19 @@ mod tests {
     #[test]
     fn test_space_detection_edge_cases() {
         let parser = CommandLineParser::new();
-        
+
         // Test with tab character
         let result = parser.parse("git\t", 4);
         assert_eq!(result.completion_context, CompletionContext::SubCommand);
-        
+
         // Test with multiple spaces
         let result = parser.parse("git   ", 6);
         assert_eq!(result.completion_context, CompletionContext::SubCommand);
-        
+
         // Test cursor at different positions
         let result = parser.parse("git ", 3); // cursor at end of command
         assert_eq!(result.completion_context, CompletionContext::Command);
-        
+
         let result = parser.parse("git ", 4); // cursor at space
         assert_eq!(result.completion_context, CompletionContext::SubCommand);
     }
@@ -571,19 +577,19 @@ mod tests {
     #[test]
     fn test_subcommand_completion_requires_space() {
         let parser = CommandLineParser::new();
-        
+
         // Without space - should be command completion
         let result = parser.parse("git", 3);
         assert_eq!(result.completion_context, CompletionContext::Command);
-        
+
         // With space - should be subcommand completion
         let result = parser.parse("git ", 4);
         assert_eq!(result.completion_context, CompletionContext::SubCommand);
-        
+
         // Partial subcommand without space after command - should be command completion
         let result = parser.parse("gita", 4);
         assert_eq!(result.completion_context, CompletionContext::Command);
-        
+
         // Partial subcommand with space after command - should be subcommand completion
         let result = parser.parse("git a", 5);
         assert_eq!(result.completion_context, CompletionContext::SubCommand);

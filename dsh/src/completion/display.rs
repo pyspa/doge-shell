@@ -1,9 +1,42 @@
 #![allow(dead_code)]
-use super::integrated::{CandidateType, EnhancedCandidate};
+use anyhow::Result;
 use crossterm::style::{Color, Print, ResetColor, SetForegroundColor};
-use crossterm::{queue, terminal};
-use std::io::{Result as IoResult, Write, stdout};
+use crossterm::terminal::{Clear, ClearType};
+use crossterm::{cursor, execute, queue};
+use serde::{Deserialize, Serialize};
+use std::io::{Write, stdout};
+use tracing::debug;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+// Completion display configuration
+const MAX_COMPLETION_ITEMS: usize = 30;
+
+fn unicode_display_width(s: &str) -> usize {
+    s.width()
+}
+
+/// Truncate a Unicode string to fit within the specified display width
+fn truncate_to_width(s: &str, max_width: usize) -> String {
+    if unicode_display_width(s) <= max_width {
+        return s.to_string();
+    }
+
+    let mut result = String::new();
+    let mut current_width = 0;
+
+    for ch in s.chars() {
+        let char_width = ch.width().unwrap_or(0);
+        if current_width + char_width > max_width.saturating_sub(1) {
+            // Reserve space for ellipsis
+            result.push('…');
+            break;
+        }
+        result.push(ch);
+        current_width += char_width;
+    }
+
+    result
+}
 
 /// Completion candidate display settings
 #[derive(Debug, Clone)]
@@ -35,334 +68,585 @@ impl Default for DisplayConfig {
     }
 }
 
-/// Completion candidate display
+#[derive(Debug, Clone)]
+pub struct CompletionConfig {
+    pub max_items: usize,
+    pub more_items_message_template: String,
+    pub show_item_count: bool,
+}
+
+impl Default for CompletionConfig {
+    fn default() -> Self {
+        Self {
+            max_items: MAX_COMPLETION_ITEMS,
+            more_items_message_template: "...and {} more items available".to_string(),
+            show_item_count: true,
+        }
+    }
+}
+
+impl CompletionConfig {
+    #[allow(dead_code)]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[allow(dead_code)]
+    pub fn with_max_items(mut self, max_items: usize) -> Self {
+        self.max_items = max_items;
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn with_message_template<S: Into<String>>(mut self, template: S) -> Self {
+        self.more_items_message_template = template.into();
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn with_item_count_display(mut self, show: bool) -> Self {
+        self.show_item_count = show;
+        self
+    }
+
+    pub fn format_more_items_message(&self, remaining_count: usize) -> String {
+        if self.more_items_message_template.contains("{}") {
+            self.more_items_message_template
+                .replace("{}", &remaining_count.to_string())
+        } else {
+            format!("{} ({})", self.more_items_message_template, remaining_count)
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct CompletionDisplay {
-    config: DisplayConfig,
+    candidates: Vec<Candidate>,
+    selected_index: usize,
+    #[allow(dead_code)]
+    terminal_width: usize,
+    column_width: usize,
+    items_per_row: usize,
+    total_rows: usize,
+    display_start_row: Option<u16>,
+    display_start_col: Option<u16>,
+    prompt_text: String,
+    input_text: String,
+    cursor_hidden: bool,
+    #[allow(dead_code)]
+    config: CompletionConfig,
+    has_more_items: bool,
+    total_items_count: usize,
+}
+
+impl Drop for CompletionDisplay {
+    fn drop(&mut self) {
+        // Ensure cursor is shown when CompletionDisplay is dropped
+        if self.cursor_hidden {
+            let _ = execute!(stdout(), cursor::Show);
+        }
+    }
 }
 
 impl CompletionDisplay {
-    /// Create a new display
-    pub fn new(config: DisplayConfig) -> Self {
-        Self { config }
+    #[allow(dead_code)]
+    pub fn new(candidates: Vec<Candidate>, prompt_text: String, input_text: String) -> Self {
+        Self::new_with_config(
+            candidates,
+            &prompt_text,
+            &input_text,
+            CompletionConfig::default(),
+        )
     }
 
-    /// Create display with default settings
-    pub fn with_default_config() -> Self {
-        Self::new(DisplayConfig::default())
-    }
+    pub fn new_with_config(
+        mut candidates: Vec<Candidate>,
+        prompt_text: &str,
+        input_text: &str,
+        config: CompletionConfig,
+    ) -> Self {
+        let terminal_width = term_size::dimensions().map(|(w, _)| w).unwrap_or(80);
+        let total_items_count = candidates.len();
+        let has_more_items = total_items_count > config.max_items;
 
-    /// Display completion candidates
-    pub fn display_candidates(&self, candidates: &[EnhancedCandidate]) -> IoResult<()> {
-        if candidates.is_empty() {
-            return Ok(());
-        }
+        // Limit candidates to max_items
+        if has_more_items {
+            candidates.truncate(config.max_items);
 
-        let mut stdout = stdout();
-
-        // Get terminal size
-        let (terminal_width, _) = terminal::size()?;
-        let available_width = terminal_width as usize;
-
-        // Group candidates by type
-        let grouped = self.group_candidates_by_type(candidates);
-
-        // Display each group
-        for (candidate_type, group_candidates) in grouped {
-            if group_candidates.is_empty() {
-                continue;
-            }
-
-            // Display group header
-            self.display_group_header(&mut stdout, &candidate_type)?;
-
-            // Display candidates
-            self.display_candidate_group(&mut stdout, &group_candidates, available_width)?;
-
-            // Empty line between groups
-            queue!(stdout, Print("\n"))?;
-        }
-
-        stdout.flush()?;
-        Ok(())
-    }
-
-    /// Group candidates by type
-    fn group_candidates_by_type<'a>(
-        &self,
-        candidates: &'a [EnhancedCandidate],
-    ) -> Vec<(CandidateType, Vec<&'a EnhancedCandidate>)> {
-        let mut groups: std::collections::BTreeMap<u8, (CandidateType, Vec<&EnhancedCandidate>)> =
-            std::collections::BTreeMap::new();
-
-        for candidate in candidates {
-            let sort_order = candidate.candidate_type.sort_order();
-            groups
-                .entry(sort_order)
-                .or_insert_with(|| (candidate.candidate_type.clone(), Vec::new()))
-                .1
-                .push(candidate);
-        }
-
-        groups.into_values().collect()
-    }
-
-    /// Display group header
-    fn display_group_header(
-        &self,
-        stdout: &mut std::io::Stdout,
-        candidate_type: &CandidateType,
-    ) -> IoResult<()> {
-        if !self.config.use_colors {
-            queue!(
-                stdout,
-                Print(format!(
-                    "{} {}:\n",
-                    if self.config.show_icons {
-                        candidate_type.icon()
-                    } else {
-                        ""
-                    },
-                    self.get_type_name(candidate_type)
-                ))
-            )?;
-            return Ok(());
-        }
-
-        queue!(
-            stdout,
-            SetForegroundColor(candidate_type.color()),
-            Print(format!(
-                "{} {}:\n",
-                if self.config.show_icons {
-                    candidate_type.icon()
-                } else {
-                    ""
-                },
-                self.get_type_name(candidate_type)
-            )),
-            ResetColor
-        )?;
-
-        Ok(())
-    }
-
-    /// Display candidate group
-    fn display_candidate_group(
-        &self,
-        stdout: &mut std::io::Stdout,
-        candidates: &[&EnhancedCandidate],
-        available_width: usize,
-    ) -> IoResult<()> {
-        let items_per_row = self.calculate_items_per_row(candidates, available_width);
-        let max_items = self.config.max_rows * items_per_row;
-        let display_candidates = &candidates[..candidates.len().min(max_items)];
-
-        for chunk in display_candidates.chunks(items_per_row) {
-            self.display_candidate_row(stdout, chunk, available_width)?;
-        }
-
-        // Display when candidates are truncated
-        if candidates.len() > max_items {
-            queue!(
-                stdout,
-                SetForegroundColor(Color::DarkGrey),
-                Print(format!("  ... and {} more\n", candidates.len() - max_items)),
-                ResetColor
-            )?;
-        }
-
-        Ok(())
-    }
-
-    /// Display one row of candidates
-    fn display_candidate_row(
-        &self,
-        stdout: &mut std::io::Stdout,
-        candidates: &[&EnhancedCandidate],
-        available_width: usize,
-    ) -> IoResult<()> {
-        let column_width = available_width / candidates.len().max(1);
-
-        for (i, candidate) in candidates.iter().enumerate() {
-            if i > 0 {
-                queue!(stdout, Print("  "))?; // Space between columns
-            }
-
-            self.display_single_candidate(stdout, candidate, column_width)?;
-        }
-
-        queue!(stdout, Print("\n"))?;
-        Ok(())
-    }
-
-    /// Display single candidate
-    fn display_single_candidate(
-        &self,
-        stdout: &mut std::io::Stdout,
-        candidate: &EnhancedCandidate,
-        max_width: usize,
-    ) -> IoResult<()> {
-        let text = self.truncate_text(&candidate.text, max_width);
-
-        if !self.config.use_colors {
-            queue!(stdout, Print(format!("  {}", text)))?;
-            return Ok(());
-        }
-
-        // Display with color
-        queue!(
-            stdout,
-            SetForegroundColor(candidate.candidate_type.color()),
-            Print(format!("  {}", text)),
-            ResetColor
-        )?;
-
-        // Display description in dim color if available
-        if self.config.show_descriptions {
-            if let Some(ref description) = candidate.description {
-                let desc_text =
-                    self.truncate_text(description, max_width.saturating_sub(text.width() + 4));
-                if !desc_text.is_empty() {
-                    queue!(
-                        stdout,
-                        SetForegroundColor(Color::DarkGrey),
-                        Print(format!(" ({})", desc_text)),
-                        ResetColor
-                    )?;
-                }
+            // Add a message candidate to show there are more items
+            if config.show_item_count {
+                let remaining_count = total_items_count - config.max_items;
+                let message = config.format_more_items_message(remaining_count);
+                candidates.push(Candidate::Basic(format!("📋 {}", message)));
             }
         }
 
-        Ok(())
-    }
-
-    /// Calculate number of candidates per row
-    fn calculate_items_per_row(
-        &self,
-        candidates: &[&EnhancedCandidate],
-        available_width: usize,
-    ) -> usize {
-        if candidates.is_empty() {
-            return 1;
-        }
-
-        // Calculate width of longest candidate text
-        let max_text_width = candidates
+        // Calculate the maximum display width needed
+        let max_display_width = candidates
             .iter()
-            .map(|c| c.text.width())
+            .map(|c| {
+                let name_width = unicode_display_width(c.get_display_name());
+                let type_char_width = c.get_type_char().width().unwrap_or(2); // Most emojis are 2 chars wide
+                name_width + type_char_width + 2 // type_char + " " + name + " "
+            })
             .max()
             .unwrap_or(10);
 
-        // Also consider description text
-        let max_desc_width = if self.config.show_descriptions {
-            candidates
-                .iter()
-                .filter_map(|c| c.description.as_ref())
-                .map(|d| d.width())
-                .max()
-                .unwrap_or(0)
-                .min(20) // Description text is max 20 characters
+        // Limit column width to prevent extremely wide columns and ensure no wrapping
+        let column_width = std::cmp::min(max_display_width, terminal_width / 3);
+
+        let items_per_row = if column_width > 0 {
+            std::cmp::max(1, terminal_width / column_width)
         } else {
-            0
+            1
         };
 
-        let estimated_item_width = max_text_width + max_desc_width + 6; // Margin and icon space
-        let items_per_row = (available_width / estimated_item_width.max(1)).max(1);
+        let total_rows = candidates.len().div_ceil(items_per_row);
 
-        items_per_row.min(self.config.max_columns)
-    }
-
-    /// Truncate text to specified width
-    fn truncate_text(&self, text: &str, max_width: usize) -> String {
-        if text.width() <= max_width {
-            text.to_string()
-        } else {
-            let mut result = String::new();
-            let mut current_width = 0;
-
-            for ch in text.chars() {
-                let ch_width = ch.width().unwrap_or(0);
-                if current_width + ch_width + 3 > max_width {
-                    // Consider space for "..."
-                    result.push_str("...");
-                    break;
-                }
-                result.push(ch);
-                current_width += ch_width;
-            }
-
-            result
+        CompletionDisplay {
+            candidates,
+            selected_index: 0,
+            terminal_width,
+            column_width,
+            items_per_row,
+            total_rows,
+            display_start_row: None,
+            display_start_col: None,
+            prompt_text: prompt_text.to_string(),
+            input_text: input_text.to_string(),
+            cursor_hidden: false,
+            config,
+            has_more_items,
+            total_items_count,
         }
     }
 
-    /// Get candidate type name
-    fn get_type_name(&self, candidate_type: &CandidateType) -> &'static str {
-        match candidate_type {
-            CandidateType::SubCommand => "Subcommands",
-            CandidateType::LongOption => "Options",
-            CandidateType::ShortOption => "Short Options",
-            CandidateType::Argument => "Arguments",
-            CandidateType::File => "Files",
-            CandidateType::Directory => "Directories",
-            CandidateType::Generic => "Suggestions",
-        }
-    }
-
-    /// Display interactive candidate selection
-    pub fn display_interactive_selection(
-        &self,
-        candidates: &[EnhancedCandidate],
-        selected_index: usize,
-    ) -> IoResult<()> {
+    /// Ensure there's enough space below the cursor for completion display
+    fn ensure_display_space(&mut self) -> Result<()> {
         let mut stdout = stdout();
 
-        // Clear screen
-        queue!(stdout, terminal::Clear(terminal::ClearType::FromCursorDown))?;
+        // Get current terminal size and cursor position
+        let terminal_size = crossterm::terminal::size()?;
+        let terminal_height = terminal_size.1;
 
-        for (i, candidate) in candidates.iter().enumerate() {
-            let is_selected = i == selected_index;
+        let current_row = if let Some(row) = self.display_start_row {
+            row
+        } else if let Ok((_, row)) = cursor::position() {
+            row
+        } else {
+            return Ok(()); // Can't determine position, skip space creation
+        };
 
-            if is_selected {
-                // Highlight selected candidate
-                queue!(
-                    stdout,
-                    SetForegroundColor(Color::Black),
-                    crossterm::style::SetBackgroundColor(Color::White),
-                    Print(format!("▶ {}", candidate.text)),
-                    ResetColor
-                )?;
+        let available_rows = terminal_height.saturating_sub(current_row + 1);
+        let needed_rows = self.total_rows as u16;
+
+        debug!(
+            "Space check - Terminal height: {}, current row: {}, available: {}, needed: {}",
+            terminal_height, current_row, available_rows, needed_rows
+        );
+
+        // If we don't have enough space, create it
+        if needed_rows > available_rows {
+            let rows_to_create = needed_rows - available_rows;
+            debug!(
+                "Creating {} rows of space for completion display",
+                rows_to_create
+            );
+
+            // Save current cursor position
+            let (original_col, original_row) = cursor::position().unwrap_or((0, current_row));
+
+            // Create space by moving to the bottom and adding newlines
+            // This will cause the terminal to scroll up naturally
+            execute!(stdout, cursor::MoveTo(0, terminal_height - 1))?;
+            for _ in 0..rows_to_create {
+                execute!(stdout, Print("\n"))?;
+            }
+
+            // Update our recorded position since content has shifted up
+            let new_row = original_row.saturating_sub(rows_to_create);
+
+            self.display_start_row = Some(new_row);
+            debug!("Updated display start position to row: {}", new_row);
+
+            // Move cursor back to the updated position
+            execute!(stdout, cursor::MoveTo(original_col, new_row))?;
+        }
+
+        Ok(())
+    }
+
+    pub fn move_up(&mut self) {
+        if self.selected_index >= self.items_per_row {
+            self.selected_index -= self.items_per_row;
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        if self.selected_index + self.items_per_row < self.candidates.len() {
+            self.selected_index += self.items_per_row;
+        }
+    }
+
+    pub fn move_left(&mut self) {
+        if self.selected_index > 0 {
+            self.selected_index -= 1;
+        }
+    }
+
+    pub fn move_right(&mut self) {
+        if self.selected_index + 1 < self.candidates.len() {
+            self.selected_index += 1;
+        }
+    }
+
+    pub fn get_selected(&self) -> Option<&Candidate> {
+        if let Some(candidate) = self.candidates.get(self.selected_index) {
+            // Don't return message items as selectable
+            if self.has_more_items
+                && self.selected_index == self.candidates.len() - 1
+                && candidate.get_display_name().starts_with("📋")
+            {
+                return None;
+            }
+            Some(candidate)
+        } else {
+            None
+        }
+    }
+
+    pub fn display(&mut self) -> Result<()> {
+        let mut stdout = stdout();
+
+        // Hide cursor during completion display (only once)
+        if !self.cursor_hidden {
+            execute!(stdout, cursor::Hide)?;
+            self.cursor_hidden = true;
+        }
+
+        // Record current cursor position before displaying
+        if self.display_start_row.is_none() {
+            if let Ok((col, row)) = cursor::position() {
+                debug!("Recording display start position: col={}, row={}", col, row);
+                self.display_start_row = Some(row);
+                self.display_start_col = Some(col);
             } else {
-                // Normal candidate
-                queue!(
-                    stdout,
-                    SetForegroundColor(candidate.candidate_type.color()),
-                    Print(format!("  {}", candidate.text)),
-                    ResetColor
-                )?;
+                debug!("Failed to get cursor position");
             }
+        }
 
-            // Display description
-            if let Some(ref description) = candidate.description {
-                queue!(
-                    stdout,
-                    SetForegroundColor(Color::DarkGrey),
-                    Print(format!(" - {}", description)),
-                    ResetColor
-                )?;
+        // Ensure we have enough space for the completion display
+        self.ensure_display_space()?;
+
+        // Clear the current line and redraw prompt + input
+        execute!(
+            stdout,
+            cursor::MoveToColumn(0),
+            Clear(ClearType::CurrentLine)
+        )?;
+        queue!(stdout, Print(&self.prompt_text))?;
+        queue!(stdout, Print(&self.input_text))?;
+
+        // Calculate the total display width of prompt + input for cursor positioning
+        // Move cursor to start of completion area
+        execute!(stdout, cursor::MoveToNextLine(1))?;
+
+        // Get terminal width to prevent wrapping
+        let (terminal_width, _) = crossterm::terminal::size()?;
+        let terminal_width = terminal_width as usize;
+
+        for row in 0..self.total_rows {
+            let mut current_line_width = 0;
+
+            for col in 0..self.items_per_row {
+                let index = row * self.items_per_row + col;
+                if index >= self.candidates.len() {
+                    break;
+                }
+
+                let candidate = &self.candidates[index];
+                let is_selected = index == self.selected_index;
+                let is_message_item = self.has_more_items
+                    && index == self.candidates.len() - 1
+                    && candidate.get_display_name().starts_with("📋");
+
+                // Calculate the width this item will take
+                let formatted = if is_message_item {
+                    candidate.get_display_name().to_string()
+                } else {
+                    candidate.get_formatted_display(self.column_width)
+                };
+
+                let item_width = 1 + unicode_display_width(&formatted); // ">" or " " + formatted
+                let spacing_width =
+                    if col < self.items_per_row - 1 && index + 1 < self.candidates.len() {
+                        1
+                    } else {
+                        0
+                    };
+                let total_item_width = item_width + spacing_width;
+
+                // Check if adding this item would cause wrapping
+                if current_line_width + total_item_width > terminal_width {
+                    break; // Skip this item to prevent wrapping
+                }
+
+                // Display with type character and proper formatting
+                if is_selected {
+                    queue!(stdout, SetForegroundColor(Color::Yellow))?;
+                    queue!(stdout, Print(">"))?;
+                } else {
+                    queue!(stdout, Print(" "))?;
+                }
+
+                // Add type-specific coloring
+                if is_message_item {
+                    queue!(stdout, SetForegroundColor(Color::DarkGrey))?;
+                } else {
+                    match candidate.get_type_char() {
+                        '⚡' => queue!(stdout, SetForegroundColor(Color::Green))?, // Command - lightning bolt
+                        '📁' => queue!(stdout, SetForegroundColor(Color::Blue))?, // Directory - folder
+                        '📄' => queue!(stdout, SetForegroundColor(Color::White))?, // File - document
+                        '⚙' => queue!(stdout, SetForegroundColor(Color::Yellow))?, // Option - gear
+                        '🔹' => queue!(stdout, SetForegroundColor(Color::White))?, // Basic - small blue diamond
+                        '🌿' => queue!(stdout, SetForegroundColor(Color::Green))?, // Git branch - herb/branch
+                        '📜' => queue!(stdout, SetForegroundColor(Color::Cyan))?, // Script - scroll
+                        '🕒' => queue!(stdout, SetForegroundColor(Color::Magenta))?, // History - clock
+                        _ => queue!(stdout, SetForegroundColor(Color::White))?,
+                    }
+                }
+
+                queue!(stdout, Print(formatted))?;
+                queue!(stdout, ResetColor)?;
+
+                current_line_width += item_width;
+
+                // Add spacing between columns
+                if col < self.items_per_row - 1 && index + 1 < self.candidates.len() {
+                    queue!(stdout, Print(" "))?;
+                    current_line_width += spacing_width;
+                }
             }
+            if row < self.total_rows - 1 {
+                queue!(stdout, cursor::MoveToNextLine(1))?;
+            }
+        }
 
-            queue!(stdout, Print("\n"))?;
+        // Move cursor back to the end of input line (but keep it hidden)
+        if let (Some(start_row), Some(start_col)) = (self.display_start_row, self.display_start_col)
+        {
+            let prompt_width = unicode_display_width(&self.prompt_text);
+            let input_width = unicode_display_width(&self.input_text);
+            let input_end_col = start_col + prompt_width as u16 + input_width as u16;
+            execute!(stdout, cursor::MoveTo(input_end_col, start_row))?;
         }
 
         stdout.flush()?;
+        debug!(
+            "Displayed {} candidates in {} rows (total items: {}, has_more: {})",
+            self.candidates.len(),
+            self.total_rows,
+            self.total_items_count,
+            self.has_more_items
+        );
+        Ok(())
+    }
+
+    pub fn clear_display(&mut self) -> Result<()> {
+        let mut stdout = stdout();
+
+        debug!("Clearing completion display with {} rows", self.total_rows);
+
+        // If we have recorded position, move back to it first
+        if let (Some(start_row), Some(start_col)) = (self.display_start_row, self.display_start_col)
+        {
+            debug!(
+                "Using recorded position: col={}, row={}",
+                start_col, start_row
+            );
+
+            // Move to the start position
+            execute!(stdout, cursor::MoveTo(start_col, start_row))?;
+
+            // Clear from the start position down to the end of completion area
+            // Clear the current line first
+            execute!(stdout, Clear(ClearType::CurrentLine))?;
+
+            // Then clear each subsequent line
+            for i in 0..self.total_rows {
+                execute!(
+                    stdout,
+                    cursor::MoveToNextLine(1),
+                    Clear(ClearType::CurrentLine)
+                )?;
+                debug!("Cleared completion line {}", i + 1);
+            }
+
+            // Move back to the original position and redraw prompt + input
+            execute!(stdout, cursor::MoveTo(start_col, start_row))?;
+            queue!(stdout, Print(&self.prompt_text))?;
+            queue!(stdout, Print(&self.input_text))?;
+
+            // Position cursor at the end of input
+            let prompt_width = unicode_display_width(&self.prompt_text);
+            let input_width = unicode_display_width(&self.input_text);
+            let input_end_col = start_col + prompt_width as u16 + input_width as u16;
+            execute!(stdout, cursor::MoveTo(input_end_col, start_row))?;
+        } else {
+            debug!("Using fallback clear method");
+
+            // Fallback: clear using the old method with additional safety
+            // First, try to clear the current line
+            execute!(stdout, Clear(ClearType::CurrentLine))?;
+
+            // Then move up and clear each line
+            for i in 0..self.total_rows {
+                execute!(
+                    stdout,
+                    cursor::MoveToPreviousLine(1),
+                    Clear(ClearType::CurrentLine)
+                )?;
+                debug!("Cleared line {} (moving up)", i + 1);
+            }
+
+            // Redraw prompt + input
+            queue!(stdout, Print(&self.prompt_text))?;
+            queue!(stdout, Print(&self.input_text))?;
+        }
+
+        // Show cursor again after clearing completion display
+        if self.cursor_hidden {
+            execute!(stdout, cursor::Show)?;
+            self.cursor_hidden = false;
+        }
+
+        // Reset the recorded position
+        self.display_start_row = None;
+        self.display_start_col = None;
+
+        stdout.flush()?;
+        debug!("Completion display cleared successfully");
         Ok(())
     }
 }
 
 /// Simple display function (for compatibility with existing systems)
-pub fn display_candidates_simple(candidates: &[EnhancedCandidate]) -> IoResult<()> {
-    let display = CompletionDisplay::with_default_config();
-    display.display_candidates(candidates)
+// pub fn display_candidates_simple(candidates: &[EnhancedCandidate]) -> IoResult<()> {
+//     let display = CompletionDisplay::with_default_config();
+//     display.display_candidates(candidates)
+// }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd, Eq, Ord)]
+pub enum Candidate {
+    Item(String, String), // output, description
+    Path(String),
+    Basic(String),
+    // Context-aware completion types
+    Command {
+        name: String,
+        description: String,
+    },
+    Option {
+        name: String,
+        description: String,
+    },
+    GitBranch {
+        name: String,
+        is_current: bool,
+    },
+    File {
+        path: String,
+        is_dir: bool,
+    },
+    History {
+        command: String,
+        frequency: u32,
+        last_used: i64,
+    },
+}
+
+impl Candidate {
+    /// Get the type character for display
+    pub fn get_type_char(&self) -> char {
+        match self {
+            Candidate::Item(_, desc) => {
+                if desc.contains("command") {
+                    '⚡' // Command - lightning bolt
+                } else if desc.contains("file") {
+                    '📄' // File - document
+                } else if desc.contains("directory") {
+                    '📁' // Directory - folder
+                } else {
+                    '⚙' // Option or other - gear
+                }
+            }
+            Candidate::Path(path) => {
+                if path.ends_with('/') {
+                    '📁' // Directory - folder
+                } else {
+                    '📄' // File - document
+                }
+            }
+            Candidate::Basic(_) => '🔹', // Basic - small blue diamond
+            Candidate::Command { .. } => '⚡', // Command - lightning bolt
+            Candidate::Option { .. } => '⚙', // Option - gear
+            Candidate::File { is_dir, .. } => {
+                if *is_dir {
+                    '📁' // Directory - folder
+                } else {
+                    '📄' // File - document
+                }
+            }
+            Candidate::GitBranch { .. } => '🌿', // Git branch - herb/branch
+            Candidate::History { .. } => '🕒',   // History - clock
+        }
+    }
+
+    /// Get the display name (without description)
+    pub fn get_display_name(&self) -> &str {
+        match self {
+            Candidate::Item(name, _) => name,
+            Candidate::Path(path) => path,
+            Candidate::Basic(basic) => basic,
+            Candidate::Command { name, .. } => name,
+            Candidate::Option { name, .. } => name,
+            Candidate::File { path, .. } => path,
+            Candidate::GitBranch { name, .. } => name,
+            Candidate::History { command, .. } => command,
+        }
+    }
+
+    /// Get formatted display string with type character
+    pub fn get_formatted_display(&self, width: usize) -> String {
+        let type_char = self.get_type_char();
+        let name = self.get_display_name();
+
+        // Calculate the width needed for the type character (emoji)
+        let type_char_width = type_char.width().unwrap_or(2);
+
+        // Calculate maximum width available for the name
+        // Format: "emoji name" with proper spacing
+        let max_name_width = width.saturating_sub(type_char_width + 1); // type_char + " "
+
+        // Truncate name if it's too long for the available width
+        let display_name = if unicode_display_width(name) > max_name_width {
+            truncate_to_width(name, max_name_width)
+        } else {
+            name.to_string()
+        };
+
+        // Calculate padding needed to align columns properly
+        let name_display_width = unicode_display_width(&display_name);
+        let total_content_width = type_char_width + 1 + name_display_width; // type_char + " " + name
+        let padding_needed = width.saturating_sub(total_content_width);
+
+        format!(
+            "{} {}{}",
+            type_char,
+            display_name,
+            " ".repeat(padding_needed)
+        )
+    }
 }
 
 #[cfg(test)]
@@ -388,51 +672,5 @@ mod tests {
         assert!(config.show_descriptions);
         assert!(config.show_icons);
         assert!(config.use_colors);
-    }
-
-    #[test]
-    fn test_group_candidates_by_type() {
-        let display = CompletionDisplay::with_default_config();
-        let candidates = vec![
-            create_test_candidate("file.txt", CandidateType::File),
-            create_test_candidate("add", CandidateType::SubCommand),
-            create_test_candidate("--verbose", CandidateType::LongOption),
-            create_test_candidate("dir/", CandidateType::Directory),
-        ];
-
-        let grouped = display.group_candidates_by_type(&candidates);
-
-        // Subcommands come first
-        assert_eq!(grouped[0].0, CandidateType::SubCommand);
-        assert_eq!(grouped[0].1.len(), 1);
-
-        // Options come next
-        assert_eq!(grouped[1].0, CandidateType::LongOption);
-        assert_eq!(grouped[1].1.len(), 1);
-    }
-
-    #[test]
-    fn test_truncate_text() {
-        let display = CompletionDisplay::with_default_config();
-
-        let short_text = "short";
-        assert_eq!(display.truncate_text(short_text, 10), "short");
-
-        let long_text = "this_is_a_very_long_text";
-        let truncated = display.truncate_text(long_text, 10);
-        assert!(truncated.len() <= 10);
-        assert!(truncated.ends_with("..."));
-    }
-
-    #[test]
-    fn test_calculate_items_per_row() {
-        let display = CompletionDisplay::with_default_config();
-        let candidate1 = create_test_candidate("short", CandidateType::SubCommand);
-        let candidate2 = create_test_candidate("medium_length", CandidateType::SubCommand);
-        let candidates = vec![&candidate1, &candidate2];
-
-        let items_per_row = display.calculate_items_per_row(&candidates, 80);
-        assert!(items_per_row >= 1);
-        assert!(items_per_row <= display.config.max_columns);
     }
 }

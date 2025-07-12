@@ -19,6 +19,17 @@ pub struct ParsedCommand {
     pub specified_arguments: Vec<String>,
 }
 
+/// Parameters for determining completion context
+struct CompletionContextParams<'a> {
+    cursor_token_index: usize,
+    current_token: &'a str,
+    subcommand_path: &'a [String],
+    _specified_options: &'a [String],
+    specified_arguments: &'a [String],
+    all_tokens: &'a [String],
+    has_space_after_command: bool,
+}
+
 /// Completion context (which part is currently being completed)
 #[derive(Debug, Clone, PartialEq)]
 pub enum CompletionContext {
@@ -203,15 +214,15 @@ impl CommandLineParser {
                 String::new()
             };
 
-            let context = self.determine_completion_context(
+            let context = self.determine_completion_context(CompletionContextParams {
                 cursor_token_index,
-                &current_token,
-                &subcommand_path,
-                &specified_options,
-                &specified_arguments,
-                &all_tokens,
+                current_token: &current_token,
+                subcommand_path: &subcommand_path,
+                _specified_options: &specified_options,
+                specified_arguments: &specified_arguments,
+                all_tokens: &all_tokens,
                 has_space_after_command,
-            );
+            });
 
             (current_token, context)
         };
@@ -325,26 +336,17 @@ impl CommandLineParser {
     }
 
     /// Determine completion context
-    fn determine_completion_context(
-        &self,
-        cursor_token_index: usize,
-        current_token: &str,
-        subcommand_path: &[String],
-        _specified_options: &[String],
-        specified_arguments: &[String],
-        all_tokens: &[String],
-        has_space_after_command: bool,
-    ) -> CompletionContext {
-        if cursor_token_index == 0 {
+    fn determine_completion_context(&self, params: CompletionContextParams) -> CompletionContext {
+        if params.cursor_token_index == 0 {
             return CompletionContext::Command;
         }
 
         // If current token is an option
-        if current_token.starts_with("--") {
+        if params.current_token.starts_with("--") {
             return CompletionContext::LongOption;
-        } else if current_token.starts_with('-') {
+        } else if params.current_token.starts_with('-') {
             // Support both short options (-x) and long options starting with single dash (-xxx)
-            if current_token.len() == 2 {
+            if params.current_token.len() == 2 {
                 return CompletionContext::ShortOption;
             } else {
                 return CompletionContext::LongOption;
@@ -352,8 +354,8 @@ impl CommandLineParser {
         }
 
         // If previous token is an option that takes a value
-        if cursor_token_index > 0 {
-            let prev_token = &all_tokens[cursor_token_index - 1];
+        if params.cursor_token_index > 0 {
+            let prev_token = &params.all_tokens[params.cursor_token_index - 1];
             if prev_token.starts_with('-') && self.option_takes_value(prev_token) {
                 return CompletionContext::OptionValue {
                     option_name: prev_token.clone(),
@@ -363,16 +365,16 @@ impl CommandLineParser {
         }
 
         // Subcommand completion only if there's a space after the command
-        if cursor_token_index == 1 && !has_space_after_command {
+        if params.cursor_token_index == 1 && !params.has_space_after_command {
             // If we're at the first position after command but there's no space,
             // treat it as command completion (not subcommand)
             return CompletionContext::Command;
         }
 
         // Subcommand or argument
-        if subcommand_path.is_empty() || self.looks_like_subcommand(current_token) {
+        if params.subcommand_path.is_empty() || self.looks_like_subcommand(params.current_token) {
             // Only allow subcommand completion if there's a space after the command
-            if has_space_after_command {
+            if params.has_space_after_command {
                 CompletionContext::SubCommand
             } else {
                 CompletionContext::Command
@@ -380,8 +382,11 @@ impl CommandLineParser {
         } else {
             // If current token is an argument, calculate its index
             // Don't include current token (since it's the completion target)
-            let arg_index = specified_arguments.len().saturating_sub(
-                if specified_arguments.contains(&current_token.to_string()) {
+            let arg_index = params.specified_arguments.len().saturating_sub(
+                if params
+                    .specified_arguments
+                    .contains(&params.current_token.to_string())
+                {
                     1
                 } else {
                     0

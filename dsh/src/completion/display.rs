@@ -652,7 +652,7 @@ impl Candidate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::completion::integrated::CandidateSource;
+    use crate::completion::integrated::{CandidateSource, CandidateType, EnhancedCandidate};
 
     fn create_test_candidate(text: &str, candidate_type: CandidateType) -> EnhancedCandidate {
         EnhancedCandidate {

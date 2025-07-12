@@ -13,7 +13,7 @@ use skim::prelude::*;
 use skim::{Skim, SkimItemReceiver, SkimItemSender};
 use std::borrow::Cow;
 use std::fs::{File, create_dir_all, read_dir, remove_file};
-use std::io::{BufReader, BufWriter, Write, stdout};
+use std::io::{BufReader, BufWriter, stdout};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::{process::Command, sync::Arc};

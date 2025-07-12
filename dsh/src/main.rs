@@ -64,6 +64,7 @@ mod prompt;
 mod proxy;
 mod repl;
 mod shell;
+mod string_optimization;
 
 #[cfg(test)]
 mod error_handling_tests;

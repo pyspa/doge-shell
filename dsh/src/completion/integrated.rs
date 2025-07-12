@@ -7,8 +7,13 @@ use super::json_loader::JsonCompletionLoader;
 use super::parser::{self, CommandLineParser};
 use crate::completion::display::Candidate;
 use anyhow::Result;
+use once_cell::sync::Lazy;
+use regex::Regex;
 use std::path::Path;
 use tracing::{debug, warn};
+
+// Pre-compiled regex for efficient whitespace splitting
+static WHITESPACE_SPLIT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+").unwrap());
 
 /// Integrated completion engine - integrates all completion features
 pub struct IntegratedCompletionEngine {
@@ -129,7 +134,7 @@ impl IntegratedCompletionEngine {
         }
 
         // 2. Existing context completion
-        let parts: Vec<&str> = input.split_whitespace().collect();
+        let parts: Vec<&str> = WHITESPACE_SPLIT_REGEX.split(input).collect();
         if !parts.is_empty() {
             let _command = parts[0];
             let _args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();

@@ -3,9 +3,17 @@ use crate::shell::APP_NAME;
 
 use super::command::{CommandCompletion, CommandCompletionDatabase};
 use anyhow::{Context, Result};
+use once_cell::sync::Lazy;
+use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
+
+// Pre-compiled regex patterns for option validation
+static SHORT_OPTION_VALIDATION_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^-[a-zA-Z]$").unwrap());
+static LONG_OPTION_VALIDATION_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^--[a-zA-Z][a-zA-Z0-9-]{2,}$").unwrap());
 
 pub struct JsonCompletionLoader {
     completion_dirs: Vec<PathBuf>,
@@ -266,13 +274,13 @@ impl JsonCompletionLoader {
         }
 
         if let Some(ref short) = option.short {
-            if !short.starts_with('-') || short.len() != 2 {
+            if !SHORT_OPTION_VALIDATION_REGEX.is_match(short) {
                 anyhow::bail!("Invalid short option format '{}' in '{}'", short, context);
             }
         }
 
         if let Some(ref long) = option.long {
-            if !long.starts_with("--") || long.len() < 4 {
+            if !LONG_OPTION_VALIDATION_REGEX.is_match(long) {
                 anyhow::bail!("Invalid long option format '{}' in '{}'", long, context);
             }
         }

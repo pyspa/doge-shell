@@ -4,12 +4,20 @@ use crate::dirs::search_file;
 use crate::shell::APP_NAME;
 use anyhow::Context as _;
 use anyhow::Result;
+use once_cell::sync::Lazy;
 use parking_lot::RwLock;
+use regex::Regex;
 use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+// Pre-compiled regex patterns for path processing
+static ABSOLUTE_PATH_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^/").unwrap());
+static RELATIVE_PATH_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\.\/").unwrap());
+#[allow(dead_code)]
+static HOME_PATH_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^~").unwrap());
 
 /// Environment change notification mechanism
 #[allow(dead_code)]
@@ -93,7 +101,7 @@ impl Environment {
     }
 
     pub fn lookup(&self, cmd: &str) -> Option<String> {
-        if cmd.starts_with('/') {
+        if ABSOLUTE_PATH_REGEX.is_match(cmd) {
             let cmd_path = Path::new(cmd);
             if cmd_path.exists() && cmd_path.is_file() {
                 return Some(cmd.to_string());
@@ -101,7 +109,7 @@ impl Environment {
                 return None;
             }
         }
-        if cmd.starts_with("./") {
+        if RELATIVE_PATH_REGEX.is_match(cmd) {
             let cmd_path = Path::new(cmd);
             if cmd_path.exists() && cmd_path.is_file() {
                 return Some(cmd.to_string());
@@ -119,10 +127,10 @@ impl Environment {
     }
 
     pub fn search(&self, cmd: &str) -> Option<String> {
-        if cmd.starts_with('/') {
+        if ABSOLUTE_PATH_REGEX.is_match(cmd) {
             // TODO
         }
-        if cmd.starts_with("./") {
+        if RELATIVE_PATH_REGEX.is_match(cmd) {
             // TODO
         }
         for path in &self.paths {

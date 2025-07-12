@@ -18,3 +18,4 @@ tracing.workspace = true
 uuid.workspace = true
 
 getopts = "0.2.23"
+regex = "1.11"

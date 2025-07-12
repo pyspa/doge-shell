@@ -859,6 +859,7 @@ dependencies = [
  "dsh-types",
  "getopts",
  "once_cell",
+ "regex",
  "shellexpand",
  "tracing",
  "uuid",

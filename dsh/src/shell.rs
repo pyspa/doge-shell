@@ -822,7 +822,7 @@ impl Shell {
     pub fn exec_chpwd_hooks(&mut self, pwd: &str) -> Result<()> {
         let pwd = Path::new(pwd);
 
-        chpwd_update_env(pwd, Arc::clone(&self.environment))?;
+        chpwd_update_env(pwd, Arc::clone(&self.environment));
         direnv::check_path(pwd, Arc::clone(&self.environment))?;
 
         {
@@ -951,10 +951,9 @@ impl Shell {
     // }
 }
 
-fn chpwd_update_env(pwd: &Path, _env: Arc<RwLock<Environment>>) -> Result<()> {
+fn chpwd_update_env(pwd: &Path, _env: Arc<RwLock<Environment>>) {
     debug!("chpwd update env {:?}", pwd);
     unsafe { std::env::set_var("PWD", pwd) };
-    Ok(())
 }
 
 fn read_fd(fd: RawFd) -> Result<String> {
@@ -981,8 +980,8 @@ mod tests {
         let test_path = PathBuf::from("/tmp/test");
         let env = Environment::new();
 
-        let result = chpwd_update_env(&test_path, env);
-        assert!(result.is_ok());
+        // Function now returns (), so we just call it
+        chpwd_update_env(&test_path, env);
 
         // Verify that PWD environment variable is set
         let pwd = std::env::var("PWD").unwrap_or_default();

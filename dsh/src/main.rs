@@ -4,6 +4,9 @@ use crate::shell::Shell;
 use anyhow::Result;
 use clap::Parser;
 use dsh_types::Context;
+use nix::unistd::isatty;
+use std::io::{self, BufRead, BufReader};
+use std::os::unix::io::AsRawFd;
 use std::process::ExitCode;
 use tracing::debug;
 
@@ -64,7 +67,6 @@ mod prompt;
 mod proxy;
 mod repl;
 mod shell;
-mod string_optimization;
 
 #[cfg(test)]
 mod error_handling_tests;
@@ -120,13 +122,16 @@ fn setup_panic_handler() {
         let thread = std::thread::current();
         let thread_name = thread.name().unwrap_or("unnamed");
 
-        let payload = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
-            s.to_string()
-        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
-            s.clone()
-        } else {
-            "Unknown panic payload".to_string()
-        };
+        let payload = panic_info.payload().downcast_ref::<&str>().map_or_else(
+            || {
+                if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "Unknown panic payload".to_string()
+                }
+            },
+            |s| (*s).to_string(),
+        );
 
         // Don't show stacktrace for panics related to normal exit
         if payload.contains("Shell terminated by double Ctrl+C")
@@ -139,21 +144,22 @@ fn setup_panic_handler() {
             return;
         }
 
-        let location = if let Some(location) = panic_info.location() {
-            format!(
-                "{}:{}:{}",
-                location.file(),
-                location.line(),
-                location.column()
-            )
-        } else {
-            "Unknown location".to_string()
-        };
+        let location = panic_info.location().map_or_else(
+            || "Unknown location".to_string(),
+            |location| {
+                format!(
+                    "{}:{}:{}",
+                    location.file(),
+                    location.line(),
+                    location.column()
+                )
+            },
+        );
 
         // Get backtrace (if RUST_BACKTRACE=1 is set)
         let backtrace = std::backtrace::Backtrace::capture();
         let backtrace_str = match backtrace.status() {
-            std::backtrace::BacktraceStatus::Captured => format!("\nBacktrace:\n{}", backtrace),
+            std::backtrace::BacktraceStatus::Captured => format!("\nBacktrace:\n{backtrace}"),
             std::backtrace::BacktraceStatus::Disabled => {
                 "\nBacktrace: disabled (set RUST_BACKTRACE=1 to enable)".to_string()
             }
@@ -165,12 +171,11 @@ fn setup_panic_handler() {
         let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f UTC");
         let panic_log = format!(
             "\n=== PANIC OCCURRED ===\n\
-            Timestamp: {}\n\
-            Thread: {}\n\
-            Location: {}\n\
-            Message: {}{}\n\
-            ======================\n",
-            timestamp, thread_name, location, payload, backtrace_str
+            Timestamp: {timestamp}\n\
+            Thread: {thread_name}\n\
+            Location: {location}\n\
+            Message: {payload}{backtrace_str}\n\
+            ======================\n"
         );
 
         // Record logs in multiple ways
@@ -183,20 +188,20 @@ fn setup_panic_handler() {
                 .open(log_file)
             {
                 use std::io::Write;
-                let _ = writeln!(file, "{}", panic_log);
+                let _ = writeln!(file, "{panic_log}");
                 let _ = file.flush();
             }
         }
 
         // 2. Also try to output to tracing log (if initialized)
-        tracing::error!("PANIC OCCURRED: {} at {}", payload, location);
+        tracing::error!("PANIC OCCURRED: {payload} at {location}");
 
         // 3. Also output to stderr (maintain default behavior)
         eprintln!("\n=== doge-shell PANIC ===");
-        eprintln!("Message: {}", payload);
-        eprintln!("Location: {}", location);
-        eprintln!("Thread: {}", thread_name);
-        eprintln!("Timestamp: {}", timestamp);
+        eprintln!("Message: {payload}");
+        eprintln!("Location: {location}");
+        eprintln!("Thread: {thread_name}");
+        eprintln!("Timestamp: {timestamp}");
         eprintln!("See debug.log and panic.log for detailed information");
         eprintln!("========================\n");
     }));
@@ -235,13 +240,11 @@ async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
     }
 
     // Check if stdin is a terminal
-    use nix::unistd::isatty;
-    use std::os::unix::io::AsRawFd;
     if isatty(std::io::stdin().as_raw_fd()).unwrap_or(false) {
         // Interactive mode
         debug!("Running in interactive mode");
         match repl.run_interactive().await {
-            Ok(_) => ExitCode::from(0),
+            Ok(()) => ExitCode::from(0),
             Err(err) => {
                 // Don't display error message for normal exit
                 let err_str = err.to_string();
@@ -260,7 +263,6 @@ async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
     } else {
         // Pipe mode - read from stdin
         debug!("Running in pipe mode");
-        use std::io::{self, BufRead, BufReader};
         let stdin = io::stdin();
         let reader = BufReader::new(stdin);
 
@@ -278,13 +280,13 @@ async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
                     match repl.shell.eval_str(ctx, input.to_string(), false).await {
                         Ok(_) => {}
                         Err(err) => {
-                            eprint!("Error executing '{}': ", input);
+                            eprint!("Error executing '{input}': ");
                             display_user_error(&err);
                         }
                     }
                 }
                 Err(err) => {
-                    eprintln!("Error reading input: {}", err);
+                    eprintln!("Error reading input: {err}");
                     break;
                 }
             }

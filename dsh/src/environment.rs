@@ -4,7 +4,6 @@ use crate::dirs::search_file;
 use crate::shell::APP_NAME;
 use anyhow::Context as _;
 use anyhow::Result;
-use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use regex::Regex;
 use std::collections::HashMap;
@@ -14,10 +13,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // Pre-compiled regex patterns for path processing
-static ABSOLUTE_PATH_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^/").unwrap());
-static RELATIVE_PATH_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\.\/").unwrap());
+static ABSOLUTE_PATH_REGEX: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"^/").unwrap());
+static RELATIVE_PATH_REGEX: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"^\.\/").unwrap());
 #[allow(dead_code)]
-static HOME_PATH_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^~").unwrap());
+static HOME_PATH_REGEX: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"^~").unwrap());
 
 /// Environment change notification mechanism
 #[allow(dead_code)]

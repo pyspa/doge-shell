@@ -3,17 +3,16 @@ use crate::shell::APP_NAME;
 
 use super::command::{CommandCompletion, CommandCompletionDatabase};
 use anyhow::{Context, Result};
-use once_cell::sync::Lazy;
 use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
 
 // Pre-compiled regex patterns for option validation
-static SHORT_OPTION_VALIDATION_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^-[a-zA-Z]$").unwrap());
-static LONG_OPTION_VALIDATION_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^--[a-zA-Z][a-zA-Z0-9-]{2,}$").unwrap());
+static SHORT_OPTION_VALIDATION_REGEX: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"^-[a-zA-Z]$").unwrap());
+static LONG_OPTION_VALIDATION_REGEX: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"^--[a-zA-Z][a-zA-Z0-9-]{2,}$").unwrap());
 
 pub struct JsonCompletionLoader {
     completion_dirs: Vec<PathBuf>,

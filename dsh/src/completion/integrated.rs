@@ -7,13 +7,13 @@ use super::json_loader::JsonCompletionLoader;
 use super::parser::{self, CommandLineParser};
 use crate::completion::display::Candidate;
 use anyhow::Result;
-use once_cell::sync::Lazy;
 use regex::Regex;
 use std::path::Path;
 use tracing::{debug, warn};
 
 // Pre-compiled regex for efficient whitespace splitting
-static WHITESPACE_SPLIT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+").unwrap());
+static WHITESPACE_SPLIT_REGEX: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"\s+").unwrap());
 
 /// Integrated completion engine - integrates all completion features
 pub struct IntegratedCompletionEngine {

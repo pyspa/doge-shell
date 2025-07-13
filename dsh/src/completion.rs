@@ -8,7 +8,6 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, read};
 use crossterm::{cursor, execute};
 use display::CompletionConfig;
 use dsh_frecency::ItemStats;
-use once_cell::sync::Lazy;
 use regex::Regex;
 use skim::prelude::*;
 use skim::{Skim, SkimItemReceiver, SkimItemSender};
@@ -1118,10 +1117,12 @@ pub struct ChatGPTCompletion {
 }
 
 // Pre-compiled regex for whitespace replacement - compiled once at first use
-static WHITESPACE_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+").unwrap());
+static WHITESPACE_REGEX: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"\s+").unwrap());
 // Pre-compiled regex for whitespace splitting - more efficient than split_whitespace for complex patterns
 #[allow(dead_code)]
-static WHITESPACE_SPLIT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+").unwrap());
+static WHITESPACE_SPLIT_REGEX: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"\s+").unwrap());
 
 fn replace_space(s: &str) -> String {
     WHITESPACE_REGEX.replace_all(s, "_").to_string()

@@ -2,14 +2,14 @@ use crate::completion::display::Candidate;
 use anyhow::Result;
 use chrono::Timelike;
 use dsh_frecency::{FrecencyStore, SortMethod};
-use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
 use std::path::Path;
 use tracing::debug;
 
 // Pre-compiled regex for efficient whitespace splitting
-static WHITESPACE_SPLIT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+").unwrap());
+static WHITESPACE_SPLIT_REGEX: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"\s+").unwrap());
 
 /// History-based completion using frecency algorithm
 #[allow(dead_code)]

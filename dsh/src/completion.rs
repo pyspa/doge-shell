@@ -427,7 +427,8 @@ pub fn select_completion_items_with_config(
                     return None;
                 }
                 (KeyCode::Esc, KeyModifiers::NONE)
-                | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                | (KeyCode::Char('c'), KeyModifiers::CONTROL)
+                | (KeyCode::Char('q'), KeyModifiers::NONE) => {
                     let _ = display.clear_display();
                     return None;
                 }

@@ -12,6 +12,7 @@ use regex::Regex;
 use skim::prelude::*;
 use skim::{Skim, SkimItemReceiver, SkimItemSender};
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::fs::{File, create_dir_all, read_dir, remove_file};
 use std::io::{BufReader, BufWriter, stdout};
 use std::path::{Path, PathBuf};
@@ -584,6 +585,8 @@ fn completion_from_current(_input: &Input, repl: &Repl, query: Option<&str>) -> 
         if !only_path {
             let mut cmds_items = get_commands(&environment.read().paths, query_str);
             items.append(&mut cmds_items);
+            // Deduplicate combined results
+            items = deduplicate_candidates(items);
         }
         select_completion_items_simple(items, Some(path_query))
     } else {
@@ -1000,6 +1003,8 @@ fn completion_from_current_with_prompt(
         if !only_path {
             let mut cmds_items = get_commands(&environment.read().paths, query_str);
             items.append(&mut cmds_items);
+            // Deduplicate combined results
+            items = deduplicate_candidates(items);
         }
         select_completion_items(items, Some(path_query), prompt_text, input_text)
     } else {
@@ -1026,7 +1031,9 @@ fn get_commands(paths: &Vec<String>, cmd: &str) -> Vec<Candidate> {
         let mut cmds = get_executables(path, cmd);
         list.append(&mut cmds);
     }
-    list
+
+    // Deduplicate commands from multiple PATH directories
+    deduplicate_candidates(list)
 }
 
 fn get_executables(dir: &str, name: &str) -> Vec<Candidate> {
@@ -1054,6 +1061,96 @@ fn get_executables(dir: &str, name: &str) -> Vec<Candidate> {
     list
 }
 
+/// Deduplicate candidates, prioritizing commands over files for the same name
+fn deduplicate_candidates(items: Vec<Candidate>) -> Vec<Candidate> {
+    debug!("deduplicate_candidates: input items count={}", items.len());
+    let mut seen_names = std::collections::HashMap::new();
+    let mut result = Vec::new();
+
+    for candidate in items {
+        let (name, _description) = match &candidate {
+            Candidate::Item(name, desc) => (name.clone(), desc.clone()),
+            Candidate::Path(name) => (name.clone(), "(path)".to_string()),
+            Candidate::Basic(name) => (name.clone(), "(basic)".to_string()),
+            Candidate::Command { name, description } => (name.clone(), description.clone()),
+            Candidate::Option { name, description } => (name.clone(), description.clone()),
+            Candidate::GitBranch { name, .. } => (name.clone(), "(git-branch)".to_string()),
+            Candidate::File { path, is_dir } => (
+                path.clone(),
+                if *is_dir { "(directory)" } else { "(file)" }.to_string(),
+            ),
+            Candidate::History { command, .. } => (command.clone(), "(history)".to_string()),
+        };
+
+        // Extract just the filename for comparison (remove path prefixes)
+        let base_name = if let Some(pos) = name.rfind('/') {
+            &name[pos + 1..]
+        } else {
+            &name
+        };
+
+        match seen_names.get(base_name) {
+            Some(existing_idx) => {
+                debug!(
+                    "deduplicate_candidates: found duplicate base_name='{}', name='{}'",
+                    base_name, name
+                );
+                // If we already have this name, prioritize commands over files
+                let existing_candidate = &result[*existing_idx];
+                let should_replace = match (&existing_candidate, &candidate) {
+                    // Replace file with command
+                    (Candidate::Item(_, existing_desc), Candidate::Item(_, new_desc))
+                        if existing_desc == "(file)" && new_desc == "(command)" =>
+                    {
+                        debug!(
+                            "deduplicate_candidates: replacing file with command for '{}'",
+                            base_name
+                        );
+                        true
+                    }
+                    // Don't replace command with file
+                    (Candidate::Item(_, existing_desc), Candidate::Item(_, new_desc))
+                        if existing_desc == "(command)" && new_desc == "(file)" =>
+                    {
+                        debug!(
+                            "deduplicate_candidates: keeping command over file for '{}'",
+                            base_name
+                        );
+                        false
+                    }
+                    // For other cases, keep the first one
+                    _ => {
+                        debug!(
+                            "deduplicate_candidates: keeping first occurrence for '{}'",
+                            base_name
+                        );
+                        false
+                    }
+                };
+
+                if should_replace {
+                    result[*existing_idx] = candidate;
+                }
+            }
+            None => {
+                // First time seeing this name
+                debug!(
+                    "deduplicate_candidates: adding new candidate base_name='{}', name='{}'",
+                    base_name, name
+                );
+                seen_names.insert(base_name.to_string(), result.len());
+                result.push(candidate);
+            }
+        }
+    }
+
+    debug!(
+        "deduplicate_candidates: output items count={}",
+        result.len()
+    );
+    result
+}
+
 fn get_file_completions(dir: &str, prefix: &str) -> Vec<Candidate> {
     debug!("get_file_completions: dir={}, prefix={}", dir, prefix);
     get_file_completions_with_filter(dir, prefix, None)
@@ -1068,7 +1165,7 @@ fn get_file_completions_with_filter(
         "get_file_completions_with_filter: dir={}, prefix={}, filter_prefix={:?}",
         dir, prefix, filter_prefix
     );
-    let mut list = Vec::new();
+    let mut candidates_set = BTreeSet::new();
     let prefix = if !prefix.is_empty() && !prefix.ends_with('/') {
         format!("{}/", prefix)
     } else {
@@ -1092,22 +1189,24 @@ fn get_file_completions_with_filter(
                     }
                 }
 
-                if is_file {
-                    list.push(Candidate::Item(
-                        format!("{}{}", prefix, file_name),
-                        "(file)".to_string(),
-                    ));
+                let candidate = if is_file {
+                    Candidate::Item(format!("{}{}", prefix, file_name), "(file)".to_string())
                 } else {
-                    list.push(Candidate::Item(
+                    Candidate::Item(
                         format!("{}{}", prefix, file_name),
                         "(directory)".to_string(),
-                    ));
-                }
+                    )
+                };
+
+                // BTreeSet automatically handles deduplication
+                candidates_set.insert(candidate);
             }
         }
         Err(_err) => {}
     }
-    list
+
+    // Convert BTreeSet back to Vec to maintain the expected return type
+    candidates_set.into_iter().collect()
 }
 
 /// ChatGPT completion structure
@@ -1394,9 +1493,53 @@ impl IntegratedCompletionEngine {
 /// These functions provide backward compatibility with the existing codebase
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[allow(dead_code)]
     fn init() {
         let _ = tracing_subscriber::fmt::try_init();
+    }
+
+    #[test]
+    fn test_deduplicate_candidates() {
+        // Test deduplication with command priority over file
+        let items = vec![
+            Candidate::Item("test".to_string(), "(file)".to_string()),
+            Candidate::Item("test".to_string(), "(command)".to_string()),
+            Candidate::Item("other".to_string(), "(file)".to_string()),
+        ];
+
+        let result = deduplicate_candidates(items);
+
+        assert_eq!(result.len(), 2);
+        // Should keep command version of "test", not file version
+        assert!(result.iter().any(
+            |c| matches!(c, Candidate::Item(name, desc) if name == "test" && desc == "(command)")
+        ));
+        assert!(result.iter().any(
+            |c| matches!(c, Candidate::Item(name, desc) if name == "other" && desc == "(file)")
+        ));
+        // Should not have file version of "test"
+        assert!(!result.iter().any(
+            |c| matches!(c, Candidate::Item(name, desc) if name == "test" && desc == "(file)")
+        ));
+    }
+
+    #[test]
+    fn test_deduplicate_candidates_with_paths() {
+        // Test deduplication with path prefixes
+        let items = vec![
+            Candidate::Item("/usr/bin/ls".to_string(), "(command)".to_string()),
+            Candidate::Item("./ls".to_string(), "(file)".to_string()),
+            Candidate::Item("ls".to_string(), "(command)".to_string()),
+        ];
+
+        let result = deduplicate_candidates(items);
+
+        // Should deduplicate based on base filename "ls"
+        assert_eq!(result.len(), 1);
+        // Should keep the first command version
+        assert!(result.iter().any(|c| matches!(c, Candidate::Item(name, desc) if name == "/usr/bin/ls" && desc == "(command)")));
     }
 
     //     #[test]

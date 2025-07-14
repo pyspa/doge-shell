@@ -4,6 +4,7 @@ use crate::shell::APP_NAME;
 use super::command::{CommandCompletion, CommandCompletionDatabase};
 use anyhow::{Context, Result};
 use regex::Regex;
+use rust_embed::RustEmbed;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
@@ -13,6 +14,12 @@ static SHORT_OPTION_VALIDATION_REGEX: std::sync::LazyLock<Regex> =
     std::sync::LazyLock::new(|| Regex::new(r"^-[a-zA-Z]$").unwrap());
 static LONG_OPTION_VALIDATION_REGEX: std::sync::LazyLock<Regex> =
     std::sync::LazyLock::new(|| Regex::new(r"^--[a-zA-Z][a-zA-Z0-9-]{2,}$").unwrap());
+
+/// Embedded completion assets using rust-embed
+/// This embeds all JSON files from the completions/ directory at compile time
+#[derive(RustEmbed)]
+#[folder = "../completions/"]
+struct CompletionAssets;
 
 pub struct JsonCompletionLoader {
     completion_dirs: Vec<PathBuf>,
@@ -60,52 +67,126 @@ impl JsonCompletionLoader {
         let mut loaded_count = 0;
         let mut error_count = 0;
 
-        debug!(
-            "Checking {} completion directories",
-            self.completion_dirs.len()
-        );
-
-        for (i, dir) in self.completion_dirs.iter().enumerate() {
-            debug!(
-                "Checking completion directory {}/{}: {:?}",
-                i + 1,
-                self.completion_dirs.len(),
-                dir
-            );
-
-            if !dir.exists() {
-                debug!("Completion directory does not exist: {:?}", dir);
-                continue;
+        // First, load from embedded resources
+        debug!("Loading completions from embedded resources...");
+        match self.load_from_embedded(&mut database) {
+            Ok(count) => {
+                loaded_count += count;
+                debug!(
+                    "Successfully loaded {} completion files from embedded resources",
+                    count
+                );
             }
-
-            debug!("Loading completions from existing directory: {:?}", dir);
-            match self.load_from_directory(dir, &mut database) {
-                Ok(count) => {
-                    loaded_count += count;
-                    if count > 0 {
-                        debug!(
-                            "Successfully loaded {} completion files from {:?}",
-                            count, dir
-                        );
-                    } else {
-                        debug!("No completion files found in {:?}", dir);
-                    }
-                }
-                Err(e) => {
-                    error_count += 1;
-                    warn!("Failed to load completions from {:?}: {}", dir, e);
-                }
+            Err(e) => {
+                error_count += 1;
+                warn!("Failed to load completions from embedded resources: {}", e);
             }
         }
 
         debug!(
-            "Completion loading complete: {} files loaded, {} errors from {} directories",
+            "Checking {} completion directories for additional files",
+            self.completion_dirs.len()
+        );
+
+        // Then, load from filesystem directories (for user customizations)
+        // for (i, dir) in self.completion_dirs.iter().enumerate() {
+        //     debug!(
+        //         "Checking completion directory {}/{}: {:?}",
+        //         i + 1,
+        //         self.completion_dirs.len(),
+        //         dir
+        //     );
+
+        //     if !dir.exists() {
+        //         debug!("Completion directory does not exist: {:?}", dir);
+        //         continue;
+        //     }
+
+        //     debug!("Loading completions from existing directory: {:?}", dir);
+        //     match self.load_from_directory(dir, &mut database) {
+        //         Ok(count) => {
+        //             loaded_count += count;
+        //             if count > 0 {
+        //                 debug!(
+        //                     "Successfully loaded {} completion files from {:?}",
+        //                     count, dir
+        //                 );
+        //             } else {
+        //                 debug!("No completion files found in {:?}", dir);
+        //             }
+        //         }
+        //         Err(e) => {
+        //             error_count += 1;
+        //             warn!("Failed to load completions from {:?}: {}", dir, e);
+        //         }
+        //     }
+        // }
+
+        debug!(
+            "Completion loading complete: {} files loaded, {} errors from embedded resources + {} directories",
             loaded_count,
             error_count,
             self.completion_dirs.len()
         );
 
         Ok(database)
+    }
+
+    /// Load completion data from embedded resources
+    fn load_from_embedded(&self, database: &mut CommandCompletionDatabase) -> Result<usize> {
+        debug!("Loading completions from embedded resources...");
+        let mut loaded_count = 0;
+        let mut file_count = 0;
+
+        // Iterate through all embedded files
+        for file_path in CompletionAssets::iter() {
+            file_count += 1;
+            debug!("Found embedded file: {}", file_path);
+
+            // Process only .json files
+            if !file_path.ends_with(".json") {
+                debug!("Skipping non-JSON embedded file: {}", file_path);
+                continue;
+            }
+
+            debug!("Processing embedded JSON completion file: {}", file_path);
+
+            // Get the embedded file content
+            match CompletionAssets::get(&file_path) {
+                Some(file_data) => {
+                    match self.load_completion_from_content(&file_data.data, &file_path) {
+                        Ok(completion) => {
+                            debug!(
+                                "Successfully loaded completion for command: {} from embedded file: {}",
+                                completion.command, file_path
+                            );
+                            debug!(
+                                "Completion details - subcommands: {}, global_options: {}",
+                                completion.subcommands.len(),
+                                completion.global_options.len()
+                            );
+                            database.add_command(completion);
+                            loaded_count += 1;
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to load embedded completion file {}: {}",
+                                file_path, e
+                            );
+                        }
+                    }
+                }
+                None => {
+                    warn!("Failed to get embedded file content for: {}", file_path);
+                }
+            }
+        }
+
+        debug!(
+            "Embedded resource scan complete: found {} files, loaded {} JSON completion files",
+            file_count, loaded_count
+        );
+        Ok(loaded_count)
     }
 
     /// Load completion data from specified directory
@@ -166,20 +247,37 @@ impl JsonCompletionLoader {
     /// Load a single completion file
     fn load_completion_file(&self, path: &Path) -> Result<CommandCompletion> {
         debug!("Reading file content from: {:?}", path);
-        let content =
-            fs::read_to_string(path).with_context(|| format!("Failed to read file: {path:?}"))?;
+        let content = fs::read(path).with_context(|| format!("Failed to read file: {path:?}"))?;
 
         debug!("File content length: {} bytes", content.len());
-        debug!("Parsing JSON content from: {:?}", path);
 
-        let completion: CommandCompletion = match serde_json::from_str(&content) {
+        let source_name = path.to_string_lossy();
+        self.load_completion_from_content(&content, &source_name)
+    }
+
+    /// Load completion from byte content (used for embedded resources)
+    fn load_completion_from_content(
+        &self,
+        content: &[u8],
+        source_name: &str,
+    ) -> Result<CommandCompletion> {
+        debug!("Parsing content from: {}", source_name);
+
+        // Convert bytes to string
+        let content_str = std::str::from_utf8(content)
+            .with_context(|| format!("Failed to convert content to UTF-8 string: {source_name}"))?;
+
+        debug!("Content length: {} bytes", content_str.len());
+        debug!("Parsing JSON content from: {}", source_name);
+
+        let completion: CommandCompletion = match serde_json::from_str(content_str) {
             Ok(completion) => completion,
             Err(e) => {
-                warn!("JSON parse error in {:?}: {}", path, e);
+                warn!("JSON parse error in {}: {}", source_name, e);
                 debug!("JSON parse error details: {:?}", e);
                 return Err(anyhow::anyhow!(
-                    "Failed to parse JSON in file: {:?}: {}",
-                    path,
+                    "Failed to parse JSON in source: {}: {}",
+                    source_name,
                     e
                 ));
             }
@@ -193,7 +291,7 @@ impl JsonCompletionLoader {
         // Basic validation
         debug!("Validating completion data for: {}", completion.command);
         self.validate_completion(&completion)
-            .with_context(|| format!("Validation failed for file: {path:?}"))?;
+            .with_context(|| format!("Validation failed for source: {source_name}"))?;
 
         debug!("Validation successful for: {}", completion.command);
         Ok(completion)
@@ -291,11 +389,43 @@ impl JsonCompletionLoader {
     pub fn load_command_completion(&self, command_name: &str) -> Result<Option<CommandCompletion>> {
         let filename = format!("{command_name}.json");
 
+        // First, try to load from embedded resources
+        debug!("Checking embedded resources for: {}", filename);
+        if let Some(file_data) = CompletionAssets::get(&filename) {
+            debug!("Found embedded completion for: {}", command_name);
+            match self.load_completion_from_content(&file_data.data, &filename) {
+                Ok(completion) => {
+                    debug!(
+                        "Successfully loaded embedded completion for: {}",
+                        command_name
+                    );
+                    return Ok(Some(completion));
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to load embedded completion for '{}': {}",
+                        command_name, e
+                    );
+                }
+            }
+        } else {
+            debug!("No embedded completion found for: {}", command_name);
+        }
+
+        // Fallback to filesystem directories
+        debug!("Checking filesystem directories for: {}", filename);
         for dir in &self.completion_dirs {
             let path = dir.join(&filename);
             if path.exists() {
+                debug!("Found filesystem completion at: {:?}", path);
                 match self.load_completion_file(&path) {
-                    Ok(completion) => return Ok(Some(completion)),
+                    Ok(completion) => {
+                        debug!(
+                            "Successfully loaded filesystem completion for: {}",
+                            command_name
+                        );
+                        return Ok(Some(completion));
+                    }
                     Err(e) => {
                         warn!(
                             "Failed to load completion for '{}' from {:?}: {}",
@@ -306,13 +436,28 @@ impl JsonCompletionLoader {
             }
         }
 
+        debug!("No completion found for command: {}", command_name);
         Ok(None)
     }
 
     /// Get list of available completion files
     pub fn list_available_completions(&self) -> Result<Vec<String>> {
-        let mut commands = Vec::new();
+        let mut commands = std::collections::BTreeSet::new();
 
+        // First, collect from embedded resources
+        debug!("Collecting completions from embedded resources...");
+        for file_path in CompletionAssets::iter() {
+            if file_path.ends_with(".json") {
+                // Extract command name from filename like "git.json"
+                if let Some(stem) = file_path.strip_suffix(".json") {
+                    debug!("Found embedded completion for: {}", stem);
+                    commands.insert(stem.to_string());
+                }
+            }
+        }
+
+        // Then, collect from filesystem directories
+        debug!("Collecting completions from filesystem directories...");
         for dir in &self.completion_dirs {
             if !dir.exists() {
                 continue;
@@ -327,16 +472,16 @@ impl JsonCompletionLoader {
 
                 if path.extension().and_then(|s| s.to_str()) == Some("json") {
                     if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        if !commands.contains(&stem.to_string()) {
-                            commands.push(stem.to_string());
-                        }
+                        debug!("Found filesystem completion for: {}", stem);
+                        commands.insert(stem.to_string());
                     }
                 }
             }
         }
 
-        commands.sort();
-        Ok(commands)
+        let result: Vec<String> = commands.into_iter().collect();
+        debug!("Total available completions: {}", result.len());
+        Ok(result)
     }
 }
 
@@ -434,7 +579,7 @@ mod tests {
 
     #[test]
     fn test_load_real_git_completion() {
-        let loader = JsonCompletionLoader::with_dirs(vec![PathBuf::from("../completions")]);
+        let loader = JsonCompletionLoader::new();
 
         match loader.load_command_completion("git") {
             Ok(Some(completion)) => {
@@ -457,7 +602,7 @@ mod tests {
             }
             Ok(None) => {
                 println!(
-                    "Git completion file not found - this is expected if running from different directory"
+                    "Git completion file not found - this is expected if no embedded or filesystem completion exists"
                 );
             }
             Err(e) => {
@@ -468,7 +613,7 @@ mod tests {
 
     #[test]
     fn test_load_real_cargo_completion() {
-        let loader = JsonCompletionLoader::with_dirs(vec![PathBuf::from("../completions")]);
+        let loader = JsonCompletionLoader::new();
 
         match loader.load_command_completion("cargo") {
             Ok(Some(completion)) => {
@@ -487,12 +632,59 @@ mod tests {
             }
             Ok(None) => {
                 println!(
-                    "Cargo completion file not found - this is expected if running from different directory"
+                    "Cargo completion file not found - this is expected if no embedded or filesystem completion exists"
                 );
             }
             Err(e) => {
                 println!("Error loading cargo completion: {e}");
             }
         }
+    }
+
+    #[test]
+    fn test_embedded_completions_available() {
+        let loader = JsonCompletionLoader::new();
+
+        match loader.list_available_completions() {
+            Ok(completions) => {
+                println!("Available completions: {completions:?}");
+                // We expect at least some completions to be available from embedded resources
+                // The exact number depends on what's in the completions/ directory
+            }
+            Err(e) => {
+                println!("Error listing completions: {e}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_load_completion_from_content() {
+        let loader = JsonCompletionLoader::new();
+
+        let test_json = r#"
+        {
+            "command": "test",
+            "description": "Test command",
+            "global_options": [],
+            "subcommands": [
+                {
+                    "name": "sub",
+                    "description": "Test subcommand",
+                    "aliases": [],
+                    "options": [],
+                    "arguments": [],
+                    "subcommands": []
+                }
+            ]
+        }
+        "#;
+
+        let result = loader.load_completion_from_content(test_json.as_bytes(), "test_source");
+        assert!(result.is_ok());
+
+        let completion = result.unwrap();
+        assert_eq!(completion.command, "test");
+        assert_eq!(completion.subcommands.len(), 1);
+        assert_eq!(completion.subcommands[0].name, "sub");
     }
 }

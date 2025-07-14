@@ -1192,10 +1192,7 @@ fn get_file_completions_with_filter(
                 let candidate = if is_file {
                     Candidate::Item(format!("{prefix}{file_name}"), "(file)".to_string())
                 } else {
-                    Candidate::Item(
-                        format!("{prefix}{file_name}"),
-                        "(directory)".to_string(),
-                    )
+                    Candidate::Item(format!("{prefix}{file_name}"), "(directory)".to_string())
                 };
 
                 // BTreeSet automatically handles deduplication

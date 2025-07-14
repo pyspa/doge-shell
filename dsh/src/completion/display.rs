@@ -165,7 +165,13 @@ impl CompletionDisplay {
         input_text: &str,
         config: CompletionConfig,
     ) -> Self {
-        let terminal_width = term_size::dimensions().map(|(w, _)| w).unwrap_or(80);
+        // Use crossterm for more reliable terminal size detection
+        let terminal_width = crossterm::terminal::size()
+            .map(|(w, _)| w as usize)
+            .unwrap_or(80);
+
+        debug!("Terminal width detected: {}", terminal_width);
+
         let total_items_count = candidates.len();
         let has_more_items = total_items_count > config.max_items;
 
@@ -181,27 +187,60 @@ impl CompletionDisplay {
             }
         }
 
-        // Calculate the maximum display width needed
+        // Calculate the maximum display width needed for each candidate
         let max_display_width = candidates
             .iter()
             .map(|c| {
                 let name_width = unicode_display_width(c.get_display_name());
                 let type_char_width = c.get_type_char().width().unwrap_or(2); // Most emojis are 2 chars wide
-                name_width + type_char_width + 2 // type_char + " " + name + " "
+                name_width + type_char_width + 1 // type_char + " " + name
             })
             .max()
             .unwrap_or(10);
 
-        // Limit column width to prevent extremely wide columns and ensure no wrapping
-        let column_width = std::cmp::min(max_display_width, terminal_width / 3);
+        debug!("Max display width needed: {}", max_display_width);
 
-        let items_per_row = if column_width > 0 {
-            std::cmp::max(1, terminal_width / column_width)
+        // Reserve space for selection indicator ("> " or "  ") and inter-column spacing
+        let selection_indicator_width = 1; // ">" or " "
+        let inter_column_spacing = 2; // Space between columns
+
+        // Calculate effective column width including all necessary spacing
+        let effective_column_width = max_display_width + selection_indicator_width;
+
+        // Calculate how many items can fit per row, accounting for spacing between columns
+        let items_per_row = if effective_column_width > 0 {
+            let available_width = terminal_width.saturating_sub(4); // Reserve 4 chars margin for safety
+            let width_per_item = effective_column_width + inter_column_spacing;
+
+            // Calculate maximum items that can fit
+            let max_items = if width_per_item > 0 {
+                std::cmp::max(1, available_width / width_per_item)
+            } else {
+                1
+            };
+
+            // Ensure at least 1 item per row, but don't exceed what can actually fit
+            std::cmp::min(max_items, candidates.len())
         } else {
             1
         };
 
+        // Recalculate column width based on actual items per row to ensure proper fit
+        let column_width = if items_per_row > 0 {
+            let available_width = terminal_width.saturating_sub(4); // Reserve margin
+            let total_spacing = (items_per_row.saturating_sub(1)) * inter_column_spacing;
+            let width_for_content = available_width.saturating_sub(total_spacing);
+            width_for_content / items_per_row
+        } else {
+            terminal_width.saturating_sub(4)
+        };
+
         let total_rows = candidates.len().div_ceil(items_per_row);
+
+        debug!(
+            "Display layout: terminal_width={}, column_width={}, items_per_row={}, total_rows={}",
+            terminal_width, column_width, items_per_row, total_rows
+        );
 
         CompletionDisplay {
             candidates,
@@ -347,16 +386,66 @@ impl CompletionDisplay {
         queue!(stdout, Print(&self.prompt_text))?;
         queue!(stdout, Print(&self.input_text))?;
 
-        // Calculate the total display width of prompt + input for cursor positioning
         // Move cursor to start of completion area
         execute!(stdout, cursor::MoveToNextLine(1))?;
 
-        // Get terminal width to prevent wrapping
-        let (terminal_width, _) = crossterm::terminal::size()?;
-        let terminal_width = terminal_width as usize;
+        // Get current terminal width to handle dynamic resizing
+        let (current_terminal_width, _) = crossterm::terminal::size()?;
+        let current_terminal_width = current_terminal_width as usize;
+
+        debug!(
+            "Current terminal width: {}, stored width: {}",
+            current_terminal_width, self.terminal_width
+        );
+
+        // Update our calculations if terminal was resized
+        if current_terminal_width != self.terminal_width {
+            debug!("Terminal was resized, recalculating layout");
+            self.terminal_width = current_terminal_width;
+
+            // Recalculate items per row based on new terminal width
+            let available_width = self.terminal_width.saturating_sub(4); // Reserve margin
+            let inter_column_spacing = 2;
+            let selection_indicator_width = 1;
+
+            let max_display_width = self
+                .candidates
+                .iter()
+                .map(|c| {
+                    let name_width = unicode_display_width(c.get_display_name());
+                    let type_char_width = c.get_type_char().width().unwrap_or(2);
+                    name_width + type_char_width + 1
+                })
+                .max()
+                .unwrap_or(10);
+
+            let effective_column_width = max_display_width + selection_indicator_width;
+            let width_per_item = effective_column_width + inter_column_spacing;
+
+            self.items_per_row = if width_per_item > 0 {
+                std::cmp::max(1, available_width / width_per_item)
+            } else {
+                1
+            };
+
+            self.column_width = if self.items_per_row > 0 {
+                let total_spacing = (self.items_per_row.saturating_sub(1)) * inter_column_spacing;
+                let width_for_content = available_width.saturating_sub(total_spacing);
+                width_for_content / self.items_per_row
+            } else {
+                available_width
+            };
+
+            self.total_rows = self.candidates.len().div_ceil(self.items_per_row);
+
+            debug!(
+                "Recalculated layout: column_width={}, items_per_row={}, total_rows={}",
+                self.column_width, self.items_per_row, self.total_rows
+            );
+        }
 
         for row in 0..self.total_rows {
-            let mut current_line_width = 0;
+            let mut items_displayed_in_row = 0;
 
             for col in 0..self.items_per_row {
                 let index = row * self.items_per_row + col;
@@ -370,34 +459,34 @@ impl CompletionDisplay {
                     && index == self.candidates.len() - 1
                     && candidate.get_display_name().starts_with("📋");
 
-                // Calculate the width this item will take
-                let formatted = if is_message_item {
-                    candidate.get_display_name().to_string()
-                } else {
-                    candidate.get_formatted_display(self.column_width)
-                };
+                // Calculate the total width this column should occupy
+                let column_total_width = self.column_width + 1; // column_width + selection indicator
+                let column_end_position = (col + 1) * column_total_width + col * 2; // + inter-column spacing
 
-                let item_width = 1 + unicode_display_width(&formatted); // ">" or " " + formatted
-                let spacing_width =
-                    if col < self.items_per_row - 1 && index + 1 < self.candidates.len() {
-                        1
-                    } else {
-                        0
-                    };
-                let total_item_width = item_width + spacing_width;
-
-                // Check if adding this item would cause wrapping
-                if current_line_width + total_item_width > terminal_width {
-                    break; // Skip this item to prevent wrapping
+                // Check if this column would exceed terminal width
+                if column_end_position > self.terminal_width {
+                    debug!(
+                        "Skipping column {} to prevent overflow: end_position={}, terminal_width={}",
+                        col, column_end_position, self.terminal_width
+                    );
+                    break;
                 }
 
-                // Display with type character and proper formatting
+                // Display the selection indicator
                 if is_selected {
                     queue!(stdout, SetForegroundColor(Color::Yellow))?;
                     queue!(stdout, Print(">"))?;
                 } else {
                     queue!(stdout, Print(" "))?;
                 }
+
+                // Format the item for display with fixed width
+                let formatted = if is_message_item {
+                    // For message items, don't apply column width formatting
+                    candidate.get_display_name().to_string()
+                } else {
+                    candidate.get_formatted_display(self.column_width)
+                };
 
                 // Add type-specific coloring
                 if is_message_item {
@@ -419,14 +508,19 @@ impl CompletionDisplay {
                 queue!(stdout, Print(formatted))?;
                 queue!(stdout, ResetColor)?;
 
-                current_line_width += item_width;
+                items_displayed_in_row += 1;
 
-                // Add spacing between columns
+                // Add spacing between columns (except for the last column in the row)
                 if col < self.items_per_row - 1 && index + 1 < self.candidates.len() {
-                    queue!(stdout, Print(" "))?;
-                    current_line_width += spacing_width;
+                    queue!(stdout, Print("  "))?; // Two spaces between columns
                 }
             }
+
+            debug!(
+                "Row {}: displayed {} items with fixed column alignment",
+                row, items_displayed_in_row
+            );
+
             if row < self.total_rows - 1 {
                 queue!(stdout, cursor::MoveToNextLine(1))?;
             }
@@ -628,6 +722,13 @@ impl Candidate {
         // Format: "emoji name" with proper spacing
         let max_name_width = width.saturating_sub(type_char_width + 1); // type_char + " "
 
+        // Ensure we have at least some space for the name
+        if max_name_width < 3 {
+            // If width is too small, just return the type character with padding
+            let padding_needed = width.saturating_sub(type_char_width);
+            return format!("{}{}", type_char, " ".repeat(padding_needed));
+        }
+
         // Truncate name if it's too long for the available width
         let display_name = if unicode_display_width(name) > max_name_width {
             truncate_to_width(name, max_name_width)
@@ -635,11 +736,12 @@ impl Candidate {
             name.to_string()
         };
 
-        // Calculate padding needed to align columns properly
+        // Calculate padding needed to make the total width exactly match the requested width
         let name_display_width = unicode_display_width(&display_name);
-        let total_content_width = type_char_width + 1 + name_display_width; // type_char + " " + name
-        let padding_needed = width.saturating_sub(total_content_width);
+        let content_width = type_char_width + 1 + name_display_width; // type_char + " " + name
+        let padding_needed = width.saturating_sub(content_width);
 
+        // Format with proper padding to ensure fixed width
         format!(
             "{} {}{}",
             type_char,
@@ -672,5 +774,134 @@ mod tests {
         assert!(config.show_descriptions);
         assert!(config.show_icons);
         assert!(config.use_colors);
+    }
+
+    #[test]
+    fn test_terminal_size_calculation() {
+        // Test with various terminal widths to ensure proper calculation
+        let candidates = vec![
+            Candidate::Command {
+                name: "git".to_string(),
+                description: "Version control".to_string(),
+            },
+            Candidate::File {
+                path: "file.txt".to_string(),
+                is_dir: false,
+            },
+            Candidate::File {
+                path: "directory/".to_string(),
+                is_dir: true,
+            },
+        ];
+
+        let config = CompletionConfig::default();
+        let display = CompletionDisplay::new_with_config(candidates, "$ ", "test input", config);
+
+        // Verify that items_per_row is reasonable
+        assert!(display.items_per_row >= 1);
+        assert!(display.items_per_row <= display.candidates.len());
+
+        // Verify that column_width is reasonable
+        assert!(display.column_width > 0);
+        assert!(display.column_width <= display.terminal_width);
+
+        // Verify that total_rows is calculated correctly
+        let expected_rows = display.candidates.len().div_ceil(display.items_per_row);
+        assert_eq!(display.total_rows, expected_rows);
+    }
+
+    #[test]
+    fn test_formatted_display_width_limits() {
+        let candidate = Candidate::Command {
+            name: "very_long_command_name_that_should_be_truncated".to_string(),
+            description: "A command with a very long name".to_string(),
+        };
+
+        // Test with small width
+        let formatted = candidate.get_formatted_display(20);
+        let display_width = unicode_display_width(&formatted);
+
+        // Should not exceed the requested width significantly
+        assert!(display_width <= 25); // Allow some tolerance for emoji width
+
+        // Should contain the type character
+        assert!(formatted.contains('⚡'));
+
+        // Should be truncated if name is too long
+        if candidate.get_display_name().len() > 15 {
+            assert!(formatted.contains('…'));
+        }
+    }
+
+    #[test]
+    fn test_column_alignment_fixed_width() {
+        // Test that formatted display produces consistent width
+        let candidates = vec![
+            Candidate::Command {
+                name: "git".to_string(),
+                description: "Version control".to_string(),
+            },
+            Candidate::Command {
+                name: "very_long_command_name".to_string(),
+                description: "A command with a long name".to_string(),
+            },
+            Candidate::File {
+                path: "file.txt".to_string(),
+                is_dir: false,
+            },
+        ];
+
+        let fixed_width = 25;
+
+        for candidate in &candidates {
+            let formatted = candidate.get_formatted_display(fixed_width);
+            let actual_width = unicode_display_width(&formatted);
+
+            // All formatted items should have exactly the same width
+            assert_eq!(
+                actual_width,
+                fixed_width,
+                "Candidate '{}' has width {} but expected {}",
+                candidate.get_display_name(),
+                actual_width,
+                fixed_width
+            );
+        }
+    }
+
+    #[test]
+    fn test_column_alignment_with_unicode() {
+        // Test column alignment with Unicode characters
+        let candidates = vec![
+            Candidate::File {
+                path: "file.txt".to_string(),
+                is_dir: false,
+            },
+            Candidate::File {
+                path: "日本語ファイル.txt".to_string(), // Japanese filename
+                is_dir: false,
+            },
+            Candidate::File {
+                path: "🐕.txt".to_string(), // Emoji filename
+                is_dir: false,
+            },
+        ];
+
+        let fixed_width = 30;
+
+        for candidate in &candidates {
+            let formatted = candidate.get_formatted_display(fixed_width);
+            let actual_width = unicode_display_width(&formatted);
+
+            // All formatted items should have exactly the same width, even with Unicode
+            assert_eq!(
+                actual_width,
+                fixed_width,
+                "Unicode candidate '{}' has width {} but expected {}",
+                candidate.get_display_name(),
+                actual_width,
+                fixed_width
+            );
+        }
     }
 }

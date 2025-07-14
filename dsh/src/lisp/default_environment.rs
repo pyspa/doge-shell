@@ -356,9 +356,7 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
 
             for arg in args {
                 product = (&product * &arg).map_err(|_| RuntimeError {
-                    msg: format!(
-                        "Function \"*\" requires arguments to be numbers; found {arg}"
-                    ),
+                    msg: format!("Function \"*\" requires arguments to be numbers; found {arg}"),
                 })?;
             }
 

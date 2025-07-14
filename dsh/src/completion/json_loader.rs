@@ -318,8 +318,8 @@ impl JsonCompletionLoader {
                 continue;
             }
 
-            let entries = fs::read_dir(dir)
-                .with_context(|| format!("Failed to read directory: {dir:?}"))?;
+            let entries =
+                fs::read_dir(dir).with_context(|| format!("Failed to read directory: {dir:?}"))?;
 
             for entry in entries {
                 let entry = entry?;

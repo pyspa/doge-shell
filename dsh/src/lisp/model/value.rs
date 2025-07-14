@@ -317,10 +317,9 @@ impl Debug for Value {
             Value::Float(this) => write!(f, "Value::Float({this:?})"),
             Value::Symbol(Symbol(this)) => write!(f, "Value::Symbol({this:?})"),
             Value::Foreign(_) => f.write_str("<foreign_value>"),
-            Value::TailCall { func, args } => write!(
-                f,
-                "Value::TailCall {{ func: {func:?}, args: {args:?} }}"
-            ),
+            Value::TailCall { func, args } => {
+                write!(f, "Value::TailCall {{ func: {func:?}, args: {args:?} }}")
+            }
         }
     }
 }

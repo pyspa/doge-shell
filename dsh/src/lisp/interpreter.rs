@@ -266,9 +266,7 @@ fn eval_inner(
 
                     let body = &Value::List(list.cdr().cdr());
                     let body: &List = body.try_into().map_err(|_| RuntimeError {
-                        msg: format!(
-                            "Expected expression(s) after let-declarations, found {body}"
-                        ),
+                        msg: format!("Expected expression(s) after let-declarations, found {body}"),
                     })?;
 
                     eval_block_inner(let_env, body.into_iter(), context)
@@ -306,9 +304,7 @@ fn eval_inner(
 
                     let body = &Value::List(list.cdr().cdr());
                     let body: &List = body.try_into().map_err(|_| RuntimeError {
-                        msg: format!(
-                            "Expected expression(s) after let-declarations, found {body}"
-                        ),
+                        msg: format!("Expected expression(s) after let-declarations, found {body}"),
                     })?;
                     debug!(
                         "variables {:?}",

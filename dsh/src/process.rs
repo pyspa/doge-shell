@@ -813,6 +813,20 @@ impl JobProcess {
         false
     }
 
+    /// Check if any process in the pipeline is stopped
+    fn has_stopped_process(&self) -> bool {
+        match self.get_state() {
+            ProcessState::Stopped(_, _) => true,
+            _ => {
+                if let Some(next) = self.next() {
+                    next.has_stopped_process()
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
     pub fn get_cap_out(&self) -> (Option<RawFd>, Option<RawFd>) {
         match self {
             JobProcess::Builtin(_p) => (None, None),
@@ -2223,8 +2237,10 @@ pub fn is_job_completed(job: &Job) -> bool {
             }
         }
 
-        // Job is completed if either all processes are completed OR the consumer terminated normally
-        let job_completed = completed || consumer_terminated;
+        // Job is completed if either all processes are completed OR
+        // (the consumer terminated normally AND no processes are stopped)
+        let has_stopped = process.has_stopped_process();
+        let job_completed = completed || (consumer_terminated && !has_stopped);
 
         debug!(
             "JOB_COMPLETION_CHECK_RESULT: Job {} completion result: {}",

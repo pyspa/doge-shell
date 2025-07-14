@@ -342,17 +342,28 @@ Manages shell aliases with support for setting, listing, and querying aliases.
 
 ### AI Integration Commands
 
-#### `chat <message>`
-Integrates with OpenAI ChatGPT API for AI-powered assistance within the shell. Requires `OPENAI_API_KEY` environment variable to be set.
+#### `chat [options] <message>`
+Integrates with OpenAI ChatGPT API for AI-powered assistance within the shell. Supports model selection and custom prompts.
+
+**Options:**
+- `-m, --model <model>` - Use specific OpenAI model for this request
 
 ```bash
+# Use default model (o1-mini)
 🐕 < chat "Explain how to use git rebase"
+
+# Use specific model
+🐕 < chat -m gpt-4 "Complex reasoning task"
+🐕 < chat --model o1-preview "Advanced analysis needed"
+
+# Write scripts and get help
 🐕 < chat "Write a bash script to backup files"
 ```
 
 **Requirements:**
 - Set `OPENAI_API_KEY` environment variable with your OpenAI API key
 - Internet connection for API communication
+- Optional: Set `OPENAI_MODEL` environment variable for default model
 
 #### `chat_prompt <prompt_template>`
 Sets a custom prompt template for ChatGPT interactions. The prompt template provides context for all subsequent chat commands.
@@ -360,6 +371,25 @@ Sets a custom prompt template for ChatGPT interactions. The prompt template prov
 ```bash
 🐕 < chat_prompt "You are a helpful Linux system administrator"
 🐕 < chat "How do I check disk usage?"
+```
+
+#### `chat_model [model_name]`
+Manages the default OpenAI model for ChatGPT interactions. When called without arguments, shows the current model.
+
+```bash
+# Show current default model
+🐕 < chat_model
+Current OpenAI model: o1-mini (default)
+
+# Set new default model
+🐕 < chat_model gpt-4
+OpenAI model set to: gpt-4
+
+# Available models include:
+# - o1-mini (fast, cost-effective) [default]
+# - o1-preview (advanced reasoning)
+# - gpt-4 (balanced performance)
+# - gpt-3.5-turbo (fastest, cheapest)
 ```
 
 ### Utility Commands

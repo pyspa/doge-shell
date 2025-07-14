@@ -93,6 +93,7 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, BuiltinCommand>>> = Lazy::n
     // AI integration commands
     builtin.insert("chat", chatgpt::chat as BuiltinCommand);
     builtin.insert("chat_prompt", chatgpt::chat_prompt as BuiltinCommand);
+    builtin.insert("chat_model", chatgpt::chat_model as BuiltinCommand);
 
     // Git integration commands
     builtin.insert("glog", glog::command as BuiltinCommand);

@@ -381,9 +381,7 @@ fn checkout_commit(ctx: &Context, commit_hash: &str) -> ExitStatus {
     }
 
     // Perform the checkout
-    let output = Command::new("git")
-        .args(["checkout", commit_hash])
-        .output();
+    let output = Command::new("git").args(["checkout", commit_hash]).output();
 
     match output {
         Ok(result) => {
@@ -392,10 +390,8 @@ fn checkout_commit(ctx: &Context, commit_hash: &str) -> ExitStatus {
                 if !stdout.trim().is_empty() {
                     ctx.write_stdout(&stdout).ok();
                 }
-                ctx.write_stdout(&format!(
-                    "✓ Successfully checked out commit {commit_hash}"
-                ))
-                .ok();
+                ctx.write_stdout(&format!("✓ Successfully checked out commit {commit_hash}"))
+                    .ok();
                 ctx.write_stdout("💡 To return to a branch, use: git checkout <branch_name>")
                     .ok();
                 ExitStatus::ExitedWith(0)

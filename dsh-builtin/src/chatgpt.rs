@@ -1,5 +1,5 @@
 use super::ShellProxy;
-use dsh_chatgpt::ChatGptClient;
+use dsh_openai::ChatGptClient;
 use dsh_types::{Context, ExitStatus};
 
 const PROMPT_KEY: &str = "CHAT_PROMPT";

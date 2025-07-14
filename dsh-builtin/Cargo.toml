@@ -8,7 +8,7 @@ edition = "2024"
 [dependencies]
 dsh-types = { path = "../dsh-types" }
 dsh-frecency = { path = "../dsh-frecency" }
-dsh-chatgpt = { path = "../dsh-chatgpt" }
+dsh-openai = { path = "../dsh-openai" }
 
 anyhow.workspace = true
 shellexpand.workspace = true

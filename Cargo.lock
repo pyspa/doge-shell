@@ -811,8 +811,8 @@ dependencies = [
  "crossterm",
  "dirs 5.0.1",
  "dsh-builtin",
- "dsh-chatgpt",
  "dsh-frecency",
+ "dsh-openai",
  "dsh-types",
  "dsh-wasm",
  "easy_reader",
@@ -854,8 +854,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",
- "dsh-chatgpt",
  "dsh-frecency",
+ "dsh-openai",
  "dsh-types",
  "getopts",
  "once_cell",
@@ -863,20 +863,6 @@ dependencies = [
  "shellexpand",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "dsh-chatgpt"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cfg-if",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -894,6 +880,20 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "xdg",
+]
+
+[[package]]
+name = "dsh-openai"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cfg-if",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

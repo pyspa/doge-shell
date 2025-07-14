@@ -14,7 +14,7 @@ members = [
   "dsh-wasm",
   "dsh-types",
   "dsh-builtin",
-  "dsh-chatgpt",
+  "dsh-openai",
 ]
 
 [workspace.dependencies]

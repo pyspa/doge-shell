@@ -1246,7 +1246,7 @@ impl ChatGPTCompletion {
             let items: Vec<Candidate> = serde_json::from_reader(reader)?;
             items
         } else {
-            let client = dsh_chatgpt::ChatGptClient::new(self.api_key.to_string())?;
+            let client = dsh_openai::ChatGptClient::new(self.api_key.to_string())?;
             let content = format!(
                 r#"
 You are a talented software engineer.

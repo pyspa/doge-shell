@@ -802,15 +802,12 @@ impl JobProcess {
                 return true;
             }
             // If the next process (consumer) completed normally, the pipeline should terminate
-            match next.get_state() {
-                ProcessState::Completed(0, None) => {
-                    debug!(
-                        "PIPELINE_CONSUMER_TERMINATED: Consumer process '{}' exited normally, pipeline should terminate",
-                        next.get_cmd()
-                    );
-                    return true;
-                }
-                _ => {}
+            if let ProcessState::Completed(0, None) = next.get_state() {
+                debug!(
+                    "PIPELINE_CONSUMER_TERMINATED: Consumer process '{}' exited normally, pipeline should terminate",
+                    next.get_cmd()
+                );
+                return true;
             }
         }
         false
@@ -1505,13 +1502,16 @@ impl Job {
                 debug!("⏳ WAIT: Job completed, breaking from wait_process loop");
                 break;
             }
-            
+
             // Check if consumer terminated and we need to kill remaining processes
             if let Some(process) = &self.process {
                 if process.is_pipeline_consumer_terminated() && !process.is_completed() {
                     debug!("⏳ WAIT: Pipeline consumer terminated, killing remaining processes");
                     if let Some(pgid) = self.pgid {
-                        debug!("⏳ WAIT: Sending SIGTERM to remaining processes in pgid: {}", pgid);
+                        debug!(
+                            "⏳ WAIT: Sending SIGTERM to remaining processes in pgid: {}",
+                            pgid
+                        );
                         match killpg(pgid, Signal::SIGTERM) {
                             Ok(_) => {
                                 debug!("⏳ WAIT: Successfully sent SIGTERM to pgid: {}", pgid);
@@ -1529,7 +1529,7 @@ impl Job {
                     break;
                 }
             }
-            
+
             if is_job_stopped(self) {
                 debug!("⏳ WAIT: Job stopped");
                 println!("\rdsh: job {} '{}' has stopped", self.job_id, self.cmd);
@@ -1599,7 +1599,7 @@ impl Job {
                 debug!("Job completed, breaking from wait_process_no_hang loop");
                 break;
             }
-            
+
             // Check if consumer terminated and we need to kill remaining processes
             if let Some(process) = &self.process {
                 if process.is_pipeline_consumer_terminated() && !process.is_completed() {
@@ -1623,7 +1623,7 @@ impl Job {
                     break;
                 }
             }
-            
+
             if is_job_stopped(self) {
                 println!("\rdsh: job {} '{}' has stopped", self.job_id, self.cmd);
                 debug!("Job stopped, breaking from wait_process_no_hang loop");
@@ -1690,7 +1690,7 @@ impl Job {
                 debug!("Job completed, breaking from wait_process_no_hang_sync loop");
                 break;
             }
-            
+
             // Check if consumer terminated and we need to kill remaining processes
             if let Some(process) = &self.process {
                 if process.is_pipeline_consumer_terminated() && !process.is_completed() {
@@ -1714,7 +1714,7 @@ impl Job {
                     break;
                 }
             }
-            
+
             if is_job_stopped(self) {
                 println!("\rdsh: job {} '{}' has stopped", self.job_id, self.cmd);
                 debug!("Job stopped, breaking from wait_process_no_hang_sync loop");
@@ -2230,7 +2230,7 @@ pub fn is_job_completed(job: &Job) -> bool {
             "JOB_COMPLETION_CHECK_RESULT: Job {} completion result: {}",
             job.job_id, job_completed
         );
-        
+
         // If consumer terminated but not all processes are complete, we should terminate remaining processes
         if consumer_terminated && !completed {
             debug!(
@@ -2238,7 +2238,7 @@ pub fn is_job_completed(job: &Job) -> bool {
                 job.job_id
             );
         }
-        
+
         job_completed
     } else {
         debug!(
@@ -2613,23 +2613,23 @@ mod tests {
     #[test]
     fn test_pipeline_consumer_termination() {
         init();
-        
+
         // Create a pipeline: cat | less
         let mut cat_process = Process::new("cat".to_string(), vec!["cat".to_string()]);
         let mut less_process = Process::new("less".to_string(), vec!["less".to_string()]);
-        
+
         // Set initial states
         cat_process.state = ProcessState::Running;
         less_process.state = ProcessState::Running;
-        
+
         // Link them in pipeline
         cat_process.next = Some(Box::new(JobProcess::Command(less_process.clone())));
-        
+
         let mut cat_job_process = JobProcess::Command(cat_process);
-        
+
         // Initially, consumer is not terminated
         assert!(!cat_job_process.is_pipeline_consumer_terminated());
-        
+
         // Now simulate less (consumer) exiting normally
         if let JobProcess::Command(cat_proc) = &mut cat_job_process {
             if let Some(next_box) = &mut cat_proc.next {
@@ -2638,10 +2638,10 @@ mod tests {
                 }
             }
         }
-        
+
         // Now consumer should be detected as terminated
         assert!(cat_job_process.is_pipeline_consumer_terminated());
-        
+
         // But the pipeline is not fully completed since cat is still running
         assert!(!cat_job_process.is_completed());
     }
@@ -2649,22 +2649,22 @@ mod tests {
     #[test]
     fn test_job_completion_with_consumer_termination() {
         init();
-        
+
         let shell_pgid = getpgrp();
         let mut job = Job::new("cat file | less".to_string(), shell_pgid);
-        
+
         // Create pipeline processes
         let mut cat_process = Process::new("cat".to_string(), vec!["cat".to_string()]);
         let mut less_process = Process::new("less".to_string(), vec!["less".to_string()]);
-        
+
         // Set states: cat running, less completed normally
         cat_process.state = ProcessState::Running;
         less_process.state = ProcessState::Completed(0, None);
-        
+
         // Link pipeline
         cat_process.next = Some(Box::new(JobProcess::Command(less_process)));
         job.set_process(JobProcess::Command(cat_process));
-        
+
         // Job should be considered completed due to consumer termination
         assert!(is_job_completed(&job));
     }
@@ -2672,22 +2672,22 @@ mod tests {
     #[test]
     fn test_normal_pipeline_completion() {
         init();
-        
+
         let shell_pgid = getpgrp();
         let mut job = Job::new("cat file | less".to_string(), shell_pgid);
-        
+
         // Create pipeline processes
         let mut cat_process = Process::new("cat".to_string(), vec!["cat".to_string()]);
         let mut less_process = Process::new("less".to_string(), vec!["less".to_string()]);
-        
+
         // Set states: both completed
         cat_process.state = ProcessState::Completed(0, None);
         less_process.state = ProcessState::Completed(0, None);
-        
+
         // Link pipeline
         cat_process.next = Some(Box::new(JobProcess::Command(less_process)));
         job.set_process(JobProcess::Command(cat_process));
-        
+
         // Job should be completed normally
         assert!(is_job_completed(&job));
     }

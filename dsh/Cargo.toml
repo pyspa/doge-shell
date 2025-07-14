@@ -26,7 +26,7 @@ dsh-wasm = { path = "../dsh-wasm" }
 dsh-types = { path = "../dsh-types" }
 dsh-frecency = { path = "../dsh-frecency" }
 dsh-builtin = { path = "../dsh-builtin" }
-dsh-chatgpt = { path = "../dsh-chatgpt" }
+dsh-openai = { path = "../dsh-openai" }
 
 anyhow.workspace = true
 libc.workspace=true

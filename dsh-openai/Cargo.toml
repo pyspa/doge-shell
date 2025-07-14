@@ -1,5 +1,5 @@
 [package]
-name = "dsh-chatgpt"
+name = "dsh-openai"
 version = "0.1.0"
 edition = "2024"
 

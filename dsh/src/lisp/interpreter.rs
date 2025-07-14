@@ -272,7 +272,7 @@ fn eval_inner(
                     eval_block_inner(let_env, body.into_iter(), context)
                 }
 
-                Value::Symbol(Symbol(keyword)) if keyword == "vlet" => {
+                Value::Symbol(Symbol(keyword)) if keyword == "v-let" || keyword == "value-let" => {
                     let let_env = Rc::new(RefCell::new(Env::extend(env)));
 
                     let args = &list.cdr().into_iter().collect::<Vec<Value>>();

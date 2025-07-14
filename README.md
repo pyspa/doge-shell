@@ -432,14 +432,14 @@ An example is shown below.
 
 ;; User functions
 (fn gco ()
-    (vlet ((slct (sh "git branch --all | grep -v HEAD | sk | tr -d ' ' "))
-           (branch (sh "echo $slct | sed 's/.* //' | sed 's#remotes/[^/]*/##'")))
-          (sh "git checkout $branch")))
+  (value-let ((slct (sh "git branch --all | grep -v HEAD | sk | tr -d ' ' "))
+              (branch (sh "echo $slct | sed 's/.* //' | sed 's#remotes/[^/]*/##'")))
+    (sh "git checkout $branch")))
 
 (fn fkill (arg)
-    (vlet ((q arg)
-           (slct (sh "ps -ef | sed 1d | sk -q $q | awk '{print $2}' ")))
-        (sh "kill -TERM $slct")))
+  (value-let ((q arg)
+              (slct (sh "ps -ef | sed 1d | sk -q $q | awk '{print $2}' ")))
+    (sh "kill -TERM $slct")))
 
 ```
 

@@ -7,6 +7,7 @@ use tracing::debug;
 
 // Builtin command modules
 mod add_path;
+mod alias;
 mod bg;
 pub mod cd;
 mod chatgpt;
@@ -47,6 +48,15 @@ pub trait ShellProxy {
 
     /// Sets an environment variable (exported to child processes)
     fn set_env_var(&mut self, key: String, value: String);
+
+    /// Retrieves an alias command by name
+    fn get_alias(&mut self, name: &str) -> Option<String>;
+
+    /// Sets an alias mapping from name to command
+    fn set_alias(&mut self, name: String, command: String);
+
+    /// Lists all current aliases as a HashMap
+    fn list_aliases(&mut self) -> std::collections::HashMap<String, String>;
 }
 
 /// Type alias for builtin command function signature
@@ -77,6 +87,7 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, BuiltinCommand>>> = Lazy::n
     builtin.insert("set", set::command as BuiltinCommand);
     builtin.insert("var", var::command as BuiltinCommand);
     builtin.insert("read", read::command as BuiltinCommand);
+    builtin.insert("alias", alias::command as BuiltinCommand);
 
     // AI integration commands
     builtin.insert("chat", chatgpt::chat as BuiltinCommand);

@@ -858,9 +858,11 @@ dependencies = [
  "dsh-openai",
  "dsh-types",
  "getopts",
+ "nix 0.26.4",
  "once_cell",
  "regex",
  "shellexpand",
+ "tabled",
  "tracing",
  "uuid",
 ]

@@ -455,4 +455,19 @@ impl ShellProxy for Shell {
             debug!("set env {} {}", &key, &value);
         }
     }
+
+    fn get_alias(&mut self, name: &str) -> Option<String> {
+        debug!("Getting alias for: {}", name);
+        self.environment.read().alias.get(name).cloned()
+    }
+
+    fn set_alias(&mut self, name: String, command: String) {
+        debug!("Setting alias: {} = {}", name, command);
+        self.environment.write().alias.insert(name, command);
+    }
+
+    fn list_aliases(&mut self) -> std::collections::HashMap<String, String> {
+        debug!("Listing all aliases");
+        self.environment.read().alias.clone()
+    }
 }

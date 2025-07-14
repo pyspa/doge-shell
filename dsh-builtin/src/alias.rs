@@ -83,8 +83,7 @@ fn show_specific_alias(ctx: &Context, name: &str, proxy: &mut dyn ShellProxy) ->
             }
         }
         None => {
-            ctx.write_stderr(&format!("alias: {name}: not found"))
-                .ok();
+            ctx.write_stderr(&format!("alias: {name}: not found")).ok();
             ExitStatus::ExitedWith(1)
         }
     }
@@ -137,9 +136,10 @@ fn set_alias_from_assignment(
 /// Removes surrounding single or double quotes from a string
 fn remove_surrounding_quotes(s: &str) -> &str {
     if s.len() >= 2
-        && ((s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\''))) {
-            return &s[1..s.len() - 1];
-        }
+        && ((s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')))
+    {
+        return &s[1..s.len() - 1];
+    }
     s
 }
 

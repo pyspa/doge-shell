@@ -7,10 +7,10 @@ const PROMPT_KEY: &str = "CHAT_PROMPT";
 
 /// Built-in chat command implementation
 /// Integrates OpenAI ChatGPT API for AI-powered assistance within the shell
-/// Requires OPEN_AI_API_KEY environment variable to be set
+/// Requires OPENAI_API_KEY environment variable to be set
 pub fn chat(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     // Check if OpenAI API key is available
-    if let Some(key) = proxy.get_var("OPEN_AI_API_KEY") {
+    if let Some(key) = proxy.get_var("OPENAI_API_KEY") {
         match ChatGptClient::new(key) {
             Ok(client) => {
                 let content = &argv[1];

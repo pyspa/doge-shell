@@ -1,6 +1,6 @@
 use crate::completion::{self, Completion};
 use crate::dirs;
-use crate::input::{Input, InputConfig};
+use crate::input::{Input, InputConfig, display_width};
 use crate::parser::Rule;
 use crate::prompt::Prompt;
 use crate::shell::{SHELL_TERMINAL, Shell};
@@ -237,15 +237,26 @@ impl<'a> Repl<'a> {
     }
 
     fn move_cursor_input_end(&self, out: &mut StdoutLock<'static>) {
-        let prompt_size = self.prompt.read().mark.chars().count();
-        let cursor_pos = prompt_size + self.input.cursor() + 1;
+        let prompt_mark = &self.prompt.read().mark;
+        let prompt_display_width = display_width(prompt_mark);
+        let input_cursor_width = self.input.cursor_display_width();
+        let cursor_display_pos = prompt_display_width + input_cursor_width;
+
         debug!(
-            "move_cursor_input_end: prompt_size={}, input_cursor={}, final_pos={}",
-            prompt_size,
-            self.input.cursor(),
-            cursor_pos
+            "move_cursor_input_end: prompt_mark='{}', prompt_width={}, input_cursor_width={}, final_pos={}",
+            prompt_mark, prompt_display_width, input_cursor_width, cursor_display_pos
         );
-        queue!(out, ResetColor, cursor::MoveToColumn(cursor_pos as u16),).ok();
+        debug!(
+            "move_cursor_input_end: input_text='{}', input_cursor_pos={}",
+            self.input.as_str(),
+            self.input.cursor()
+        );
+
+        // Ensure we don't go beyond reasonable bounds
+        let safe_pos = cursor_display_pos.min(1000); // Reasonable terminal width limit
+
+        // crossterm uses 0-based column indexing
+        queue!(out, ResetColor, cursor::MoveToColumn(safe_pos as u16),).ok();
     }
 
     // fn move_cursor(&self, len: usize) {
@@ -360,8 +371,11 @@ impl<'a> Repl<'a> {
         debug!("print_input called, reset_completion: {}", reset_completion);
         queue!(out, cursor::Hide).ok();
         let input = self.input.to_string();
-        let prompt_count = self.prompt.write().mark.chars().count();
-        debug!("Current input: '{}', prompt_count: {}", input, prompt_count);
+        let prompt_display_width = display_width(&self.prompt.write().mark);
+        debug!(
+            "Current input: '{}', prompt_display_width: {}",
+            input, prompt_display_width
+        );
 
         let mut completion: Option<String> = None;
         let mut can_execute = false;

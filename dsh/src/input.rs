@@ -5,6 +5,48 @@ use pest::Span;
 use std::cmp::min;
 use std::fmt;
 use std::io::{BufWriter, StdoutLock, Write};
+use unicode_width::UnicodeWidthChar;
+
+/// Remove ANSI escape sequences from a string and return the clean string
+fn strip_ansi_codes(input: &str) -> String {
+    let mut result = String::new();
+    let mut chars = input.chars();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            // Found escape sequence, skip until we find the end
+            if chars.next() == Some('[') {
+                // Skip until we find a letter (end of ANSI sequence)
+                for next_ch in chars.by_ref() {
+                    if next_ch.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
+}
+
+/// Calculate the actual display width of a string, accounting for ANSI codes and Unicode width
+pub fn display_width(input: &str) -> usize {
+    let clean_str = strip_ansi_codes(input);
+
+    // Use UnicodeWidthStr::width_cjk for better East Asian character support
+    // This treats ambiguous-width characters as wide (2 columns)
+    clean_str
+        .chars()
+        .map(|c| {
+            match unicode_width::UnicodeWidthChar::width(c) {
+                Some(w) => w,
+                None => 0, // Control characters, combining marks, etc.
+            }
+        })
+        .sum()
+}
 
 const INITIAL_CAP: usize = 256;
 
@@ -137,6 +179,38 @@ impl Input {
 
     pub fn len(&self) -> usize {
         self.indices.len()
+    }
+
+    /// Get the display width from the beginning to the cursor position
+    pub fn cursor_display_width(&self) -> usize {
+        if self.cursor == 0 {
+            return 0;
+        }
+
+        let cursor_byte_pos = self.byte_index();
+        let text_to_cursor = &self.input[..cursor_byte_pos];
+
+        // Calculate width character by character for better control
+        let width = text_to_cursor
+            .chars()
+            .map(|c| {
+                match c.width() {
+                    Some(w) => w,
+                    None => 0, // Control characters, combining marks, etc.
+                }
+            })
+            .sum();
+
+        // Debug output for troubleshooting
+        tracing::debug!(
+            "cursor_display_width: cursor={}, byte_pos={}, text='{}', width={}",
+            self.cursor,
+            cursor_byte_pos,
+            text_to_cursor,
+            width
+        );
+
+        width
     }
 
     pub fn is_empty(&self) -> bool {
@@ -297,5 +371,102 @@ mod tests {
         // Cursor movement test
         input.move_to_end();
         assert_eq!(input.cursor(), 2);
+    }
+
+    #[test]
+    fn test_unicode_width_calculation() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+
+        // Test ASCII characters (width = 1 each)
+        input.insert('a');
+        input.insert('b');
+        assert_eq!(input.cursor(), 2);
+        assert_eq!(input.cursor_display_width(), 2);
+
+        // Clear and test Japanese characters (width = 2 each)
+        input.clear();
+        input.insert('あ'); // Japanese hiragana 'a'
+        input.insert('い'); // Japanese hiragana 'i'
+        assert_eq!(input.cursor(), 2); // 2 characters
+        assert_eq!(input.cursor_display_width(), 4); // 4 display width
+
+        // Test mixed ASCII and Japanese
+        input.clear();
+        input.insert('a'); // width = 1
+        input.insert('あ'); // width = 2
+        input.insert('b'); // width = 1
+        assert_eq!(input.cursor(), 3); // 3 characters
+        assert_eq!(input.cursor_display_width(), 4); // 1 + 2 + 1 = 4 display width
+    }
+
+    #[test]
+    fn test_cursor_movement_with_unicode() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+
+        // Insert mixed characters
+        input.insert('a'); // width = 1
+        input.insert('あ'); // width = 2
+        input.insert('b'); // width = 1
+
+        // Move cursor to different positions and check display width
+        input.move_to_begin();
+        assert_eq!(input.cursor(), 0);
+        assert_eq!(input.cursor_display_width(), 0);
+
+        input.move_by(1); // After 'a'
+        assert_eq!(input.cursor(), 1);
+        assert_eq!(input.cursor_display_width(), 1);
+
+        input.move_by(1); // After 'あ'
+        assert_eq!(input.cursor(), 2);
+        assert_eq!(input.cursor_display_width(), 3); // 1 + 2
+
+        input.move_by(1); // After 'b'
+        assert_eq!(input.cursor(), 3);
+        assert_eq!(input.cursor_display_width(), 4); // 1 + 2 + 1
+    }
+
+    #[test]
+    fn test_strip_ansi_codes() {
+        // Test plain text
+        assert_eq!(strip_ansi_codes("hello"), "hello");
+
+        // Test text with ANSI color codes
+        assert_eq!(strip_ansi_codes("\x1b[31mred\x1b[0m"), "red");
+        assert_eq!(
+            strip_ansi_codes("\x1b[1;32mbold green\x1b[0m"),
+            "bold green"
+        );
+
+        // Test mixed content
+        assert_eq!(
+            strip_ansi_codes("normal \x1b[31mred\x1b[0m normal"),
+            "normal red normal"
+        );
+    }
+
+    #[test]
+    fn test_display_width() {
+        // Test ASCII
+        assert_eq!(display_width("hello"), 5);
+
+        // Test Unicode
+        assert_eq!(display_width("こんにちは"), 10); // 5 Japanese chars * 2 width each
+
+        // Test emoji (dog emoji width is 2)
+        let dog_width = display_width("🐕");
+        assert_eq!(dog_width, 2);
+
+        // Test mixed with ANSI codes
+        let ansi_test = display_width("\x1b[31m🐕\x1b[0m < ");
+        // emoji(2) + space(1) + <(1) + space(1) = 5
+        assert_eq!(ansi_test, 5);
+
+        // Test the actual prompt format
+        let prompt_width = display_width("🐕 < ");
+        // emoji(2) + space(1) + <(1) + space(1) = 5
+        assert_eq!(prompt_width, 5);
     }
 }

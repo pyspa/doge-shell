@@ -116,7 +116,7 @@ impl TryFrom<&Value> for IntType {
                 return Ok(*this);
             }
             _ => Err(RuntimeError {
-                msg: format!("Expected int, got a {}", value),
+                msg: format!("Expected int, got a {value}"),
             }),
         }
     }
@@ -135,7 +135,7 @@ impl TryFrom<&Value> for FloatType {
         match value {
             Value::Float(this) => Ok(*this),
             _ => Err(RuntimeError {
-                msg: format!("Expected float, got a {}", value),
+                msg: format!("Expected float, got a {value}"),
             }),
         }
     }
@@ -154,7 +154,7 @@ impl<'a> TryFrom<&'a Value> for &'a String {
         match value {
             Value::String(this) => Ok(this),
             _ => Err(RuntimeError {
-                msg: format!("Expected string, got a {}", value),
+                msg: format!("Expected string, got a {value}"),
             }),
         }
     }
@@ -173,7 +173,7 @@ impl<'a> TryFrom<&'a Value> for &'a Symbol {
         match value {
             Value::Symbol(this) => Ok(this),
             _ => Err(RuntimeError {
-                msg: format!("Expected symbol, got a {}", value),
+                msg: format!("Expected symbol, got a {value}"),
             }),
         }
     }
@@ -192,7 +192,7 @@ impl<'a> TryFrom<&'a Value> for &'a List {
         match value {
             Value::List(this) => Ok(this),
             _ => Err(RuntimeError {
-                msg: format!("Expected list, got a {}", value),
+                msg: format!("Expected list, got a {value}"),
             }),
         }
     }
@@ -211,7 +211,7 @@ impl<'a> TryFrom<&'a Value> for &'a Lambda {
         match value {
             Value::Lambda(this) => Ok(this),
             _ => Err(RuntimeError {
-                msg: format!("Expected function, got a {}", value),
+                msg: format!("Expected function, got a {value}"),
             }),
         }
     }
@@ -230,7 +230,7 @@ impl<'a> TryFrom<&'a Value> for &'a HashMapRc {
         match value {
             Value::HashMap(this) => Ok(this),
             _ => Err(RuntimeError {
-                msg: format!("Expected hash map, got a {}", value),
+                msg: format!("Expected hash map, got a {value}"),
             }),
         }
     }
@@ -255,7 +255,7 @@ impl<'a> TryFrom<&'a Value> for &'a Rc<dyn Any> {
         match value {
             Value::Foreign(this) => Ok(this),
             _ => Err(RuntimeError {
-                msg: format!("Expected foreign value, got a {}", value),
+                msg: format!("Expected foreign value, got a {value}"),
             }),
         }
     }
@@ -274,10 +274,10 @@ impl std::fmt::Display for Value {
             Value::NativeClosure(_) => f.write_str("<closure_function>"),
             Value::True => f.write_str("T"),
             Value::False => f.write_str("F"),
-            Value::Lambda(this) => write!(f, "<func:(lambda {})>", this),
-            Value::Macro(this) => write!(f, "(macro {})", this),
-            Value::String(this) => write!(f, "{}", this),
-            Value::List(this) => write!(f, "{}", this),
+            Value::Lambda(this) => write!(f, "<func:(lambda {this})>"),
+            Value::Macro(this) => write!(f, "(macro {this})"),
+            Value::String(this) => write!(f, "{this}"),
+            Value::List(this) => write!(f, "{this}"),
             Value::HashMap(this) => {
                 let borrowed = this.borrow();
                 let entries = std::iter::once(lisp! { hash }).chain(
@@ -288,14 +288,14 @@ impl std::fmt::Display for Value {
 
                 let list = Value::List(entries.collect());
 
-                write!(f, "{}", list)
+                write!(f, "{list}")
             }
-            Value::Int(this) => write!(f, "{}", this),
-            Value::Float(this) => write!(f, "{}", this),
-            Value::Symbol(Symbol(this)) => write!(f, "{}", this),
+            Value::Int(this) => write!(f, "{this}"),
+            Value::Float(this) => write!(f, "{this}"),
+            Value::Symbol(Symbol(this)) => write!(f, "{this}"),
             Value::Foreign(_) => f.write_str("<foreign_value>"),
             Value::TailCall { func, args } => {
-                write!(f, "<tail-call: {:?} with {:?} >", func, args)
+                write!(f, "<tail-call: {func:?} with {args:?} >")
             }
         }
     }
@@ -308,19 +308,18 @@ impl Debug for Value {
             Value::NativeClosure(_) => f.write_str("<closure_function>"),
             Value::True => f.write_str("Value::True"),
             Value::False => f.write_str("Value::False"),
-            Value::Lambda(this) => write!(f, "Value::Lambda({:?})", this),
-            Value::Macro(this) => write!(f, "Value::Macro({:?})", this),
-            Value::String(this) => write!(f, "Value::String({:?})", this),
-            Value::List(this) => write!(f, "Value::List({:?})", this),
-            Value::HashMap(this) => write!(f, "Value::HashMap({:?})", this),
-            Value::Int(this) => write!(f, "Value::Int({:?})", this),
-            Value::Float(this) => write!(f, "Value::Float({:?})", this),
-            Value::Symbol(Symbol(this)) => write!(f, "Value::Symbol({:?})", this),
+            Value::Lambda(this) => write!(f, "Value::Lambda({this:?})"),
+            Value::Macro(this) => write!(f, "Value::Macro({this:?})"),
+            Value::String(this) => write!(f, "Value::String({this:?})"),
+            Value::List(this) => write!(f, "Value::List({this:?})"),
+            Value::HashMap(this) => write!(f, "Value::HashMap({this:?})"),
+            Value::Int(this) => write!(f, "Value::Int({this:?})"),
+            Value::Float(this) => write!(f, "Value::Float({this:?})"),
+            Value::Symbol(Symbol(this)) => write!(f, "Value::Symbol({this:?})"),
             Value::Foreign(_) => f.write_str("<foreign_value>"),
             Value::TailCall { func, args } => write!(
                 f,
-                "Value::TailCall {{ func: {:?}, args: {:?} }}",
-                func, args
+                "Value::TailCall {{ func: {func:?}, args: {args:?} }}"
             ),
         }
     }
@@ -510,7 +509,7 @@ impl Ord for Value {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.partial_cmp(other) {
             Some(ordering) => ordering,
-            None => format!("{:?}", self).cmp(&format!("{:?}", other)),
+            None => format!("{self:?}").cmp(&format!("{other:?}")),
         }
     }
 }

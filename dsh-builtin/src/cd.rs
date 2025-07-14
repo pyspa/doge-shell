@@ -13,7 +13,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     let current_dir = match std::env::current_dir() {
         Ok(dir) => dir,
         Err(err) => {
-            ctx.write_stderr(&format!("cd: failed to get current directory: {}", err))
+            ctx.write_stderr(&format!("cd: failed to get current directory: {err}"))
                 .ok();
             return ExitStatus::ExitedWith(1);
         }
@@ -28,7 +28,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
             match res {
                 Ok(res) => res.to_string_lossy().into_owned(),
                 Err(err) => {
-                    ctx.write_stderr(&format!("cd: {}: {}", err, dir)).ok();
+                    ctx.write_stderr(&format!("cd: {err}: {dir}")).ok();
                     return ExitStatus::ExitedWith(1);
                 }
             }
@@ -45,7 +45,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     match proxy.changepwd(&dir) {
         Ok(_) => ExitStatus::ExitedWith(0),
         Err(err) => {
-            ctx.write_stderr(&format!("cd: {}: {}", err, dir)).ok();
+            ctx.write_stderr(&format!("cd: {err}: {dir}")).ok();
             ExitStatus::ExitedWith(1)
         }
     }

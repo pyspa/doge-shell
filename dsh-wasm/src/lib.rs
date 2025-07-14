@@ -79,7 +79,7 @@ impl WasmEngine {
             let start = instance.exports.get_function("_start")?;
             start.call(&mut self.store, &[])?;
         } else {
-            eprint!("\runknown wasm command: {}\r\n", name);
+            eprint!("\runknown wasm command: {name}\r\n");
         }
         Ok(())
     }

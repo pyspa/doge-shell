@@ -269,7 +269,7 @@ impl SkimItem for Candidate {
     fn text(&self) -> Cow<str> {
         match self {
             Candidate::Item(x, y) => {
-                let desc = format!("{0:<30} {1}", x, y);
+                let desc = format!("{x:<30} {y}");
                 Cow::Owned(desc)
             }
             Candidate::Path(p) => Cow::Borrowed(p),
@@ -277,31 +277,31 @@ impl SkimItem for Candidate {
             Candidate::Command { name, description } => {
                 let icon = "⚡"; // Command icon
                 if description.is_empty() {
-                    Cow::Owned(format!("{} {}", icon, name))
+                    Cow::Owned(format!("{icon} {name}"))
                 } else {
-                    Cow::Owned(format!("{} {:<30} {}", icon, name, description))
+                    Cow::Owned(format!("{icon} {name:<30} {description}"))
                 }
             }
             Candidate::Option { name, description } => {
                 let icon = "🔧"; // Option icon
                 if description.is_empty() {
-                    Cow::Owned(format!("{} {}", icon, name))
+                    Cow::Owned(format!("{icon} {name}"))
                 } else {
-                    Cow::Owned(format!("{} {:<30} {}", icon, name, description))
+                    Cow::Owned(format!("{icon} {name:<30} {description}"))
                 }
             }
             Candidate::File { path, is_dir } => {
                 let type_indicator = if *is_dir { "/" } else { "" };
-                Cow::Owned(format!("{}{}", path, type_indicator))
+                Cow::Owned(format!("{path}{type_indicator}"))
             }
             Candidate::GitBranch { name, is_current } => {
                 let indicator = if *is_current { " (current)" } else { "" };
-                Cow::Owned(format!("{}{}", name, indicator))
+                Cow::Owned(format!("{name}{indicator}"))
             }
             Candidate::History {
                 command, frequency, ..
             } => {
-                let desc = format!("{0:<30} used {1} times", command, frequency);
+                let desc = format!("{command:<30} used {frequency} times");
                 Cow::Owned(desc)
             }
         }
@@ -492,7 +492,7 @@ fn completion_from_lisp(input: &Input, repl: &Repl, query: Option<&str>) -> Opti
                         return Some(str);
                     }
                     Err(err) => {
-                        println!("{:?}", err);
+                        println!("{err:?}");
                     }
                     _ => {}
                 }
@@ -614,11 +614,11 @@ fn completion_from_chatgpt(input: &Input, repl: &Repl, _query: Option<&str>) -> 
                     return res;
                 }
                 Err(err) => {
-                    eprintln!("{:?}", err);
+                    eprintln!("{err:?}");
                 }
             },
             Err(err) => {
-                eprintln!("{:?}", err);
+                eprintln!("{err:?}");
             }
         }
     }
@@ -908,7 +908,7 @@ fn completion_from_lisp_with_prompt(
                         return Some(str);
                     }
                     Err(err) => {
-                        println!("{:?}", err);
+                        println!("{err:?}");
                     }
                     _ => {}
                 }
@@ -1167,7 +1167,7 @@ fn get_file_completions_with_filter(
     );
     let mut candidates_set = BTreeSet::new();
     let prefix = if !prefix.is_empty() && !prefix.ends_with('/') {
-        format!("{}/", prefix)
+        format!("{prefix}/")
     } else {
         prefix.to_string()
     };
@@ -1190,10 +1190,10 @@ fn get_file_completions_with_filter(
                 }
 
                 let candidate = if is_file {
-                    Candidate::Item(format!("{}{}", prefix, file_name), "(file)".to_string())
+                    Candidate::Item(format!("{prefix}{file_name}"), "(file)".to_string())
                 } else {
                     Candidate::Item(
-                        format!("{}{}", prefix, file_name),
+                        format!("{prefix}{file_name}"),
                         "(directory)".to_string(),
                     )
                 };
@@ -1279,9 +1279,8 @@ Output:
 "--author", "-l to show the author of each file"
 
 
-Follow the above rules to print the subcommands and option lists for the "{}" command.
-"#,
-                cmd
+Follow the above rules to print the subcommands and option lists for the "{cmd}" command.
+"#
             );
             let mut items: Vec<Candidate> = Vec::new();
 

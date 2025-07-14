@@ -310,7 +310,7 @@ impl CompletionGenerator {
                     let full_path = if dir_path == "." {
                         file_name
                     } else {
-                        format!("{}/{}", dir_path, file_name)
+                        format!("{dir_path}/{file_name}")
                     };
 
                     if path.is_dir() {
@@ -357,7 +357,7 @@ impl CompletionGenerator {
                     let full_path = if dir_path == "." {
                         file_name
                     } else {
-                        format!("{}/{}", dir_path, file_name)
+                        format!("{dir_path}/{file_name}")
                     };
 
                     candidates.push(CompletionCandidate::directory(full_path));

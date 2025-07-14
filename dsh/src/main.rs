@@ -50,7 +50,7 @@ fn display_user_error(err: &anyhow::Error) {
         debug!("Shell exiting normally: {}", error_msg);
     } else {
         // For other errors, display the root cause without debug info
-        eprintln!("dsh: {}", error_msg);
+        eprintln!("dsh: {error_msg}");
     }
 }
 
@@ -335,7 +335,7 @@ mod tests {
                     && content.contains("Test panic for logging verification")
                 {
                     found_panic_log = true;
-                    println!("Panic information found in {}", log_file);
+                    println!("Panic information found in {log_file}");
                     break;
                 }
             }

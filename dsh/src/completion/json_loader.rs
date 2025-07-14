@@ -116,14 +116,14 @@ impl JsonCompletionLoader {
     ) -> Result<usize> {
         debug!("Reading directory entries from: {:?}", dir);
         let entries =
-            fs::read_dir(dir).with_context(|| format!("Failed to read directory: {:?}", dir))?;
+            fs::read_dir(dir).with_context(|| format!("Failed to read directory: {dir:?}"))?;
 
         let mut loaded_count = 0;
         let mut file_count = 0;
 
         for entry in entries {
             let entry =
-                entry.with_context(|| format!("Failed to read directory entry in {:?}", dir))?;
+                entry.with_context(|| format!("Failed to read directory entry in {dir:?}"))?;
             let path = entry.path();
             file_count += 1;
 
@@ -167,7 +167,7 @@ impl JsonCompletionLoader {
     fn load_completion_file(&self, path: &Path) -> Result<CommandCompletion> {
         debug!("Reading file content from: {:?}", path);
         let content =
-            fs::read_to_string(path).with_context(|| format!("Failed to read file: {:?}", path))?;
+            fs::read_to_string(path).with_context(|| format!("Failed to read file: {path:?}"))?;
 
         debug!("File content length: {} bytes", content.len());
         debug!("Parsing JSON content from: {:?}", path);
@@ -193,7 +193,7 @@ impl JsonCompletionLoader {
         // Basic validation
         debug!("Validating completion data for: {}", completion.command);
         self.validate_completion(&completion)
-            .with_context(|| format!("Validation failed for file: {:?}", path))?;
+            .with_context(|| format!("Validation failed for file: {path:?}"))?;
 
         debug!("Validation successful for: {}", completion.command);
         Ok(completion)
@@ -289,7 +289,7 @@ impl JsonCompletionLoader {
 
     /// Load completion data for specific command
     pub fn load_command_completion(&self, command_name: &str) -> Result<Option<CommandCompletion>> {
-        let filename = format!("{}.json", command_name);
+        let filename = format!("{command_name}.json");
 
         for dir in &self.completion_dirs {
             let path = dir.join(&filename);
@@ -319,7 +319,7 @@ impl JsonCompletionLoader {
             }
 
             let entries = fs::read_dir(dir)
-                .with_context(|| format!("Failed to read directory: {:?}", dir))?;
+                .with_context(|| format!("Failed to read directory: {dir:?}"))?;
 
             for entry in entries {
                 let entry = entry?;
@@ -461,7 +461,7 @@ mod tests {
                 );
             }
             Err(e) => {
-                println!("Error loading git completion: {}", e);
+                println!("Error loading git completion: {e}");
             }
         }
     }
@@ -491,7 +491,7 @@ mod tests {
                 );
             }
             Err(e) => {
-                println!("Error loading cargo completion: {}", e);
+                println!("Error loading cargo completion: {e}");
             }
         }
     }

@@ -157,7 +157,7 @@ impl Input {
         if let Some(match_index) = &self.match_index {
             // Build colored segments to reduce write_fmt calls
             let colored_output = self.build_colored_string(match_index);
-            out.write_fmt(format_args!("{}", colored_output)).ok();
+            out.write_fmt(format_args!("{colored_output}")).ok();
         } else {
             out.write_fmt(format_args!("{}", self.as_str().with(self.config.fg_color)))
                 .ok();
@@ -243,7 +243,7 @@ impl Input {
         }
 
         // Single write operation
-        out.write_fmt(format_args!("{}", output)).ok();
+        out.write_fmt(format_args!("{output}")).ok();
 
         // Ensure all buffered output is written immediately
         out.flush().ok();
@@ -280,7 +280,7 @@ mod tests {
 
         assert_eq!(input.as_str(), "");
         assert_eq!(input.cursor(), 0);
-        assert_eq!(format!("{}", input), "");
+        assert_eq!(format!("{input}"), "");
     }
 
     #[test]

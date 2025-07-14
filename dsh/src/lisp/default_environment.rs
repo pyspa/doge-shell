@@ -277,7 +277,7 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
                     hash.insert(key.clone(), value.clone());
                 } else {
                     return Err(RuntimeError {
-                        msg: format!("Must pass an even number of arguments to 'hash', because they're used as key/value pairs; found extra argument {}", key)
+                        msg: format!("Must pass an even number of arguments to 'hash', because they're used as key/value pairs; found extra argument {key}")
                     });
                 }
             }
@@ -320,8 +320,7 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
                 Value::String(_) => Ok(Value::String("".into())),
                 _ => Err(RuntimeError {
                     msg: format!(
-                        "Function \"+\" requires arguments to be numbers or strings; found {}",
-                        first_arg
+                        "Function \"+\" requires arguments to be numbers or strings; found {first_arg}"
                     ),
                 }),
             }?;
@@ -329,8 +328,7 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
             for arg in args {
                 total = (&total + &arg).map_err(|_| RuntimeError {
                     msg: format!(
-                        "Function \"+\" requires arguments to be numbers or strings; found {}",
-                        arg
+                        "Function \"+\" requires arguments to be numbers or strings; found {arg}"
                     ),
                 })?;
             }
@@ -359,8 +357,7 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
             for arg in args {
                 product = (&product * &arg).map_err(|_| RuntimeError {
                     msg: format!(
-                        "Function \"*\" requires arguments to be numbers; found {}",
-                        arg
+                        "Function \"*\" requires arguments to be numbers; found {arg}"
                     ),
                 })?;
             }

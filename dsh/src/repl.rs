@@ -42,7 +42,7 @@ fn display_user_error(err: &anyhow::Error) {
         debug!("Shell exiting normally: {}", error_msg);
     } else {
         // For other errors, display the root cause without debug info
-        eprintln!("dsh: {}", error_msg);
+        eprintln!("dsh: {error_msg}");
     }
 }
 
@@ -846,12 +846,12 @@ impl<'a> Repl<'a> {
                     match maybe_event {
                         Some(Ok(event)) => {
                             if let Err(err) = self.handle_event(ShellEvent::Input(event)).await{
-                                self.shell.print_error(format!("Error: {:?}\r",err));
+                                self.shell.print_error(format!("Error: {err:?}\r"));
                                 break;
                             }
                         }
                         Some(Err(err)) => {
-                            self.shell.print_error(format!("Error: {:?}\r",err));
+                            self.shell.print_error(format!("Error: {err:?}\r"));
                             break;
                         },
                         None => break,

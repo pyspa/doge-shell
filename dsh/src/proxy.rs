@@ -153,7 +153,7 @@ impl ShellProxy for Shell {
                     debug!("{}", val);
                 }
                 Err(err) => {
-                    ctx.write_stderr(&format!("{}", err))?;
+                    ctx.write_stderr(&format!("{err}"))?;
                 }
             },
             "lisp-run" => {
@@ -164,7 +164,7 @@ impl ShellProxy for Shell {
                         debug!("{}", val);
                     }
                     Err(err) => {
-                        ctx.write_stderr(&format!("{}", err))?;
+                        ctx.write_stderr(&format!("{err}"))?;
                     }
                 }
             }
@@ -189,7 +189,7 @@ impl ShellProxy for Shell {
                 let output = match std::str::from_utf8(&stdin) {
                     Ok(s) => s.trim_end_matches('\n').to_owned(),
                     Err(err) => {
-                        ctx.write_stderr(&format!("read: invalid UTF-8 input: {}", err))
+                        ctx.write_stderr(&format!("read: invalid UTF-8 input: {err}"))
                             .ok();
                         return Err(anyhow::anyhow!("invalid UTF-8 input: {}", err));
                     }
@@ -275,7 +275,7 @@ impl ShellProxy for Shell {
                                     "FG_CMD_ERROR: put_in_foreground_sync failed for job {} with error: {:?}",
                                     job.job_id, err
                                 );
-                                ctx.write_stderr(&format!("{}", err)).ok();
+                                ctx.write_stderr(&format!("{err}")).ok();
                                 return Err(err);
                             }
                         }
@@ -283,7 +283,7 @@ impl ShellProxy for Shell {
                         let error_msg = if job_spec.is_empty() {
                             "fg: no current job".to_string()
                         } else {
-                            format!("fg: job not found: {}", job_spec)
+                            format!("fg: job not found: {job_spec}")
                         };
                         debug!("FG_CMD_NOT_FOUND: {}", error_msg);
                         ctx.write_stderr(&error_msg)?;
@@ -400,7 +400,7 @@ impl ShellProxy for Shell {
                                         "BG_CMD_SIGCONT_ERROR: Failed to send SIGCONT to job {}: {}",
                                         job.job_id, err
                                     );
-                                    ctx.write_stderr(&format!("bg: failed to resume job: {}", err))
+                                    ctx.write_stderr(&format!("bg: failed to resume job: {err}"))
                                         .ok();
                                     return Err(err.into());
                                 }
@@ -419,7 +419,7 @@ impl ShellProxy for Shell {
                         let error_msg = if job_spec.is_empty() {
                             "bg: no stopped jobs".to_string()
                         } else {
-                            format!("bg: job not found: {}", job_spec)
+                            format!("bg: job not found: {job_spec}")
                         };
                         debug!("BG_CMD_NOT_FOUND: {}", error_msg);
                         ctx.write_stderr(&error_msg)?;

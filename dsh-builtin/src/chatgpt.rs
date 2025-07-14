@@ -16,13 +16,13 @@ pub fn chat(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> Exi
                         ExitStatus::ExitedWith(0)
                     }
                     Err(err) => {
-                        ctx.write_stderr(&format!("\r{:?}", err)).ok();
+                        ctx.write_stderr(&format!("\r{err:?}")).ok();
                         ExitStatus::ExitedWith(1)
                     }
                 }
             }
             Err(err) => {
-                ctx.write_stderr(&format!("\r{:?}", err)).ok();
+                ctx.write_stderr(&format!("\r{err:?}")).ok();
                 ExitStatus::ExitedWith(1)
             }
         }

@@ -1788,9 +1788,9 @@ impl OutputMonitor {
                 disable_raw_mode().ok();
                 if !self.outputed {
                     self.outputed = true;
-                    print!("\n\r{}", line);
+                    print!("\n\r{line}");
                 } else {
-                    print!("{}", line);
+                    print!("{line}");
                 }
                 enable_raw_mode().ok();
                 Ok(len)
@@ -1813,9 +1813,9 @@ impl OutputMonitor {
                     disable_raw_mode().ok();
                     if !self.outputed {
                         self.outputed = true;
-                        print!("\r{}", line);
+                        print!("\r{line}");
                     } else {
-                        print!("{}", line);
+                        print!("{line}");
                     }
                     enable_raw_mode().ok();
                     len = readed;

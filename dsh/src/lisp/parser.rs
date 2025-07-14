@@ -112,7 +112,7 @@ fn parse_list(code: &str, index: usize) -> ParseResult {
         }))
     } else {
         Some(Err(ParseError {
-            msg: format!("Unclosed list at index {}", index),
+            msg: format!("Unclosed list at index {index}"),
         }))
     }
 }
@@ -275,7 +275,7 @@ fn parse_string(code: &str, index: usize) -> ParseResult {
             }))
         } else {
             Some(Err(ParseError {
-                msg: format!("Unclosed string at index {}", last_index),
+                msg: format!("Unclosed string at index {last_index}"),
             }))
         }
     } else {

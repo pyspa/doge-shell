@@ -70,7 +70,7 @@ pub fn allow_direnv(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
                 env.borrow().shell_env.write().direnv_roots.push(direnv);
             }
             Err(e) => {
-                eprintln!("Warning: Failed to create direnv for {}: {}", root, e);
+                eprintln!("Warning: Failed to create direnv for {root}: {e}");
             }
         }
     }
@@ -140,7 +140,7 @@ pub async fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
     let shell_tmode = match tcgetattr(0) {
         Ok(tmode) => tmode,
         Err(err) => {
-            eprintln!("error: {}", err);
+            eprintln!("error: {err}");
             return Err(RuntimeError {
                 msg: err.to_string(),
             });
@@ -151,7 +151,7 @@ pub async fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
     let (pout, pin) = match pipe() {
         Ok(p) => p,
         Err(err) => {
-            eprintln!("error: {}", err);
+            eprintln!("error: {err}");
             return Err(RuntimeError {
                 msg: err.to_string(),
             });
@@ -160,7 +160,7 @@ pub async fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
 
     ctx.captured_out = Some(pin);
     if let Err(err) = shell.eval_str(&mut ctx, input, false).await {
-        eprintln!("error: {}", err);
+        eprintln!("error: {err}");
         return Err(RuntimeError {
             msg: err.to_string(),
         });
@@ -172,7 +172,7 @@ pub async fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
     let output = match std::str::from_utf8(&raw_stdout) {
         Ok(str) => str.trim_matches('\n').to_owned(),
         Err(err) => {
-            eprintln!("error: {}", err);
+            eprintln!("error: {err}");
             return Err(RuntimeError {
                 msg: err.to_string(),
             });
@@ -200,7 +200,7 @@ pub async fn sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value,
     let shell_tmode = match tcgetattr(0) {
         Ok(tmode) => tmode,
         Err(err) => {
-            eprintln!("error: {}", err);
+            eprintln!("error: {err}");
             return Err(RuntimeError {
                 msg: err.to_string(),
             });
@@ -210,7 +210,7 @@ pub async fn sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value,
     let mut ctx = Context::new(shell.pid, shell.pgid, shell_tmode, true);
     // ctx.captured_out = Some(pin);
     if let Err(err) = shell.eval_str(&mut ctx, input, false).await {
-        eprintln!("error: {}", err);
+        eprintln!("error: {err}");
         return Err(RuntimeError {
             msg: err.to_string(),
         });
@@ -241,7 +241,7 @@ mod tests {
         let res = sh(env_clone, args.to_vec()).await;
         assert!(res.is_ok());
         if let Ok(result) = res {
-            println!("{}", result);
+            println!("{result}");
         }
 
         // let args = vec![Value::String("cargo build".to_string())];

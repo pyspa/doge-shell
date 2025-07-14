@@ -66,7 +66,7 @@ impl Env {
                     parent.borrow_mut().set(key, value)
                 } else {
                     Err(RuntimeError {
-                        msg: format!("Tried to set value of undefined symbol \"{}\"", key),
+                        msg: format!("Tried to set value of undefined symbol \"{key}\""),
                     })
                 }
             }
@@ -89,7 +89,7 @@ impl Env {
         output.push_str("{ ");
 
         for (symbol, value) in &self.entries {
-            output.push_str(format!("\n{}  {}: {}", indent, symbol, value).as_str());
+            output.push_str(format!("\n{indent}  {symbol}: {value}").as_str());
         }
 
         if let Some(parent) = &self.parent {

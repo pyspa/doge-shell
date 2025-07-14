@@ -86,7 +86,7 @@ fn eval_inner(
     match expression {
         // look up symbol
         Value::Symbol(symbol) => env.borrow().get(symbol).ok_or_else(|| RuntimeError {
-            msg: format!("\"{}\" is not defined", symbol),
+            msg: format!("\"{symbol}\" is not defined"),
         }),
 
         // s-expression
@@ -204,7 +204,7 @@ fn eval_inner(
                             cmd = Some(str.clone());
                         }
                         _ => {
-                            println!("autocomplete unknown value: {:?}", val);
+                            println!("autocomplete unknown value: {val:?}");
                         }
                     }
 
@@ -214,7 +214,7 @@ fn eval_inner(
                         func,
                         candidates,
                     };
-                    debug!("add autocomplete {:?}", entry);
+                    debug!("add autocomplete {entry:?}");
 
                     env.borrow_mut()
                         .shell_env
@@ -251,11 +251,11 @@ fn eval_inner(
                         let decl = &decl;
 
                         let decl_cons: &List = decl.try_into().map_err(|_| RuntimeError {
-                            msg: format!("Expected declaration clause, found {}", decl),
+                            msg: format!("Expected declaration clause, found {decl}"),
                         })?;
                         let symbol = &decl_cons.car()?;
                         let symbol: &Symbol = symbol.try_into().map_err(|_| RuntimeError {
-                            msg: format!("Expected symbol for let declaration, found {}", symbol),
+                            msg: format!("Expected symbol for let declaration, found {symbol}"),
                         })?;
                         let expr = &decl_cons.cdr().car()?;
 
@@ -267,8 +267,7 @@ fn eval_inner(
                     let body = &Value::List(list.cdr().cdr());
                     let body: &List = body.try_into().map_err(|_| RuntimeError {
                         msg: format!(
-                            "Expected expression(s) after let-declarations, found {}",
-                            body
+                            "Expected expression(s) after let-declarations, found {body}"
                         ),
                     })?;
 
@@ -286,11 +285,11 @@ fn eval_inner(
                         let decl = &decl;
 
                         let decl_cons: &List = decl.try_into().map_err(|_| RuntimeError {
-                            msg: format!("Expected declaration clause, found {}", decl),
+                            msg: format!("Expected declaration clause, found {decl}"),
                         })?;
                         let symbol = &decl_cons.car()?;
                         let symbol: &Symbol = symbol.try_into().map_err(|_| RuntimeError {
-                            msg: format!("Expected symbol for let declaration, found {}", symbol),
+                            msg: format!("Expected symbol for let declaration, found {symbol}"),
                         })?;
                         let expr = &decl_cons.cdr().car()?;
 
@@ -300,7 +299,7 @@ fn eval_inner(
                             .shell_env
                             .write()
                             .variables
-                            .insert(format!("${}", symbol), result.to_string());
+                            .insert(format!("${symbol}"), result.to_string());
                         // OPTIMIZED: Move result instead of clone when possible
                         let_env.borrow_mut().define(symbol.clone(), result);
                     }
@@ -308,8 +307,7 @@ fn eval_inner(
                     let body = &Value::List(list.cdr().cdr());
                     let body: &List = body.try_into().map_err(|_| RuntimeError {
                         msg: format!(
-                            "Expected expression(s) after let-declarations, found {}",
-                            body
+                            "Expected expression(s) after let-declarations, found {body}"
                         ),
                     })?;
                     debug!(
@@ -330,7 +328,7 @@ fn eval_inner(
                         let clause = &clause;
 
                         let clause: &List = clause.try_into().map_err(|_| RuntimeError {
-                            msg: format!("Expected conditional clause, found {}", clause),
+                            msg: format!("Expected conditional clause, found {clause}"),
                         })?;
 
                         let condition = &clause.car()?;
@@ -493,7 +491,7 @@ fn call_function_or_macro(
             )
         } else {
             Err(RuntimeError {
-                msg: format!("{} is not callable", func),
+                msg: format!("{func} is not callable"),
             })
         }
     }
@@ -663,7 +661,7 @@ mod tests {
 
         // Test that define operations are efficient
         for i in 0..100 {
-            let var_name = format!("var-{}", i);
+            let var_name = format!("var-{i}");
             let define_expr = Value::List(
                 vec![
                     Value::Symbol(Symbol::from("define")),
@@ -680,7 +678,7 @@ mod tests {
 
         // Verify all variables are accessible
         for i in 0..100 {
-            let var_name = format!("var-{}", i);
+            let var_name = format!("var-{i}");
             let lookup =
                 eval(env.clone(), &Value::Symbol(Symbol::from(var_name.as_str()))).unwrap();
             assert_eq!(lookup, Value::Int(i.into()));

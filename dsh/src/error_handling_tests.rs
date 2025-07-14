@@ -71,6 +71,6 @@ mod tests {
         assert!(!stderr.contains("anyhow::error"));
         assert!(!stderr.contains("dsh::shell::Shell::parse_command"));
 
-        println!("Stderr output: {}", stderr);
+        println!("Stderr output: {stderr}");
     }
 }

@@ -63,6 +63,6 @@ mod tests {
     fn test_search_file() {
         init();
         let b = search_file("/bin", "g");
-        println!("{:?}", b);
+        println!("{b:?}");
     }
 }

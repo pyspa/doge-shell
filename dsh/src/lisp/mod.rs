@@ -42,7 +42,7 @@ impl LispEngine {
             .with_context(|| format!("Failed to read config file: {}", file_path.display()))?
             .trim()
             .to_string();
-        let _ = self.run(format!("(begin {} )", config_lisp).as_str());
+        let _ = self.run(format!("(begin {config_lisp} )").as_str());
 
         Ok(())
     }
@@ -58,9 +58,9 @@ impl LispEngine {
                 }
                 Err(err) => {
                     tracing::error!("Lisp evaluation error: {}", err);
-                    eprintln!("{}", err);
+                    eprintln!("{err}");
                     // Return error value instead of continuing
-                    return Ok(Value::String(format!("Error: {}", err)));
+                    return Ok(Value::String(format!("Error: {err}")));
                 }
             }
         }
@@ -227,11 +227,11 @@ mod tests {
         let args = vec![Value::Int(IntType::from(1)), Value::Int(IntType::from(2))];
         let res = engine.borrow().run_func_values("adder", args);
         assert!(res.is_ok());
-        println!("{:?}", res);
+        println!("{res:?}");
 
         let args = vec![];
         let res = engine.borrow().run_func_values("call", args);
         assert!(res.is_ok());
-        println!("{:?}", res);
+        println!("{res:?}");
     }
 }

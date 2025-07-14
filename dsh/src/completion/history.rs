@@ -107,7 +107,7 @@ impl HistoryCompletion {
         // Add pattern-based suggestions
         if let Some(patterns) = self.command_patterns.get(prefix) {
             for pattern in patterns {
-                let full_command = format!("{} {}", prefix, pattern);
+                let full_command = format!("{prefix} {pattern}");
                 suggestions.push(Candidate::History {
                     command: full_command,
                     frequency: 1,

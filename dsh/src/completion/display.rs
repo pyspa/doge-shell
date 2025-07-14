@@ -177,7 +177,7 @@ impl CompletionDisplay {
             if config.show_item_count {
                 let remaining_count = total_items_count - config.max_items;
                 let message = config.format_more_items_message(remaining_count);
-                candidates.push(Candidate::Basic(format!("📋 {}", message)));
+                candidates.push(Candidate::Basic(format!("📋 {message}")));
             }
         }
 
@@ -657,7 +657,7 @@ mod tests {
     fn create_test_candidate(text: &str, candidate_type: CandidateType) -> EnhancedCandidate {
         EnhancedCandidate {
             text: text.to_string(),
-            description: Some(format!("Description for {}", text)),
+            description: Some(format!("Description for {text}")),
             candidate_type,
             priority: 100,
             source: CandidateSource::Command,

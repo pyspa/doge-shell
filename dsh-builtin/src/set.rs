@@ -3,7 +3,7 @@ use dsh_types::{Context, ExitStatus};
 use getopts::Options;
 
 fn print_usage(ctx: &Context, cmd_name: &str, opts: Options) {
-    let brief = format!("Usage: {} [OPTIONS] KEY VALUE", cmd_name);
+    let brief = format!("Usage: {cmd_name} [OPTIONS] KEY VALUE");
     ctx.write_stdout(&opts.usage(&brief)).ok();
 }
 
@@ -15,7 +15,7 @@ pub fn command(ctx: &Context, args: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
         Err(err) => {
-            ctx.write_stderr(&format!("{}", err)).ok();
+            ctx.write_stderr(&format!("{err}")).ok();
             return ExitStatus::ExitedWith(1);
         }
     };

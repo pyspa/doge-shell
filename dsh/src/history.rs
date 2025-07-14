@@ -153,7 +153,7 @@ impl History {
     pub fn write_history(&mut self, history: &str) -> Result<()> {
         if let Some(ref path) = self.path {
             // Use file lock to prevent concurrent access
-            let lock_path = format!("{}.lock", path);
+            let lock_path = format!("{path}.lock");
             let _lock = file_lock::FileLock::lock(&lock_path, true, file_lock::FileOptions::new())
                 .context("Failed to acquire history file lock")?;
 
@@ -161,7 +161,7 @@ impl History {
                 .create(true)
                 .append(true)
                 .open(path)
-                .with_context(|| format!("Failed to open history file: {}", path))?;
+                .with_context(|| format!("Failed to open history file: {path}"))?;
 
             let now = Local::now();
             let entry = Entry {
@@ -175,11 +175,11 @@ impl History {
 
             history_file
                 .write_all(json_line.as_bytes())
-                .with_context(|| format!("Failed to write to history file: {}", path))?;
+                .with_context(|| format!("Failed to write to history file: {path}"))?;
 
             history_file
                 .flush()
-                .with_context(|| format!("Failed to flush history file: {}", path))?;
+                .with_context(|| format!("Failed to flush history file: {path}"))?;
 
             // Lock is automatically released when _lock goes out of scope
 

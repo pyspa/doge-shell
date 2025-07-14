@@ -1,38 +1,212 @@
-# doge-shell
+# 🐕 doge-shell
 
-Doge-shell is a high-performance shell written in Rust. Its fast and efficient design makes it a perfect choice for users who value speed and performance.
+Doge-shell is a modern, high-performance shell written in Rust that combines the speed of native code with advanced features like AI integration, Lisp scripting, and WebAssembly runtime support. Designed for developers and power users who value both performance and extensibility.
 
-## Features
+## ✨ Key Features
 
-- Command completion like fish shell
-- Scripting support for Lisp
-- High-speed performance, thanks to being written in Rust
-- Prompt with Git status display, similar to starship
-- Comes bundled with a WASM runtime, allowing you to run WASM (WASI-compliant) binaries
-- Comprehensive set of built-in commands for shell operations
-- AI integration with OpenAI ChatGPT
-- Advanced job control system
-- Frecency-based directory navigation
+### 🚀 Performance & Architecture
+- **High-speed execution** - Written in Rust with zero-cost abstractions
+- **Modular design** - Multi-crate workspace architecture for maintainability
+- **Memory safety** - Rust's ownership system prevents common shell vulnerabilities
+- **Concurrent processing** - Tokio-based async runtime for responsive I/O
 
-## Installation
+### 🧠 AI Integration
+- **OpenAI ChatGPT integration** - Use `!` prefix for AI-powered assistance
+- **Streaming responses** - Real-time AI output with "Thinking..." indicator
+- **Configurable prompts** - Customize AI behavior for different contexts
+- **Full shell integration** - AI responses support redirection and piping
 
-To install doge-shell, follow these steps:
+### 🎯 Advanced Completion System
+- **Multi-layered completion** - Commands, files, and context-aware suggestions
+- **JSON-based definitions** - Extensible command completion via JSON files
+- **Fuzzy matching** - Smart completion with scoring and ranking
+- **History integration** - Suggestions based on command history patterns
+- **Real-time display** - Interactive completion with visual feedback
+
+### 🔧 Lisp Scripting Engine
+- **Built-in Lisp interpreter** - Full-featured scripting environment
+- **Shell integration** - Direct access to shell functions and variables
+- **User-defined functions** - Extend shell functionality with custom Lisp code
+- **Configuration system** - Customize shell behavior via `config.lisp`
+
+### 🌐 WebAssembly Runtime
+- **WASI-compliant execution** - Run WebAssembly binaries natively
+- **Wasmer integration** - High-performance WASM runtime
+- **Sandboxed execution** - Secure execution environment for WASM modules
+
+### 📁 Smart Navigation
+- **Frecency-based directory jumping** - `z` command for intelligent navigation
+- **Path history tracking** - Learns from your directory usage patterns
+- **Fuzzy directory matching** - Quick access to frequently used locations
+
+### ⚡ Advanced Job Control
+- **Process group management** - Proper job control with signal handling
+- **Background/foreground switching** - Full job control like traditional shells
+- **Job monitoring** - Real-time status tracking of background processes
+- **Signal propagation** - Correct signal handling for process groups
+
+## 🏗️ Architecture
+
+Doge-shell is built as a modular Rust workspace with six specialized crates:
+
+```
+doge-shell/
+├── dsh/              # Main shell binary and core logic
+├── dsh-builtin/      # Built-in commands implementation
+├── dsh-frecency/     # Frecency-based navigation system
+├── dsh-types/        # Shared types and context definitions
+├── dsh-wasm/         # WebAssembly runtime integration
+└── dsh-openai/       # OpenAI API client and integration
+```
+
+### Core Components
+- **Shell Engine** - Command parsing, execution, and process management
+- **Completion Engine** - Multi-layered completion with fuzzy matching
+- **Lisp Interpreter** - Built-in scripting environment for configuration
+- **Job Controller** - Advanced process and signal management
+- **AI Client** - OpenAI integration with streaming support
+- **WASM Runtime** - WebAssembly execution environment
+
+## 📦 Installation
+
+### Prerequisites
+- Rust 2024 Edition (latest stable)
+- Git for cloning the repository
+
+### Build from Source
 
 ```shell
 $ git clone https://github.com/pyspa/doge-shell.git
 $ cd doge-shell
 $ cargo build --release
-$ cargo install
+$ cargo install --path dsh
 ```
 
-Usage
-To start using doge-shell, simply run:
+### Quick Start
 
-```
+```shell
 $ dsh
+🐕 < echo "Welcome to doge-shell!"
+Welcome to doge-shell!
 ```
 
-## Built-in Commands
+### Configuration
+
+Create a `config.lisp` file in your configuration directory to customize the shell:
+
+```lisp
+;; ~/.config/dsh/config.lisp
+(alias "ll" "ls -la")
+(alias "g" "git")
+
+;; Custom function for git branch switching
+(fn gco ()
+    (vlet ((branch (sh "git branch | sk | tr -d ' '")))
+          (sh "git checkout $branch")))
+```
+
+## 🤖 AI Integration
+
+Doge-shell features seamless OpenAI ChatGPT integration for AI-powered assistance directly in your terminal.
+
+### Getting Started with AI
+
+1. Set your OpenAI API key:
+```shell
+export OPENAI_API_KEY="your-api-key-here"
+```
+
+2. Use the `!` prefix to interact with AI:
+```shell
+🐕 < ! How do I find large files in Linux?
+Thinking...
+You can find large files in Linux using several methods:
+
+1. Using `find` command:
+   find /path/to/search -type f -size +100M
+
+2. Using `du` with sort:
+   du -ah /path | sort -rh | head -20
+...
+```
+
+### AI Features
+
+- **Streaming responses** - See AI output in real-time
+- **Shell integration** - Redirect AI output to files or pipe to other commands
+- **Configurable prompts** - Set custom system prompts for different contexts
+- **Context awareness** - AI understands shell environment and common tasks
+
+### AI Command Examples
+
+```shell
+# Get help with commands
+🐕 < ! Explain the difference between grep and awk
+
+# Generate scripts
+🐕 < ! Write a bash script to backup my home directory > backup.sh
+
+# Troubleshoot issues
+🐕 < ! Why am I getting permission denied when running docker?
+
+# Set custom prompt for specific domain
+🐕 < chat_prompt "You are a DevOps expert specializing in Kubernetes"
+🐕 < ! How do I debug a failing pod?
+```
+
+## 🎯 Advanced Completion System
+
+Doge-shell features a sophisticated multi-layered completion system that provides intelligent suggestions as you type.
+
+### Completion Features
+
+1. **Command Completion** - Completes commands from your PATH
+2. **File/Directory Completion** - Smart filesystem navigation
+3. **Subcommand Completion** - Context-aware command options
+4. **History-based Suggestions** - Learn from your command patterns
+5. **Fuzzy Matching** - Find what you need with partial matches
+
+### How It Works
+
+- **TAB key** - Trigger completion menu
+- **Real-time suggestions** - See history matches as you type
+- **JSON-based definitions** - Extensible completion for any command
+- **Priority system** - Most relevant suggestions first
+
+### Completion Priority
+
+1. **Subcommand/Option completion** (when command is already entered)
+2. **Command/File completion** (for new commands)
+3. **History-based suggestions** (matching previous commands)
+
+### Custom Completion
+
+Add completion definitions in JSON format:
+
+```json
+{
+  "command": "myapp",
+  "description": "My custom application",
+  "subcommands": [
+    {
+      "name": "start",
+      "description": "Start the application",
+      "options": [
+        {
+          "long": "--port",
+          "description": "Port number",
+          "takes_value": true,
+          "value_type": {"type": "Number"}
+        }
+      ]
+    }
+  ]
+}
+```
+
+Save as `completions/myapp.json` in your doge-shell directory.
+
+## 🔧 Built-in Commands
 
 Doge Shell provides a comprehensive set of built-in commands for efficient shell operations. These commands are implemented in Rust for optimal performance and are tightly integrated with the shell's features.
 
@@ -157,6 +331,15 @@ Reads input from stdin and stores it in the specified shell variable. Commonly u
 🐕 < echo "Hello $name"
 ```
 
+#### `alias [name[=command]]`
+Manages shell aliases with support for setting, listing, and querying aliases.
+
+```bash
+🐕 < alias                      # List all aliases
+🐕 < alias ll="ls -la"          # Set an alias
+🐕 < alias ll                   # Show specific alias
+```
+
 ### AI Integration Commands
 
 #### `chat <message>`
@@ -225,7 +408,7 @@ Generates and outputs a random UUID (Universally Unique Identifier) using UUID v
 🐕 < add_path $PROJECT_DIR/bin
 ```
 
-## config.lisp
+## 📝 Configuration with config.lisp
 
 Users can extend the functionality with their own lisp scripts.
 An example is shown below.
@@ -260,5 +443,6 @@ An example is shown below.
 
 ```
 
-License
+## 📄 License
+
 Doge-shell is released under the MIT license. For more information, see LICENSE.

@@ -415,7 +415,7 @@ pub fn select_completion_items_with_config(
                     display.move_left();
                     let _ = display.display();
                 }
-                (KeyCode::Right, KeyModifiers::NONE) => {
+                (KeyCode::Right, KeyModifiers::NONE) | (KeyCode::Tab, KeyModifiers::NONE) => {
                     let _ = display.clear_display();
                     display.move_right();
                     let _ = display.display();

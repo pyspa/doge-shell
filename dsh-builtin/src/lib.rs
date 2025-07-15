@@ -12,6 +12,7 @@ mod alias;
 mod bg;
 pub mod cd;
 mod chatgpt;
+mod dmv;
 mod fg;
 mod glog;
 mod history;
@@ -117,6 +118,7 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, BuiltinCommand>>> = Lazy::n
     builtin.insert("add_path", add_path::command as BuiltinCommand);
     builtin.insert("serve", serve::command as BuiltinCommand);
     builtin.insert("uuid", uuid::command as BuiltinCommand);
+    builtin.insert("dmv", dmv::command as BuiltinCommand);
 
     Mutex::new(builtin)
 });

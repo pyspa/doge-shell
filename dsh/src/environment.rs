@@ -53,6 +53,7 @@ pub trait ChangePwdHook {
 
 pub struct Environment {
     pub alias: HashMap<String, String>,
+    pub abbreviations: HashMap<String, String>,
     pub autocompletion: Vec<AutoComplete>,
     pub paths: Vec<String>,
     pub variables: HashMap<String, String>,
@@ -76,6 +77,7 @@ impl Environment {
         #[allow(clippy::arc_with_non_send_sync)]
         Arc::new(RwLock::new(Environment {
             alias: HashMap::new(),
+            abbreviations: HashMap::new(),
             autocompletion: Vec::new(),
             variables: HashMap::new(),
             paths,
@@ -86,6 +88,7 @@ impl Environment {
 
     pub fn extend(parent: Arc<RwLock<Environment>>) -> Arc<RwLock<Self>> {
         let alias = parent.read().alias.clone();
+        let abbreviations = parent.read().abbreviations.clone();
         let paths = parent.read().paths.clone();
         let autocompletion = parent.read().autocompletion.clone();
         let variables = parent.read().variables.clone();
@@ -94,6 +97,7 @@ impl Environment {
         #[allow(clippy::arc_with_non_send_sync)]
         Arc::new(RwLock::new(Environment {
             alias,
+            abbreviations,
             autocompletion,
             variables,
             paths,
@@ -174,6 +178,7 @@ impl std::fmt::Debug for Environment {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
         f.debug_struct("Environment")
             .field("alias", &self.alias)
+            .field("abbreviations", &self.abbreviations)
             .field("autocompletion", &self.autocompletion)
             .field("direnv_paths", &self.direnv_roots)
             .field("paths", &self.paths)

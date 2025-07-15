@@ -557,6 +557,41 @@ impl<'a> Repl<'a> {
                     return Ok(());
                 }
             }
+            (KeyCode::Char(' '), NONE) => {
+                // Handle abbreviation expansion before inserting space
+                if let Some(word) = self.input.get_current_word_for_abbr() {
+                    debug!("ABBR_EXPANSION: Found word for expansion: '{}'", word);
+                    if let Some(expansion) = self.shell.environment.read().abbreviations.get(&word)
+                    {
+                        debug!(
+                            "ABBR_EXPANSION: Found expansion for '{}': '{}'",
+                            word, expansion
+                        );
+                        let expansion = expansion.clone();
+                        if self.input.replace_current_word(&expansion) {
+                            debug!(
+                                "ABBR_EXPANSION: Successfully replaced '{}' with '{}'",
+                                word, expansion
+                            );
+                            // Abbreviation was expanded, force redraw
+                            reset_completion = true;
+                        } else {
+                            debug!("ABBR_EXPANSION: Failed to replace word '{}'", word);
+                        }
+                    } else {
+                        debug!("ABBR_EXPANSION: No expansion found for word '{}'", word);
+                        let abbrs = self.shell.environment.read().abbreviations.clone();
+                        debug!("ABBR_EXPANSION: Available abbreviations: {:?}", abbrs);
+                    }
+                } else {
+                    debug!("ABBR_EXPANSION: No word found for expansion at cursor position");
+                }
+
+                self.input.insert(' ');
+                if self.completion.is_changed(self.input.as_str()) {
+                    self.completion.clear();
+                }
+            }
             (KeyCode::Char(ch), NONE) => {
                 self.input.insert(ch);
                 if self.completion.is_changed(self.input.as_str()) {
@@ -650,6 +685,18 @@ impl<'a> Repl<'a> {
                 debug!("Set start_completion flag to true and reset_completion to true");
             }
             (KeyCode::Enter, NONE) => {
+                // Handle abbreviation expansion on Enter if cursor is at end of a word
+                if let Some(word) = self.input.get_current_word_for_abbr() {
+                    if let Some(expansion) = self.shell.environment.read().abbreviations.get(&word)
+                    {
+                        let expansion = expansion.clone();
+                        if self.input.replace_current_word(&expansion) {
+                            // Abbreviation was expanded - the input will be redrawn after command execution
+                            debug!("Abbreviation '{}' expanded to '{}'", word, expansion);
+                        }
+                    }
+                }
+
                 self.input.completion.take();
                 self.stop_history_mode();
                 print!("\r\n");

@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use tracing::debug;
 
 // Builtin command modules
+mod abbr;
 mod add_path;
 mod alias;
 mod bg;
@@ -58,6 +59,18 @@ pub trait ShellProxy {
 
     /// Lists all current aliases as a HashMap
     fn list_aliases(&mut self) -> std::collections::HashMap<String, String>;
+
+    /// Adds a new abbreviation
+    fn add_abbr(&mut self, name: String, expansion: String);
+
+    /// Removes an abbreviation by name, returns true if it existed
+    fn remove_abbr(&mut self, name: &str) -> bool;
+
+    /// Lists all abbreviations as name-expansion pairs
+    fn list_abbrs(&self) -> Vec<(String, String)>;
+
+    /// Gets an abbreviation expansion by name
+    fn get_abbr(&self, name: &str) -> Option<String>;
 }
 
 /// Type alias for builtin command function signature
@@ -88,6 +101,7 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, BuiltinCommand>>> = Lazy::n
     builtin.insert("set", set::command as BuiltinCommand);
     builtin.insert("var", var::command as BuiltinCommand);
     builtin.insert("read", read::command as BuiltinCommand);
+    builtin.insert("abbr", abbr::command as BuiltinCommand);
     builtin.insert("alias", alias::command as BuiltinCommand);
 
     // AI integration commands

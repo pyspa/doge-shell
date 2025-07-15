@@ -331,6 +331,51 @@ Reads input from stdin and stores it in the specified shell variable. Commonly u
 🐕 < echo "Hello $name"
 ```
 
+#### `abbr [options] [name] [expansion]`
+Manages shell abbreviations with real-time expansion during input. Abbreviations expand when you type them followed by space or enter, providing immediate visual feedback.
+
+**Options:**
+- `-a, --add <name> <expansion>` - Add new abbreviation
+- `-e, --erase <name>` - Remove abbreviation
+- `-l, --list` - List all abbreviations
+- `-s` - Show all abbreviations (same as -l)
+
+```bash
+# Add abbreviations
+🐕 < abbr -a gco "git checkout"
+🐕 < abbr -a gst "git status"
+🐕 < abbr -a ll "ls -la"
+
+# Use abbreviations (real-time expansion)
+🐕 < gco[SPACE] → git checkout 
+🐕 < gst[SPACE] → git status 
+
+# List abbreviations
+🐕 < abbr -l
+┌──────┬──────────────┐
+│ name │ expansion    │
+├──────┼──────────────┤
+│ gco  │ git checkout │
+│ gst  │ git status   │
+│ ll   │ ls -la       │
+└──────┴──────────────┘
+
+# Remove abbreviation
+🐕 < abbr -e gco
+
+# Show specific abbreviation
+🐕 < abbr gst
+abbr gst 'git status'
+```
+
+**Lisp Integration (config.lisp):**
+```lisp
+;; ~/.config/dsh/config.lisp
+(abbr "gco" "git checkout")
+(abbr "gst" "git status")
+(abbr "ll" "ls -la")
+```
+
 #### `alias [name[=command]]`
 Manages shell aliases with support for setting, listing, and querying aliases.
 

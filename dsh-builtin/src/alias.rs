@@ -218,6 +218,20 @@ mod tests {
         fn list_aliases(&mut self) -> HashMap<String, String> {
             self.aliases.clone()
         }
+
+        fn add_abbr(&mut self, _name: String, _expansion: String) {}
+
+        fn remove_abbr(&mut self, _name: &str) -> bool {
+            false
+        }
+
+        fn list_abbrs(&self) -> Vec<(String, String)> {
+            Vec::new()
+        }
+
+        fn get_abbr(&self, _name: &str) -> Option<String> {
+            None
+        }
     }
 
     #[test]

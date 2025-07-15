@@ -60,6 +60,26 @@ pub fn alias(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeEr
     Ok(Value::NIL)
 }
 
+/// Built-in abbr function for Lisp
+/// Sets abbreviations that expand in real-time during input
+/// Usage: (abbr "name" "expansion")
+pub fn abbr(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    if args.len() != 2 {
+        return Err(RuntimeError::new(
+            "abbr requires exactly 2 arguments: name and expansion",
+        ));
+    }
+
+    let name = &args[0];
+    let expansion = &args[1];
+    env.borrow()
+        .shell_env
+        .write()
+        .abbreviations
+        .insert(name.to_string(), expansion.to_string());
+    Ok(Value::NIL)
+}
+
 pub fn allow_direnv(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     for arg in args {
         let root = arg.to_string();

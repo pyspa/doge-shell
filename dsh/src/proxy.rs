@@ -470,4 +470,36 @@ impl ShellProxy for Shell {
         debug!("Listing all aliases");
         self.environment.read().alias.clone()
     }
+
+    fn add_abbr(&mut self, name: String, expansion: String) {
+        debug!("Adding abbreviation: {} = {}", name, expansion);
+        self.environment
+            .write()
+            .abbreviations
+            .insert(name, expansion);
+    }
+
+    fn remove_abbr(&mut self, name: &str) -> bool {
+        debug!("Removing abbreviation: {}", name);
+        self.environment
+            .write()
+            .abbreviations
+            .remove(name)
+            .is_some()
+    }
+
+    fn list_abbrs(&self) -> Vec<(String, String)> {
+        debug!("Listing all abbreviations");
+        self.environment
+            .read()
+            .abbreviations
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
+    fn get_abbr(&self, name: &str) -> Option<String> {
+        debug!("Getting abbreviation for: {}", name);
+        self.environment.read().abbreviations.get(name).cloned()
+    }
 }

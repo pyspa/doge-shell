@@ -6,6 +6,14 @@ pub struct RuntimeError {
     pub msg: String,
 }
 
+impl RuntimeError {
+    pub fn new(msg: &str) -> Self {
+        RuntimeError {
+            msg: msg.to_string(),
+        }
+    }
+}
+
 impl std::fmt::Display for RuntimeError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(formatter, "Runtime error: {}", self.msg)

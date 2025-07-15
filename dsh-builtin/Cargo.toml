@@ -11,6 +11,7 @@ dsh-frecency = { path = "../dsh-frecency" }
 dsh-openai = { path = "../dsh-openai" }
 
 anyhow.workspace = true
+thiserror.workspace = true
 shellexpand.workspace = true
 once_cell.workspace = true
 dirs.workspace = true
@@ -21,3 +22,16 @@ nix.workspace = true
 
 getopts = "0.2.23"
 regex = "1.11"
+
+# HTTP server dependencies for serve command
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+mime_guess.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+tokio-util = "0.7"
+httpdate = "1.0"
+
+[dev-dependencies]
+tempfile = "3.8"

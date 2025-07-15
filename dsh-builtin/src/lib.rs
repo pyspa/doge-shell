@@ -18,6 +18,7 @@ mod history;
 mod jobs;
 pub mod lisp;
 mod read;
+pub mod serve;
 mod set;
 mod uuid;
 mod var;
@@ -114,6 +115,7 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, BuiltinCommand>>> = Lazy::n
 
     // Utility commands
     builtin.insert("add_path", add_path::command as BuiltinCommand);
+    builtin.insert("serve", serve::command as BuiltinCommand);
     builtin.insert("uuid", uuid::command as BuiltinCommand);
 
     Mutex::new(builtin)

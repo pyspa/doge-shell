@@ -43,11 +43,21 @@ pub fn read_store(path: &PathBuf) -> Result<FrecencyStore> {
 pub fn write_store(store: &FrecencyStore, path: &PathBuf) -> Result<()> {
     let store_dir = path.parent().expect("file must have parent");
     create_dir_all(store_dir)?;
+
+    tracing::debug!(
+        "Writing frecency store to {}, items: {}, changed: {}",
+        path.display(),
+        store.items.len(),
+        store.changed
+    );
+
     let file = File::create(path)?;
     let fd = file.as_raw_fd();
     flock(fd, FlockArg::LockExclusive)?;
     let writer = BufWriter::new(file);
     bincode::serialize_into(writer, &FrecencyStoreSerializer::from(store))?;
+
+    tracing::debug!("Successfully wrote frecency store to {}", path.display());
     Ok(())
 }
 

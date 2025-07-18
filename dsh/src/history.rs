@@ -363,6 +363,17 @@ impl FrecencyHistory {
         }
     }
 
+    /// 強制的にchangedフラグをtrueに設定し、保存を強制する
+    pub fn force_changed(&mut self) {
+        if let Some(ref mut store) = self.store {
+            store.changed = true;
+            tracing::debug!(
+                "Forcing changed flag to true. Items count: {}",
+                store.items.len()
+            );
+        }
+    }
+
     pub fn search_fuzzy_first(&self, pattern: &str) -> Option<String> {
         let results = self.sort_by_match(pattern);
         results.into_iter().next().map(|item| item.item)

@@ -10,6 +10,21 @@ use std::os::unix::io::AsRawFd;
 use std::process::ExitCode;
 use tracing::debug;
 
+mod completion;
+mod direnv;
+mod dirs;
+mod environment;
+mod history;
+mod history_import;
+mod input;
+mod lisp;
+mod parser;
+mod process;
+mod prompt;
+mod proxy;
+mod repl;
+mod shell;
+
 /// Custom error type representing normal exit
 #[derive(Debug)]
 pub enum ShellExit {
@@ -54,28 +69,27 @@ fn display_user_error(err: &anyhow::Error) {
     }
 }
 
-mod completion;
-mod direnv;
-mod dirs;
-mod environment;
-mod history;
-mod input;
-mod lisp;
-mod parser;
-mod process;
-mod prompt;
-mod proxy;
-mod repl;
-mod shell;
-
-#[cfg(test)]
-mod error_handling_tests;
-
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
     #[arg(short, long)]
     command: Option<String>,
+
+    #[command(subcommand)]
+    subcommand: Option<SubCommand>,
+}
+
+#[derive(Parser)]
+enum SubCommand {
+    /// Import command history from another shell
+    Import {
+        /// Shell to import from (e.g., fish)
+        shell: String,
+
+        /// Custom path to the shell history file
+        #[arg(short, long)]
+        path: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -93,6 +107,16 @@ fn main() -> ExitCode {
 
 async fn run_shell() -> ExitCode {
     let cli = Cli::parse();
+
+    // Handle subcommands
+    if let Some(subcommand) = &cli.subcommand {
+        match subcommand {
+            SubCommand::Import { shell, path } => {
+                return handle_import_command(shell, path.as_deref());
+            }
+        }
+    }
+
     let env = Environment::new();
     let mut shell = Shell::new(env);
     let mut ctx = create_context(&shell);
@@ -101,6 +125,49 @@ async fn run_shell() -> ExitCode {
         execute_command(&mut shell, &mut ctx, command).await
     } else {
         run_interactive(&mut shell, &mut ctx).await
+    }
+}
+
+fn handle_import_command(shell_name: &str, custom_path: Option<&str>) -> ExitCode {
+    use crate::history::FrecencyHistory;
+    use crate::history_import::create_importer;
+    use tracing::{debug, error, info};
+
+    debug!("Starting history import from {shell_name} shell");
+    println!("Importing history from {shell_name} shell...");
+
+    // Create a history importer for the specified shell
+    let importer = match create_importer(shell_name, custom_path) {
+        Ok(importer) => importer,
+        Err(err) => {
+            error!("Failed to create importer for {shell_name} shell: {err}");
+            eprintln!("Error creating importer: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Create or load the dsh command history
+    let mut history = match FrecencyHistory::from_file("dsh_cmd_history") {
+        Ok(history) => history,
+        Err(err) => {
+            error!("Failed to load dsh command history: {err}");
+            eprintln!("Error loading dsh history: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Import the history
+    match importer.import(&mut history) {
+        Ok(count) => {
+            info!("Successfully imported {count} commands from {shell_name} shell");
+            println!("Successfully imported {count} commands from {shell_name} shell.");
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            error!("Failed to import history from {shell_name} shell: {err}");
+            eprintln!("Error importing history: {err}");
+            ExitCode::FAILURE
+        }
     }
 }
 

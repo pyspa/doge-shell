@@ -45,6 +45,12 @@ Doge-shell is a modern, high-performance shell written in Rust that combines the
 - **Job monitoring** - Real-time status tracking of background processes
 - **Signal propagation** - Correct signal handling for process groups
 
+### 🔄 History Management
+- **Frecency-based history** - Intelligent command history ranking
+- **History import** - Import command history from other shells (fish, etc.)
+- **Fuzzy history search** - Quickly find and reuse previous commands
+- **History synchronization** - Consistent history across multiple sessions
+
 ## 🏗️ Architecture
 
 Doge-shell is built as a modular Rust workspace with six specialized crates:
@@ -205,6 +211,25 @@ Add completion definitions in JSON format:
 ```
 
 Save as `completions/myapp.json` in your doge-shell directory.
+
+## 🔄 History Import
+
+Doge-shell allows you to import command history from other shells to make migration easier.
+
+### Importing History from Fish Shell
+
+```shell
+# Import history from fish shell (default location)
+$ dsh import fish
+
+# Import history from a custom location
+$ dsh import fish --path /path/to/custom/fish_history
+```
+
+### Supported Shells for Import
+
+- Fish shell (`~/.local/share/fish/fish_history`)
+- More shells coming soon
 
 ## 🔧 Built-in Commands
 

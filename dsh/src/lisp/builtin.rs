@@ -4,7 +4,6 @@ use crate::shell::Shell;
 use dsh_types::Context;
 use nix::sys::termios::tcgetattr;
 use nix::unistd::pipe;
-
 use std::fs::File;
 use std::io::prelude::*;
 use std::os::unix::io::FromRawFd;
@@ -13,7 +12,6 @@ use std::sync::Arc;
 use std::{cell::RefCell, rc::Rc};
 use tracing::debug;
 
-#[allow(dead_code)]
 pub fn set_env(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let key = &args[0];
     let key = key.to_string();
@@ -52,6 +50,7 @@ pub fn set_variable(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
 pub fn alias(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let alias = &args[0];
     let command = &args[1];
+    debug!("set alias {} {}", alias, command);
     env.borrow()
         .shell_env
         .write()

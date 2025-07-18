@@ -145,6 +145,8 @@ pub fn make_env(environment: Arc<RwLock<Environment>>) -> Rc<RefCell<Env>> {
         Symbol::from("add_path"),
         Value::NativeFunc(builtin::add_path),
     );
+    env.borrow_mut()
+        .define(Symbol::from("setenv"), Value::NativeFunc(builtin::set_env));
 
     env
 }

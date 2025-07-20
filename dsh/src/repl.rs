@@ -1,3 +1,4 @@
+use crate::completion::integrated::IntegratedCompletionEngine;
 use crate::completion::{self, Completion};
 use crate::dirs;
 use crate::input::{Input, InputConfig, display_width};
@@ -115,7 +116,7 @@ pub struct Repl<'a> {
     history_search: Option<String>,
     start_completion: bool,
     completion: Completion,
-    integrated_completion: completion::IntegratedCompletionEngine,
+    integrated_completion: IntegratedCompletionEngine,
     prompt: Arc<RwLock<Prompt>>,
     ctrl_c_state: CtrlCState,
     should_exit: bool,
@@ -160,7 +161,7 @@ impl<'a> Repl<'a> {
             history_search: None,
             start_completion: false,
             completion: Completion::new(),
-            integrated_completion: completion::IntegratedCompletionEngine::new(),
+            integrated_completion: IntegratedCompletionEngine::new(),
             prompt,
             ctrl_c_state: CtrlCState::new(),
             should_exit: false,
@@ -634,12 +635,15 @@ impl<'a> Repl<'a> {
                     input_text, cursor_pos
                 );
 
-                let candidates = self.integrated_completion.complete(
-                    &input_text,
-                    cursor_pos,
-                    &current_dir,
-                    20, // max candidates
-                );
+                let candidates = self
+                    .integrated_completion
+                    .complete(
+                        &input_text,
+                        cursor_pos,
+                        &current_dir,
+                        20, // max candidates
+                    )
+                    .await;
 
                 debug!(
                     "IntegratedCompletionEngine returned {} candidates. {:?}",

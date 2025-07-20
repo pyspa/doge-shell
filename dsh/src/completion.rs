@@ -1,3 +1,4 @@
+use crate::completion::display::CompletionConfig;
 use crate::dirs::is_executable;
 use crate::environment::get_data_file;
 use crate::input::Input;
@@ -6,7 +7,6 @@ use crate::repl::Repl;
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, read};
 use crossterm::{cursor, execute};
-use display::CompletionConfig;
 use dsh_frecency::ItemStats;
 use regex::Regex;
 use skim::prelude::*;
@@ -22,19 +22,22 @@ use tracing::debug;
 use tracing::warn;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-pub mod command;
-pub mod display;
-pub mod fuzzy;
-pub mod generator;
-pub mod history;
+mod command;
+mod display;
+mod dynamic;
+mod fuzzy;
+mod generator;
+mod history;
 pub mod integrated;
-pub mod json_loader;
-pub mod parser;
+mod json_loader;
+mod parser;
 
-pub use self::display::CompletionDisplay;
-pub use self::fuzzy::{ScoredCandidate, SmartCompletion};
-pub use self::integrated::IntegratedCompletionEngine;
+// Re-export from completion module
+pub use crate::completion::command::CompletionType;
 pub use crate::completion::display::Candidate;
+pub use crate::completion::display::CompletionDisplay;
+pub use crate::completion::fuzzy::{ScoredCandidate, SmartCompletion};
+pub use crate::completion::integrated::IntegratedCompletionEngine;
 
 /// Calculate the display width of a Unicode string
 /// This accounts for wide characters (like CJK characters and emojis)
@@ -1332,7 +1335,7 @@ pub fn unquote(s: &str) -> String {
 impl IntegratedCompletionEngine {
     /// Get completion for a specific command (legacy compatibility)
     #[allow(dead_code)]
-    pub fn complete_command(
+    pub async fn complete_command(
         &self,
         command: &str,
         args: &[String],
@@ -1345,7 +1348,7 @@ impl IntegratedCompletionEngine {
             format!("{} {}", command, args.join(" "))
         };
 
-        let enhanced_candidates = self.complete(&input, input.len(), current_dir, 20);
+        let enhanced_candidates = self.complete(&input, input.len(), current_dir, 20).await;
 
         // Convert enhanced candidates back to legacy format
         enhanced_candidates

@@ -13,6 +13,21 @@ static OPTION_REGEX: std::sync::LazyLock<Regex> =
 static DOUBLE_DASH_REGEX: std::sync::LazyLock<Regex> =
     std::sync::LazyLock::new(|| Regex::new(r"^--").unwrap());
 
+/// Command line parsing result for dynamic completion
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedCommandLine {
+    /// Main command name
+    pub command: String,
+    /// Command arguments
+    pub args: Vec<String>,
+    /// Current argument being completed
+    pub current_arg: Option<String>,
+    /// Completion context
+    pub completion_context: CompletionContext,
+    /// Cursor index
+    pub cursor_index: usize,
+}
+
 /// Command line parsing result
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedCommand {

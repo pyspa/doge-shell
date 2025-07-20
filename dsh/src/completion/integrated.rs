@@ -1,10 +1,11 @@
 #![allow(dead_code)]
 use super::command::CompletionCandidate;
+use super::dynamic::DynamicCompletionRegistry;
 use super::fuzzy::{FuzzyCompletion, SmartCompletion};
 use super::generator::CompletionGenerator;
 use super::history::{CompletionContext, HistoryCompletion};
 use super::json_loader::JsonCompletionLoader;
-use super::parser::{self, CommandLineParser};
+use super::parser::{self, CommandLineParser, ParsedCommandLine};
 use crate::completion::display::Candidate;
 use anyhow::Result;
 use regex::Regex;
@@ -25,6 +26,8 @@ pub struct IntegratedCompletionEngine {
     fuzzy_completion: FuzzyCompletion,
     history_completion: HistoryCompletion,
     smart_completion: SmartCompletion,
+    /// Dynamic completion registry
+    dynamic_registry: DynamicCompletionRegistry,
 }
 
 impl IntegratedCompletionEngine {
@@ -36,6 +39,7 @@ impl IntegratedCompletionEngine {
             fuzzy_completion: FuzzyCompletion::new(),
             history_completion: HistoryCompletion::new(),
             smart_completion: SmartCompletion::new(),
+            dynamic_registry: DynamicCompletionRegistry::with_default_handlers(),
         }
     }
 
@@ -80,13 +84,47 @@ impl IntegratedCompletionEngine {
         Ok(())
     }
 
+    /// Convert ParsedCommand to ParsedCommandLine for dynamic completion
+    fn convert_to_parsed_command_line(&self, input: &str, cursor_pos: usize) -> ParsedCommandLine {
+        let parsed = self.parser.parse(input, cursor_pos);
+
+        ParsedCommandLine {
+            command: parsed.command.clone(),
+            args: parsed.specified_arguments.clone(),
+            current_arg: Some(parsed.current_token.clone()),
+            completion_context: match parsed.completion_context {
+                parser::CompletionContext::Command => super::parser::CompletionContext::Command,
+                parser::CompletionContext::SubCommand => {
+                    super::parser::CompletionContext::SubCommand
+                }
+                parser::CompletionContext::ShortOption | parser::CompletionContext::LongOption => {
+                    super::parser::CompletionContext::ShortOption
+                }
+                parser::CompletionContext::OptionValue { .. } => {
+                    super::parser::CompletionContext::OptionValue {
+                        option_name: "".to_string(),
+                        value_type: None,
+                    }
+                }
+                parser::CompletionContext::Argument { .. } => {
+                    super::parser::CompletionContext::Argument {
+                        arg_index: 0,
+                        arg_type: None,
+                    }
+                }
+                parser::CompletionContext::Unknown => super::parser::CompletionContext::Unknown,
+            },
+            cursor_index: cursor_pos,
+        }
+    }
+
     /// Load history data
     pub fn load_history(&mut self, history_path: &Path) -> Result<()> {
         self.history_completion.load_history(history_path)
     }
 
     /// Execute integrated completion
-    pub fn complete(
+    pub async fn complete(
         &self,
         input: &str,
         cursor_pos: usize,
@@ -100,7 +138,39 @@ impl IntegratedCompletionEngine {
 
         let mut all_candidates = Vec::new();
 
-        // 1. New command completion system (highest priority)
+        // 0. Check dynamic completions first (highest priority)
+        let parsed_command_line = self.convert_to_parsed_command_line(input, cursor_pos);
+        if self.dynamic_registry.matches(&parsed_command_line) {
+            debug!("Using dynamic completion for input: '{}'", input);
+            match self
+                .dynamic_registry
+                .generate_candidates(&parsed_command_line)
+                .await
+            {
+                Ok(dynamic_candidates) => {
+                    let enhanced_candidates = dynamic_candidates
+                        .into_iter()
+                        .map(|c| self.convert_to_enhanced_candidate(c, CandidateSource::Dynamic))
+                        .collect::<Vec<_>>();
+
+                    debug!(
+                        "Dynamic completion generated {} candidates for '{}'",
+                        enhanced_candidates.len(),
+                        input
+                    );
+
+                    if !enhanced_candidates.is_empty() {
+                        all_candidates.extend(enhanced_candidates);
+                        return self.deduplicate_and_sort(all_candidates, max_results);
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to generate dynamic completion candidates: {}", e);
+                }
+            }
+        }
+
+        // 1. JSON-based command completion (if no dynamic completions)
         if let Some(ref generator) = self.command_generator {
             debug!("Using JSON completion generator for input: '{}'", input);
             let parsed = self.parser.parse(input, cursor_pos);
@@ -211,6 +281,7 @@ impl IntegratedCompletionEngine {
             description,
             candidate_type,
             priority: match source {
+                CandidateSource::Dynamic => 120, // Highest priority
                 CandidateSource::Command => 100,
                 CandidateSource::Context => 80,
                 CandidateSource::History => 60,
@@ -397,6 +468,8 @@ pub enum CandidateSource {
     Context,
     /// History completion
     History,
+    /// Dynamic completion
+    Dynamic,
 }
 
 #[cfg(test)]

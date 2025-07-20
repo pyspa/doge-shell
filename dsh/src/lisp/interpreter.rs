@@ -1,9 +1,6 @@
-use crate::{
-    completion,
-    lisp::{
-        model::{Env, Lambda, List, RuntimeError, Symbol, Value},
-        utils::{require_arg, require_typed_arg},
-    },
+use crate::lisp::{
+    model::{Env, Lambda, List, RuntimeError, Symbol, Value},
+    utils::{require_arg, require_typed_arg},
 };
 use std::{cell::RefCell, rc::Rc};
 use tracing::log::debug;
@@ -208,7 +205,7 @@ fn eval_inner(
                         }
                     }
 
-                    let entry = completion::AutoComplete {
+                    let entry = crate::completion::AutoComplete {
                         target,
                         cmd,
                         func,

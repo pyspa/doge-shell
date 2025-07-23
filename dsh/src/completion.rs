@@ -39,6 +39,8 @@ pub use crate::completion::display::CompletionDisplay;
 pub use crate::completion::fuzzy::{ScoredCandidate, SmartCompletion};
 pub use crate::completion::integrated::IntegratedCompletionEngine;
 
+pub const MAX_RESULT: usize = 500;
+
 /// Calculate the display width of a Unicode string
 /// This accounts for wide characters (like CJK characters and emojis)
 #[allow(dead_code)]
@@ -1348,7 +1350,9 @@ impl IntegratedCompletionEngine {
             format!("{} {}", command, args.join(" "))
         };
 
-        let enhanced_candidates = self.complete(&input, input.len(), current_dir, 20).await;
+        let enhanced_candidates = self
+            .complete(&input, input.len(), current_dir, MAX_RESULT)
+            .await;
 
         // Convert enhanced candidates back to legacy format
         enhanced_candidates

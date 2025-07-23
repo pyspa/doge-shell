@@ -1,5 +1,5 @@
 use crate::completion::integrated::IntegratedCompletionEngine;
-use crate::completion::{self, Completion};
+use crate::completion::{self, Completion, MAX_RESULT};
 use crate::dirs;
 use crate::input::{Input, InputConfig, display_width};
 use crate::parser::Rule;
@@ -641,7 +641,7 @@ impl<'a> Repl<'a> {
                         &input_text,
                         cursor_pos,
                         &current_dir,
-                        20, // max candidates
+                        MAX_RESULT, // max candidates
                     )
                     .await;
 

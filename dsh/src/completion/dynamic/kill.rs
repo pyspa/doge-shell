@@ -23,8 +23,14 @@ impl DynamicCompletionHandler for KillCompletionHandler {
         // Since we can't use async directly, we'll use tokio::task::block_in_place
         // to run the async code in a blocking context
         let output = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { Command::new("ps").arg("-eo").arg("pid,comm").output().await })
+            tokio::runtime::Handle::current().block_on(async {
+                Command::new("ps")
+                    .arg("-xo")
+                    .arg("pid,%cpu,%mem,command")
+                    .arg("--sort=%mem")
+                    .output()
+                    .await
+            })
         })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -37,7 +43,7 @@ impl DynamicCompletionHandler for KillCompletionHandler {
                 let comm = parts[1].trim();
                 candidates.push(CompletionCandidate {
                     text: pid.to_string(),
-                    description: Some(format!("Process: {comm}")),
+                    description: Some(comm.to_owned()),
                     completion_type: CompletionType::Argument,
                     priority: 100,
                 });

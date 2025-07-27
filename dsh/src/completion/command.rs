@@ -29,8 +29,6 @@ pub struct SubCommand {
     pub arguments: Vec<Argument>,
     /// Nested subcommands (e.g., git remote add)
     pub subcommands: Vec<SubCommand>,
-    /// Aliases (short forms)
-    pub aliases: Vec<String>,
 }
 
 /// Option definition
@@ -42,14 +40,6 @@ pub struct CommandOption {
     pub long: Option<String>,
     /// Option description
     pub description: Option<String>,
-    /// Whether it takes a value (flag or parameter)
-    pub takes_value: bool,
-    /// Value type (when takes_value is true)
-    pub value_type: Option<ArgumentType>,
-    /// Whether it's a required option
-    pub required: bool,
-    /// Whether it can be specified multiple times
-    pub multiple: bool,
 }
 
 /// Argument definition
@@ -59,12 +49,6 @@ pub struct Argument {
     pub name: String,
     /// Argument description
     pub description: Option<String>,
-    /// Argument type
-    pub arg_type: ArgumentType,
-    /// Whether it's a required argument
-    pub required: bool,
-    /// Whether it accepts multiple values
-    pub multiple: bool,
 }
 
 /// Argument/value types

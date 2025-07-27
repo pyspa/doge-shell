@@ -37,13 +37,13 @@ impl CompletionGenerator {
             CompletionContext::ShortOption => self.generate_short_option_candidates(parsed),
             CompletionContext::LongOption => self.generate_long_option_candidates(parsed),
             CompletionContext::OptionValue {
-                option_name,
+                option_name: _,
                 value_type,
-            } => self.generate_option_value_candidates(parsed, option_name, value_type.as_ref()),
+            } => self.generate_option_value_candidates(parsed, value_type.as_ref()),
             CompletionContext::Argument {
-                arg_index,
+                arg_index: _,
                 arg_type,
-            } => self.generate_argument_candidates(parsed, *arg_index, arg_type.as_ref()),
+            } => self.generate_argument_candidates(parsed, arg_type.as_ref()),
             CompletionContext::Unknown => Ok(Vec::new()),
         }
     }
@@ -90,16 +90,6 @@ impl CompletionGenerator {
                             sub.description.clone(),
                         ));
                     }
-
-                    // Include aliases too
-                    for alias in &sub.aliases {
-                        if alias.starts_with(&parsed.current_token) {
-                            candidates.push(CompletionCandidate::subcommand(
-                                alias.clone(),
-                                Some(format!("Alias for {}", sub.name)),
-                            ));
-                        }
-                    }
                 }
             } else {
                 // Top-level subcommands
@@ -109,16 +99,6 @@ impl CompletionGenerator {
                             subcommand.name.clone(),
                             subcommand.description.clone(),
                         ));
-                    }
-
-                    // Include aliases too
-                    for alias in &subcommand.aliases {
-                        if alias.starts_with(&parsed.current_token) {
-                            candidates.push(CompletionCandidate::subcommand(
-                                alias.clone(),
-                                Some(format!("Alias for {}", subcommand.name)),
-                            ));
-                        }
                     }
                 }
             }
@@ -187,17 +167,12 @@ impl CompletionGenerator {
     fn generate_option_value_candidates(
         &self,
         parsed: &ParsedCommand,
-        option_name: &str,
         value_type: Option<&ArgumentType>,
     ) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::new();
 
         // Get actual value type
-        let actual_value_type = if let Some(vt) = value_type {
-            Some(vt)
-        } else {
-            self.get_option_value_type(&parsed.command, &parsed.subcommand_path, option_name)
-        };
+        let actual_value_type = value_type;
 
         if let Some(arg_type) = actual_value_type {
             candidates.extend(self.generate_candidates_for_type(arg_type, &parsed.current_token)?);
@@ -210,17 +185,12 @@ impl CompletionGenerator {
     fn generate_argument_candidates(
         &self,
         parsed: &ParsedCommand,
-        arg_index: usize,
         arg_type: Option<&ArgumentType>,
     ) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::new();
 
         // Get actual argument type
-        let actual_arg_type = if let Some(at) = arg_type {
-            Some(at)
-        } else {
-            self.get_argument_type(&parsed.command, &parsed.subcommand_path, arg_index)
-        };
+        let actual_arg_type = arg_type;
 
         if let Some(arg_type) = actual_arg_type {
             candidates.extend(self.generate_candidates_for_type(arg_type, &parsed.current_token)?);
@@ -424,7 +394,7 @@ impl CompletionGenerator {
         for subcommand_name in subcommand_path {
             current_subcommand = current_subcommands
                 .iter()
-                .find(|sc| sc.name == *subcommand_name || sc.aliases.contains(subcommand_name));
+                .find(|sc| sc.name == *subcommand_name);
 
             if let Some(sc) = current_subcommand {
                 current_subcommands = &sc.subcommands;
@@ -455,46 +425,6 @@ impl CompletionGenerator {
 
         options
     }
-
-    /// Get option value type
-    fn get_option_value_type(
-        &self,
-        command: &str,
-        subcommand_path: &[String],
-        option_name: &str,
-    ) -> Option<&ArgumentType> {
-        if let Some(command_completion) = self.database.get_command(command) {
-            let options = self.collect_available_options(command_completion, subcommand_path);
-
-            for option in options {
-                if option.short.as_deref() == Some(option_name)
-                    || option.long.as_deref() == Some(option_name)
-                {
-                    return option.value_type.as_ref();
-                }
-            }
-        }
-        None
-    }
-
-    /// Get argument type
-    fn get_argument_type(
-        &self,
-        command: &str,
-        subcommand_path: &[String],
-        arg_index: usize,
-    ) -> Option<&ArgumentType> {
-        if let Some(command_completion) = self.database.get_command(command) {
-            if let Some(subcommand) =
-                self.find_current_subcommand(command_completion, subcommand_path)
-            {
-                if let Some(arg) = subcommand.arguments.get(arg_index) {
-                    return Some(&arg.arg_type);
-                }
-            }
-        }
-        None
-    }
 }
 
 #[cfg(test)]
@@ -513,21 +443,16 @@ mod tests {
                 SubCommand {
                     name: "add".to_string(),
                     description: Some("Add files".to_string()),
-                    aliases: vec!["a".to_string()],
                     options: vec![],
                     arguments: vec![Argument {
                         name: "pathspec".to_string(),
                         description: Some("Files to add".to_string()),
-                        arg_type: ArgumentType::File { extensions: None },
-                        required: false,
-                        multiple: true,
                     }],
                     subcommands: vec![],
                 },
                 SubCommand {
                     name: "commit".to_string(),
                     description: Some("Commit changes".to_string()),
-                    aliases: vec![],
                     options: vec![],
                     arguments: vec![],
                     subcommands: vec![],
@@ -570,8 +495,5 @@ mod tests {
 
         let add_candidate = candidates.iter().find(|c| c.text == "add");
         assert!(add_candidate.is_some());
-
-        let alias_candidate = candidates.iter().find(|c| c.text == "a");
-        assert!(alias_candidate.is_some());
     }
 }

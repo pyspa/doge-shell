@@ -1,0 +1,452 @@
+{
+  "command": "pacman",
+  "description": "Arch Linux package manager",
+  "global_options": [
+    {
+      "long": "--help",
+      "short": "-h",
+      "description": "Show help information",
+      "takes_value": false,
+      "required": false,
+      "multiple": false
+    },
+    {
+      "long": "--version",
+      "short": "-V",
+      "description": "Show version information",
+      "takes_value": false,
+      "required": false,
+      "multiple": false
+    },
+    {
+      "long": "--verbose",
+      "short": "-v",
+      "description": "Be verbose",
+      "takes_value": false,
+      "required": false,
+      "multiple": true
+    },
+    {
+      "long": "--quiet",
+      "short": "-q",
+      "description": "Show less information for query and search",
+      "takes_value": false,
+      "required": false,
+      "multiple": true
+    },
+    {
+      "long": "--root",
+      "short": "-r",
+      "description": "Set an alternate installation root",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      },
+      "required": false,
+      "multiple": false
+    },
+    {
+      "long": "--dbpath",
+      "short": "-b",
+      "description": "Set an alternate database location",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      },
+      "required": false,
+      "multiple": false
+    },
+    {
+      "long": "--config",
+      "description": "Set an alternate configuration file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File"
+      },
+      "required": false,
+      "multiple": false
+    },
+    {
+      "long": "--noconfirm",
+      "description": "Do not ask for any confirmation",
+      "takes_value": false,
+      "required": false,
+      "multiple": false
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "-S",
+      "description": "Synchronize packages (install)",
+      "aliases": ["--sync"],
+      "options": [
+        {
+          "short": "-y",
+          "long": "--refresh",
+          "description": "Download fresh package databases",
+          "takes_value": false,
+          "required": false,
+          "multiple": true
+        },
+        {
+          "short": "-u",
+          "long": "--sysupgrade",
+          "description": "Upgrade installed packages",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-s",
+          "long": "--search",
+          "description": "Search remote repositories for matching strings",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-i",
+          "long": "--info",
+          "description": "View package information",
+          "takes_value": false,
+          "required": false,
+          "multiple": true
+        },
+        {
+          "short": "-w",
+          "long": "--downloadonly",
+          "description": "Download packages but do not install/upgrade anything",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--needed",
+          "description": "Do not reinstall up to date packages",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--asdeps",
+          "description": "Install packages as non-explicitly installed",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--asexplicit",
+          "description": "Install packages as explicitly installed",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "package",
+          "description": "Package name to install",
+          "arg_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": true
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "-R",
+      "description": "Remove packages",
+      "aliases": ["--remove"],
+      "options": [
+        {
+          "short": "-s",
+          "long": "--recursive",
+          "description": "Remove dependencies not required by other packages",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-n",
+          "long": "--nosave",
+          "description": "Ignore file backup designations",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-c",
+          "long": "--cascade",
+          "description": "Remove packages and all packages that depend on them",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-u",
+          "long": "--unneeded",
+          "description": "Remove targets that are not required by any other packages",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "package",
+          "description": "Package name to remove",
+          "arg_type": {
+            "type": "String"
+          },
+          "required": true,
+          "multiple": true
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "-Q",
+      "description": "Query the package database",
+      "aliases": ["--query"],
+      "options": [
+        {
+          "short": "-s",
+          "long": "--search",
+          "description": "Search locally-installed packages for matching strings",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-i",
+          "long": "--info",
+          "description": "View package information",
+          "takes_value": false,
+          "required": false,
+          "multiple": true
+        },
+        {
+          "short": "-l",
+          "long": "--list",
+          "description": "List the files owned by the queried package",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-o",
+          "long": "--owns",
+          "description": "Query the package that owns a file",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-d",
+          "long": "--deps",
+          "description": "List packages installed as dependencies",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-e",
+          "long": "--explicit",
+          "description": "List packages explicitly installed",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-t",
+          "long": "--unrequired",
+          "description": "List packages not required by any other package",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-u",
+          "long": "--upgrades",
+          "description": "List outdated packages",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-m",
+          "long": "--foreign",
+          "description": "List installed packages not found in sync db(s)",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-n",
+          "long": "--native",
+          "description": "List installed packages only found in sync db(s)",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "package",
+          "description": "Package name to query",
+          "arg_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": true
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "-U",
+      "description": "Upgrade packages from files",
+      "aliases": ["--upgrade"],
+      "options": [
+        {
+          "long": "--needed",
+          "description": "Do not reinstall up to date packages",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--asdeps",
+          "description": "Install packages as non-explicitly installed",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--asexplicit",
+          "description": "Install packages as explicitly installed",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "file",
+          "description": "Package file to install",
+          "arg_type": {
+            "type": "File",
+            "data": {
+              "extensions": ["pkg.tar.xz", "pkg.tar.zst"]
+            }
+          },
+          "required": true,
+          "multiple": true
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "-F",
+      "description": "Query the files database",
+      "aliases": ["--files"],
+      "options": [
+        {
+          "short": "-y",
+          "long": "--refresh",
+          "description": "Download fresh files databases",
+          "takes_value": false,
+          "required": false,
+          "multiple": true
+        },
+        {
+          "short": "-s",
+          "long": "--search",
+          "description": "Search package file names for matching strings",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-x",
+          "long": "--regex",
+          "description": "Enable searching using regular expressions",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-l",
+          "long": "--list",
+          "description": "List the files owned by the queried package",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-o",
+          "long": "--owns",
+          "description": "Query the package that owns a file",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "target",
+          "description": "Package name or file path",
+          "arg_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": true
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "-D",
+      "description": "Operate on the package database",
+      "aliases": ["--database"],
+      "options": [
+        {
+          "long": "--asdeps",
+          "description": "Mark packages as non-explicitly installed",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--asexplicit",
+          "description": "Mark packages as explicitly installed",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-k",
+          "long": "--check",
+          "description": "Check the local package database",
+          "takes_value": false,
+          "required": false,
+          "multiple": true
+        }
+      ],
+      "arguments": [
+        {
+          "name": "package",
+          "description": "Package name",
+          "arg_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": true
+        }
+      ],
+      "subcommands": []
+    }
+  ]
+}

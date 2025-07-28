@@ -571,9 +571,15 @@ mod tests {
         let loader = JsonCompletionLoader::with_dirs(vec![temp_dir.path().to_path_buf()]);
         let completions = loader.list_available_completions().unwrap();
 
-        assert_eq!(completions.len(), 2);
+        // Should include both embedded completions and filesystem completions
+        // Embedded: git, cargo, docker, pacman, systemctl (5 total)
+        // The filesystem git.json and cargo.json will be deduplicated with embedded ones
+        assert_eq!(completions.len(), 5);
         assert!(completions.contains(&"git".to_string()));
         assert!(completions.contains(&"cargo".to_string()));
+        assert!(completions.contains(&"docker".to_string()));
+        assert!(completions.contains(&"pacman".to_string()));
+        assert!(completions.contains(&"systemctl".to_string()));
         assert!(!completions.contains(&"not_json".to_string()));
     }
 

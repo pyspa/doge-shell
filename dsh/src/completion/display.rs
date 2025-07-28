@@ -8,6 +8,12 @@ use std::io::{Write, stdout};
 use tracing::debug;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+#[derive(Debug, Clone, Copy)]
+enum DisplayMode {
+    Full,
+    SelectionOnly,
+}
+
 // Completion display configuration
 const MAX_COMPLETION_ITEMS: usize = 30;
 
@@ -355,6 +361,14 @@ impl CompletionDisplay {
     }
 
     pub fn display(&mut self) -> Result<()> {
+        self.display_with_mode(DisplayMode::Full)
+    }
+
+    pub fn update_selection(&mut self) -> Result<()> {
+        self.display_with_mode(DisplayMode::SelectionOnly)
+    }
+
+    fn display_with_mode(&mut self, mode: DisplayMode) -> Result<()> {
         let mut stdout = stdout();
 
         // Hide cursor during completion display (only once)
@@ -363,87 +377,135 @@ impl CompletionDisplay {
             self.cursor_hidden = true;
         }
 
-        // Record current cursor position before displaying
-        if self.display_start_row.is_none() {
-            if let Ok((col, row)) = cursor::position() {
-                debug!("Recording display start position: col={}, row={}", col, row);
-                self.display_start_row = Some(row);
-                self.display_start_col = Some(col);
-            } else {
-                debug!("Failed to get cursor position");
+        match mode {
+            DisplayMode::Full => {
+                // Record current cursor position before displaying
+                if self.display_start_row.is_none() {
+                    if let Ok((col, row)) = cursor::position() {
+                        debug!("Recording display start position: col={}, row={}", col, row);
+                        self.display_start_row = Some(row);
+                        self.display_start_col = Some(col);
+                    } else {
+                        debug!("Failed to get cursor position");
+                    }
+                }
+
+                // Ensure we have enough space for the completion display
+                self.ensure_display_space()?;
+
+                // Clear the current line and redraw prompt + input
+                execute!(
+                    stdout,
+                    cursor::MoveToColumn(0),
+                    Clear(ClearType::CurrentLine)
+                )?;
+                queue!(stdout, Print(&self.prompt_text))?;
+                queue!(stdout, Print(&self.input_text))?;
+
+                // Move cursor to start of completion area
+                execute!(stdout, cursor::MoveToNextLine(1))?;
+            }
+            DisplayMode::SelectionOnly => {
+                // For selection-only updates, move to the completion area start
+                if let Some(start_row) = self.display_start_row {
+                    execute!(stdout, cursor::MoveTo(0, start_row + 1))?;
+                } else {
+                    // Fallback to full display if we don't have position info
+                    return self.display_with_mode(DisplayMode::Full);
+                }
             }
         }
 
-        // Ensure we have enough space for the completion display
-        self.ensure_display_space()?;
-
-        // Clear the current line and redraw prompt + input
-        execute!(
-            stdout,
-            cursor::MoveToColumn(0),
-            Clear(ClearType::CurrentLine)
-        )?;
-        queue!(stdout, Print(&self.prompt_text))?;
-        queue!(stdout, Print(&self.input_text))?;
-
-        // Move cursor to start of completion area
-        execute!(stdout, cursor::MoveToNextLine(1))?;
-
-        // Get current terminal width to handle dynamic resizing
-        let (current_terminal_width, _) = crossterm::terminal::size()?;
-        let current_terminal_width = current_terminal_width as usize;
-
-        debug!(
-            "Current terminal width: {}, stored width: {}",
-            current_terminal_width, self.terminal_width
-        );
-
-        // Update our calculations if terminal was resized
-        if current_terminal_width != self.terminal_width {
-            debug!("Terminal was resized, recalculating layout");
-            self.terminal_width = current_terminal_width;
-
-            // Recalculate items per row based on new terminal width
-            let available_width = self.terminal_width.saturating_sub(4); // Reserve margin
-            let inter_column_spacing = 2;
-            let selection_indicator_width = 1;
-
-            let max_display_width = self
-                .candidates
-                .iter()
-                .map(|c| {
-                    let name_width = unicode_display_width(c.get_display_name());
-                    let type_char_width = c.get_type_char().width().unwrap_or(2);
-                    name_width + type_char_width + 1
-                })
-                .max()
-                .unwrap_or(10);
-
-            let effective_column_width = max_display_width + selection_indicator_width;
-            let width_per_item = effective_column_width + inter_column_spacing;
-
-            self.items_per_row = if width_per_item > 0 {
-                std::cmp::max(1, available_width / width_per_item)
-            } else {
-                1
-            };
-
-            self.column_width = if self.items_per_row > 0 {
-                let total_spacing = (self.items_per_row.saturating_sub(1)) * inter_column_spacing;
-                let width_for_content = available_width.saturating_sub(total_spacing);
-                width_for_content / self.items_per_row
-            } else {
-                available_width
-            };
-
-            self.total_rows = self.candidates.len().div_ceil(self.items_per_row);
+        // Handle terminal resizing only for full display mode
+        if matches!(mode, DisplayMode::Full) {
+            // Get current terminal width to handle dynamic resizing
+            let (current_terminal_width, _) = crossterm::terminal::size()?;
+            let current_terminal_width = current_terminal_width as usize;
 
             debug!(
-                "Recalculated layout: column_width={}, items_per_row={}, total_rows={}",
-                self.column_width, self.items_per_row, self.total_rows
+                "Current terminal width: {}, stored width: {}",
+                current_terminal_width, self.terminal_width
             );
+
+            // Update our calculations if terminal was resized
+            if current_terminal_width != self.terminal_width {
+                debug!("Terminal was resized, recalculating layout");
+                self.terminal_width = current_terminal_width;
+
+                // Recalculate items per row based on new terminal width
+                let available_width = self.terminal_width.saturating_sub(4); // Reserve margin
+                let inter_column_spacing = 2;
+                let selection_indicator_width = 1;
+
+                let max_display_width = self
+                    .candidates
+                    .iter()
+                    .map(|c| {
+                        let name_width = unicode_display_width(c.get_display_name());
+                        let type_char_width = c.get_type_char().width().unwrap_or(2);
+                        name_width + type_char_width + 1
+                    })
+                    .max()
+                    .unwrap_or(10);
+
+                let effective_column_width = max_display_width + selection_indicator_width;
+                let width_per_item = effective_column_width + inter_column_spacing;
+
+                self.items_per_row = if width_per_item > 0 {
+                    std::cmp::max(1, available_width / width_per_item)
+                } else {
+                    1
+                };
+
+                self.column_width = if self.items_per_row > 0 {
+                    let total_spacing =
+                        (self.items_per_row.saturating_sub(1)) * inter_column_spacing;
+                    let width_for_content = available_width.saturating_sub(total_spacing);
+                    width_for_content / self.items_per_row
+                } else {
+                    available_width
+                };
+
+                self.total_rows = self.candidates.len().div_ceil(self.items_per_row);
+
+                debug!(
+                    "Recalculated layout: column_width={}, items_per_row={}, total_rows={}",
+                    self.column_width, self.items_per_row, self.total_rows
+                );
+            }
         }
 
+        match mode {
+            DisplayMode::Full => {
+                self.render_all_items(&mut stdout)?;
+            }
+            DisplayMode::SelectionOnly => {
+                self.render_selection_update(&mut stdout)?;
+            }
+        }
+
+        // Move cursor back to the end of input line (but keep it hidden)
+        if let (Some(start_row), Some(start_col)) = (self.display_start_row, self.display_start_col)
+        {
+            let prompt_width = unicode_display_width(&self.prompt_text);
+            let input_width = unicode_display_width(&self.input_text);
+            let input_end_col = start_col + prompt_width as u16 + input_width as u16;
+            execute!(stdout, cursor::MoveTo(input_end_col, start_row))?;
+        }
+
+        stdout.flush()?;
+        debug!(
+            "Displayed {} candidates in {} rows (total items: {}, has_more: {}) - mode: {:?}",
+            self.candidates.len(),
+            self.total_rows,
+            self.total_items_count,
+            self.has_more_items,
+            mode
+        );
+        Ok(())
+    }
+
+    fn render_all_items(&self, stdout: &mut std::io::Stdout) -> Result<()> {
         for row in 0..self.total_rows {
             let mut items_displayed_in_row = 0;
 
@@ -472,41 +534,7 @@ impl CompletionDisplay {
                     break;
                 }
 
-                // Display the selection indicator
-                if is_selected {
-                    queue!(stdout, SetForegroundColor(Color::Yellow))?;
-                    queue!(stdout, Print(">"))?;
-                } else {
-                    queue!(stdout, Print(" "))?;
-                }
-
-                // Format the item for display with fixed width
-                let formatted = if is_message_item {
-                    // For message items, don't apply column width formatting
-                    candidate.get_display_name().to_string()
-                } else {
-                    candidate.get_formatted_display(self.column_width)
-                };
-
-                // Add type-specific coloring
-                if is_message_item {
-                    queue!(stdout, SetForegroundColor(Color::DarkGrey))?;
-                } else {
-                    match candidate.get_type_char() {
-                        '⚡' => queue!(stdout, SetForegroundColor(Color::Green))?, // Command - lightning bolt
-                        '📁' => queue!(stdout, SetForegroundColor(Color::Blue))?, // Directory - folder
-                        '📄' => queue!(stdout, SetForegroundColor(Color::White))?, // File - document
-                        '⚙' => queue!(stdout, SetForegroundColor(Color::Yellow))?, // Option - gear
-                        '🔹' => queue!(stdout, SetForegroundColor(Color::White))?, // Basic - small blue diamond
-                        '🌿' => queue!(stdout, SetForegroundColor(Color::Green))?, // Git branch - herb/branch
-                        '📜' => queue!(stdout, SetForegroundColor(Color::Cyan))?, // Script - scroll
-                        '🕒' => queue!(stdout, SetForegroundColor(Color::Magenta))?, // History - clock
-                        _ => queue!(stdout, SetForegroundColor(Color::White))?,
-                    }
-                }
-
-                queue!(stdout, Print(formatted))?;
-                queue!(stdout, ResetColor)?;
+                self.render_item(stdout, candidate, is_selected, is_message_item)?;
 
                 items_displayed_in_row += 1;
 
@@ -525,24 +553,74 @@ impl CompletionDisplay {
                 queue!(stdout, cursor::MoveToNextLine(1))?;
             }
         }
+        Ok(())
+    }
 
-        // Move cursor back to the end of input line (but keep it hidden)
-        if let (Some(start_row), Some(start_col)) = (self.display_start_row, self.display_start_col)
-        {
-            let prompt_width = unicode_display_width(&self.prompt_text);
-            let input_width = unicode_display_width(&self.input_text);
-            let input_end_col = start_col + prompt_width as u16 + input_width as u16;
-            execute!(stdout, cursor::MoveTo(input_end_col, start_row))?;
+    fn render_selection_update(&self, stdout: &mut std::io::Stdout) -> Result<()> {
+        // Optimized approach: only redraw the items without clearing
+        // Move to the start of the completion area and redraw in place
+        if let Some(start_row) = self.display_start_row {
+            execute!(stdout, cursor::MoveTo(0, start_row + 1))?;
+            self.render_all_items(stdout)?;
+
+            // Move cursor back to input position
+            if let Some(start_col) = self.display_start_col {
+                let prompt_width = unicode_display_width(&self.prompt_text);
+                let input_width = unicode_display_width(&self.input_text);
+                let input_end_col = start_col + prompt_width as u16 + input_width as u16;
+                execute!(stdout, cursor::MoveTo(input_end_col, start_row))?;
+            }
+        } else {
+            // Fallback to full display if position is unknown
+            self.render_all_items(stdout)?;
         }
 
-        stdout.flush()?;
-        debug!(
-            "Displayed {} candidates in {} rows (total items: {}, has_more: {})",
-            self.candidates.len(),
-            self.total_rows,
-            self.total_items_count,
-            self.has_more_items
-        );
+        Ok(())
+    }
+
+    fn render_item(
+        &self,
+        stdout: &mut std::io::Stdout,
+        candidate: &Candidate,
+        is_selected: bool,
+        is_message_item: bool,
+    ) -> Result<()> {
+        // Display the selection indicator
+        if is_selected {
+            queue!(stdout, SetForegroundColor(Color::Yellow))?;
+            queue!(stdout, Print(">"))?;
+        } else {
+            queue!(stdout, Print(" "))?;
+        }
+
+        // Format the item for display with fixed width
+        let formatted = if is_message_item {
+            // For message items, don't apply column width formatting
+            candidate.get_display_name().to_string()
+        } else {
+            candidate.get_formatted_display(self.column_width)
+        };
+
+        // Add type-specific coloring
+        if is_message_item {
+            queue!(stdout, SetForegroundColor(Color::DarkGrey))?;
+        } else {
+            match candidate.get_type_char() {
+                '⚡' => queue!(stdout, SetForegroundColor(Color::Green))?, // Command - lightning bolt
+                '📁' => queue!(stdout, SetForegroundColor(Color::Blue))?,  // Directory - folder
+                '📄' => queue!(stdout, SetForegroundColor(Color::White))?, // File - document
+                '⚙' => queue!(stdout, SetForegroundColor(Color::Yellow))?, // Option - gear
+                '🔹' => queue!(stdout, SetForegroundColor(Color::White))?, // Basic - small blue diamond
+                '🌿' => queue!(stdout, SetForegroundColor(Color::Green))?, // Git branch - herb/branch
+                '📜' => queue!(stdout, SetForegroundColor(Color::Cyan))?,  // Script - scroll
+                '🕒' => queue!(stdout, SetForegroundColor(Color::Magenta))?, // History - clock
+                _ => queue!(stdout, SetForegroundColor(Color::White))?,
+            }
+        }
+
+        queue!(stdout, Print(formatted))?;
+        queue!(stdout, ResetColor)?;
+
         Ok(())
     }
 

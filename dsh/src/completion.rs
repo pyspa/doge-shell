@@ -406,24 +406,20 @@ pub fn select_completion_items_with_config(
         {
             match (code, modifiers) {
                 (KeyCode::Up, KeyModifiers::NONE) => {
-                    let _ = display.clear_display();
                     display.move_up();
-                    let _ = display.display();
+                    let _ = display.update_selection();
                 }
                 (KeyCode::Down, KeyModifiers::NONE) => {
-                    let _ = display.clear_display();
                     display.move_down();
-                    let _ = display.display();
+                    let _ = display.update_selection();
                 }
                 (KeyCode::Left, KeyModifiers::NONE) => {
-                    let _ = display.clear_display();
                     display.move_left();
-                    let _ = display.display();
+                    let _ = display.update_selection();
                 }
                 (KeyCode::Right, KeyModifiers::NONE) | (KeyCode::Tab, KeyModifiers::NONE) => {
-                    let _ = display.clear_display();
                     display.move_right();
-                    let _ = display.display();
+                    let _ = display.update_selection();
                 }
                 (KeyCode::Enter, KeyModifiers::NONE) => {
                     let _ = display.clear_display();

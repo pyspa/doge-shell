@@ -250,10 +250,17 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore] // Ignore this test as it requires a TTY environment
     async fn test_lisp_sh() {
         init();
         let env = Environment::new();
         let engine = LispEngine::new(env);
+
+        // Skip TTY-dependent test in non-TTY environments
+        if !nix::unistd::isatty(0).unwrap_or(false) {
+            println!("Skipping TTY-dependent test");
+            return;
+        }
 
         let args = [Value::String("ls -al".to_string())];
         let env_clone = Rc::clone(&engine.borrow().env);
@@ -262,10 +269,5 @@ mod tests {
         if let Ok(result) = res {
             println!("{result}");
         }
-
-        // let args = vec![Value::String("cargo build".to_string())];
-        // let res = sh(Rc::clone(&engine.borrow().env), args.as_slice());
-        // assert!(res.is_ok());
-        // println!("{}", res.unwrap());
     }
 }

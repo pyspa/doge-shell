@@ -130,26 +130,13 @@ impl Redirect {
 }
 
 fn copy_fd(src: RawFd, dst: RawFd) -> Result<()> {
-    debug!("📋 COPY_FD: copy_fd called with src={}, dst={}", src, dst);
-
     if src != dst && src >= 0 && dst >= 0 {
-        debug!("📋 COPY_FD: Performing dup2({} -> {})", src, dst);
         dup2(src, dst).map_err(|e| anyhow::anyhow!("dup2 failed: {}", e))?;
-        debug!("📋 COPY_FD: dup2 successful");
 
         // Only close if it's not a standard file descriptor
         if src > 2 {
-            debug!("📋 COPY_FD: Closing source fd {} (non-standard fd)", src);
             close(src).map_err(|e| anyhow::anyhow!("close failed: {}", e))?;
-            debug!("📋 COPY_FD: Successfully closed fd {}", src);
-        } else {
-            debug!("📋 COPY_FD: Not closing fd {} (standard fd)", src);
         }
-    } else {
-        debug!(
-            "📋 COPY_FD: No action needed (src={}, dst={}) - same fd or invalid",
-            src, dst
-        );
     }
     Ok(())
 }
@@ -547,54 +534,19 @@ impl Process {
     }
 
     fn update_state(&mut self) -> Option<ProcessState> {
-        debug!(
-            "PROCESS_UPDATE_STATE: Checking state for process '{}' (current: {:?}, pid: {:?})",
-            self.cmd, self.state, self.pid
-        );
-
         if let ProcessState::Completed(_, _) = self.state {
-            debug!(
-                "PROCESS_UPDATE_STATE: Process '{}' already completed, returning existing state",
-                self.cmd
-            );
             Some(self.state)
         } else {
             if let Some(pid) = self.pid {
-                debug!(
-                    "PROCESS_UPDATE_STATE: Calling wait_pid_job for process '{}' pid: {}",
-                    self.cmd, pid
-                );
-                if let Some((waited_pid, state)) = wait_pid_job(pid, true) {
-                    debug!(
-                        "PROCESS_UPDATE_STATE: Process '{}' state updated from {:?} to {:?} (waited_pid: {})",
-                        self.cmd, self.state, state, waited_pid
-                    );
+                if let Some((_waited_pid, state)) = wait_pid_job(pid, true) {
                     self.state = state;
-                } else {
-                    debug!(
-                        "PROCESS_UPDATE_STATE: No state change for process '{}' (still {:?})",
-                        self.cmd, self.state
-                    );
                 }
-            } else {
-                debug!(
-                    "PROCESS_UPDATE_STATE: Process '{}' has no PID, cannot check state",
-                    self.cmd
-                );
             }
 
             if let Some(next) = self.next.as_mut() {
-                debug!(
-                    "PROCESS_UPDATE_STATE: Checking next process in pipeline for '{}'",
-                    self.cmd
-                );
                 next.update_state();
             }
 
-            debug!(
-                "PROCESS_UPDATE_STATE: Final state for process '{}': {:?}",
-                self.cmd, self.state
-            );
             Some(self.state)
         }
     }
@@ -858,42 +810,16 @@ impl JobProcess {
         // has pipelines process ?
         let next_process = self.take_next();
 
-        debug!("🚀 LAUNCH: Starting process launch");
-        debug!(
-            "🚀 LAUNCH: Initial I/O - ctx.infile={}, ctx.outfile={}, ctx.errfile={}",
-            ctx.infile, ctx.outfile, ctx.errfile
-        );
-        debug!(
-            "🚀 LAUNCH: next_process={:?}, redirect={:?}",
-            next_process.is_some(),
-            redirect
-        );
-
         let pipe_out = match next_process {
             Some(_) => {
-                debug!("🚀 LAUNCH: Has next process - creating pipe");
                 create_pipe(ctx)? // create pipe
             }
             None => {
-                debug!("🚀 LAUNCH: No next process - handling redirect");
                 handle_output_redirect(ctx, redirect, stdout)? // check redirect
             }
         };
 
-        debug!(
-            "🚀 LAUNCH: After pipe/redirect - ctx.infile={}, ctx.outfile={}, ctx.errfile={}",
-            ctx.infile, ctx.outfile, ctx.errfile
-        );
-        debug!("🚀 LAUNCH: pipe_out={:?}", pipe_out);
-
         self.set_io(ctx.infile, ctx.outfile, ctx.errfile);
-
-        debug!("🚀 LAUNCH: After set_io - process I/O configured");
-        debug!(
-            "🚀 LAUNCH: launch cmd:{} pgid:{:?}",
-            self.get_cmd(),
-            &ctx.pgid
-        );
 
         // initial pid
         let current_pid = getpid();
@@ -931,15 +857,7 @@ impl JobProcess {
 
         // set pipe inout
         if let Some(pipe_out) = pipe_out {
-            debug!(
-                "🔗 PIPE_CHAIN: Setting pipe read end {} as input for next process",
-                pipe_out
-            );
-            debug!("🔗 PIPE_CHAIN: Before - ctx.infile={}", ctx.infile);
             ctx.infile = pipe_out;
-            debug!("🔗 PIPE_CHAIN: After - ctx.infile={}", ctx.infile);
-        } else {
-            debug!("🔗 PIPE_CHAIN: No pipe output to chain");
         }
         // return launched process pid and pipeline process
         Ok((pid, next_process))
@@ -1441,34 +1359,18 @@ impl Job {
     }
 
     fn wait_process(&mut self) -> Result<()> {
-        debug!("⏳ WAIT: Starting wait_process for job: {}", self.id);
-        debug!("⏳ WAIT: Job pgid: {:?}", self.pgid);
         let mut send_killpg = false;
         loop {
-            debug!("⏳ WAIT: waitpid loop iteration for pgid:{:?}", self.pgid);
-
             // match task::spawn_blocking(|| waitpid(None, Some(WaitPidFlag::WUNTRACED))).await {
             let (pid, state) = match waitpid(None, Some(WaitPidFlag::WUNTRACED)) {
                 Ok(WaitStatus::Exited(pid, status)) => {
-                    debug!("⏳ WAIT: Process exited - pid: {}, status: {}", pid, status);
                     (pid, ProcessState::Completed(status as u8, None))
                 } // ok??
                 Ok(WaitStatus::Signaled(pid, signal, _)) => {
-                    debug!(
-                        "⏳ WAIT: Process signaled - pid: {}, signal: {:?}",
-                        pid, signal
-                    );
                     (pid, ProcessState::Completed(1, Some(signal)))
                 }
-                Ok(WaitStatus::Stopped(pid, signal)) => {
-                    debug!(
-                        "⏳ WAIT: Process stopped - pid: {}, signal: {:?}",
-                        pid, signal
-                    );
-                    (pid, ProcessState::Stopped(pid, signal))
-                }
+                Ok(WaitStatus::Stopped(pid, signal)) => (pid, ProcessState::Stopped(pid, signal)),
                 Err(nix::errno::Errno::ECHILD) | Ok(WaitStatus::StillAlive) => {
-                    debug!("⏳ WAIT: No more children to wait for (ECHILD or StillAlive)");
                     break;
                 }
                 status => {
@@ -2334,22 +2236,7 @@ pub fn wait_pid_job(pid: Pid, no_hang: bool) -> Option<(Pid, ProcessState)> {
 fn create_pipe(ctx: &mut Context) -> Result<Option<RawFd>> {
     let (pout, pin) = pipe().context("failed pipe")?;
 
-    debug!(
-        "🔧 PIPE: Created pipe - read_end={}, write_end={}",
-        pout, pin
-    );
-    debug!(
-        "🔧 PIPE: Before - ctx.infile={}, ctx.outfile={}, ctx.errfile={}",
-        ctx.infile, ctx.outfile, ctx.errfile
-    );
-
     ctx.outfile = pin;
-
-    debug!(
-        "🔧 PIPE: After - ctx.infile={}, ctx.outfile={}, ctx.errfile={}",
-        ctx.infile, ctx.outfile, ctx.errfile
-    );
-    debug!("🔧 PIPE: Returning read_end={} for next process", pout);
 
     Ok(Some(pout))
 }
@@ -2359,25 +2246,11 @@ fn handle_output_redirect(
     redirect: &Option<Redirect>,
     stdout: RawFd,
 ) -> Result<Option<RawFd>> {
-    debug!("🔀 REDIRECT: Starting output redirect processing");
-    debug!(
-        "🔀 REDIRECT: Input - ctx.infile={}, ctx.outfile={}, ctx.errfile={}",
-        ctx.infile, ctx.outfile, ctx.errfile
-    );
-    debug!("🔀 REDIRECT: stdout={}, redirect={:?}", stdout, redirect);
-
     if let Some(output) = redirect {
-        debug!("🔀 REDIRECT: Processing redirect: {:?}", output);
         match output {
-            Redirect::StdoutOutput(file) | Redirect::StdoutAppend(file) => {
-                debug!("🔀 REDIRECT: StdoutOutput/Append to file: {}", file);
+            Redirect::StdoutOutput(_file) | Redirect::StdoutAppend(_file) => {
                 let (pout, pin) = pipe().context("failed pipe")?;
-                debug!(
-                    "🔀 REDIRECT: Created redirect pipe - read_end={}, write_end={}",
-                    pout, pin
-                );
                 ctx.outfile = pin;
-                debug!("🔀 REDIRECT: Set ctx.outfile={}", ctx.outfile);
                 Ok(Some(pout))
             }
             Redirect::StderrOutput(file) | Redirect::StderrAppend(file) => {

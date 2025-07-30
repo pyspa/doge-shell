@@ -13,7 +13,7 @@ use tracing::{debug, warn};
 static SHORT_OPTION_VALIDATION_REGEX: std::sync::LazyLock<Regex> =
     std::sync::LazyLock::new(|| Regex::new(r"^-[a-zA-Z]$").unwrap());
 static LONG_OPTION_VALIDATION_REGEX: std::sync::LazyLock<Regex> =
-    std::sync::LazyLock::new(|| Regex::new(r"^--[a-zA-Z][a-zA-Z0-9-]{2,}$").unwrap());
+    std::sync::LazyLock::new(|| Regex::new(r"^--[a-zA-Z][a-zA-Z0-9-]{1,}$").unwrap());
 
 /// Embedded completion assets using rust-embed
 /// This embeds all JSON files from the completions/ directory at compile time

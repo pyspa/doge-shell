@@ -59,6 +59,10 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
                     ctx.write_stderr(&format!("gco: failed to get git log: {err}"))
                         .ok();
                     return ExitStatus::ExitedWith(1);
+                } else {
+                    let output = String::from_utf8_lossy(&output.stdout);
+                    let output = output.trim().to_string();
+                    ctx.write_stdout(&output.to_string()).ok();
                 }
             }
             Err(err) => {

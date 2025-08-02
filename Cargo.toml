@@ -49,6 +49,7 @@ tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "fs"] }
 mime_guess = "2.0"
 chrono = { version = "0.4", features = ["serde"] }
+skim = "0.20"
 
 [profile.dev]
 # https://jakedeichert.com/blog/reducing-rust-incremental-compilation-times-on-macos-by-70-percent/

@@ -47,6 +47,7 @@ futures-timer.workspace = true
 xid.workspace = true
 bincode.workspace = true
 parking_lot.workspace = true
+skim.workspace = true
 unicode-width = "0.2"
 async-trait = "0.1"
 
@@ -63,7 +64,6 @@ easy_reader = "0.5"
 pest = "2.8"
 pest_derive = "2.8"
 fuzzy-matcher = "0.3"  # "*" → "0.3"
-skim = "0.20"      # 0.10 → 0.20
 tabled = "0.20"    # "*" → "0.20"
 num-bigint = { version = "0.4", optional = true }
 num-traits = "0.2"

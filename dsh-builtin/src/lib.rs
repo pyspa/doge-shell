@@ -14,6 +14,7 @@ pub mod cd;
 mod chatgpt;
 mod dmv;
 mod fg;
+mod gco;
 mod glog;
 mod history;
 mod jobs;
@@ -113,6 +114,7 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, BuiltinCommand>>> = Lazy::n
 
     // Git integration commands
     builtin.insert("glog", glog::command as BuiltinCommand);
+    builtin.insert("gco", gco::command as BuiltinCommand);
 
     // Utility commands
     builtin.insert("add_path", add_path::command as BuiltinCommand);

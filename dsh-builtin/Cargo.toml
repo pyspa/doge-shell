@@ -19,6 +19,7 @@ tracing.workspace = true
 uuid.workspace = true
 tabled.workspace = true
 nix.workspace = true
+skim.workspace = true
 
 getopts = "0.2.23"
 regex = "1.11"

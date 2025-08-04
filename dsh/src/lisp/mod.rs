@@ -42,9 +42,18 @@ impl LispEngine {
             .with_context(|| format!("Failed to read config file: {}", file_path.display()))?
             .trim()
             .to_string();
-        let _ = self.run(format!("(begin {config_lisp} )").as_str());
 
-        Ok(())
+        let wrapped_config = format!("(begin {config_lisp}\n)");
+        match self.run(&wrapped_config) {
+            Ok(_) => {
+                tracing::debug!("Successfully loaded config.lisp");
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!("Failed to execute config.lisp: {}", e);
+                Err(e)
+            }
+        }
     }
 
     pub fn run(&self, src: &str) -> anyhow::Result<Value> {
@@ -57,10 +66,8 @@ impl LispEngine {
                     return Ok(res);
                 }
                 Err(err) => {
-                    tracing::error!("Lisp evaluation error: {}", err);
-                    eprintln!("{err}");
-                    // Return error value instead of continuing
-                    return Ok(Value::String(format!("Error: {err}")));
+                    tracing::error!("Lisp parse error: {}", err);
+                    return Err(anyhow::anyhow!("Parse error: {}", err));
                 }
             }
         }

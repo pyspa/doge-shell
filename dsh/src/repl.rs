@@ -1,6 +1,7 @@
 use crate::completion::integrated::IntegratedCompletionEngine;
 use crate::completion::{self, Completion, MAX_RESULT};
 use crate::dirs;
+use crate::history::FrecencyHistory;
 use crate::input::{Input, InputConfig, display_width};
 use crate::parser::Rule;
 use crate::prompt::Prompt;
@@ -19,7 +20,7 @@ use nix::sys::termios::{Termios, tcgetattr};
 use nix::unistd::tcsetpgrp;
 use parking_lot::RwLock;
 use std::io::{StdoutLock, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
@@ -226,42 +227,38 @@ impl<'a> Repl<'a> {
     }
 
     fn save_history(&mut self) {
-        if let Some(ref mut history) = self.shell.cmd_history {
-            if let Ok(mut history) = history.try_lock() {
+        Self::save_single_history_helper(&mut self.shell.cmd_history, "command");
+        Self::save_single_history_helper(&mut self.shell.path_history, "path");
+    }
+
+    fn save_single_history_helper(
+        history: &mut Option<Arc<Mutex<FrecencyHistory>>>,
+        history_type: &str,
+    ) {
+        if let Some(history) = history {
+            if let Ok(mut history_guard) = history.try_lock() {
                 // Only save if there are changes
-                if let Some(ref store) = history.store {
+                if let Some(ref store) = history_guard.store {
                     if store.changed {
-                        if let Err(e) = history.save() {
-                            warn!("Failed to save command history: {}", e);
+                        if let Err(e) = history_guard.save() {
+                            warn!("Failed to save {} history: {}", history_type, e);
                         } else {
-                            debug!("Command history saved successfully");
+                            debug!("{} history saved successfully", history_type);
                         }
                     } else {
-                        debug!("Command history unchanged, skipping save");
+                        debug!("{} history unchanged, skipping save", history_type);
                     }
                 }
             } else {
-                debug!("Command history is locked, skipping save");
+                debug!("{} history is locked, skipping save", history_type);
             }
         }
-        if let Some(ref mut history) = self.shell.path_history {
-            if let Ok(mut history) = history.try_lock() {
-                // Only save if there are changes
-                if let Some(ref store) = history.store {
-                    if store.changed {
-                        if let Err(e) = history.save() {
-                            warn!("Failed to save path history: {}", e);
-                        } else {
-                            debug!("Path history saved successfully");
-                        }
-                    } else {
-                        debug!("Path history unchanged, skipping save");
-                    }
-                }
-            } else {
-                debug!("Path history is locked, skipping save");
-            }
-        }
+    }
+
+    fn save_history_periodic(&mut self) {
+        // Save both command and path history if they have changes
+        Self::save_single_history_helper(&mut self.shell.cmd_history, "command");
+        Self::save_single_history_helper(&mut self.shell.path_history, "path");
     }
 
     fn move_cursor_input_end(&self, out: &mut StdoutLock<'static>) {
@@ -875,43 +872,14 @@ impl<'a> Repl<'a> {
         }
         self.shell.check_job_state().await?;
 
-        let mut last_save_time = Instant::now();
+        let _last_save_time = Instant::now();
         loop {
             let mut check_background_delay = Delay::new(Duration::from_millis(1000)).fuse();
             let mut event = reader.next().fuse();
             select! {
                 _ = check_background_delay => {
                     // Save history every 30 seconds if there have been changes
-                    if last_save_time.elapsed() > Duration::from_secs(30) {
-                        if let Some(ref mut history) = self.shell.path_history {
-                            if let Ok(mut history) = history.try_lock() {
-                                if let Some(ref store) = history.store {
-                                    if store.changed {
-                                        if let Err(e) = history.save() {
-                                            warn!("Failed to save path history: {}", e);
-                                        } else {
-                                            debug!("Path history saved after 30 seconds");
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if let Some(ref mut history) = self.shell.cmd_history {
-                            if let Ok(mut history) = history.try_lock() {
-                                if let Some(ref store) = history.store {
-                                    if store.changed {
-                                        if let Err(e) = history.save() {
-                                            warn!("Failed to save command history: {}", e);
-                                        } else {
-                                            debug!("Command history saved after 30 seconds");
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        last_save_time = Instant::now();
-                    }
-
+                    self.save_history_periodic();
                     self.check_background_jobs(true).await?;
                 },
                 maybe_event = event => {

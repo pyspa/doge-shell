@@ -64,13 +64,16 @@ impl FrecencyStore {
         item_stats.update_num_accesses(1);
         item_stats.update_last_access(current_time_secs());
 
-        self.check_changed();
+        // Mark as changed since we've added/updated an item
+        self.changed = true;
     }
 
     pub fn check_changed(&mut self) {
         let changed = self.size != self.items.len();
         self.size = self.items.len();
-        self.changed = changed;
+        if changed {
+            self.changed = true;
+        }
     }
 
     /// Adjust the score of a item by a given weight

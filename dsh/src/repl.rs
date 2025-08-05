@@ -120,6 +120,7 @@ pub struct Repl<'a> {
     prompt: Arc<RwLock<Prompt>>,
     ctrl_c_state: CtrlCState,
     should_exit: bool,
+    last_command_time: Option<Instant>,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -165,6 +166,7 @@ impl<'a> Repl<'a> {
             prompt,
             ctrl_c_state: CtrlCState::new(),
             should_exit: false,
+            last_command_time: None,
         }
     }
 
@@ -223,8 +225,17 @@ impl<'a> Repl<'a> {
     fn save_history(&mut self) {
         if let Some(ref mut history) = self.shell.cmd_history {
             if let Ok(mut history) = history.try_lock() {
-                if let Err(e) = history.save() {
-                    warn!("Failed to save command history: {}", e);
+                // Only save if there are changes
+                if let Some(ref store) = history.store {
+                    if store.changed {
+                        if let Err(e) = history.save() {
+                            warn!("Failed to save command history: {}", e);
+                        } else {
+                            debug!("Command history saved successfully");
+                        }
+                    } else {
+                        debug!("Command history unchanged, skipping save");
+                    }
                 }
             } else {
                 debug!("Command history is locked, skipping save");
@@ -232,8 +243,17 @@ impl<'a> Repl<'a> {
         }
         if let Some(ref mut history) = self.shell.path_history {
             if let Ok(mut history) = history.try_lock() {
-                if let Err(e) = history.save() {
-                    warn!("Failed to save path history: {}", e);
+                // Only save if there are changes
+                if let Some(ref store) = history.store {
+                    if store.changed {
+                        if let Err(e) = history.save() {
+                            warn!("Failed to save path history: {}", e);
+                        } else {
+                            debug!("Path history saved successfully");
+                        }
+                    } else {
+                        debug!("Path history unchanged, skipping save");
+                    }
                 }
             } else {
                 debug!("Path history is locked, skipping save");
@@ -730,6 +750,7 @@ impl<'a> Repl<'a> {
                         }
                     }
                     self.input.clear();
+                    self.last_command_time = Some(Instant::now());
                 }
                 // After command execution, show new prompt
                 let mut out = std::io::stdout().lock();
@@ -851,46 +872,43 @@ impl<'a> Repl<'a> {
         }
         self.shell.check_job_state().await?;
 
-        let mut save_history_delay = Delay::new(Duration::from_millis(10_000)).fuse();
+        let mut last_save_time = Instant::now();
         loop {
             let mut check_background_delay = Delay::new(Duration::from_millis(1000)).fuse();
             let mut event = reader.next().fuse();
             select! {
-                _ = save_history_delay => {
-                    if let Some(ref mut history) = self.shell.path_history {
-                        let history = history.clone();
-                        tokio::spawn(async move{
-                            match history.lock() {
-                                Ok(mut history) => {
-                                    if let Err(e) = history.save() {
-                                        warn!("Failed to save path history in background: {}", e);
-                                    }
-                                }
-                                Err(e) => {
-                                    warn!("Failed to acquire path history lock in background: {}", e);
-                                }
-                            }
-                        });
-                    }
-                    if let Some(ref mut history) = self.shell.cmd_history {
-                        let history = history.clone();
-                        tokio::spawn(async move{
-                            match history.lock() {
-                                Ok(mut history) => {
-                                    if let Err(e) = history.save() {
-                                        warn!("Failed to save command history in background: {}", e);
-                                    }
-                                }
-                                Err(e) => {
-                                    warn!("Failed to acquire command history lock in background: {}", e);
-                                }
-                            }
-                        });
-                    }
-                    save_history_delay = Delay::new(Duration::from_millis(10_000)).fuse();
-                },
-
                 _ = check_background_delay => {
+                    // Save history every 30 seconds if there have been changes
+                    if last_save_time.elapsed() > Duration::from_secs(30) {
+                        if let Some(ref mut history) = self.shell.path_history {
+                            if let Ok(mut history) = history.try_lock() {
+                                if let Some(ref store) = history.store {
+                                    if store.changed {
+                                        if let Err(e) = history.save() {
+                                            warn!("Failed to save path history: {}", e);
+                                        } else {
+                                            debug!("Path history saved after 30 seconds");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(ref mut history) = self.shell.cmd_history {
+                            if let Ok(mut history) = history.try_lock() {
+                                if let Some(ref store) = history.store {
+                                    if store.changed {
+                                        if let Err(e) = history.save() {
+                                            warn!("Failed to save command history: {}", e);
+                                        } else {
+                                            debug!("Command history saved after 30 seconds");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        last_save_time = Instant::now();
+                    }
+
                     self.check_background_jobs(true).await?;
                 },
                 maybe_event = event => {

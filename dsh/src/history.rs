@@ -208,7 +208,7 @@ impl History {
 
 pub struct FrecencyHistory {
     pub path: Option<PathBuf>,
-    store: Option<FrecencyStore>,
+    pub store: Option<FrecencyStore>,
     histories: Option<Vec<ItemStats>>,
     current_index: usize,
     pub search_word: Option<String>,
@@ -351,7 +351,13 @@ impl FrecencyHistory {
         let file_path = self.path.clone().unwrap();
         if let Some(ref store) = self.store {
             if store.changed {
-                return write_store(store, &file_path);
+                let result = write_store(store, &file_path);
+                if result.is_ok() {
+                    // Reset the changed flag after successful save
+                    let store_mut = self.store.as_mut().unwrap();
+                    store_mut.changed = false;
+                }
+                return result;
             }
         }
         Ok(())

@@ -198,20 +198,24 @@ impl<'a> Repl<'a> {
                 }
             }
 
-            // Then output results with lock
+            // Batch all output operations with a single stdout lock
             let mut out = std::io::stdout().lock();
+            let mut output_buffer = String::new();
+            
             for job in &self.shell.wait_jobs {
                 if !job.foreground && output {
-                    out.write_fmt(format_args!(
+                    output_buffer.push_str(&format!(
                         "\rdsh: job {} '{}' {}\n",
                         job.job_id, job.cmd, job.state
-                    ))?;
+                    ));
                 }
             }
 
-            // out.write(b"\r\n").ok();
-            self.print_prompt(&mut out);
-            out.flush()?;
+            if !output_buffer.is_empty() {
+                out.write_all(output_buffer.as_bytes())?;
+                self.print_prompt(&mut out);
+                out.flush()?;
+            }
         }
         Ok(())
     }

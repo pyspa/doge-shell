@@ -136,6 +136,10 @@ impl Prompt {
         get_git_root()
     }
 
+    pub fn current_path(&self) -> &Path {
+        &self.current_dir
+    }
+
     pub fn set_current(&mut self, path: &Path) {
         self.current_dir = path.to_path_buf();
         debug!("set current dir {:?}", self.current_dir,);

@@ -631,7 +631,7 @@ impl<'a> Repl<'a> {
                 );
 
                 // Use the new integrated completion engine
-                let current_dir = std::env::current_dir().unwrap_or_default();
+                let current_dir = self.prompt.read().current_path().to_path_buf();
                 let cursor_pos = self.input.cursor();
 
                 debug!(

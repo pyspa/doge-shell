@@ -335,6 +335,31 @@ fn eval_inner(
                     Ok(Value::NIL)
                 }
 
+                Value::Symbol(Symbol(keyword)) if keyword == "when" => {
+                    let args = &list.cdr().into_iter().collect::<Vec<Value>>();
+
+                    if args.is_empty() {
+                        return Err(RuntimeError {
+                            msg: "when requires at least a condition".to_string(),
+                        });
+                    }
+
+                    let condition = require_arg(keyword, args, 0)?;
+
+                    if eval_inner(env.clone(), condition, context.found_tail(true))?.into() {
+                        let body = &Value::List(list.cdr().cdr());
+                        let body: &List = body.try_into().map_err(|_| RuntimeError {
+                            msg: format!(
+                                "Expected expression(s) after when-condition, found {body}"
+                            ),
+                        })?;
+
+                        eval_block_inner(env, body.into_iter(), context)
+                    } else {
+                        Ok(Value::NIL)
+                    }
+                }
+
                 Value::Symbol(Symbol(keyword)) if keyword == "if" => {
                     let args = &list.cdr().into_iter().collect::<Vec<Value>>();
 

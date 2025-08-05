@@ -934,8 +934,8 @@ impl<'a> Repl<'a> {
                     let histories = history.sorted(&dsh_frecency::SortMethod::Recent);
                     if let Some(val) = completion::select_item_with_skim(
                         histories
-                            .iter()
-                            .map(|history| completion::Candidate::Basic(history.item.to_string()))
+                            .into_iter()
+                            .map(|history| completion::Candidate::Basic(history.item))
                             .collect(),
                         Some(query),
                     ) {

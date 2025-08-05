@@ -1,11 +1,12 @@
 use crate::environment::Environment;
+use crate::lisp::Value;
 use crate::repl::Repl;
 use crate::shell::Shell;
 use anyhow::Result;
 use clap::Parser;
 use dsh_types::Context;
 use nix::unistd::isatty;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::io::AsRawFd;
 use std::process::ExitCode;
 use tracing::debug;
@@ -75,6 +76,10 @@ struct Cli {
     #[arg(short, long)]
     command: Option<String>,
 
+    /// Lisp script to execute
+    #[arg(short, long)]
+    lisp: Option<String>,
+
     #[command(subcommand)]
     subcommand: Option<SubCommand>,
 }
@@ -121,7 +126,9 @@ async fn run_shell() -> ExitCode {
     let mut shell = Shell::new(env);
     let mut ctx = create_context(&shell);
 
-    if let Some(command) = cli.command.as_deref() {
+    if let Some(lisp_script) = cli.lisp.as_deref() {
+        execute_lisp(&mut shell, &mut ctx, lisp_script).await
+    } else if let Some(command) = cli.command.as_deref() {
         execute_command(&mut shell, &mut ctx, command).await
     } else {
         run_interactive(&mut shell, &mut ctx).await
@@ -290,6 +297,29 @@ async fn execute_command(shell: &mut Shell, ctx: &mut Context, command: &str) ->
         }
         Err(err) => {
             display_user_error(&err);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn execute_lisp(shell: &mut Shell, _ctx: &mut Context, lisp_script: &str) -> ExitCode {
+    debug!("Executing Lisp script: {}", lisp_script);
+    shell.set_signals();
+
+    match shell.lisp_engine.borrow().run(lisp_script) {
+        Ok(value) => {
+            debug!("Lisp script executed successfully: {:?}", value);
+            // Print the result if it's not NIL
+            if value != Value::NIL {
+                if let Err(err) = writeln!(std::io::stdout(), "{}", value) {
+                    eprintln!("Error writing to stdout: {}", err);
+                    return ExitCode::FAILURE;
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("Error executing Lisp script: {}", err);
             ExitCode::FAILURE
         }
     }

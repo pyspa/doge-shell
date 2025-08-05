@@ -5,7 +5,7 @@ use crate::history::FrecencyHistory;
 use crate::lisp;
 use crate::parser::{self, Rule, ShellParser};
 use crate::process::SubshellType;
-use crate::process::{self, Job, JobProcess, Redirect, is_job_completed, wait_pid_job};
+use crate::process::{self, Job, JobProcess, Redirect, wait_pid_job};
 use anyhow::Context as _;
 use anyhow::{Result, anyhow, bail};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
@@ -871,7 +871,10 @@ impl Shell {
                 job.job_id, i, job.pid, job.state, job.foreground
             );
 
-            if !job.foreground {
+            // Check background output first, but only if the job is not already completed
+            // This avoids unnecessary work for jobs that will be removed anyway
+            let is_completed_now = job.update_status();
+            if !is_completed_now && !job.foreground {
                 debug!(
                     "CHECK_JOB_STATE_BACKGROUND: Checking background output for job {}",
                     job.job_id
@@ -882,14 +885,17 @@ impl Shell {
                         job.job_id, e
                     );
                 }
+
+                // After checking background output, we need to update the status again
+                // as it might have changed
             }
 
-            let was_completed_before = is_job_completed(job);
+            // Update status after background output check
             let is_completed_now = job.update_status();
 
             debug!(
-                "CHECK_JOB_STATE_STATUS: Job {} completion status: before={}, after={}, current_state={:?}",
-                job.job_id, was_completed_before, is_completed_now, job.state
+                "CHECK_JOB_STATE_STATUS: Job {} completion status: current_state={:?}",
+                job.job_id, job.state
             );
 
             if is_completed_now {

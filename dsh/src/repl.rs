@@ -193,7 +193,7 @@ impl<'a> Repl<'a> {
         let exists = !jobs.is_empty();
 
         if output && exists {
-            // Process jobs first without holding stdout lock
+            // Process background output for completed jobs
             for mut job in jobs {
                 if !job.foreground {
                     job.check_background_all_output().await?;
@@ -204,6 +204,9 @@ impl<'a> Repl<'a> {
             let mut out = std::io::stdout().lock();
             let mut output_buffer = String::new();
 
+            // Check remaining jobs in wait_jobs for status messages
+            // Note: Completed jobs are no longer in self.shell.wait_jobs since they were removed
+            // by check_job_state, so we only need to check the remaining active jobs.
             for job in &self.shell.wait_jobs {
                 if !job.foreground && output {
                     output_buffer.push_str(&format!(

@@ -201,7 +201,7 @@ impl<'a> Repl<'a> {
             // Batch all output operations with a single stdout lock
             let mut out = std::io::stdout().lock();
             let mut output_buffer = String::new();
-            
+
             for job in &self.shell.wait_jobs {
                 if !job.foreground && output {
                     output_buffer.push_str(&format!(
@@ -710,21 +710,12 @@ impl<'a> Repl<'a> {
                 print!("\r\n");
                 if !self.input.is_empty() {
                     self.completion.clear();
-                    let shell_tmode = match tcgetattr(0) {
-                        Ok(tmode) => tmode,
-                        Err(e) => {
-                            warn!(
-                                "Failed to get terminal attributes: {}, using stored mode",
-                                e
-                            );
-                            self.tmode.clone().unwrap_or_else(|| {
-                                warn!("No stored terminal mode available, using default");
-                                // Create a default Termios - this is a fallback that may not work perfectly
-                                // but prevents crashes
-                                unsafe { std::mem::zeroed() }
-                            })
-                        }
-                    };
+                    let shell_tmode = self.tmode.clone().unwrap_or_else(|| {
+                        warn!("No stored terminal mode available, using default");
+                        // Create a default Termios - this is a fallback that may not work perfectly
+                        // but prevents crashes
+                        unsafe { std::mem::zeroed() }
+                    });
                     let mut ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);
                     match self
                         .shell
@@ -752,19 +743,10 @@ impl<'a> Repl<'a> {
                 if !self.input.is_empty() {
                     self.completion.clear();
                     let input = self.input.to_string();
-                    let shell_tmode = match tcgetattr(0) {
-                        Ok(tmode) => tmode,
-                        Err(e) => {
-                            warn!(
-                                "Failed to get terminal attributes: {}, using stored mode",
-                                e
-                            );
-                            self.tmode.clone().unwrap_or_else(|| {
-                                warn!("No stored terminal mode available, using default");
-                                unsafe { std::mem::zeroed() }
-                            })
-                        }
-                    };
+                    let shell_tmode = self.tmode.clone().unwrap_or_else(|| {
+                        warn!("No stored terminal mode available, using default");
+                        unsafe { std::mem::zeroed() }
+                    });
                     let mut ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);
                     if let Err(err) = self.shell.eval_str(&mut ctx, input, true).await {
                         display_user_error(&err);

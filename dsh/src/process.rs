@@ -1342,7 +1342,7 @@ impl Job {
             self.wait_process_no_hang().await
         } else {
             debug!("Calling wait_process (blocking)");
-            self.wait_process()
+            self.wait_process().await
         }
     }
 
@@ -1354,14 +1354,114 @@ impl Job {
             self.wait_process_no_hang_sync()
         } else {
             debug!("Calling wait_process (blocking)");
-            self.wait_process()
+            self.wait_process_sync()
         }
     }
 
-    fn wait_process(&mut self) -> Result<()> {
+    async fn wait_process(&mut self) -> Result<()> {
         let mut send_killpg = false;
         loop {
-            // match task::spawn_blocking(|| waitpid(None, Some(WaitPidFlag::WUNTRACED))).await {
+            let (pid, state) =
+                match tokio::task::spawn_blocking(|| waitpid(None, Some(WaitPidFlag::WUNTRACED)))
+                    .await?
+                {
+                    Ok(WaitStatus::Exited(pid, status)) => {
+                        (pid, ProcessState::Completed(status as u8, None))
+                    } // ok??
+                    Ok(WaitStatus::Signaled(pid, signal, _)) => {
+                        (pid, ProcessState::Completed(1, Some(signal)))
+                    }
+                    Ok(WaitStatus::Stopped(pid, signal)) => {
+                        (pid, ProcessState::Stopped(pid, signal))
+                    }
+                    Err(nix::errno::Errno::ECHILD) | Ok(WaitStatus::StillAlive) => {
+                        break;
+                    }
+                    status => {
+                        error!("unexpected waitpid event: {:?}", status);
+                        break;
+                    }
+                };
+
+            self.set_process_state(pid, state);
+
+            debug!(
+                "fin waitpid pgid:{:?} pid:{:?} state:{:?}",
+                self.pgid, pid, state
+            );
+
+            // show_process_state(&self.process); // debug
+
+            if let ProcessState::Completed(code, signal) = state {
+                debug!(
+                    "⏳ WAIT: Process completed - pid: {}, code: {}, signal: {:?}",
+                    pid, code, signal
+                );
+                if code != 0 && !send_killpg {
+                    if let Some(pgid) = self.pgid {
+                        debug!(
+                            "⏳ WAIT: Process failed (code: {}), sending SIGKILL to pgid: {}",
+                            code, pgid
+                        );
+                        match killpg(pgid, Signal::SIGKILL) {
+                            Ok(_) => debug!("⏳ WAIT: Successfully sent SIGKILL to pgid: {}", pgid),
+                            Err(e) => {
+                                debug!("⏳ WAIT: Failed to send SIGKILL to pgid {}: {}", pgid, e)
+                            }
+                        }
+                        send_killpg = true;
+                    } else {
+                        debug!("⏳ WAIT: Process failed but no pgid to kill");
+                    }
+                } else if code == 0 {
+                    debug!("⏳ WAIT: Process completed successfully");
+                }
+            }
+            // break;
+            if is_job_completed(self) {
+                debug!("⏳ WAIT: Job completed, breaking from wait_process loop");
+                break;
+            }
+
+            // Check if consumer terminated and we need to kill remaining processes
+            if let Some(process) = &self.process {
+                if process.is_pipeline_consumer_terminated() && !process.is_completed() {
+                    debug!("⏳ WAIT: Pipeline consumer terminated, killing remaining processes");
+                    if let Some(pgid) = self.pgid {
+                        debug!(
+                            "⏳ WAIT: Sending SIGTERM to remaining processes in pgid: {}",
+                            pgid
+                        );
+                        match killpg(pgid, Signal::SIGTERM) {
+                            Ok(_) => {
+                                debug!("⏳ WAIT: Successfully sent SIGTERM to pgid: {}", pgid);
+                                // Give processes a moment to terminate gracefully
+                                time::sleep(Duration::from_millis(100)).await;
+                                // Then send SIGKILL if needed
+                                let _ = killpg(pgid, Signal::SIGKILL);
+                                debug!("⏳ WAIT: Sent SIGKILL to pgid: {}", pgid);
+                            }
+                            Err(e) => {
+                                debug!("⏳ WAIT: Failed to send SIGTERM to pgid {}: {}", pgid, e);
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+
+            if is_job_stopped(self) {
+                debug!("⏳ WAIT: Job stopped");
+                println!("\rdsh: job {} '{}' has stopped", self.job_id, self.cmd);
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn wait_process_sync(&mut self) -> Result<()> {
+        let mut send_killpg = false;
+        loop {
             let (pid, state) = match waitpid(None, Some(WaitPidFlag::WUNTRACED)) {
                 Ok(WaitStatus::Exited(pid, status)) => {
                     (pid, ProcessState::Completed(status as u8, None))

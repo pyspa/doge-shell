@@ -12,7 +12,7 @@ use crossterm::cursor;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::style::{Print, ResetColor};
 use crossterm::terminal::{self, Clear, ClearType, enable_raw_mode};
-use crossterm::{execute, queue};
+use crossterm::queue;
 use dsh_types::Context;
 use futures::{StreamExt, future::FutureExt, select};
 use futures_timer::Delay;
@@ -329,10 +329,10 @@ impl<'a> Repl<'a> {
         // update cached mark and width in case mark changed
         self.prompt_mark_cache = prompt.mark.clone();
         self.prompt_mark_width = display_width(&self.prompt_mark_cache);
-        // draw mark only
+        // draw mark only (defer flushing to caller for batching)
         out.write_all(b"\r").ok();
         out.write_all(self.prompt_mark_cache.as_bytes()).ok();
-        out.flush().ok();
+        // no out.flush() here
     }
 
     fn stop_history_mode(&mut self) {
@@ -569,11 +569,11 @@ impl<'a> Repl<'a> {
                     self.input.move_by(-1);
                     self.completion.clear();
 
-                    // Move cursor relatively
+                    // Move cursor relatively, defer flush to common path
                     let mut out = std::io::stdout().lock();
                     let new_disp = self.prompt_mark_width + self.input.cursor_display_width();
                     self.move_cursor_relative(&mut out, prev_cursor_disp, new_disp);
-                    out.flush().ok();
+                    // no flush here
                     return Ok(());
                 } else {
                     return Ok(());
@@ -606,11 +606,11 @@ impl<'a> Repl<'a> {
                     self.input.move_by(1);
                     self.completion.clear();
 
-                    // Move cursor relatively
+                    // Move cursor relatively, defer flush to common path
                     let mut out = std::io::stdout().lock();
                     let new_disp = self.prompt_mark_width + self.input.cursor_display_width();
                     self.move_cursor_relative(&mut out, prev_cursor_disp, new_disp);
-                    out.flush().ok();
+                    // no flush here
                     return Ok(());
                 } else {
                     return Ok(());
@@ -796,6 +796,7 @@ impl<'a> Repl<'a> {
                 // After command execution, show new prompt
                 let mut out = std::io::stdout().lock();
                 self.print_prompt(&mut out);
+                out.flush().ok();
                 return Ok(());
             }
             (KeyCode::Enter, ALT) => {
@@ -818,6 +819,7 @@ impl<'a> Repl<'a> {
                 // After command execution, show new prompt
                 let mut out = std::io::stdout().lock();
                 self.print_prompt(&mut out);
+                out.flush().ok();
                 return Ok(());
             }
             (KeyCode::Char('a'), CTRL) => {
@@ -837,32 +839,38 @@ impl<'a> Repl<'a> {
 
                 if self.ctrl_c_state.on_ctrl_c_pressed() {
                     // Second Ctrl+C - exit shell normally
-                    execute!(out, Print("\r\nExiting shell...\r\n")).ok();
+                    // queue message and flush once here
+                    queue!(out, Print("\r\nExiting shell...\r\n")).ok();
+                    out.flush().ok();
                     self.should_exit = true;
                     return Ok(());
                 } else {
                     // First Ctrl+C - reset prompt + show message
-                    execute!(
+                    // queue message and defer flushing until after prompt
+                    queue!(
                         out,
                         Print("\r\n(Press Ctrl+C again within 3 seconds to exit)\r\n")
                     )
                     .ok();
                     self.print_prompt(&mut out);
+                    out.flush().ok();
                     self.input.clear();
                     return Ok(());
                 }
             }
             (KeyCode::Char('l'), CTRL) => {
                 let mut out = std::io::stdout().lock();
-                execute!(out, Clear(ClearType::All), cursor::MoveTo(0, 0)).ok();
+                queue!(out, Clear(ClearType::All), cursor::MoveTo(0, 0)).ok();
                 self.print_prompt(&mut out);
+                out.flush().ok();
                 self.input.clear();
                 return Ok(());
             }
             (KeyCode::Char('d'), CTRL) => {
                 let mut out = std::io::stdout().lock();
-                execute!(out, Print("\r\nuse 'exit' to leave the shell\n")).ok();
+                queue!(out, Print("\r\nuse 'exit' to leave the shell\n")).ok();
                 self.print_prompt(&mut out);
+                out.flush().ok();
                 self.input.clear();
                 return Ok(());
             }

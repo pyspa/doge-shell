@@ -698,10 +698,17 @@ impl<'a> Repl<'a> {
 
                 if let Some(val) = completion_result {
                     debug!("Completion selected: '{}'", val);
-                    if let Some(q) = completion_query {
-                        self.input.backspacen(q.len());
+                    // For history candidates, replace the entire input
+                    let is_history_candidate = val.starts_with("🕒 ");
+                    if is_history_candidate {
+                        let command = val[3..].trim(); // Remove the clock emoji and any extra spaces
+                        self.input.reset(command.to_string());
+                    } else {
+                        if let Some(q) = completion_query {
+                            self.input.backspacen(q.len());
+                        }
+                        self.input.insert_str(val.as_str());
                     }
-                    self.input.insert_str(val.as_str());
                     debug!("Input after completion: '{}'", self.input.to_string());
                 } else {
                     debug!("No completion selected");
@@ -928,7 +935,8 @@ impl<'a> Repl<'a> {
                             .collect(),
                         Some(query),
                     ) {
-                        self.input.insert_str(val.as_str());
+                        // Replace current input with the selected history command
+                        self.input.reset(val);
                     }
                     history.reset_index();
                 }

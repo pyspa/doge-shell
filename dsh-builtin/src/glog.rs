@@ -473,7 +473,8 @@ mod tests {
     #[test]
     fn test_is_git_repository() {
         // This test will depend on the test environment
-        let result = is_git_repository();
-        assert!(result || !result);
+        let _result = is_git_repository();
+        // Environment-dependent; ensure function is callable without panic
+        // No assertion on value to keep test stable across environments
     }
 }

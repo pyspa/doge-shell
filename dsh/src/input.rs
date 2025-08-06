@@ -382,9 +382,8 @@ impl Input {
 
     pub fn print_candidates(&mut self, out: &mut StdoutLock<'static>, completion: String) {
         let mut out = BufWriter::new(out);
-        let current = self.cursor;
-        let length = self.input.len();
-        let is_end = current == length;
+        let current_byte = self.byte_index();
+        let is_end = current_byte == self.input.len();
 
         // Build the complete output string to reduce write_fmt calls
         let mut output = String::new();
@@ -394,7 +393,7 @@ impl Input {
         ));
 
         if !is_end {
-            let tmp = &self.input[current..];
+            let tmp = &self.input[current_byte..];
             output.push_str(&format!("{}", tmp.with(self.config.fg_color)));
         }
 
@@ -406,14 +405,12 @@ impl Input {
     }
 
     pub fn split_current_pos(&self) -> Option<(&str, &str)> {
-        let current = self.cursor;
-        let length = self.input.len();
-        let is_end = current == length;
-        if is_end {
+        let current_byte = self.byte_index();
+        if current_byte == self.input.len() {
             None
         } else {
-            let pre = &self.input[..current];
-            let post = &self.input[current..];
+            let pre = &self.input[..current_byte];
+            let post = &self.input[current_byte..];
             Some((pre, post))
         }
     }

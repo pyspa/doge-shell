@@ -291,6 +291,25 @@ impl<'a> Repl<'a> {
         queue!(out, ResetColor, cursor::MoveToColumn(safe_pos as u16),).ok();
     }
 
+    /// Move cursor relatively on the input line given previous and new display positions
+    fn move_cursor_relative(
+        &self,
+        out: &mut StdoutLock<'static>,
+        prev_display_pos: usize,
+        new_display_pos: usize,
+    ) {
+        if new_display_pos == prev_display_pos {
+            return;
+        }
+        if new_display_pos > prev_display_pos {
+            let delta = (new_display_pos - prev_display_pos) as u16;
+            queue!(out, cursor::MoveRight(delta)).ok();
+        } else {
+            let delta = (prev_display_pos - new_display_pos) as u16;
+            queue!(out, cursor::MoveLeft(delta)).ok();
+        }
+    }
+
     // fn move_cursor(&self, len: usize) {
     //     let mut stdout = std::io::stdout();
     //     let prompt_size = self.get_prompt().chars().count();
@@ -510,6 +529,9 @@ impl<'a> Repl<'a> {
     async fn handle_key_event(&mut self, ev: &KeyEvent) -> Result<()> {
         let redraw = true;
         let mut reset_completion = false;
+        // compute previous and new cursor display positions for relative move
+        let prompt_w = self.prompt_mark_width;
+        let prev_cursor_disp = prompt_w + self.input.cursor_display_width();
 
         // Reset Ctrl+C state on any key input other than Ctrl+C
         if !matches!((ev.code, ev.modifiers), (KeyCode::Char('c'), CTRL)) {
@@ -547,9 +569,10 @@ impl<'a> Repl<'a> {
                     self.input.move_by(-1);
                     self.completion.clear();
 
-                    // Only move cursor, don't redraw entire prompt
+                    // Move cursor relatively
                     let mut out = std::io::stdout().lock();
-                    self.move_cursor_input_end(&mut out);
+                    let new_disp = self.prompt_mark_width + self.input.cursor_display_width();
+                    self.move_cursor_relative(&mut out, prev_cursor_disp, new_disp);
                     out.flush().ok();
                     return Ok(());
                 } else {
@@ -583,9 +606,10 @@ impl<'a> Repl<'a> {
                     self.input.move_by(1);
                     self.completion.clear();
 
-                    // Only move cursor, don't redraw entire prompt
+                    // Move cursor relatively
                     let mut out = std::io::stdout().lock();
-                    self.move_cursor_input_end(&mut out);
+                    let new_disp = self.prompt_mark_width + self.input.cursor_display_width();
+                    self.move_cursor_relative(&mut out, prev_cursor_disp, new_disp);
                     out.flush().ok();
                     return Ok(());
                 } else {

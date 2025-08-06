@@ -845,6 +845,12 @@ impl Shell {
     }
 
     pub async fn check_job_state(&mut self) -> Result<Vec<Job>> {
+        // Fast path: no jobs to check
+        if self.wait_jobs.is_empty() {
+            debug!("CHECK_JOB_STATE_EMPTY: No jobs to check, skipping");
+            return Ok(Vec::new());
+        }
+
         let start_time = std::time::Instant::now();
 
         debug!(
@@ -871,8 +877,7 @@ impl Shell {
                 job.job_id, i, job.pid, job.state, job.foreground
             );
 
-            // Check background output first, but only if the job is not already completed
-            // This avoids unnecessary work for jobs that will be removed anyway
+            // Single status evaluation; only check background output if not completed after first check
             let is_completed_now = job.update_status();
             if !is_completed_now && !job.foreground {
                 debug!(
@@ -885,18 +890,23 @@ impl Shell {
                         job.job_id, e
                     );
                 }
-
-                // After checking background output, we need to update the status again
-                // as it might have changed
+                // Re-evaluate status only if background output was checked
+                let is_completed_after_bg = job.update_status();
+                if is_completed_after_bg {
+                    let removed_job = self.wait_jobs.remove(i);
+                    debug!(
+                        "CHECK_JOB_STATE_COMPLETED: Job {} completed and removed (final state: {:?}, exit_code: {})",
+                        removed_job.job_id,
+                        removed_job.state,
+                        match removed_job.state {
+                            crate::process::ProcessState::Completed(code, _) => code.to_string(),
+                            _ => "unknown".to_string(),
+                        }
+                    );
+                    completed.push(removed_job);
+                    continue;
+                }
             }
-
-            // Update status after background output check
-            let is_completed_now = job.update_status();
-
-            debug!(
-                "CHECK_JOB_STATE_STATUS: Job {} completion status: current_state={:?}",
-                job.job_id, job.state
-            );
 
             if is_completed_now {
                 let removed_job = self.wait_jobs.remove(i);

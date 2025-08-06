@@ -119,6 +119,9 @@ pub struct Repl<'a> {
     completion: Completion,
     integrated_completion: IntegratedCompletionEngine,
     prompt: Arc<RwLock<Prompt>>,
+    // Cached prompt mark and its display width to avoid recomputation on each redraw
+    prompt_mark_cache: String,
+    prompt_mark_width: usize,
     ctrl_c_state: CtrlCState,
     should_exit: bool,
     last_command_time: Option<Instant>,
@@ -154,6 +157,9 @@ impl<'a> Repl<'a> {
             .push(Box::new(Arc::clone(&prompt)));
         let input_config = InputConfig::default();
 
+        let prompt_mark_cache = prompt.read().mark.clone();
+        let prompt_mark_width = display_width(&prompt_mark_cache);
+
         Repl {
             shell,
             input: Input::new(input_config),
@@ -165,6 +171,8 @@ impl<'a> Repl<'a> {
             completion: Completion::new(),
             integrated_completion: IntegratedCompletionEngine::new(),
             prompt,
+            prompt_mark_cache,
+            prompt_mark_width,
             ctrl_c_state: CtrlCState::new(),
             should_exit: false,
             last_command_time: None,
@@ -262,14 +270,13 @@ impl<'a> Repl<'a> {
     }
 
     fn move_cursor_input_end(&self, out: &mut StdoutLock<'static>) {
-        let prompt_mark = &self.prompt.read().mark;
-        let prompt_display_width = display_width(prompt_mark);
+        let prompt_display_width = self.prompt_mark_width;
         let input_cursor_width = self.input.cursor_display_width();
         let cursor_display_pos = prompt_display_width + input_cursor_width;
 
         debug!(
             "move_cursor_input_end: prompt_mark='{}', prompt_width={}, input_cursor_width={}, final_pos={}",
-            prompt_mark, prompt_display_width, input_cursor_width, cursor_display_pos
+            self.prompt_mark_cache, prompt_display_width, input_cursor_width, cursor_display_pos
         );
         debug!(
             "move_cursor_input_end: input_text='{}', input_cursor_pos={}",
@@ -296,12 +303,16 @@ impl<'a> Repl<'a> {
     // }
 
     fn print_prompt(&mut self, out: &mut StdoutLock<'static>) {
-        debug!("print_prompt called - this will trigger full prompt redraw");
+        debug!("print_prompt called - full preprompt + mark redraw");
         let mut prompt = self.prompt.write();
-        let prompt_mark = prompt.mark.clone();
+        // draw preprompt only here (initial or after command/bg output)
         prompt.print_preprompt(out);
+        // update cached mark and width in case mark changed
+        self.prompt_mark_cache = prompt.mark.clone();
+        self.prompt_mark_width = display_width(&self.prompt_mark_cache);
+        // draw mark only
         out.write_all(b"\r").ok();
-        out.write_all(prompt_mark.as_bytes()).ok();
+        out.write_all(self.prompt_mark_cache.as_bytes()).ok();
         out.flush().ok();
     }
 
@@ -396,7 +407,7 @@ impl<'a> Repl<'a> {
         debug!("print_input called, reset_completion: {}", reset_completion);
         queue!(out, cursor::Hide).ok();
         let input = self.input.to_string();
-        let prompt_display_width = display_width(&self.prompt.write().mark);
+        let prompt_display_width = self.prompt_mark_width;
         debug!(
             "Current input: '{}', prompt_display_width: {}",
             input, prompt_display_width
@@ -480,10 +491,9 @@ impl<'a> Repl<'a> {
         queue!(out, Print("\r"), Clear(ClearType::CurrentLine)).ok();
 
         // Only redraw the prompt mark (not the full preprompt)
-        let prompt = self.prompt.read();
-        let prompt_mark = &prompt.mark;
-        debug!("Redrawing prompt mark: '{}'", prompt_mark);
-        queue!(out, Print(prompt_mark)).ok();
+        // Use cached prompt mark without re-locking prompt
+        debug!("Redrawing prompt mark: '{}'", self.prompt_mark_cache);
+        queue!(out, Print(self.prompt_mark_cache.as_str())).ok();
 
         // Print the input
         self.input.print(out);

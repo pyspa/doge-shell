@@ -10,9 +10,9 @@ use anyhow::Context as _;
 use anyhow::Result;
 use crossterm::cursor;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::queue;
 use crossterm::style::{Print, ResetColor};
 use crossterm::terminal::{self, Clear, ClearType, enable_raw_mode};
-use crossterm::queue;
 use dsh_types::Context;
 use futures::{StreamExt, future::FutureExt, select};
 use futures_timer::Delay;
@@ -125,6 +125,12 @@ pub struct Repl<'a> {
     ctrl_c_state: CtrlCState,
     should_exit: bool,
     last_command_time: Option<Instant>,
+    // short-term cache for history-based completion to reduce lock/sort frequency
+    history_cache_prefix: String,
+    history_cache_time: Option<Instant>,
+    history_cache_ttl: Duration,
+    history_cache_sorted_recent: Option<Vec<dsh_frecency::ItemStats>>,
+    history_cache_match_sorted: Option<Vec<dsh_frecency::ItemStats>>,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -176,6 +182,11 @@ impl<'a> Repl<'a> {
             ctrl_c_state: CtrlCState::new(),
             should_exit: false,
             last_command_time: None,
+            history_cache_prefix: String::new(),
+            history_cache_time: None,
+            history_cache_ttl: Duration::from_millis(300),
+            history_cache_sorted_recent: None,
+            history_cache_match_sorted: None,
         }
     }
 
@@ -271,8 +282,9 @@ impl<'a> Repl<'a> {
 
     fn move_cursor_input_end(&self, out: &mut StdoutLock<'static>) {
         let prompt_display_width = self.prompt_mark_width;
+        // cache locally to avoid duplicate computation chains
         let input_cursor_width = self.input.cursor_display_width();
-        let cursor_display_pos = prompt_display_width + input_cursor_width;
+        let mut cursor_display_pos = prompt_display_width + input_cursor_width;
 
         debug!(
             "move_cursor_input_end: prompt_mark='{}', prompt_width={}, input_cursor_width={}, final_pos={}",
@@ -284,11 +296,20 @@ impl<'a> Repl<'a> {
             self.input.cursor()
         );
 
-        // Ensure we don't go beyond reasonable bounds
-        let safe_pos = cursor_display_pos.min(1000); // Reasonable terminal width limit
+        // bound to current terminal columns if available
+        if self.columns > 0 {
+            cursor_display_pos = cursor_display_pos.min(self.columns.saturating_sub(1));
+        } else {
+            cursor_display_pos = cursor_display_pos.min(1000);
+        }
 
         // crossterm uses 0-based column indexing
-        queue!(out, ResetColor, cursor::MoveToColumn(safe_pos as u16),).ok();
+        queue!(
+            out,
+            ResetColor,
+            cursor::MoveToColumn(cursor_display_pos as u16)
+        )
+        .ok();
     }
 
     /// Move cursor relatively on the input line given previous and new display positions
@@ -354,14 +375,53 @@ impl<'a> Repl<'a> {
     }
 
     fn set_completions(&mut self) {
+        let now = Instant::now();
+        let input_str = self.input.as_str().to_string();
+        let is_empty = input_str.is_empty();
+
+        // Try using cache first when TTL is valid and prefix unchanged
+        if let Some(last_time) = self.history_cache_time {
+            if now.duration_since(last_time) <= self.history_cache_ttl
+                && self.history_cache_prefix == input_str
+            {
+                if is_empty {
+                    if let Some(ref comps) = self.history_cache_sorted_recent {
+                        self.completion
+                            .set_completions(self.input.as_str(), comps.clone());
+                        return;
+                    }
+                } else if let Some(ref comps) = self.history_cache_match_sorted {
+                    self.completion
+                        .set_completions(self.input.as_str(), comps.clone());
+                    return;
+                }
+            }
+        }
+
+        // Fallback to computing with lock, and refresh cache if successful
         if let Some(ref mut history) = self.shell.cmd_history {
             match history.lock() {
                 Ok(history) => {
-                    let comps = if self.input.is_empty() {
-                        history.sorted(&dsh_frecency::SortMethod::Recent)
+                    // If store changed, invalidate cache
+                    let changed = history.store.as_ref().map(|s| s.changed).unwrap_or(false);
+                    if changed {
+                        self.history_cache_sorted_recent = None;
+                        self.history_cache_match_sorted = None;
+                        self.history_cache_time = None;
+                    }
+
+                    let comps = if is_empty {
+                        let list = history.sorted(&dsh_frecency::SortMethod::Recent);
+                        self.history_cache_sorted_recent = Some(list.clone());
+                        list
                     } else {
-                        history.sort_by_match(self.input.as_str())
+                        let list = history.sort_by_match(&input_str);
+                        self.history_cache_match_sorted = Some(list.clone());
+                        list
                     };
+
+                    self.history_cache_prefix = input_str;
+                    self.history_cache_time = Some(now);
 
                     self.completion.set_completions(self.input.as_str(), comps);
                 }
@@ -401,6 +461,24 @@ impl<'a> Repl<'a> {
     }
 
     fn get_completion_from_history(&mut self, input: &str) -> Option<String> {
+        let now = Instant::now();
+        // Try cached match-sorted list first if still fresh and prefix unchanged
+        if let Some(last_time) = self.history_cache_time {
+            if now.duration_since(last_time) <= self.history_cache_ttl
+                && self.history_cache_prefix.starts_with(input)
+            {
+                if let Some(ref list) = self.history_cache_match_sorted {
+                    if let Some(top) = list.iter().find(|it| it.item.starts_with(input)) {
+                        let entry = top.item.clone();
+                        self.input.completion = Some(entry.clone());
+                        if entry.len() >= input.len() {
+                            return Some(entry[input.len()..].to_string());
+                        }
+                    }
+                }
+            }
+        }
+
         if let Some(ref mut history) = self.shell.cmd_history {
             match history.lock() {
                 Ok(history) => {
@@ -426,7 +504,7 @@ impl<'a> Repl<'a> {
         debug!("print_input called, reset_completion: {}", reset_completion);
         queue!(out, cursor::Hide).ok();
         let input = self.input.to_string();
-        let prompt_display_width = self.prompt_mark_width;
+        let prompt_display_width = self.prompt_mark_width; // cached at new()/print_prompt()
         debug!(
             "Current input: '{}', prompt_display_width: {}",
             input, prompt_display_width
@@ -521,6 +599,7 @@ impl<'a> Repl<'a> {
 
         if let Some(completion) = completion {
             self.input.print_candidates(out, completion);
+            // reuse cached cursor width implicitly via move_cursor_input_end recomputation; avoid extra heavy work here
             self.move_cursor_input_end(out);
         }
         queue!(out, cursor::Show).ok();
@@ -531,6 +610,7 @@ impl<'a> Repl<'a> {
         let mut reset_completion = false;
         // compute previous and new cursor display positions for relative move
         let prompt_w = self.prompt_mark_width;
+        // compute once per event to avoid duplicate width computation
         let prev_cursor_disp = prompt_w + self.input.cursor_display_width();
 
         // Reset Ctrl+C state on any key input other than Ctrl+C
@@ -918,6 +998,8 @@ impl<'a> Repl<'a> {
             let mut out = std::io::stdout().lock();
             // start repl loop
             self.print_prompt(&mut out);
+            // ensure preprompt + mark are flushed on initial draw
+            out.flush().ok();
         }
         self.shell.check_job_state().await?;
 

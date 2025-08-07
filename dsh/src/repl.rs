@@ -660,7 +660,9 @@ impl<'a> Repl<'a> {
                     return Ok(());
                 }
             }
-            (KeyCode::Right, modifiers) if self.input.completion.is_some() && !modifiers.contains(CTRL) => {
+            (KeyCode::Right, modifiers)
+                if self.input.completion.is_some() && !modifiers.contains(CTRL) =>
+            {
                 // TODO refactor
                 if let Some(comp) = &self.input.completion {
                     let cursor = self.input.cursor();

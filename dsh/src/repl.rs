@@ -643,23 +643,24 @@ impl<'a> Repl<'a> {
                     }
                 }
             }
-            (KeyCode::Left, NONE) => {
+            (KeyCode::Left, modifiers) if !modifiers.contains(CTRL) => {
                 if self.input.cursor() > 0 {
                     self.input.completion = None;
                     self.input.move_by(-1);
                     self.completion.clear();
 
-                    // Move cursor relatively, defer flush to common path
+                    // Move cursor relatively, ensure cursor is visible in fast path
                     let mut out = std::io::stdout().lock();
                     let new_disp = self.prompt_mark_width + self.input.cursor_display_width();
                     self.move_cursor_relative(&mut out, prev_cursor_disp, new_disp);
-                    // no flush here
+                    queue!(out, cursor::Show).ok();
+                    out.flush().ok();
                     return Ok(());
                 } else {
                     return Ok(());
                 }
             }
-            (KeyCode::Right, NONE) if self.input.completion.is_some() => {
+            (KeyCode::Right, modifiers) if self.input.completion.is_some() && !modifiers.contains(CTRL) => {
                 // TODO refactor
                 if let Some(comp) = &self.input.completion {
                     let cursor = self.input.cursor();
@@ -681,16 +682,17 @@ impl<'a> Repl<'a> {
                 }
                 self.completion.clear();
             }
-            (KeyCode::Right, NONE) => {
+            (KeyCode::Right, modifiers) if !modifiers.contains(CTRL) => {
                 if self.input.cursor() < self.input.len() {
                     self.input.move_by(1);
                     self.completion.clear();
 
-                    // Move cursor relatively, defer flush to common path
+                    // Move cursor relatively, ensure cursor is visible in fast path
                     let mut out = std::io::stdout().lock();
                     let new_disp = self.prompt_mark_width + self.input.cursor_display_width();
                     self.move_cursor_relative(&mut out, prev_cursor_disp, new_disp);
-                    // no flush here
+                    queue!(out, cursor::Show).ok();
+                    out.flush().ok();
                     return Ok(());
                 } else {
                     return Ok(());

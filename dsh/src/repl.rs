@@ -500,10 +500,10 @@ impl<'a> Repl<'a> {
         // debug!("print_input called, reset_completion: {}", reset_completion);
         queue!(out, cursor::Hide).ok();
         let input = self.input.to_string();
-        let prompt_display_width = self.prompt_mark_width; // cached at new()/print_prompt()
+        let _prompt_display_width = self.prompt_mark_width; // cached at new()/print_prompt()
         // debug!(
         //     "Current input: '{}', prompt_display_width: {}",
-        //     input, prompt_display_width
+        //     input, _prompt_display_width
         // );
 
         let mut completion: Option<String> = None;
@@ -717,8 +717,8 @@ impl<'a> Repl<'a> {
                         }
                     } else {
                         // debug!("ABBR_EXPANSION: No expansion found for word '{}'", word);
-                        let abbrs = self.shell.environment.read().abbreviations.clone();
-                        // debug!("ABBR_EXPANSION: Available abbreviations: {:?}", abbrs);
+                        let _abbrs = self.shell.environment.read().abbreviations.clone();
+                        // debug!("ABBR_EXPANSION: Available abbreviations: {:?}", _abbrs);
                     }
                 } else {
                     // debug!("ABBR_EXPANSION: No word found for expansion at cursor position");

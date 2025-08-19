@@ -12,9 +12,9 @@ pub struct PacmanCompletionHandler;
 impl DynamicCompletionHandler for PacmanCompletionHandler {
     fn matches(&self, parsed_command: &ParsedCommandLine) -> bool {
         // Match pacman -S command
-        parsed_command.command == "sudo"
+        parsed_command.command == "pacman"
             && !parsed_command.args.is_empty()
-            && parsed_command.args[0] == "pacman"
+            && parsed_command.args[0] == "-S"
     }
 
     fn generate_candidates(

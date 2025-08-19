@@ -207,10 +207,10 @@ impl BuiltinProcess {
             if let Some(self_pid) = self.pid
                 && self_pid == pid
             {
-                debug!(
-                    "BuiltinProcess::set_state: updating state for pid {} from {:?} to {:?}",
-                    pid, self.state, state
-                );
+                // debug!(
+                //     "BuiltinProcess::set_state: updating state for pid {} from {:?} to {:?}",
+                //     pid, self.state, state
+                // );
                 self.state = state;
                 return true;
             }
@@ -230,10 +230,10 @@ impl BuiltinProcess {
     }
 
     pub fn launch(&mut self, ctx: &mut Context, shell: &mut Shell) -> Result<()> {
-        debug!(
-            "launch: builtin process {:?} infile:{:?} outfile:{:?}",
-            &self.name, self.stdin, self.stdout
-        );
+        // debug!(
+        //     "launch: builtin process {:?} infile:{:?} outfile:{:?}",
+        //     &self.name, self.stdin, self.stdout
+        // );
         let exit = (self.cmd_fn)(ctx, self.argv.to_vec(), shell);
         match exit {
             ExitStatus::ExitedWith(code) => {

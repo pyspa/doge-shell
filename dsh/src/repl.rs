@@ -41,7 +41,7 @@ fn display_user_error(err: &anyhow::Error) {
         || error_msg.contains("Exit by")
     {
         // Don't display normal exit messages
-        debug!("Shell exiting normally: {}", error_msg);
+        // debug!("Shell exiting normally: {}", error_msg);
     } else {
         // For other errors, display the root cause without debug info
         eprintln!("dsh: {error_msg}");
@@ -198,11 +198,11 @@ impl<'a> Repl<'a> {
         self.columns = screen_size.0 as usize;
 
         // Initialize integrated completion engine
-        debug!("Initializing integrated completion engine...");
+        // debug!("Initializing integrated completion engine...");
         if let Err(e) = self.integrated_completion.initialize_command_completion() {
             warn!("Failed to initialize command completion: {}", e);
         } else {
-            debug!("Integrated completion engine initialized successfully");
+            // debug!("Integrated completion engine initialized successfully");
         }
         self.lines = screen_size.1 as usize;
         enable_raw_mode().ok();
@@ -262,14 +262,14 @@ impl<'a> Repl<'a> {
                         if let Err(e) = history_guard.save() {
                             warn!("Failed to save {} history: {}", history_type, e);
                         } else {
-                            debug!("{} history saved successfully", history_type);
+                            // debug!("{} history saved successfully", history_type);
                         }
                     } else {
-                        debug!("{} history unchanged, skipping save", history_type);
+                        // debug!("{} history unchanged, skipping save", history_type);
                     }
                 }
             } else {
-                debug!("{} history is locked, skipping save", history_type);
+                // debug!("{} history is locked, skipping save", history_type);
             }
         }
     }
@@ -286,15 +286,15 @@ impl<'a> Repl<'a> {
         let input_cursor_width = self.input.cursor_display_width();
         let mut cursor_display_pos = prompt_display_width + input_cursor_width;
 
-        debug!(
-            "move_cursor_input_end: prompt_mark='{}', prompt_width={}, input_cursor_width={}, final_pos={}",
-            self.prompt_mark_cache, prompt_display_width, input_cursor_width, cursor_display_pos
-        );
-        debug!(
-            "move_cursor_input_end: input_text='{}', input_cursor_pos={}",
-            self.input.as_str(),
-            self.input.cursor()
-        );
+        // debug!(
+        //     "move_cursor_input_end: prompt_mark='{}', prompt_width={}, input_cursor_width={}, final_pos={}",
+        //     self.prompt_mark_cache, prompt_display_width, input_cursor_width, cursor_display_pos
+        // );
+        // debug!(
+        //     "move_cursor_input_end: input_text='{}', input_cursor_pos={}",
+        //     self.input.as_str(),
+        //     self.input.cursor()
+        // );
 
         // bound to current terminal columns if available
         if self.columns > 0 {
@@ -343,7 +343,7 @@ impl<'a> Repl<'a> {
     // }
 
     fn print_prompt(&mut self, out: &mut StdoutLock<'static>) {
-        debug!("print_prompt called - full preprompt + mark redraw");
+        // debug!("print_prompt called - full preprompt + mark redraw");
         let mut prompt = self.prompt.write();
         // draw preprompt only here (initial or after command/bg output)
         prompt.print_preprompt(out);
@@ -497,14 +497,14 @@ impl<'a> Repl<'a> {
     }
 
     pub fn print_input(&mut self, out: &mut StdoutLock<'static>, reset_completion: bool) {
-        debug!("print_input called, reset_completion: {}", reset_completion);
+        // debug!("print_input called, reset_completion: {}", reset_completion);
         queue!(out, cursor::Hide).ok();
         let input = self.input.to_string();
         let prompt_display_width = self.prompt_mark_width; // cached at new()/print_prompt()
-        debug!(
-            "Current input: '{}', prompt_display_width: {}",
-            input, prompt_display_width
-        );
+        // debug!(
+        //     "Current input: '{}', prompt_display_width: {}",
+        //     input, prompt_display_width
+        // );
 
         let mut completion: Option<String> = None;
         let mut can_execute = false;
@@ -583,7 +583,7 @@ impl<'a> Repl<'a> {
 
         // Only redraw the prompt mark (not the full preprompt)
         // Use cached prompt mark without re-locking prompt
-        debug!("Redrawing prompt mark: '{}'", self.prompt_mark_cache);
+        // debug!("Redrawing prompt mark: '{}'", self.prompt_mark_cache);
         queue!(out, Print(self.prompt_mark_cache.as_str())).ok();
 
         // Print the input
@@ -697,31 +697,31 @@ impl<'a> Repl<'a> {
             (KeyCode::Char(' '), NONE) => {
                 // Handle abbreviation expansion before inserting space
                 if let Some(word) = self.input.get_current_word_for_abbr() {
-                    debug!("ABBR_EXPANSION: Found word for expansion: '{}'", word);
+                    // debug!("ABBR_EXPANSION: Found word for expansion: '{}'", word);
                     if let Some(expansion) = self.shell.environment.read().abbreviations.get(&word)
                     {
-                        debug!(
-                            "ABBR_EXPANSION: Found expansion for '{}': '{}'",
-                            word, expansion
-                        );
+                        // debug!(
+                        //     "ABBR_EXPANSION: Found expansion for '{}': '{}'",
+                        //     word, expansion
+                        // );
                         let expansion = expansion.clone();
                         if self.input.replace_current_word(&expansion) {
-                            debug!(
-                                "ABBR_EXPANSION: Successfully replaced '{}' with '{}'",
-                                word, expansion
-                            );
+                            // debug!(
+                            //     "ABBR_EXPANSION: Successfully replaced '{}' with '{}'",
+                            //     word, expansion
+                            // );
                             // Abbreviation was expanded, force redraw
                             reset_completion = true;
                         } else {
-                            debug!("ABBR_EXPANSION: Failed to replace word '{}'", word);
+                            // debug!("ABBR_EXPANSION: Failed to replace word '{}'", word);
                         }
                     } else {
-                        debug!("ABBR_EXPANSION: No expansion found for word '{}'", word);
+                        // debug!("ABBR_EXPANSION: No expansion found for word '{}'", word);
                         let abbrs = self.shell.environment.read().abbreviations.clone();
-                        debug!("ABBR_EXPANSION: Available abbreviations: {:?}", abbrs);
+                        // debug!("ABBR_EXPANSION: Available abbreviations: {:?}", abbrs);
                     }
                 } else {
-                    debug!("ABBR_EXPANSION: No word found for expansion at cursor position");
+                    // debug!("ABBR_EXPANSION: No word found for expansion at cursor position");
                 }
 
                 self.input.insert(' ');
@@ -757,19 +757,19 @@ impl<'a> Repl<'a> {
                 let prompt_text = self.prompt.read().mark.clone();
                 let input_text = self.input.to_string();
 
-                debug!(
-                    "Starting completion with prompt: '{}', input: '{}'",
-                    prompt_text, input_text
-                );
+                // debug!(
+                //     "Starting completion with prompt: '{}', input: '{}'",
+                //     prompt_text, input_text
+                // );
 
                 // Use the new integrated completion engine
                 let current_dir = self.prompt.read().current_path().to_path_buf();
                 let cursor_pos = self.input.cursor();
 
-                debug!(
-                    "Using IntegratedCompletionEngine for input: '{}' at position {}",
-                    input_text, cursor_pos
-                );
+                // debug!(
+                //     "Using IntegratedCompletionEngine for input: '{}' at position {}",
+                //     input_text, cursor_pos
+                // );
 
                 let candidates = self
                     .integrated_completion
@@ -781,11 +781,11 @@ impl<'a> Repl<'a> {
                     )
                     .await;
 
-                debug!(
-                    "IntegratedCompletionEngine returned {} candidates. {:?}",
-                    candidates.len(),
-                    candidates,
-                );
+                // debug!(
+                //     "IntegratedCompletionEngine returned {} candidates. {:?}",
+                //     candidates.len(),
+                //     candidates,
+                // );
 
                 let completion_result = if !candidates.is_empty() {
                     // Convert to completion format and show with skim
@@ -795,10 +795,10 @@ impl<'a> Repl<'a> {
                     completion::select_item_with_skim(completion_candidates, completion_query)
                 } else {
                     // Fall back to existing completion if no candidates from integrated engine
-                    debug!(
-                        "No candidates from IntegratedCompletionEngine, falling back to legacy completion. {:?} {:?}",
-                        &self.input, &completion_query
-                    );
+                    // debug!(
+                    //     "No candidates from IntegratedCompletionEngine, falling back to legacy completion. {:?} {:?}",
+                    //     &self.input, &completion_query
+                    // );
                     completion::input_completion(
                         &self.input,
                         self,

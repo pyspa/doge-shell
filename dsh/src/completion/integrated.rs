@@ -145,7 +145,6 @@ impl IntegratedCompletionEngine {
             match self
                 .dynamic_registry
                 .generate_candidates(&parsed_command_line)
-                .await
             {
                 Ok(dynamic_candidates) => {
                     let enhanced_candidates = dynamic_candidates

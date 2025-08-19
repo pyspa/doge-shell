@@ -3,7 +3,9 @@ use super::parser::ParsedCommandLine;
 use anyhow::Result;
 use tracing::{debug, warn};
 
+mod git;
 mod kill;
+mod pacman;
 mod sudo;
 
 /// Trait for dynamic completion handlers.
@@ -22,6 +24,8 @@ pub trait DynamicCompletionHandler: Send + Sync {
 pub enum DynamicCompleter {
     Kill(kill::KillCompletionHandler),
     Sudo(sudo::SudoCompletionHandler),
+    Git(git::GitCompletionHandler),
+    Pacman(pacman::PacmanCompletionHandler),
 }
 
 impl DynamicCompletionHandler for DynamicCompleter {
@@ -29,6 +33,8 @@ impl DynamicCompletionHandler for DynamicCompleter {
         match self {
             DynamicCompleter::Kill(handler) => handler.matches(parsed_command),
             DynamicCompleter::Sudo(handler) => handler.matches(parsed_command),
+            DynamicCompleter::Git(handler) => handler.matches(parsed_command),
+            DynamicCompleter::Pacman(handler) => handler.matches(parsed_command),
         }
     }
 
@@ -39,6 +45,8 @@ impl DynamicCompletionHandler for DynamicCompleter {
         match self {
             DynamicCompleter::Kill(handler) => handler.generate_candidates(parsed_command),
             DynamicCompleter::Sudo(handler) => handler.generate_candidates(parsed_command),
+            DynamicCompleter::Git(handler) => handler.generate_candidates(parsed_command),
+            DynamicCompleter::Pacman(handler) => handler.generate_candidates(parsed_command),
         }
     }
 }
@@ -70,13 +78,27 @@ impl DynamicCompletionRegistry {
             .push(DynamicCompleter::Sudo(sudo::SudoCompletionHandler));
     }
 
+    /// Register a git completion handler
+    pub fn register_git(&mut self) {
+        debug!("Registering git completion handler");
+        self.handlers
+            .push(DynamicCompleter::Git(git::GitCompletionHandler));
+    }
+
+    /// Register a pacman completion handler
+    pub fn register_pacman(&mut self) {
+        debug!("Registering pacman completion handler");
+        self.handlers
+            .push(DynamicCompleter::Pacman(pacman::PacmanCompletionHandler));
+    }
+
     /// Check if any handler matches the input
     pub fn matches(&self, parsed_command: &ParsedCommandLine) -> bool {
         self.handlers.iter().any(|h| h.matches(parsed_command))
     }
 
     /// Generate completion candidates from all matching handlers
-    pub async fn generate_candidates(
+    pub fn generate_candidates(
         &self,
         parsed_command: &ParsedCommandLine,
     ) -> Result<Vec<CompletionCandidate>> {
@@ -106,6 +128,8 @@ impl DynamicCompletionRegistry {
         let mut registry = Self::new();
         registry.register_kill();
         registry.register_sudo();
+        registry.register_git();
+        registry.register_pacman();
         debug!("Initialized dynamic completion registry with default handlers");
         registry
     }
@@ -116,94 +140,6 @@ impl Default for DynamicCompletionRegistry {
         Self::with_default_handlers()
     }
 }
-
-// /// Handler for `kill` command dynamic completion.
-// pub struct KillCompletionHandler;
-
-// impl DynamicCompletionHandler for KillCompletionHandler {
-//     fn matches(&self, parsed_command: &ParsedCommandLine) -> bool {
-//         parsed_command.command == "kill" && parsed_command.args.len() <= 1
-//     }
-
-//     fn generate_candidates(
-//         &self,
-//         _parsed_command: &ParsedCommandLine,
-//     ) -> Result<Vec<CompletionCandidate>> {
-//         debug!("Generating dynamic completion candidates for 'kill' command.");
-
-//         // Since we can't use async directly, we'll use tokio::task::block_in_place
-//         // to run the async code in a blocking context
-//         let output = tokio::task::block_in_place(|| {
-//             tokio::runtime::Handle::current()
-//                 .block_on(async { Command::new("ps").arg("-eo").arg("pid,comm").output().await })
-//         })?;
-
-//         let stdout = String::from_utf8_lossy(&output.stdout);
-//         let mut candidates = Vec::new();
-
-//         for line in stdout.lines().skip(1) {
-//             let parts: Vec<&str> = line.trim().splitn(2, ' ').collect();
-//             if parts.len() == 2 {
-//                 let pid = parts[0].trim();
-//                 let comm = parts[1].trim();
-//                 candidates.push(CompletionCandidate {
-//                     text: pid.to_string(),
-//                     description: Some(format!("Process: {comm}")),
-//                     completion_type: super::command::CompletionType::Argument,
-//                     priority: 100,
-//                 });
-//             }
-//         }
-//         debug!(
-//             "Generated {} candidates for 'kill' command.",
-//             candidates.len()
-//         );
-//         Ok(candidates)
-//     }
-// }
-
-// /// Handler for `sudo` command dynamic completion.
-// pub struct SudoCompletionHandler;
-
-// impl DynamicCompletionHandler for SudoCompletionHandler {
-//     fn matches(&self, parsed_command: &ParsedCommandLine) -> bool {
-//         parsed_command.command == "sudo" && parsed_command.args.is_empty()
-//     }
-
-//     fn generate_candidates(
-//         &self,
-//         _parsed_command: &ParsedCommandLine,
-//     ) -> Result<Vec<CompletionCandidate>> {
-//         debug!("Generating dynamic completion candidates for 'sudo' command.");
-
-//         // Since we can't use async directly, we'll use tokio::task::block_in_place
-//         // to run the async code in a blocking context
-//         let output = tokio::task::block_in_place(|| {
-//             tokio::runtime::Handle::current()
-//                 .block_on(async { Command::new("getent").arg("passwd").output().await })
-//         })?;
-
-//         let stdout = String::from_utf8_lossy(&output.stdout);
-//         let mut candidates = Vec::new();
-
-//         for line in stdout.lines() {
-//             let parts: Vec<&str> = line.split(':').collect();
-//             if let Some(username) = parts.first() {
-//                 candidates.push(CompletionCandidate {
-//                     text: username.to_string(),
-//                     description: None,
-//                     completion_type: super::command::CompletionType::Argument,
-//                     priority: 100,
-//                 });
-//             }
-//         }
-//         debug!(
-//             "Generated {} candidates for 'sudo' command.",
-//             candidates.len()
-//         );
-//         Ok(candidates)
-//     }
-// }
 
 #[cfg(test)]
 mod tests {
@@ -241,28 +177,59 @@ mod tests {
     }
 
     #[test]
+    fn test_git_completion_handler_matches() {
+        let handler = git::GitCompletionHandler;
+        assert!(handler.matches(&create_parsed_command("git", vec!["switch"])));
+        assert!(handler.matches(&create_parsed_command("git", vec!["checkout"])));
+        assert!(!handler.matches(&create_parsed_command("git", vec!["commit"])));
+        assert!(!handler.matches(&create_parsed_command("github", vec!["switch"])));
+    }
+
+    #[test]
+    fn test_pacman_completion_handler_matches() {
+        let handler = pacman::PacmanCompletionHandler;
+        assert!(handler.matches(&create_parsed_command("pacman", vec!["-S"])));
+        assert!(!handler.matches(&create_parsed_command("pacman", vec!["-R"])));
+        assert!(!handler.matches(&create_parsed_command("yay", vec!["-S"])));
+    }
+
+    #[test]
     fn test_dynamic_registry_creation() {
         let registry = DynamicCompletionRegistry::with_default_handlers();
 
-        // Should have both default handlers
-        assert_eq!(registry.handlers.len(), 2);
+        // Should have all default handlers
+        assert_eq!(registry.handlers.len(), 4);
 
         // Should match kill command
         assert!(registry.matches(&create_parsed_command("kill", vec![])));
 
         // Should match sudo command
         assert!(registry.matches(&create_parsed_command("sudo", vec![])));
+
+        // Should match git command
+        assert!(registry.matches(&create_parsed_command("git", vec!["switch"])));
+
+        // Should match pacman command
+        assert!(registry.matches(&create_parsed_command("pacman", vec!["-S"])));
     }
 
     #[test]
     fn test_dynamic_completer_matches() {
         let kill_completer = DynamicCompleter::Kill(kill::KillCompletionHandler);
         let sudo_completer = DynamicCompleter::Sudo(sudo::SudoCompletionHandler);
+        let git_completer = DynamicCompleter::Git(git::GitCompletionHandler);
+        let pacman_completer = DynamicCompleter::Pacman(pacman::PacmanCompletionHandler);
 
         assert!(kill_completer.matches(&create_parsed_command("kill", vec![])));
         assert!(!kill_completer.matches(&create_parsed_command("sudo", vec![])));
 
         assert!(sudo_completer.matches(&create_parsed_command("sudo", vec![])));
         assert!(!sudo_completer.matches(&create_parsed_command("kill", vec![])));
+
+        assert!(git_completer.matches(&create_parsed_command("git", vec!["switch"])));
+        assert!(!git_completer.matches(&create_parsed_command("kill", vec![])));
+
+        assert!(pacman_completer.matches(&create_parsed_command("pacman", vec!["-S"])));
+        assert!(!pacman_completer.matches(&create_parsed_command("kill", vec![])));
     }
 }

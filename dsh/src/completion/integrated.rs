@@ -88,9 +88,19 @@ impl IntegratedCompletionEngine {
     fn convert_to_parsed_command_line(&self, input: &str, cursor_pos: usize) -> ParsedCommandLine {
         let parsed = self.parser.parse(input, cursor_pos);
 
+        // For dynamic completion, we need to combine arguments and options in the order they appear
+        // This is important for commands like "sudo pacman -S" where we need to match the sequence
+        let mut args = Vec::new();
+        args.extend(parsed.specified_arguments.clone());
+
+        // For pacman completion specifically, we need to handle the case where options come after arguments
+        // In "sudo pacman -S", "-S" is an option that comes after the argument "pacman"
+        // But for dynamic completion matching, we want to see ["pacman", "-S"]
+        args.extend(parsed.specified_options.clone());
+
         ParsedCommandLine {
             command: parsed.command.clone(),
-            args: parsed.specified_arguments.clone(),
+            args,
             current_arg: Some(parsed.current_token.clone()),
             completion_context: match parsed.completion_context {
                 parser::CompletionContext::Command => super::parser::CompletionContext::Command,

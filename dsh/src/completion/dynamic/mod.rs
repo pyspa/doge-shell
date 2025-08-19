@@ -159,6 +159,23 @@ mod tests {
         }
     }
 
+    fn create_parsed_command_with_current_arg(
+        command: &str,
+        args: Vec<&str>,
+        current_arg: Option<&str>,
+    ) -> ParsedCommandLine {
+        ParsedCommandLine {
+            command: command.to_string(),
+            args: args.into_iter().map(|s| s.to_string()).collect(),
+            current_arg: current_arg.map(|s| s.to_string()),
+            completion_context: CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: None,
+            },
+            cursor_index: 0,
+        }
+    }
+
     #[test]
     fn test_kill_completion_handler_matches() {
         let handler = kill::KillCompletionHandler;
@@ -188,9 +205,23 @@ mod tests {
     #[test]
     fn test_pacman_completion_handler_matches() {
         let handler = pacman::PacmanCompletionHandler;
-        assert!(handler.matches(&create_parsed_command("pacman", vec!["-S"])));
-        assert!(!handler.matches(&create_parsed_command("pacman", vec!["-R"])));
-        assert!(!handler.matches(&create_parsed_command("yay", vec!["-S"])));
+        assert!(handler.matches(&create_parsed_command("sudo", vec!["pacman", "-S"])));
+        assert!(!handler.matches(&create_parsed_command("sudo", vec!["pacman", "-R"])));
+        assert!(!handler.matches(&create_parsed_command("yay", vec!["pacman", "-S"])));
+
+        // Test with trailing space (current_arg is empty)
+        assert!(handler.matches(&create_parsed_command_with_current_arg(
+            "sudo",
+            vec!["pacman", "-S"],
+            Some("")
+        )));
+
+        // Test with partial argument - should still match to provide filtered completions
+        assert!(handler.matches(&create_parsed_command_with_current_arg(
+            "sudo",
+            vec!["pacman", "-S"],
+            Some("part")
+        )));
     }
 
     #[test]
@@ -210,7 +241,7 @@ mod tests {
         assert!(registry.matches(&create_parsed_command("git", vec!["switch"])));
 
         // Should match pacman command
-        assert!(registry.matches(&create_parsed_command("pacman", vec!["-S"])));
+        assert!(registry.matches(&create_parsed_command("sudo", vec!["pacman", "-S"])));
     }
 
     #[test]
@@ -229,7 +260,7 @@ mod tests {
         assert!(git_completer.matches(&create_parsed_command("git", vec!["switch"])));
         assert!(!git_completer.matches(&create_parsed_command("kill", vec![])));
 
-        assert!(pacman_completer.matches(&create_parsed_command("pacman", vec!["-S"])));
+        assert!(pacman_completer.matches(&create_parsed_command("sudo", vec!["pacman", "-S"])));
         assert!(!pacman_completer.matches(&create_parsed_command("kill", vec![])));
     }
 }

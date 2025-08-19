@@ -413,9 +413,10 @@ impl DirectoryScanner {
 
             // Skip hidden files and directories (starting with .)
             if let Some(name) = path.file_name().and_then(|n| n.to_str())
-                && name.starts_with('.') {
-                    continue;
-                }
+                && name.starts_with('.')
+            {
+                continue;
+            }
 
             match DirectoryEntry::from_path(&path, dir_path) {
                 Ok(dir_entry) => entries.push(dir_entry),
@@ -995,36 +996,37 @@ impl FileServer {
             // Check If-None-Match (ETag)
             if let Some(if_none_match) = headers.get(header::IF_NONE_MATCH)
                 && let Ok(client_etag) = if_none_match.to_str()
-                    && (client_etag == etag || client_etag == "*") {
-                        debug!("returning 304 Not Modified for ETag match");
-                        return Ok(Response::builder()
-                            .status(StatusCode::NOT_MODIFIED)
-                            .header(header::ETAG, etag)
-                            .body(Body::empty())
-                            .unwrap());
-                    }
+                && (client_etag == etag || client_etag == "*")
+            {
+                debug!("returning 304 Not Modified for ETag match");
+                return Ok(Response::builder()
+                    .status(StatusCode::NOT_MODIFIED)
+                    .header(header::ETAG, etag)
+                    .body(Body::empty())
+                    .unwrap());
+            }
 
             // Check If-Modified-Since
             if let Some(if_modified_since) = headers.get(header::IF_MODIFIED_SINCE)
                 && let (Ok(client_time_str), Some(file_time)) =
                     (if_modified_since.to_str(), modified_time)
-                {
-                    // Simple time comparison (not parsing HTTP date for simplicity)
-                    let file_timestamp = file_time
-                        .duration_since(SystemTime::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-                    let client_timestamp_str = format!("{file_timestamp}");
+            {
+                // Simple time comparison (not parsing HTTP date for simplicity)
+                let file_timestamp = file_time
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let client_timestamp_str = format!("{file_timestamp}");
 
-                    if client_time_str.contains(&client_timestamp_str) {
-                        debug!("returning 304 Not Modified for If-Modified-Since");
-                        return Ok(Response::builder()
-                            .status(StatusCode::NOT_MODIFIED)
-                            .header(header::ETAG, etag)
-                            .body(Body::empty())
-                            .unwrap());
-                    }
+                if client_time_str.contains(&client_timestamp_str) {
+                    debug!("returning 304 Not Modified for If-Modified-Since");
+                    return Ok(Response::builder()
+                        .status(StatusCode::NOT_MODIFIED)
+                        .header(header::ETAG, etag)
+                        .body(Body::empty())
+                        .unwrap());
                 }
+            }
         }
 
         // Determine MIME type
@@ -1078,11 +1080,12 @@ impl FileServer {
 
         // Add last-modified header
         if let Ok(modified) = metadata.modified()
-            && let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
-                let timestamp = duration.as_secs();
-                let http_date = format_http_date(timestamp);
-                response_builder = response_builder.header(header::LAST_MODIFIED, http_date);
-            }
+            && let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH)
+        {
+            let timestamp = duration.as_secs();
+            let http_date = format_http_date(timestamp);
+            response_builder = response_builder.header(header::LAST_MODIFIED, http_date);
+        }
 
         // Add security headers
         response_builder = Self::add_security_headers(response_builder, mime_type);
@@ -1129,11 +1132,12 @@ impl FileServer {
 
         // Add last-modified header
         if let Ok(modified) = metadata.modified()
-            && let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
-                let timestamp = duration.as_secs();
-                let http_date = format_http_date(timestamp);
-                response_builder = response_builder.header(header::LAST_MODIFIED, http_date);
-            }
+            && let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH)
+        {
+            let timestamp = duration.as_secs();
+            let http_date = format_http_date(timestamp);
+            response_builder = response_builder.header(header::LAST_MODIFIED, http_date);
+        }
 
         // Add security headers
         response_builder = Self::add_security_headers(response_builder, mime_type);
@@ -1155,9 +1159,10 @@ impl FileServer {
         metadata.len().hash(&mut hasher);
 
         if let Ok(modified) = metadata.modified()
-            && let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
-                duration.as_secs().hash(&mut hasher);
-            }
+            && let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH)
+        {
+            duration.as_secs().hash(&mut hasher);
+        }
 
         format!("\"{}\"", hasher.finish())
     }
@@ -1602,9 +1607,10 @@ async fn serve_directory(dir_path: &Path) -> Response<Body> {
 
             // Add parent directory link if not root
             if let Some(parent) = dir_path.parent()
-                && parent != dir_path {
-                    html.push_str("<li><a href=\"../\" class=\"dir\">📁 ../</a></li>");
-                }
+                && parent != dir_path
+            {
+                html.push_str("<li><a href=\"../\" class=\"dir\">📁 ../</a></li>");
+            }
 
             // Collect and sort entries
             let mut entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();

@@ -216,9 +216,11 @@ impl CommandLineParser {
 
                 // Check if next token is option value
                 if let Some(next_token) = tokens_queue.get(i + 1)
-                    && !OPTION_REGEX.is_match(next_token) && self.option_takes_value(token) {
-                        skip_next = true;
-                    }
+                    && !OPTION_REGEX.is_match(next_token)
+                    && self.option_takes_value(token)
+                {
+                    skip_next = true;
+                }
             } else {
                 specified_arguments.push(token.clone());
             }

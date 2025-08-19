@@ -5,18 +5,21 @@ Doge-shell is a modern, high-performance shell written in Rust that combines the
 ## ✨ Key Features
 
 ### 🚀 Performance & Architecture
+
 - **High-speed execution** - Written in Rust with zero-cost abstractions
 - **Modular design** - Multi-crate workspace architecture for maintainability
 - **Memory safety** - Rust's ownership system prevents common shell vulnerabilities
 - **Concurrent processing** - Tokio-based async runtime for responsive I/O
 
 ### 🧠 AI Integration
+
 - **OpenAI ChatGPT integration** - Use `!` prefix for AI-powered assistance
 - **Streaming responses** - Real-time AI output with "Thinking..." indicator
 - **Configurable prompts** - Customize AI behavior for different contexts
 - **Full shell integration** - AI responses support redirection and piping
 
 ### 🎯 Advanced Completion System
+
 - **Multi-layered completion** - Commands, files, and context-aware suggestions
 - **JSON-based definitions** - Extensible command completion via JSON files
 - **Fuzzy matching** - Smart completion with scoring and ranking
@@ -24,28 +27,27 @@ Doge-shell is a modern, high-performance shell written in Rust that combines the
 - **Real-time display** - Interactive completion with visual feedback
 
 ### 🔧 Lisp Scripting Engine
+
 - **Built-in Lisp interpreter** - Full-featured scripting environment
 - **Shell integration** - Direct access to shell functions and variables
 - **User-defined functions** - Extend shell functionality with custom Lisp code
 - **Configuration system** - Customize shell behavior via `config.lisp`
 
-### 🌐 WebAssembly Runtime
-- **WASI-compliant execution** - Run WebAssembly binaries natively
-- **Wasmer integration** - High-performance WASM runtime
-- **Sandboxed execution** - Secure execution environment for WASM modules
-
 ### 📁 Smart Navigation
+
 - **Frecency-based directory jumping** - `z` command for intelligent navigation
 - **Path history tracking** - Learns from your directory usage patterns
 - **Fuzzy directory matching** - Quick access to frequently used locations
 
 ### ⚡ Advanced Job Control
+
 - **Process group management** - Proper job control with signal handling
 - **Background/foreground switching** - Full job control like traditional shells
 - **Job monitoring** - Real-time status tracking of background processes
 - **Signal propagation** - Correct signal handling for process groups
 
 ### 🔄 History Management
+
 - **Frecency-based history** - Intelligent command history ranking
 - **History import** - Import command history from other shells (fish, etc.)
 - **Fuzzy history search** - Quickly find and reuse previous commands
@@ -55,27 +57,27 @@ Doge-shell is a modern, high-performance shell written in Rust that combines the
 
 Doge-shell is built as a modular Rust workspace with six specialized crates:
 
-```
+``` shell
 doge-shell/
 ├── dsh/              # Main shell binary and core logic
 ├── dsh-builtin/      # Built-in commands implementation
 ├── dsh-frecency/     # Frecency-based navigation system
 ├── dsh-types/        # Shared types and context definitions
-├── dsh-wasm/         # WebAssembly runtime integration
 └── dsh-openai/       # OpenAI API client and integration
 ```
 
 ### Core Components
+
 - **Shell Engine** - Command parsing, execution, and process management
 - **Completion Engine** - Multi-layered completion with fuzzy matching
 - **Lisp Interpreter** - Built-in scripting environment for configuration
 - **Job Controller** - Advanced process and signal management
 - **AI Client** - OpenAI integration with streaming support
-- **WASM Runtime** - WebAssembly execution environment
 
 ## 📦 Installation
 
 ### Prerequisites
+
 - Rust 2024 Edition (latest stable)
 - Git for cloning the repository
 
@@ -118,11 +120,13 @@ Doge-shell features seamless OpenAI ChatGPT integration for AI-powered assistanc
 ### Getting Started with AI
 
 1. Set your OpenAI API key:
+
 ```shell
 export OPENAI_API_KEY="your-api-key-here"
 ```
 
 2. Use the `!` prefix to interact with AI:
+
 ```shell
 🐕 < ! How do I find large files in Linux?
 Thinking...
@@ -238,6 +242,7 @@ Doge Shell provides a comprehensive set of built-in commands for efficient shell
 ### Core Shell Commands
 
 #### `exit`
+
 Terminates the current shell session gracefully.
 
 ```bash
@@ -245,7 +250,9 @@ Terminates the current shell session gracefully.
 ```
 
 #### `cd [directory]`
+
 Changes the current working directory. Supports various path formats:
+
 - Absolute paths (starting with `/`)
 - Home directory paths (starting with `~`)
 - Relative paths
@@ -259,6 +266,7 @@ Changes the current working directory. Supports various path formats:
 ```
 
 #### `history`
+
 Displays the command history, showing previously executed commands for reference.
 
 ```bash
@@ -268,6 +276,7 @@ Displays the command history, showing previously executed commands for reference
 ### Navigation and Directory Management
 
 #### `z [pattern]`
+
 Provides frecency-based directory navigation, similar to the popular `z` utility. Quickly jump to frequently and recently visited directories by partial name matching.
 
 ```bash
@@ -278,6 +287,7 @@ Provides frecency-based directory navigation, similar to the popular `z` utility
 ### Job Control Commands
 
 #### `jobs`
+
 Lists all active background jobs in the current shell session, showing job IDs, status, and command information.
 
 ```bash
@@ -291,7 +301,9 @@ Lists all active background jobs in the current shell session, showing job IDs, 
 ```
 
 #### `fg [job_spec]`
+
 Brings a background job to the foreground for interactive execution. Job specification can be:
+
 - Job number: `1`, `2`, etc.
 - `%1`, `%2` for job references
 - `%+` for current job, `%-` for previous job
@@ -304,6 +316,7 @@ Brings a background job to the foreground for interactive execution. Job specifi
 ```
 
 #### `bg [job_spec]`
+
 Resumes a stopped job in the background, allowing it to continue execution while you use the shell.
 
 ```bash
@@ -315,6 +328,7 @@ Resumes a stopped job in the background, allowing it to continue execution while
 ### Scripting and Configuration
 
 #### `lisp <s-expression>`
+
 Evaluates Lisp s-expressions using the shell's integrated Lisp interpreter. Used for advanced scripting and shell configuration.
 
 ```bash
@@ -323,9 +337,11 @@ Evaluates Lisp s-expressions using the shell's integrated Lisp interpreter. Used
 ```
 
 #### `set [options] <key> <value>`
+
 Sets shell variables or environment variables. Supports both local shell variables and exported environment variables.
 
 **Options:**
+
 - `-x, --export`: Export as environment variable (available to child processes)
 - `-h, --help`: Show help information
 
@@ -336,6 +352,7 @@ Sets shell variables or environment variables. Supports both local shell variabl
 ```
 
 #### `var`
+
 Displays all current shell variables in a formatted table.
 
 ```bash
@@ -349,6 +366,7 @@ Displays all current shell variables in a formatted table.
 ```
 
 #### `read <variable_name>`
+
 Reads input from stdin and stores it in the specified shell variable. Commonly used in shell scripts for interactive input collection.
 
 ```bash
@@ -357,9 +375,11 @@ Reads input from stdin and stores it in the specified shell variable. Commonly u
 ```
 
 #### `abbr [options] [name] [expansion]`
+
 Manages shell abbreviations with real-time expansion during input. Abbreviations expand when you type them followed by space or enter, providing immediate visual feedback.
 
 **Options:**
+
 - `-a, --add <name> <expansion>` - Add new abbreviation
 - `-e, --erase <name>` - Remove abbreviation
 - `-l, --list` - List all abbreviations
@@ -394,6 +414,7 @@ abbr gst 'git status'
 ```
 
 **Lisp Integration (config.lisp):**
+
 ```lisp
 ;; ~/.config/dsh/config.lisp
 (abbr "gco" "git checkout")
@@ -402,6 +423,7 @@ abbr gst 'git status'
 ```
 
 #### `alias [name[=command]]`
+
 Manages shell aliases with support for setting, listing, and querying aliases.
 
 ```bash
@@ -413,9 +435,11 @@ Manages shell aliases with support for setting, listing, and querying aliases.
 ### AI Integration Commands
 
 #### `chat [options] <message>`
+
 Integrates with OpenAI ChatGPT API for AI-powered assistance within the shell. Supports model selection and custom prompts.
 
 **Options:**
+
 - `-m, --model <model>` - Use specific OpenAI model for this request
 
 ```bash
@@ -431,11 +455,13 @@ Integrates with OpenAI ChatGPT API for AI-powered assistance within the shell. S
 ```
 
 **Requirements:**
+
 - Set `OPENAI_API_KEY` environment variable with your OpenAI API key
 - Internet connection for API communication
 - Optional: Set `OPENAI_MODEL` environment variable for default model
 
 #### `chat_prompt <prompt_template>`
+
 Sets a custom prompt template for ChatGPT interactions. The prompt template provides context for all subsequent chat commands.
 
 ```bash
@@ -444,6 +470,7 @@ Sets a custom prompt template for ChatGPT interactions. The prompt template prov
 ```
 
 #### `chat_model [model_name]`
+
 Manages the default OpenAI model for ChatGPT interactions. When called without arguments, shows the current model.
 
 ```bash
@@ -465,6 +492,7 @@ OpenAI model set to: gpt-4
 ### Utility Commands
 
 #### `add_path <directory>`
+
 Adds a directory to the beginning of the PATH environment variable, giving it the highest priority for command lookup. Supports tilde expansion for home directory references.
 
 ```bash
@@ -473,6 +501,7 @@ Adds a directory to the beginning of the PATH environment variable, giving it th
 ```
 
 #### `uuid`
+
 Generates and outputs a random UUID (Universally Unique Identifier) using UUID version 4 for maximum uniqueness.
 
 ```bash

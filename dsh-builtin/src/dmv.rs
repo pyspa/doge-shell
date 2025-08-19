@@ -159,11 +159,12 @@ fn execute_dmv(
         if !dry_run {
             // Create parent directory if it doesn't exist
             if let Some(parent) = new_path.parent()
-                && !parent.exists() {
-                    fs::create_dir_all(parent).map_err(|e| {
-                        format!("Failed to create directory {}: {}", parent.display(), e)
-                    })?;
-                }
+                && !parent.exists()
+            {
+                fs::create_dir_all(parent).map_err(|e| {
+                    format!("Failed to create directory {}: {}", parent.display(), e)
+                })?;
+            }
 
             // Perform the rename
             fs::rename(&old_path, &new_path).map_err(|e| {
@@ -326,9 +327,10 @@ fn find_matches_recursive(
         if let Ok(entries) = fs::read_dir(dir) {
             for entry in entries.flatten() {
                 if let Ok(file_type) = entry.file_type()
-                    && file_type.is_dir() {
-                        find_matches_recursive(&entry.path(), pattern, matches)?;
-                    }
+                    && file_type.is_dir()
+                {
+                    find_matches_recursive(&entry.path(), pattern, matches)?;
+                }
             }
         }
     } else {

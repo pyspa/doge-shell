@@ -382,20 +382,20 @@ impl<'a> Repl<'a> {
         // Try using cache first when TTL is valid and prefix unchanged
         if let Some(last_time) = self.history_cache_time
             && now.duration_since(last_time) <= self.history_cache_ttl
-                && self.history_cache_prefix == input_str
-            {
-                if is_empty {
-                    if let Some(ref comps) = self.history_cache_sorted_recent {
-                        self.completion
-                            .set_completions(self.input.as_str(), comps.clone());
-                        return;
-                    }
-                } else if let Some(ref comps) = self.history_cache_match_sorted {
+            && self.history_cache_prefix == input_str
+        {
+            if is_empty {
+                if let Some(ref comps) = self.history_cache_sorted_recent {
                     self.completion
                         .set_completions(self.input.as_str(), comps.clone());
                     return;
                 }
+            } else if let Some(ref comps) = self.history_cache_match_sorted {
+                self.completion
+                    .set_completions(self.input.as_str(), comps.clone());
+                return;
             }
+        }
 
         // Fallback to computing with lock, and refresh cache if successful
         if let Some(ref mut history) = self.shell.cmd_history {
@@ -464,15 +464,16 @@ impl<'a> Repl<'a> {
         // Try cached match-sorted list first if still fresh and prefix unchanged
         if let Some(last_time) = self.history_cache_time
             && now.duration_since(last_time) <= self.history_cache_ttl
-                && self.history_cache_prefix.starts_with(input)
-                && let Some(ref list) = self.history_cache_match_sorted
-                    && let Some(top) = list.iter().find(|it| it.item.starts_with(input)) {
-                        let entry = top.item.clone();
-                        self.input.completion = Some(entry.clone());
-                        if entry.len() >= input.len() {
-                            return Some(entry[input.len()..].to_string());
-                        }
-                    }
+            && self.history_cache_prefix.starts_with(input)
+            && let Some(ref list) = self.history_cache_match_sorted
+            && let Some(top) = list.iter().find(|it| it.item.starts_with(input))
+        {
+            let entry = top.item.clone();
+            self.input.completion = Some(entry.clone());
+            if entry.len() >= input.len() {
+                return Some(entry[input.len()..].to_string());
+            }
+        }
 
         if let Some(ref mut history) = self.shell.cmd_history {
             match history.lock() {
@@ -542,28 +543,29 @@ impl<'a> Repl<'a> {
                                     break;
                                 } else if let Ok(Some(dir)) =
                                     completion::path_completion_prefix(word)
-                                    && dirs::is_dir(&dir) {
-                                        if dir.len() >= input.len() {
-                                            completion = Some(dir[input.len()..].to_string());
-                                        }
-                                        self.input.completion = Some(dir.to_string());
-                                        break;
+                                    && dirs::is_dir(&dir)
+                                {
+                                    if dir.len() >= input.len() {
+                                        completion = Some(dir[input.len()..].to_string());
                                     }
+                                    self.input.completion = Some(dir.to_string());
+                                    break;
+                                }
                             }
                             Rule::args => {
                                 if let Ok(Some(path)) = completion::path_completion_prefix(word)
-                                    && path.len() >= word.len() {
-                                        let part = path[word.len()..].to_string();
-                                        completion = Some(path[word.len()..].to_string());
+                                    && path.len() >= word.len()
+                                {
+                                    let part = path[word.len()..].to_string();
+                                    completion = Some(path[word.len()..].to_string());
 
-                                        if let Some((pre, post)) = self.input.split_current_pos() {
-                                            self.input.completion =
-                                                Some(pre.to_owned() + &part + post);
-                                        } else {
-                                            self.input.completion = Some(input + &part);
-                                        }
-                                        break;
+                                    if let Some((pre, post)) = self.input.split_current_pos() {
+                                        self.input.completion = Some(pre.to_owned() + &part + post);
+                                    } else {
+                                        self.input.completion = Some(input + &part);
                                     }
+                                    break;
+                                }
                             }
 
                             _ => {}
@@ -629,10 +631,11 @@ impl<'a> Repl<'a> {
             // history
             (KeyCode::Down, NONE) => {
                 if self.completion.completion_mode()
-                    && let Some(item) = self.completion.forward() {
-                        self.input
-                            .reset_with_match_index(item.item.clone(), item.match_index.clone());
-                    }
+                    && let Some(item) = self.completion.forward()
+                {
+                    self.input
+                        .reset_with_match_index(item.item.clone(), item.match_index.clone());
+                }
             }
             (KeyCode::Left, modifiers) if !modifiers.contains(CTRL) => {
                 if self.input.cursor() > 0 {
@@ -832,13 +835,13 @@ impl<'a> Repl<'a> {
                 // Handle abbreviation expansion on Enter if cursor is at end of a word
                 if let Some(word) = self.input.get_current_word_for_abbr()
                     && let Some(expansion) = self.shell.environment.read().abbreviations.get(&word)
-                    {
-                        let expansion = expansion.clone();
-                        if self.input.replace_current_word(&expansion) {
-                            // Abbreviation was expanded - the input will be redrawn after command execution
-                            debug!("Abbreviation '{}' expanded to '{}'", word, expansion);
-                        }
+                {
+                    let expansion = expansion.clone();
+                    if self.input.replace_current_word(&expansion) {
+                        // Abbreviation was expanded - the input will be redrawn after command execution
+                        debug!("Abbreviation '{}' expanded to '{}'", word, expansion);
                     }
+                }
 
                 self.input.completion.take();
                 self.stop_history_mode();

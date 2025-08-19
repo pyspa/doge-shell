@@ -207,7 +207,7 @@ impl Input {
         self.input.is_empty()
     }
 
-    pub fn get_cursor_word(&self) -> Result<Option<(Rule, Span)>> {
+    pub fn get_cursor_word(&self) -> Result<Option<(Rule, Span<'_>)>> {
         parser::get_pos_word(self.input.as_str(), self.cursor)
     }
 
@@ -303,7 +303,7 @@ impl Input {
         }
     }
 
-    pub fn get_words(&self) -> Result<Vec<(Rule, Span, bool)>> {
+    pub fn get_words(&self) -> Result<Vec<(Rule, Span<'_>, bool)>> {
         parser::get_words(self.input.as_str(), self.cursor)
     }
 

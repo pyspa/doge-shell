@@ -280,11 +280,12 @@ impl Shell {
     pub fn terminate_background_jobs(&mut self) -> Result<()> {
         for job in &mut self.wait_jobs {
             if !job.foreground
-                && let Some(pid) = job.pid {
-                    debug!("Terminating background job {} (pid: {})", job.job_id, pid);
-                    // Send SIGTERM first, then SIGKILL if needed
-                    let _ = nix::sys::signal::killpg(pid, Signal::SIGTERM);
-                }
+                && let Some(pid) = job.pid
+            {
+                debug!("Terminating background job {} (pid: {})", job.job_id, pid);
+                // Send SIGTERM first, then SIGKILL if needed
+                let _ = nix::sys::signal::killpg(pid, Signal::SIGTERM);
+            }
         }
         Ok(())
     }
@@ -308,17 +309,18 @@ impl Shell {
         force_background: bool,
     ) -> Result<ExitCode> {
         if ctx.save_history
-            && let Some(ref mut history) = self.cmd_history {
-                match history.lock() {
-                    Ok(mut history) => {
-                        history.add(&input);
-                        history.reset_index();
-                    }
-                    Err(e) => {
-                        warn!("Failed to acquire command history lock: {}", e);
-                    }
+            && let Some(ref mut history) = self.cmd_history
+        {
+            match history.lock() {
+                Ok(mut history) => {
+                    history.add(&input);
+                    history.reset_index();
+                }
+                Err(e) => {
+                    warn!("Failed to acquire command history lock: {}", e);
                 }
             }
+        }
         // TODO refactor context
         // let tmode = tcgetattr(0).expect("failed tcgetattr");
 
@@ -544,18 +546,19 @@ impl Shell {
                     Rule::command => self.parse_jobs(ctx, pair, &mut jobs)?,
                     Rule::command_list_sep => {
                         if let Some(sep) = pair.into_inner().next()
-                            && let Some(ref mut last) = jobs.last_mut() {
-                                debug!("last job {:?}", &last.cmd);
-                                match sep.as_rule() {
-                                    Rule::and_op => {
-                                        last.list_op = process::ListOp::And;
-                                    }
-                                    Rule::or_op => {
-                                        last.list_op = process::ListOp::Or;
-                                    }
-                                    _ => {}
+                            && let Some(ref mut last) = jobs.last_mut()
+                        {
+                            debug!("last job {:?}", &last.cmd);
+                            match sep.as_rule() {
+                                Rule::and_op => {
+                                    last.list_op = process::ListOp::And;
                                 }
+                                Rule::or_op => {
+                                    last.list_op = process::ListOp::Or;
+                                }
+                                _ => {}
                             }
+                        }
                     }
                     _ => {
                         debug!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());

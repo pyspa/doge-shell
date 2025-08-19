@@ -86,10 +86,11 @@ fn parse_arguments(argv: &[String]) -> LogOptions {
         match argv[i].as_str() {
             "-n" | "--number" => {
                 if i + 1 < argv.len()
-                    && let Ok(limit) = argv[i + 1].parse::<usize>() {
-                        options.limit = limit;
-                        i += 1;
-                    }
+                    && let Ok(limit) = argv[i + 1].parse::<usize>()
+                {
+                    options.limit = limit;
+                    i += 1;
+                }
             }
             "--no-graph" => {
                 options.graph = false;
@@ -339,9 +340,11 @@ fn numbered_commit_selection(log_entries: &[String]) -> Option<String> {
     }
 
     if let Ok(num) = input.parse::<usize>()
-        && num > 0 && num <= log_entries.len() {
-            return Some(log_entries[num - 1].clone());
-        }
+        && num > 0
+        && num <= log_entries.len()
+    {
+        return Some(log_entries[num - 1].clone());
+    }
 
     println!("Invalid selection");
     None

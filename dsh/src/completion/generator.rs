@@ -55,12 +55,13 @@ impl CompletionGenerator {
         // Commands registered in database
         for command_name in self.database.get_command_names() {
             if command_name.starts_with(current_token)
-                && let Some(completion) = self.database.get_command(command_name) {
-                    candidates.push(CompletionCandidate::subcommand(
-                        command_name.clone(),
-                        completion.description.clone(),
-                    ));
-                }
+                && let Some(completion) = self.database.get_command(command_name)
+            {
+                candidates.push(CompletionCandidate::subcommand(
+                    command_name.clone(),
+                    completion.description.clone(),
+                ));
+            }
         }
 
         // Also add system commands (simplified version)
@@ -120,13 +121,13 @@ impl CompletionGenerator {
             for option in options {
                 if let Some(ref short) = option.short
                     && short.starts_with(&parsed.current_token)
-                        && !parsed.specified_options.contains(short)
-                    {
-                        candidates.push(CompletionCandidate::short_option(
-                            short.clone(),
-                            option.description.clone(),
-                        ));
-                    }
+                    && !parsed.specified_options.contains(short)
+                {
+                    candidates.push(CompletionCandidate::short_option(
+                        short.clone(),
+                        option.description.clone(),
+                    ));
+                }
             }
         }
 
@@ -147,13 +148,13 @@ impl CompletionGenerator {
             for option in options {
                 if let Some(ref long) = option.long
                     && long.starts_with(&parsed.current_token)
-                        && !parsed.specified_options.contains(long)
-                    {
-                        candidates.push(CompletionCandidate::long_option(
-                            long.clone(),
-                            option.description.clone(),
-                        ));
-                    }
+                    && !parsed.specified_options.contains(long)
+                {
+                    candidates.push(CompletionCandidate::long_option(
+                        long.clone(),
+                        option.description.clone(),
+                    ));
+                }
             }
         }
 
@@ -262,16 +263,17 @@ impl CompletionGenerator {
 
                     // Extension filter
                     if let Some(exts) = extensions
-                        && path.is_file() {
-                            if let Some(ext) = path.extension() {
-                                let ext_str = format!(".{}", ext.to_string_lossy());
-                                if !exts.contains(&ext_str) {
-                                    continue;
-                                }
-                            } else {
+                        && path.is_file()
+                    {
+                        if let Some(ext) = path.extension() {
+                            let ext_str = format!(".{}", ext.to_string_lossy());
+                            if !exts.contains(&ext_str) {
                                 continue;
                             }
+                        } else {
+                            continue;
                         }
+                    }
 
                     let full_path = if dir_path == "." {
                         file_name

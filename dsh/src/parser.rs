@@ -30,7 +30,7 @@ pub fn get_string(pair: Pair<Rule>) -> Option<String> {
     }
 }
 
-pub fn get_pos_word(input: &str, pos: usize) -> Result<Option<(Rule, Span)>> {
+pub fn get_pos_word(input: &str, pos: usize) -> Result<Option<(Rule, Span<'_>)>> {
     let pairs = ShellParser::parse(Rule::command, input).map_err(|e| anyhow!(e))?;
 
     for pair in pairs {
@@ -392,9 +392,9 @@ fn expand_command_alias(
     Ok(buf)
 }
 
-pub fn get_words(input: &str, pos: usize) -> Result<Vec<(Rule, Span, bool)>> {
+pub fn get_words(input: &str, pos: usize) -> Result<Vec<(Rule, Span<'_>, bool)>> {
     let pairs = ShellParser::parse(Rule::command, input).map_err(|e| anyhow!(e))?;
-    let mut result: Vec<(Rule, Span, bool)> = Vec::new();
+    let mut result: Vec<(Rule, Span<'_>, bool)> = Vec::new();
     for pair in pairs {
         match pair.as_rule() {
             Rule::command => {

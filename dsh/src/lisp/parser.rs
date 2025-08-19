@@ -226,12 +226,12 @@ fn parse_number(code: &str, index: usize) -> ParseResult {
                         .get(index..back_last_index)
                         .unwrap_or("")
                         .parse::<FloatType>()
-                    {
-                        return Some(Ok(ParsedAndIndex {
-                            parsed: ParseTree::Atom(Value::Float(float)),
-                            index: back_last_index,
-                        }));
-                    }
+                {
+                    return Some(Ok(ParsedAndIndex {
+                        parsed: ParseTree::Atom(Value::Float(float)),
+                        index: back_last_index,
+                    }));
+                }
             } else if code.as_bytes().get(back_last_index - 1) == Some(&b'.') {
                 return Some(Err(ParseError {
                     msg: format!(
@@ -247,12 +247,12 @@ fn parse_number(code: &str, index: usize) -> ParseResult {
                 .get(index..front_last_index)
                 .unwrap_or("")
                 .parse::<IntType>()
-            {
-                return Some(Ok(ParsedAndIndex {
-                    parsed: ParseTree::Atom(Value::Int(int)),
-                    index: front_last_index,
-                }));
-            }
+        {
+            return Some(Ok(ParsedAndIndex {
+                parsed: ParseTree::Atom(Value::Int(int)),
+                index: front_last_index,
+            }));
+        }
     }
 
     None

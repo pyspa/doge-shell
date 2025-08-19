@@ -258,7 +258,7 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
 }
 
 impl SkimItem for Candidate {
-    fn output(&self) -> Cow<str> {
+    fn output(&self) -> Cow<'_, str> {
         match self {
             Candidate::Item(x, _) => Cow::Borrowed(x),
             Candidate::Path(p) => Cow::Borrowed(p),
@@ -271,7 +271,7 @@ impl SkimItem for Candidate {
         }
     }
 
-    fn text(&self) -> Cow<str> {
+    fn text(&self) -> Cow<'_, str> {
         match self {
             Candidate::Item(x, y) => {
                 let desc = format!("{x:<30} {y}");
@@ -676,10 +676,11 @@ pub fn input_completion_with_fuzzy(
 
     // 1. Get command candidates from PATH
     if let Some(word) = get_current_word(input)
-        && is_command_position(input) {
-            let command_candidates = get_command_candidates(&word);
-            all_candidates.extend(command_candidates);
-        }
+        && is_command_position(input)
+    {
+        let command_candidates = get_command_candidates(&word);
+        all_candidates.extend(command_candidates);
+    }
 
     // 2. Get file/directory candidates
     if let Some(word) = get_current_word(input) {
@@ -689,15 +690,16 @@ pub fn input_completion_with_fuzzy(
 
     // 3. Get history candidates
     if let Some(ref history) = repl.shell.cmd_history
-        && let Ok(history) = history.lock() {
-            let history_candidates: Vec<Candidate> = history
-                .sorted(&dsh_frecency::SortMethod::Frecent)
-                .iter()
-                .take(50) // Limit history candidates for performance
-                .map(|item| Candidate::Basic(item.item.clone()))
-                .collect();
-            all_candidates.extend(history_candidates);
-        }
+        && let Ok(history) = history.lock()
+    {
+        let history_candidates: Vec<Candidate> = history
+            .sorted(&dsh_frecency::SortMethod::Frecent)
+            .iter()
+            .take(50) // Limit history candidates for performance
+            .map(|item| Candidate::Basic(item.item.clone()))
+            .collect();
+        all_candidates.extend(history_candidates);
+    }
 
     // 4. Apply fuzzy matching with smart completion
     if !all_candidates.is_empty() {
@@ -789,15 +791,16 @@ fn get_command_candidates(_query: &str) -> Vec<Candidate> {
             if let Ok(entries) = read_dir(path_dir) {
                 for entry in entries.flatten() {
                     if let Ok(file_type) = entry.file_type()
-                        && file_type.is_file() {
-                            let file_name = entry.file_name().to_string_lossy().to_string();
-                            if is_executable(&entry) {
-                                candidates.push(Candidate::Command {
-                                    name: file_name,
-                                    description: "executable".to_string(),
-                                });
-                            }
+                        && file_type.is_file()
+                    {
+                        let file_name = entry.file_name().to_string_lossy().to_string();
+                        if is_executable(&entry) {
+                            candidates.push(Candidate::Command {
+                                name: file_name,
+                                description: "executable".to_string(),
+                            });
                         }
+                    }
                 }
             }
         }
@@ -1183,9 +1186,10 @@ fn get_file_completions_with_filter(
 
                 // Apply prefix filter if provided
                 if let Some(filter) = filter_prefix
-                    && !file_name.starts_with(filter) {
-                        continue;
-                    }
+                    && !file_name.starts_with(filter)
+                {
+                    continue;
+                }
 
                 let candidate = if is_file {
                     Candidate::Item(format!("{prefix}{file_name}"), "(file)".to_string())
@@ -1283,12 +1287,13 @@ Follow the above rules to print the subcommands and option lists for the "{cmd}"
                 Ok(res) => {
                     for res in res.split('\n') {
                         if res.starts_with('"')
-                            && let Some((opt, desc)) = res.split_once(',') {
-                                let opt = unquote(opt).to_string();
-                                let unq_desc = unquote(desc.trim()).to_string();
-                                let item = Candidate::Item(opt, unq_desc);
-                                items.push(item);
-                            }
+                            && let Some((opt, desc)) = res.split_once(',')
+                        {
+                            let opt = unquote(opt).to_string();
+                            let unq_desc = unquote(desc.trim()).to_string();
+                            let item = Candidate::Item(opt, unq_desc);
+                            items.push(item);
+                        }
                     }
 
                     let write_file = File::create(&completion_file_path)?;

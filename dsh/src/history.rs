@@ -350,15 +350,16 @@ impl FrecencyHistory {
     pub fn save(&mut self) -> Result<()> {
         let file_path = self.path.clone().unwrap();
         if let Some(ref store) = self.store
-            && store.changed {
-                let result = write_store(store, &file_path);
-                if result.is_ok() {
-                    // Reset the changed flag after successful save
-                    let store_mut = self.store.as_mut().unwrap();
-                    store_mut.changed = false;
-                }
-                return result;
+            && store.changed
+        {
+            let result = write_store(store, &file_path);
+            if result.is_ok() {
+                // Reset the changed flag after successful save
+                let store_mut = self.store.as_mut().unwrap();
+                store_mut.changed = false;
             }
+            return result;
+        }
         Ok(())
     }
 
@@ -399,12 +400,13 @@ impl FrecencyHistory {
         if let Some(ref store) = self.store {
             for item in store.items.iter() {
                 if let Some((score, index)) = self.matcher.fuzzy_indices(&item.item, pattern)
-                    && score > 25 {
-                        let mut item = item.clone();
-                        item.match_score = score;
-                        item.match_index = index;
-                        results.push(item);
-                    }
+                    && score > 25
+                {
+                    let mut item = item.clone();
+                    item.match_score = score;
+                    item.match_index = index;
+                    results.push(item);
+                }
             }
         }
         results.sort_by(|a, b| a.cmp_match_score(b).reverse());

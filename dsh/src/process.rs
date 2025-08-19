@@ -205,14 +205,15 @@ impl BuiltinProcess {
             }
             // Check if this process matches the PID
             if let Some(self_pid) = self.pid
-                && self_pid == pid {
-                    debug!(
-                        "BuiltinProcess::set_state: updating state for pid {} from {:?} to {:?}",
-                        pid, self.state, state
-                    );
-                    self.state = state;
-                    return true;
-                }
+                && self_pid == pid
+            {
+                debug!(
+                    "BuiltinProcess::set_state: updating state for pid {} from {:?} to {:?}",
+                    pid, self.state, state
+                );
+                self.state = state;
+                return true;
+            }
         }
         false
     }
@@ -330,14 +331,16 @@ impl Process {
 
     pub fn set_state(&mut self, pid: Pid, state: ProcessState) -> bool {
         if let Some(ppid) = self.pid
-            && ppid == pid {
-                self.state = state;
-                return true;
-            }
+            && ppid == pid
+        {
+            self.state = state;
+            return true;
+        }
         if let Some(ref mut next) = self.next
-            && next.set_state_pid(pid, state) {
-                return true;
-            }
+            && next.set_state_pid(pid, state)
+        {
+            return true;
+        }
         false
     }
 
@@ -440,9 +443,10 @@ impl Process {
             Some(self.state)
         } else {
             if let Some(pid) = self.pid
-                && let Some((_waited_pid, state)) = wait_pid_job(pid, true) {
-                    self.state = state;
-                }
+                && let Some((_waited_pid, state)) = wait_pid_job(pid, true)
+            {
+                self.state = state;
+            }
 
             if let Some(next) = self.next.as_mut() {
                 next.update_state();
@@ -1283,29 +1287,31 @@ impl Job {
 
             // Check if consumer terminated and we need to kill remaining processes
             if let Some(process) = &self.process
-                && process.is_pipeline_consumer_terminated() && !process.is_completed() {
-                    debug!("⏳ WAIT: Pipeline consumer terminated, killing remaining processes");
-                    if let Some(pgid) = self.pgid {
-                        debug!(
-                            "⏳ WAIT: Sending SIGTERM to remaining processes in pgid: {}",
-                            pgid
-                        );
-                        match killpg(pgid, Signal::SIGTERM) {
-                            Ok(_) => {
-                                debug!("⏳ WAIT: Successfully sent SIGTERM to pgid: {}", pgid);
-                                // Give processes a moment to terminate gracefully
-                                time::sleep(Duration::from_millis(100)).await;
-                                // Then send SIGKILL if needed
-                                let _ = killpg(pgid, Signal::SIGKILL);
-                                debug!("⏳ WAIT: Sent SIGKILL to pgid: {}", pgid);
-                            }
-                            Err(e) => {
-                                debug!("⏳ WAIT: Failed to send SIGTERM to pgid {}: {}", pgid, e);
-                            }
+                && process.is_pipeline_consumer_terminated()
+                && !process.is_completed()
+            {
+                debug!("⏳ WAIT: Pipeline consumer terminated, killing remaining processes");
+                if let Some(pgid) = self.pgid {
+                    debug!(
+                        "⏳ WAIT: Sending SIGTERM to remaining processes in pgid: {}",
+                        pgid
+                    );
+                    match killpg(pgid, Signal::SIGTERM) {
+                        Ok(_) => {
+                            debug!("⏳ WAIT: Successfully sent SIGTERM to pgid: {}", pgid);
+                            // Give processes a moment to terminate gracefully
+                            time::sleep(Duration::from_millis(100)).await;
+                            // Then send SIGKILL if needed
+                            let _ = killpg(pgid, Signal::SIGKILL);
+                            debug!("⏳ WAIT: Sent SIGKILL to pgid: {}", pgid);
+                        }
+                        Err(e) => {
+                            debug!("⏳ WAIT: Failed to send SIGTERM to pgid {}: {}", pgid, e);
                         }
                     }
-                    break;
                 }
+                break;
+            }
 
             if is_job_stopped(self) {
                 debug!("⏳ WAIT: Job stopped");
@@ -1378,29 +1384,31 @@ impl Job {
 
             // Check if consumer terminated and we need to kill remaining processes
             if let Some(process) = &self.process
-                && process.is_pipeline_consumer_terminated() && !process.is_completed() {
-                    debug!("⏳ WAIT: Pipeline consumer terminated, killing remaining processes");
-                    if let Some(pgid) = self.pgid {
-                        debug!(
-                            "⏳ WAIT: Sending SIGTERM to remaining processes in pgid: {}",
-                            pgid
-                        );
-                        match killpg(pgid, Signal::SIGTERM) {
-                            Ok(_) => {
-                                debug!("⏳ WAIT: Successfully sent SIGTERM to pgid: {}", pgid);
-                                // Give processes a moment to terminate gracefully
-                                std::thread::sleep(Duration::from_millis(100));
-                                // Then send SIGKILL if needed
-                                let _ = killpg(pgid, Signal::SIGKILL);
-                                debug!("⏳ WAIT: Sent SIGKILL to pgid: {}", pgid);
-                            }
-                            Err(e) => {
-                                debug!("⏳ WAIT: Failed to send SIGTERM to pgid {}: {}", pgid, e);
-                            }
+                && process.is_pipeline_consumer_terminated()
+                && !process.is_completed()
+            {
+                debug!("⏳ WAIT: Pipeline consumer terminated, killing remaining processes");
+                if let Some(pgid) = self.pgid {
+                    debug!(
+                        "⏳ WAIT: Sending SIGTERM to remaining processes in pgid: {}",
+                        pgid
+                    );
+                    match killpg(pgid, Signal::SIGTERM) {
+                        Ok(_) => {
+                            debug!("⏳ WAIT: Successfully sent SIGTERM to pgid: {}", pgid);
+                            // Give processes a moment to terminate gracefully
+                            std::thread::sleep(Duration::from_millis(100));
+                            // Then send SIGKILL if needed
+                            let _ = killpg(pgid, Signal::SIGKILL);
+                            debug!("⏳ WAIT: Sent SIGKILL to pgid: {}", pgid);
+                        }
+                        Err(e) => {
+                            debug!("⏳ WAIT: Failed to send SIGTERM to pgid {}: {}", pgid, e);
                         }
                     }
-                    break;
                 }
+                break;
+            }
 
             if is_job_stopped(self) {
                 debug!("⏳ WAIT: Job stopped");
@@ -1458,12 +1466,14 @@ impl Job {
             // show_process_state(&self.process); // debug
 
             if let ProcessState::Completed(code, _) = state
-                && code != 0 && !send_killpg
-                    && let Some(pgid) = self.pgid {
-                        debug!("killpg pgid: {}", pgid);
-                        let _ = killpg(pgid, Signal::SIGKILL);
-                        send_killpg = true;
-                    }
+                && code != 0
+                && !send_killpg
+                && let Some(pgid) = self.pgid
+            {
+                debug!("killpg pgid: {}", pgid);
+                let _ = killpg(pgid, Signal::SIGKILL);
+                send_killpg = true;
+            }
             // break;
             if is_job_completed(self) {
                 debug!("Job completed, breaking from wait_process_no_hang loop");
@@ -1472,26 +1482,28 @@ impl Job {
 
             // Check if consumer terminated and we need to kill remaining processes
             if let Some(process) = &self.process
-                && process.is_pipeline_consumer_terminated() && !process.is_completed() {
-                    debug!("Pipeline consumer terminated, killing remaining processes");
-                    if let Some(pgid) = self.pgid {
-                        debug!("Sending SIGTERM to remaining processes in pgid: {}", pgid);
-                        match killpg(pgid, Signal::SIGTERM) {
-                            Ok(_) => {
-                                debug!("Successfully sent SIGTERM to pgid: {}", pgid);
-                                // Give processes a moment to terminate gracefully
-                                time::sleep(Duration::from_millis(100)).await;
-                                // Then send SIGKILL if needed
-                                let _ = killpg(pgid, Signal::SIGKILL);
-                                debug!("Sent SIGKILL to pgid: {}", pgid);
-                            }
-                            Err(e) => {
-                                debug!("Failed to send SIGTERM to pgid {}: {}", pgid, e);
-                            }
+                && process.is_pipeline_consumer_terminated()
+                && !process.is_completed()
+            {
+                debug!("Pipeline consumer terminated, killing remaining processes");
+                if let Some(pgid) = self.pgid {
+                    debug!("Sending SIGTERM to remaining processes in pgid: {}", pgid);
+                    match killpg(pgid, Signal::SIGTERM) {
+                        Ok(_) => {
+                            debug!("Successfully sent SIGTERM to pgid: {}", pgid);
+                            // Give processes a moment to terminate gracefully
+                            time::sleep(Duration::from_millis(100)).await;
+                            // Then send SIGKILL if needed
+                            let _ = killpg(pgid, Signal::SIGKILL);
+                            debug!("Sent SIGKILL to pgid: {}", pgid);
+                        }
+                        Err(e) => {
+                            debug!("Failed to send SIGTERM to pgid {}: {}", pgid, e);
                         }
                     }
-                    break;
                 }
+                break;
+            }
 
             if is_job_stopped(self) {
                 println!("\rdsh: job {} '{}' has stopped", self.job_id, self.cmd);
@@ -1546,12 +1558,14 @@ impl Job {
             debug!("fin wait: pid:{:?}", pid);
 
             if let ProcessState::Completed(code, _) = state
-                && code != 0 && !send_killpg
-                    && let Some(pgid) = self.pgid {
-                        debug!("killpg pgid: {}", pgid);
-                        let _ = killpg(pgid, Signal::SIGKILL);
-                        send_killpg = true;
-                    }
+                && code != 0
+                && !send_killpg
+                && let Some(pgid) = self.pgid
+            {
+                debug!("killpg pgid: {}", pgid);
+                let _ = killpg(pgid, Signal::SIGKILL);
+                send_killpg = true;
+            }
 
             if is_job_completed(self) {
                 debug!("Job completed, breaking from wait_process_no_hang_sync loop");
@@ -1560,26 +1574,28 @@ impl Job {
 
             // Check if consumer terminated and we need to kill remaining processes
             if let Some(process) = &self.process
-                && process.is_pipeline_consumer_terminated() && !process.is_completed() {
-                    debug!("Pipeline consumer terminated, killing remaining processes");
-                    if let Some(pgid) = self.pgid {
-                        debug!("Sending SIGTERM to remaining processes in pgid: {}", pgid);
-                        match killpg(pgid, Signal::SIGTERM) {
-                            Ok(_) => {
-                                debug!("Successfully sent SIGTERM to pgid: {}", pgid);
-                                // Give processes a moment to terminate gracefully
-                                std::thread::sleep(Duration::from_millis(100));
-                                // Then send SIGKILL if needed
-                                let _ = killpg(pgid, Signal::SIGKILL);
-                                debug!("Sent SIGKILL to pgid: {}", pgid);
-                            }
-                            Err(e) => {
-                                debug!("Failed to send SIGTERM to pgid {}: {}", pgid, e);
-                            }
+                && process.is_pipeline_consumer_terminated()
+                && !process.is_completed()
+            {
+                debug!("Pipeline consumer terminated, killing remaining processes");
+                if let Some(pgid) = self.pgid {
+                    debug!("Sending SIGTERM to remaining processes in pgid: {}", pgid);
+                    match killpg(pgid, Signal::SIGTERM) {
+                        Ok(_) => {
+                            debug!("Successfully sent SIGTERM to pgid: {}", pgid);
+                            // Give processes a moment to terminate gracefully
+                            std::thread::sleep(Duration::from_millis(100));
+                            // Then send SIGKILL if needed
+                            let _ = killpg(pgid, Signal::SIGKILL);
+                            debug!("Sent SIGKILL to pgid: {}", pgid);
+                        }
+                        Err(e) => {
+                            debug!("Failed to send SIGTERM to pgid {}: {}", pgid, e);
                         }
                     }
-                    break;
                 }
+                break;
+            }
 
             if is_job_stopped(self) {
                 println!("\rdsh: job {} '{}' has stopped", self.job_id, self.cmd);
@@ -1629,54 +1645,52 @@ impl Job {
         let old_state = self.state;
 
         if let Some(process) = self.process.as_mut()
-            && let Some(state) = process.update_state() {
-                self.state = state;
+            && let Some(state) = process.update_state()
+        {
+            self.state = state;
 
-                // Log state changes with detailed information
-                if old_state != self.state {
-                    debug!(
-                        "JOB_STATE_CHANGE: Job {} state changed: {:?} -> {:?} (pid: {:?}, pgid: {:?})",
-                        self.job_id, old_state, self.state, self.pid, self.pgid
-                    );
+            // Log state changes with detailed information
+            if old_state != self.state {
+                debug!(
+                    "JOB_STATE_CHANGE: Job {} state changed: {:?} -> {:?} (pid: {:?}, pgid: {:?})",
+                    self.job_id, old_state, self.state, self.pid, self.pgid
+                );
 
-                    // Log specific state transitions
-                    match (&old_state, &self.state) {
-                        (ProcessState::Running, ProcessState::Stopped(pid, signal)) => {
-                            debug!(
-                                "JOB_STOPPED: Job {} stopped by signal {:?} (pid: {:?})",
-                                self.job_id, signal, pid
-                            );
-                        }
-                        (ProcessState::Stopped(_, _), ProcessState::Running) => {
-                            debug!(
-                                "JOB_RESUMED: Job {} resumed from stopped state",
-                                self.job_id
-                            );
-                        }
-                        (ProcessState::Running, ProcessState::Completed(exit_code, signal)) => {
-                            debug!(
-                                "JOB_COMPLETED: Job {} completed with exit_code: {}, signal: {:?}",
-                                self.job_id, exit_code, signal
-                            );
-                        }
-                        (
-                            ProcessState::Stopped(_, _),
-                            ProcessState::Completed(exit_code, signal),
-                        ) => {
-                            debug!(
-                                "JOB_COMPLETED_FROM_STOP: Job {} completed from stopped state with exit_code: {}, signal: {:?}",
-                                self.job_id, exit_code, signal
-                            );
-                        }
-                        _ => {
-                            debug!(
-                                "JOB_STATE_OTHER: Job {} other state transition: {:?} -> {:?}",
-                                self.job_id, old_state, self.state
-                            );
-                        }
+                // Log specific state transitions
+                match (&old_state, &self.state) {
+                    (ProcessState::Running, ProcessState::Stopped(pid, signal)) => {
+                        debug!(
+                            "JOB_STOPPED: Job {} stopped by signal {:?} (pid: {:?})",
+                            self.job_id, signal, pid
+                        );
+                    }
+                    (ProcessState::Stopped(_, _), ProcessState::Running) => {
+                        debug!(
+                            "JOB_RESUMED: Job {} resumed from stopped state",
+                            self.job_id
+                        );
+                    }
+                    (ProcessState::Running, ProcessState::Completed(exit_code, signal)) => {
+                        debug!(
+                            "JOB_COMPLETED: Job {} completed with exit_code: {}, signal: {:?}",
+                            self.job_id, exit_code, signal
+                        );
+                    }
+                    (ProcessState::Stopped(_, _), ProcessState::Completed(exit_code, signal)) => {
+                        debug!(
+                            "JOB_COMPLETED_FROM_STOP: Job {} completed from stopped state with exit_code: {}, signal: {:?}",
+                            self.job_id, exit_code, signal
+                        );
+                    }
+                    _ => {
+                        debug!(
+                            "JOB_STATE_OTHER: Job {} other state transition: {:?} -> {:?}",
+                            self.job_id, old_state, self.state
+                        );
                     }
                 }
             }
+        }
 
         let is_completed = is_job_completed(self);
         debug!(

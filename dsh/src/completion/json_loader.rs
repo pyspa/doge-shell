@@ -371,14 +371,16 @@ impl JsonCompletionLoader {
         }
 
         if let Some(ref short) = option.short
-            && !SHORT_OPTION_VALIDATION_REGEX.is_match(short) {
-                anyhow::bail!("Invalid short option format '{}' in '{}'", short, context);
-            }
+            && !SHORT_OPTION_VALIDATION_REGEX.is_match(short)
+        {
+            anyhow::bail!("Invalid short option format '{}' in '{}'", short, context);
+        }
 
         if let Some(ref long) = option.long
-            && !LONG_OPTION_VALIDATION_REGEX.is_match(long) {
-                anyhow::bail!("Invalid long option format '{}' in '{}'", long, context);
-            }
+            && !LONG_OPTION_VALIDATION_REGEX.is_match(long)
+        {
+            anyhow::bail!("Invalid long option format '{}' in '{}'", long, context);
+        }
 
         Ok(())
     }
@@ -469,10 +471,11 @@ impl JsonCompletionLoader {
                 let path = entry.path();
 
                 if path.extension().and_then(|s| s.to_str()) == Some("json")
-                    && let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        debug!("Found filesystem completion for: {}", stem);
-                        commands.insert(stem.to_string());
-                    }
+                    && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                {
+                    debug!("Found filesystem completion for: {}", stem);
+                    commands.insert(stem.to_string());
+                }
             }
         }
 

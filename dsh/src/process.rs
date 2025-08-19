@@ -204,8 +204,8 @@ impl BuiltinProcess {
                 return true;
             }
             // Check if this process matches the PID
-            if let Some(self_pid) = self.pid {
-                if self_pid == pid {
+            if let Some(self_pid) = self.pid
+                && self_pid == pid {
                     debug!(
                         "BuiltinProcess::set_state: updating state for pid {} from {:?} to {:?}",
                         pid, self.state, state
@@ -213,7 +213,6 @@ impl BuiltinProcess {
                     self.state = state;
                     return true;
                 }
-            }
         }
         false
     }
@@ -257,101 +256,6 @@ impl BuiltinProcess {
             }
         }
         Ok(())
-    }
-
-    fn update_state(&mut self) -> Option<ProcessState> {
-        if let Some(next) = self.next.as_mut() {
-            next.update_state()
-        } else {
-            None
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct WasmProcess {
-    name: String,
-    argv: Vec<String>,
-    state: ProcessState, // completed, stopped,
-    pub next: Option<Box<JobProcess>>,
-    pub stdin: RawFd,
-    pub stdout: RawFd,
-    pub stderr: RawFd,
-}
-
-impl PartialEq for WasmProcess {
-    fn eq(&self, other: &Self) -> bool {
-        self.argv == other.argv
-    }
-}
-
-impl Eq for WasmProcess {}
-
-impl std::fmt::Debug for WasmProcess {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
-        f.debug_struct("WASMProcess")
-            .field("name", &self.name)
-            .field("argv", &self.argv)
-            .field("state", &self.state)
-            .field("next", &self.next)
-            .field("stdin", &self.stdin)
-            .field("stdout", &self.stdout)
-            .field("stderr", &self.stderr)
-            .finish()
-    }
-}
-
-impl WasmProcess {
-    pub fn new(name: String, argv: Vec<String>) -> Self {
-        WasmProcess {
-            name,
-            argv,
-            state: ProcessState::Running,
-            next: None,
-            stdin: STDIN_FILENO,
-            stdout: STDOUT_FILENO,
-            stderr: STDERR_FILENO,
-        }
-    }
-
-    pub fn set_state(&mut self, pid: Pid, state: ProcessState) -> bool {
-        if let Some(ref mut next) = self.next {
-            if next.set_state_pid(pid, state) {
-                return true;
-            }
-        }
-        false
-    }
-
-    pub fn link(&mut self, process: JobProcess) {
-        match self.next {
-            Some(ref mut p) => {
-                p.link(process);
-            }
-            None => {
-                self.next = Some(Box::new(process));
-            }
-        }
-    }
-
-    pub fn launch(&mut self, _ctx: &mut Context, shell: &mut Shell) -> Result<()> {
-        debug!(
-            "launch: wasm process infile:{:?} outfile:{:?}",
-            self.stdin, self.stdout
-        );
-
-        match shell.run_wasm(self.name.as_str(), self.argv.to_vec()) {
-            Ok(_) => {
-                debug!("WASM process {} completed successfully", self.name);
-                self.state = ProcessState::Completed(0, None);
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!("WASM process {} failed: {}", self.name, e);
-                self.state = ProcessState::Completed(1, None);
-                Err(e)
-            }
-        }
     }
 
     fn update_state(&mut self) -> Option<ProcessState> {
@@ -425,17 +329,15 @@ impl Process {
     }
 
     pub fn set_state(&mut self, pid: Pid, state: ProcessState) -> bool {
-        if let Some(ppid) = self.pid {
-            if ppid == pid {
+        if let Some(ppid) = self.pid
+            && ppid == pid {
                 self.state = state;
                 return true;
             }
-        }
-        if let Some(ref mut next) = self.next {
-            if next.set_state_pid(pid, state) {
+        if let Some(ref mut next) = self.next
+            && next.set_state_pid(pid, state) {
                 return true;
             }
-        }
         false
     }
 
@@ -537,11 +439,10 @@ impl Process {
         if let ProcessState::Completed(_, _) = self.state {
             Some(self.state)
         } else {
-            if let Some(pid) = self.pid {
-                if let Some((_waited_pid, state)) = wait_pid_job(pid, true) {
+            if let Some(pid) = self.pid
+                && let Some((_waited_pid, state)) = wait_pid_job(pid, true) {
                     self.state = state;
                 }
-            }
 
             if let Some(next) = self.next.as_mut() {
                 next.update_state();
@@ -555,7 +456,6 @@ impl Process {
 #[derive(Clone, PartialEq, Eq)]
 pub enum JobProcess {
     Builtin(BuiltinProcess),
-    Wasm(WasmProcess),
     Command(Process),
 }
 
@@ -565,11 +465,6 @@ impl std::fmt::Debug for JobProcess {
             JobProcess::Builtin(jprocess) => f
                 .debug_struct("JobProcess::Builtin")
                 .field("cmd", &jprocess.argv)
-                .field("has_next", &jprocess.next.is_some())
-                .finish(),
-            JobProcess::Wasm(jprocess) => f
-                .debug_struct("JobProcess::WASM")
-                .field("wasm", jprocess)
                 .field("has_next", &jprocess.next.is_some())
                 .finish(),
             JobProcess::Command(jprocess) => f
@@ -591,7 +486,6 @@ impl JobProcess {
     pub fn link(&mut self, process: JobProcess) {
         match self {
             JobProcess::Builtin(jprocess) => jprocess.link(process),
-            JobProcess::Wasm(jprocess) => jprocess.link(process),
             JobProcess::Command(jprocess) => jprocess.link(process),
         }
     }
@@ -599,7 +493,6 @@ impl JobProcess {
     pub fn next(&self) -> Option<Box<JobProcess>> {
         match self {
             JobProcess::Builtin(jprocess) => jprocess.next.as_ref().cloned(),
-            JobProcess::Wasm(jprocess) => jprocess.next.as_ref().cloned(),
             JobProcess::Command(jprocess) => jprocess.next.as_ref().cloned(),
         }
     }
@@ -608,7 +501,6 @@ impl JobProcess {
     pub fn mut_next(&self) -> Option<Box<JobProcess>> {
         match self {
             JobProcess::Builtin(jprocess) => jprocess.next.as_ref().cloned(),
-            JobProcess::Wasm(jprocess) => jprocess.next.as_ref().cloned(),
             JobProcess::Command(jprocess) => jprocess.next.as_ref().cloned(),
         }
     }
@@ -616,7 +508,6 @@ impl JobProcess {
     pub fn take_next(&mut self) -> Option<Box<JobProcess>> {
         match self {
             JobProcess::Builtin(jprocess) => jprocess.next.take(),
-            JobProcess::Wasm(jprocess) => jprocess.next.take(),
             JobProcess::Command(jprocess) => jprocess.next.take(),
         }
     }
@@ -624,11 +515,6 @@ impl JobProcess {
     pub fn set_io(&mut self, stdin: RawFd, stdout: RawFd, stderr: RawFd) {
         match self {
             JobProcess::Builtin(jprocess) => {
-                jprocess.stdin = stdin;
-                jprocess.stdout = stdout;
-                jprocess.stderr = stderr;
-            }
-            JobProcess::Wasm(jprocess) => {
                 jprocess.stdin = stdin;
                 jprocess.stdout = stdout;
                 jprocess.stderr = stderr;
@@ -644,7 +530,6 @@ impl JobProcess {
     pub fn get_io(&self) -> (RawFd, RawFd, RawFd) {
         match self {
             JobProcess::Builtin(jprocess) => (jprocess.stdin, jprocess.stdout, jprocess.stderr),
-            JobProcess::Wasm(jprocess) => (jprocess.stdin, jprocess.stdout, jprocess.stderr),
             JobProcess::Command(jprocess) => (jprocess.stdin, jprocess.stdout, jprocess.stderr),
         }
     }
@@ -652,9 +537,6 @@ impl JobProcess {
     pub fn set_pid(&mut self, pid: Option<Pid>) {
         match self {
             JobProcess::Builtin(_) => {
-                // noop
-            }
-            JobProcess::Wasm(_) => {
                 // noop
             }
             JobProcess::Command(process) => {
@@ -670,10 +552,6 @@ impl JobProcess {
                 // noop
                 None
             }
-            JobProcess::Wasm(_) => {
-                // noop
-                None
-            }
             JobProcess::Command(process) => process.pid,
         }
     }
@@ -682,7 +560,6 @@ impl JobProcess {
     pub fn set_state(&mut self, state: ProcessState) {
         match self {
             JobProcess::Builtin(p) => p.state = state,
-            JobProcess::Wasm(p) => p.state = state,
             JobProcess::Command(p) => p.state = state,
         }
     }
@@ -697,10 +574,6 @@ impl JobProcess {
                 debug!("🔄 STATE: Setting state for builtin process: {}", p.name);
                 p.set_state(pid, state)
             }
-            JobProcess::Wasm(p) => {
-                debug!("🔄 STATE: Setting state for wasm process: {}", p.name);
-                p.set_state(pid, state)
-            }
             JobProcess::Command(p) => {
                 debug!("🔄 STATE: Setting state for command process: {}", p.cmd);
                 p.set_state(pid, state)
@@ -713,7 +586,6 @@ impl JobProcess {
     pub fn get_state(&self) -> ProcessState {
         match self {
             JobProcess::Builtin(p) => p.state,
-            JobProcess::Wasm(p) => p.state,
             JobProcess::Command(p) => p.state,
         }
     }
@@ -782,7 +654,6 @@ impl JobProcess {
     pub fn get_cap_out(&self) -> (Option<RawFd>, Option<RawFd>) {
         match self {
             JobProcess::Builtin(_p) => (None, None),
-            JobProcess::Wasm(_p) => (None, None),
             JobProcess::Command(p) => (p.cap_stdout, p.cap_stderr),
         }
     }
@@ -790,7 +661,6 @@ impl JobProcess {
     pub fn get_cmd(&self) -> &str {
         match self {
             JobProcess::Builtin(p) => &p.name,
-            JobProcess::Wasm(p) => &p.name,
             JobProcess::Command(p) => &p.cmd,
         }
     }
@@ -837,15 +707,6 @@ impl JobProcess {
                     child_pid
                 }
             }
-            JobProcess::Wasm(process) => {
-                if ctx.foreground {
-                    process.launch(ctx, shell)?;
-                    current_pid
-                } else {
-                    // Fork for background execution
-                    fork_wasm_process(ctx, process, shell)?
-                }
-            }
             JobProcess::Command(process) => {
                 ctx.process_count += 1;
                 // fork
@@ -866,7 +727,6 @@ impl JobProcess {
     pub fn kill(&self) -> Result<()> {
         match self {
             JobProcess::Builtin(_) => Ok(()),
-            JobProcess::Wasm(_) => Ok(()),
             JobProcess::Command(process) => {
                 if let Some(pid) = process.pid {
                     send_signal(pid, Signal::SIGKILL)
@@ -881,7 +741,6 @@ impl JobProcess {
     pub fn cont(&self) -> Result<()> {
         match self {
             JobProcess::Builtin(_) => Ok(()),
-            JobProcess::Wasm(_) => Ok(()),
             JobProcess::Command(process) => {
                 if let Some(pid) = process.pid {
                     debug!("send signal SIGCONT pid:{:?}", pid);
@@ -896,7 +755,6 @@ impl JobProcess {
     fn update_state(&mut self) -> Option<ProcessState> {
         match self {
             JobProcess::Builtin(process) => process.update_state(),
-            JobProcess::Wasm(process) => process.update_state(),
             JobProcess::Command(process) => process.update_state(),
         }
     }
@@ -1424,8 +1282,8 @@ impl Job {
             }
 
             // Check if consumer terminated and we need to kill remaining processes
-            if let Some(process) = &self.process {
-                if process.is_pipeline_consumer_terminated() && !process.is_completed() {
+            if let Some(process) = &self.process
+                && process.is_pipeline_consumer_terminated() && !process.is_completed() {
                     debug!("⏳ WAIT: Pipeline consumer terminated, killing remaining processes");
                     if let Some(pgid) = self.pgid {
                         debug!(
@@ -1448,7 +1306,6 @@ impl Job {
                     }
                     break;
                 }
-            }
 
             if is_job_stopped(self) {
                 debug!("⏳ WAIT: Job stopped");
@@ -1520,8 +1377,8 @@ impl Job {
             }
 
             // Check if consumer terminated and we need to kill remaining processes
-            if let Some(process) = &self.process {
-                if process.is_pipeline_consumer_terminated() && !process.is_completed() {
+            if let Some(process) = &self.process
+                && process.is_pipeline_consumer_terminated() && !process.is_completed() {
                     debug!("⏳ WAIT: Pipeline consumer terminated, killing remaining processes");
                     if let Some(pgid) = self.pgid {
                         debug!(
@@ -1544,7 +1401,6 @@ impl Job {
                     }
                     break;
                 }
-            }
 
             if is_job_stopped(self) {
                 debug!("⏳ WAIT: Job stopped");
@@ -1601,15 +1457,13 @@ impl Job {
 
             // show_process_state(&self.process); // debug
 
-            if let ProcessState::Completed(code, _) = state {
-                if code != 0 && !send_killpg {
-                    if let Some(pgid) = self.pgid {
+            if let ProcessState::Completed(code, _) = state
+                && code != 0 && !send_killpg
+                    && let Some(pgid) = self.pgid {
                         debug!("killpg pgid: {}", pgid);
                         let _ = killpg(pgid, Signal::SIGKILL);
                         send_killpg = true;
                     }
-                }
-            }
             // break;
             if is_job_completed(self) {
                 debug!("Job completed, breaking from wait_process_no_hang loop");
@@ -1617,8 +1471,8 @@ impl Job {
             }
 
             // Check if consumer terminated and we need to kill remaining processes
-            if let Some(process) = &self.process {
-                if process.is_pipeline_consumer_terminated() && !process.is_completed() {
+            if let Some(process) = &self.process
+                && process.is_pipeline_consumer_terminated() && !process.is_completed() {
                     debug!("Pipeline consumer terminated, killing remaining processes");
                     if let Some(pgid) = self.pgid {
                         debug!("Sending SIGTERM to remaining processes in pgid: {}", pgid);
@@ -1638,7 +1492,6 @@ impl Job {
                     }
                     break;
                 }
-            }
 
             if is_job_stopped(self) {
                 println!("\rdsh: job {} '{}' has stopped", self.job_id, self.cmd);
@@ -1692,15 +1545,13 @@ impl Job {
 
             debug!("fin wait: pid:{:?}", pid);
 
-            if let ProcessState::Completed(code, _) = state {
-                if code != 0 && !send_killpg {
-                    if let Some(pgid) = self.pgid {
+            if let ProcessState::Completed(code, _) = state
+                && code != 0 && !send_killpg
+                    && let Some(pgid) = self.pgid {
                         debug!("killpg pgid: {}", pgid);
                         let _ = killpg(pgid, Signal::SIGKILL);
                         send_killpg = true;
                     }
-                }
-            }
 
             if is_job_completed(self) {
                 debug!("Job completed, breaking from wait_process_no_hang_sync loop");
@@ -1708,8 +1559,8 @@ impl Job {
             }
 
             // Check if consumer terminated and we need to kill remaining processes
-            if let Some(process) = &self.process {
-                if process.is_pipeline_consumer_terminated() && !process.is_completed() {
+            if let Some(process) = &self.process
+                && process.is_pipeline_consumer_terminated() && !process.is_completed() {
                     debug!("Pipeline consumer terminated, killing remaining processes");
                     if let Some(pgid) = self.pgid {
                         debug!("Sending SIGTERM to remaining processes in pgid: {}", pgid);
@@ -1729,7 +1580,6 @@ impl Job {
                     }
                     break;
                 }
-            }
 
             if is_job_stopped(self) {
                 println!("\rdsh: job {} '{}' has stopped", self.job_id, self.cmd);
@@ -1778,8 +1628,8 @@ impl Job {
     pub fn update_status(&mut self) -> bool {
         let old_state = self.state;
 
-        if let Some(process) = self.process.as_mut() {
-            if let Some(state) = process.update_state() {
+        if let Some(process) = self.process.as_mut()
+            && let Some(state) = process.update_state() {
                 self.state = state;
 
                 // Log state changes with detailed information
@@ -1827,7 +1677,6 @@ impl Job {
                     }
                 }
             }
-        }
 
         let is_completed = is_job_completed(self);
         debug!(
@@ -2045,53 +1894,6 @@ fn fork_builtin_process(
             }
 
             // Builtin commands complete immediately, so exit with success
-            std::process::exit(0);
-        }
-    }
-}
-
-fn fork_wasm_process(
-    ctx: &mut Context,
-    process: &mut WasmProcess,
-    shell: &mut Shell,
-) -> Result<Pid> {
-    debug!("fork_wasm_process for background execution");
-
-    debug!("🍴 WASM: About to fork wasm process: {}", process.name);
-    let pid = unsafe { fork().context("failed fork for wasm")? };
-
-    match pid {
-        ForkResult::Parent { child } => {
-            debug!(
-                "🍴 WASM: Parent process - forked wasm {} with child pid {}",
-                process.name, child
-            );
-            Ok(child)
-        }
-        ForkResult::Child => {
-            // Child process: execute wasm command
-            let pid = getpid();
-            debug!(
-                "🍴 WASM: Child process - executing wasm command {} with pid {}",
-                process.name, pid
-            );
-            debug!(
-                "🍴 WASM: Child process I/O - stdin={}, stdout={}, stderr={}",
-                process.stdin, process.stdout, process.stderr
-            );
-
-            // Set process group for job control
-            if let Err(e) = setpgid(pid, pid) {
-                error!("Failed to setpgid for wasm: {}", e);
-            }
-
-            // Execute the wasm command
-            if let Err(e) = process.launch(ctx, shell) {
-                error!("Failed to launch wasm process: {}", e);
-                std::process::exit(1);
-            }
-
-            // Wasm commands complete immediately, so exit with success
             std::process::exit(0);
         }
     }

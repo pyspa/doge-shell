@@ -310,12 +310,11 @@ async fn execute_lisp(shell: &mut Shell, _ctx: &mut Context, lisp_script: &str) 
         Ok(value) => {
             debug!("Lisp script executed successfully: {:?}", value);
             // Print the result if it's not NIL
-            if value != Value::NIL {
-                if let Err(err) = writeln!(std::io::stdout(), "{value}") {
+            if value != Value::NIL
+                && let Err(err) = writeln!(std::io::stdout(), "{value}") {
                     eprintln!("Error writing to stdout: {err}");
                     return ExitCode::FAILURE;
                 }
-            }
             ExitCode::SUCCESS
         }
         Err(err) => {

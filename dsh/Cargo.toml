@@ -22,7 +22,6 @@ f32 = []
 
 
 [dependencies]
-dsh-wasm = { path = "../dsh-wasm" }
 dsh-types = { path = "../dsh-types" }
 dsh-frecency = { path = "../dsh-frecency" }
 dsh-builtin = { path = "../dsh-builtin" }

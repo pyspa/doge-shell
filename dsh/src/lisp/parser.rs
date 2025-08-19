@@ -221,8 +221,8 @@ fn parse_number(code: &str, index: usize) -> ParseResult {
             let back_last_index = back_last_index + 1;
 
             if back_last_index >= front_last_index + 2 {
-                if next_char_is_break(code, back_last_index) {
-                    if let Ok(float) = code
+                if next_char_is_break(code, back_last_index)
+                    && let Ok(float) = code
                         .get(index..back_last_index)
                         .unwrap_or("")
                         .parse::<FloatType>()
@@ -232,7 +232,6 @@ fn parse_number(code: &str, index: usize) -> ParseResult {
                             index: back_last_index,
                         }));
                     }
-                }
             } else if code.as_bytes().get(back_last_index - 1) == Some(&b'.') {
                 return Some(Err(ParseError {
                     msg: format!(
@@ -243,8 +242,8 @@ fn parse_number(code: &str, index: usize) -> ParseResult {
             }
         }
 
-        if next_char_is_break(code, front_last_index) {
-            if let Ok(int) = code
+        if next_char_is_break(code, front_last_index)
+            && let Ok(int) = code
                 .get(index..front_last_index)
                 .unwrap_or("")
                 .parse::<IntType>()
@@ -254,7 +253,6 @@ fn parse_number(code: &str, index: usize) -> ParseResult {
                     index: front_last_index,
                 }));
             }
-        }
     }
 
     None

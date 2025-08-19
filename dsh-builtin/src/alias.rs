@@ -152,11 +152,10 @@ fn is_valid_alias_name(name: &str) -> bool {
 
     // First character must be alphabetic or underscore
     let mut chars = name.chars();
-    if let Some(first) = chars.next() {
-        if !first.is_alphabetic() && first != '_' {
+    if let Some(first) = chars.next()
+        && !first.is_alphabetic() && first != '_' {
             return false;
         }
-    }
 
     // Remaining characters must be alphanumeric, underscore, or hyphen
     for c in chars {

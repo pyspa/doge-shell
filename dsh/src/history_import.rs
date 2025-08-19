@@ -131,15 +131,14 @@ impl HistoryImporter for FishHistoryImporter {
         }
 
         // 保存後に履歴ファイルのサイズを確認
-        if let Some(ref path) = history.path {
-            if let Ok(metadata) = std::fs::metadata(path) {
+        if let Some(ref path) = history.path
+            && let Ok(metadata) = std::fs::metadata(path) {
                 tracing::debug!(
                     "History file saved: {} (size: {} bytes)",
                     path.display(),
                     metadata.len()
                 );
             }
-        }
 
         debug!("Imported {} commands from fish history", count);
         tracing::info!("Successfully imported {count} commands from fish history");

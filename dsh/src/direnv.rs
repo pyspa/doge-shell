@@ -104,14 +104,13 @@ impl DirEnvironment {
                     self.entries.push(data);
                 }
             }
-        } else if envrc_file.exists() {
-            if let Some(file) = envrc_file.to_str() {
+        } else if envrc_file.exists()
+            && let Some(file) = envrc_file.to_str() {
                 let cfgs = read_envrc_config_file(file)?;
                 for data in cfgs {
                     self.entries.push(data);
                 }
             }
-        }
         Ok(())
     }
 }

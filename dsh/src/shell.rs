@@ -10,7 +10,6 @@ use anyhow::Context as _;
 use anyhow::{Result, anyhow, bail};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dsh_types::{Context, ExitStatus};
-use dsh_wasm::WasmEngine;
 use libc::{STDIN_FILENO, c_int};
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 use nix::sys::termios::tcgetattr;
@@ -73,7 +72,6 @@ pub struct Shell {
     pub path_history: Option<Arc<Mutex<FrecencyHistory>>>,
     pub(crate) wait_jobs: Vec<Job>,
     pub lisp_engine: Rc<RefCell<lisp::LispEngine>>,
-    pub wasm_engine: WasmEngine,
     next_job_id: usize,
 }
 
@@ -134,7 +132,6 @@ impl Shell {
             }
         };
 
-        let wasm_engine = WasmEngine::new(APP_NAME);
         let lisp_engine = lisp::LispEngine::new(Arc::clone(&environment));
         if let Err(err) = lisp_engine.borrow().run_config_lisp() {
             eprintln!("Failed to load init lisp: {err:#}");
@@ -149,7 +146,6 @@ impl Shell {
             path_history,
             wait_jobs: Vec::new(),
             lisp_engine,
-            wasm_engine,
             next_job_id: 1,
         }
     }
@@ -283,13 +279,12 @@ impl Shell {
     #[allow(dead_code)]
     pub fn terminate_background_jobs(&mut self) -> Result<()> {
         for job in &mut self.wait_jobs {
-            if !job.foreground {
-                if let Some(pid) = job.pid {
+            if !job.foreground
+                && let Some(pid) = job.pid {
                     debug!("Terminating background job {} (pid: {})", job.job_id, pid);
                     // Send SIGTERM first, then SIGKILL if needed
                     let _ = nix::sys::signal::killpg(pid, Signal::SIGTERM);
                 }
-            }
         }
         Ok(())
     }
@@ -312,8 +307,8 @@ impl Shell {
         input: String,
         force_background: bool,
     ) -> Result<ExitCode> {
-        if ctx.save_history {
-            if let Some(ref mut history) = self.cmd_history {
+        if ctx.save_history
+            && let Some(ref mut history) = self.cmd_history {
                 match history.lock() {
                     Ok(mut history) => {
                         history.add(&input);
@@ -324,7 +319,6 @@ impl Shell {
                     }
                 }
             }
-        }
         // TODO refactor context
         // let tmode = tcgetattr(0).expect("failed tcgetattr");
 
@@ -549,8 +543,8 @@ impl Shell {
                 match pair.as_rule() {
                     Rule::command => self.parse_jobs(ctx, pair, &mut jobs)?,
                     Rule::command_list_sep => {
-                        if let Some(sep) = pair.into_inner().next() {
-                            if let Some(ref mut last) = jobs.last_mut() {
+                        if let Some(sep) = pair.into_inner().next()
+                            && let Some(ref mut last) = jobs.last_mut() {
                                 debug!("last job {:?}", &last.cmd);
                                 match sep.as_rule() {
                                     Rule::and_op => {
@@ -562,7 +556,6 @@ impl Shell {
                                     _ => {}
                                 }
                             }
-                        }
                     }
                     _ => {
                         debug!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
@@ -690,9 +683,6 @@ impl Shell {
         if let Some(cmd_fn) = dsh_builtin::get_command(cmd) {
             let builtin = process::BuiltinProcess::new(cmd.to_string(), cmd_fn, argv);
             current_job.set_process(JobProcess::Builtin(builtin));
-        } else if self.wasm_engine.modules.contains_key(cmd) {
-            let wasm = process::WasmProcess::new(cmd.to_string(), argv);
-            current_job.set_process(JobProcess::Wasm(wasm));
         } else if self.lisp_engine.borrow().is_export(cmd) {
             let cmd_fn = dsh_builtin::lisp::run;
             let builtin = process::BuiltinProcess::new(cmd.to_string(), cmd_fn, argv);
@@ -808,11 +798,6 @@ impl Shell {
             }
         }
         Ok(())
-    }
-
-    pub fn run_wasm(&mut self, name: &str, args: Vec<String>) -> Result<()> {
-        // TODO support ctx
-        self.wasm_engine.call(name, args.as_ref())
     }
 
     pub fn exit(&mut self) {

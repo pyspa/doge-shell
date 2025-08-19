@@ -176,12 +176,11 @@ impl Prompt {
         let git_root = self.current_git_root.as_ref()?;
 
         // Check if cache is valid
-        if let Some(ref cache) = self.git_status_cache {
-            if cache.is_valid(git_root) {
+        if let Some(ref cache) = self.git_status_cache
+            && cache.is_valid(git_root) {
                 debug!("Using cached git status for {:?}", git_root);
                 return Some(cache.status.clone());
             }
-        }
 
         // Get new status if cache is invalid or doesn't exist
         debug!("Fetching fresh git status for {:?}", git_root);
@@ -309,13 +308,11 @@ fn get_git_root() -> Option<String> {
         .arg("--show-toplevel")
         .output();
 
-    if let Ok(output) = result {
-        if output.status.success() {
-            if let Ok(out) = String::from_utf8(output.stdout) {
+    if let Ok(output) = result
+        && output.status.success()
+            && let Ok(out) = String::from_utf8(output.stdout) {
                 return Some(out.trim().to_string());
             }
-        }
-    }
     None
 }
 
@@ -360,20 +357,18 @@ fn get_git_status() -> Option<GitStatus> {
                             debug!("get_git_status: Found branch: {}", status.branch);
                         }
                     } else if buf.starts_with("# branch.ab") {
-                        if let Some(val) = splited.get(2) {
-                            if *val != "+0" {
+                        if let Some(val) = splited.get(2)
+                            && *val != "+0" {
                                 branch_status = BRANCH_AHEAD.to_string();
                             }
-                        }
-                        if let Some(val) = splited.get(3) {
-                            if *val != "-0" {
+                        if let Some(val) = splited.get(3)
+                            && *val != "-0" {
                                 if branch_status == BRANCH_AHEAD {
                                     branch_status = BRANCH_DIVERGED.to_string();
                                 } else {
                                     branch_status = BRANCH_BEHIND.to_string();
                                 }
                             }
-                        }
                     }
                 } else if buf.starts_with('1') {
                     modified = true;

@@ -6,6 +6,7 @@
 *.org
 .env
 .envrc
+.serena*
 .aider*
 .kiro*
 .crush*

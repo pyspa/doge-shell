@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use serde_json::{Value, json};
 use shell_words::split;
 use std::env;
@@ -6,6 +7,8 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::Command;
 use xdg::BaseDirectories;
+
+use crate::ShellProxy;
 
 pub(crate) const NAME: &str = "execute";
 
@@ -35,7 +38,7 @@ pub(crate) fn definition() -> Value {
     })
 }
 
-pub(crate) fn run(arguments: &str) -> Result<String, String> {
+pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String, String> {
     let parsed: Value = serde_json::from_str(arguments)
         .map_err(|err| format!("chat: invalid JSON arguments for execute tool: {err}"))?;
 
@@ -48,10 +51,11 @@ pub(crate) fn run(arguments: &str) -> Result<String, String> {
         return Err("chat: execute tool command must not be empty".to_string());
     }
 
-    let allowlist = load_allowed_commands()?;
+    let allowlist = load_allowed_commands(proxy.list_execute_allowlist())?;
     if allowlist.is_empty() {
         return Err(format!(
-            "chat: execute tool has no allowed commands configured. Add entries to ~/.config/dsh/{EXECUTE_TOOL_CONFIG_FILE} or set {EXECUTE_TOOL_ENV_ALLOWLIST}."
+            "chat: execute tool has no allowed commands configured when requested `{}`. Add entries to ~/.config/dsh/{EXECUTE_TOOL_CONFIG_FILE}, set {EXECUTE_TOOL_ENV_ALLOWLIST}, or call chat-execute-add in config.lisp.",
+            command.trim()
         ));
     }
 
@@ -59,7 +63,8 @@ pub(crate) fn run(arguments: &str) -> Result<String, String> {
 
     if !allowlist.iter().any(|item| item == &program) {
         return Err(format!(
-            "chat: execute tool command `{program}` is not permitted. Allowed commands: {}",
+            "chat: execute tool command `{program}` from request `{}` is not permitted. Allowed commands: {}",
+            command.trim(),
             allowlist.join(", ")
         ));
     }
@@ -108,46 +113,54 @@ fn extract_program_name(command: &str) -> Result<String, String> {
         .ok_or_else(|| "chat: execute tool command must specify a program".to_string())
 }
 
-fn load_allowed_commands() -> Result<Vec<String>, String> {
-    if let Some(commands) = read_allowlist_from_env() {
+fn load_allowed_commands(runtime_allowed: Vec<String>) -> Result<Vec<String>, String> {
+    if let Some(mut commands) = read_allowlist_from_env() {
+        commands.sort();
+        commands.dedup();
         return Ok(commands);
     }
 
-    let Some(config_path) = resolve_allowlist_path()? else {
-        return Ok(Vec::new());
-    };
+    let mut allowlist = runtime_allowed;
 
-    let contents = fs::read_to_string(&config_path).map_err(|err| {
+    if let Some(config_path) = resolve_allowlist_path()?
+        && let Some(mut file_allowlist) = read_allowlist_from_file(&config_path)?
+    {
+        allowlist.append(&mut file_allowlist);
+    }
+
+    allowlist.sort();
+    allowlist.dedup();
+    Ok(allowlist)
+}
+
+fn read_allowlist_from_file(path: &PathBuf) -> Result<Option<Vec<String>>, String> {
+    let contents = fs::read_to_string(path).map_err(|err| {
         format!(
             "chat: failed to read execute tool config {}: {err}",
-            config_path.display()
+            path.display()
         )
     })?;
 
     if contents.trim().is_empty() {
-        return Ok(Vec::new());
+        return Ok(Some(Vec::new()));
     }
 
-    let raw: Value = serde_json::from_str(&contents).map_err(|err| {
-        format!(
-            "chat: failed to parse {} as JSON: {err}",
-            config_path.display()
-        )
-    })?;
+    #[derive(Deserialize)]
+    struct ExecuteAllowlist {
+        #[serde(default)]
+        allowed_commands: Vec<String>,
+    }
 
-    let Some(array) = raw.get("allowed_commands").and_then(|v| v.as_array()) else {
-        return Err(format!(
-            "chat: execute tool config {} must contain `allowed_commands` array",
-            config_path.display()
-        ));
-    };
+    let raw: ExecuteAllowlist = serde_json::from_str(&contents)
+        .map_err(|err| format!("chat: failed to parse {} as JSON: {err}", path.display()))?;
 
-    Ok(array
-        .iter()
-        .filter_map(|value| value.as_str())
-        .map(|item| item.trim().to_string())
-        .filter(|item| !item.is_empty())
-        .collect())
+    Ok(Some(
+        raw.allowed_commands
+            .into_iter()
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+            .collect(),
+    ))
 }
 
 fn read_allowlist_from_env() -> Option<Vec<String>> {
@@ -179,7 +192,57 @@ fn resolve_allowlist_path() -> Result<Option<PathBuf>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dsh_types::Context;
     use tempfile::tempdir;
+
+    struct NoopProxy {
+        allow: Vec<String>,
+    }
+
+    impl ShellProxy for NoopProxy {
+        fn exit_shell(&mut self) {}
+        fn dispatch(
+            &mut self,
+            _ctx: &Context,
+            _cmd: &str,
+            _argv: Vec<String>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn save_path_history(&mut self, _path: &str) {}
+        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn insert_path(&mut self, _index: usize, _path: &str) {}
+        fn get_var(&mut self, _key: &str) -> Option<String> {
+            None
+        }
+        fn set_var(&mut self, _key: String, _value: String) {}
+        fn set_env_var(&mut self, _key: String, _value: String) {}
+        fn get_alias(&mut self, _name: &str) -> Option<String> {
+            None
+        }
+        fn set_alias(&mut self, _name: String, _command: String) {}
+        fn list_aliases(&mut self) -> std::collections::HashMap<String, String> {
+            std::collections::HashMap::new()
+        }
+        fn add_abbr(&mut self, _name: String, _expansion: String) {}
+        fn remove_abbr(&mut self, _name: &str) -> bool {
+            false
+        }
+        fn list_abbrs(&self) -> Vec<(String, String)> {
+            Vec::new()
+        }
+        fn get_abbr(&self, _name: &str) -> Option<String> {
+            None
+        }
+        fn list_mcp_servers(&mut self) -> Vec<dsh_types::mcp::McpServerConfig> {
+            Vec::new()
+        }
+        fn list_execute_allowlist(&mut self) -> Vec<String> {
+            self.allow.clone()
+        }
+    }
 
     #[test]
     fn extract_program_name_returns_first_token() {
@@ -190,7 +253,10 @@ mod tests {
     #[test]
     fn load_allowlist_prefers_env() {
         let _guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls,git\ncat");
-        assert_eq!(load_allowed_commands().unwrap(), vec!["ls", "git", "cat"]);
+        assert_eq!(
+            load_allowed_commands(vec![]).unwrap(),
+            vec!["cat", "git", "ls"]
+        );
     }
 
     #[test]
@@ -204,11 +270,45 @@ mod tests {
             EXECUTE_TOOL_CONFIG_OVERRIDE_ENV,
             config_path.to_str().unwrap(),
         );
-        unsafe {
-            env::remove_var(EXECUTE_TOOL_ENV_ALLOWLIST);
-        }
+        let _allow_env = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "");
 
-        assert_eq!(load_allowed_commands().unwrap(), vec!["ls", "cargo"]);
+        assert_eq!(load_allowed_commands(vec![]).unwrap(), vec!["cargo", "ls"]);
+    }
+
+    #[test]
+    fn load_allowlist_merges_runtime_entries() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("allow.json");
+        let contents = json!({ "allowed_commands": ["cargo"] }).to_string();
+        std::fs::write(&config_path, contents).unwrap();
+
+        let _env_guard = EnvGuard::set(
+            EXECUTE_TOOL_CONFIG_OVERRIDE_ENV,
+            config_path.to_str().unwrap(),
+        );
+        let _allow_env = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "");
+
+        let allowlist = load_allowed_commands(vec!["ls".to_string(), "cargo".to_string()]).unwrap();
+        assert_eq!(allowlist, vec!["cargo", "ls"]);
+    }
+
+    #[test]
+    fn run_reports_full_command_on_disallowed_program() {
+        let mut proxy = NoopProxy {
+            allow: vec!["ls".to_string()],
+        };
+        let result = run("{\"command\":\"cat README.md\"}", &mut proxy);
+        let err = result.expect_err("command should be rejected");
+        assert!(err.contains("`cat`"));
+        assert!(err.contains("`cat README.md`"));
+    }
+
+    #[test]
+    fn run_reports_command_when_allowlist_empty() {
+        let mut proxy = NoopProxy { allow: Vec::new() };
+        let result = run("{\"command\":\"rm -rf /\"}", &mut proxy);
+        let err = result.expect_err("command should be rejected due to empty allowlist");
+        assert!(err.contains("rm -rf /")); // ensure full command noted
     }
 
     struct EnvGuard {

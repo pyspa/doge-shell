@@ -4,6 +4,7 @@ use crate::dirs::search_file;
 use crate::shell::APP_NAME;
 use anyhow::Context as _;
 use anyhow::Result;
+use dsh_types::mcp::McpServerConfig;
 use parking_lot::RwLock;
 use regex::Regex;
 use std::collections::HashMap;
@@ -59,6 +60,8 @@ pub struct Environment {
     pub variables: HashMap<String, String>,
     pub direnv_roots: Vec<DirEnvironment>,
     pub chpwd_hooks: Vec<Box<dyn ChangePwdHook>>,
+    pub mcp_servers: Vec<McpServerConfig>,
+    pub execute_allowlist: Vec<String>,
 }
 
 impl Environment {
@@ -83,6 +86,8 @@ impl Environment {
             paths,
             direnv_roots: Vec::new(),
             chpwd_hooks: Vec::new(),
+            mcp_servers: Vec::new(),
+            execute_allowlist: Vec::new(),
         }))
     }
 
@@ -93,6 +98,8 @@ impl Environment {
         let autocompletion = parent.read().autocompletion.clone();
         let variables = parent.read().variables.clone();
         let direnv_roots = parent.read().direnv_roots.clone();
+        let mcp_servers = parent.read().mcp_servers.clone();
+        let execute_allowlist = parent.read().execute_allowlist.clone();
 
         #[allow(clippy::arc_with_non_send_sync)]
         Arc::new(RwLock::new(Environment {
@@ -103,6 +110,8 @@ impl Environment {
             paths,
             direnv_roots,
             chpwd_hooks: Vec::new(),
+            mcp_servers,
+            execute_allowlist,
         }))
     }
 
@@ -183,7 +192,37 @@ impl std::fmt::Debug for Environment {
             .field("direnv_paths", &self.direnv_roots)
             .field("paths", &self.paths)
             .field("variables", &self.variables)
+            .field("mcp_servers", &self.mcp_servers)
+            .field("execute_allowlist", &self.execute_allowlist)
             .finish()
+    }
+}
+
+impl Environment {
+    pub fn clear_mcp_servers(&mut self) {
+        self.mcp_servers.clear();
+    }
+
+    pub fn add_mcp_server(&mut self, server: McpServerConfig) {
+        self.mcp_servers.push(server);
+    }
+
+    pub fn mcp_servers(&self) -> &[McpServerConfig] {
+        &self.mcp_servers
+    }
+
+    pub fn clear_execute_allowlist(&mut self) {
+        self.execute_allowlist.clear();
+    }
+
+    pub fn add_execute_allowlist_entry(&mut self, entry: String) {
+        if !self.execute_allowlist.contains(&entry) {
+            self.execute_allowlist.push(entry);
+        }
+    }
+
+    pub fn execute_allowlist(&self) -> &[String] {
+        &self.execute_allowlist
     }
 }
 

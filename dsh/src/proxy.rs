@@ -2,7 +2,7 @@ use crate::{process::ProcessState, shell::Shell};
 use anyhow::Result;
 use dsh_builtin::ShellProxy;
 use dsh_frecency::SortMethod;
-use dsh_types::Context;
+use dsh_types::{Context, mcp::McpServerConfig};
 use std::fs::File;
 use std::io::prelude::*;
 use std::os::unix::io::FromRawFd;
@@ -594,6 +594,14 @@ impl ShellProxy for Shell {
     fn get_abbr(&self, name: &str) -> Option<String> {
         debug!("Getting abbreviation for: {}", name);
         self.environment.read().abbreviations.get(name).cloned()
+    }
+
+    fn list_mcp_servers(&mut self) -> Vec<McpServerConfig> {
+        self.environment.read().mcp_servers.clone()
+    }
+
+    fn list_execute_allowlist(&mut self) -> Vec<String> {
+        self.environment.read().execute_allowlist.clone()
     }
 }
 

@@ -8,6 +8,7 @@ use crate::{
     },
 };
 use cfg_if::cfg_if;
+use dsh_types::mcp::{McpServerConfig, McpTransport};
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::{cell::RefCell, collections::HashMap, convert::TryInto, rc::Rc};
@@ -170,6 +171,120 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
             v.reverse();
 
             Ok(Value::List(v.into_iter().collect()))
+        }),
+    );
+
+    env.define(
+        Symbol::from("mcp-clear"),
+        Value::NativeFunc(|env, _args| {
+            env.borrow().shell_env.write().clear_mcp_servers();
+            Ok(Value::NIL)
+        }),
+    );
+
+    env.define(
+        Symbol::from("mcp-add-stdio"),
+        Value::NativeFunc(|env, args| {
+            let label = require_typed_arg::<&String>("mcp-add-stdio", &args, 0)?.clone();
+            let command = require_typed_arg::<&String>("mcp-add-stdio", &args, 1)?.clone();
+            let arg_list = args.get(2).cloned().unwrap_or(Value::NIL);
+            let env_list = args.get(3).cloned().unwrap_or(Value::NIL);
+            let cwd_value = args.get(4).cloned().unwrap_or(Value::NIL);
+            let description_value = args.get(5).cloned().unwrap_or(Value::NIL);
+
+            let args_vec = list_of_strings("mcp-add-stdio", &arg_list)?;
+            let env_map = list_of_pairs("mcp-add-stdio", &env_list)?;
+            let cwd = optional_string("mcp-add-stdio", &cwd_value)?;
+            let description = optional_string("mcp-add-stdio", &description_value)?;
+
+            let transport = McpTransport::Stdio {
+                command,
+                args: args_vec,
+                env: env_map,
+                cwd: cwd.map(Into::into),
+            };
+
+            env.borrow()
+                .shell_env
+                .write()
+                .add_mcp_server(McpServerConfig {
+                    label,
+                    description,
+                    transport,
+                });
+
+            Ok(Value::NIL)
+        }),
+    );
+
+    env.define(
+        Symbol::from("mcp-add-sse"),
+        Value::NativeFunc(|env, args| {
+            let label = require_typed_arg::<&String>("mcp-add-sse", &args, 0)?.clone();
+            let url = require_typed_arg::<&String>("mcp-add-sse", &args, 1)?.clone();
+            let description_value = args.get(2).cloned().unwrap_or(Value::NIL);
+            let description = optional_string("mcp-add-sse", &description_value)?;
+
+            env.borrow()
+                .shell_env
+                .write()
+                .add_mcp_server(McpServerConfig {
+                    label,
+                    description,
+                    transport: McpTransport::Sse { url },
+                });
+
+            Ok(Value::NIL)
+        }),
+    );
+
+    env.define(
+        Symbol::from("mcp-add-http"),
+        Value::NativeFunc(|env, args| {
+            let label = require_typed_arg::<&String>("mcp-add-http", &args, 0)?.clone();
+            let url = require_typed_arg::<&String>("mcp-add-http", &args, 1)?.clone();
+            let auth_value = args.get(2).cloned().unwrap_or(Value::NIL);
+            let allow_value = args.get(3).cloned().unwrap_or(Value::NIL);
+            let description_value = args.get(4).cloned().unwrap_or(Value::NIL);
+
+            let auth_header = optional_string("mcp-add-http", &auth_value)?;
+            let allow_stateless = optional_bool("mcp-add-http", &allow_value)?;
+            let description = optional_string("mcp-add-http", &description_value)?;
+
+            env.borrow()
+                .shell_env
+                .write()
+                .add_mcp_server(McpServerConfig {
+                    label,
+                    description,
+                    transport: McpTransport::Http {
+                        url,
+                        auth_header,
+                        allow_stateless,
+                    },
+                });
+
+            Ok(Value::NIL)
+        }),
+    );
+
+    env.define(
+        Symbol::from("chat-execute-clear"),
+        Value::NativeFunc(|env, _args| {
+            env.borrow().shell_env.write().clear_execute_allowlist();
+            Ok(Value::NIL)
+        }),
+    );
+
+    env.define(
+        Symbol::from("chat-execute-add"),
+        Value::NativeFunc(|env, args| {
+            let command = require_typed_arg::<&String>("chat-execute-add", &args, 0)?.clone();
+            env.borrow()
+                .shell_env
+                .write()
+                .add_execute_allowlist_entry(command);
+            Ok(Value::NIL)
         }),
     );
 
@@ -485,4 +600,217 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
     );
 
     env
+}
+
+fn list_of_strings(name: &str, value: &Value) -> Result<Vec<String>, RuntimeError> {
+    match value {
+        Value::List(list) if *list == List::NIL => Ok(Vec::new()),
+        Value::List(list) => list
+            .into_iter()
+            .map(|item| match item {
+                Value::String(s) => Ok(s),
+                other => Err(RuntimeError {
+                    msg: format!("\"{name}\" expects a list of strings; got element {other}"),
+                }),
+            })
+            .collect(),
+        Value::False => Ok(Vec::new()),
+        other => Err(RuntimeError {
+            msg: format!("\"{name}\" expects a list of strings or NIL; got {other}"),
+        }),
+    }
+}
+
+fn list_of_pairs(name: &str, value: &Value) -> Result<HashMap<String, String>, RuntimeError> {
+    match value {
+        Value::List(list) if *list == List::NIL => Ok(HashMap::new()),
+        Value::List(list) => {
+            let mut map = HashMap::new();
+            for entry in list.into_iter() {
+                match entry {
+                    Value::List(pair) => {
+                        let mut iter = pair.into_iter();
+                        let key = match iter.next() {
+                            Some(Value::String(s)) => s,
+                            Some(other) => {
+                                return Err(RuntimeError {
+                                    msg: format!(
+                                        "\"{name}\" expects env entries as (key value); got key {other}"
+                                    ),
+                                });
+                            }
+                            None => {
+                                return Err(RuntimeError {
+                                    msg: format!(
+                                        "\"{name}\" expects env entries with two elements"
+                                    ),
+                                });
+                            }
+                        };
+                        let value = match iter.next() {
+                            Some(Value::String(s)) => s,
+                            Some(other) => {
+                                return Err(RuntimeError {
+                                    msg: format!(
+                                        "\"{name}\" expects env entries as (key value); got value {other}"
+                                    ),
+                                });
+                            }
+                            None => {
+                                return Err(RuntimeError {
+                                    msg: format!(
+                                        "\"{name}\" expects env entries with two elements"
+                                    ),
+                                });
+                            }
+                        };
+                        map.insert(key, value);
+                    }
+                    other => {
+                        return Err(RuntimeError {
+                            msg: format!("\"{name}\" expects env entries as lists; got {other}"),
+                        });
+                    }
+                }
+            }
+            Ok(map)
+        }
+        Value::False => Ok(HashMap::new()),
+        other => Err(RuntimeError {
+            msg: format!("\"{name}\" expects a list of key/value pairs or NIL; got {other}"),
+        }),
+    }
+}
+
+fn optional_string(name: &str, value: &Value) -> Result<Option<String>, RuntimeError> {
+    match value {
+        Value::List(list) if *list == List::NIL => Ok(None),
+        Value::False => Ok(None),
+        Value::String(s) => Ok(Some(s.clone())),
+        other => Err(RuntimeError {
+            msg: format!("\"{name}\" expects a string or NIL; got {other}"),
+        }),
+    }
+}
+
+fn optional_bool(name: &str, value: &Value) -> Result<Option<bool>, RuntimeError> {
+    match value {
+        Value::List(list) if *list == List::NIL => Ok(None),
+        Value::False => Ok(Some(false)),
+        Value::True => Ok(Some(true)),
+        other => Err(RuntimeError {
+            msg: format!("\"{name}\" expects a boolean or NIL; got {other}"),
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::environment::Environment;
+    use crate::lisp::LispEngine;
+
+    fn run(engine: &Rc<RefCell<LispEngine>>, expr: &str) {
+        engine.borrow().run(expr).unwrap();
+    }
+
+    #[test]
+    fn lisp_mcp_helpers_add_servers() {
+        let env = Environment::new();
+        let engine = LispEngine::new(env.clone());
+
+        run(&engine, "(mcp-clear)");
+        run(
+            &engine,
+            "(mcp-add-stdio \"local\" \"/bin/echo\" '(\"hello\") '((\"FOO\" \"bar\")) '() \"Local echo\")",
+        );
+        run(
+            &engine,
+            "(mcp-add-http \"remote\" \"https://example.com/mcp\" '() '() \"Remote service\")",
+        );
+
+        let env_lock = env.read();
+        let servers = env_lock.mcp_servers();
+        assert_eq!(servers.len(), 2);
+
+        let stdio = &servers[0];
+        assert_eq!(stdio.label, "local");
+        assert_eq!(stdio.description.as_deref(), Some("Local echo"));
+        match &stdio.transport {
+            McpTransport::Stdio {
+                command,
+                args,
+                env,
+                cwd,
+            } => {
+                assert_eq!(command, "/bin/echo");
+                assert_eq!(args, &vec!["hello".to_string()]);
+                assert_eq!(env.get("FOO"), Some(&"bar".to_string()));
+                assert!(cwd.is_none());
+            }
+            other => panic!("expected stdio transport, got {:?}", other),
+        }
+
+        let http = &servers[1];
+        assert_eq!(http.label, "remote");
+        assert_eq!(http.description.as_deref(), Some("Remote service"));
+        match &http.transport {
+            McpTransport::Http {
+                url,
+                auth_header,
+                allow_stateless,
+            } => {
+                assert_eq!(url, "https://example.com/mcp");
+                assert!(auth_header.is_none());
+                assert!(allow_stateless.is_none());
+            }
+            other => panic!("expected http transport, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn mcp_clear_resets_servers() {
+        let env = Environment::new();
+        let engine = LispEngine::new(env.clone());
+
+        run(
+            &engine,
+            "(mcp-add-stdio \"initial\" \"/bin/true\" '() '() '() '())",
+        );
+        run(&engine, "(mcp-clear)");
+        run(
+            &engine,
+            "(mcp-add-sse \"after\" \"https://example.com/sse\" \"Docs\")",
+        );
+
+        let env_lock = env.read();
+        let servers = env_lock.mcp_servers();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].label, "after");
+        match &servers[0].transport {
+            McpTransport::Sse { url } => assert_eq!(url, "https://example.com/sse"),
+            other => panic!("expected sse transport, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn execute_allowlist_helpers_manage_entries() {
+        let env = Environment::new();
+        let engine = LispEngine::new(env.clone());
+
+        run(&engine, "(chat-execute-clear)");
+        run(&engine, "(chat-execute-add \"ls\")");
+        run(&engine, "(chat-execute-add \"git\")");
+        run(&engine, "(chat-execute-add \"ls\")"); // duplicate should be ignored
+
+        let env_lock = env.read();
+        let allowlist = env_lock.execute_allowlist();
+        assert_eq!(allowlist, &["ls", "git"]);
+
+        drop(env_lock);
+        run(&engine, "(chat-execute-clear)");
+        let env_lock = env.read();
+        let allowlist_after = env_lock.execute_allowlist();
+        assert!(allowlist_after.is_empty());
+    }
 }

@@ -223,6 +223,14 @@ mod tests {
         fn get_abbr(&self, name: &str) -> Option<String> {
             self.abbreviations.get(name).cloned()
         }
+
+        fn list_mcp_servers(&mut self) -> Vec<dsh_types::mcp::McpServerConfig> {
+            Vec::new()
+        }
+
+        fn list_execute_allowlist(&mut self) -> Vec<String> {
+            Vec::new()
+        }
     }
 
     #[test]

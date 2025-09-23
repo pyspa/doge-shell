@@ -29,8 +29,10 @@ Only invoke `execute` with commands whose first token is present in the configur
 
 If a tool call is not needed, answer normally. After you finish applying edits or command runs, describe the changes in your final reply. Only call tools when a real action is required."#;
 
+mod mcp;
 mod tool;
 
+use mcp::McpManager;
 use tool::{build_tools, execute_tool_call};
 fn load_openai_config(proxy: &mut dyn ShellProxy) -> OpenAiConfig {
     OpenAiConfig::from_getter(|key| proxy.get_var(key).or_else(|| std::env::var(key).ok()))
@@ -87,8 +89,17 @@ pub fn execute_chat_message(
         Ok(client) => {
             let prompt = proxy.get_var(PROMPT_KEY);
             let model_override = model_override.map(|model| model.to_string());
+            let mcp_manager = McpManager::load(proxy.list_mcp_servers());
 
-            match chat_with_tools(&client, message, prompt, Some(0.1), model_override) {
+            match chat_with_tools(
+                &client,
+                message,
+                prompt,
+                Some(0.1),
+                model_override,
+                &mcp_manager,
+                proxy,
+            ) {
                 Ok(res) => {
                     ctx.write_stdout(res.trim()).ok();
                     ExitStatus::ExitedWith(0)
@@ -191,15 +202,20 @@ fn chat_with_tools(
     operator_prompt: Option<String>,
     temperature: Option<f64>,
     model_override: Option<String>,
+    mcp_manager: &McpManager,
+    proxy: &mut dyn ShellProxy,
 ) -> Result<String, String> {
     let mut messages = Vec::new();
     messages.push(json!({
         "role": "system",
-        "content": build_system_prompt(operator_prompt),
+        "content": build_system_prompt(operator_prompt, mcp_manager),
     }));
     messages.push(json!({ "role": "user", "content": user_input }));
 
-    let tools = build_tools();
+    let mut tools = build_tools();
+    if !mcp_manager.is_empty() {
+        tools.extend(mcp_manager.tool_definitions());
+    }
     let mut iterations = 0;
 
     loop {
@@ -248,7 +264,7 @@ fn chat_with_tools(
                     .unwrap_or_default()
                     .to_string();
 
-                let tool_result = execute_tool_call(tool_call)?;
+                let tool_result = execute_tool_call(tool_call, mcp_manager, proxy)?;
 
                 messages.push(json!({
                     "role": "tool",
@@ -299,7 +315,15 @@ impl Drop for SpinnerGuard {
     }
 }
 
-fn build_system_prompt(operator_prompt: Option<String>) -> String {
+fn build_system_prompt(operator_prompt: Option<String>, mcp_manager: &McpManager) -> String {
+    let mut base = TOOL_SYSTEM_PROMPT.to_string();
+
+    if let Some(fragment) = mcp_manager.system_prompt_fragment() {
+        base.push_str("\n\nMCP access:");
+        base.push('\n');
+        base.push_str(&fragment);
+    }
+
     match operator_prompt.and_then(|p| {
         let trimmed = p.trim();
         if trimmed.is_empty() {
@@ -308,11 +332,12 @@ fn build_system_prompt(operator_prompt: Option<String>) -> String {
             Some(trimmed.to_string())
         }
     }) {
-        Some(extra) => format!(
-            "{TOOL_SYSTEM_PROMPT}\n\nAdditional operator instructions:\n{}",
-            extra
-        ),
-        None => TOOL_SYSTEM_PROMPT.to_string(),
+        Some(extra) => {
+            base.push_str("\n\nAdditional operator instructions:\n");
+            base.push_str(&extra);
+            base
+        }
+        None => base,
     }
 }
 

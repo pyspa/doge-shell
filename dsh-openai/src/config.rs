@@ -131,7 +131,7 @@ mod tests {
             _ => None,
         };
 
-        let cfg = OpenAiConfig::from_getter(|key| getter(key));
+        let cfg = OpenAiConfig::from_getter(getter);
 
         assert_eq!(cfg.api_key(), Some("primary"));
         assert_eq!(cfg.base_url(), "https://example.com/api");
@@ -145,7 +145,7 @@ mod tests {
             _ => None,
         };
 
-        let cfg = OpenAiConfig::from_getter(|key| getter(key));
+        let cfg = OpenAiConfig::from_getter(getter);
 
         assert_eq!(cfg.api_key(), Some("legacy"));
         assert_eq!(cfg.base_url(), "https://api.openai.com/v1");

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use dsh_types::{Context, ExitStatus};
+use dsh_types::{Context, ExitStatus, mcp::McpServerConfig};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -76,6 +76,12 @@ pub trait ShellProxy {
 
     /// Gets an abbreviation expansion by name
     fn get_abbr(&self, name: &str) -> Option<String>;
+
+    /// Lists MCP servers configured in the shell session
+    fn list_mcp_servers(&mut self) -> Vec<McpServerConfig>;
+
+    /// Lists execute-tool allowlist entries configured via config.lisp
+    fn list_execute_allowlist(&mut self) -> Vec<String>;
 }
 
 /// Type alias for builtin command function signature

@@ -22,11 +22,14 @@ nix.workspace = true
 skim.workspace = true
 serde_json.workspace = true
 xdg.workspace = true
+serde.workspace = true
 
 getopts = "0.2.23"
 regex = "1.11"
 shell-words = "1.1"
 indicatif = "0.17"
+toml = "0.8"
+rmcp = { version = "0.6", features = ["client", "transport-child-process", "transport-sse-client", "transport-sse-client-reqwest", "transport-streamable-http-client", "transport-streamable-http-client-reqwest"] }
 
 # HTTP server dependencies for serve command
 axum.workspace = true

@@ -427,14 +427,13 @@ mod tests {
         // Check if log files are created and panic info is recorded
         let mut found_panic_log = false;
         for log_file in &test_log_files {
-            if let Ok(content) = fs::read_to_string(log_file) {
-                if content.contains("PANIC OCCURRED")
-                    && content.contains("Test panic for logging verification")
-                {
-                    found_panic_log = true;
-                    println!("Panic information found in {log_file}");
-                    break;
-                }
+            if let Ok(content) = fs::read_to_string(log_file)
+                && content.contains("PANIC OCCURRED")
+                && content.contains("Test panic for logging verification")
+            {
+                found_panic_log = true;
+                println!("Panic information found in {log_file}");
+                break;
             }
         }
 

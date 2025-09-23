@@ -351,12 +351,11 @@ mod tests {
         assert!(!cat_job_process.is_pipeline_consumer_terminated());
 
         // Now simulate less (consumer) exiting normally
-        if let JobProcess::Command(cat_proc) = &mut cat_job_process {
-            if let Some(next_box) = &mut cat_proc.next {
-                if let JobProcess::Command(less_proc) = next_box.as_mut() {
-                    less_proc.state = ProcessState::Completed(0, None);
-                }
-            }
+        if let JobProcess::Command(cat_proc) = &mut cat_job_process
+            && let Some(next_box) = &mut cat_proc.next
+            && let JobProcess::Command(less_proc) = next_box.as_mut()
+        {
+            less_proc.state = ProcessState::Completed(0, None);
         }
 
         // Now consumer should be detected as terminated

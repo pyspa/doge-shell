@@ -43,6 +43,8 @@ impl LispEngine {
             .trim()
             .to_string();
 
+        self.shell_env.write().clear_mcp_servers();
+
         let wrapped_config = format!("(begin {config_lisp}\n)");
         match self.run(&wrapped_config) {
             Ok(_) => {

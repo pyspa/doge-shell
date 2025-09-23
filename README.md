@@ -164,6 +164,92 @@ You can find large files in Linux using several methods:
 🐕 < ! How do I debug a failing pod?
 ```
 
+### MCP Integration
+
+doge-shell can bridge Model Context Protocol (MCP) servers through the OpenAI client so the LLM can call external tools. Configure MCP endpoints via `~/.config/dsh/config.toml` (created automatically the first time you run `reload` or `chat`).
+
+```toml
+# ~/.config/dsh/config.toml
+[mcp]
+servers = [
+  { # Local stdio server
+    label = "local-fs"
+    description = "Local filesystem utilities"
+    transport = "stdio"
+    command = "./target/release/mcp-local"
+    args = ["--config", "tools.toml"]
+    cwd = "/home/you/projects/mcp-local"
+    env = { RUST_LOG = "info" }
+  },
+  { # Remote SSE server
+    label = "docs"
+    transport = "sse"
+    url = "https://mcp.example.com/sse"
+  },
+  { # Streamable HTTP server (OpenAI MCP-compatible services)
+    label = "code-search"
+    transport = "http"
+    url = "https://mcp.example.com/http"
+    auth_header = "Bearer $MCP_API_TOKEN"
+    allow_stateless = true
+  }
+]
+```
+
+| Transport | Required keys | Optional keys | Notes |
+|-----------|----------------|---------------|-------|
+| `stdio`   | `command`      | `args`, `env`, `cwd` | Launches a child process; `env` expects a `{ KEY = "value" }` table. |
+| `sse`     | `url`          | *(none)*       | Connects to an SSE endpoint that implements MCP streams. |
+| `http` / `https` / `streamable_http` | `url` | `auth_header`, `allow_stateless` | Uses the streamable HTTP client; set `allow_stateless = true` for servers that do not require a session. |
+
+You can define the same servers in `config.lisp`, which is reloaded via the `reload` builtin:
+
+```lisp
+;; ~/.config/dsh/config.lisp
+(mcp-clear)
+
+(mcp-add-stdio
+  "local-fs"
+  "./target/release/mcp-local"
+  '("--config" "tools.toml")
+  '(("RUST_LOG" "info"))
+  "/home/you/projects/mcp-local"
+  "Local filesystem utilities")
+
+(mcp-add-sse "docs" "https://mcp.example.com/sse" "Documentation indexer")
+
+(mcp-add-http
+  "code-search"
+  "https://mcp.example.com/http"
+  "Bearer $MCP_API_TOKEN"
+  t
+  "Source browsing")
+```
+
+Use `mcp-clear` at the top of your config to avoid duplicating entries on reload. The helper forms accept lists of arguments and environment pairs, and booleans (`t`/`nil`) for HTTP stateless mode.
+
+### Execute Tool Allowlist Configuration
+
+The `execute` tool only runs commands whose first token is on the allowlist. Besides the JSON config (`~/.config/dsh/openai-execute-tool.json`) and the `AI_CHAT_EXECUTE_ALLOWLIST` environment variable, you can manage the allowlist directly inside `config.lisp`:
+
+```lisp
+(chat-execute-clear)
+(chat-execute-add "ls")
+(chat-execute-add "git")
+```
+
+Use `chat-execute-clear` before adding entries to prevent duplicates when `reload` runs multiple times.
+
+When doge-shell starts a chat session it:
+
+1. Loads `config.toml`, validates each server definition, and queries `tools/list` to discover available tool schemas.
+2. Generates stable function names of the form `mcp__<server>__<tool>` and exposes them to the LLM alongside the built-in `edit` & `execute` tools.
+3. Extends the system prompt with a summary of the configured MCP servers so the model understands when to call them.
+
+Tool invocations from the model are routed back to the specified MCP server and the raw JSON results are returned to the model. If a server cannot be reached or returns an error, the failure is surfaced to the chat output.
+
+> **Tip:** Run `cargo test -p dsh-builtin` after editing `config.toml` to ensure your MCP definitions parse correctly in CI, and prefer descriptive `label` values—the label appears in both the system prompt and generated tool names.
+
 ## 🎯 Advanced Completion System
 
 Doge-shell features a sophisticated multi-layered completion system that provides intelligent suggestions as you type.

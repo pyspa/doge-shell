@@ -233,6 +233,14 @@ mod tests {
         fn get_abbr(&self, _name: &str) -> Option<String> {
             None
         }
+
+        fn list_mcp_servers(&mut self) -> Vec<dsh_types::mcp::McpServerConfig> {
+            Vec::new()
+        }
+
+        fn list_execute_allowlist(&mut self) -> Vec<String> {
+            Vec::new()
+        }
     }
 
     #[test]

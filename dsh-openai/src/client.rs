@@ -64,8 +64,21 @@ impl ChatGptClient {
         temperature: Option<f64>,
         model: Option<String>,
     ) -> Result<String> {
-        let f = self.send_message_inner(input, prompt, temperature, model);
-        tokio::runtime::Handle::current().block_on(f)
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let prompt_clone = prompt.clone();
+            let model_clone = model.clone();
+            tokio::task::block_in_place(move || {
+                handle.block_on(self.send_message_inner(
+                    input,
+                    prompt_clone,
+                    temperature,
+                    model_clone,
+                ))
+            })
+        } else {
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(self.send_message_inner(input, prompt, temperature, model))
+        }
     }
 
     async fn send_message_inner(

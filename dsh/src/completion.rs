@@ -606,14 +606,14 @@ fn completion_from_chatgpt(input: &Input, repl: &Repl, _query: Option<&str>) -> 
         guard.variables.clone()
     };
 
-    let mut getter = |key: &str| {
+    let getter = |key: &str| {
         variables_snapshot
             .get(key)
             .cloned()
             .or_else(|| std::env::var(key).ok())
     };
 
-    let config = dsh_openai::OpenAiConfig::from_getter(|key| getter(key));
+    let config = dsh_openai::OpenAiConfig::from_getter(getter);
 
     if config.api_key().is_some() {
         debug!("ChatGPT completion input:{:?}", input);

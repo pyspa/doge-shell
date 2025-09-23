@@ -4,29 +4,48 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use tracing::debug;
 
+use crate::config::OpenAiConfig;
+
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
-const API_URL: &str = "https://api.openai.com/v1/chat/completions";
-const DEFAULT_MODEL: &str = "o4-mini";
 
 #[derive(Debug)]
 pub struct ChatGptClient {
     api_key: String,
     default_model: String,
+    chat_endpoint: String,
 }
 
 impl ChatGptClient {
     pub fn new(api_key: String) -> Result<Self> {
-        Self::new_with_model(api_key, None)
+        Self::new_with_settings(api_key, None, None)
     }
 
     pub fn new_with_model(api_key: String, model: Option<String>) -> Result<Self> {
-        let default_model = model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
-        let s = Self {
-            api_key,
-            default_model,
+        Self::new_with_settings(api_key, model, None)
+    }
+
+    pub fn new_with_settings(
+        api_key: String,
+        model: Option<String>,
+        base_url: Option<String>,
+    ) -> Result<Self> {
+        let config = OpenAiConfig::new(Some(api_key), base_url, model);
+        Self::try_from_config(&config)
+    }
+
+    pub fn try_from_config(config: &OpenAiConfig) -> Result<Self> {
+        let api_key = config
+            .api_key()
+            .ok_or_else(|| anyhow!("OpenAI-compatible API key is not configured"))?;
+
+        let client = Self {
+            api_key: api_key.to_string(),
+            default_model: config.default_model().to_string(),
+            chat_endpoint: config.chat_endpoint(),
         };
-        let _ = s.build_client()?; // check error
-        Ok(s)
+
+        let _ = client.build_client()?;
+        Ok(client)
     }
 
     pub fn send_message(
@@ -108,7 +127,7 @@ impl ChatGptClient {
         let header_value = format!("Bearer {}", &self.api_key);
         let builder = self
             .build_client()?
-            .post(API_URL)
+            .post(&self.chat_endpoint)
             .header("Authorization", header_value)
             .json(&body);
 

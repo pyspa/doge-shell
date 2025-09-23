@@ -436,14 +436,14 @@ Manages shell aliases with support for setting, listing, and querying aliases.
 
 #### `chat [options] <message>`
 
-Integrates with OpenAI ChatGPT API for AI-powered assistance within the shell. Supports model selection and custom prompts.
+Integrates with OpenAI-compatible chat APIs for AI-powered assistance within the shell. Supports model selection, custom prompts, and alternate API endpoints such as OpenRouter.
 
 **Options:**
 
 - `-m, --model <model>` - Use specific OpenAI model for this request
 
 ```bash
-# Use default model (o1-mini)
+# Use default model (gpt-5-mini)
 🐕 < chat "Explain how to use git rebase"
 
 # Use specific model
@@ -456,9 +456,18 @@ Integrates with OpenAI ChatGPT API for AI-powered assistance within the shell. S
 
 **Requirements:**
 
-- Set `OPENAI_API_KEY` environment variable with your OpenAI API key
+- Set `AI_CHAT_API_KEY` (or legacy `OPENAI_API_KEY`) with your API key
+- Optional: Configure `AI_CHAT_BASE_URL` (or `OPENAI_BASE_URL`) for OpenAI-compatible services; defaults to `https://api.openai.com/v1/`
+- Optional: Configure `AI_CHAT_MODEL` (or `OPENAI_MODEL`) for the default model; defaults to `gpt-5-mini`
 - Internet connection for API communication
-- Optional: Set `OPENAI_MODEL` environment variable for default model
+
+To configure these values via `~/.config/dsh/config.lisp`:
+
+```lisp
+(vset "AI_CHAT_API_KEY" "sk-...your-key...")
+(vset "AI_CHAT_BASE_URL" "https://openrouter.ai/api/v1/")
+(vset "AI_CHAT_MODEL" "openrouter/auto")
+```
 
 #### `chat_prompt <prompt_template>`
 
@@ -476,14 +485,14 @@ Manages the default OpenAI model for ChatGPT interactions. When called without a
 ```bash
 # Show current default model
 🐕 < chat_model
-Current OpenAI model: o1-mini (default)
+Current OpenAI model: gpt-5-mini
 
 # Set new default model
 🐕 < chat_model gpt-4
 OpenAI model set to: gpt-4
 
 # Available models include:
-# - o1-mini (fast, cost-effective) [default]
+# - gpt-5-mini (default fast reasoning)
 # - o1-preview (advanced reasoning)
 # - gpt-4 (balanced performance)
 # - gpt-3.5-turbo (fastest, cheapest)

@@ -601,16 +601,24 @@ fn completion_from_chatgpt(input: &Input, repl: &Repl, _query: Option<&str>) -> 
     let environment = Arc::clone(&lisp_engine.borrow().shell_env);
 
     // ChatGPT Completion
-    if let Some(api_key) = environment
-        .read()
-        .variables
-        .get("OPEN_AI_API_KEY")
-        .map(|val| val.to_string())
-    {
-        debug!("ChatGPT completion input:{:?}", input);
-        // TODO displaying the inquiring mark
+    let variables_snapshot = {
+        let guard = environment.read();
+        guard.variables.clone()
+    };
 
-        match ChatGPTCompletion::new(api_key) {
+    let mut getter = |key: &str| {
+        variables_snapshot
+            .get(key)
+            .cloned()
+            .or_else(|| std::env::var(key).ok())
+    };
+
+    let config = dsh_openai::OpenAiConfig::from_getter(|key| getter(key));
+
+    if config.api_key().is_some() {
+        debug!("ChatGPT completion input:{:?}", input);
+
+        match ChatGPTCompletion::new(config) {
             Ok(mut processor) => match processor.completion(input.as_str()) {
                 Ok(res) => {
                     return res;
@@ -1211,7 +1219,7 @@ fn get_file_completions_with_filter(
 /// ChatGPT completion structure
 #[derive(Debug)]
 pub struct ChatGPTCompletion {
-    api_key: String,
+    config: dsh_openai::OpenAiConfig,
     store_path: PathBuf,
 }
 
@@ -1228,13 +1236,10 @@ fn replace_space(s: &str) -> String {
 }
 
 impl ChatGPTCompletion {
-    pub fn new(api_key: String) -> Result<Self> {
+    pub fn new(config: dsh_openai::OpenAiConfig) -> Result<Self> {
         let store_path = get_data_file("completions")?;
         create_dir_all(&store_path)?;
-        Ok(ChatGPTCompletion {
-            api_key,
-            store_path,
-        })
+        Ok(ChatGPTCompletion { config, store_path })
     }
 
     pub fn completion(&mut self, cmd: &str) -> Result<Option<String>> {
@@ -1248,7 +1253,7 @@ impl ChatGPTCompletion {
             let items: Vec<Candidate> = serde_json::from_reader(reader)?;
             items
         } else {
-            let client = dsh_openai::ChatGptClient::new(self.api_key.to_string())?;
+            let client = dsh_openai::ChatGptClient::try_from_config(&self.config)?;
             let content = format!(
                 r#"
 You are a talented software engineer.

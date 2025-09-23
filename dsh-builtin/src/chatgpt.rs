@@ -1,11 +1,17 @@
 use super::ShellProxy;
-use dsh_openai::ChatGptClient;
+use dsh_openai::{ChatGptClient, OpenAiConfig};
 use dsh_types::{Context, ExitStatus};
 
 /// Environment variable key for storing the chat prompt template
 const PROMPT_KEY: &str = "CHAT_PROMPT";
-/// Environment variable key for storing the default OpenAI model
-const MODEL_KEY: &str = "OPENAI_MODEL";
+/// Primary configuration key for storing the default model
+const MODEL_KEY: &str = "AI_CHAT_MODEL";
+/// Legacy key maintained for backwards compatibility with older configs
+const LEGACY_MODEL_KEY: &str = "OPENAI_MODEL";
+
+fn load_openai_config(proxy: &mut dyn ShellProxy) -> OpenAiConfig {
+    OpenAiConfig::from_getter(|key| proxy.get_var(key).or_else(|| std::env::var(key).ok()))
+}
 
 /// Built-in chat command implementation
 /// Integrates OpenAI ChatGPT API for AI-powered assistance within the shell
@@ -31,40 +37,33 @@ pub fn chat(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> Exi
         }
     };
 
-    // Check if OpenAI API key is available
-    if let Some(key) = proxy.get_var("OPENAI_API_KEY") {
-        // Get default model from environment variable
-        let default_model = proxy.get_var(MODEL_KEY);
+    let config = load_openai_config(proxy);
 
-        match ChatGptClient::new_with_model(key, default_model) {
-            Ok(client) => {
-                // Get optional custom prompt template
-                let prompt = proxy.get_var(PROMPT_KEY);
+    if config.api_key().is_none() {
+        ctx.write_stderr("AI_CHAT_API_KEY / OPENAI_API_KEY not found")
+            .ok();
+        return ExitStatus::ExitedWith(1);
+    }
 
-                // Send message to ChatGPT with low temperature for consistent responses
-                match client.send_message_with_model(&message, prompt, Some(0.1), model_override) {
-                    Ok(res) => {
-                        // Output ChatGPT response to stdout
-                        ctx.write_stdout(res.trim()).ok();
-                        ExitStatus::ExitedWith(0)
-                    }
-                    Err(err) => {
-                        // Report API communication errors
-                        ctx.write_stderr(&format!("\r{err:?}")).ok();
-                        ExitStatus::ExitedWith(1)
-                    }
+    match ChatGptClient::try_from_config(&config) {
+        Ok(client) => {
+            let prompt = proxy.get_var(PROMPT_KEY);
+
+            match client.send_message_with_model(&message, prompt, Some(0.1), model_override) {
+                Ok(res) => {
+                    ctx.write_stdout(res.trim()).ok();
+                    ExitStatus::ExitedWith(0)
+                }
+                Err(err) => {
+                    ctx.write_stderr(&format!("\r{err:?}")).ok();
+                    ExitStatus::ExitedWith(1)
                 }
             }
-            Err(err) => {
-                // Report client initialization errors
-                ctx.write_stderr(&format!("\r{err:?}")).ok();
-                ExitStatus::ExitedWith(1)
-            }
         }
-    } else {
-        // API key not found - inform user of requirement
-        ctx.write_stderr("OPENAI_API_KEY not found").ok();
-        ExitStatus::ExitedWith(1)
+        Err(err) => {
+            ctx.write_stderr(&format!("\r{err:?}")).ok();
+            ExitStatus::ExitedWith(1)
+        }
     }
 }
 
@@ -95,10 +94,9 @@ pub fn chat_prompt(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy)
 pub fn chat_model(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     match argv.len() {
         1 => {
-            // Show current model
-            let current_model = proxy
-                .get_var(MODEL_KEY)
-                .unwrap_or_else(|| "o1-mini (default)".to_string());
+            // Show current model using resolved configuration
+            let config = load_openai_config(proxy);
+            let current_model = config.default_model().to_string();
             ctx.write_stdout(&format!("Current OpenAI model: {current_model}"))
                 .ok();
             ExitStatus::ExitedWith(0)
@@ -107,6 +105,7 @@ pub fn chat_model(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) 
             // Set new model
             let new_model = &argv[1];
             proxy.set_var(MODEL_KEY.to_string(), new_model.to_string());
+            proxy.set_var(LEGACY_MODEL_KEY.to_string(), new_model.to_string());
             ctx.write_stdout(&format!("OpenAI model set to: {new_model}"))
                 .ok();
             ExitStatus::ExitedWith(0)

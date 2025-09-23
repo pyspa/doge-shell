@@ -20,6 +20,7 @@ uuid.workspace = true
 tabled.workspace = true
 nix.workspace = true
 skim.workspace = true
+serde_json.workspace = true
 
 getopts = "0.2.23"
 regex = "1.11"

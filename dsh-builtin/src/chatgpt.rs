@@ -1,6 +1,7 @@
 use super::ShellProxy;
 use dsh_openai::{ChatGptClient, OpenAiConfig};
 use dsh_types::{Context, ExitStatus};
+use serde_json::{Value, json};
 
 /// Environment variable key for storing the chat prompt template
 const PROMPT_KEY: &str = "CHAT_PROMPT";
@@ -8,7 +9,19 @@ const PROMPT_KEY: &str = "CHAT_PROMPT";
 const MODEL_KEY: &str = "AI_CHAT_MODEL";
 /// Legacy key maintained for backwards compatibility with older configs
 const LEGACY_MODEL_KEY: &str = "OPENAI_MODEL";
+/// Maximum number of iterations to satisfy tool calls before aborting
+const MAX_TOOL_ITERATIONS: usize = 6;
+/// System prompt that explains how to use the builtin tools
+const TOOL_SYSTEM_PROMPT: &str = r#"You are the AI assistant that runs inside doge-shell. You may update files by calling the `edit` tool. When you need to change a file, call the tool with JSON arguments:
+{
+  "path": "relative/path/to/file",
+  "contents": "entire desired file contents"
+}
+The `path` must stay inside the workspace (no absolute paths or `..`). Always supply the full file contents; the tool overwrites the file. After you finish applying edits, describe the changes in your final reply. Only call the tool when a file change is actually required."#;
 
+mod tool;
+
+use tool::{build_tools, execute_tool_call};
 fn load_openai_config(proxy: &mut dyn ShellProxy) -> OpenAiConfig {
     OpenAiConfig::from_getter(|key| proxy.get_var(key).or_else(|| std::env::var(key).ok()))
 }
@@ -65,7 +78,7 @@ pub fn execute_chat_message(
             let prompt = proxy.get_var(PROMPT_KEY);
             let model_override = model_override.map(|model| model.to_string());
 
-            match client.send_message_with_model(message, prompt, Some(0.1), model_override) {
+            match chat_with_tools(&client, message, prompt, Some(0.1), model_override) {
                 Ok(res) => {
                     ctx.write_stdout(res.trim()).ok();
                     ExitStatus::ExitedWith(0)
@@ -160,4 +173,126 @@ fn parse_chat_args(argv: &[String]) -> Result<(String, Option<String>), String> 
 
     let message = argv[i].clone();
     Ok((message, model_override))
+}
+
+fn chat_with_tools(
+    client: &ChatGptClient,
+    user_input: &str,
+    operator_prompt: Option<String>,
+    temperature: Option<f64>,
+    model_override: Option<String>,
+) -> Result<String, String> {
+    let mut messages = Vec::new();
+    messages.push(json!({
+        "role": "system",
+        "content": build_system_prompt(operator_prompt),
+    }));
+    messages.push(json!({ "role": "user", "content": user_input }));
+
+    let tools = build_tools();
+    let mut iterations = 0;
+
+    loop {
+        iterations += 1;
+        if iterations > MAX_TOOL_ITERATIONS {
+            return Err("chat: exceeded maximum number of tool interactions".to_string());
+        }
+
+        let response = client
+            .send_chat_request(&messages, temperature, model_override.clone(), Some(&tools))
+            .map_err(|err| format!("{err:?}"))?;
+
+        let choice = response
+            .get("choices")
+            .and_then(|choices| choices.get(0))
+            .ok_or_else(|| format!("chat: unexpected response structure {response}"))?;
+
+        let assistant_message = choice
+            .get("message")
+            .cloned()
+            .ok_or_else(|| format!("chat: response missing assistant message {response}"))?;
+
+        messages.push(assistant_message.clone());
+
+        if let Some(tool_calls) = assistant_message
+            .get("tool_calls")
+            .and_then(|v| v.as_array())
+        {
+            if tool_calls.is_empty() {
+                continue;
+            }
+
+            for tool_call in tool_calls {
+                let tool_call_id = tool_call
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+
+                let tool_result = execute_tool_call(tool_call)?;
+
+                messages.push(json!({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": tool_result,
+                }));
+            }
+
+            continue;
+        }
+
+        if choice
+            .get("finish_reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            == "tool_calls"
+        {
+            continue;
+        }
+
+        let content = extract_message_content(&assistant_message)
+            .ok_or_else(|| format!("chat: assistant returned empty content {response}"))?;
+
+        return Ok(content);
+    }
+}
+
+fn build_system_prompt(operator_prompt: Option<String>) -> String {
+    match operator_prompt.and_then(|p| {
+        let trimmed = p.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }) {
+        Some(extra) => format!(
+            "{TOOL_SYSTEM_PROMPT}\n\nAdditional operator instructions:\n{}",
+            extra
+        ),
+        None => TOOL_SYSTEM_PROMPT.to_string(),
+    }
+}
+
+fn extract_message_content(message: &Value) -> Option<String> {
+    match message.get("content") {
+        Some(Value::String(text)) => Some(text.to_string()),
+        Some(Value::Array(items)) => {
+            let mut buffer = String::new();
+            for item in items {
+                if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                    buffer.push_str(text);
+                } else if let Some(text) = item.get("content").and_then(|v| v.as_str()) {
+                    buffer.push_str(text);
+                }
+            }
+
+            if buffer.is_empty() {
+                None
+            } else {
+                Some(buffer)
+            }
+        }
+        _ => None,
+    }
 }

@@ -81,6 +81,36 @@ impl ChatGptClient {
         }
     }
 
+    pub fn send_chat_request(
+        &self,
+        messages: &[Value],
+        temperature: Option<f64>,
+        model: Option<String>,
+        tools: Option<&[Value]>,
+    ) -> Result<Value> {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let messages_vec = messages.to_vec();
+            let tools_vec = tools.map(|items| items.to_vec());
+            let model_clone = model.clone();
+            tokio::task::block_in_place(move || {
+                handle.block_on(self.send_chat_request_inner(
+                    messages_vec,
+                    temperature,
+                    model_clone,
+                    tools_vec,
+                ))
+            })
+        } else {
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(self.send_chat_request_inner(
+                messages.to_vec(),
+                temperature,
+                model,
+                tools.map(|items| items.to_vec()),
+            ))
+        }
+    }
+
     async fn send_message_inner(
         &self,
         content: &str,
@@ -88,10 +118,10 @@ impl ChatGptClient {
         temperature: Option<f64>,
         model: Option<String>,
     ) -> Result<String> {
-        let builder = self.request_builder(content, prompt, temperature, model)?;
-
-        let res = builder.send().await?;
-        let data: Value = res.json().await?;
+        let builder_messages = Self::build_messages(content, prompt);
+        let data = self
+            .send_chat_request_inner(builder_messages, temperature, model, None)
+            .await?;
         let output = data["choices"][0]["message"]["content"]
             .as_str()
             .ok_or_else(|| anyhow!("Unexpected response {data}"))?;
@@ -99,29 +129,32 @@ impl ChatGptClient {
         Ok(output.to_string())
     }
 
+    async fn send_chat_request_inner(
+        &self,
+        messages: Vec<Value>,
+        temperature: Option<f64>,
+        model: Option<String>,
+        tools: Option<Vec<Value>>,
+    ) -> Result<Value> {
+        let builder = self.request_builder_from_messages(messages, temperature, model, tools)?;
+
+        let res = builder.send().await?;
+        let data: Value = res.json().await?;
+        Ok(data)
+    }
+
     fn build_client(&self) -> Result<Client> {
         let client = Client::builder().timeout(CONNECT_TIMEOUT).build()?;
         Ok(client)
     }
 
-    fn request_builder(
+    fn request_builder_from_messages(
         &self,
-        content: &str,
-        prompt: Option<String>,
+        messages: Vec<Value>,
         temperature: Option<f64>,
         model: Option<String>,
+        tools: Option<Vec<Value>>,
     ) -> Result<RequestBuilder> {
-        let user_message = json!({ "role": "user", "content": content });
-        let messages = match prompt {
-            Some(prompt) => {
-                let system_message = json!({ "role": "system", "content": prompt.trim() });
-                json!([system_message, user_message])
-            }
-            None => {
-                json!([user_message])
-            }
-        };
-
         // Use provided model or fall back to default
         let selected_model = model.unwrap_or_else(|| self.default_model.clone());
 
@@ -130,10 +163,15 @@ impl ChatGptClient {
             "messages": messages,
         });
 
-        if let Some(v) = temperature {
-            body.as_object_mut()
-                .and_then(|m| m.insert("temperature".into(), json!(v)));
-        }
+        if let Some(v) = temperature
+            && let Some(map) = body.as_object_mut() {
+                map.insert("temperature".into(), json!(v));
+            }
+
+        if let Some(tools) = tools
+            && let Some(map) = body.as_object_mut() {
+                map.insert("tools".into(), json!(tools));
+            }
 
         debug!("req: {:?}", body);
 
@@ -145,5 +183,15 @@ impl ChatGptClient {
             .json(&body);
 
         Ok(builder)
+    }
+
+    fn build_messages(content: &str, prompt: Option<String>) -> Vec<Value> {
+        let mut messages = Vec::new();
+        if let Some(prompt) = prompt
+            && !prompt.trim().is_empty() {
+                messages.push(json!({ "role": "system", "content": prompt.trim() }));
+            }
+        messages.push(json!({ "role": "user", "content": content }));
+        messages
     }
 }

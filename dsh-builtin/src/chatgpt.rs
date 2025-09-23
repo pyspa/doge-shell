@@ -1,7 +1,9 @@
 use super::ShellProxy;
 use dsh_openai::{ChatGptClient, OpenAiConfig};
 use dsh_types::{Context, ExitStatus};
+use indicatif::{ProgressBar, ProgressStyle};
 use serde_json::{Value, json};
+use std::time::Duration;
 
 /// Environment variable key for storing the chat prompt template
 const PROMPT_KEY: &str = "CHAT_PROMPT";
@@ -206,9 +208,18 @@ fn chat_with_tools(
             return Err("chat: exceeded maximum number of tool interactions".to_string());
         }
 
-        let response = client
-            .send_chat_request(&messages, temperature, model_override.clone(), Some(&tools))
-            .map_err(|err| format!("{err:?}"))?;
+        let response = {
+            let spinner_text = if iterations == 1 {
+                "Waiting for LLM response...".to_string()
+            } else {
+                format!("Waiting for LLM response... (attempt {iterations})")
+            };
+
+            let _spinner = SpinnerGuard::start(&spinner_text);
+            client
+                .send_chat_request(&messages, temperature, model_override.clone(), Some(&tools))
+                .map_err(|err| format!("{err:?}"))?
+        };
 
         let choice = response
             .get("choices")
@@ -262,6 +273,29 @@ fn chat_with_tools(
             .ok_or_else(|| format!("chat: assistant returned empty content {response}"))?;
 
         return Ok(content);
+    }
+}
+
+struct SpinnerGuard {
+    progress: ProgressBar,
+}
+
+impl SpinnerGuard {
+    fn start(message: &str) -> Self {
+        let progress = ProgressBar::new_spinner();
+        let style = ProgressStyle::with_template("{spinner} {msg}")
+            .unwrap_or_else(|_| ProgressStyle::default_spinner())
+            .tick_chars("-\\|/");
+        progress.set_style(style);
+        progress.set_message(message.to_string());
+        progress.enable_steady_tick(Duration::from_millis(80));
+        SpinnerGuard { progress }
+    }
+}
+
+impl Drop for SpinnerGuard {
+    fn drop(&mut self) {
+        self.progress.finish_and_clear();
     }
 }
 

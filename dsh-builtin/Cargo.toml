@@ -26,6 +26,7 @@ xdg.workspace = true
 getopts = "0.2.23"
 regex = "1.11"
 shell-words = "1.1"
+indicatif = "0.17"
 
 # HTTP server dependencies for serve command
 axum.workspace = true

@@ -12,6 +12,7 @@ mod alias;
 mod bg;
 pub mod cd;
 mod chatgpt;
+pub use chatgpt::execute_chat_message;
 mod dmv;
 mod fg;
 mod gco;

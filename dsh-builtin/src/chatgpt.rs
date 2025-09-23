@@ -37,6 +37,21 @@ pub fn chat(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> Exi
         }
     };
 
+    execute_chat_message(ctx, proxy, &message, model_override.as_deref())
+}
+
+/// Execute a chat request using the configured OpenAI client
+pub fn execute_chat_message(
+    ctx: &Context,
+    proxy: &mut dyn ShellProxy,
+    message: &str,
+    model_override: Option<&str>,
+) -> ExitStatus {
+    if message.trim().is_empty() {
+        ctx.write_stderr("chat: message content required").ok();
+        return ExitStatus::ExitedWith(1);
+    }
+
     let config = load_openai_config(proxy);
 
     if config.api_key().is_none() {
@@ -48,8 +63,9 @@ pub fn chat(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> Exi
     match ChatGptClient::try_from_config(&config) {
         Ok(client) => {
             let prompt = proxy.get_var(PROMPT_KEY);
+            let model_override = model_override.map(|model| model.to_string());
 
-            match client.send_message_with_model(&message, prompt, Some(0.1), model_override) {
+            match client.send_message_with_model(message, prompt, Some(0.1), model_override) {
                 Ok(res) => {
                     ctx.write_stdout(res.trim()).ok();
                     ExitStatus::ExitedWith(0)

@@ -9,6 +9,7 @@ use crate::process::{self, Job, JobProcess, Redirect, wait_pid_job};
 use anyhow::Context as _;
 use anyhow::{Result, anyhow, bail};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use dsh_builtin::execute_chat_message;
 use dsh_types::{Context, ExitStatus};
 use libc::{STDIN_FILENO, c_int};
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
@@ -323,6 +324,23 @@ impl Shell {
         }
         // TODO refactor context
         // let tmode = tcgetattr(0).expect("failed tcgetattr");
+
+        if let Some(rest) = input.trim_start().strip_prefix('!') {
+            disable_raw_mode().ok();
+            let message = rest.trim_start();
+            let status = execute_chat_message(ctx, self, message, None);
+            let code = match status {
+                ExitStatus::ExitedWith(exit) if exit >= 0 => {
+                    let normalized = exit.clamp(0, u8::MAX as i32) as u8;
+                    ExitCode::from(normalized)
+                }
+                ExitStatus::ExitedWith(_) => ExitCode::from(1),
+                ExitStatus::Running(_) => ExitCode::from(0),
+                ExitStatus::Break | ExitStatus::Continue | ExitStatus::Return => ExitCode::from(0),
+            };
+            enable_raw_mode().ok();
+            return Ok(code);
+        }
 
         let jobs = self.get_jobs(input)?;
         let mut last_exit_code = 0;

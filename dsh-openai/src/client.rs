@@ -164,14 +164,16 @@ impl ChatGptClient {
         });
 
         if let Some(v) = temperature
-            && let Some(map) = body.as_object_mut() {
-                map.insert("temperature".into(), json!(v));
-            }
+            && let Some(map) = body.as_object_mut()
+        {
+            map.insert("temperature".into(), json!(v));
+        }
 
         if let Some(tools) = tools
-            && let Some(map) = body.as_object_mut() {
-                map.insert("tools".into(), json!(tools));
-            }
+            && let Some(map) = body.as_object_mut()
+        {
+            map.insert("tools".into(), json!(tools));
+        }
 
         debug!("req: {:?}", body);
 
@@ -188,9 +190,10 @@ impl ChatGptClient {
     fn build_messages(content: &str, prompt: Option<String>) -> Vec<Value> {
         let mut messages = Vec::new();
         if let Some(prompt) = prompt
-            && !prompt.trim().is_empty() {
-                messages.push(json!({ "role": "system", "content": prompt.trim() }));
-            }
+            && !prompt.trim().is_empty()
+        {
+            messages.push(json!({ "role": "system", "content": prompt.trim() }));
+        }
         messages.push(json!({ "role": "user", "content": content }));
         messages
     }

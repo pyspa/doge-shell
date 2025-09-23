@@ -21,9 +21,11 @@ tabled.workspace = true
 nix.workspace = true
 skim.workspace = true
 serde_json.workspace = true
+xdg.workspace = true
 
 getopts = "0.2.23"
 regex = "1.11"
+shell-words = "1.1"
 
 # HTTP server dependencies for serve command
 axum.workspace = true

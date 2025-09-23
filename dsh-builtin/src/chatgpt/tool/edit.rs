@@ -2,11 +2,13 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::{Component, Path};
 
-pub fn build_tools() -> Vec<Value> {
-    vec![json!({
+pub(crate) const NAME: &str = "edit";
+
+pub(crate) fn definition() -> Value {
+    json!({
         "type": "function",
         "function": {
-            "name": "edit",
+            "name": NAME,
             "description": "Create or overwrite a workspace file with the provided contents.",
             "parameters": {
                 "type": "object",
@@ -24,31 +26,10 @@ pub fn build_tools() -> Vec<Value> {
                 "additionalProperties": false
             }
         }
-    })]
+    })
 }
 
-pub fn execute_tool_call(tool_call: &Value) -> Result<String, String> {
-    let function = tool_call
-        .get("function")
-        .ok_or_else(|| "chat: tool call missing function".to_string())?;
-
-    let name = function
-        .get("name")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "chat: tool call missing function name".to_string())?;
-
-    let arguments = function
-        .get("arguments")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-
-    match name {
-        "edit" => run_edit_tool(arguments),
-        other => Err(format!("chat: unsupported tool `{other}`")),
-    }
-}
-
-fn run_edit_tool(arguments: &str) -> Result<String, String> {
+pub(crate) fn run(arguments: &str) -> Result<String, String> {
     let parsed: Value = serde_json::from_str(arguments)
         .map_err(|err| format!("chat: invalid JSON arguments for edit tool: {err}"))?;
 
@@ -80,10 +61,11 @@ fn run_edit_tool(arguments: &str) -> Result<String, String> {
     }
 
     if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)
-                .map_err(|err| format!("chat: failed to create parent directories: {err}"))?;
-        }
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("chat: failed to create parent directories: {err}"))?;
+    }
 
     fs::write(path, contents)
         .map_err(|err| format!("chat: failed to write file `{path_value}`: {err}"))?;

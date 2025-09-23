@@ -454,6 +454,23 @@ Integrates with OpenAI-compatible chat APIs for AI-powered assistance within the
 🐕 < chat "Write a bash script to backup files"
 ```
 
+##### Tool calling
+
+The chat assistant can invoke tools when additional actions are required:
+
+- `edit` overwrites workspace files with provided contents.
+- `execute` runs an allowlisted shell command via `bash -lc` and returns the exit code, stdout, and stderr (also streamed back into the shell).
+
+Configure the `execute` allowlist in `~/.config/dsh/openai-execute-tool.json`:
+
+```json
+{
+  "allowed_commands": ["ls", "git", "cargo"]
+}
+```
+
+Only commands whose first token appears in `allowed_commands` will run. You can also provide a comma- or newline-separated list via the `AI_CHAT_EXECUTE_ALLOWLIST` environment variable. After execution, the tool passes the captured output back to the model so it can summarize the result.
+
 **Requirements:**
 
 - Set `AI_CHAT_API_KEY` (or legacy `OPENAI_API_KEY`) with your API key

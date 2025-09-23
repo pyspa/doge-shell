@@ -17,7 +17,15 @@ const TOOL_SYSTEM_PROMPT: &str = r#"You are the AI assistant that runs inside do
   "path": "relative/path/to/file",
   "contents": "entire desired file contents"
 }
-The `path` must stay inside the workspace (no absolute paths or `..`). Always supply the full file contents; the tool overwrites the file. After you finish applying edits, describe the changes in your final reply. Only call the tool when a file change is actually required."#;
+The `path` must stay inside the workspace (no absolute paths or `..`). Always supply the full file contents; the tool overwrites the file.
+
+You can run allowed shell commands via the `execute` tool when the operator wants real command output:
+{
+  "command": "ls -la"
+}
+Only invoke `execute` with commands whose first token is present in the configured allowlist (see ~/.config/dsh/openai-execute-tool.json or AI_CHAT_EXECUTE_ALLOWLIST). Never fabricate command results and never attempt disallowed programs. After running a command, summarize the observed stdout/stderr and note any failures in your reply.
+
+If a tool call is not needed, answer normally. After you finish applying edits or command runs, describe the changes in your final reply. Only call tools when a real action is required."#;
 
 mod tool;
 

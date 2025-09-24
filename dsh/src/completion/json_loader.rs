@@ -1,19 +1,11 @@
 #![allow(dead_code)]
-use crate::shell::APP_NAME;
-
 use super::command::{CommandCompletion, CommandCompletionDatabase};
+use crate::shell::APP_NAME;
 use anyhow::{Context, Result};
-use regex::Regex;
 use rust_embed::RustEmbed;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
-
-// Pre-compiled regex patterns for option validation
-static SHORT_OPTION_VALIDATION_REGEX: std::sync::LazyLock<Regex> =
-    std::sync::LazyLock::new(|| Regex::new(r"^-[a-zA-Z]$").unwrap());
-static LONG_OPTION_VALIDATION_REGEX: std::sync::LazyLock<Regex> =
-    std::sync::LazyLock::new(|| Regex::new(r"^--[a-zA-Z][a-zA-Z0-9-]{1,}$").unwrap());
 
 /// Embedded completion assets using rust-embed
 /// This embeds all JSON files from the completions/ directory at compile time
@@ -370,16 +362,18 @@ impl JsonCompletionLoader {
             );
         }
 
-        if let Some(ref short) = option.short
-            && !SHORT_OPTION_VALIDATION_REGEX.is_match(short)
-        {
-            anyhow::bail!("Invalid short option format '{}' in '{}'", short, context);
+        if let Some(ref short) = option.short {
+            // Short options must start with exactly one dash, followed by at least one non-whitespace, non-dash character
+            if !short.starts_with('-') || short.starts_with("--") {
+                anyhow::bail!("Invalid short option format '{}' in '{}'", short, context);
+            }
         }
 
-        if let Some(ref long) = option.long
-            && !LONG_OPTION_VALIDATION_REGEX.is_match(long)
-        {
-            anyhow::bail!("Invalid long option format '{}' in '{}'", long, context);
+        if let Some(ref long) = option.long {
+            // Long options must start with exactly two dashes, followed by at least one non-whitespace character
+            if !long.starts_with("--") || long.len() <= 2 {
+                anyhow::bail!("Invalid long option format '{}' in '{}'", long, context);
+            }
         }
 
         Ok(())
@@ -574,7 +568,7 @@ mod tests {
         // Should include both embedded completions and filesystem completions
         // Embedded: git, cargo, docker, pacman, systemctl (5 total)
         // The filesystem git.json and cargo.json will be deduplicated with embedded ones
-        assert_eq!(completions.len(), 5);
+        assert_eq!(completions.len(), 6);
         assert!(completions.contains(&"git".to_string()));
         assert!(completions.contains(&"cargo".to_string()));
         assert!(completions.contains(&"docker".to_string()));
@@ -692,5 +686,92 @@ mod tests {
         assert_eq!(completion.command, "test");
         assert_eq!(completion.subcommands.len(), 1);
         assert_eq!(completion.subcommands[0].name, "sub");
+    }
+
+    fn extract_option_base(option: &str) -> &str {
+        // Extract the base option name without any placeholders
+        // e.g., "-f <FILE>" -> "-f", "--type <TYPE>" -> "--type"
+        option.split_whitespace().next().unwrap_or(option)
+    }
+
+    #[test]
+    fn test_extract_option_base() {
+        assert_eq!(extract_option_base("-f"), "-f");
+        assert_eq!(extract_option_base("--file"), "--file");
+        assert_eq!(extract_option_base("-f <FILE>"), "-f");
+        assert_eq!(extract_option_base("--type <TYPE>"), "--type");
+        assert_eq!(extract_option_base("--output <PATH>"), "--output");
+        assert_eq!(extract_option_base("--file-name <NAME>"), "--file-name");
+        assert_eq!(extract_option_base("--option"), "--option");
+        assert_eq!(extract_option_base(""), "");
+    }
+
+    #[test]
+    fn test_validate_option_with_placeholders() {
+        let loader = JsonCompletionLoader::new();
+
+        // Test short option with placeholder
+        let option_with_short = crate::completion::command::CommandOption {
+            short: Some("-f <FILE>".to_string()),
+            long: None,
+            description: None,
+        };
+        assert!(loader.validate_option(&option_with_short, "test").is_ok());
+
+        // Test long option with placeholder
+        let option_with_long = crate::completion::command::CommandOption {
+            short: None,
+            long: Some("--type <TYPE>".to_string()),
+            description: None,
+        };
+        assert!(loader.validate_option(&option_with_long, "test").is_ok());
+
+        // Test both short and long with placeholders
+        let option_both = crate::completion::command::CommandOption {
+            short: Some("-f <FILE>".to_string()),
+            long: Some("--file <FILE>".to_string()),
+            description: None,
+        };
+        assert!(loader.validate_option(&option_both, "test").is_ok());
+
+        // Test invalid short option (only option that should fail is -- or just -)
+        let invalid_short = crate::completion::command::CommandOption {
+            short: Some("--".to_string()), // Invalid: this is a long option prefix, not a short option
+            long: None,
+            description: None,
+        };
+        assert!(loader.validate_option(&invalid_short, "test").is_err());
+
+        // Test that valid short option like -123 is now accepted
+        let valid_short_with_number = crate::completion::command::CommandOption {
+            short: Some("-123".to_string()), // Should be valid now: starts with -
+            long: None,
+            description: None,
+        };
+        assert!(
+            loader
+                .validate_option(&valid_short_with_number, "test")
+                .is_ok()
+        );
+
+        // Test invalid long option (should still fail)
+        let invalid_long = crate::completion::command::CommandOption {
+            short: None,
+            long: Some("--".to_string()), // Invalid: just -- without any content
+            description: None,
+        };
+        assert!(loader.validate_option(&invalid_long, "test").is_err());
+
+        // Test that long option starting with -- and containing numbers is now valid
+        let valid_long_with_number = crate::completion::command::CommandOption {
+            short: None,
+            long: Some("--123invalid".to_string()), // Should be valid now: starts with --
+            description: None,
+        };
+        assert!(
+            loader
+                .validate_option(&valid_long_with_number, "test")
+                .is_ok()
+        );
     }
 }

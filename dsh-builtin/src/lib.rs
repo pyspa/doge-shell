@@ -112,6 +112,9 @@ impl BuiltinCommandFn {
     }
 }
 
+/// Type alias for the builtin command function type to reduce complexity
+type BuiltinFn = fn(&Context, Vec<String>, &mut dyn ShellProxy) -> ExitStatus;
+
 impl BuiltinCommandTrait for BuiltinCommandFn {
     fn execute(&self, ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
         (self.func)(ctx, argv, proxy)
@@ -283,9 +286,7 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
 
 /// Retrieves a builtin command function by name
 /// Returns None if the command is not found
-pub fn get_command(
-    name: &str,
-) -> Option<fn(&Context, Vec<String>, &mut dyn ShellProxy) -> ExitStatus> {
+pub fn get_command(name: &str) -> Option<BuiltinFn> {
     if let Ok(builtin) = BUILTIN_COMMAND.lock() {
         // Find the BuiltinCommandFn inside the trait object and extract its func
         for (key, cmd) in builtin.iter() {

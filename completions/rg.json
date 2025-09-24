@@ -1,0 +1,112 @@
+{
+  "command": "rg",
+  "description": "A fast, user-friendly alternative to grep.",
+  "global_options": [
+    {
+      "short": "-i",
+      "long": "--ignore-case",
+      "description": "Ignore case distinctions in PATTERN.",
+      "takes_value": false
+    },
+    {
+      "short": "-w",
+      "long": "--word-regexp",
+      "description": "Select only matches that match whole words.",
+      "takes_value": false
+    },
+    {
+      "short": "-F",
+      "long": "--fixed-strings",
+      "description": "Treat PATTERN as fixed strings.",
+      "takes_value": false
+    },
+    {
+      "short": "-v",
+      "long": "--invert-match",
+      "description": "Select non-matching lines.",
+      "takes_value": false
+    },
+    {
+      "short": "-c",
+      "long": "--count",
+      "description": "Suppress normal output; show count of matching lines.",
+      "takes_value": false
+    },
+    {
+      "short": "-l",
+      "long": "--files-with-matches",
+      "description": "Suppress normal output; show file names with matches.",
+      "takes_value": false
+    },
+    {
+      "long": "--files-without-match",
+      "description": "Suppress normal output; show file names without matches.",
+      "takes_value": false
+    },
+    {
+      "short": "-g",
+      "long": "--glob <GLOB>",
+      "description": "Include or exclude files with GLOB.",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "long": "--type <TYPE>",
+      "description": "Only search files matching TYPE (e.g., 'rust', 'py'). See 'rg --type-list'.",
+      "takes_value": true,
+      "value_type": { "type": "Choice", "data": ["rust", "python", "json", "md", "html"] }
+    },
+    {
+      "long": "--max-columns <NUM>",
+      "description": "The maximum number of columns to read from each file.",
+      "takes_value": true,
+      "value_type": { "type": "Number" }
+    },
+    {
+      "long": "--color <WHEN>",
+      "description": "When to use color in output (always, never, auto).",
+      "takes_value": true,
+      "value_type": { "type": "Choice", "data": ["always", "never", "auto"] }
+    },
+    {
+      "short": "-r",
+      "long": "--replace <STRING>",
+      "description": "Replace matches with STRING.",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "long": "--max-filesize <SIZE>",
+      "description": "Ignore files larger than SIZE (e.g., '10m' for 10MB).",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "short": "-j",
+      "long": "--threads <NUM>",
+      "description": "Number of threads to use.",
+      "takes_value": true,
+      "value_type": { "type": "Number" }
+    },
+    {
+      "long": "--smart-case",
+      "description": "Case insensitive unless PATTERN has uppercase.",
+      "takes_value": false
+    }
+  ],
+  "subcommands": [],
+  "arguments": [
+    {
+      "name": "PATTERN",
+      "description": "The search pattern (regular expression).",
+      "required": true,
+      "arg_type": { "type": "Regex" }
+    },
+    {
+      "name": "PATH",
+      "description": "Path(s) to search (directories or files).",
+      "multiple": true,
+      "arg_type": { "type": "Directory" }
+    }
+  ]
+}

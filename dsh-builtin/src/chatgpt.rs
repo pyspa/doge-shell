@@ -241,9 +241,11 @@ fn chat_with_tools(
 
         let response = {
             let spinner_text = if iterations == 1 {
-                "Waiting for LLM response...".to_string()
+                // "Waiting for LLM response...".to_string()
+                "".to_string()
             } else {
-                format!("Waiting for LLM response... (attempt {iterations})")
+                //format!("Waiting for LLM response... (attempt {iterations})")
+                "".to_string()
             };
 
             let _spinner = SpinnerGuard::start(&spinner_text);

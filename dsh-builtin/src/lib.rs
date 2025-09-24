@@ -17,6 +17,7 @@ mod dmv;
 mod fg;
 mod gco;
 mod glog;
+mod help;
 mod history;
 mod jobs;
 pub mod lisp;
@@ -130,6 +131,7 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, BuiltinCommand>>> = Lazy::n
     builtin.insert("uuid", uuid::command as BuiltinCommand);
     builtin.insert("dmv", dmv::command as BuiltinCommand);
     builtin.insert("reload", reload::command as BuiltinCommand);
+    builtin.insert("help", help::command as BuiltinCommand);
 
     Mutex::new(builtin)
 });

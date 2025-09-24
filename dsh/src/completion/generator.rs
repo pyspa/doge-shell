@@ -29,6 +29,11 @@ impl CompletionGenerator {
             .collect()
     }
 
+    /// Check if a command has JSON completion data available
+    pub fn has_command_completion(&self, command: &str) -> bool {
+        self.database.get_command(command).is_some()
+    }
+
     /// Generate completion candidates from parsed command
     pub fn generate_candidates(&self, parsed: &ParsedCommand) -> Result<Vec<CompletionCandidate>> {
         match &parsed.completion_context {
@@ -99,6 +104,29 @@ impl CompletionGenerator {
                             subcommand.name.clone(),
                             subcommand.description.clone(),
                         ));
+                    }
+                }
+
+                // If no subcommands exist but global options are available,
+                // show global options as alternatives when there are no subcommands to show
+                if command_completion.subcommands.is_empty()
+                    && !command_completion.global_options.is_empty()
+                {
+                    for option in &command_completion.global_options {
+                        if let Some(ref short) = option.short
+                            && short.starts_with(&parsed.current_token) {
+                                candidates.push(CompletionCandidate::short_option(
+                                    short.clone(),
+                                    option.description.clone(),
+                                ));
+                            }
+                        if let Some(ref long) = option.long
+                            && long.starts_with(&parsed.current_token) {
+                                candidates.push(CompletionCandidate::long_option(
+                                    long.clone(),
+                                    option.description.clone(),
+                                ));
+                            }
                     }
                 }
             }

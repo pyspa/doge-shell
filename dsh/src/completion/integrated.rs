@@ -180,6 +180,7 @@ impl IntegratedCompletionEngine {
         }
 
         // 1. JSON-based command completion (if no dynamic completions)
+        let mut has_command_completion_data = false;
         if let Some(ref generator) = self.command_generator {
             debug!("Using JSON completion generator for input: '{}'", input);
             let parsed = self.parser.parse(input, cursor_pos);
@@ -189,6 +190,9 @@ impl IntegratedCompletionEngine {
                 debug!("No completion context found - skipping JSON completion");
                 return all_candidates;
             }
+
+            // Check if the command has JSON completion data available
+            has_command_completion_data = generator.has_command_completion(&parsed.command);
 
             match generator.generate_candidates(&parsed) {
                 Ok(command_candidates) => {
@@ -219,16 +223,25 @@ impl IntegratedCompletionEngine {
             let _args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
         }
 
-        // 3. History-based completion
-        let context = CompletionContext::new(current_dir.to_string_lossy().to_string());
-        let history_candidates = self.history_completion.complete_command(input, &context);
-        let enhanced_candidates = history_candidates
-            .into_iter()
-            .map(|c| self.convert_legacy_candidate(c, CandidateSource::History))
-            .collect::<Vec<_>>();
+        // 3. History-based completion - only add if the command doesn't have specific JSON completion data
+        // This prevents showing generic history candidates when a command has specific completion data but returns no candidates
+        let should_show_history = !has_command_completion_data;
+        if should_show_history {
+            let context = CompletionContext::new(current_dir.to_string_lossy().to_string());
+            let history_candidates = self.history_completion.complete_command(input, &context);
+            let enhanced_candidates = history_candidates
+                .into_iter()
+                .map(|c| self.convert_legacy_candidate(c, CandidateSource::History))
+                .collect::<Vec<_>>();
 
-        debug!("Generated {} history candidates", enhanced_candidates.len());
-        all_candidates.extend(enhanced_candidates);
+            debug!("Generated {} history candidates", enhanced_candidates.len());
+            all_candidates.extend(enhanced_candidates);
+        } else {
+            debug!(
+                "Skipping history completion as command '{}' has JSON completion data",
+                self.parser.parse(input, cursor_pos).command
+            );
+        }
 
         // 4. Deduplication and sorting
         self.deduplicate_and_sort(all_candidates, max_results)

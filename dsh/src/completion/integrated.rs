@@ -16,6 +16,104 @@ use tracing::{debug, warn};
 static WHITESPACE_SPLIT_REGEX: std::sync::LazyLock<Regex> =
     std::sync::LazyLock::new(|| Regex::new(r"\s+").unwrap());
 
+#[derive(Debug, Clone, Copy)]
+struct CompletionRequest<'a> {
+    input: &'a str,
+    cursor_pos: usize,
+    current_dir: &'a Path,
+    max_results: usize,
+}
+
+impl<'a> CompletionRequest<'a> {
+    fn new(input: &'a str, cursor_pos: usize, current_dir: &'a Path, max_results: usize) -> Self {
+        Self {
+            input,
+            cursor_pos,
+            current_dir,
+            max_results,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct CandidateBatch {
+    candidates: Vec<EnhancedCandidate>,
+    exclusive: bool,
+}
+
+impl CandidateBatch {
+    fn empty() -> Self {
+        Self {
+            candidates: Vec::new(),
+            exclusive: false,
+        }
+    }
+
+    fn inclusive(candidates: Vec<EnhancedCandidate>) -> Self {
+        Self {
+            candidates,
+            exclusive: false,
+        }
+    }
+
+    fn exclusive(candidates: Vec<EnhancedCandidate>) -> Self {
+        Self {
+            candidates,
+            exclusive: true,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CommandCollection {
+    batch: CandidateBatch,
+    has_command_specific_data: bool,
+}
+
+impl CommandCollection {
+    fn empty() -> Self {
+        Self {
+            batch: CandidateBatch::empty(),
+            has_command_specific_data: false,
+        }
+    }
+}
+
+struct CandidateAggregator<'a> {
+    engine: &'a IntegratedCompletionEngine,
+    max_results: usize,
+    collected: Vec<EnhancedCandidate>,
+}
+
+impl<'a> CandidateAggregator<'a> {
+    fn new(engine: &'a IntegratedCompletionEngine, max_results: usize) -> Self {
+        Self {
+            engine,
+            max_results,
+            collected: Vec::new(),
+        }
+    }
+
+    fn extend(&mut self, batch: CandidateBatch) -> bool {
+        if batch.candidates.is_empty() {
+            return true;
+        }
+
+        debug!(
+            "Aggregating {} candidates (exclusive: {})",
+            batch.candidates.len(),
+            batch.exclusive
+        );
+        self.collected.extend(batch.candidates);
+        !batch.exclusive
+    }
+
+    fn finalize(self) -> Vec<EnhancedCandidate> {
+        self.engine
+            .deduplicate_and_sort(self.collected, self.max_results)
+    }
+}
+
 /// Integrated completion engine - integrates all completion features
 pub struct IntegratedCompletionEngine {
     /// JSON-based command completion
@@ -146,105 +244,154 @@ impl IntegratedCompletionEngine {
             input, cursor_pos, current_dir
         );
 
-        let mut all_candidates = Vec::new();
+        let request = CompletionRequest::new(input, cursor_pos, current_dir, max_results);
+        let mut aggregator = CandidateAggregator::new(self, request.max_results);
 
-        // 0. Check dynamic completions first (highest priority)
+        // 0. Dynamic completion (highest priority, exclusive when available)
         let parsed_command_line = self.convert_to_parsed_command_line(input, cursor_pos);
-        if self.dynamic_registry.matches(&parsed_command_line) {
-            debug!("Using dynamic completion for input: '{}'", input);
-            match self
-                .dynamic_registry
-                .generate_candidates(&parsed_command_line)
-            {
-                Ok(dynamic_candidates) => {
-                    let enhanced_candidates = dynamic_candidates
-                        .into_iter()
-                        .map(|c| self.convert_to_enhanced_candidate(c, CandidateSource::Dynamic))
-                        .collect::<Vec<_>>();
-
-                    debug!(
-                        "Dynamic completion generated {} candidates for '{}'",
-                        enhanced_candidates.len(),
-                        input
-                    );
-
-                    if !enhanced_candidates.is_empty() {
-                        all_candidates.extend(enhanced_candidates);
-                        return self.deduplicate_and_sort(all_candidates, max_results);
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to generate dynamic completion candidates: {}", e);
-                }
-            }
+        let dynamic_batch = self.collect_dynamic_candidates(&request, &parsed_command_line);
+        if !aggregator.extend(dynamic_batch) {
+            return aggregator.finalize();
         }
 
-        // 1. JSON-based command completion (if no dynamic completions)
-        let mut has_command_completion_data = false;
-        if let Some(ref generator) = self.command_generator {
-            debug!("Using JSON completion generator for input: '{}'", input);
-            let parsed = self.parser.parse(input, cursor_pos);
-            debug!("Parsed command: {:?}", parsed);
-
-            if parsed.completion_context == parser::CompletionContext::Command {
-                debug!("No completion context found - skipping JSON completion");
-                return all_candidates;
-            }
-
-            // Check if the command has JSON completion data available
-            has_command_completion_data = generator.has_command_completion(&parsed.command);
-
-            match generator.generate_candidates(&parsed) {
-                Ok(command_candidates) => {
-                    let enhanced_candidates = command_candidates
-                        .into_iter()
-                        .map(|c| self.convert_to_enhanced_candidate(c, CandidateSource::Command))
-                        .collect::<Vec<_>>();
-
-                    debug!(
-                        "JSON completion generated {} candidates for '{}'",
-                        enhanced_candidates.len(),
-                        input
-                    );
-                    all_candidates.extend(enhanced_candidates);
-                }
-                Err(e) => {
-                    warn!("Failed to generate JSON completion candidates: {}", e);
-                }
-            }
-        } else {
-            debug!("No JSON completion generator available - skipping JSON completion");
+        // 1. JSON-based command completion
+        let parsed_command = self.parser.parse(input, cursor_pos);
+        let command_collection = self.collect_command_candidates(&request, &parsed_command);
+        let has_command_specific_data = command_collection.has_command_specific_data;
+        if !aggregator.extend(command_collection.batch) {
+            return aggregator.finalize();
         }
 
-        // 2. Existing context completion
-        let parts: Vec<&str> = WHITESPACE_SPLIT_REGEX.split(input).collect();
+        // 2. Context analysis placeholder (reserved for future providers)
+        let parts: Vec<&str> = WHITESPACE_SPLIT_REGEX.split(request.input).collect();
         if !parts.is_empty() {
             let _command = parts[0];
             let _args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
         }
 
-        // 3. History-based completion - only add if the command doesn't have specific JSON completion data
-        // This prevents showing generic history candidates when a command has specific completion data but returns no candidates
-        let should_show_history = !has_command_completion_data;
-        if should_show_history {
-            let context = CompletionContext::new(current_dir.to_string_lossy().to_string());
-            let history_candidates = self.history_completion.complete_command(input, &context);
-            let enhanced_candidates = history_candidates
-                .into_iter()
-                .map(|c| self.convert_legacy_candidate(c, CandidateSource::History))
-                .collect::<Vec<_>>();
-
-            debug!("Generated {} history candidates", enhanced_candidates.len());
-            all_candidates.extend(enhanced_candidates);
+        // 3. History-based completion (skipped when command-specific data exists)
+        if !has_command_specific_data {
+            let history_batch = self.collect_history_candidates(&request);
+            if !aggregator.extend(history_batch) {
+                return aggregator.finalize();
+            }
         } else {
             debug!(
                 "Skipping history completion as command '{}' has JSON completion data",
-                self.parser.parse(input, cursor_pos).command
+                parsed_command.command
             );
         }
 
-        // 4. Deduplication and sorting
-        self.deduplicate_and_sort(all_candidates, max_results)
+        aggregator.finalize()
+    }
+
+    fn collect_dynamic_candidates(
+        &self,
+        request: &CompletionRequest,
+        parsed_command_line: &ParsedCommandLine,
+    ) -> CandidateBatch {
+        if !self.dynamic_registry.matches(parsed_command_line) {
+            return CandidateBatch::empty();
+        }
+
+        debug!("Using dynamic completion for input: '{}'", request.input);
+        match self
+            .dynamic_registry
+            .generate_candidates(parsed_command_line)
+        {
+            Ok(dynamic_candidates) => {
+                let enhanced_candidates = dynamic_candidates
+                    .into_iter()
+                    .map(|c| self.convert_to_enhanced_candidate(c, CandidateSource::Dynamic))
+                    .collect::<Vec<_>>();
+
+                debug!(
+                    "Dynamic completion generated {} candidates for '{}'",
+                    enhanced_candidates.len(),
+                    request.input
+                );
+
+                if enhanced_candidates.is_empty() {
+                    CandidateBatch::empty()
+                } else {
+                    CandidateBatch::exclusive(enhanced_candidates)
+                }
+            }
+            Err(e) => {
+                warn!("Failed to generate dynamic completion candidates: {}", e);
+                CandidateBatch::empty()
+            }
+        }
+    }
+
+    fn collect_command_candidates(
+        &self,
+        request: &CompletionRequest,
+        parsed_command: &parser::ParsedCommand,
+    ) -> CommandCollection {
+        if parsed_command.completion_context == parser::CompletionContext::Command {
+            debug!("No completion context found - skipping JSON completion");
+            return CommandCollection::empty();
+        }
+
+        let Some(generator) = &self.command_generator else {
+            debug!("No JSON completion generator available - skipping JSON completion");
+            return CommandCollection::empty();
+        };
+
+        debug!(
+            "Using JSON completion generator for input: '{}'",
+            request.input
+        );
+
+        let has_command_specific_data = generator.has_command_completion(&parsed_command.command);
+
+        match generator.generate_candidates(parsed_command) {
+            Ok(command_candidates) => {
+                let enhanced_candidates = command_candidates
+                    .into_iter()
+                    .map(|c| self.convert_to_enhanced_candidate(c, CandidateSource::Command))
+                    .collect::<Vec<_>>();
+
+                debug!(
+                    "JSON completion generated {} candidates for '{}'",
+                    enhanced_candidates.len(),
+                    request.input
+                );
+
+                CommandCollection {
+                    batch: CandidateBatch::inclusive(enhanced_candidates),
+                    has_command_specific_data,
+                }
+            }
+            Err(e) => {
+                warn!("Failed to generate JSON completion candidates: {}", e);
+                CommandCollection {
+                    batch: CandidateBatch::empty(),
+                    has_command_specific_data,
+                }
+            }
+        }
+    }
+
+    fn collect_history_candidates(&self, request: &CompletionRequest) -> CandidateBatch {
+        let context = CompletionContext::new(request.current_dir.to_string_lossy().to_string());
+        let history_candidates = self
+            .history_completion
+            .complete_command(request.input, &context);
+        let enhanced_candidates = history_candidates
+            .into_iter()
+            .map(|c| self.convert_legacy_candidate(c, CandidateSource::History))
+            .collect::<Vec<_>>();
+
+        debug!("Generated {} history candidates", enhanced_candidates.len());
+
+        CandidateBatch::inclusive(enhanced_candidates)
+    }
+
+    fn priority_from_source(source: CandidateSource, bias: i32) -> u32 {
+        let base = source.base_priority() as i32 + bias;
+        base.max(0) as u32
     }
 
     /// Convert CompletionCandidate to EnhancedCandidate
@@ -302,12 +449,7 @@ impl IntegratedCompletionEngine {
             text,
             description,
             candidate_type,
-            priority: match source {
-                CandidateSource::Dynamic => 120, // Highest priority
-                CandidateSource::Command => 100,
-                CandidateSource::Context => 80,
-                CandidateSource::History => 60,
-            },
+            priority: source.base_priority(),
             source,
         }
     }
@@ -494,6 +636,18 @@ pub enum CandidateSource {
     Dynamic,
 }
 
+impl CandidateSource {
+    /// Base priority used for ordering candidates contributed by this source
+    pub fn base_priority(&self) -> u32 {
+        match self {
+            CandidateSource::Dynamic => 120,
+            CandidateSource::Command => 100,
+            CandidateSource::Context => 80,
+            CandidateSource::History => 60,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -571,5 +725,36 @@ mod tests {
         assert!(display_text.contains("🔧"));
         assert!(display_text.contains("--verbose"));
         assert!(display_text.contains("Show detailed output"));
+    }
+
+    #[test]
+    fn aggregator_stops_after_exclusive_batch() {
+        let engine = IntegratedCompletionEngine::new();
+        let mut aggregator = CandidateAggregator::new(&engine, 10);
+
+        let history_candidate = EnhancedCandidate {
+            text: "history".to_string(),
+            description: None,
+            candidate_type: CandidateType::Generic,
+            priority: CandidateSource::History.base_priority(),
+            source: CandidateSource::History,
+        };
+
+        assert!(aggregator.extend(CandidateBatch::inclusive(vec![history_candidate])));
+
+        let dynamic_candidate = EnhancedCandidate {
+            text: "dynamic".to_string(),
+            description: None,
+            candidate_type: CandidateType::Generic,
+            priority: CandidateSource::Dynamic.base_priority(),
+            source: CandidateSource::Dynamic,
+        };
+
+        assert!(!aggregator.extend(CandidateBatch::exclusive(vec![dynamic_candidate])));
+
+        let result = aggregator.finalize();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].text, "dynamic");
+        assert_eq!(result[1].text, "history");
     }
 }

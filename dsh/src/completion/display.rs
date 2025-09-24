@@ -1,9 +1,11 @@
 #![allow(dead_code)]
+use super::ui::CompletionUi;
 use anyhow::Result;
 use crossterm::style::{Color, Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{Clear, ClearType};
 use crossterm::{cursor, execute, queue};
 use serde::{Deserialize, Serialize};
+use skim::prelude::SkimItem;
 use std::io::{Write, stdout};
 use tracing::debug;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -707,6 +709,41 @@ impl CompletionDisplay {
 //     let display = CompletionDisplay::with_default_config();
 //     display.display_candidates(candidates)
 // }
+
+impl CompletionUi for CompletionDisplay {
+    fn show(&mut self) -> Result<()> {
+        self.display()
+    }
+
+    fn refresh_selection(&mut self) -> Result<()> {
+        self.update_selection()
+    }
+
+    fn clear(&mut self) -> Result<()> {
+        self.clear_display()
+    }
+
+    fn move_up(&mut self) {
+        CompletionDisplay::move_up(self);
+    }
+
+    fn move_down(&mut self) {
+        CompletionDisplay::move_down(self);
+    }
+
+    fn move_left(&mut self) {
+        CompletionDisplay::move_left(self);
+    }
+
+    fn move_right(&mut self) {
+        CompletionDisplay::move_right(self);
+    }
+
+    fn selected_output(&self) -> Option<String> {
+        self.get_selected()
+            .map(|candidate| candidate.output().to_string())
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd, Eq, Ord)]
 pub enum Candidate {

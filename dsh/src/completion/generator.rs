@@ -114,19 +114,21 @@ impl CompletionGenerator {
                 {
                     for option in &command_completion.global_options {
                         if let Some(ref short) = option.short
-                            && short.starts_with(&parsed.current_token) {
-                                candidates.push(CompletionCandidate::short_option(
-                                    short.clone(),
-                                    option.description.clone(),
-                                ));
-                            }
+                            && short.starts_with(&parsed.current_token)
+                        {
+                            candidates.push(CompletionCandidate::short_option(
+                                short.clone(),
+                                option.description.clone(),
+                            ));
+                        }
                         if let Some(ref long) = option.long
-                            && long.starts_with(&parsed.current_token) {
-                                candidates.push(CompletionCandidate::long_option(
-                                    long.clone(),
-                                    option.description.clone(),
-                                ));
-                            }
+                            && long.starts_with(&parsed.current_token)
+                        {
+                            candidates.push(CompletionCandidate::long_option(
+                                long.clone(),
+                                option.description.clone(),
+                            ));
+                        }
                     }
                 }
             }

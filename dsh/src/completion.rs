@@ -1,11 +1,11 @@
 use crate::completion::display::CompletionConfig;
+use crate::completion::ui::{CompletionInteraction, CompletionOutcome, TerminalEventSource};
 use crate::dirs::is_executable;
 use crate::environment::get_data_file;
 use crate::input::Input;
 use crate::lisp::Value;
 use crate::repl::Repl;
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, read};
 use crossterm::{cursor, execute};
 use dsh_frecency::ItemStats;
 use regex::Regex;
@@ -31,6 +31,7 @@ mod history;
 pub mod integrated;
 mod json_loader;
 mod parser;
+mod ui;
 
 // Re-export from completion module
 pub use crate::completion::command::CompletionType;
@@ -392,51 +393,16 @@ pub fn select_completion_items_with_config(
     let mut display =
         CompletionDisplay::new_with_config(items.clone(), prompt_text, input_text, config);
 
-    // Show initial display (cursor will be hidden in display method)
-    if display.display().is_err() {
-        // If display fails, make sure cursor is shown
-        let _ = execute!(stdout(), cursor::Show);
-        return None;
-    }
+    let mut controller = CompletionInteraction::new(TerminalEventSource);
 
-    loop {
-        if let Ok(Event::Key(KeyEvent {
-            code, modifiers, ..
-        })) = read()
-        {
-            match (code, modifiers) {
-                (KeyCode::Up, KeyModifiers::NONE) => {
-                    display.move_up();
-                    let _ = display.update_selection();
-                }
-                (KeyCode::Down, KeyModifiers::NONE) => {
-                    display.move_down();
-                    let _ = display.update_selection();
-                }
-                (KeyCode::Left, KeyModifiers::NONE) => {
-                    display.move_left();
-                    let _ = display.update_selection();
-                }
-                (KeyCode::Right, KeyModifiers::NONE) | (KeyCode::Tab, KeyModifiers::NONE) => {
-                    display.move_right();
-                    let _ = display.update_selection();
-                }
-                (KeyCode::Enter, KeyModifiers::NONE) => {
-                    let _ = display.clear_display();
-                    if let Some(selected_candidate) = display.get_selected() {
-                        return Some(selected_candidate.output().to_string());
-                    }
-                    return None;
-                }
-                (KeyCode::Esc, KeyModifiers::NONE)
-                | (KeyCode::Char('g'), KeyModifiers::CONTROL)
-                | (KeyCode::Char('c'), KeyModifiers::CONTROL)
-                | (KeyCode::Char('q'), KeyModifiers::NONE) => {
-                    let _ = display.clear_display();
-                    return None;
-                }
-                _ => {}
-            }
+    match controller.run(&mut display) {
+        Ok(CompletionOutcome::Submitted(value)) => Some(value),
+        Ok(CompletionOutcome::Cancelled) | Ok(CompletionOutcome::NoSelection) => None,
+        Err(error) => {
+            warn!("Completion interaction failed: {}", error);
+            let _ = display.clear_display();
+            let _ = execute!(stdout(), cursor::Show);
+            None
         }
     }
 }
@@ -1404,7 +1370,7 @@ impl IntegratedCompletionEngine {
                     text,
                     description: Some(desc),
                     candidate_type: CandidateType::Generic,
-                    priority: 50,
+                    priority: CandidateSource::Context.base_priority().saturating_sub(30),
                     source: CandidateSource::Context,
                 },
                 Candidate::File { path, is_dir } => EnhancedCandidate {
@@ -1415,49 +1381,53 @@ impl IntegratedCompletionEngine {
                     } else {
                         CandidateType::File
                     },
-                    priority: if is_dir { 50 } else { 40 },
+                    priority: if is_dir {
+                        CandidateSource::Context.base_priority().saturating_sub(30)
+                    } else {
+                        CandidateSource::Context.base_priority().saturating_sub(40)
+                    },
                     source: CandidateSource::Context,
                 },
                 Candidate::Path(path) => EnhancedCandidate {
                     text: path,
                     description: None,
                     candidate_type: CandidateType::File,
-                    priority: 40,
+                    priority: CandidateSource::Context.base_priority().saturating_sub(40),
                     source: CandidateSource::Context,
                 },
                 Candidate::Basic(text) => EnhancedCandidate {
                     text,
                     description: None,
                     candidate_type: CandidateType::Generic,
-                    priority: 30,
+                    priority: CandidateSource::Context.base_priority().saturating_sub(50),
                     source: CandidateSource::Context,
                 },
                 Candidate::Command { name, description } => EnhancedCandidate {
                     text: name,
                     description: Some(description),
                     candidate_type: CandidateType::SubCommand,
-                    priority: 80,
+                    priority: CandidateSource::Context.base_priority(),
                     source: CandidateSource::Context,
                 },
                 Candidate::Option { name, description } => EnhancedCandidate {
                     text: name,
                     description: Some(description),
                     candidate_type: CandidateType::LongOption,
-                    priority: 70,
+                    priority: CandidateSource::Context.base_priority().saturating_sub(10),
                     source: CandidateSource::Context,
                 },
                 Candidate::GitBranch { name, .. } => EnhancedCandidate {
                     text: name,
                     description: None,
                     candidate_type: CandidateType::Generic,
-                    priority: 60,
+                    priority: CandidateSource::Context.base_priority().saturating_sub(20),
                     source: CandidateSource::Context,
                 },
                 Candidate::History { command, .. } => EnhancedCandidate {
                     text: command,
                     description: None,
                     candidate_type: CandidateType::Generic,
-                    priority: 40,
+                    priority: CandidateSource::History.base_priority().saturating_sub(20),
                     source: CandidateSource::History,
                 },
             })

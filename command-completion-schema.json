@@ -1,0 +1,282 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "Command Completion Schema",
+  "description": "Schema for command completion definitions in doge-shell",
+  "required": ["command"],
+  "properties": {
+    "command": {
+      "type": "string",
+      "description": "The command name (e.g., 'git', 'docker', 'cargo')",
+      "pattern": "^[^\\s]+$",
+      "minLength": 1
+    },
+    "description": {
+      "type": ["string", "null"],
+      "description": "A brief description of the command"
+    },
+    "global_options": {
+      "type": "array",
+      "description": "Options that apply to the command globally",
+      "items": {
+        "$ref": "#/definitions/CommandOption"
+      }
+    },
+    "subcommands": {
+      "type": "array",
+      "description": "Subcommands of this command",
+      "items": {
+        "$ref": "#/definitions/SubCommand"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "CommandOption": {
+      "type": "object",
+      "description": "Definition of a command line option",
+      "properties": {
+        "short": {
+          "type": ["string", "null"],
+          "description": "Short form of the option (e.g., '-v')",
+          "pattern": "^-[a-zA-Z]$"
+        },
+        "long": {
+          "type": ["string", "null"],
+          "description": "Long form of the option (e.g., '--verbose')",
+          "pattern": "^--[a-zA-Z][a-zA-Z0-9-]*$"
+        },
+        "description": {
+          "type": ["string", "null"],
+          "description": "Description of what the option does"
+        },
+        "takes_value": {
+          "type": "boolean",
+          "description": "Whether this option takes a value",
+          "default": false
+        },
+        "required": {
+          "type": "boolean",
+          "description": "Whether this option is required",
+          "default": false
+        },
+        "multiple": {
+          "type": "boolean",
+          "description": "Whether this option can be specified multiple times",
+          "default": false
+        },
+        "value_type": {
+          "$ref": "#/definitions/ArgumentType",
+          "description": "Type of value this option takes"
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["short"]
+        },
+        {
+          "required": ["long"]
+        }
+      ],
+      "additionalProperties": false
+    },
+    "SubCommand": {
+      "type": "object",
+      "description": "Definition of a subcommand",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name of the subcommand",
+          "minLength": 1,
+          "pattern": "^[^\\s]+$"
+        },
+        "description": {
+          "type": ["string", "null"],
+          "description": "Description of what the subcommand does"
+        },
+        "aliases": {
+          "type": "array",
+          "description": "Alternative names for this subcommand",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "options": {
+          "type": "array",
+          "description": "Options specific to this subcommand",
+          "items": {
+            "$ref": "#/definitions/CommandOption"
+          }
+        },
+        "arguments": {
+          "type": "array",
+          "description": "Arguments that this subcommand accepts",
+          "items": {
+            "$ref": "#/definitions/Argument"
+          }
+        },
+        "subcommands": {
+          "type": "array",
+          "description": "Nested subcommands",
+          "items": {
+            "$ref": "#/definitions/SubCommand"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Argument": {
+      "type": "object",
+      "description": "Definition of a command argument",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name of the argument",
+          "minLength": 1
+        },
+        "description": {
+          "type": ["string", "null"],
+          "description": "Description of what the argument represents"
+        },
+        "required": {
+          "type": "boolean",
+          "description": "Whether this argument is required",
+          "default": true
+        },
+        "multiple": {
+          "type": "boolean",
+          "description": "Whether multiple values can be provided for this argument",
+          "default": false
+        },
+        "arg_type": {
+          "$ref": "#/definitions/ArgumentType",
+          "description": "Type of value this argument expects"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ArgumentType": {
+      "oneOf": [
+        {
+          "type": "object",
+          "title": "File Type",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["File"]
+            },
+            "data": {
+              "type": "object",
+              "properties": {
+                "extensions": {
+                  "type": ["array", "null"],
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "title": "Directory Type",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["Directory"]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "title": "String Type",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["String"]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "title": "Number Type",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["Number"]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "title": "Choice Type",
+          "required": ["type", "data"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["Choice"]
+            },
+            "data": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "title": "Command Type",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["Command"]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "title": "Environment Type",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["Environment"]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "title": "URL Type",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["Url"]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "title": "Regex Type",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["Regex"]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

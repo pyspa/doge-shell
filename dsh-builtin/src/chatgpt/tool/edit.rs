@@ -1,6 +1,8 @@
+use crate::ShellProxy;
 use serde_json::{Value, json};
+use std::env;
 use std::fs;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 pub(crate) const NAME: &str = "edit";
 
@@ -29,7 +31,7 @@ pub(crate) fn definition() -> Value {
     })
 }
 
-pub(crate) fn run(arguments: &str) -> Result<String, String> {
+pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String, String> {
     let parsed: Value = serde_json::from_str(arguments)
         .map_err(|err| format!("chat: invalid JSON arguments for edit tool: {err}"))?;
 
@@ -60,14 +62,33 @@ pub(crate) fn run(arguments: &str) -> Result<String, String> {
         return Err("chat: edit tool path must not contain `..`".to_string());
     }
 
-    if let Some(parent) = path.parent()
+    // Get current working directory
+    let current_dir = env::current_dir()
+        .map_err(|err| format!("chat: failed to get current working directory: {err}"))?;
+
+    // Convert the relative path to an absolute path by joining with current directory
+    let abs_path = current_dir.join(path);
+
+    // Normalize the absolute path to resolve any relative components like "." or ".."
+    let normalized_abs_path = normalize_path(&abs_path);
+    let normalized_current_dir = normalize_path(&current_dir);
+
+    // Check if the resolved path is within the current directory
+    if !normalized_abs_path.starts_with(&normalized_current_dir) {
+        return Err(format!(
+            "chat: edit tool path `{path_value}` resolves outside current directory (resolved to: {})",
+            normalized_abs_path.display()
+        ));
+    }
+
+    if let Some(parent) = normalized_abs_path.parent()
         && !parent.as_os_str().is_empty()
     {
         fs::create_dir_all(parent)
             .map_err(|err| format!("chat: failed to create parent directories: {err}"))?;
     }
 
-    fs::write(path, contents)
+    fs::write(&normalized_abs_path, contents)
         .map_err(|err| format!("chat: failed to write file `{path_value}`: {err}"))?;
 
     Ok(format!(
@@ -75,4 +96,23 @@ pub(crate) fn run(arguments: &str) -> Result<String, String> {
         contents.len(),
         path_value
     ))
+}
+
+// Helper function to normalize a path by resolving all relative components
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::CurDir => {
+                // Skip current directory components
+            }
+            _ => {
+                normalized.push(component);
+            }
+        }
+    }
+    normalized
 }

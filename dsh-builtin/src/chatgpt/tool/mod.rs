@@ -34,7 +34,7 @@ pub fn execute_tool_call(
     }
 
     match name {
-        edit::NAME => edit::run(arguments),
+        edit::NAME => edit::run(arguments, proxy),
         execute::NAME => execute::run(arguments, proxy),
         other => Err(format!("chat: unsupported tool `{other}`")),
     }

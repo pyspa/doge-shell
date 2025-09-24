@@ -1,5 +1,4 @@
 use anyhow::Result;
-use dsh_builtin::BuiltinCommand;
 use dsh_types::{Context, ExitStatus};
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::unistd::Pid;
@@ -13,7 +12,7 @@ use crate::shell::Shell;
 #[derive(Clone)]
 pub struct BuiltinProcess {
     pub(crate) name: String,
-    pub(crate) cmd_fn: BuiltinCommand,
+    pub(crate) cmd_fn: fn(&Context, Vec<String>, &mut dyn dsh_builtin::ShellProxy) -> ExitStatus,
     pub(crate) argv: Vec<String>,
     pub(crate) state: ProcessState, // completed, stopped,
     pub pid: Option<Pid>,
@@ -46,7 +45,11 @@ impl std::fmt::Debug for BuiltinProcess {
 }
 
 impl BuiltinProcess {
-    pub fn new(name: String, cmd_fn: BuiltinCommand, argv: Vec<String>) -> Self {
+    pub fn new(
+        name: String,
+        cmd_fn: fn(&Context, Vec<String>, &mut dyn dsh_builtin::ShellProxy) -> ExitStatus,
+        argv: Vec<String>,
+    ) -> Self {
         BuiltinProcess {
             name,
             cmd_fn,

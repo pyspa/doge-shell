@@ -85,64 +85,257 @@ pub trait ShellProxy {
     fn list_execute_allowlist(&mut self) -> Vec<String>;
 }
 
-/// Type alias for builtin command function signature
-/// All builtin commands must conform to this signature
-pub type BuiltinCommand =
-    fn(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus;
+use std::any::Any;
+
+/// Trait representing a builtin command with its description
+pub trait BuiltinCommandTrait: Send + Sync {
+    /// Execute the builtin command
+    fn execute(&self, ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus;
+    /// Get the description of the builtin command
+    fn description(&self) -> &'static str;
+    /// Get the command function directly
+    fn as_any(&self) -> &dyn Any;
+}
+
+/// Implementation of the trait for function pointers
+pub struct BuiltinCommandFn {
+    pub func: fn(&Context, Vec<String>, &mut dyn ShellProxy) -> ExitStatus,
+    pub description: &'static str,
+}
+
+impl BuiltinCommandFn {
+    pub fn new(
+        func: fn(&Context, Vec<String>, &mut dyn ShellProxy) -> ExitStatus,
+        description: &'static str,
+    ) -> Self {
+        Self { func, description }
+    }
+}
+
+impl BuiltinCommandTrait for BuiltinCommandFn {
+    fn execute(&self, ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+        (self.func)(ctx, argv, proxy)
+    }
+
+    fn description(&self) -> &'static str {
+        self.description
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
 
 /// Global registry of all builtin commands
 /// Uses lazy initialization and mutex for thread-safe access
-pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, BuiltinCommand>>> = Lazy::new(|| {
-    let mut builtin = HashMap::new();
+pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait>>>> =
+    Lazy::new(|| {
+        let mut builtin = HashMap::new();
 
-    // Core shell commands
-    builtin.insert("exit", exit as BuiltinCommand);
-    builtin.insert("cd", cd::command as BuiltinCommand);
-    builtin.insert("history", history::command as BuiltinCommand);
+        // Core shell commands
+        builtin.insert(
+            "exit",
+            Box::new(BuiltinCommandFn::new(exit, "Exit the shell")) as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "cd",
+            Box::new(BuiltinCommandFn::new(
+                cd::command,
+                "Change the current working directory",
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "history",
+            Box::new(BuiltinCommandFn::new(
+                history::command,
+                "Show command history",
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
 
-    // Navigation and directory management
-    builtin.insert("z", z::command as BuiltinCommand);
+        // Navigation and directory management
+        builtin.insert(
+            "z",
+            Box::new(BuiltinCommandFn::new(
+                z::command,
+                "Jump to frequently used directories",
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
 
-    // Job control commands
-    builtin.insert("jobs", jobs::command as BuiltinCommand);
-    builtin.insert("fg", fg::command as BuiltinCommand);
-    builtin.insert("bg", bg::command as BuiltinCommand);
+        // Job control commands
+        builtin.insert(
+            "jobs",
+            Box::new(BuiltinCommandFn::new(jobs::command, "List active jobs"))
+                as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "fg",
+            Box::new(BuiltinCommandFn::new(
+                fg::command,
+                "Resume a stopped job in the foreground",
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "bg",
+            Box::new(BuiltinCommandFn::new(
+                bg::command,
+                "Resume a stopped job in the background",
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
 
-    // Scripting and configuration
-    builtin.insert("lisp", lisp::command as BuiltinCommand);
-    builtin.insert("set", set::command as BuiltinCommand);
-    builtin.insert("var", var::command as BuiltinCommand);
-    builtin.insert("read", read::command as BuiltinCommand);
-    builtin.insert("abbr", abbr::command as BuiltinCommand);
-    builtin.insert("alias", alias::command as BuiltinCommand);
+        // Scripting and configuration
+        builtin.insert(
+            "lisp",
+            Box::new(BuiltinCommandFn::new(lisp::command, "Execute Lisp code"))
+                as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "set",
+            Box::new(BuiltinCommandFn::new(set::command, "Set shell options"))
+                as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "var",
+            Box::new(BuiltinCommandFn::new(
+                var::command,
+                "Manage shell variables",
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "read",
+            Box::new(BuiltinCommandFn::new(
+                read::command,
+                "Read a line from standard input",
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "abbr",
+            Box::new(BuiltinCommandFn::new(
+                abbr::command,
+                "Manage abbreviations that expand when typed",
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "alias",
+            Box::new(BuiltinCommandFn::new(
+                alias::command,
+                "Create and manage command aliases",
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
 
-    // AI integration commands
-    builtin.insert("chat", chatgpt::chat as BuiltinCommand);
-    builtin.insert("chat_prompt", chatgpt::chat_prompt as BuiltinCommand);
-    builtin.insert("chat_model", chatgpt::chat_model as BuiltinCommand);
+        // AI integration commands
+        builtin.insert(
+            "chat",
+            Box::new(BuiltinCommandFn::new(
+                chatgpt::chat,
+                "Chat with AI assistant",
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "chat_prompt",
+            Box::new(BuiltinCommandFn::new(
+                chatgpt::chat_prompt,
+                "Set or show the system prompt for chat",
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "chat_model",
+            Box::new(BuiltinCommandFn::new(
+                chatgpt::chat_model,
+                "Set or show the AI model used for chat",
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
 
-    // Git integration commands
-    builtin.insert("glog", glog::command as BuiltinCommand);
-    builtin.insert("gco", gco::command as BuiltinCommand);
+        // Git integration commands
+        builtin.insert(
+            "glog",
+            Box::new(BuiltinCommandFn::new(
+                glog::command,
+                "View git log with fzf selection",
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "gco",
+            Box::new(BuiltinCommandFn::new(
+                gco::command,
+                "Checkout git branches with fzf selection",
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
 
-    // Utility commands
-    builtin.insert("add_path", add_path::command as BuiltinCommand);
-    builtin.insert("serve", serve::command as BuiltinCommand);
-    builtin.insert("uuid", uuid::command as BuiltinCommand);
-    builtin.insert("dmv", dmv::command as BuiltinCommand);
-    builtin.insert("reload", reload::command as BuiltinCommand);
-    builtin.insert("help", help::command as BuiltinCommand);
+        // Utility commands
+        builtin.insert(
+            "add_path",
+            Box::new(BuiltinCommandFn::new(
+                add_path::command,
+                "Add paths to the PATH environment variable",
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "serve",
+            Box::new(BuiltinCommandFn::new(
+                serve::command,
+                "Start a simple HTTP file server",
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "uuid",
+            Box::new(BuiltinCommandFn::new(
+                uuid::command,
+                "Generate a random UUID",
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "dmv",
+            Box::new(BuiltinCommandFn::new(
+                dmv::command,
+                "Rename files with your editor",
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "reload",
+            Box::new(BuiltinCommandFn::new(
+                reload::command,
+                "Reload shell configuration",
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "help",
+            Box::new(BuiltinCommandFn::new(
+                help::command,
+                "Show help information for built-in commands",
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
 
-    Mutex::new(builtin)
-});
+        Mutex::new(builtin)
+    });
 
 /// Retrieves a builtin command function by name
 /// Returns None if the command is not found
-pub fn get_command(name: &str) -> Option<BuiltinCommand> {
+pub fn get_command(
+    name: &str,
+) -> Option<fn(&Context, Vec<String>, &mut dyn ShellProxy) -> ExitStatus> {
     if let Ok(builtin) = BUILTIN_COMMAND.lock() {
-        builtin.get(name).copied()
+        // Find the BuiltinCommandFn inside the trait object and extract its func
+        for (key, cmd) in builtin.iter() {
+            if *key == name {
+                // Since we created BuiltinCommandFn instances, we can downcast them
+                if let Some(builtin_cmd) = cmd.as_any().downcast_ref::<BuiltinCommandFn>() {
+                    return Some(builtin_cmd.func);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Get all builtin commands with their descriptions
+pub fn get_all_commands() -> Vec<(&'static str, &'static str)> {
+    if let Ok(builtin) = BUILTIN_COMMAND.lock() {
+        builtin
+            .iter()
+            .map(|(name, cmd)| (*name, cmd.description()))
+            .collect()
     } else {
-        None
+        Vec::new()
     }
 }
 

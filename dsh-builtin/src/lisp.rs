@@ -1,6 +1,11 @@
 use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
 
+/// Built-in lisp command description
+pub fn description() -> &'static str {
+    "Execute Lisp code"
+}
+
 /// Built-in lisp command implementation
 /// Evaluates Lisp s-expressions for shell scripting and configuration
 /// Supports the shell's integrated Lisp interpreter for advanced scripting

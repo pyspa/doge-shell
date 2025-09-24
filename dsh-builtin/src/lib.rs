@@ -135,91 +135,76 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
         // Core shell commands
         builtin.insert(
             "exit",
-            Box::new(BuiltinCommandFn::new(exit, "Exit the shell")) as Box<dyn BuiltinCommandTrait>,
+            Box::new(BuiltinCommandFn::new(exit, exit_description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
         builtin.insert(
             "cd",
-            Box::new(BuiltinCommandFn::new(
-                cd::command,
-                "Change the current working directory",
-            )) as Box<dyn BuiltinCommandTrait>,
+            Box::new(BuiltinCommandFn::new(cd::command, cd::description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
         builtin.insert(
             "history",
             Box::new(BuiltinCommandFn::new(
                 history::command,
-                "Show command history",
+                history::description(),
             )) as Box<dyn BuiltinCommandTrait>,
         );
 
         // Navigation and directory management
         builtin.insert(
             "z",
-            Box::new(BuiltinCommandFn::new(
-                z::command,
-                "Jump to frequently used directories",
-            )) as Box<dyn BuiltinCommandTrait>,
+            Box::new(BuiltinCommandFn::new(z::command, z::description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
 
         // Job control commands
         builtin.insert(
             "jobs",
-            Box::new(BuiltinCommandFn::new(jobs::command, "List active jobs"))
+            Box::new(BuiltinCommandFn::new(jobs::command, jobs::description()))
                 as Box<dyn BuiltinCommandTrait>,
         );
         builtin.insert(
             "fg",
-            Box::new(BuiltinCommandFn::new(
-                fg::command,
-                "Resume a stopped job in the foreground",
-            )) as Box<dyn BuiltinCommandTrait>,
+            Box::new(BuiltinCommandFn::new(fg::command, fg::description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
         builtin.insert(
             "bg",
-            Box::new(BuiltinCommandFn::new(
-                bg::command,
-                "Resume a stopped job in the background",
-            )) as Box<dyn BuiltinCommandTrait>,
+            Box::new(BuiltinCommandFn::new(bg::command, bg::description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
 
         // Scripting and configuration
         builtin.insert(
             "lisp",
-            Box::new(BuiltinCommandFn::new(lisp::command, "Execute Lisp code"))
+            Box::new(BuiltinCommandFn::new(lisp::command, lisp::description()))
                 as Box<dyn BuiltinCommandTrait>,
         );
         builtin.insert(
             "set",
-            Box::new(BuiltinCommandFn::new(set::command, "Set shell options"))
+            Box::new(BuiltinCommandFn::new(set::command, set::description()))
                 as Box<dyn BuiltinCommandTrait>,
         );
         builtin.insert(
             "var",
-            Box::new(BuiltinCommandFn::new(
-                var::command,
-                "Manage shell variables",
-            )) as Box<dyn BuiltinCommandTrait>,
+            Box::new(BuiltinCommandFn::new(var::command, var::description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
         builtin.insert(
             "read",
-            Box::new(BuiltinCommandFn::new(
-                read::command,
-                "Read a line from standard input",
-            )) as Box<dyn BuiltinCommandTrait>,
+            Box::new(BuiltinCommandFn::new(read::command, read::description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
         builtin.insert(
             "abbr",
-            Box::new(BuiltinCommandFn::new(
-                abbr::command,
-                "Manage abbreviations that expand when typed",
-            )) as Box<dyn BuiltinCommandTrait>,
+            Box::new(BuiltinCommandFn::new(abbr::command, abbr::description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
         builtin.insert(
             "alias",
-            Box::new(BuiltinCommandFn::new(
-                alias::command,
-                "Create and manage command aliases",
-            )) as Box<dyn BuiltinCommandTrait>,
+            Box::new(BuiltinCommandFn::new(alias::command, alias::description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
 
         // AI integration commands
@@ -227,38 +212,34 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             "chat",
             Box::new(BuiltinCommandFn::new(
                 chatgpt::chat,
-                "Chat with AI assistant",
+                chatgpt::chat_description(),
             )) as Box<dyn BuiltinCommandTrait>,
         );
         builtin.insert(
             "chat_prompt",
             Box::new(BuiltinCommandFn::new(
                 chatgpt::chat_prompt,
-                "Set or show the system prompt for chat",
+                chatgpt::chat_prompt_description(),
             )) as Box<dyn BuiltinCommandTrait>,
         );
         builtin.insert(
             "chat_model",
             Box::new(BuiltinCommandFn::new(
                 chatgpt::chat_model,
-                "Set or show the AI model used for chat",
+                chatgpt::chat_model_description(),
             )) as Box<dyn BuiltinCommandTrait>,
         );
 
         // Git integration commands
         builtin.insert(
             "glog",
-            Box::new(BuiltinCommandFn::new(
-                glog::command,
-                "View git log with fzf selection",
-            )) as Box<dyn BuiltinCommandTrait>,
+            Box::new(BuiltinCommandFn::new(glog::command, glog::description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
         builtin.insert(
             "gco",
-            Box::new(BuiltinCommandFn::new(
-                gco::command,
-                "Checkout git branches with fzf selection",
-            )) as Box<dyn BuiltinCommandTrait>,
+            Box::new(BuiltinCommandFn::new(gco::command, gco::description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
 
         // Utility commands
@@ -266,43 +247,35 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             "add_path",
             Box::new(BuiltinCommandFn::new(
                 add_path::command,
-                "Add paths to the PATH environment variable",
+                add_path::description(),
             )) as Box<dyn BuiltinCommandTrait>,
         );
         builtin.insert(
             "serve",
-            Box::new(BuiltinCommandFn::new(
-                serve::command,
-                "Start a simple HTTP file server",
-            )) as Box<dyn BuiltinCommandTrait>,
+            Box::new(BuiltinCommandFn::new(serve::command, serve::description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
         builtin.insert(
             "uuid",
-            Box::new(BuiltinCommandFn::new(
-                uuid::command,
-                "Generate a random UUID",
-            )) as Box<dyn BuiltinCommandTrait>,
+            Box::new(BuiltinCommandFn::new(uuid::command, uuid::description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
         builtin.insert(
             "dmv",
-            Box::new(BuiltinCommandFn::new(
-                dmv::command,
-                "Rename files with your editor",
-            )) as Box<dyn BuiltinCommandTrait>,
+            Box::new(BuiltinCommandFn::new(dmv::command, dmv::description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
         builtin.insert(
             "reload",
             Box::new(BuiltinCommandFn::new(
                 reload::command,
-                "Reload shell configuration",
+                reload::description(),
             )) as Box<dyn BuiltinCommandTrait>,
         );
         builtin.insert(
             "help",
-            Box::new(BuiltinCommandFn::new(
-                help::command,
-                "Show help information for built-in commands",
-            )) as Box<dyn BuiltinCommandTrait>,
+            Box::new(BuiltinCommandFn::new(help::command, help::description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
 
         Mutex::new(builtin)
@@ -337,6 +310,11 @@ pub fn get_all_commands() -> Vec<(&'static str, &'static str)> {
     } else {
         Vec::new()
     }
+}
+
+/// Built-in exit command description
+pub fn exit_description() -> &'static str {
+    "Exit the shell"
 }
 
 /// Built-in exit command implementation

@@ -8,6 +8,11 @@ struct AliasEntry {
     command: String,
 }
 
+/// Built-in alias command description
+pub fn description() -> &'static str {
+    "Create and manage command aliases"
+}
+
 /// Built-in alias command implementation
 /// Manages shell aliases with support for setting, listing, and querying aliases
 /// Integrates with the existing Lisp-based alias system

@@ -2,6 +2,11 @@ use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
 use tracing::debug;
 
+/// Built-in z command description
+pub fn description() -> &'static str {
+    "Jump to frequently used directories"
+}
+
 /// Built-in z command implementation
 /// Provides frecency-based directory navigation similar to the z utility
 /// Allows users to quickly jump to frequently and recently visited directories

@@ -1,6 +1,11 @@
 use super::{ShellProxy, get_all_commands};
 use dsh_types::{Context, ExitStatus};
 
+/// Built-in help command description
+pub fn description() -> &'static str {
+    "Show help information for built-in commands"
+}
+
 /// Built-in help command implementation
 /// Displays a list of all available built-in commands with their descriptions
 pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -> ExitStatus {

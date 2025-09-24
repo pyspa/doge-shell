@@ -6,6 +6,11 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Built-in dmv command description
+pub fn description() -> &'static str {
+    "Rename files with your editor"
+}
+
 /// Built-in dmv command implementation
 /// Provides batch file renaming functionality similar to zsh's zmv
 ///

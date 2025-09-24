@@ -1,6 +1,11 @@
 use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
 
+/// Built-in var command description
+pub fn description() -> &'static str {
+    "Manage shell variables"
+}
+
 /// Built-in var command implementation
 /// Displays or manages shell variables
 /// Delegates to the shell's variable management system for listing and manipulation

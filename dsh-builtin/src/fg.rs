@@ -1,6 +1,11 @@
 use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
 
+/// Built-in fg command description
+pub fn description() -> &'static str {
+    "Resume a stopped job in the foreground"
+}
+
 /// Built-in fg (foreground) command implementation
 /// Brings a background job to the foreground for interactive execution
 /// Part of the shell's job control system for managing process execution

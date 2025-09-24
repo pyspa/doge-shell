@@ -10,6 +10,11 @@ use std::path::Path;
 static ABSOLUTE_PATH_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^/").unwrap());
 static HOME_PATH_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^~").unwrap());
 
+/// Built-in cd command description
+pub fn description() -> &'static str {
+    "Change the current working directory"
+}
+
 /// Built-in cd (change directory) command implementation
 /// Supports various path formats:
 /// - Absolute paths (starting with /)

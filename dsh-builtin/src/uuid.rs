@@ -2,6 +2,11 @@ use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
 use uuid::Uuid;
 
+/// Built-in uuid command description
+pub fn description() -> &'static str {
+    "Generate a random UUID"
+}
+
 /// Built-in uuid command implementation
 /// Generates and outputs a random UUID (Universally Unique Identifier)
 /// Uses UUID version 4 (random) for maximum uniqueness

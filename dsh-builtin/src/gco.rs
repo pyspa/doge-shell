@@ -5,6 +5,11 @@ use skim::{Skim, SkimItemReceiver, SkimItemSender};
 use std::process::{Command, Stdio};
 use tracing::debug;
 
+/// Built-in gco command description
+pub fn description() -> &'static str {
+    "Checkout git branches with fzf selection"
+}
+
 pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -> ExitStatus {
     // Check if we're in a git repository
     if !is_git_repository() {

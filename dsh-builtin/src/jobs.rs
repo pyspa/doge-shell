@@ -1,6 +1,11 @@
 use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
 
+/// Built-in jobs command description
+pub fn description() -> &'static str {
+    "List active jobs"
+}
+
 /// Built-in jobs command implementation
 /// Lists all active background jobs in the current shell session
 /// Shows job IDs, status, and command information for job control

@@ -1,6 +1,11 @@
 use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
 
+/// Built-in bg command description
+pub fn description() -> &'static str {
+    "Resume a stopped job in the background"
+}
+
 /// Built-in bg (background) command implementation
 /// Resumes a suspended job in the background, allowing it to continue execution
 /// Part of the shell's job control system for managing process execution

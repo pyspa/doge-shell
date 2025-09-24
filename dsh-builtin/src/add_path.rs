@@ -1,6 +1,11 @@
 use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
 
+/// Built-in add_path command description
+pub fn description() -> &'static str {
+    "Add paths to the PATH environment variable"
+}
+
 /// Built-in add_path command implementation
 /// Adds a directory to the beginning of the PATH environment variable
 /// Supports tilde expansion for home directory references

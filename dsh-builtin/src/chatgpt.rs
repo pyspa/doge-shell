@@ -38,6 +38,11 @@ fn load_openai_config(proxy: &mut dyn ShellProxy) -> OpenAiConfig {
     OpenAiConfig::from_getter(|key| proxy.get_var(key).or_else(|| std::env::var(key).ok()))
 }
 
+/// Built-in chat command description
+pub fn chat_description() -> &'static str {
+    "Chat with AI assistant"
+}
+
 /// Built-in chat command implementation
 /// Integrates OpenAI ChatGPT API for AI-powered assistance within the shell
 /// Requires OPENAI_API_KEY environment variable to be set
@@ -117,6 +122,11 @@ pub fn execute_chat_message(
     }
 }
 
+/// Built-in chat_prompt command description
+pub fn chat_prompt_description() -> &'static str {
+    "Set or show the system prompt for chat"
+}
+
 /// Built-in chat_prompt command implementation
 /// Sets a custom prompt template for ChatGPT interactions
 /// The prompt template is used to provide context for all subsequent chat commands
@@ -133,6 +143,11 @@ pub fn chat_prompt(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy)
             .ok();
         ExitStatus::ExitedWith(0)
     }
+}
+
+/// Built-in chat_model command description
+pub fn chat_model_description() -> &'static str {
+    "Set or show the AI model used for chat"
 }
 
 /// Built-in chat_model command implementation

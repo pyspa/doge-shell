@@ -1,6 +1,11 @@
 use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
 
+/// Built-in reload command description
+pub fn description() -> &'static str {
+    "Reload shell configuration"
+}
+
 /// Built-in reload command implementation
 /// Reloads the config.lisp configuration file without restarting the shell
 /// This allows users to apply configuration changes during their shell session

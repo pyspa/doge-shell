@@ -3,6 +3,11 @@ use dsh_types::{Context, ExitStatus};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+/// Built-in glog command description
+pub fn description() -> &'static str {
+    "View git log with fzf selection"
+}
+
 /// Git Log Interactive - Enhanced git log with interactive commit selection and checkout
 ///
 /// Features:

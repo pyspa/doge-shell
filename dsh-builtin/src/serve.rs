@@ -16,6 +16,11 @@ use tokio::fs as async_fs;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info};
 
+/// Built-in serve command description
+pub fn description() -> &'static str {
+    "Start a simple HTTP file server"
+}
+
 /// Comprehensive error types for the serve command
 /// Covers all possible error conditions with user-friendly messages
 #[derive(Debug, Error)]

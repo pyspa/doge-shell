@@ -2,6 +2,11 @@ use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
 use getopts::Options;
 
+/// Built-in set command description
+pub fn description() -> &'static str {
+    "Set shell options"
+}
+
 /// Prints usage information for the set command
 /// Displays command syntax and available options
 fn print_usage(ctx: &Context, cmd_name: &str, opts: Options) {

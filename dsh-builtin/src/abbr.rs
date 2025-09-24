@@ -8,6 +8,11 @@ struct AbbrEntry {
     expansion: String,
 }
 
+/// Built-in abbr command description
+pub fn description() -> &'static str {
+    "Manage abbreviations that expand when typed"
+}
+
 /// Built-in abbr command implementation
 /// Manages shell abbreviations with support for setting, listing, and removing abbreviations
 /// Integrates with the Lisp-based abbreviation system and provides real-time expansion

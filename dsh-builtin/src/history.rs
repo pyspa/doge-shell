@@ -1,6 +1,11 @@
 use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
 
+/// Built-in history command description
+pub fn description() -> &'static str {
+    "Show command history"
+}
+
 /// Built-in history command implementation
 /// Displays the command history by delegating to the shell's history system
 /// This command shows previously executed commands for user reference

@@ -1,6 +1,11 @@
 use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
 
+/// Built-in read command description
+pub fn description() -> &'static str {
+    "Read a line from standard input"
+}
+
 /// Built-in read command implementation
 /// Reads input from stdin and stores it in shell variables
 /// Commonly used in shell scripts for interactive input collection

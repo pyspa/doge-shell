@@ -1,689 +1,352 @@
-# 🐕 doge-shell
-
-Doge-shell is a modern, high-performance shell written in Rust that combines the speed of native code with advanced features like AI integration, Lisp scripting, and WebAssembly runtime support. Designed for developers and power users who value both performance and extensibility.
-
-## ✨ Key Features
-
-### 🚀 Performance & Architecture
-
-- **High-speed execution** - Written in Rust with zero-cost abstractions
-- **Modular design** - Multi-crate workspace architecture for maintainability
-- **Memory safety** - Rust's ownership system prevents common shell vulnerabilities
-- **Concurrent processing** - Tokio-based async runtime for responsive I/O
-
-### 🧠 AI Integration
-
-- **OpenAI ChatGPT integration** - Use `!` prefix for AI-powered assistance
-- **Streaming responses** - Real-time AI output with "Thinking..." indicator
-- **Configurable prompts** - Customize AI behavior for different contexts
-- **Full shell integration** - AI responses support redirection and piping
-
-### 🎯 Advanced Completion System
-
-- **Multi-layered completion** - Commands, files, and context-aware suggestions
-- **JSON-based definitions** - Extensible command completion via JSON files
-- **Fuzzy matching** - Smart completion with scoring and ranking
-- **History integration** - Suggestions based on command history patterns
-- **Real-time display** - Interactive completion with visual feedback
-
-### 🔧 Lisp Scripting Engine
-
-- **Built-in Lisp interpreter** - Full-featured scripting environment
-- **Shell integration** - Direct access to shell functions and variables
-- **User-defined functions** - Extend shell functionality with custom Lisp code
-- **Configuration system** - Customize shell behavior via `config.lisp`
-
-### 📁 Smart Navigation
-
-- **Frecency-based directory jumping** - `z` command for intelligent navigation
-- **Path history tracking** - Learns from your directory usage patterns
-- **Fuzzy directory matching** - Quick access to frequently used locations
-
-### ⚡ Advanced Job Control
-
-- **Process group management** - Proper job control with signal handling
-- **Background/foreground switching** - Full job control like traditional shells
-- **Job monitoring** - Real-time status tracking of background processes
-- **Signal propagation** - Correct signal handling for process groups
-
-### 🔄 History Management
-
-- **Frecency-based history** - Intelligent command history ranking
-- **History import** - Import command history from other shells (fish, etc.)
-- **Fuzzy history search** - Quickly find and reuse previous commands
-- **History synchronization** - Consistent history across multiple sessions
-
-## 🏗️ Architecture
-
-Doge-shell is built as a modular Rust workspace with six specialized crates:
-
-``` shell
-doge-shell/
-├── dsh/              # Main shell binary and core logic
-├── dsh-builtin/      # Built-in commands implementation
-├── dsh-frecency/     # Frecency-based navigation system
-├── dsh-types/        # Shared types and context definitions
-└── dsh-openai/       # OpenAI API client and integration
-```
-
-### Core Components
-
-- **Shell Engine** - Command parsing, execution, and process management
-- **Completion Engine** - Multi-layered completion with fuzzy matching
-- **Lisp Interpreter** - Built-in scripting environment for configuration
-- **Job Controller** - Advanced process and signal management
-- **AI Client** - OpenAI integration with streaming support
-
-## 📦 Installation
-
-### Prerequisites
-
-- Rust 2024 Edition (latest stable)
-- Git for cloning the repository
-
-### Build from Source
-
-```shell
-$ git clone https://github.com/pyspa/doge-shell.git
-$ cd doge-shell
-$ cargo build --release
-$ cargo install --path dsh
-```
-
-### Quick Start
-
-```shell
-$ dsh
-🐕 < echo "Welcome to doge-shell!"
-Welcome to doge-shell!
-```
-
-### Configuration
-
-Create a `config.lisp` file in your configuration directory to customize the shell:
-
-```lisp
-;; ~/.config/dsh/config.lisp
-(alias "ll" "ls -la")
-(alias "g" "git")
-
-;; Custom function for git branch switching
-(fn gco ()
-    (vlet ((branch (sh "git branch | sk | tr -d ' '")))
-          (sh "git checkout $branch")))
-```
-
-## 🤖 AI Integration
-
-Doge-shell features seamless OpenAI ChatGPT integration for AI-powered assistance directly in your terminal.
-
-### Getting Started with AI
-
-1. Set your OpenAI API key:
-
-```shell
-export OPENAI_API_KEY="your-api-key-here"
-```
-
-2. Use the `!` prefix to interact with AI:
-
-```shell
-🐕 < ! How do I find large files in Linux?
-Thinking...
-You can find large files in Linux using several methods:
-
-1. Using `find` command:
-   find /path/to/search -type f -size +100M
-
-2. Using `du` with sort:
-   du -ah /path | sort -rh | head -20
-...
-```
-
-### AI Features
-
-- **Streaming responses** - See AI output in real-time
-- **Shell integration** - Redirect AI output to files or pipe to other commands
-- **Configurable prompts** - Set custom system prompts for different contexts
-- **Context awareness** - AI understands shell environment and common tasks
-
-### AI Command Examples
-
-```shell
-# Get help with commands
-🐕 < ! Explain the difference between grep and awk
-
-# Generate scripts
-🐕 < ! Write a bash script to backup my home directory > backup.sh
-
-# Troubleshoot issues
-🐕 < ! Why am I getting permission denied when running docker?
-
-# Set custom prompt for specific domain
-🐕 < chat_prompt "You are a DevOps expert specializing in Kubernetes"
-🐕 < ! How do I debug a failing pod?
-```
-
-### MCP Integration
-
-doge-shell can bridge Model Context Protocol (MCP) servers through the OpenAI client so the LLM can call external tools. Configure MCP endpoints via `~/.config/dsh/config.toml` (created automatically the first time you run `reload` or `chat`).
-
-```toml
-# ~/.config/dsh/config.toml
-[mcp]
-servers = [
-  { # Local stdio server
-    label = "local-fs"
-    description = "Local filesystem utilities"
-    transport = "stdio"
-    command = "./target/release/mcp-local"
-    args = ["--config", "tools.toml"]
-    cwd = "/home/you/projects/mcp-local"
-    env = { RUST_LOG = "info" }
-  },
-  { # Remote SSE server
-    label = "docs"
-    transport = "sse"
-    url = "https://mcp.example.com/sse"
-  },
-  { # Streamable HTTP server (OpenAI MCP-compatible services)
-    label = "code-search"
-    transport = "http"
-    url = "https://mcp.example.com/http"
-    auth_header = "Bearer $MCP_API_TOKEN"
-    allow_stateless = true
-  }
-]
-```
-
-| Transport | Required keys | Optional keys | Notes |
-|-----------|----------------|---------------|-------|
-| `stdio`   | `command`      | `args`, `env`, `cwd` | Launches a child process; `env` expects a `{ KEY = "value" }` table. |
-| `sse`     | `url`          | *(none)*       | Connects to an SSE endpoint that implements MCP streams. |
-| `http` / `https` / `streamable_http` | `url` | `auth_header`, `allow_stateless` | Uses the streamable HTTP client; set `allow_stateless = true` for servers that do not require a session. |
-
-You can define the same servers in `config.lisp`, which is reloaded via the `reload` builtin:
-
-```lisp
-;; ~/.config/dsh/config.lisp
-(mcp-clear)
-
-(mcp-add-stdio
-  "local-fs"
-  "./target/release/mcp-local"
-  '("--config" "tools.toml")
-  '(("RUST_LOG" "info"))
-  "/home/you/projects/mcp-local"
-  "Local filesystem utilities")
-
-(mcp-add-sse "docs" "https://mcp.example.com/sse" "Documentation indexer")
-
-(mcp-add-http
-  "code-search"
-  "https://mcp.example.com/http"
-  "Bearer $MCP_API_TOKEN"
-  t
-  "Source browsing")
-```
-
-Use `mcp-clear` at the top of your config to avoid duplicating entries on reload. The helper forms accept lists of arguments and environment pairs, and booleans (`t`/`nil`) for HTTP stateless mode.
-
-### Execute Tool Allowlist Configuration
-
-The `execute` tool only runs commands whose first token is on the allowlist. Besides the JSON config (`~/.config/dsh/openai-execute-tool.json`) and the `AI_CHAT_EXECUTE_ALLOWLIST` environment variable, you can manage the allowlist directly inside `config.lisp`:
-
-```lisp
-(chat-execute-clear)
-(chat-execute-add "ls")
-(chat-execute-add "git")
-```
-
-Use `chat-execute-clear` before adding entries to prevent duplicates when `reload` runs multiple times.
-
-When doge-shell starts a chat session it:
-
-1. Loads `config.toml`, validates each server definition, and queries `tools/list` to discover available tool schemas.
-2. Generates stable function names of the form `mcp__<server>__<tool>` and exposes them to the LLM alongside the built-in `edit` & `execute` tools.
-3. Extends the system prompt with a summary of the configured MCP servers so the model understands when to call them.
-
-Tool invocations from the model are routed back to the specified MCP server and the raw JSON results are returned to the model. If a server cannot be reached or returns an error, the failure is surfaced to the chat output.
-
-> **Tip:** Run `cargo test -p dsh-builtin` after editing `config.toml` to ensure your MCP definitions parse correctly in CI, and prefer descriptive `label` values—the label appears in both the system prompt and generated tool names.
-
-## 🎯 Advanced Completion System
-
-Doge-shell features a sophisticated multi-layered completion system that provides intelligent suggestions as you type.
-
-### Completion Features
-
-1. **Command Completion** - Completes commands from your PATH
-2. **File/Directory Completion** - Smart filesystem navigation
-3. **Subcommand Completion** - Context-aware command options
-4. **History-based Suggestions** - Learn from your command patterns
-5. **Fuzzy Matching** - Find what you need with partial matches
-
-### How It Works
-
-- **TAB key** - Trigger completion menu
-- **Real-time suggestions** - See history matches as you type
-- **JSON-based definitions** - Extensible completion for any command
-- **Priority system** - Most relevant suggestions first
-
-### Completion Priority
-
-1. **Subcommand/Option completion** (when command is already entered)
-2. **Command/File completion** (for new commands)
-3. **History-based suggestions** (matching previous commands)
-
-### Custom Completion
-
-Add completion definitions in JSON format:
-
-```json
-{
-  "command": "myapp",
-  "description": "My custom application",
-  "subcommands": [
-    {
-      "name": "start",
-      "description": "Start the application",
-      "options": [
-        {
-          "long": "--port",
-          "description": "Port number",
-          "takes_value": true,
-          "value_type": {"type": "Number"}
-        }
-      ]
-    }
-  ]
-}
-```
-
-Save as `completions/myapp.json` in your doge-shell directory.
-
-## 🔄 History Import
-
-Doge-shell allows you to import command history from other shells to make migration easier.
-
-### Importing History from Fish Shell
-
-```shell
-# Import history from fish shell (default location)
-$ dsh import fish
-
-# Import history from a custom location
-$ dsh import fish --path /path/to/custom/fish_history
-```
-
-### Supported Shells for Import
-
-- Fish shell (`~/.local/share/fish/fish_history`)
-- More shells coming soon
+# doge-shell (dsh)
+
+A modern, feature-rich shell written in Rust with an integrated Lisp interpreter and AI-powered command completion.
+
+## 🐕 Overview
+
+doge-shell (dsh) is a simple yet powerful shell that combines traditional shell capabilities with modern features like AI-assisted command completion, frecency-based history, and an embedded Lisp scripting environment.
+
+## ✨ Features
+
+### Core Shell Features
+- **Interactive Command Line**: Full-featured interactive shell with readline-like functionality
+- **Command Execution**: Execute external commands, built-in commands, and shell scripts
+- **Background Processing**: Run commands in background with `&` and manage jobs
+- **Pipes and Redirections**: Support for pipes (`|`), input/output redirection (`>`, `>>`, `<`), and error redirection
+- **Signal Handling**: Proper handling of signals like SIGINT, SIGQUIT, SIGTSTP
+- **Subshells**: Support for command substitution and process substitution
+
+### Advanced Features
+- **Frecency-based History**: Intelligent command history using frecency scoring (frequency + recency)
+- **Directory Navigation**: Smart directory history and jump with `z` command
+- **Path Management**: Dynamic PATH management with `add_path` command
+- **Job Control**: Background job management with `jobs`, `bg`, `fg` commands
+- **Aliases**: Command aliasing with `alias` command
+- **Variables**: Environment variable management with `var`, `set` commands
+- **Abbreviations**: Define and use abbreviations with `abbr` command
+
+### Completion & UI
+- **Context-Aware Completion**: Intelligent tab completion for commands, files, and options
+- **Skim Integration**: Fuzzy finding interface for completion using [skim](https://github.com/lotabout/skim)
+- **History Search**: Interactive history search with Ctrl+R
+- **Command Abbreviations**: Define and use abbreviations with `abbr` command
+- **AI-Powered Completion**: OpenAI integration for intelligent command completion suggestions
+
+### Lisp Interpreter
+- **Embedded Lisp**: Built-in Lisp interpreter for shell scripting
+- **Configuration**: Shell configuration in Lisp with `~/.config/dsh/config.lisp`
+- **Custom Commands**: Define custom shell commands using Lisp
+- **Extensibility**: Extend shell functionality with Lisp functions
+
+### Model Context Protocol (MCP) Integration
+- **MCP Client**: Connect to external Model Context Protocol servers
+- **Multiple Transport**: Support for stdio, HTTP, and SSE transports
+- **Dynamic Tools**: Automatic discovery of MCP server tools
+- **Configuration**: MCP servers can be configured in both config.lisp and config.toml
+
+### Other Features
+- **Git Integration**: Commands for Git operations (`gco`, `glog`, etc.)
+- **UUID Generation**: Built-in UUID generation with `uuid` command
+- **URL Shortening**: URL shortening with `dmv` command
+- **Web Server**: Built-in static file server with `serve` command
+- **Configuration Reload**: Runtime configuration reloading with `reload` command
 
 ## 🔧 Built-in Commands
 
-Doge Shell provides a comprehensive set of built-in commands for efficient shell operations. These commands are implemented in Rust for optimal performance and are tightly integrated with the shell's features.
+The shell includes many built-in commands:
 
-### Core Shell Commands
+| Command | Description |
+|---------|-------------|
+| `exit` | Exit the shell |
+| `cd` | Change directory |
+| `history` | Show command history |
+| `z` | Jump to frequently used directories |
+| `jobs` | Show background jobs |
+| `fg` | Bring job to foreground |
+| `bg` | Send job to background |
+| `lisp` | Execute Lisp expressions |
+| `set` | Set shell variables |
+| `var` | Manage shell variables |
+| `read` | Read input into a variable |
+| `abbr` | Configure abbreviations |
+| `alias` | Configure command aliases |
+| `chat` | Chat with AI assistant |
+| `chat_prompt` | Set AI assistant system prompt |
+| `chat_model` | Set AI model |
+| `glog` | Git log with interactive selection |
+| `gco` | Git checkout with interactive branch selection |
+| `add_path` | Add path to PATH environment variable |
+| `serve` | Start a static file server |
+| `uuid` | Generate UUIDs |
+| `dmv` | URL shortener |
+| `reload` | Reload shell configuration |
+| `help` | Show help information |
 
-#### `exit`
+## 🧠 Lisp Functions
 
-Terminates the current shell session gracefully.
+The embedded Lisp interpreter includes many built-in functions:
 
-```bash
-🐕 < exit
-```
+### Core Functions
+- `print` - Print a value
+- `is_null`, `is_number`, `is_symbol`, `is_boolean`, `is_procedure`, `is_pair` - Type checking
+- `car`, `cdr`, `cons`, `list`, `nth`, `sort`, `reverse` - List operations
+- `map`, `filter` - Higher-order functions
+- `length`, `range` - List utilities
+- `hash`, `hash_get`, `hash_set` - Hash map functions
+- `+`, `-`, `*`, `/`, `truncate` - Arithmetic operations
+- `not`, `==`, `!=`, `<`, `<=`, `>`, `>=` - Comparison operations
+- `eval`, `apply` - Meta functions
 
-#### `cd [directory]`
+### Shell Integration Functions
+- `alias` - Set command aliases from Lisp
+- `abbr` - Set abbreviations from Lisp
+- `command` - Execute external commands and capture output
+- `sh` - Execute shell commands in the current shell context
+- `sh!` - Execute shell commands with output capture
+- `setenv` - Set environment variables
+- `vset` - Set shell variables
+- `add_path` - Add paths to PATH
+- `allow-direnv` - Configure direnv roots
 
-Changes the current working directory. Supports various path formats:
+### MCP Management Functions
+- `mcp-clear` - Clear all MCP servers
+- `mcp-add-stdio` - Add an MCP server with stdio transport
+- `mcp-add-http` - Add an MCP server with HTTP transport
+- `mcp-add-sse` - Add an MCP server with SSE transport
+- `chat-execute-clear` - Clear execute tool allowlist
+- `chat-execute-add` - Add command to execute tool allowlist
 
-- Absolute paths (starting with `/`)
-- Home directory paths (starting with `~`)
-- Relative paths
-- No argument defaults to home directory
+## 📁 Configuration
 
-```bash
-🐕 < cd /usr/local/bin          # Absolute path
-🐕 < cd ~/Documents             # Home directory path
-🐕 < cd ../parent               # Relative path
-🐕 < cd                         # Go to home directory
-```
+### config.lisp
 
-#### `history`
-
-Displays the command history, showing previously executed commands for reference.
-
-```bash
-🐕 < history
-```
-
-### Navigation and Directory Management
-
-#### `z [pattern]`
-
-Provides frecency-based directory navigation, similar to the popular `z` utility. Quickly jump to frequently and recently visited directories by partial name matching.
-
-```bash
-🐕 < z proj                     # Jump to most frecent directory matching "proj"
-🐕 < z                          # Show frecency-ranked directories
-```
-
-### Job Control Commands
-
-#### `jobs`
-
-Lists all active background jobs in the current shell session, showing job IDs, status, and command information.
-
-```bash
-🐕 < jobs
-┌─────┬──────┬─────────┬─────────────────┐
-│ job │ pid  │ state   │ command         │
-├─────┼──────┼─────────┼─────────────────┤
-│ 1   │ 1234 │ Running │ long_process    │
-│ 2   │ 1235 │ Stopped │ vim file.txt    │
-└─────┴──────┴─────────┴─────────────────┘
-```
-
-#### `fg [job_spec]`
-
-Brings a background job to the foreground for interactive execution. Job specification can be:
-
-- Job number: `1`, `2`, etc.
-- `%1`, `%2` for job references
-- `%+` for current job, `%-` for previous job
-- Empty for most recent job
-
-```bash
-🐕 < fg                         # Foreground most recent job
-🐕 < fg 1                       # Foreground job 1
-🐕 < fg %+                      # Foreground current job
-```
-
-#### `bg [job_spec]`
-
-Resumes a stopped job in the background, allowing it to continue execution while you use the shell.
-
-```bash
-🐕 < bg                         # Resume most recent stopped job
-🐕 < bg 1                       # Resume job 1 in background
-🐕 < bg %2                      # Resume job 2 in background
-```
-
-### Scripting and Configuration
-
-#### `lisp <s-expression>`
-
-Evaluates Lisp s-expressions using the shell's integrated Lisp interpreter. Used for advanced scripting and shell configuration.
-
-```bash
-🐕 < lisp '(+ 1 2 3)'           # Evaluate arithmetic expression
-🐕 < lisp '(alias "ll" "ls -la")' # Define alias using Lisp
-```
-
-#### `set [options] <key> <value>`
-
-Sets shell variables or environment variables. Supports both local shell variables and exported environment variables.
-
-**Options:**
-
-- `-x, --export`: Export as environment variable (available to child processes)
-- `-h, --help`: Show help information
-
-```bash
-🐕 < set MY_VAR "hello world"   # Set local shell variable
-🐕 < set -x PATH "/new/path:$PATH" # Export environment variable
-🐕 < set --export API_KEY "secret" # Export with long option
-```
-
-#### `var`
-
-Displays all current shell variables in a formatted table.
-
-```bash
-🐕 < var
-┌─────────┬──────────────┐
-│ key     │ value        │
-├─────────┼──────────────┤
-│ MY_VAR  │ hello world  │
-│ USER    │ username     │
-└─────────┴──────────────┘
-```
-
-#### `read <variable_name>`
-
-Reads input from stdin and stores it in the specified shell variable. Commonly used in shell scripts for interactive input collection.
-
-```bash
-🐕 < echo "Enter your name:" && read name
-🐕 < echo "Hello $name"
-```
-
-#### `abbr [options] [name] [expansion]`
-
-Manages shell abbreviations with real-time expansion during input. Abbreviations expand when you type them followed by space or enter, providing immediate visual feedback.
-
-**Options:**
-
-- `-a, --add <name> <expansion>` - Add new abbreviation
-- `-e, --erase <name>` - Remove abbreviation
-- `-l, --list` - List all abbreviations
-- `-s` - Show all abbreviations (same as -l)
-
-```bash
-# Add abbreviations
-🐕 < abbr -a gco "git checkout"
-🐕 < abbr -a gst "git status"
-🐕 < abbr -a ll "ls -la"
-
-# Use abbreviations (real-time expansion)
-🐕 < gco[SPACE] → git checkout 
-🐕 < gst[SPACE] → git status 
-
-# List abbreviations
-🐕 < abbr -l
-┌──────┬──────────────┐
-│ name │ expansion    │
-├──────┼──────────────┤
-│ gco  │ git checkout │
-│ gst  │ git status   │
-│ ll   │ ls -la       │
-└──────┴──────────────┘
-
-# Remove abbreviation
-🐕 < abbr -e gco
-
-# Show specific abbreviation
-🐕 < abbr gst
-abbr gst 'git status'
-```
-
-**Lisp Integration (config.lisp):**
+Create a `~/.config/dsh/config.lisp` file to configure your shell:
 
 ```lisp
-;; ~/.config/dsh/config.lisp
-(abbr "gco" "git checkout")
-(abbr "gst" "git status")
-(abbr "ll" "ls -la")
+;; Example configuration
+(setq prompt "🐶 > ")
+(alias "ls" "ls --color=auto")
+(alias "ll" "ls -alF")
+(alias "la" "ls -A")
+(alias "l" "ls -CF")
+
+;; Set environment variables
+(setenv "EDITOR" "vim")
+(setenv "PAGER" "less")
+
+;; Set shell variables
+(vset "MY_VAR" "my_value")
+
+;; Set abbreviations
+(abbr "g" "git")
+(abbr "ga" "git add")
+(abbr "gc" "git commit")
+(abbr "gs" "git status")
+
+;; Add paths to PATH
+(add_path "~/bin")
+(add_path "~/.cargo/bin")
+
+;; MCP server configuration using Lisp functions
+(mcp-clear)  ; Clear any existing servers before adding new ones
+
+;; Add MCP server with stdio transport (for local executable servers)
+;; Parameters: label, command path, arguments list, environment variables list, working directory (optional), description (optional)
+(mcp-add-stdio 
+  "local-dev-tools"                    ; label
+  "/path/to/your/mcp-server"          ; command
+  '("arg1" "arg2")                    ; arguments list
+  '(("ENV_VAR1" "value1") ("ENV_VAR2" "value2"))  ; environment variables list
+  '()                                 ; working directory (NIL = current directory)
+  "Local development tools via stdio"  ; description
+)
+
+;; Add MCP server with HTTP transport
+;; Parameters: label, URL, authentication header (optional), allow stateless (optional), description (optional)
+(mcp-add-http 
+  "remote-http-service"               ; label
+  "https://example.com/mcp"           ; URL
+  '()                                 ; authentication header (NIL = no auth)
+  '()                                 ; allow stateless (NIL = false)
+  "Remote HTTP MCP service"           ; description
+)
+
+;; Add MCP server with SSE transport
+;; Parameters: label, URL, description (optional)
+(mcp-add-sse 
+  "streaming-service"                 ; label
+  "https://example.com/sse"           ; URL
+  "SSE-based MCP service"             ; description
+)
+
+;; Chat execute allowlist - commands that can be executed by AI assistant
+(chat-execute-clear)
+(chat-execute-add "ls")
+(chat-execute-add "cat")
+(chat-execute-add "echo")
+(chat-execute-add "grep")
+(chat-execute-add "find")
 ```
 
-#### `alias [name[=command]]`
+### MCP Configuration Details
 
-Manages shell aliases with support for setting, listing, and querying aliases.
+MCP (Model Context Protocol) allows the shell to connect to external services that provide tools for AI assistants. You can configure MCP servers in your `config.lisp` file using these functions:
 
-```bash
-🐕 < alias                      # List all aliases
-🐕 < alias ll="ls -la"          # Set an alias
-🐕 < alias ll                   # Show specific alias
-```
+#### `(mcp-clear)`
+Removes all currently configured MCP servers.
 
-### AI Integration Commands
+#### `(mcp-add-stdio label command args env-vars cwd description)`
+Adds an MCP server that communicates via standard input/output streams.
 
-#### `chat [options] <message>`
+- `label`: A unique identifier for the server
+- `command`: Path to the server executable
+- `args`: List of command-line arguments to pass to the server
+- `env-vars`: List of (key value) pairs for environment variables
+- `cwd`: Working directory for the server (or NIL for current directory)
+- `description`: Optional description of the server
 
-Integrates with OpenAI-compatible chat APIs for AI-powered assistance within the shell. Supports model selection, custom prompts, and alternate API endpoints such as OpenRouter.
-
-**Options:**
-
-- `-m, --model <model>` - Use specific OpenAI model for this request
-
-```bash
-# Use default model (gpt-5-mini)
-🐕 < chat "Explain how to use git rebase"
-
-# Use specific model
-🐕 < chat -m gpt-4 "Complex reasoning task"
-🐕 < chat --model o1-preview "Advanced analysis needed"
-
-# Write scripts and get help
-🐕 < chat "Write a bash script to backup files"
-```
-
-##### Tool calling
-
-The chat assistant can invoke tools when additional actions are required:
-
-- `edit` overwrites workspace files with provided contents.
-- `execute` runs an allowlisted shell command via `bash -lc` and returns the exit code, stdout, and stderr (also streamed back into the shell).
-
-Configure the `execute` allowlist in `~/.config/dsh/openai-execute-tool.json`:
-
-```json
-{
-  "allowed_commands": ["ls", "git", "cargo"]
-}
-```
-
-Only commands whose first token appears in `allowed_commands` will run. You can also provide a comma- or newline-separated list via the `AI_CHAT_EXECUTE_ALLOWLIST` environment variable. After execution, the tool passes the captured output back to the model so it can summarize the result.
-
-**Requirements:**
-
-- Set `AI_CHAT_API_KEY` (or legacy `OPENAI_API_KEY`) with your API key
-- Optional: Configure `AI_CHAT_BASE_URL` (or `OPENAI_BASE_URL`) for OpenAI-compatible services; defaults to `https://api.openai.com/v1/`
-- Optional: Configure `AI_CHAT_MODEL` (or `OPENAI_MODEL`) for the default model; defaults to `gpt-5-mini`
-- Internet connection for API communication
-
-To configure these values via `~/.config/dsh/config.lisp`:
-
+Example:
 ```lisp
-(vset "AI_CHAT_API_KEY" "sk-...your-key...")
-(vset "AI_CHAT_BASE_URL" "https://openrouter.ai/api/v1/")
-(vset "AI_CHAT_MODEL" "openrouter/auto")
+(mcp-add-stdio 
+  "git-tools" 
+  "/usr/local/bin/git-mcp-server" 
+  '("--verbose") 
+  '(("GIT_AUTHOR_NAME" "Your Name")) 
+  '() 
+  "Git utility tools"
+)
 ```
 
-#### `chat_prompt <prompt_template>`
+#### `(mcp-add-http label url auth-header allow-stateless description)`
+Adds an MCP server that communicates via HTTP requests.
 
-Sets a custom prompt template for ChatGPT interactions. The prompt template provides context for all subsequent chat commands.
+- `label`: A unique identifier for the server
+- `url`: The HTTP endpoint for the server
+- `auth-header`: Authentication header value (or NIL)
+- `allow-stateless`: Whether to allow stateless operations (or NIL)
+- `description`: Optional description of the server
 
-```bash
-🐕 < chat_prompt "You are a helpful Linux system administrator"
-🐕 < chat "How do I check disk usage?"
-```
-
-#### `chat_model [model_name]`
-
-Manages the default OpenAI model for ChatGPT interactions. When called without arguments, shows the current model.
-
-```bash
-# Show current default model
-🐕 < chat_model
-Current OpenAI model: gpt-5-mini
-
-# Set new default model
-🐕 < chat_model gpt-4
-OpenAI model set to: gpt-4
-
-# Available models include:
-# - gpt-5-mini (default fast reasoning)
-# - o1-preview (advanced reasoning)
-# - gpt-4 (balanced performance)
-# - gpt-3.5-turbo (fastest, cheapest)
-```
-
-### Utility Commands
-
-#### `add_path <directory>`
-
-Adds a directory to the beginning of the PATH environment variable, giving it the highest priority for command lookup. Supports tilde expansion for home directory references.
-
-```bash
-🐕 < add_path ~/bin             # Add ~/bin to PATH
-🐕 < add_path /usr/local/bin    # Add /usr/local/bin to PATH
-```
-
-#### `uuid`
-
-Generates and outputs a random UUID (Universally Unique Identifier) using UUID version 4 for maximum uniqueness.
-
-```bash
-🐕 < uuid
-550e8400-e29b-41d4-a716-446655440000
-```
-
-### Usage Notes
-
-- All built-in commands support I/O redirection and piping
-- Commands integrate seamlessly with the shell's job control system
-- Error messages are displayed on stderr with appropriate exit codes
-- Commands respect the shell's variable expansion and environment
-- AI commands require proper API configuration and internet connectivity
-
-### Examples of Advanced Usage
-
-```bash
-# Combine commands with pipes and redirection
-🐕 < history | grep git > git_commands.txt
-
-# Use AI integration with output redirection
-🐕 < chat "Explain Docker basics" > docker_guide.txt
-
-# Job control workflow
-🐕 < long_running_command &     # Start in background
-🐕 < jobs                       # Check job status
-🐕 < fg 1                       # Bring to foreground
-
-# Variable management
-🐕 < set PROJECT_DIR ~/my-project
-🐕 < cd $PROJECT_DIR
-🐕 < add_path $PROJECT_DIR/bin
-```
-
-## 📝 Configuration with config.lisp
-
-Users can extend the functionality with their own lisp scripts.
-An example is shown below.
-
+Example:
 ```lisp
-
-;; Define alias
-
-(alias "a" "cd ../")
-(alias "aa" "cd ../../")
-(alias "aaa" "cd ../../../")
-(alias "aaaa" "cd ../../../../")
-(alias "ll" "exa -al")
-(alias "cat" "bat")
-(alias "g" "git")
-(alias "gp" "git push")
-(alias "m" "make")
-
-;; It has a direnv equivalent.
-(allow-direnv "~/repos/github.com/pyspa/doge-shell")
-
-;; User functions
-(fn gco ()
-  (value-let ((slct (sh "git branch --all | grep -v HEAD | sk | tr -d ' ' "))
-              (branch (sh "echo $slct | sed 's/.* //' | sed 's#remotes/[^/]*/##'")))
-    (sh "git checkout $branch")))
-
-(fn fkill (arg)
-  (value-let ((q arg)
-              (slct (sh "ps -ef | sed 1d | sk -q $q | awk '{print $2}' ")))
-    (sh "kill -TERM $slct")))
-
+(mcp-add-http 
+  "remote-api" 
+  "https://api.example.com/mcp" 
+  '("Bearer your-token-here") 
+  '() 
+  "Remote API server"
+)
 ```
+
+#### `(mcp-add-sse label url description)`
+Adds an MCP server that communicates via Server-Sent Events.
+
+- `label`: A unique identifier for the server
+- `url`: The SSE endpoint URL
+- `description`: Optional description of the server
+
+Example:
+```lisp
+(mcp-add-sse 
+  "events-service" 
+  "https://events.example.com/stream" 
+  "Real-time events service"
+)
+```
+
+### config.toml (MCP Configuration)
+
+For MCP server configuration, you can also create a `~/.config/dsh/config.toml` file:
+
+```toml
+[mcp]
+# Define MCP servers that connect via stdio
+servers = [
+  { label = "local-tools", description = "Local MCP tools", transport = { type = "stdio", command = "/path/to/server", args = [] } },
+  { label = "remote-service", description = "Remote HTTP MCP service", transport = { type = "http", url = "https://example.com/mcp" } },
+  { label = "streaming-service", description = "SSE MCP service", transport = { type = "sse", url = "https://example.com/sse" } }
+]
+```
+
+## 🔧 Usage
+
+### Basic Usage
+```bash
+# Start the shell interactively
+dsh
+
+# Execute a single command
+dsh -c "echo 'Hello, World!'"
+
+# Execute a Lisp script
+dsh -l "(print \"Hello from Lisp!\")"
+```
+
+### Import History
+Import command history from other shells:
+```bash
+# Import from fish shell
+dsh import fish
+
+# Import from bash with custom path
+dsh import bash --path /path/to/bash_history
+```
+
+### Key Bindings
+- `Tab` - Context-aware completion
+- `Ctrl+R` - Interactive history search
+- `Ctrl+C` - Cancel current command (press twice to exit shell)
+- `Ctrl+L` - Clear screen
+- `Ctrl+D` - Show exit hint (use `exit` to leave)
+
+## 🤖 AI Integration
+
+The shell includes AI-powered command completion using OpenAI. To use this feature:
+
+1. Set your OpenAI API key in the environment:
+   ```bash
+   export OPENAI_API_KEY="your-api-key-here"
+   ```
+
+2. The shell will automatically provide command suggestions when available.
+
+3. Use `!` prefix to chat with the AI directly:
+   ```bash
+   !explain how to use the grep command
+   ```
+
+4. Use the `chat` command for extended conversations:
+   ```bash
+   chat "How do I compress a directory with tar?"
+   ```
+
+## 📁 Project Structure
+
+- `dsh/` - Main shell executable and core implementation
+- `dsh-builtin/` - Built-in commands
+- `dsh-frecency/` - Frecency-based history management
+- `dsh-types/` - Shared data structures
+- `dsh-openai/` - OpenAI integration
+- `completions/` - Command completion definitions
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Make your changes
+4. Add tests if applicable
+5. Run tests (`cargo test`)
+6. Commit your changes (`git commit -m 'Add amazing feature'`)
+7. Push to the branch (`git push origin feature/amazing-feature`)
+8. Open a Pull Request
 
 ## 📄 License
 
-Doge-shell is released under the MIT license. For more information, see LICENSE.
+This project is licensed under the MIT/Apache-2.0 license - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- Built with [Rust](https://www.rust-lang.org/)
+- Uses [skim](https://github.com/lotabout/skim) for fuzzy finding
+- Inspired by modern shells like Fish and Zsh
+- Includes an embedded Lisp interpreter for extensibility
+- Integrates with Model Context Protocol (MCP) for AI-assisted tool access

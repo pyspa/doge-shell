@@ -391,6 +391,10 @@ pub fn select_completion_items(
     )
 }
 
+fn last_word(s: &str) -> &str {
+    s.split_whitespace().last().unwrap_or("")
+}
+
 pub fn select_completion_items_with_config(
     items: Vec<Candidate>,
     query: Option<&str>,
@@ -429,6 +433,7 @@ pub fn select_completion_items_with_config(
     match controller.run(&mut display) {
         // User selected a completion item
         Ok(CompletionOutcome::Submitted(value)) => Some(value),
+        Ok(CompletionOutcome::Input(value)) => Some(last_word(input_text).to_owned() + &value),
         // User cancelled (e.g. pressed ESC) or made no selection
         // Both cases return None, maintaining the "silent failure" behavior
         Ok(CompletionOutcome::Cancelled) | Ok(CompletionOutcome::NoSelection) => None,
@@ -525,6 +530,8 @@ fn completion_from_lisp(input: &Input, repl: &Repl, query: Option<&str>) -> Opti
 fn completion_from_current(_input: &Input, repl: &Repl, query: Option<&str>) -> Option<String> {
     let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
     let environment = Arc::clone(&lisp_engine.borrow().shell_env);
+
+    debug!("completion_from_current: query={:?}", query);
 
     // 2 . try completion
     if let Some(query_str) = query {

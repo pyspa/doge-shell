@@ -33,6 +33,7 @@ impl CompletionEventSource for TerminalEventSource {
 #[derive(Debug, PartialEq, Eq)]
 pub enum CompletionOutcome {
     Submitted(String),
+    Input(String),
     Cancelled,
     NoSelection,
 }
@@ -88,6 +89,11 @@ where
                         debug!("Completion confirmed without selection");
                         return Ok(CompletionOutcome::NoSelection);
                     }
+                    InteractionCommand::Input(ch) => {
+                        ui.clear()?;
+                        debug!("Completion cancelled by input");
+                        return Ok(CompletionOutcome::Input(ch.to_string()));
+                    }
                     InteractionCommand::Cancel => {
                         ui.clear()?;
                         debug!("Completion cancelled by user");
@@ -110,6 +116,7 @@ enum InteractionCommand {
     MoveLeft,
     MoveRight,
     Submit,
+    Input(char),
     Cancel,
     Noop,
 }
@@ -125,11 +132,13 @@ fn interpret_key_event(key: &KeyEvent) -> InteractionCommand {
         (KeyCode::Left, _) => InteractionCommand::MoveLeft,
         (KeyCode::Right, _) | (KeyCode::Tab, KeyModifiers::NONE) => InteractionCommand::MoveRight,
         (KeyCode::Enter, _) => InteractionCommand::Submit,
-        (KeyCode::Esc, _)
-        | (KeyCode::Char('c'), KeyModifiers::CONTROL)
-        | (KeyCode::Char('g'), KeyModifiers::CONTROL)
-        | (KeyCode::Char('q'), KeyModifiers::NONE) => InteractionCommand::Cancel,
-        _ => InteractionCommand::Noop,
+        // (KeyCode::Esc, _)
+        // | (KeyCode::Char('c'), KeyModifiers::CONTROL)
+        // | (KeyCode::Char('g'), KeyModifiers::CONTROL)
+        // | (KeyCode::Char('q'), KeyModifiers::NONE) => InteractionCommand::Cancel,
+        // _ => InteractionCommand::Noop,
+        (KeyCode::Char(ch), _) => InteractionCommand::Input(ch),
+        _ => InteractionCommand::Cancel,
     }
 }
 
@@ -241,7 +250,7 @@ mod tests {
 
         let outcome = controller.run(&mut ui).expect("controller run succeeds");
 
-        assert_eq!(outcome, CompletionOutcome::Cancelled);
+        assert_eq!(outcome, CompletionOutcome::Input("c".to_string()));
         assert_eq!(ui.clear_calls, 1);
         assert_eq!(ui.refresh_calls, 0);
     }

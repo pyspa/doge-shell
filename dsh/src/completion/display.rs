@@ -704,12 +704,6 @@ impl CompletionDisplay {
     }
 }
 
-/// Simple display function (for compatibility with existing systems)
-// pub fn display_candidates_simple(candidates: &[EnhancedCandidate]) -> IoResult<()> {
-//     let display = CompletionDisplay::with_default_config();
-//     display.display_candidates(candidates)
-// }
-
 impl CompletionUi for CompletionDisplay {
     fn show(&mut self) -> Result<()> {
         self.display()

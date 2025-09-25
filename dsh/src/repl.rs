@@ -762,57 +762,71 @@ impl<'a> Repl<'a> {
                 self.input.match_index = None;
             }
             (KeyCode::Tab, NONE) | (KeyCode::BackTab, NONE) => {
+                // Extract the current word at cursor position for completion query
                 let completion_query = match self.input.get_cursor_word() {
                     Ok(Some((_rule, span))) => Some(span.as_str()),
                     _ => None,
                 };
 
-                // Get prompt and input text for completion display
+                // Get the current prompt text and input text for completion display context
                 let prompt_text = self.prompt.read().mark.clone();
                 let input_text = self.input.to_string();
 
-                // debug!(
-                //     "Starting completion with prompt: '{}', input: '{}'",
-                //     prompt_text, input_text
-                // );
+                debug!(
+                    "TAB completion starting with prompt: '{}', input: '{}', query: '{:?}'",
+                    prompt_text, input_text, completion_query
+                );
 
-                // Use the new integrated completion engine
+                // Use the new integrated completion engine with current directory context
                 let current_dir = self.prompt.read().current_path().to_path_buf();
                 let cursor_pos = self.input.cursor();
 
-                // debug!(
-                //     "Using IntegratedCompletionEngine for input: '{}' at position {}",
-                //     input_text, cursor_pos
-                // );
+                debug!(
+                    "Using IntegratedCompletionEngine for input: '{}' at position {}",
+                    input_text, cursor_pos
+                );
 
+                // Get completion candidates from the integrated engine
                 let candidates = self
                     .integrated_completion
                     .complete(
                         &input_text,
                         cursor_pos,
                         &current_dir,
-                        MAX_RESULT, // max candidates
+                        MAX_RESULT, // maximum number of candidates to return
                     )
                     .await;
 
-                // debug!(
-                //     "IntegratedCompletionEngine returned {} candidates. {:?}",
-                //     candidates.len(),
-                //     candidates,
-                // );
+                debug!(
+                    "IntegratedCompletionEngine returned {} candidates",
+                    candidates.len()
+                );
+                for (i, candidate) in candidates.iter().enumerate() {
+                    debug!("Integrated engine candidate {}: {:?}", i, candidate);
+                }
 
+                // Attempt to get completion result
+                // First try with integrated completion engine, then fall back to legacy system
                 let completion_result = if !candidates.is_empty() {
-                    // Convert to completion format and show with skim
+                    // If integrated engine returned candidates, show them with skim selector
                     let completion_candidates: Vec<completion::Candidate> =
                         self.integrated_completion.to_candidates(candidates);
 
+                    debug!(
+                        "Converted to {} UI candidates for skim",
+                        completion_candidates.len()
+                    );
+                    for (i, candidate) in completion_candidates.iter().enumerate() {
+                        debug!("Skim UI candidate {}: {:?}", i, candidate);
+                    }
+
                     completion::select_item_with_skim(completion_candidates, completion_query)
                 } else {
-                    // Fall back to existing completion if no candidates from integrated engine
-                    // debug!(
-                    //     "No candidates from IntegratedCompletionEngine, falling back to legacy completion. {:?} {:?}",
-                    //     &self.input, &completion_query
-                    // );
+                    debug!(
+                        "No candidates from IntegratedCompletionEngine, falling back to legacy completion"
+                    );
+                    // If no candidates from integrated engine, fall back to legacy completion system
+                    // This handles path completion, command completion from PATH, etc.
                     completion::input_completion(
                         &self.input,
                         self,
@@ -822,28 +836,42 @@ impl<'a> Repl<'a> {
                     )
                 };
 
+                // Process the completion result
                 if let Some(val) = completion_result {
                     debug!("Completion selected: '{}'", val);
-                    // For history candidates, replace the entire input
+                    // For history candidates (indicated by clock emoji), replace entire input
                     let is_history_candidate = val.starts_with("🕒 ");
                     if is_history_candidate {
                         let command = val[3..].trim(); // Remove the clock emoji and any extra spaces
                         self.input.reset(command.to_string());
                     } else {
+                        // For regular completions, replace the query part with the selected value
                         if let Some(q) = completion_query {
-                            self.input.backspacen(q.len());
+                            self.input.backspacen(q.len()); // Remove the original query text
                         }
-                        self.input.insert_str(val.as_str());
+                        self.input.insert_str(val.as_str()); // Insert the completion
                     }
                     debug!("Input after completion: '{}'", self.input.to_string());
                 } else {
+                    // No completion was selected - this happens when:
+                    // 1. No candidates were found (empty candidate list returns None immediately)
+                    // 2. User cancelled the completion interface (e.g. pressed ESC in skim)
+                    // 3. User made no selection from the completion list
                     debug!("No completion selected");
+                    // In this case, the input remains unchanged and no error is shown to user
+                    // This is the "silent failure" behavior when no matches are found
                 }
 
-                // Force redraw after completion
+                // Force a redraw after completion to update the display
                 reset_completion = true;
                 self.start_completion = true;
                 debug!("Set start_completion flag to true and reset_completion to true");
+
+                // Note: When no matches are found, no UI is shown and no error is displayed to user.
+                // The integrated completion engine returns an empty vector when no candidates match,
+                // which immediately results in a fallback to legacy completion.
+                // If legacy completion also finds no matches, completion::input_completion returns None,
+                // leading to the "No completion selected" case above.
             }
             (KeyCode::Enter, NONE) => {
                 // Handle abbreviation expansion on Enter if cursor is at end of a word

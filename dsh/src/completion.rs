@@ -1,7 +1,6 @@
 use crate::completion::display::CompletionConfig;
 use crate::completion::ui::{CompletionInteraction, CompletionOutcome, TerminalEventSource};
 use crate::dirs::is_executable;
-use crate::environment::get_data_file;
 use crate::input::Input;
 use crate::lisp::Value;
 use crate::repl::Repl;
@@ -13,8 +12,8 @@ use skim::prelude::*;
 use skim::{Skim, SkimItemReceiver, SkimItemSender};
 use std::borrow::Cow;
 use std::collections::BTreeSet;
-use std::fs::{File, create_dir_all, read_dir, remove_file};
-use std::io::{BufReader, BufWriter, stdout};
+use std::fs::read_dir;
+use std::io::stdout;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::{process::Command, sync::Arc};
@@ -315,31 +314,51 @@ impl SkimItem for Candidate {
 }
 
 pub fn select_item_with_skim(items: Vec<Candidate>, query: Option<&str>) -> Option<String> {
+    // Log the completion candidates before passing them to skim
+    debug!(
+        "select_item_with_skim: {} candidates provided, query: {:?}",
+        items.len(),
+        query
+    );
+    for (i, candidate) in items.iter().enumerate() {
+        debug!("Skim candidate {}: {:?}", i, candidate);
+    }
+
+    // Configure skim fuzzy finder options
     let options = SkimOptionsBuilder::default()
-        .select_1(true)
-        .bind(vec!["Enter:accept".to_string()])
-        .query(query.map(|s| s.to_string()))
+        .select_1(true) // Only allow selecting one item
+        .bind(vec!["Enter:accept".to_string()]) // Use Enter to accept selection
+        .query(query.map(|s| s.to_string())) // Optional initial query
         .build()
         .unwrap();
 
+    // Create channels to send items to skim
     let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
+
+    // Send all completion candidates to skim
     for item in items {
         let _ = tx_item.send(Arc::new(item));
     }
-    drop(tx_item);
+    drop(tx_item); // Close the sender to signal no more items
 
+    // Run skim and get selected items
+    // When no items are provided, skim will show an empty interface
+    // User can still press Enter (with no selection) or ESC to cancel
     let selected = Skim::run_with(&options, Some(rx_item))
         .map(|out| match out.final_key {
-            Key::Enter => out.selected_items,
-            _ => Vec::new(),
+            Key::Enter => out.selected_items, // User pressed Enter (may be empty if no items)
+            _ => Vec::new(),                  // User cancelled (ESC, Ctrl+C, etc.)
         })
         .unwrap_or_default();
 
+    // Return the selected item if one was chosen
     if !selected.is_empty() {
         let val = selected[0].output().to_string();
         return Some(val);
     }
 
+    // Return None if no items were selected or if no items were provided
+    // This is consistent with the "silent failure" behavior when no matches are found
     None
 }
 
@@ -386,7 +405,17 @@ pub fn select_completion_items_with_config(
         prompt_text,
         input_text
     );
+
+    // Log the actual content of the completion candidates before display
+    for (i, candidate) in items.iter().enumerate() {
+        debug!("Completion candidate {}: {:?}", i, candidate);
+    }
+
+    // If no completion candidates are available, return None immediately
+    // This prevents showing an empty completion UI to the user
+    // This is the "silent failure" behavior when no matches are found
     if items.is_empty() {
+        debug!("No completion candidates found, returning None");
         return None;
     }
 
@@ -395,9 +424,15 @@ pub fn select_completion_items_with_config(
 
     let mut controller = CompletionInteraction::new(TerminalEventSource);
 
+    // Run the completion interaction loop
+    // This displays the completion UI and waits for user selection
     match controller.run(&mut display) {
+        // User selected a completion item
         Ok(CompletionOutcome::Submitted(value)) => Some(value),
+        // User cancelled (e.g. pressed ESC) or made no selection
+        // Both cases return None, maintaining the "silent failure" behavior
         Ok(CompletionOutcome::Cancelled) | Ok(CompletionOutcome::NoSelection) => None,
+        // Error occurred during completion interaction
         Err(error) => {
             warn!("Completion interaction failed: {}", error);
             let _ = display.clear_display();
@@ -562,46 +597,6 @@ fn completion_from_current(_input: &Input, repl: &Repl, query: Option<&str>) -> 
     }
 }
 
-fn completion_from_chatgpt(input: &Input, repl: &Repl, _query: Option<&str>) -> Option<String> {
-    let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
-    let environment = Arc::clone(&lisp_engine.borrow().shell_env);
-
-    // ChatGPT Completion
-    let variables_snapshot = {
-        let guard = environment.read();
-        guard.variables.clone()
-    };
-
-    let getter = |key: &str| {
-        variables_snapshot
-            .get(key)
-            .cloned()
-            .or_else(|| std::env::var(key).ok())
-    };
-
-    let config = dsh_openai::OpenAiConfig::from_getter(getter);
-
-    if config.api_key().is_some() {
-        debug!("ChatGPT completion input:{:?}", input);
-
-        match ChatGPTCompletion::new(config) {
-            Ok(mut processor) => match processor.completion(input.as_str()) {
-                Ok(res) => {
-                    return res;
-                }
-                Err(err) => {
-                    eprintln!("{err:?}");
-                }
-            },
-            Err(err) => {
-                eprintln!("{err:?}");
-            }
-        }
-    }
-
-    None
-}
-
 pub fn input_completion(
     input: &Input,
     repl: &Repl,
@@ -609,21 +604,32 @@ pub fn input_completion(
     prompt_text: &str,
     input_text: &str,
 ) -> Option<String> {
-    // Use original completion logic only (fuzzy completion removed)
+    // Main fallback completion function that tries multiple completion sources in sequence:
+    // 1. Lisp-based completion (custom completion definitions)
+    // 2. Current context completion (path completion, command completion from PATH)
+    // 3. ChatGPT completion (if enabled and API key is set)
+
+    debug!("input_completion starting with query: {:?}", query);
+
+    // Try lisp-based completion first (custom completions defined by user)
     let res = completion_from_lisp_with_prompt(input, repl, query, prompt_text, input_text);
     if res.is_some() {
+        debug!("Lisp completion returned result: {:?}", res);
         return res;
     }
+
+    // Try current context completion (files, directories, commands in PATH)
     let res = completion_from_current_with_prompt(input, repl, query, prompt_text, input_text);
     if res.is_some() {
+        debug!("Context completion returned result: {:?}", res);
         return res;
     }
-    if input.can_execute {
-        let res = completion_from_chatgpt(input, repl, query);
-        if res.is_some() {
-            return res;
-        }
-    }
+
+    debug!("No completion candidates found from any source");
+
+    // Return None if no completion sources provided any candidates
+    // This is the "silent failure" behavior when no matches are found from any source
+    // No error message is shown to user, maintaining the "no visible effect" behavior
     None
 }
 
@@ -920,9 +926,11 @@ fn completion_from_current_with_prompt(
     let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
     let environment = Arc::clone(&lisp_engine.borrow().shell_env);
     debug!("completion_from_current_with_prompt: query={:?}", query);
-    // 2 . try completion
+
+    // Attempt completion using current context (files, directories, commands in PATH)
+    // Only proceed if a query string was provided
     if let Some(query_str) = query {
-        // check path
+        // Determine current directory for relative path resolution
         let current = std::env::current_dir().unwrap_or_else(|e| {
             warn!(
                 "Failed to get current directory: {}, using home directory",
@@ -937,10 +945,13 @@ fn completion_from_current_with_prompt(
                 })
         });
 
+        // Expand tilde (~) in the query path
         let expand_path = shellexpand::tilde(&query_str);
         let expand = expand_path.as_ref();
         let path = Path::new(expand);
 
+        // Determine the path to search and query substring
+        // This handles cases like directory completion vs. file name completion
         let (path, path_query, only_path) = if path.is_dir() {
             (path, "", true)
         } else if let Some(parent) = path.parent() {
@@ -955,6 +966,7 @@ fn completion_from_current_with_prompt(
             (current.as_path(), query_str, false)
         };
 
+        // Canonicalize the path for consistent resolution
         let canonical_path = if let Ok(path) = path.canonicalize() {
             path
         } else {
@@ -965,7 +977,8 @@ fn completion_from_current_with_prompt(
         };
         let path_str = canonical_path.display().to_string();
 
-        // path - Apply prefix filtering for file completions
+        // Get file completions (directories and files) for the path
+        // Apply prefix filtering based on the query string
         let mut items = if path_query.is_empty() {
             get_file_completions(path_str.as_str(), path.to_str().unwrap())
         } else {
@@ -976,14 +989,20 @@ fn completion_from_current_with_prompt(
             )
         };
 
+        // If not in path-only mode, also search for commands in PATH
         if !only_path {
             let mut cmds_items = get_commands(&environment.read().paths, query_str);
             items.append(&mut cmds_items);
-            // Deduplicate combined results
+            // Merge duplicate candidates with priority given to commands over files
             items = deduplicate_candidates(items);
         }
+
+        // Attempt to select a completion from the gathered items
+        // Returns None if no items were found (no matches) or if user cancelled selection
         select_completion_items(items, Some(path_query), prompt_text, input_text)
     } else {
+        // Return None if no query was provided (e.g. empty input)
+        // This is part of the "silent failure" behavior when no matches are found
         None
     }
 }
@@ -1182,13 +1201,6 @@ fn get_file_completions_with_filter(
     candidates_set.into_iter().collect()
 }
 
-/// ChatGPT completion structure
-#[derive(Debug)]
-pub struct ChatGPTCompletion {
-    config: dsh_openai::OpenAiConfig,
-    store_path: PathBuf,
-}
-
 // Pre-compiled regex for whitespace replacement - compiled once at first use
 static WHITESPACE_REGEX: std::sync::LazyLock<Regex> =
     std::sync::LazyLock::new(|| Regex::new(r"\s+").unwrap());
@@ -1199,99 +1211,6 @@ static WHITESPACE_SPLIT_REGEX: std::sync::LazyLock<Regex> =
 
 fn replace_space(s: &str) -> String {
     WHITESPACE_REGEX.replace_all(s, "_").to_string()
-}
-
-impl ChatGPTCompletion {
-    pub fn new(config: dsh_openai::OpenAiConfig) -> Result<Self> {
-        let store_path = get_data_file("completions")?;
-        create_dir_all(&store_path)?;
-        Ok(ChatGPTCompletion { config, store_path })
-    }
-
-    pub fn completion(&mut self, cmd: &str) -> Result<Option<String>> {
-        let file_name = replace_space(cmd.trim());
-        debug!("completion file name : {}", file_name);
-        let completion_file_path = self.store_path.join(file_name + ".json");
-
-        let items = if completion_file_path.exists() {
-            let open_file = File::open(&completion_file_path)?;
-            let reader = BufReader::new(open_file);
-            let items: Vec<Candidate> = serde_json::from_reader(reader)?;
-            items
-        } else {
-            let client = dsh_openai::ChatGptClient::try_from_config(&self.config)?;
-            let content = format!(
-                r#"
-You are a talented software engineer.
-You know how to use various CLI commands and know the command options for tools written in go, rust and node.js as well as linux commands.
-For example, the "bat" command.
-I would like to be taught the options for various commands, so when I type in a command name, please output a list of pairs of options and a brief description of those options.
-Output as many options as possible.
-the output of the man command is also helpful.
-The original command name is not required.
-Be sure to start a new line for each pair you output.
-Also, if you have an option that begins with "--", please output that as an option.
-The output format is as follows
-
-Output:
-
-"Option 1", "Description of Option 1"
-
-"Option 2", "Description of option 2"
-
-Example
-In the case of the ls command, the format is as follows.
-
-Output:
-
-"--all", "Do not ignore entries beginning with"
-
-"--author", "-l to show the author of each file"
-
-
-Follow the above rules to print the subcommands and option lists for the "{cmd}" command.
-"#
-            );
-            let mut items: Vec<Candidate> = Vec::new();
-
-            match client.send_message(&content, None, Some(0.1)) {
-                Ok(res) => {
-                    for res in res.split('\n') {
-                        if res.starts_with('"')
-                            && let Some((opt, desc)) = res.split_once(',')
-                        {
-                            let opt = unquote(opt).to_string();
-                            let unq_desc = unquote(desc.trim()).to_string();
-                            let item = Candidate::Item(opt, unq_desc);
-                            items.push(item);
-                        }
-                    }
-
-                    let write_file = File::create(&completion_file_path)?;
-                    let writer = BufWriter::new(write_file);
-                    serde_json::to_writer(writer, &items)?;
-                    items
-                }
-                _ => items,
-            }
-        };
-
-        if items.is_empty() {
-            remove_file(&completion_file_path)?;
-        }
-        let res = select_completion_items_simple(items, None);
-        Ok(res)
-    }
-}
-
-pub fn unquote(s: &str) -> String {
-    let quote = s.chars().next().unwrap();
-
-    if quote != '"' && quote != '\'' && quote != '`' {
-        return s.to_string();
-    }
-    let s = &s[1..s.len() - 1];
-    s.to_string()
 }
 
 /// Advanced completion engine that combines multiple completion strategies

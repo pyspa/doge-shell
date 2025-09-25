@@ -54,8 +54,10 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
     let allowlist = load_allowed_commands(proxy.list_execute_allowlist())?;
     if allowlist.is_empty() {
         return Err(format!(
-            "chat: execute tool has no allowed commands configured when requested `{}`. Add entries to ~/.config/dsh/{EXECUTE_TOOL_CONFIG_FILE}, set {EXECUTE_TOOL_ENV_ALLOWLIST}, or call chat-execute-add in config.lisp.",
-            command.trim()
+            "chat: execute tool has no allowed commands configured when requested `{}`. Add entries to ~/.config/dsh/{}, set {}, or call chat-execute-add in config.lisp.",
+            command.trim(),
+            EXECUTE_TOOL_CONFIG_FILE,
+            EXECUTE_TOOL_ENV_ALLOWLIST
         ));
     }
 
@@ -63,7 +65,8 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
 
     if !allowlist.iter().any(|item| item == &program) {
         return Err(format!(
-            "chat: execute tool command `{program}` from request `{}` is not permitted. Allowed commands: {}",
+            "chat: execute tool command `{}` from request `{}` is not permitted. Allowed commands: {}",
+            program,
             command.trim(),
             allowlist.join(", ")
         ));
@@ -263,7 +266,7 @@ mod tests {
     fn load_allowlist_reads_config_file() {
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("allow.json");
-        let contents = json!({ "allowed_commands": ["ls", "cargo"] }).to_string();
+        let contents = json!({ "allowed_commands": ["cargo"] }).to_string();
         std::fs::write(&config_path, contents).unwrap();
 
         let _env_guard = EnvGuard::set(
@@ -271,8 +274,7 @@ mod tests {
             config_path.to_str().unwrap(),
         );
         let _allow_env = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "");
-
-        assert_eq!(load_allowed_commands(vec![]).unwrap(), vec!["cargo", "ls"]);
+        assert_eq!(load_allowed_commands(vec![]).unwrap(), vec!["cargo"]);
     }
 
     #[test]

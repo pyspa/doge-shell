@@ -539,9 +539,7 @@ fn completion_from_lisp(input: &Input, repl: &Repl, query: Option<&str>) -> Opti
 fn completion_from_current(_input: &Input, repl: &Repl, query: Option<&str>) -> Option<String> {
     debug!("completion_from_current: query={:?}", query);
 
-    let Some(query_str) = query.filter(|q| !q.is_empty()) else {
-        return None;
-    };
+    let query_str = query.filter(|q| !q.is_empty())?;
 
     debug!("cache query_str: '{}'", query_str);
     if let Some(hit) = LEGACY_COMPLETION_CACHE.lookup(query_str) {
@@ -557,9 +555,7 @@ fn completion_from_current(_input: &Input, repl: &Repl, query: Option<&str>) -> 
         }
     }
 
-    let Some(data) = collect_current_context_candidates(repl, query_str) else {
-        return None;
-    };
+    let data = collect_current_context_candidates(repl, query_str)?;
 
     if data.items.is_empty() {
         return None;
@@ -898,9 +894,7 @@ fn completion_from_current_with_prompt(
 ) -> Option<String> {
     debug!("completion_from_current_with_prompt: query={:?}", query);
 
-    let Some(query_str) = query.filter(|q| !q.is_empty()) else {
-        return None;
-    };
+    let query_str = query.filter(|q| !q.is_empty())?;
 
     debug!("cache query_str: '{}'", query_str);
     if let Some(hit) = LEGACY_COMPLETION_CACHE.lookup(query_str) {
@@ -921,9 +915,7 @@ fn completion_from_current_with_prompt(
         }
     }
 
-    let Some(data) = collect_current_context_candidates(repl, query_str) else {
-        return None;
-    };
+    let data = collect_current_context_candidates(repl, query_str)?;
 
     if data.items.is_empty() {
         return None;

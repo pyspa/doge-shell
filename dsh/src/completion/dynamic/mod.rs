@@ -150,6 +150,7 @@ mod tests {
         ParsedCommandLine {
             command: command.to_string(),
             args: args.into_iter().map(|s| s.to_string()).collect(),
+            options: vec![],
             current_arg: None,
             completion_context: CompletionContext::Argument {
                 arg_index: 0,
@@ -167,6 +168,7 @@ mod tests {
         ParsedCommandLine {
             command: command.to_string(),
             args: args.into_iter().map(|s| s.to_string()).collect(),
+            options: vec![],
             current_arg: current_arg.map(|s| s.to_string()),
             completion_context: CompletionContext::Argument {
                 arg_index: 0,

@@ -20,6 +20,8 @@ pub struct ParsedCommandLine {
     pub command: String,
     /// Command arguments
     pub args: Vec<String>,
+    /// Command  options
+    pub options: Vec<String>,
     /// Current argument being completed
     pub current_arg: Option<String>,
     /// Completion context

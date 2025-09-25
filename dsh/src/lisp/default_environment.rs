@@ -284,9 +284,14 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
             for arg in args {
                 let command = match arg {
                     Value::String(s) => s.clone(),
-                    _ => return Err(RuntimeError {
-                        msg: format!("chat-execute-add requires all arguments to be strings; found {}", arg)
-                    }),
+                    _ => {
+                        return Err(RuntimeError {
+                            msg: format!(
+                                "chat-execute-add requires all arguments to be strings; found {}",
+                                arg
+                            ),
+                        });
+                    }
                 };
                 shell_env.add_execute_allowlist_entry(command);
             }
@@ -825,11 +830,14 @@ mod tests {
         let engine = LispEngine::new(env.clone());
 
         run(&engine, "(chat-execute-clear)");
-        run(&engine, "(chat-execute-add \"ls\" \"cat\" \"grep\" \"find\")");
+        run(
+            &engine,
+            "(chat-execute-add \"ls\" \"cat\" \"grep\" \"find\")",
+        );
 
         let env_lock = env.read();
         let allowlist = env_lock.execute_allowlist();
-        
+
         // Verify that all expected commands are present regardless of order
         assert!(allowlist.contains(&"ls".to_string()));
         assert!(allowlist.contains(&"cat".to_string()));

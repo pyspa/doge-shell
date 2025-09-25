@@ -658,21 +658,35 @@ impl<'a> Repl<'a> {
                 if self.input.completion.is_some() && !modifiers.contains(CTRL) =>
             {
                 // TODO refactor
-                if let Some(comp) = &self.input.completion {
+                if let Some(completion) = &self.input.completion {
                     let cursor = self.input.cursor();
+                    let completion_chars = completion.chars().count();
 
-                    if cursor >= comp.len() {
+                    if cursor >= completion_chars {
                         return Ok(());
                     }
 
-                    if let Some((comp, post)) = comp[cursor..].split_once(' ') {
-                        let mut comp = self.input.as_str().to_owned() + comp;
+                    let suffix_byte_index = completion
+                        .char_indices()
+                        .nth(cursor)
+                        .map(|(idx, _)| idx)
+                        .unwrap_or_else(|| completion.len());
+
+                    if suffix_byte_index >= completion.len() {
+                        return Ok(());
+                    }
+
+                    let suffix = &completion[suffix_byte_index..];
+
+                    if let Some((fragment, post)) = suffix.split_once(' ') {
+                        let mut new_input = self.input.as_str().to_owned();
+                        new_input.push_str(fragment);
                         if !post.is_empty() {
-                            comp += " ";
-                        };
-                        self.input.reset(comp.to_string());
+                            new_input.push(' ');
+                        }
+                        self.input.reset(new_input);
                     } else {
-                        self.input.reset(comp.to_string());
+                        self.input.reset(completion.to_string());
                         self.input.completion = None;
                     }
                 }

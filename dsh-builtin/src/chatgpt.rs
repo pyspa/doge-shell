@@ -1,5 +1,5 @@
 use super::ShellProxy;
-use dsh_openai::{ChatGptClient, OpenAiConfig};
+use dsh_openai::{CANCELLED_MESSAGE, ChatGptClient, OpenAiConfig, is_ctrl_c_cancelled};
 use dsh_types::{Context, ExitStatus};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde_json::{Value, json};
@@ -105,6 +105,7 @@ pub fn execute_chat_message(
                     ctx.write_stdout(res.trim()).ok();
                     ExitStatus::ExitedWith(0)
                 }
+                Err(err) if err == CANCELLED_MESSAGE => ExitStatus::ExitedWith(1),
                 Err(err) => {
                     ctx.write_stderr(&format!("\r{err:?}")).ok();
                     ExitStatus::ExitedWith(1)
@@ -246,7 +247,13 @@ fn chat_with_tools(
             let _spinner = SpinnerGuard::start(&spinner_text);
             client
                 .send_chat_request(&messages, temperature, model_override.clone(), Some(&tools))
-                .map_err(|err| format!("{err:?}"))?
+                .map_err(|err| {
+                    if is_ctrl_c_cancelled(&err) {
+                        err.to_string()
+                    } else {
+                        format!("{err:?}")
+                    }
+                })?
         };
 
         let choice = response

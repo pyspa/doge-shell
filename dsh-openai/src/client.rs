@@ -1,6 +1,7 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Error, Result, anyhow};
 use reqwest::{Client, RequestBuilder};
 use serde_json::{Value, json};
+use std::fmt;
 use std::future::Future;
 use std::time::Duration;
 use tracing::debug;
@@ -8,7 +9,24 @@ use tracing::debug;
 use crate::config::OpenAiConfig;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
-const CANCELLED_MESSAGE: &str = "OpenAI request cancelled by Ctrl+C";
+pub const CANCELLED_MESSAGE: &str = "OpenAI request cancelled by Ctrl+C";
+
+#[derive(Debug)]
+struct RequestCancelled;
+
+impl fmt::Display for RequestCancelled {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(CANCELLED_MESSAGE)
+    }
+}
+
+impl std::error::Error for RequestCancelled {}
+
+/// Returns true when the provided error represents a Ctrl+C cancellation
+/// triggered during an OpenAI request.
+pub fn is_ctrl_c_cancelled(err: &Error) -> bool {
+    err.downcast_ref::<RequestCancelled>().is_some()
+}
 
 #[derive(Debug)]
 pub struct ChatGptClient {
@@ -157,7 +175,7 @@ impl ChatGptClient {
         tokio::select! {
             res = &mut future => res.map_err(anyhow::Error::from),
             ctrl = &mut ctrl_c => match ctrl {
-                Ok(()) => Err(anyhow!(CANCELLED_MESSAGE)),
+                Ok(()) => Err(RequestCancelled.into()),
                 Err(e) => Err(anyhow!("Failed to listen for Ctrl+C: {e}")),
             },
         }

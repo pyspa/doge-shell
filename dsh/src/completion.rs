@@ -1,3 +1,4 @@
+use self::cache::CompletionCache;
 use crate::completion::display::CompletionConfig;
 use crate::completion::ui::{CompletionInteraction, CompletionOutcome, TerminalEventSource};
 use crate::dirs::is_executable;
@@ -16,11 +17,14 @@ use std::fs::read_dir;
 use std::io::stdout;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::LazyLock;
+use std::time::Duration;
 use std::{process::Command, sync::Arc};
 use tracing::debug;
 use tracing::warn;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+mod cache;
 mod command;
 mod display;
 mod dynamic;
@@ -40,6 +44,11 @@ pub use crate::completion::fuzzy::{ScoredCandidate, SmartCompletion};
 pub use crate::completion::integrated::IntegratedCompletionEngine;
 
 pub const MAX_RESULT: usize = 500;
+
+const LEGACY_CACHE_TTL_MS: u64 = 3000;
+
+static LEGACY_COMPLETION_CACHE: LazyLock<CompletionCache<Candidate>> =
+    LazyLock::new(|| CompletionCache::new(Duration::from_millis(LEGACY_CACHE_TTL_MS)));
 
 /// Calculate the display width of a Unicode string
 /// This accounts for wide characters (like CJK characters and emojis)
@@ -411,9 +420,9 @@ pub fn select_completion_items_with_config(
     );
 
     // Log the actual content of the completion candidates before display
-    for (i, candidate) in items.iter().enumerate() {
-        debug!("Completion candidate {}: {:?}", i, candidate);
-    }
+    // for (i, candidate) in items.iter().enumerate() {
+    //     debug!("Completion candidate {}: {:?}", i, candidate);
+    // }
 
     // If no completion candidates are available, return None immediately
     // This prevents showing an empty completion UI to the user
@@ -528,80 +537,37 @@ fn completion_from_lisp(input: &Input, repl: &Repl, query: Option<&str>) -> Opti
 
 #[allow(dead_code)]
 fn completion_from_current(_input: &Input, repl: &Repl, query: Option<&str>) -> Option<String> {
-    let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
-    let environment = Arc::clone(&lisp_engine.borrow().shell_env);
-
     debug!("completion_from_current: query={:?}", query);
 
-    // 2 . try completion
-    if let Some(query_str) = query {
-        // check path
-        let current = std::env::current_dir().unwrap_or_else(|e| {
-            warn!(
-                "Failed to get current directory: {}, using home directory",
-                e
-            );
-            std::env::var("HOME")
-                .map(std::path::PathBuf::from)
-                .ok()
-                .unwrap_or_else(|| {
-                    warn!("Failed to get home directory, using root");
-                    std::path::PathBuf::from("/")
-                })
-        });
+    let Some(query_str) = query.filter(|q| !q.is_empty()) else {
+        return None;
+    };
 
-        let expand_path = shellexpand::tilde(&query_str);
-        let expand = expand_path.as_ref();
-        let path = Path::new(expand);
-
-        let (path, path_query, only_path) = if path.is_dir() {
-            (path, "", true)
-        } else if let Some(parent) = path.parent() {
-            let parent = Path::new(parent);
-            let has_parent = !parent.as_os_str().is_empty();
-            if let Some(file_name) = &path.file_name() {
-                (parent, file_name.to_str().unwrap(), has_parent)
-            } else {
-                (path, "", has_parent)
-            }
-        } else {
-            (current.as_path(), query_str, false)
-        };
-
-        let canonical_path = if let Ok(path) = path.canonicalize() {
-            path
-        } else {
-            std::env::current_dir().unwrap_or_else(|e| {
-                warn!("Failed to get current directory for canonicalization: {}, using home directory", e);
-                std::env::var("HOME").map(std::path::PathBuf::from).ok().unwrap_or_else(|| {
-                    warn!("Failed to get home directory, using root");
-                    std::path::PathBuf::from("/")
-                })
-            })
-        };
-        let path_str = canonical_path.display().to_string();
-
-        // path - Apply prefix filtering for file completions
-        let mut items = if path_query.is_empty() {
-            get_file_completions(path_str.as_str(), path.to_str().unwrap())
-        } else {
-            get_file_completions_with_filter(
-                path_str.as_str(),
-                path.to_str().unwrap(),
-                Some(path_query),
-            )
-        };
-
-        if !only_path {
-            let mut cmds_items = get_commands(&environment.read().paths, query_str);
-            items.append(&mut cmds_items);
-            // Deduplicate combined results
-            items = deduplicate_candidates(items);
+    debug!("cache query_str: '{}'", query_str);
+    if let Some(hit) = LEGACY_COMPLETION_CACHE.lookup(query_str) {
+        debug!(
+            "cache hit (simple) for query '{}' (key: '{}', len: {})",
+            query_str,
+            hit.key,
+            hit.candidates.len()
+        );
+        if hit.exact || !hit.candidates.is_empty() {
+            LEGACY_COMPLETION_CACHE.extend_ttl(&hit.key);
+            return select_completion_items_simple(hit.candidates, Some(query_str));
         }
-        select_completion_items_simple(items, Some(path_query))
-    } else {
-        None
     }
+
+    let Some(data) = collect_current_context_candidates(repl, query_str) else {
+        return None;
+    };
+
+    if data.items.is_empty() {
+        return None;
+    }
+
+    LEGACY_COMPLETION_CACHE.set(query_str.to_string(), data.items.clone());
+
+    select_completion_items_simple(data.items, data.selection_query.as_deref())
 }
 
 pub fn input_completion(
@@ -930,88 +896,125 @@ fn completion_from_current_with_prompt(
     prompt_text: &str,
     input_text: &str,
 ) -> Option<String> {
-    let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
-    let environment = Arc::clone(&lisp_engine.borrow().shell_env);
     debug!("completion_from_current_with_prompt: query={:?}", query);
 
-    // Attempt completion using current context (files, directories, commands in PATH)
-    // Only proceed if a query string was provided
-    if let Some(query_str) = query {
-        // Determine current directory for relative path resolution
-        let current = std::env::current_dir().unwrap_or_else(|e| {
-            warn!(
-                "Failed to get current directory: {}, using home directory",
-                e
+    let Some(query_str) = query.filter(|q| !q.is_empty()) else {
+        return None;
+    };
+
+    debug!("cache query_str: '{}'", query_str);
+    if let Some(hit) = LEGACY_COMPLETION_CACHE.lookup(query_str) {
+        debug!(
+            "cache hit for query '{}' (key: '{}', len: {})",
+            query_str,
+            hit.key,
+            hit.candidates.len()
+        );
+        if hit.exact || !hit.candidates.is_empty() {
+            LEGACY_COMPLETION_CACHE.extend_ttl(&hit.key);
+            return select_completion_items(
+                hit.candidates,
+                Some(query_str),
+                prompt_text,
+                input_text,
             );
-            std::env::var("HOME")
-                .map(std::path::PathBuf::from)
-                .ok()
-                .unwrap_or_else(|| {
-                    warn!("Failed to get home directory, using root");
-                    std::path::PathBuf::from("/")
-                })
-        });
-
-        // Expand tilde (~) in the query path
-        let expand_path = shellexpand::tilde(&query_str);
-        let expand = expand_path.as_ref();
-        let path = Path::new(expand);
-
-        // Determine the path to search and query substring
-        // This handles cases like directory completion vs. file name completion
-        let (path, path_query, only_path) = if path.is_dir() {
-            (path, "", true)
-        } else if let Some(parent) = path.parent() {
-            let parent = Path::new(parent);
-            let has_parent = !parent.as_os_str().is_empty();
-            if let Some(file_name) = &path.file_name() {
-                (parent, file_name.to_str().unwrap(), has_parent)
-            } else {
-                (path, "", has_parent)
-            }
-        } else {
-            (current.as_path(), query_str, false)
-        };
-
-        // Canonicalize the path for consistent resolution
-        let canonical_path = if let Ok(path) = path.canonicalize() {
-            path
-        } else {
-            match std::env::current_dir() {
-                Ok(dir) => dir,
-                Err(_) => return None, // Return None if we can't get current directory
-            }
-        };
-        let path_str = canonical_path.display().to_string();
-
-        // Get file completions (directories and files) for the path
-        // Apply prefix filtering based on the query string
-        let mut items = if path_query.is_empty() {
-            get_file_completions(path_str.as_str(), path.to_str().unwrap())
-        } else {
-            get_file_completions_with_filter(
-                path_str.as_str(),
-                path.to_str().unwrap(),
-                Some(path_query),
-            )
-        };
-
-        // If not in path-only mode, also search for commands in PATH
-        if !only_path {
-            let mut cmds_items = get_commands(&environment.read().paths, query_str);
-            items.append(&mut cmds_items);
-            // Merge duplicate candidates with priority given to commands over files
-            items = deduplicate_candidates(items);
         }
-
-        // Attempt to select a completion from the gathered items
-        // Returns None if no items were found (no matches) or if user cancelled selection
-        select_completion_items(items, Some(path_query), prompt_text, input_text)
-    } else {
-        // Return None if no query was provided (e.g. empty input)
-        // This is part of the "silent failure" behavior when no matches are found
-        None
     }
+
+    let Some(data) = collect_current_context_candidates(repl, query_str) else {
+        return None;
+    };
+
+    if data.items.is_empty() {
+        return None;
+    }
+
+    LEGACY_COMPLETION_CACHE.set(query_str.to_string(), data.items.clone());
+
+    select_completion_items(
+        data.items,
+        data.selection_query.as_deref(),
+        prompt_text,
+        input_text,
+    )
+}
+
+#[derive(Debug, Clone)]
+struct CurrentCompletionData {
+    items: Vec<Candidate>,
+    selection_query: Option<String>,
+}
+
+fn collect_current_context_candidates(
+    repl: &Repl,
+    query_str: &str,
+) -> Option<CurrentCompletionData> {
+    let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
+    let environment = Arc::clone(&lisp_engine.borrow().shell_env);
+
+    // Determine current directory for relative path resolution
+    let current_dir = std::env::current_dir().unwrap_or_else(|e| {
+        warn!(
+            "Failed to get current directory: {}, using home directory",
+            e
+        );
+        std::env::var("HOME")
+            .map(std::path::PathBuf::from)
+            .ok()
+            .unwrap_or_else(|| {
+                warn!("Failed to get home directory, using root");
+                std::path::PathBuf::from("/")
+            })
+    });
+
+    // Expand tilde (~) in the query path
+    let expanded = shellexpand::tilde(query_str).to_string();
+    let expanded_path = Path::new(&expanded);
+
+    // Determine the path to search and query substring
+    let (search_path, path_query, only_path) = if expanded_path.is_dir() {
+        (expanded_path.to_path_buf(), String::new(), true)
+    } else if let Some(parent) = expanded_path.parent() {
+        let parent_buf = parent.to_path_buf();
+        let has_parent = !parent_buf.as_os_str().is_empty();
+        if let Some(file_name) = expanded_path.file_name()
+            && let Some(file_name_str) = file_name.to_str()
+        {
+            (parent_buf, file_name_str.to_string(), has_parent)
+        } else {
+            (expanded_path.to_path_buf(), String::new(), has_parent)
+        }
+    } else {
+        (current_dir.clone(), query_str.to_string(), false)
+    };
+
+    // Canonicalize the path for consistent resolution
+    let canonical_path = search_path
+        .canonicalize()
+        .unwrap_or_else(|_| current_dir.clone());
+    let canonical_str = canonical_path.display().to_string();
+    let search_path_str = search_path.to_str()?;
+
+    let mut items = if path_query.is_empty() {
+        get_file_completions(canonical_str.as_str(), search_path_str)
+    } else {
+        get_file_completions_with_filter(
+            canonical_str.as_str(),
+            search_path_str,
+            Some(path_query.as_str()),
+        )
+    };
+
+    if !only_path {
+        let mut command_items = get_commands(&environment.read().paths, query_str);
+        items.append(&mut command_items);
+        items = deduplicate_candidates(items);
+    }
+
+    Some(CurrentCompletionData {
+        items,
+        selection_query: Some(path_query),
+    })
 }
 
 fn get_commands(paths: &Vec<String>, cmd: &str) -> Vec<Candidate> {
@@ -1093,10 +1096,10 @@ fn deduplicate_candidates(items: Vec<Candidate>) -> Vec<Candidate> {
 
         match seen_names.get(base_name) {
             Some(existing_idx) => {
-                debug!(
-                    "deduplicate_candidates: found duplicate base_name='{}', name='{}'",
-                    base_name, name
-                );
+                // debug!(
+                //     "deduplicate_candidates: found duplicate base_name='{}', name='{}'",
+                //     base_name, name
+                // );
                 // If we already have this name, prioritize commands over files
                 let existing_candidate = &result[*existing_idx];
                 let should_replace = match (&existing_candidate, &candidate) {
@@ -1136,10 +1139,10 @@ fn deduplicate_candidates(items: Vec<Candidate>) -> Vec<Candidate> {
             }
             None => {
                 // First time seeing this name
-                debug!(
-                    "deduplicate_candidates: adding new candidate base_name='{}', name='{}'",
-                    base_name, name
-                );
+                // debug!(
+                //     "deduplicate_candidates: adding new candidate base_name='{}', name='{}'",
+                //     base_name, name
+                // );
                 seen_names.insert(base_name.to_string(), result.len());
                 result.push(candidate);
             }
@@ -1174,6 +1177,7 @@ fn get_file_completions_with_filter(
         prefix.to_string()
     };
 
+    debug!("reading directory: {}", dir);
     match read_dir(dir) {
         Ok(entries) => {
             let mut entries: Vec<std::fs::DirEntry> = entries.flatten().collect();

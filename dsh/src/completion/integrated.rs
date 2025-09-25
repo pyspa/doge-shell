@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+use super::cache::CompletionCache;
 use super::command::CompletionCandidate;
 use super::dynamic::DynamicCompletionRegistry;
 use super::fuzzy::{FuzzyCompletion, SmartCompletion};
@@ -10,11 +11,14 @@ use crate::completion::display::Candidate;
 use anyhow::Result;
 use regex::Regex;
 use std::path::Path;
+use std::time::Duration;
 use tracing::{debug, warn};
 
 // Pre-compiled regex for efficient whitespace splitting
 static WHITESPACE_SPLIT_REGEX: std::sync::LazyLock<Regex> =
     std::sync::LazyLock::new(|| Regex::new(r"\s+").unwrap());
+
+const DEFAULT_CACHE_TTL_MS: u64 = 3000;
 
 #[derive(Debug, Clone, Copy)]
 struct CompletionRequest<'a> {
@@ -126,6 +130,8 @@ pub struct IntegratedCompletionEngine {
     smart_completion: SmartCompletion,
     /// Dynamic completion registry
     dynamic_registry: DynamicCompletionRegistry,
+    /// Short lived completion cache
+    cache: CompletionCache<EnhancedCandidate>,
 }
 
 impl IntegratedCompletionEngine {
@@ -138,6 +144,7 @@ impl IntegratedCompletionEngine {
             history_completion: HistoryCompletion::new(),
             smart_completion: SmartCompletion::new(),
             dynamic_registry: DynamicCompletionRegistry::with_default_handlers(),
+            cache: CompletionCache::new(Duration::from_millis(DEFAULT_CACHE_TTL_MS)),
         }
     }
 
@@ -231,6 +238,16 @@ impl IntegratedCompletionEngine {
         self.history_completion.load_history(history_path)
     }
 
+    /// Expose cache keys for diagnostics or tests
+    pub fn cached_keys(&self) -> Vec<String> {
+        self.cache.cached_keys()
+    }
+
+    /// Extend cache TTL for a specific key. Returns true if the key existed.
+    pub fn extend_cache_ttl(&self, key: &str) -> bool {
+        self.cache.extend_ttl(key)
+    }
+
     /// Execute integrated completion
     pub async fn complete(
         &self,
@@ -245,13 +262,30 @@ impl IntegratedCompletionEngine {
         );
 
         let request = CompletionRequest::new(input, cursor_pos, current_dir, max_results);
+
+        if !request.input.is_empty()
+            && let Some(hit) = self.cache.lookup(request.input)
+        {
+            debug!(
+                "cache hit for '{}' (key: '{}', exact: {})",
+                request.input, hit.key, hit.exact
+            );
+
+            if hit.exact || !hit.candidates.is_empty() {
+                self.cache.extend_ttl(&hit.key);
+                return hit.candidates;
+            }
+        }
+
         let mut aggregator = CandidateAggregator::new(self, request.max_results);
 
         // 0. Dynamic completion (highest priority, exclusive when available)
         let parsed_command_line = self.convert_to_parsed_command_line(input, cursor_pos);
         let dynamic_batch = self.collect_dynamic_candidates(&request, &parsed_command_line);
         if !aggregator.extend(dynamic_batch) {
-            return aggregator.finalize();
+            let results = aggregator.finalize();
+            self.store_in_cache(request.input, &results);
+            return results;
         }
 
         // 1. JSON-based command completion
@@ -259,7 +293,9 @@ impl IntegratedCompletionEngine {
         let command_collection = self.collect_command_candidates(&request, &parsed_command);
         let has_command_specific_data = command_collection.has_command_specific_data;
         if !aggregator.extend(command_collection.batch) {
-            return aggregator.finalize();
+            let results = aggregator.finalize();
+            self.store_in_cache(request.input, &results);
+            return results;
         }
 
         // 2. Context analysis placeholder (reserved for future providers)
@@ -273,7 +309,9 @@ impl IntegratedCompletionEngine {
         if !has_command_specific_data {
             let history_batch = self.collect_history_candidates(&request);
             if !aggregator.extend(history_batch) {
-                return aggregator.finalize();
+                let results = aggregator.finalize();
+                self.store_in_cache(request.input, &results);
+                return results;
             }
         } else {
             debug!(
@@ -281,8 +319,9 @@ impl IntegratedCompletionEngine {
                 parsed_command.command
             );
         }
-
-        aggregator.finalize()
+        let results = aggregator.finalize();
+        self.store_in_cache(request.input, &results);
+        results
     }
 
     fn collect_dynamic_candidates(
@@ -460,6 +499,15 @@ impl IntegratedCompletionEngine {
             .into_iter()
             .map(|ec| ec.to_candidate())
             .collect()
+    }
+
+    fn store_in_cache(&self, key: &str, candidates: &[EnhancedCandidate]) {
+        if key.is_empty() {
+            return;
+        }
+        debug!("cache set for '{}'. len: {}", key, candidates.len());
+
+        self.cache.set(key.to_string(), candidates.to_vec());
     }
 
     /// Deduplication and sorting

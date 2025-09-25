@@ -279,11 +279,17 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
     env.define(
         Symbol::from("chat-execute-add"),
         Value::NativeFunc(|env, args| {
-            let command = require_typed_arg::<&String>("chat-execute-add", &args, 0)?.clone();
-            env.borrow()
-                .shell_env
-                .write()
-                .add_execute_allowlist_entry(command);
+            let env_ref = env.borrow();
+            let mut shell_env = env_ref.shell_env.write();
+            for arg in args {
+                let command = match arg {
+                    Value::String(s) => s.clone(),
+                    _ => return Err(RuntimeError {
+                        msg: format!("chat-execute-add requires all arguments to be strings; found {}", arg)
+                    }),
+                };
+                shell_env.add_execute_allowlist_entry(command);
+            }
             Ok(Value::NIL)
         }),
     );
@@ -812,5 +818,26 @@ mod tests {
         let env_lock = env.read();
         let allowlist_after = env_lock.execute_allowlist();
         assert!(allowlist_after.is_empty());
+    }
+    #[test]
+    fn chat_execute_add_multiple_commands_single_call() {
+        let env = Environment::new();
+        let engine = LispEngine::new(env.clone());
+
+        run(&engine, "(chat-execute-clear)");
+        run(&engine, "(chat-execute-add \"ls\" \"cat\" \"grep\" \"find\")");
+
+        let env_lock = env.read();
+        let allowlist = env_lock.execute_allowlist();
+        
+        // Verify that all expected commands are present regardless of order
+        assert!(allowlist.contains(&"ls".to_string()));
+        assert!(allowlist.contains(&"cat".to_string()));
+        assert!(allowlist.contains(&"grep".to_string()));
+        assert!(allowlist.contains(&"find".to_string()));
+        assert_eq!(allowlist.len(), 4); // Ensure no duplicates were added
+
+        drop(env_lock);
+        run(&engine, "(chat-execute-clear)");
     }
 }

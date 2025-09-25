@@ -9,10 +9,8 @@ use std::time::Duration;
 const PROMPT_KEY: &str = "CHAT_PROMPT";
 /// Primary configuration key for storing the default model
 const MODEL_KEY: &str = "AI_CHAT_MODEL";
-/// Legacy key maintained for backwards compatibility with older configs
-const LEGACY_MODEL_KEY: &str = "OPENAI_MODEL";
 /// Maximum number of iterations to satisfy tool calls before aborting
-const MAX_TOOL_ITERATIONS: usize = 6;
+const MAX_TOOL_ITERATIONS: usize = 20;
 /// System prompt that explains how to use the builtin tools
 const TOOL_SYSTEM_PROMPT: &str = r#"You are the AI assistant that runs inside doge-shell. You may update files by calling the `edit` tool. When you need to change a file, call the tool with JSON arguments:
 {
@@ -44,8 +42,7 @@ pub fn chat_description() -> &'static str {
 }
 
 /// Built-in chat command implementation
-/// Integrates OpenAI ChatGPT API for AI-powered assistance within the shell
-/// Requires OPENAI_API_KEY environment variable to be set
+/// Integrates OpenAI API for AI-powered assistance within the shell
 ///
 /// Usage:
 ///   chat "message"                    - Use default model
@@ -85,8 +82,7 @@ pub fn execute_chat_message(
     let config = load_openai_config(proxy);
 
     if config.api_key().is_none() {
-        ctx.write_stderr("AI_CHAT_API_KEY / OPENAI_API_KEY not found")
-            .ok();
+        ctx.write_stderr("AI_CHAT_API_KEY not found").ok();
         return ExitStatus::ExitedWith(1);
     }
 
@@ -170,7 +166,6 @@ pub fn chat_model(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) 
             // Set new model
             let new_model = &argv[1];
             proxy.set_var(MODEL_KEY.to_string(), new_model.to_string());
-            proxy.set_var(LEGACY_MODEL_KEY.to_string(), new_model.to_string());
             ctx.write_stdout(&format!("OpenAI model set to: {new_model}"))
                 .ok();
             ExitStatus::ExitedWith(0)

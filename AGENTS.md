@@ -16,7 +16,7 @@ Unit and integration tests live alongside source files (see `dsh/src/error_handl
 Commits follow a conventional `<type>(<scope>): <subject>` style (`feat`, `fix`, `refactor`, `chore`, etc.), as seen in `git log`. Keep subjects in the imperative mood and under 72 characters. Squash incidental work and document notable changes in the body when behavior shifts. Pull requests should summarize user-visible changes, link related issues, and include terminal output or screenshots when touching interactive UX (prompt, completion UI, AI streaming).
 
 ## Configuration & Secrets
-AI-assisted features expect `OPENAI_API_KEY` in the environment before launching `dsh`; avoid checking secrets into the repo. User customization resides in `~/.config/dsh/config.lisp`, so document any new special forms or variables in PR descriptions. When adding new config files, default them to safe behavior and gate optional integrations behind explicit environment checks.
+AI-assisted features expect `AI_CHAT_API_KEY` in the environment before launching `dsh`; avoid checking secrets into the repo. User customization resides in `~/.config/dsh/config.lisp`, so document any new special forms or variables in PR descriptions. When adding new config files, default them to safe behavior and gate optional integrations behind explicit environment checks.
 
 <!-- BACKLOG.MD GUIDELINES START -->
 # Instructions for the usage of Backlog.md CLI Tool

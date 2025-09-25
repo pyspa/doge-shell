@@ -114,7 +114,7 @@ The embedded Lisp interpreter includes many built-in functions:
 - `mcp-add-http` - Add an MCP server with HTTP transport
 - `mcp-add-sse` - Add an MCP server with SSE transport
 - `chat-execute-clear` - Clear execute tool allowlist
-- `chat-execute-add` - Add command to execute tool allowlist
+- `chat-execute-add` - Add command(s) to execute tool allowlist (accepts multiple commands)
 
 ## 📁 Configuration
 
@@ -181,11 +181,14 @@ Create a `~/.config/dsh/config.lisp` file to configure your shell:
 
 ;; Chat execute allowlist - commands that can be executed by AI assistant
 (chat-execute-clear)
-(chat-execute-add "ls")
-(chat-execute-add "cat")
-(chat-execute-add "echo")
-(chat-execute-add "grep")
-(chat-execute-add "find")
+;; You can add multiple commands in a single call:
+(chat-execute-add "ls" "cat" "echo" "grep" "find")
+;; Or add them one by one as before:
+;(chat-execute-add "ls")
+;(chat-execute-add "cat")
+;(chat-execute-add "echo")
+;(chat-execute-add "grep")
+;(chat-execute-add "find")
 ```
 
 ### MCP Configuration Details
@@ -304,7 +307,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
 
 1. Set your OpenAI API key in the environment:
    ```bash
-   export OPENAI_API_KEY="your-api-key-here"
+   export AI_CHAT_API_KEY="your-api-key-here"
    ```
 
 2. The shell will automatically provide command suggestions when available.

@@ -1,12 +1,14 @@
 use anyhow::{Result, anyhow};
 use reqwest::{Client, RequestBuilder};
 use serde_json::{Value, json};
+use std::future::Future;
 use std::time::Duration;
 use tracing::debug;
 
 use crate::config::OpenAiConfig;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
+const CANCELLED_MESSAGE: &str = "OpenAI request cancelled by Ctrl+C";
 
 #[derive(Debug)]
 pub struct ChatGptClient {
@@ -137,10 +139,28 @@ impl ChatGptClient {
         tools: Option<Vec<Value>>,
     ) -> Result<Value> {
         let builder = self.request_builder_from_messages(messages, temperature, model, tools)?;
-
-        let res = builder.send().await?;
-        let data: Value = res.json().await?;
+        let response = Self::await_with_ctrl_c(builder.send()).await?;
+        let data: Value = Self::await_with_ctrl_c(response.json()).await?;
         Ok(data)
+    }
+
+    async fn await_with_ctrl_c<F, T, E>(future: F) -> Result<T>
+    where
+        F: Future<Output = Result<T, E>>,
+        anyhow::Error: From<E>,
+    {
+        tokio::pin!(future);
+
+        let ctrl_c = tokio::signal::ctrl_c();
+        tokio::pin!(ctrl_c);
+
+        tokio::select! {
+            res = &mut future => res.map_err(anyhow::Error::from),
+            ctrl = &mut ctrl_c => match ctrl {
+                Ok(()) => Err(anyhow!(CANCELLED_MESSAGE)),
+                Err(e) => Err(anyhow!("Failed to listen for Ctrl+C: {e}")),
+            },
+        }
     }
 
     fn build_client(&self) -> Result<Client> {

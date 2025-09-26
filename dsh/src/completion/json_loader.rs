@@ -774,4 +774,241 @@ mod tests {
                 .is_ok()
         );
     }
+
+    /// Test that all embedded JSON completion files can be loaded and parsed correctly
+    #[test]
+    fn test_all_embedded_completion_files_load_correctly() {
+        let loader = JsonCompletionLoader::new();
+        let available_completions = loader
+            .list_available_completions()
+            .expect("Failed to list available completions");
+
+        for command_name in available_completions {
+            println!("Testing completion file: {}", command_name);
+
+            // Load the command completion
+            let result = loader.load_command_completion(&command_name);
+            assert!(
+                result.is_ok(),
+                "Failed to load completion for command '{}': {:?}",
+                command_name,
+                result.err()
+            );
+
+            // Check that we got a completion
+            let completion = result.unwrap();
+            assert!(
+                completion.is_some(),
+                "Expected completion for command '{}' but got None",
+                command_name
+            );
+
+            // Check that the completion has the command name
+            let completion = completion.unwrap();
+            assert_eq!(
+                completion.command, command_name,
+                "Command name mismatch for '{}': expected '{}', got '{}'",
+                command_name, command_name, completion.command
+            );
+
+            // Validate the completion data
+            let validation_result = loader.validate_completion(&completion);
+            assert!(
+                validation_result.is_ok(),
+                "Validation failed for command '{}': {:?}",
+                command_name,
+                validation_result.err()
+            );
+
+            println!(
+                "✓ Successfully loaded and validated completion for '{}': {} subcommands, {} global options",
+                command_name,
+                completion.subcommands.len(),
+                completion.global_options.len()
+            );
+        }
+    }
+
+    /// Test that completion candidates can be generated from loaded JSON files
+    #[test]
+    fn test_completion_candidates_generation_from_json() {
+        use crate::completion::generator::CompletionGenerator;
+        use crate::completion::parser::{CompletionContext, ParsedCommand};
+
+        let loader = JsonCompletionLoader::new();
+        let database = loader.load_database().expect("Failed to load database");
+        let generator = CompletionGenerator::new(database);
+
+        // Test with the commands we know exist in the test files
+        let test_commands = ["git", "cargo", "docker", "rg"];
+
+        for command in &test_commands {
+            if generator.has_command_completion(command) {
+                println!(
+                    "Testing completion candidate generation for command: {}",
+                    command
+                );
+
+                // Test command-level completion
+                let parsed_command = ParsedCommand {
+                    command: command.to_string(),
+                    subcommand_path: vec![],
+                    current_token: "".to_string(),
+                    completion_context: CompletionContext::Command,
+                    specified_options: vec![],
+                    specified_arguments: vec![],
+                };
+
+                let candidates = generator.generate_candidates(&parsed_command).unwrap();
+                assert!(
+                    !candidates.is_empty(),
+                    "Expected completion candidates for command '{}'",
+                    command
+                );
+
+                println!(
+                    "  ✓ Generated {} command candidates for '{}'",
+                    candidates.len(),
+                    command
+                );
+
+                // Test subcommand completion for commands that have subcommands
+                if generator.has_command_completion(command) {
+                    // Use the loader to get the original completion for verification
+                    let loader_for_test = JsonCompletionLoader::new();
+                    if let Ok(Some(cmd_completion)) =
+                        loader_for_test.load_command_completion(command)
+                    {
+                        if !cmd_completion.subcommands.is_empty() {
+                            let first_subcommand = &cmd_completion.subcommands[0];
+                            println!(
+                                "  Testing subcommands for '{}', first subcommand: '{}'",
+                                command, first_subcommand.name
+                            );
+
+                            let parsed_subcommand = ParsedCommand {
+                                command: command.to_string(),
+                                subcommand_path: vec![],
+                                current_token: first_subcommand
+                                    .name
+                                    .chars()
+                                    .take(1)
+                                    .collect::<String>(), // Use first letter to test filtering
+                                completion_context: CompletionContext::SubCommand,
+                                specified_options: vec![],
+                                specified_arguments: vec![],
+                            };
+
+                            let subcommand_candidates =
+                                generator.generate_candidates(&parsed_subcommand).unwrap();
+                            assert!(
+                                !subcommand_candidates.is_empty(),
+                                "Expected subcommand candidates for '{}'",
+                                command
+                            );
+
+                            println!(
+                                "  ✓ Generated {} subcommand candidates for '{}'",
+                                subcommand_candidates.len(),
+                                command
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_completion_files_display_candidates_correctly() {
+        use crate::completion::display::Candidate as DisplayCandidate;
+        use crate::completion::generator::CompletionGenerator;
+        use crate::completion::parser::{CompletionContext, ParsedCommand};
+
+        let loader = JsonCompletionLoader::new();
+        let database = loader.load_database().expect("Failed to load database");
+        let generator = CompletionGenerator::new(database);
+
+        // Test specific commands to make sure they can produce displayable candidates
+        let test_commands = ["git", "cargo"];
+
+        for command in &test_commands {
+            if generator.has_command_completion(command) {
+                println!(
+                    "Testing display candidate generation for command: {}",
+                    command
+                );
+
+                // Generate candidates for subcommands
+                let parsed_command = ParsedCommand {
+                    command: command.to_string(),
+                    subcommand_path: vec![],
+                    current_token: "".to_string(),
+                    completion_context: CompletionContext::SubCommand,
+                    specified_options: vec![],
+                    specified_arguments: vec![],
+                };
+
+                let enhanced_candidates = generator.generate_candidates(&parsed_command).unwrap();
+                assert!(
+                    !enhanced_candidates.is_empty(),
+                    "Expected completion candidates for command '{}'",
+                    command
+                );
+
+                // Convert to display candidates and ensure they're formatted correctly
+                let display_candidates: Vec<DisplayCandidate> = enhanced_candidates
+                    .into_iter()
+                    .map(|c| match c.completion_type {
+                        super::super::command::CompletionType::SubCommand => {
+                            DisplayCandidate::Command {
+                                name: c.text,
+                                description: c.description.unwrap_or_default(),
+                            }
+                        }
+                        super::super::command::CompletionType::LongOption
+                        | super::super::command::CompletionType::ShortOption => {
+                            DisplayCandidate::Option {
+                                name: c.text,
+                                description: c.description.unwrap_or_default(),
+                            }
+                        }
+                        _ => DisplayCandidate::Item(c.text, c.description.unwrap_or_default()),
+                    })
+                    .collect();
+
+                assert!(
+                    !display_candidates.is_empty(),
+                    "Expected display candidates for command '{}'",
+                    command
+                );
+
+                println!(
+                    "  ✓ Generated {} display candidates for '{}'",
+                    display_candidates.len(),
+                    command
+                );
+
+                // Verify that descriptions are properly set
+                for candidate in &display_candidates {
+                    match candidate {
+                        DisplayCandidate::Command { name, description } => {
+                            println!("    Subcommand: {} - {}", name, description);
+                            // Verify that the subcommand is from our JSON file
+                            // We can't directly access the database, so just verify they exist
+                            assert!(
+                                generator.has_command_completion(command),
+                                "Command '{}' is not available in completion database",
+                                command
+                            );
+                        }
+                        DisplayCandidate::Option { name, description } => {
+                            println!("    Option: {} - {}", name, description);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
 }

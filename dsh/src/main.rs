@@ -25,6 +25,7 @@ mod prompt;
 mod proxy;
 mod repl;
 mod shell;
+mod terminal;
 
 /// Custom error type representing normal exit
 #[derive(Debug)]

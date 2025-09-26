@@ -6,6 +6,7 @@ use crate::input::{Input, InputConfig, display_width};
 use crate::parser::Rule;
 use crate::prompt::Prompt;
 use crate::shell::{SHELL_TERMINAL, Shell};
+use crate::terminal::renderer::TerminalRenderer;
 use anyhow::Context as _;
 use anyhow::Result;
 use crossterm::cursor;
@@ -19,7 +20,7 @@ use futures_timer::Delay;
 use nix::sys::termios::{Termios, tcgetattr};
 use nix::unistd::tcsetpgrp;
 use parking_lot::RwLock;
-use std::io::{StdoutLock, Write};
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
@@ -220,8 +221,8 @@ impl<'a> Repl<'a> {
                 }
             }
 
-            // Batch all output operations with a single stdout lock
-            let mut out = std::io::stdout().lock();
+            // Batch all output operations with a single terminal renderer
+            let mut renderer = TerminalRenderer::new();
             let mut output_buffer = String::new();
 
             // Check remaining jobs in wait_jobs for status messages
@@ -237,9 +238,9 @@ impl<'a> Repl<'a> {
             }
 
             if !output_buffer.is_empty() {
-                out.write_all(output_buffer.as_bytes())?;
-                self.print_prompt(&mut out);
-                out.flush()?;
+                renderer.write_all(output_buffer.as_bytes())?;
+                self.print_prompt(&mut renderer);
+                renderer.flush()?;
             }
         }
         Ok(())
@@ -280,7 +281,7 @@ impl<'a> Repl<'a> {
         Self::save_single_history_helper(&mut self.shell.path_history, "path");
     }
 
-    fn move_cursor_input_end(&self, out: &mut StdoutLock<'static>) {
+    fn move_cursor_input_end<W: Write>(&self, out: &mut W) {
         let prompt_display_width = self.prompt_mark_width;
         // cache locally to avoid duplicate computation chains
         let input_cursor_width = self.input.cursor_display_width();
@@ -315,7 +316,7 @@ impl<'a> Repl<'a> {
     /// Move cursor relatively on the input line given previous and new display positions
     fn move_cursor_relative(
         &self,
-        out: &mut StdoutLock<'static>,
+        out: &mut impl Write,
         prev_display_pos: usize,
         new_display_pos: usize,
     ) {
@@ -342,7 +343,7 @@ impl<'a> Repl<'a> {
     //     .ok();
     // }
 
-    fn print_prompt(&mut self, out: &mut StdoutLock<'static>) {
+    fn print_prompt(&mut self, out: &mut impl Write) {
         // debug!("print_prompt called - full preprompt + mark redraw");
         let mut prompt = self.prompt.write();
         // draw preprompt only here (initial or after command/bg output)
@@ -496,7 +497,7 @@ impl<'a> Repl<'a> {
         None
     }
 
-    pub fn print_input(&mut self, out: &mut StdoutLock<'static>, reset_completion: bool) {
+    pub fn print_input(&mut self, out: &mut impl Write, reset_completion: bool) {
         // debug!("print_input called, reset_completion: {}", reset_completion);
         queue!(out, cursor::Hide).ok();
         let input = self.input.to_string();
@@ -644,11 +645,11 @@ impl<'a> Repl<'a> {
                     self.completion.clear();
 
                     // Move cursor relatively, ensure cursor is visible in fast path
-                    let mut out = std::io::stdout().lock();
+                    let mut renderer = TerminalRenderer::new();
                     let new_disp = self.prompt_mark_width + self.input.cursor_display_width();
-                    self.move_cursor_relative(&mut out, prev_cursor_disp, new_disp);
-                    queue!(out, cursor::Show).ok();
-                    out.flush().ok();
+                    self.move_cursor_relative(&mut renderer, prev_cursor_disp, new_disp);
+                    queue!(renderer, cursor::Show).ok();
+                    renderer.flush().ok();
                     return Ok(());
                 } else {
                     return Ok(());
@@ -698,11 +699,11 @@ impl<'a> Repl<'a> {
                     self.completion.clear();
 
                     // Move cursor relatively, ensure cursor is visible in fast path
-                    let mut out = std::io::stdout().lock();
+                    let mut renderer = TerminalRenderer::new();
                     let new_disp = self.prompt_mark_width + self.input.cursor_display_width();
-                    self.move_cursor_relative(&mut out, prev_cursor_disp, new_disp);
-                    queue!(out, cursor::Show).ok();
-                    out.flush().ok();
+                    self.move_cursor_relative(&mut renderer, prev_cursor_disp, new_disp);
+                    queue!(renderer, cursor::Show).ok();
+                    renderer.flush().ok();
                     return Ok(());
                 } else {
                     return Ok(());
@@ -913,9 +914,9 @@ impl<'a> Repl<'a> {
                     self.last_command_time = Some(Instant::now());
                 }
                 // After command execution, show new prompt
-                let mut out = std::io::stdout().lock();
-                self.print_prompt(&mut out);
-                out.flush().ok();
+                let mut renderer = TerminalRenderer::new();
+                self.print_prompt(&mut renderer);
+                renderer.flush().ok();
                 return Ok(());
             }
             (KeyCode::Enter, ALT) => {
@@ -936,9 +937,9 @@ impl<'a> Repl<'a> {
                     self.input.clear();
                 }
                 // After command execution, show new prompt
-                let mut out = std::io::stdout().lock();
-                self.print_prompt(&mut out);
-                out.flush().ok();
+                let mut renderer = TerminalRenderer::new();
+                self.print_prompt(&mut renderer);
+                renderer.flush().ok();
                 return Ok(());
             }
             (KeyCode::Char('a'), CTRL) => {
@@ -954,42 +955,42 @@ impl<'a> Repl<'a> {
                 self.input.move_to_end();
             }
             (KeyCode::Char('c'), CTRL) => {
-                let mut out = std::io::stdout().lock();
+                let mut renderer = TerminalRenderer::new();
 
                 if self.ctrl_c_state.on_ctrl_c_pressed() {
                     // Second Ctrl+C - exit shell normally
                     // queue message and flush once here
-                    queue!(out, Print("\r\nExiting shell...\r\n")).ok();
-                    out.flush().ok();
+                    queue!(renderer, Print("\r\nExiting shell...\r\n")).ok();
+                    renderer.flush().ok();
                     self.should_exit = true;
                     return Ok(());
                 } else {
                     // First Ctrl+C - reset prompt + show message
                     // queue message and defer flushing until after prompt
                     queue!(
-                        out,
+                        renderer,
                         Print("\r\n(Press Ctrl+C again within 3 seconds to exit)\r\n")
                     )
                     .ok();
-                    self.print_prompt(&mut out);
-                    out.flush().ok();
+                    self.print_prompt(&mut renderer);
+                    renderer.flush().ok();
                     self.input.clear();
                     return Ok(());
                 }
             }
             (KeyCode::Char('l'), CTRL) => {
-                let mut out = std::io::stdout().lock();
-                queue!(out, Clear(ClearType::All), cursor::MoveTo(0, 0)).ok();
-                self.print_prompt(&mut out);
-                out.flush().ok();
+                let mut renderer = TerminalRenderer::new();
+                queue!(renderer, Clear(ClearType::All), cursor::MoveTo(0, 0)).ok();
+                self.print_prompt(&mut renderer);
+                renderer.flush().ok();
                 self.input.clear();
                 return Ok(());
             }
             (KeyCode::Char('d'), CTRL) => {
-                let mut out = std::io::stdout().lock();
-                queue!(out, Print("\r\nuse 'exit' to leave the shell\n")).ok();
-                self.print_prompt(&mut out);
-                out.flush().ok();
+                let mut renderer = TerminalRenderer::new();
+                queue!(renderer, Print("\r\nuse 'exit' to leave the shell\n")).ok();
+                self.print_prompt(&mut renderer);
+                renderer.flush().ok();
                 self.input.clear();
                 return Ok(());
             }
@@ -1001,18 +1002,14 @@ impl<'a> Repl<'a> {
             }
         }
 
-        // Unified output handling - single stdout lock for all output operations
-        let mut out = std::io::stdout().lock();
         if redraw {
             debug!("Redrawing input, reset_completion: {}", reset_completion);
-            self.print_input(&mut out, reset_completion);
-            // Handle cursor positioning after output
-            self.move_cursor_input_end(&mut out);
+            let mut renderer = TerminalRenderer::new();
+            self.print_input(&mut renderer, reset_completion);
+            renderer.flush().ok();
         }
         // Note: For cursor-only movements (redraw=false), cursor positioning
         // is handled directly in the key event handlers to avoid full redraw
-
-        out.flush().ok();
         Ok(())
     }
 
@@ -1034,11 +1031,11 @@ impl<'a> Repl<'a> {
             }
         };
         {
-            let mut out = std::io::stdout().lock();
+            let mut renderer = TerminalRenderer::new();
             // start repl loop
-            self.print_prompt(&mut out);
+            self.print_prompt(&mut renderer);
             // ensure preprompt + mark are flushed on initial draw
-            out.flush().ok();
+            renderer.flush().ok();
         }
         self.shell.check_job_state().await?;
 

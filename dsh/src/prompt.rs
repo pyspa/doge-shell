@@ -3,7 +3,7 @@ use anyhow::Result;
 use crossterm::style::Stylize;
 use parking_lot::RwLock;
 use std::collections::HashSet;
-use std::io::{BufRead, BufReader, BufWriter, StdoutLock, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -54,9 +54,8 @@ impl Prompt {
         prompt
     }
 
-    pub fn print_preprompt(&mut self, out: &mut StdoutLock<'static>) {
-        let mut out = BufWriter::new(out);
-        out.write_fmt(format_args!("{}", "\r".reset())).ok();
+    pub fn print_preprompt<W: Write>(&mut self, out: &mut W) {
+        write!(out, "{}", "\r".reset()).ok();
 
         let (path, _is_git_root) = self.get_cwd();
 
@@ -67,37 +66,34 @@ impl Prompt {
         // );
 
         if has_git {
-            out.write_fmt(format_args!("{}", path.cyan())).ok();
+            write!(out, "{}", path.cyan()).ok();
 
             if let Some(ref git_status) = self.get_git_status_cached() {
                 // debug!(
                 //     "Git status found: branch={}, status={:?}",
                 //     git_status.branch, git_status.branch_status
                 // );
-                out.write_fmt(format_args!(" {} ", "on".reset())).ok();
-                out.write_fmt(format_args!(
+                write!(out, " {} ", "on".reset()).ok();
+                write!(
+                    out,
                     "{}",
                     format!("{} {}", BRANCH_MARK, git_status.branch).magenta(),
-                ))
+                )
                 .ok();
 
                 if let Some(status) = &git_status.branch_status {
-                    out.write_fmt(format_args!(" [{}]", status.to_string().bold().red()))
-                        .ok();
+                    write!(out, " [{}]", status.to_string().bold().red()).ok();
                 }
-                out.write_fmt(format_args!("{}", "\r\n".reset(),)).ok();
+                write!(out, "{}", "\r\n".reset()).ok();
             } else {
                 // debug!("No git status found");
-                out.write_fmt(format_args!("{}", "\r\n".reset(),)).ok();
+                write!(out, "{}", "\r\n".reset()).ok();
             }
         } else {
             // debug!("Not under git");
-            out.write_fmt(format_args!("{}", path.white())).ok();
-            out.write_fmt(format_args!("{}", "\r\n".reset(),)).ok();
+            write!(out, "{}", path.white()).ok();
+            write!(out, "{}", "\r\n".reset()).ok();
         }
-
-        // Ensure all buffered output is written immediately
-        out.flush().ok();
     }
 
     fn get_cwd(&self) -> (String, bool) {

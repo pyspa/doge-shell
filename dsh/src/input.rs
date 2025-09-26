@@ -4,7 +4,7 @@ use crossterm::style::{Color, Stylize};
 use pest::Span;
 use std::cmp::min;
 use std::fmt;
-use std::io::{BufWriter, StdoutLock, Write};
+use std::io::{BufWriter, Write};
 use unicode_width::UnicodeWidthChar;
 
 /// Remove ANSI escape sequences from a string and return the clean string
@@ -307,20 +307,21 @@ impl Input {
         parser::get_words(self.input.as_str(), self.cursor)
     }
 
-    pub fn print(&self, out: &mut StdoutLock<'static>) {
-        let mut out = BufWriter::new(out);
+    pub fn print<W: Write>(&self, out: &mut W) {
+        let mut writer = BufWriter::new(out);
 
         if let Some(match_index) = &self.match_index {
             // Build colored segments to reduce write_fmt calls
             let colored_output = self.build_colored_string(match_index);
-            out.write_fmt(format_args!("{colored_output}")).ok();
+            writer.write_fmt(format_args!("{colored_output}")).ok();
         } else {
-            out.write_fmt(format_args!("{}", self.as_str().with(self.config.fg_color)))
+            writer
+                .write_fmt(format_args!("{}", self.as_str().with(self.config.fg_color)))
                 .ok();
         }
 
         // Ensure all buffered output is written immediately
-        out.flush().ok();
+        writer.flush().ok();
     }
 
     /// Build a colored string by grouping consecutive characters with the same color
@@ -380,8 +381,8 @@ impl Input {
         self.config.completion_color
     }
 
-    pub fn print_candidates(&mut self, out: &mut StdoutLock<'static>, completion: String) {
-        let mut out = BufWriter::new(out);
+    pub fn print_candidates<W: Write>(&mut self, out: &mut W, completion: String) {
+        let mut writer = BufWriter::new(out);
         let current_byte = self.byte_index();
         let is_end = current_byte == self.input.len();
 
@@ -398,10 +399,10 @@ impl Input {
         }
 
         // Single write operation
-        out.write_fmt(format_args!("{output}")).ok();
+        writer.write_fmt(format_args!("{output}")).ok();
 
         // Ensure all buffered output is written immediately
-        out.flush().ok();
+        writer.flush().ok();
     }
 
     pub fn split_current_pos(&self) -> Option<(&str, &str)> {

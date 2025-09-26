@@ -1,0 +1,80 @@
+{
+  "command": "lsof",
+  "description": "List open files",
+  "global_options": [
+    {
+      "long": "--help",
+      "short": "-h",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "short": "-v",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": [],
+  "options": [
+    {
+      "long": "-i",
+      "short": "-i",
+      "description": "Select IPv4 and IPv6 files"
+    },
+    {
+      "long": "-i4",
+      "short": "-i4",
+      "description": "Select IPv4 files"
+    },
+    {
+      "long": "-i6",
+      "short": "-i6",
+      "description": "Select IPv6 files"
+    },
+    {
+      "long": "-p",
+      "short": "-p",
+      "description": "Select files with listed PIDs"
+    },
+    {
+      "long": "-u",
+      "short": "-u",
+      "description": "Select files for listed users"
+    },
+    {
+      "long": "-c",
+      "short": "-c",
+      "description": "Select files with command name"
+    },
+    {
+      "long": "-d",
+      "short": "-d",
+      "description": "Select files with descriptor numbers"
+    },
+    {
+      "long": "-a",
+      "short": "-a",
+      "description": "AND selections"
+    },
+    {
+      "long": "-o",
+      "short": "-o",
+      "description": "List open files by process"
+    },
+    {
+      "long": "-n",
+      "short": "-n",
+      "description": "No host name translation"
+    },
+    {
+      "long": "-l",
+      "short": "-l",
+      "description": "List port numbers instead of names"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "selection",
+      "description": "Process, file, or user selection criteria"
+    }
+  ]
+}

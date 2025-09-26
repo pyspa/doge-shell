@@ -566,14 +566,14 @@ mod tests {
         let completions = loader.list_available_completions().unwrap();
 
         // Should include both embedded completions and filesystem completions
-        // Embedded: git, cargo, docker, pacman, systemctl (5 total)
-        // The filesystem git.json and cargo.json will be deduplicated with embedded ones
-        assert_eq!(completions.len(), 6);
+        // Embedded: git, cargo, docker, npm, kubectl, make, pacman, systemctl, and others
+        assert_eq!(completions.len(), 16);
         assert!(completions.contains(&"git".to_string()));
         assert!(completions.contains(&"cargo".to_string()));
         assert!(completions.contains(&"docker".to_string()));
-        assert!(completions.contains(&"pacman".to_string()));
-        assert!(completions.contains(&"systemctl".to_string()));
+        assert!(completions.contains(&"npm".to_string()));
+        assert!(completions.contains(&"kubectl".to_string()));
+        assert!(completions.contains(&"make".to_string()));
         assert!(!completions.contains(&"not_json".to_string()));
     }
 
@@ -878,41 +878,40 @@ mod tests {
                     let loader_for_test = JsonCompletionLoader::new();
                     if let Ok(Some(cmd_completion)) =
                         loader_for_test.load_command_completion(command)
+                        && !cmd_completion.subcommands.is_empty()
                     {
-                        if !cmd_completion.subcommands.is_empty() {
-                            let first_subcommand = &cmd_completion.subcommands[0];
-                            println!(
-                                "  Testing subcommands for '{}', first subcommand: '{}'",
-                                command, first_subcommand.name
-                            );
+                        let first_subcommand = &cmd_completion.subcommands[0];
+                        println!(
+                            "  Testing subcommands for '{}', first subcommand: '{}'",
+                            command, first_subcommand.name
+                        );
 
-                            let parsed_subcommand = ParsedCommand {
-                                command: command.to_string(),
-                                subcommand_path: vec![],
-                                current_token: first_subcommand
-                                    .name
-                                    .chars()
-                                    .take(1)
-                                    .collect::<String>(), // Use first letter to test filtering
-                                completion_context: CompletionContext::SubCommand,
-                                specified_options: vec![],
-                                specified_arguments: vec![],
-                            };
+                        let parsed_subcommand = ParsedCommand {
+                            command: command.to_string(),
+                            subcommand_path: vec![],
+                            current_token: first_subcommand
+                                .name
+                                .chars()
+                                .take(1)
+                                .collect::<String>(), // Use first letter to test filtering
+                            completion_context: CompletionContext::SubCommand,
+                            specified_options: vec![],
+                            specified_arguments: vec![],
+                        };
 
-                            let subcommand_candidates =
-                                generator.generate_candidates(&parsed_subcommand).unwrap();
-                            assert!(
-                                !subcommand_candidates.is_empty(),
-                                "Expected subcommand candidates for '{}'",
-                                command
-                            );
+                        let subcommand_candidates =
+                            generator.generate_candidates(&parsed_subcommand).unwrap();
+                        assert!(
+                            !subcommand_candidates.is_empty(),
+                            "Expected subcommand candidates for '{}'",
+                            command
+                        );
 
-                            println!(
-                                "  ✓ Generated {} subcommand candidates for '{}'",
-                                subcommand_candidates.len(),
-                                command
-                            );
-                        }
+                        println!(
+                            "  ✓ Generated {} subcommand candidates for '{}'",
+                            subcommand_candidates.len(),
+                            command
+                        );
                     }
                 }
             }

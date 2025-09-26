@@ -1,0 +1,49 @@
+{
+  "command": "chmod",
+  "description": "Change file mode bits",
+  "global_options": [
+    {
+      "long": "--help",
+      "short": "-?",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "short": "-V",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": [],
+  "options": [
+    {
+      "long": "-R",
+      "short": "-R",
+      "description": "Change files and directories recursively"
+    },
+    {
+      "long": "-v",
+      "short": "-v",
+      "description": "Output a diagnostic for every file processed"
+    },
+    {
+      "long": "--reference",
+      "short": "-c",
+      "description": "Use the mode of given reference file"
+    },
+    {
+      "long": "-f",
+      "short": "-f",
+      "description": "Suppress most diagnostic messages"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "mode",
+      "description": "File mode (e.g., 755, u+rwx)"
+    },
+    {
+      "name": "files",
+      "description": "Files whose mode to change"
+    }
+  ]
+}

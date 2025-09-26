@@ -1,0 +1,344 @@
+{
+  "command": "kubectl",
+  "description": "Kubernetes command-line tool",
+  "global_options": [
+    {
+      "long": "--kubeconfig",
+      "short": "-k",
+      "description": "Path to kubeconfig file"
+    },
+    {
+      "long": "--context",
+      "short": "-c",
+      "description": "Context in kubeconfig"
+    },
+    {
+      "long": "--namespace",
+      "short": "-n",
+      "description": "Namespace for operations"
+    },
+    {
+      "long": "--dry-run",
+      "short": "-d",
+      "description": "Dry run, print commands instead of executing"
+    },
+    {
+      "long": "--help",
+      "short": "-h",
+      "description": "Help for kubectl"
+    },
+    {
+      "long": "--verbose",
+      "short": "-v",
+      "description": "Log level for verbosity"
+    },
+    {
+      "long": "--output",
+      "short": "-o",
+      "description": "Output format (yaml, json, wide, etc.)"
+    },
+    {
+      "long": "--all-namespaces",
+      "short": "-A",
+      "description": "All namespaces"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "get",
+      "description": "Display one or many resources",
+      "options": [
+        {
+          "long": "--selector",
+          "short": "-l",
+          "description": "Selector (label query) to filter"
+        },
+        {
+          "long": "--output",
+          "short": "-o",
+          "description": "Output format (yaml, json, wide, table, etc.)"
+        },
+        {
+          "long": "--show-labels",
+          "short": "-L",
+          "description": "Show labels"
+        },
+        {
+          "long": "--sort-by",
+          "description": "Sort output by field"
+        },
+        {
+          "long": "--field-selector",
+          "short": "-F",
+          "description": "Field selector to filter"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "resource",
+          "description": "Resource type (pod, service, deployment, etc.)"
+        },
+        {
+          "name": "name",
+          "description": "Resource name (optional)"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "apply",
+      "description": "Apply a configuration to a resource",
+      "options": [
+        {
+          "long": "--filename",
+          "short": "-f",
+          "description": "Filename, directory, or URL for config"
+        },
+        {
+          "long": "--kustomize",
+          "short": "-k",
+          "description": "Process directory with Kustomize"
+        },
+        {
+          "long": "--recursive",
+          "short": "-R",
+          "description": "Process directory recursively"
+        },
+        {
+          "long": "--dry-run",
+          "description": "Dry run without applying"
+        },
+        {
+          "long": "--validate",
+          "description": "Validate config before apply"
+        },
+        {
+          "long": "--prune",
+          "short": "-p",
+          "description": "Delete resources not in config"
+        },
+        {
+          "long": "--output",
+          "short": "-o",
+          "description": "Output format"
+        },
+        {
+          "long": "--overwrite",
+          "description": "Overwrite immutable fields"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "file_or_type",
+          "description": "Config file or resource type"
+        },
+        {
+          "name": "name",
+          "description": "Resource name (optional)"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "describe",
+      "description": "Show details of a resource",
+      "options": [
+        {
+          "long": "--filename",
+          "short": "-f",
+          "description": "Filename for config"
+        },
+        {
+          "long": "--recursive",
+          "short": "-R",
+          "description": "Process recursively"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "resource",
+          "description": "Resource type (pod, service, etc.)"
+        },
+        {
+          "name": "name",
+          "description": "Resource name"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "create",
+      "description": "Create a resource from file or stdin",
+      "options": [
+        {
+          "long": "--filename",
+          "short": "-f",
+          "description": "Filename or directory for config"
+        },
+        {
+          "long": "--dry-run",
+          "description": "Dry run without creating"
+        },
+        {
+          "long": "--validate",
+          "description": "Validate config"
+        },
+        {
+          "long": "--output",
+          "short": "-o",
+          "description": "Output format"
+        },
+        {
+          "long": "--save-config",
+          "description": "Store applied config in annotation"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "type",
+          "description": "Resource type if not using file"
+        },
+        {
+          "name": "name",
+          "description": "Resource name (optional)"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "delete",
+      "description": "Delete resources by file, name, or label",
+      "options": [
+        {
+          "long": "--filename",
+          "short": "-f",
+          "description": "Filename or directory for resources to delete"
+        },
+        {
+          "long": "--selector",
+          "short": "-l",
+          "description": "Label selector to filter"
+        },
+        {
+          "long": "--all",
+          "short": "-A",
+          "description": "Delete all resources"
+        },
+        {
+          "long": "--force",
+          "description": "Force deletion"
+        },
+        {
+          "long": "--grace-period",
+          "short": "-g",
+          "description": "Period to wait for graceful shutdown"
+        },
+        {
+          "long": "--now",
+          "description": "Immediate deletion"
+        },
+        {
+          "long": "--ignore-not-found",
+          "description": "Ignore if resource not found"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "resource",
+          "description": "Resource type (pod, service, etc.)"
+        },
+        {
+          "name": "name",
+          "description": "Resource name(s)"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "logs",
+      "description": "Print logs of a container in a pod",
+      "options": [
+        {
+          "long": "--follow",
+          "short": "-f",
+          "description": "Follow logs in real-time"
+        },
+        {
+          "long": "--tail",
+          "short": "-t",
+          "description": "Number of lines from end of logs"
+        },
+        {
+          "long": "--timestamps",
+          "short": "-t",
+          "description": "Include timestamps"
+        },
+        {
+          "long": "--pod-running-timeout",
+          "description": "Timeout for pod startup"
+        },
+        {
+          "long": "--container",
+          "short": "-c",
+          "description": "Container name in pod"
+        },
+        {
+          "long": "--previous",
+          "short": "-p",
+          "description": "Logs from previous instance"
+        },
+        {
+          "long": "--limit-bytes",
+          "description": "Max bytes of logs to retrieve"
+        },
+        {
+          "long": "--since",
+          "description": "Logs since time or duration"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "pod",
+          "description": "Pod name"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "exec",
+      "description": "Execute a command in a container",
+      "options": [
+        {
+          "long": "--stdin",
+          "short": "-i",
+          "description": "Pass stdin to the container"
+        },
+        {
+          "long": "--tty",
+          "short": "-t",
+          "description": "Allocate a TTY"
+        },
+        {
+          "long": "--container",
+          "short": "-c",
+          "description": "Container name"
+        },
+        {
+          "long": "--command",
+          "description": "Command separator"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "pod",
+          "description": "Pod name"
+        },
+        {
+          "name": "command",
+          "description": "Command to execute"
+        }
+      ],
+      "subcommands": []
+    }
+  ]
+}

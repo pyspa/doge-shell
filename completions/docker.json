@@ -1,271 +1,151 @@
 {
   "command": "docker",
-  "description": "Docker container platform",
+  "description": "Container management platform",
   "global_options": [
+    {
+      "long": "--version",
+      "short": "-v",
+      "description": "Print version information"
+    },
     {
       "long": "--help",
       "short": "-h",
-      "description": "Show help information",
-      "takes_value": false,
-      "required": false,
-      "multiple": false
-    },
-    {
-      "long": "--version",
-      "description": "Show Docker version information",
-      "takes_value": false,
-      "required": false,
-      "multiple": false
-    },
-    {
-      "long": "--config",
-      "description": "Location of client config files",
-      "takes_value": true,
-      "value_type": {
-        "type": "Directory"
-      },
-      "required": false,
-      "multiple": false
-    },
-    {
-      "long": "--context",
-      "short": "-c",
-      "description": "Name of the context to use",
-      "takes_value": true,
-      "value_type": {
-        "type": "String"
-      },
-      "required": false,
-      "multiple": false
+      "description": "Print usage"
     },
     {
       "long": "--debug",
-      "short": "-D",
-      "description": "Enable debug mode",
-      "takes_value": false,
-      "required": false,
-      "multiple": false
+      "description": "Enable debug mode"
     },
     {
-      "long": "--host",
-      "short": "-H",
-      "description": "Daemon socket(s) to connect to",
-      "takes_value": true,
-      "value_type": {
-        "type": "String"
-      },
-      "required": false,
-      "multiple": true
+      "long": "--config",
+      "short": "-c",
+      "description": "Location of client config files"
     }
   ],
   "subcommands": [
     {
-      "name": "run",
-      "description": "Run a command in a new container",
-      "aliases": [],
+      "name": "build",
+      "description": "Build an image from a Dockerfile",
       "options": [
         {
-          "long": "--detach",
-          "short": "-d",
-          "description": "Run container in background and print container ID",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
-        },
-        {
-          "long": "--interactive",
-          "short": "-i",
-          "description": "Keep STDIN open even if not attached",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
-        },
-        {
-          "long": "--tty",
+          "long": "--tag",
           "short": "-t",
-          "description": "Allocate a pseudo-TTY",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
+          "description": "Name and tag for the image"
         },
         {
-          "long": "--name",
-          "description": "Assign a name to the container",
-          "takes_value": true,
-          "value_type": {
-            "type": "String"
-          },
-          "required": false,
-          "multiple": false
+          "long": "--file",
+          "short": "-f",
+          "description": "Name of the Dockerfile"
         },
         {
-          "long": "--port",
-          "short": "-p",
-          "description": "Publish a container's port(s) to the host",
-          "takes_value": true,
-          "value_type": {
-            "type": "String"
-          },
-          "required": false,
-          "multiple": true
+          "long": "--no-cache",
+          "description": "Do not use cache when building"
         },
         {
-          "long": "--volume",
-          "short": "-v",
-          "description": "Bind mount a volume",
-          "takes_value": true,
-          "value_type": {
-            "type": "String"
-          },
-          "required": false,
-          "multiple": true
+          "long": "--pull",
+          "description": "Always attempt to pull base image"
         },
         {
-          "long": "--env",
-          "short": "-e",
-          "description": "Set environment variables",
-          "takes_value": true,
-          "value_type": {
-            "type": "String"
-          },
-          "required": false,
-          "multiple": true
-        },
-        {
-          "long": "--rm",
-          "description": "Automatically remove the container when it exits",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
-        },
-        {
-          "long": "--workdir",
-          "short": "-w",
-          "description": "Working directory inside the container",
-          "takes_value": true,
-          "value_type": {
-            "type": "String"
-          },
-          "required": false,
-          "multiple": false
+          "long": "--quiet",
+          "short": "-q",
+          "description": "Suppress output"
         }
       ],
       "arguments": [
         {
-          "name": "image",
-          "description": "Docker image to run",
-          "arg_type": {
-            "type": "String"
-          },
-          "required": true,
-          "multiple": false
-        },
-        {
-          "name": "command",
-          "description": "Command to run in container",
-          "arg_type": {
-            "type": "String"
-          },
-          "required": false,
-          "multiple": true
+          "name": "context",
+          "description": "Build context path (default: current directory)"
         }
       ],
       "subcommands": []
     },
     {
-      "name": "build",
-      "description": "Build an image from a Dockerfile",
-      "aliases": [],
+      "name": "run",
+      "description": "Run a command in a new container",
       "options": [
         {
-          "long": "--tag",
+          "long": "--name",
+          "description": "Assign a name to the container"
+        },
+        {
+          "long": "--detach",
+          "short": "-d",
+          "description": "Run in detached mode"
+        },
+        {
+          "long": "--publish",
+          "short": "-p",
+          "description": "Publish container ports to host"
+        },
+        {
+          "long": "--rm",
+          "description": "Automatically remove container when it exits"
+        },
+        {
+          "long": "--interactive",
+          "short": "-i",
+          "description": "Keep STDIN open"
+        },
+        {
+          "long": "--tty",
           "short": "-t",
-          "description": "Name and optionally a tag in the 'name:tag' format",
-          "takes_value": true,
-          "value_type": {
-            "type": "String"
-          },
-          "required": false,
-          "multiple": true
+          "description": "Allocate a pseudo-TTY"
         },
         {
-          "long": "--file",
-          "short": "-f",
-          "description": "Name of the Dockerfile",
-          "takes_value": true,
-          "value_type": {
-            "type": "File"
-          },
-          "required": false,
-          "multiple": false
+          "long": "--env",
+          "short": "-e",
+          "description": "Set environment variables"
         },
         {
-          "long": "--no-cache",
-          "description": "Do not use cache when building the image",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
-        },
-        {
-          "long": "--pull",
-          "description": "Always attempt to pull a newer version of the image",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
+          "long": "--volume",
+          "short": "-v",
+          "description": "Bind mount a volume"
         }
       ],
       "arguments": [
         {
-          "name": "path",
-          "description": "Build context path",
-          "arg_type": {
-            "type": "Directory"
-          },
-          "required": true,
-          "multiple": false
+          "name": "image",
+          "description": "Image name or ID"
+        },
+        {
+          "name": "command",
+          "description": "Command to run (optional)"
         }
       ],
       "subcommands": []
     },
     {
       "name": "ps",
-      "description": "List containers",
-      "aliases": [],
+      "description": "List running containers",
       "options": [
         {
           "long": "--all",
           "short": "-a",
-          "description": "Show all containers (default shows just running)",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
+          "description": "Show all containers"
+        },
+        {
+          "long": "--format",
+          "short": "-f",
+          "description": "Format output using Go template"
+        },
+        {
+          "long": "--latest",
+          "short": "-l",
+          "description": "Show only the latest container"
+        },
+        {
+          "long": "--no-trunc",
+          "description": "Do not truncate output"
         },
         {
           "long": "--quiet",
           "short": "-q",
-          "description": "Only display container IDs",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
+          "description": "Only display container IDs"
         },
         {
           "long": "--size",
           "short": "-s",
-          "description": "Display total file sizes",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
-        },
-        {
-          "long": "--filter",
-          "short": "-f",
-          "description": "Filter output based on conditions provided",
-          "takes_value": true,
-          "value_type": {
-            "type": "String"
-          },
-          "required": false,
-          "multiple": true
+          "description": "Display sizes"
         }
       ],
       "arguments": [],
@@ -274,150 +154,61 @@
     {
       "name": "images",
       "description": "List images",
-      "aliases": [],
       "options": [
         {
           "long": "--all",
           "short": "-a",
-          "description": "Show all images (default hides intermediate images)",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
+          "description": "Show all images"
+        },
+        {
+          "long": "--digests",
+          "description": "Show digests"
+        },
+        {
+          "long": "--format",
+          "short": "-f",
+          "description": "Format output using Go template"
+        },
+        {
+          "long": "--no-trunc",
+          "description": "Do not truncate output"
         },
         {
           "long": "--quiet",
           "short": "-q",
-          "description": "Only show image IDs",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
-        },
-        {
-          "long": "--filter",
-          "short": "-f",
-          "description": "Filter output based on conditions provided",
-          "takes_value": true,
-          "value_type": {
-            "type": "String"
-          },
-          "required": false,
-          "multiple": true
+          "description": "Only display IDs"
         }
       ],
-      "arguments": [
-        {
-          "name": "repository",
-          "description": "Repository name",
-          "arg_type": {
-            "type": "String"
-          },
-          "required": false,
-          "multiple": false
-        }
-      ],
+      "arguments": [],
       "subcommands": []
     },
     {
       "name": "pull",
-      "description": "Pull an image or a repository from a registry",
-      "aliases": [],
+      "description": "Pull an image from a registry",
       "options": [
         {
           "long": "--all-tags",
           "short": "-a",
-          "description": "Download all tagged images in the repository",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
+          "description": "Download all tagged images"
+        },
+        {
+          "long": "--disable-content-trust",
+          "description": "Skip image verification"
+        },
+        {
+          "long": "--platform",
+          "description": "Set platform for image"
         },
         {
           "long": "--quiet",
           "short": "-q",
-          "description": "Suppress verbose output",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
+          "description": "Suppress progress output"
         }
       ],
       "arguments": [
         {
           "name": "image",
-          "description": "Image name to pull",
-          "arg_type": {
-            "type": "String"
-          },
-          "required": true,
-          "multiple": false
-        }
-      ],
-      "subcommands": []
-    },
-    {
-      "name": "push",
-      "description": "Push an image or a repository to a registry",
-      "aliases": [],
-      "options": [
-        {
-          "long": "--all-tags",
-          "short": "-a",
-          "description": "Push all tagged images in the repository",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
-        },
-        {
-          "long": "--quiet",
-          "short": "-q",
-          "description": "Suppress verbose output",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
-        }
-      ],
-      "arguments": [
-        {
-          "name": "image",
-          "description": "Image name to push",
-          "arg_type": {
-            "type": "String"
-          },
-          "required": true,
-          "multiple": false
-        }
-      ],
-      "subcommands": []
-    },
-    {
-      "name": "start",
-      "description": "Start one or more stopped containers",
-      "aliases": [],
-      "options": [
-        {
-          "long": "--attach",
-          "short": "-a",
-          "description": "Attach STDOUT/STDERR and forward signals",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
-        },
-        {
-          "long": "--interactive",
-          "short": "-i",
-          "description": "Attach container's STDIN",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
-        }
-      ],
-      "arguments": [
-        {
-          "name": "container",
-          "description": "Container name or ID",
-          "arg_type": {
-            "type": "String"
-          },
-          "required": true,
-          "multiple": true
+          "description": "Image name or ID"
         }
       ],
       "subcommands": []
@@ -425,59 +216,17 @@
     {
       "name": "stop",
       "description": "Stop one or more running containers",
-      "aliases": [],
       "options": [
         {
           "long": "--time",
           "short": "-t",
-          "description": "Seconds to wait for stop before killing it",
-          "takes_value": true,
-          "value_type": {
-            "type": "String"
-          },
-          "required": false,
-          "multiple": false
+          "description": "Seconds to wait for stop before killing"
         }
       ],
       "arguments": [
         {
           "name": "container",
-          "description": "Container name or ID",
-          "arg_type": {
-            "type": "String"
-          },
-          "required": true,
-          "multiple": true
-        }
-      ],
-      "subcommands": []
-    },
-    {
-      "name": "restart",
-      "description": "Restart one or more containers",
-      "aliases": [],
-      "options": [
-        {
-          "long": "--time",
-          "short": "-t",
-          "description": "Seconds to wait for stop before killing the container",
-          "takes_value": true,
-          "value_type": {
-            "type": "String"
-          },
-          "required": false,
-          "multiple": false
-        }
-      ],
-      "arguments": [
-        {
-          "name": "container",
-          "description": "Container name or ID",
-          "arg_type": {
-            "type": "String"
-          },
-          "required": true,
-          "multiple": true
+          "description": "Container name or ID"
         }
       ],
       "subcommands": []
@@ -485,68 +234,17 @@
     {
       "name": "rm",
       "description": "Remove one or more containers",
-      "aliases": [],
       "options": [
         {
           "long": "--force",
           "short": "-f",
-          "description": "Force the removal of a running container",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
-        },
-        {
-          "long": "--volumes",
-          "short": "-v",
-          "description": "Remove anonymous volumes associated with the container",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
+          "description": "Force removal of running container"
         }
       ],
       "arguments": [
         {
           "name": "container",
-          "description": "Container name or ID",
-          "arg_type": {
-            "type": "String"
-          },
-          "required": true,
-          "multiple": true
-        }
-      ],
-      "subcommands": []
-    },
-    {
-      "name": "rmi",
-      "description": "Remove one or more images",
-      "aliases": [],
-      "options": [
-        {
-          "long": "--force",
-          "short": "-f",
-          "description": "Force removal of the image",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
-        },
-        {
-          "long": "--no-prune",
-          "description": "Do not delete untagged parents",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
-        }
-      ],
-      "arguments": [
-        {
-          "name": "image",
-          "description": "Image name or ID",
-          "arg_type": {
-            "type": "String"
-          },
-          "required": true,
-          "multiple": true
+          "description": "Container name or ID"
         }
       ],
       "subcommands": []
@@ -554,118 +252,45 @@
     {
       "name": "exec",
       "description": "Run a command in a running container",
-      "aliases": [],
       "options": [
         {
           "long": "--detach",
           "short": "-d",
-          "description": "Detached mode: run command in the background",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
+          "description": "Run in detached mode"
         },
         {
           "long": "--interactive",
           "short": "-i",
-          "description": "Keep STDIN open even if not attached",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
+          "description": "Keep STDIN open"
         },
         {
           "long": "--tty",
           "short": "-t",
-          "description": "Allocate a pseudo-TTY",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
+          "description": "Allocate a pseudo-TTY"
         },
         {
           "long": "--user",
           "short": "-u",
-          "description": "Username or UID",
-          "takes_value": true,
-          "value_type": {
-            "type": "String"
-          },
-          "required": false,
-          "multiple": false
+          "description": "Username or UID"
         },
         {
-          "long": "--workdir",
-          "short": "-w",
-          "description": "Working directory inside the container",
-          "takes_value": true,
-          "value_type": {
-            "type": "String"
-          },
-          "required": false,
-          "multiple": false
+          "long": "--privileged",
+          "short": "-P",
+          "description": "Give extended privileges"
+        },
+        {
+          "long": "--command",
+          "description": "Command separator"
         }
       ],
       "arguments": [
         {
           "name": "container",
-          "description": "Container name or ID",
-          "arg_type": {
-            "type": "String"
-          },
-          "required": true,
-          "multiple": false
+          "description": "Container name or ID"
         },
         {
           "name": "command",
-          "description": "Command to execute",
-          "arg_type": {
-            "type": "String"
-          },
-          "required": true,
-          "multiple": true
-        }
-      ],
-      "subcommands": []
-    },
-    {
-      "name": "logs",
-      "description": "Fetch the logs of a container",
-      "aliases": [],
-      "options": [
-        {
-          "long": "--follow",
-          "short": "-f",
-          "description": "Follow log output",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
-        },
-        {
-          "long": "--tail",
-          "description": "Number of lines to show from the end of the logs",
-          "takes_value": true,
-          "value_type": {
-            "type": "String"
-          },
-          "required": false,
-          "multiple": false
-        },
-        {
-          "long": "--timestamps",
-          "short": "-t",
-          "description": "Show timestamps",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
-        }
-      ],
-      "arguments": [
-        {
-          "name": "container",
-          "description": "Container name or ID",
-          "arg_type": {
-            "type": "String"
-          },
-          "required": true,
-          "multiple": false
+          "description": "Command to execute"
         }
       ],
       "subcommands": []

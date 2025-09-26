@@ -1,46 +1,111 @@
 {
   "command": "git",
-  "description": "Git version control system",
+  "description": "Distributed version control system",
   "global_options": [
     {
       "long": "--version",
-      "description": "Show Git version"
+      "short": "-V",
+      "description": "Print version information"
     },
     {
       "long": "--help",
       "short": "-h",
-      "description": "Show help information"
+      "description": "Print help information"
     },
     {
-      "long": "--git-dir",
-      "description": "Set the path to the repository"
+      "long": "--verbose",
+      "short": "-v",
+      "description": "Increase verbosity"
+    },
+    {
+      "long": "--quiet",
+      "short": "-q",
+      "description": "Suppress all output"
     }
   ],
   "subcommands": [
     {
-      "name": "add",
-      "description": "Add file contents to the index",
+      "name": "clone",
+      "description": "Clone a repository",
       "options": [
         {
-          "short": "-A",
-          "long": "--all",
-          "description": "Add all files in the working tree"
+          "long": "--bare",
+          "description": "Clone as bare repository"
         },
         {
-          "short": "-u",
-          "long": "--update",
-          "description": "Update tracked files"
+          "long": "--branch",
+          "short": "-b",
+          "description": "Checkout HEAD from the specified branch"
         },
         {
-          "short": "-n",
-          "long": "--dry-run",
-          "description": "Don't actually add files, just show what would be done"
+          "long": "--depth",
+          "short": "-d",
+          "description": "Create a shallow clone with limited history"
+        },
+        {
+          "long": "--origin",
+          "short": "-o",
+          "description": "Use <name> instead of 'origin' for remote name"
         }
       ],
       "arguments": [
         {
-          "name": "pathspec",
-          "description": "Files to add to the index"
+          "name": "repository",
+          "description": "The URL or path of the repository to clone"
+        },
+        {
+          "name": "directory",
+          "description": "Directory to clone into (optional)"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "init",
+      "description": "Create an empty Git repository",
+      "options": [
+        {
+          "long": "--bare",
+          "description": "Create a bare repository"
+        },
+        {
+          "long": "--template",
+          "short": "-t",
+          "description": "Template directory for initialization"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "directory",
+          "description": "Directory for the new repository (optional, defaults to current)"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "add",
+      "description": "Add files to the staging area",
+      "options": [
+        {
+          "long": "--all",
+          "short": "-A",
+          "description": "Add all changes"
+        },
+        {
+          "long": "--update",
+          "short": "-u",
+          "description": "Update staged files"
+        },
+        {
+          "long": "--interactive",
+          "short": "-i",
+          "description": "Interactive adding"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "files",
+          "description": "Files or patterns to add"
         }
       ],
       "subcommands": []
@@ -50,121 +115,202 @@
       "description": "Record changes to the repository",
       "options": [
         {
-          "short": "-m",
-          "long": "--message",
-          "description": "Use the given message as the commit message"
-        },
-        {
-          "short": "-a",
-          "long": "--all",
-          "description": "Automatically stage modified and deleted files"
-        },
-        {
           "long": "--amend",
-          "description": "Replace the tip of the current branch"
-        }
-      ],
-      "arguments": [],
-      "subcommands": []
-    },
-    {
-      "name": "push",
-      "description": "Update remote refs along with associated objects",
-      "options": [
-        {
-          "short": "-u",
-          "long": "--set-upstream",
-          "description": "Set upstream for git pull/status"
+          "short": "-a",
+          "description": "Amend the last commit"
         },
         {
-          "short": "-f",
-          "long": "--force",
-          "description": "Force push"
+          "long": "--message",
+          "short": "-m",
+          "description": "Commit message"
+        },
+        {
+          "long": "--author",
+          "short": "-a",
+          "description": "Override author info"
+        },
+        {
+          "long": "--all",
+          "short": "-a",
+          "description": "Stage all changes"
         }
       ],
       "arguments": [
         {
-          "name": "repository",
-          "description": "Remote repository name"
-        },
-        {
-          "name": "refspec",
-          "description": "Branch or tag to push"
+          "name": "files",
+          "description": "Specific files to commit (optional)"
         }
       ],
       "subcommands": []
     },
     {
-      "name": "remote",
-      "description": "Manage set of tracked repositories",
+      "name": "push",
+      "description": "Update remote refs with local changes",
       "options": [
         {
-          "short": "-v",
-          "long": "--verbose",
-          "description": "Show remote url after name"
+          "long": "--all",
+          "short": "-a",
+          "description": "Push all refs"
+        },
+        {
+          "long": "--tags",
+          "short": "-t",
+          "description": "Push all tags"
+        },
+        {
+          "long": "--force",
+          "short": "-f",
+          "description": "Force push"
+        },
+        {
+          "long": "--set-upstream",
+          "short": "-u",
+          "description": "Set upstream for the branch"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "remote",
+          "description": "Remote name (e.g., origin)"
+        },
+        {
+          "name": "branch",
+          "description": "Branch name to push"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "pull",
+      "description": "Fetch from and integrate with another repository",
+      "options": [
+        {
+          "long": "--rebase",
+          "description": "Rebase instead of merge"
+        },
+        {
+          "long": "--all",
+          "short": "-a",
+          "description": "Fetch all remotes"
+        },
+        {
+          "long": "--tags",
+          "short": "-t",
+          "description": "Fetch all tags"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "remote",
+          "description": "Remote name (optional, defaults to origin)"
+        },
+        {
+          "name": "branch",
+          "description": "Branch name (optional)"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "status",
+      "description": "Show working tree status",
+      "options": [
+        {
+          "long": "--short",
+          "short": "-s",
+          "description": "Give status in short format"
+        },
+        {
+          "long": "--branch",
+          "short": "-b",
+          "description": "Show branch info"
+        },
+        {
+          "long": "--porcelain",
+          "description": "Machine-readable output"
         }
       ],
       "arguments": [],
-      "subcommands": [
-        {
-          "name": "add",
-          "description": "Add a remote named <name> for the repository at <url>",
-          "options": [
-            {
-              "short": "-t",
-              "long": "--track",
-              "description": "Track only specified branch"
-            }
-          ],
-          "arguments": [
-            {
-              "name": "name",
-              "description": "Remote name"
-            },
-            {
-              "name": "url",
-              "description": "Remote URL"
-            }
-          ],
-          "subcommands": []
-        },
-        {
-          "name": "remove",
-          "description": "Remove the remote named <name>",
-          "options": [],
-          "arguments": [
-            {
-              "name": "name",
-              "description": "Remote name to remove"
-            }
-          ],
-          "subcommands": []
-        }
-      ]
+      "subcommands": []
     },
     {
       "name": "branch",
       "description": "List, create, or delete branches",
       "options": [
         {
-          "short": "-a",
-          "long": "--all",
-          "description": "List both remote-tracking and local branches"
+          "long": "--list",
+          "short": "-l",
+          "description": "List branches"
         },
         {
           "short": "-d",
           "long": "--delete",
-          "description": "Delete a branch"
+          "description": "Delete branch"
         },
         {
-          "short": "-D",
-          "description": "Force delete a branch"
+          "long": "--create-reflog",
+          "description": "Create reflog for new branch"
         }
       ],
       "arguments": [
         {
-          "name": "branchname",
-          "description": "Branch name"
+          "name": "branch_name",
+          "description": "Branch name to create or operate on"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "checkout",
+      "description": "Switch branches or restore files",
+      "options": [
+        {
+          "long": "--track",
+          "short": "-t",
+          "description": "Set up new branch tracking"
+        },
+        {
+          "long": "--branch",
+          "short": "-b",
+          "description": "Create and switch to new branch"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "branch_or_path",
+          "description": "Branch name or file path"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "log",
+      "description": "Show commit logs",
+      "options": [
+        {
+          "long": "--oneline",
+          "short": "-1",
+          "description": "One line per commit"
+        },
+        {
+          "long": "--graph",
+          "short": "-g",
+          "description": "Show ASCII art commit graph"
+        },
+        {
+          "long": "--author",
+          "short": "-a",
+          "description": "Filter by author"
+        },
+        {
+          "long": "--since",
+          "description": "Show commits since date"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "revision_range",
+          "description": "Revision range or path (optional)"
         }
       ],
       "subcommands": []

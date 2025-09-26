@@ -1,0 +1,65 @@
+{
+  "command": "top",
+  "description": "Display and update sorted information about processes",
+  "global_options": [
+    {
+      "long": "--help",
+      "short": "-h",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "short": "-V",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": [],
+  "options": [
+    {
+      "long": "-p",
+      "short": "-p",
+      "description": "Monitor only processes with given PIDs"
+    },
+    {
+      "long": "-u",
+      "short": "-u",
+      "description": "Show only processes for given user"
+    },
+    {
+      "long": "-n",
+      "short": "-n",
+      "description": "Number of iterations before top exits"
+    },
+    {
+      "long": "-d",
+      "short": "-d",
+      "description": "Delay between updates in seconds"
+    },
+    {
+      "long": "-b",
+      "short": "-b",
+      "description": "Batch mode operation (non-interactive)"
+    },
+    {
+      "long": "-c",
+      "short": "-c",
+      "description": "Display absolute path for command"
+    },
+    {
+      "long": "-s",
+      "short": "-s",
+      "description": "Specify sort field"
+    },
+    {
+      "long": "-o",
+      "short": "-o",
+      "description": "Override sort field"
+    },
+    {
+      "long": "-i",
+      "short": "-i",
+      "description": "Suppress idle processes (interactive mode)"
+    }
+  ],
+  "arguments": []
+}

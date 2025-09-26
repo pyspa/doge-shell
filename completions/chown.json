@@ -1,0 +1,64 @@
+{
+  "command": "chown",
+  "description": "Change file owner and group",
+  "global_options": [
+    {
+      "long": "--help",
+      "short": "-?",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "short": "-V",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": [],
+  "options": [
+    {
+      "long": "-R",
+      "short": "-R",
+      "description": "Change files and directories recursively"
+    },
+    {
+      "long": "-v",
+      "short": "-v",
+      "description": "Output a diagnostic for every file processed"
+    },
+    {
+      "long": "-c",
+      "short": "-c",
+      "description": "Like verbose but report only when a change is made"
+    },
+    {
+      "long": "--reference",
+      "short": "-h",
+      "description": "Use the owner and group of given reference file"
+    },
+    {
+      "long": "-H",
+      "short": "-H",
+      "description": "Follow symbolic links on command line"
+    },
+    {
+      "long": "-L",
+      "short": "-L",
+      "description": "Follow all symbolic links encountered"
+    },
+    {
+      "long": "-P",
+      "short": "-P",
+      "description": "Do not follow any symbolic links"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "owner_group",
+      "description": "User:group to set (e.g., user, user:group)"
+    },
+    {
+      "name": "files",
+      "description": "Files to change"
+    }
+  ]
+}

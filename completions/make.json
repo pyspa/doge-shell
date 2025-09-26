@@ -1,0 +1,101 @@
+{
+  "command": "make",
+  "description": "Build automation tool",
+  "global_options": [
+    {
+      "long": "--version",
+      "short": "-v",
+      "description": "Print version information"
+    },
+    {
+      "long": "--help",
+      "short": "-h",
+      "description": "Print help and exit"
+    },
+    {
+      "long": "--debug",
+      "short": "-d",
+      "description": "Print debugging information"
+    },
+    {
+      "long": "--silent",
+      "short": "-s",
+      "description": "Silent operation (suppress output)"
+    },
+    {
+      "long": "--quiet",
+      "short": "-q",
+      "description": "Do not echo commands"
+    },
+    {
+      "long": "--jobs",
+      "short": "-j",
+      "description": "Allow N jobs at once (parallel execution)"
+    },
+    {
+      "long": "--output-sync",
+      "short": "-O",
+      "description": "Synchronize output of parallel jobs"
+    },
+    {
+      "long": "--directory",
+      "short": "-C",
+      "description": "Change to directory before running"
+    },
+    {
+      "long": "--file",
+      "short": "-f",
+      "description": "Read Makefile from FILE"
+    },
+    {
+      "long": "--environment-overrides",
+      "short": "-e",
+      "description": "Environment variables override makefiles"
+    },
+    {
+      "long": "--ignore-errors",
+      "short": "-i",
+      "description": "Ignore errors from commands"
+    },
+    {
+      "long": "--keep-going",
+      "short": "-k",
+      "description": "Continue after errors"
+    },
+    {
+      "long": "--dry-run",
+      "short": "-n",
+      "description": "Print commands but do not execute"
+    },
+    {
+      "long": "--recurse",
+      "short": "-r",
+      "description": "Do not use built-in rules"
+    },
+    {
+      "long": "--just-print",
+      "short": "-n",
+      "description": "Just print commands (synonym for -n)"
+    },
+    {
+      "long": "--question",
+      "short": "-q",
+      "description": "Return exit status but do not execute"
+    },
+    {
+      "long": "--recon",
+      "short": "-n",
+      "description": "Print commands but do not execute"
+    },
+    {
+      "long": "--no-print-directory",
+      "description": "Do not print directory changes"
+    },
+    {
+      "long": "--print-directory",
+      "short": "-w",
+      "description": "Print directory changes"
+    }
+  ],
+  "subcommands": []
+}

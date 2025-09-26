@@ -1,0 +1,75 @@
+{
+  "command": "ls",
+  "description": "List directory contents",
+  "global_options": [
+    {
+      "long": "--help",
+      "short": "-?",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "short": "-V",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": [],
+  "options": [
+    {
+      "long": "-l",
+      "short": "-l",
+      "description": "Use a long listing format"
+    },
+    {
+      "long": "-a",
+      "short": "-a",
+      "description": "Do not ignore entries starting with ."
+    },
+    {
+      "long": "-h",
+      "short": "-h",
+      "description": "Human-readable sizes (with -l)"
+    },
+    {
+      "long": "-R",
+      "short": "-R",
+      "description": "List subdirectories recursively"
+    },
+    {
+      "long": "-t",
+      "short": "-t",
+      "description": "Sort by modification time, newest first"
+    },
+    {
+      "long": "-S",
+      "short": "-S",
+      "description": "Sort by file size"
+    },
+    {
+      "long": "-r",
+      "short": "-r",
+      "description": "Reverse order while sorting"
+    },
+    {
+      "long": "-i",
+      "short": "-i",
+      "description": "Print inode number (with -l)"
+    },
+    {
+      "long": "-n",
+      "short": "-n",
+      "description": "Like -l, but list numeric user and group IDs"
+    },
+    {
+      "long": "--color",
+      "short": "-C",
+      "description": "Colorize the output"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "directories",
+      "description": "Directories or files to list (default: current directory)"
+    }
+  ]
+}

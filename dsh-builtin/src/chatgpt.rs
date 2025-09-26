@@ -3,6 +3,7 @@ use dsh_openai::{CANCELLED_MESSAGE, ChatGptClient, OpenAiConfig, is_ctrl_c_cance
 use dsh_types::{Context, ExitStatus};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde_json::{Value, json};
+use std::process::Command;
 use std::time::Duration;
 
 /// Environment variable key for storing the chat prompt template
@@ -12,20 +13,24 @@ const MODEL_KEY: &str = "AI_CHAT_MODEL";
 /// Maximum number of iterations to satisfy tool calls before aborting
 const MAX_TOOL_ITERATIONS: usize = 20;
 /// System prompt that explains how to use the builtin tools
-const TOOL_SYSTEM_PROMPT: &str = r#"You are the AI assistant that runs inside doge-shell. You may update files by calling the `edit` tool. When you need to change a file, call the tool with JSON arguments:
-{
-  "path": "relative/path/to/file",
-  "contents": "entire desired file contents"
-}
-The `path` must stay inside the workspace (no absolute paths or `..`). Always supply the full file contents; the tool overwrites the file.
+const TOOL_SYSTEM_PROMPT: &str = r#"You are DogeShell Programmer, an autonomous expert software engineer fluent in POSIX, Windows, and other developer shells and command-line tools. Operate inside doge-shell to deliver practical solutions while keeping the workspace safe.
 
-You can run allowed shell commands via the `execute` tool when the operator wants real command output:
-{
-  "command": "ls -la"
-}
-Only invoke `execute` with commands whose first token is present in the configured allowlist (see ~/.config/dsh/openai-execute-tool.json or AI_CHAT_EXECUTE_ALLOWLIST). Never fabricate command results and never attempt disallowed programs. After running a command, summarize the observed stdout/stderr and note any failures in your reply.
+Mindset:
+- Confirm you understand the operator's intent; ask when requirements are unclear.
+- Think several steps ahead, minimize side effects, and call out risks or follow-up work.
+- Communicate succinctly: explain reasoning, note assumptions, and propose validation steps when helpful.
 
-If a tool call is not needed, answer normally. After you finish applying edits or command runs, describe the changes in your final reply. Only call tools when a real action is required."#;
+Available tools (invoke with strict JSON arguments):
+- `edit` — create or replace a workspace file. Call with `{ "path": "relative/path", "contents": "entire file contents" }`. Paths must stay inside the workspace (relative, no `..`). Always send the full desired file contents; partial edits are rejected.
+- `execute` — run a shell command whose first token is allowlisted by the operator. Call with `{ "command": "program args" }`. Only run commands on the allowlist, and never fabricate command output.
+
+Tool usage rules:
+- Prefer inspecting files or reasoning before editing; avoid speculative tool calls.
+- After an `execute` call, summarize the exit code, stdout, and stderr that were observed.
+- Report any tool failure immediately instead of retrying blindly.
+- When no tool is needed, respond normally.
+- Finish every interaction with a summary of actions taken, remaining risks, and suggested next steps.
+"#;
 
 mod mcp;
 mod tool;
@@ -335,7 +340,10 @@ impl Drop for SpinnerGuard {
 }
 
 fn build_system_prompt(operator_prompt: Option<String>, mcp_manager: &McpManager) -> String {
-    let mut base = TOOL_SYSTEM_PROMPT.to_string();
+    let mut base = format!(
+        "{TOOL_SYSTEM_PROMPT}\n\nEnvironment snapshot:\n{}",
+        environment_snapshot()
+    );
 
     if let Some(fragment) = mcp_manager.system_prompt_fragment() {
         base.push_str("\n\nMCP access:");
@@ -358,6 +366,80 @@ fn build_system_prompt(operator_prompt: Option<String>, mcp_manager: &McpManager
         }
         None => base,
     }
+}
+
+fn environment_snapshot() -> String {
+    let os_family = std::env::consts::FAMILY;
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+
+    let cwd = std::env::current_dir()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|err| format!("(failed to resolve current directory: {err})"));
+
+    format!(
+        "- OS family: {os_family}\n- OS: {os}\n- Architecture: {arch}\n- Current directory: {cwd}\n- Git: {}",
+        describe_git_state()
+    )
+}
+
+fn describe_git_state() -> String {
+    match Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let inside = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .eq_ignore_ascii_case("true");
+
+            if !inside {
+                return "not inside a Git worktree".to_string();
+            }
+
+            let root = git_string(["rev-parse", "--show-toplevel"]);
+            let branch = git_branch_description();
+
+            match root {
+                Some(root) => format!("inside a Git worktree (root: {root}, {branch})"),
+                None => format!("inside a Git worktree ({branch})"),
+            }
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.trim().is_empty() {
+                let code = output
+                    .status
+                    .code()
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "terminated by signal".to_string());
+                format!("unable to determine Git status (exit status {code})")
+            } else {
+                format!("unable to determine Git status ({})", stderr.trim())
+            }
+        }
+        Err(err) => format!("git command unavailable ({err})"),
+    }
+}
+
+fn git_branch_description() -> String {
+    match git_string(["rev-parse", "--abbrev-ref", "HEAD"]) {
+        Some(name) if name == "HEAD" => git_string(["rev-parse", "--short", "HEAD"])
+            .map(|commit| format!("detached at {commit}"))
+            .unwrap_or_else(|| "detached HEAD".to_string()),
+        Some(name) => format!("branch {name}"),
+        None => "branch unknown".to_string(),
+    }
+}
+
+fn git_string<const N: usize>(args: [&str; N]) -> Option<String> {
+    Command::new("git")
+        .args(args)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn extract_message_content(message: &Value) -> Option<String> {

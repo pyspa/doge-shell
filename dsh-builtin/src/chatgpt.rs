@@ -1,4 +1,5 @@
 use super::ShellProxy;
+use crate::markdown::render_markdown_with_fallback;
 use dsh_openai::{CANCELLED_MESSAGE, ChatGptClient, OpenAiConfig, is_ctrl_c_cancelled};
 use dsh_types::{Context, ExitStatus};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -107,7 +108,9 @@ pub fn execute_chat_message(
                 proxy,
             ) {
                 Ok(res) => {
-                    ctx.write_stdout(res.trim()).ok();
+                    let rendered = render_markdown_with_fallback(res.trim());
+                    let trimmed = rendered.trim_end_matches('\n');
+                    ctx.write_stdout(trimmed).ok();
                     ExitStatus::ExitedWith(0)
                 }
                 Err(err) if err == CANCELLED_MESSAGE => ExitStatus::ExitedWith(1),

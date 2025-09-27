@@ -15,14 +15,14 @@ use crossterm::queue;
 use crossterm::style::{Print, ResetColor};
 use crossterm::terminal::{self, Clear, ClearType, enable_raw_mode};
 use dsh_types::Context;
-use futures::{StreamExt, future::FutureExt, select};
-use futures_timer::Delay;
+use futures::StreamExt;
 use nix::sys::termios::{Termios, tcgetattr};
 use nix::unistd::tcsetpgrp;
 use parking_lot::RwLock;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 use tracing::{debug, warn};
 
 /// Display error in a user-friendly format without stack traces
@@ -1040,16 +1040,19 @@ impl<'a> Repl<'a> {
         self.shell.check_job_state().await?;
 
         let _last_save_time = Instant::now();
+        let mut background_interval = interval_at(
+            TokioInstant::now() + Duration::from_millis(1000),
+            Duration::from_millis(1000),
+        );
+        background_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
-            let mut check_background_delay = Delay::new(Duration::from_millis(1000)).fuse();
-            let mut event = reader.next().fuse();
-            select! {
-                _ = check_background_delay => {
+            tokio::select! {
+                _ = background_interval.tick() => {
                     // Save history every 30 seconds if there have been changes
                     self.save_history_periodic();
                     self.check_background_jobs(true).await?;
                 },
-                maybe_event = event => {
+                maybe_event = reader.next() => {
                     match maybe_event {
                         Some(Ok(event)) => {
                             if let Err(err) = self.handle_event(ShellEvent::Input(event)).await{
@@ -1115,6 +1118,32 @@ impl<'a> Repl<'a> {
 mod tests {
     use super::*;
     use std::thread;
+
+    #[tokio::test]
+    async fn background_interval_ticks_even_with_busy_events() {
+        let mut interval = interval_at(TokioInstant::now(), Duration::from_millis(5));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut events = futures::stream::repeat(());
+
+        let deadline = TokioInstant::now() + Duration::from_millis(50);
+        let mut ticks = 0usize;
+
+        while ticks < 3 && TokioInstant::now() < deadline {
+            tokio::select! {
+                _ = interval.tick() => {
+                    ticks += 1;
+                }
+                _ = events.next() => {
+                    tokio::task::yield_now().await;
+                }
+            }
+        }
+
+        assert!(
+            ticks >= 3,
+            "background interval ticks were starved; observed {ticks}"
+        );
+    }
 
     #[test]
     fn test_ctrl_c_state_single_press() {

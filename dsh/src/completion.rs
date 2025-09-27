@@ -234,7 +234,7 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
     let home = std::env::var("HOME")
         .map(std::path::PathBuf::from)
         .ok()
-        .unwrap();
+        .ok_or_else(|| anyhow::Error::msg("HOME environment variable not set"))?;
     let path = PathBuf::from(exp_str);
 
     let dir = read_dir(&path)?;
@@ -1041,9 +1041,25 @@ fn get_executables(dir: &str, name: &str) -> Vec<Candidate> {
             entries.sort_by_key(|x| x.file_name());
 
             for entry in entries {
-                let buf = entry.file_name();
-                let file_name = buf.to_str().unwrap();
-                let is_file = entry.file_type().unwrap().is_file();
+                // Handle potential errors when getting file name
+                let file_name_os = entry.file_name();
+                let file_name = match file_name_os.to_str() {
+                    Some(name) => name,
+                    None => {
+                        // Skip entries with non-UTF-8 names
+                        continue;
+                    }
+                };
+
+                // Handle potential errors when getting file type
+                let is_file = match entry.file_type() {
+                    Ok(metadata) => metadata.is_file(),
+                    Err(_) => {
+                        // Skip entries where we can't determine file type
+                        continue;
+                    }
+                };
+
                 // Apply prefix filtering for command names
                 if file_name.starts_with(name) && is_file && is_executable(&entry) {
                     list.push(Candidate::Item(
@@ -1176,9 +1192,24 @@ fn get_file_completions_with_filter(
             entries.sort_by_key(|x| x.file_name());
 
             for entry in entries {
-                let buf = entry.file_name();
-                let file_name = buf.to_str().unwrap();
-                let is_file = entry.file_type().unwrap().is_file();
+                // Handle potential errors when getting file name
+                let file_name_os = entry.file_name();
+                let file_name = match file_name_os.to_str() {
+                    Some(name) => name,
+                    None => {
+                        // Skip entries with non-UTF-8 names
+                        continue;
+                    }
+                };
+
+                // Handle potential errors when getting file type
+                let is_file = match entry.file_type() {
+                    Ok(metadata) => metadata.is_file(),
+                    Err(_) => {
+                        // Skip entries where we can't determine file type
+                        continue;
+                    }
+                };
 
                 // Apply prefix filter if provided
                 if let Some(filter) = filter_prefix

@@ -108,6 +108,42 @@ impl LispEngine {
         Ok(res)
     }
 
+    /// Execute all functions in a hook list safely
+    #[allow(dead_code)]
+    pub fn execute_hook_list(&self, hook_list: &Value) -> anyhow::Result<()> {
+        use crate::lisp::model::Value;
+        use tracing::warn;
+
+        if let Value::List(list) = hook_list {
+            // Iterate through the hook list and execute each function
+            for hook_func in list.into_iter() {
+                match self.apply_func(hook_func.clone(), vec![]) {
+                    Ok(_) => {
+                        // Hook executed successfully
+                    }
+                    Err(e) => {
+                        warn!("Hook function execution failed: {}", e);
+                        // Continue with other hooks even if one fails
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Get a hook list by name
+    #[allow(dead_code)]
+    pub fn get_hook_list(&self, hook_name: &str) -> anyhow::Result<Value> {
+        let full_name = format!("*{}*", hook_name);
+        match self.run(&full_name) {
+            Ok(value) => Ok(value),
+            Err(e) => {
+                tracing::warn!("Failed to retrieve hook {}: {}", hook_name, e);
+                Ok(Value::NIL) // Return empty list if hook doesn't exist
+            }
+        }
+    }
+
     #[allow(dead_code)]
     pub fn has(&self, name: &str) -> bool {
         if let Ok(v) = self.run(name) {

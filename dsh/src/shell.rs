@@ -345,6 +345,11 @@ impl Shell {
         let jobs = self.get_jobs(input)?;
         let mut last_exit_code = 0;
         for mut job in jobs {
+            // Execute pre-exec hooks
+            if let Err(e) = self.exec_pre_exec_hooks(&job.cmd) {
+                debug!("Error executing pre-exec hooks: {}", e);
+            }
+
             disable_raw_mode().ok();
             if force_background {
                 // all job run background
@@ -370,6 +375,12 @@ impl Shell {
                 process::ProcessState::Completed(exit, _signal) => {
                     debug!("job '{}' completed exit_code: {:?}", job.cmd, exit);
                     last_exit_code = exit;
+
+                    // Execute post-exec hooks
+                    if let Err(e) = self.exec_post_exec_hooks(&job.cmd, exit as i32) {
+                        debug!("Error executing post-exec hooks: {}", e);
+                    }
+
                     if job.list_op == process::ListOp::And && exit != 0 {
                         break;
                     }
@@ -836,6 +847,57 @@ impl Shell {
             for hook in &env_guard.chpwd_hooks {
                 hook.call(pwd, Arc::clone(&self.environment))?;
             }
+        }
+
+        // Execute Lisp on-chdir hooks
+        if let Err(e) = self
+            .lisp_engine
+            .borrow()
+            .run("(when (bound? '*on-chdir-hooks*) (map (lambda (hook) (hook)) *on-chdir-hooks*))")
+        {
+            debug!("Failed to execute on-chdir hooks: {}", e);
+        }
+
+        Ok(())
+    }
+
+    /// Execute pre-prompt hooks
+    pub fn exec_pre_prompt_hooks(&self) -> Result<()> {
+        if let Err(e) = self.lisp_engine.borrow().run(
+            "(when (bound? '*pre-prompt-hooks*) (map (lambda (hook) (hook)) *pre-prompt-hooks*))",
+        ) {
+            debug!("Failed to execute pre-prompt hooks: {}", e);
+        }
+        Ok(())
+    }
+
+    /// Execute pre-exec hooks
+    pub fn exec_pre_exec_hooks(&self, command: &str) -> Result<()> {
+        // Execute pre-exec hooks with the command as argument
+        let lisp_code = format!(
+            "(when (bound? '*pre-exec-hooks*) 
+                (map (lambda (hook) (hook \"{}\")) *pre-exec-hooks*))",
+            command.replace("\"", "\\\"") // Escape quotes in command
+        );
+
+        if let Err(e) = self.lisp_engine.borrow().run(&lisp_code) {
+            debug!("Failed to execute pre-exec hooks: {}", e);
+        }
+        Ok(())
+    }
+
+    /// Execute post-exec hooks
+    pub fn exec_post_exec_hooks(&self, command: &str, exit_code: i32) -> Result<()> {
+        // Execute post-exec hooks with command and exit code as arguments
+        let lisp_code = format!(
+            "(when (bound? '*post-exec-hooks*) 
+                (map (lambda (hook) (hook \"{}\" {})) *post-exec-hooks*))",
+            command.replace("\"", "\\\""), // Escape quotes in command
+            exit_code
+        );
+
+        if let Err(e) = self.lisp_engine.borrow().run(&lisp_code) {
+            debug!("Failed to execute post-exec hooks: {}", e);
         }
         Ok(())
     }

@@ -299,6 +299,86 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
         }),
     );
 
+    // Define global hook variables
+    env.define(Symbol::from("*pre-prompt-hooks*"), Value::List(List::NIL));
+
+    env.define(Symbol::from("*pre-exec-hooks*"), Value::List(List::NIL));
+
+    env.define(Symbol::from("*post-exec-hooks*"), Value::List(List::NIL));
+
+    env.define(Symbol::from("*on-chdir-hooks*"), Value::List(List::NIL));
+
+    // Define add-hook function
+    env.define(
+        Symbol::from("add-hook"),
+        Value::NativeFunc(|env, args| {
+            if args.len() != 2 {
+                return Err(RuntimeError {
+                    msg: "add-hook requires exactly 2 arguments: hook-name and function"
+                        .to_string(),
+                });
+            }
+
+            let hook_name = require_typed_arg::<&Symbol>("add-hook", &args, 0)?;
+            let func = args[1].clone();
+
+            // Get the hook variable name
+            let hook_var_name = Symbol::from(format!("*{}*", hook_name).as_str());
+
+            // Get the current value of the hook variable
+            let current_value = match env.borrow().get(&hook_var_name) {
+                Some(Value::List(list)) => list,
+                Some(_) => {
+                    return Err(RuntimeError {
+                        msg: format!("{} is not a hook variable", hook_var_name).to_string(),
+                    });
+                }
+                None => {
+                    return Err(RuntimeError {
+                        msg: format!("Hook variable {} does not exist", hook_var_name).to_string(),
+                    });
+                }
+            };
+
+            // Add the function to the hook list
+            let new_list = current_value.cons(func);
+            let new_list_value = Value::List(new_list);
+
+            // Set the new value in the environment using set to update existing binding
+            match env
+                .borrow_mut()
+                .set(hook_var_name.clone(), new_list_value.clone())
+            {
+                Ok(_) => {}
+                Err(_) => {
+                    // If set fails (variable not found), define it in current env
+                    env.borrow_mut().define(hook_var_name, new_list_value);
+                }
+            }
+
+            Ok(Value::NIL)
+        }),
+    );
+
+    // Define bound? function to check if a symbol is bound
+    env.define(
+        Symbol::from("bound?"),
+        Value::NativeFunc(|env, args| {
+            if args.len() != 1 {
+                return Err(RuntimeError {
+                    msg: "bound? requires exactly 1 argument: symbol".to_string(),
+                });
+            }
+
+            let symbol = require_typed_arg::<&Symbol>("bound?", &args, 0)?;
+
+            match env.borrow().get(symbol) {
+                Some(_) => Ok(Value::True),
+                None => Ok(Value::NIL),
+            }
+        }),
+    );
+
     env.define(
         Symbol::from("map"),
         Value::NativeFunc(|env, args| {

@@ -108,6 +108,14 @@ The embedded Lisp interpreter includes many built-in functions:
 - `add_path` - Add paths to PATH
 - `allow-direnv` - Configure direnv roots
 
+### Hook System Functions
+- `add-hook` - Add a function to a hook list
+- `bound?` - Check if a symbol is bound
+- `*pre-prompt-hooks*` - Hook list for functions to run before prompt is displayed
+- `*pre-exec-hooks*` - Hook list for functions to run before command execution
+- `*post-exec-hooks*` - Hook list for functions to run after command execution
+- `*on-chdir-hooks*` - Hook list for functions to run after changing directory
+
 ### MCP Management Functions
 - `mcp-clear` - Clear all MCP servers
 - `mcp-add-stdio` - Add an MCP server with stdio transport
@@ -189,6 +197,32 @@ Create a `~/.config/dsh/config.lisp` file to configure your shell:
 ;(chat-execute-add "echo")
 ;(chat-execute-add "grep")
 ;(chat-execute-add "find")
+
+;; Hook System - Functions that run at specific shell events
+;; Define a function to use as a hook
+(defun my-pre-prompt-func ()
+  (print "Pre-prompt hook executed")
+  ;; You can update variables, check status, etc.
+)
+
+(defun my-pre-exec-func (command)
+  (print (string-append "About to execute: " command))
+)
+
+(defun my-post-exec-func (command exit-code)
+  (print (string-append "Executed " command " with exit code: " (number->string exit-code)))
+)
+
+(defun my-chdir-func ()
+  (print (string-append "Changed directory to: " (getenv "PWD")))
+)
+
+;; Add functions to the appropriate hook lists
+;; Note: add-hook expects the base name without asterisks - it adds them internally
+(add-hook 'pre-prompt-hooks 'my-pre-prompt-func)
+(add-hook 'pre-exec-hooks 'my-pre-exec-func)
+(add-hook 'post-exec-hooks 'my-post-exec-func)
+(add-hook 'on-chdir-hooks 'my-chdir-func)
 ```
 
 ### MCP Configuration Details

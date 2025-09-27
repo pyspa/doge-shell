@@ -345,6 +345,12 @@ impl<'a> Repl<'a> {
 
     fn print_prompt(&mut self, out: &mut impl Write) {
         // debug!("print_prompt called - full preprompt + mark redraw");
+
+        // Execute pre-prompt hooks
+        if let Err(e) = self.shell.exec_pre_prompt_hooks() {
+            debug!("Error executing pre-prompt hooks: {}", e);
+        }
+
         let mut prompt = self.prompt.write();
         // draw preprompt only here (initial or after command/bg output)
         prompt.print_preprompt(out);

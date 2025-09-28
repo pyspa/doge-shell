@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use super::cache::CompletionCache;
 use super::command::CompletionCandidate;
 use super::dynamic::DynamicCompletionRegistry;

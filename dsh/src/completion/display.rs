@@ -1,5 +1,5 @@
-#![allow(dead_code)]
 use super::ui::CompletionUi;
+use crate::terminal::renderer::TerminalRenderer;
 use anyhow::Result;
 use crossterm::style::{Color, Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{Clear, ClearType};
@@ -9,8 +9,6 @@ use skim::prelude::SkimItem;
 use std::io::{Write, stdout};
 use tracing::debug;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-
-use crate::terminal::renderer::TerminalRenderer;
 
 #[derive(Debug, Clone, Copy)]
 enum DisplayMode {

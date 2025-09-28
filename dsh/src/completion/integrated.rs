@@ -7,9 +7,12 @@ use super::history::{CompletionContext, HistoryCompletion};
 use super::json_loader::JsonCompletionLoader;
 use super::parser::{self, CommandLineParser, ParsedCommandLine};
 use crate::completion::display::Candidate;
+use crate::environment::Environment;
 use anyhow::Result;
+use parking_lot::RwLock;
 use regex::Regex;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, warn};
 
@@ -126,17 +129,21 @@ pub struct IntegratedCompletionEngine {
     dynamic_registry: DynamicCompletionRegistry,
     /// Short lived completion cache
     cache: CompletionCache<EnhancedCandidate>,
+
+    /// Shell environment (for dynamic completion)
+    pub environment: Arc<RwLock<Environment>>,
 }
 
 impl IntegratedCompletionEngine {
     /// Create a new integrated completion engine
-    pub fn new() -> Self {
+    pub fn new(environment: Arc<RwLock<Environment>>) -> Self {
         Self {
             command_generator: None,
             parser: CommandLineParser::new(),
             history_completion: HistoryCompletion::new(),
             dynamic_registry: DynamicCompletionRegistry::with_default_handlers(),
             cache: CompletionCache::new(Duration::from_millis(DEFAULT_CACHE_TTL_MS)),
+            environment,
         }
     }
 
@@ -520,12 +527,6 @@ impl IntegratedCompletionEngine {
     }
 }
 
-impl Default for IntegratedCompletionEngine {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Enhanced completion candidate
 #[derive(Debug, Clone)]
 pub struct EnhancedCandidate {
@@ -640,7 +641,7 @@ mod tests {
 
     #[test]
     fn test_integrated_completion_engine_creation() {
-        let engine = IntegratedCompletionEngine::new();
+        let engine = IntegratedCompletionEngine::new(Environment::new());
         assert!(engine.command_generator.is_none());
     }
 

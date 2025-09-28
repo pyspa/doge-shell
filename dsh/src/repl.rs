@@ -167,6 +167,7 @@ impl<'a> Repl<'a> {
         let prompt_mark_cache = prompt.read().mark.clone();
         let prompt_mark_width = display_width(&prompt_mark_cache);
 
+        let envronment = Arc::clone(&shell.environment);
         Repl {
             shell,
             input: Input::new(input_config),
@@ -176,7 +177,7 @@ impl<'a> Repl<'a> {
             history_search: None,
             start_completion: false,
             completion: Completion::new(),
-            integrated_completion: IntegratedCompletionEngine::new(),
+            integrated_completion: IntegratedCompletionEngine::new(envronment),
             prompt,
             prompt_mark_cache,
             prompt_mark_width,

@@ -49,6 +49,7 @@ parking_lot.workspace = true
 skim.workspace = true
 unicode-width = "0.2"
 async-trait = "0.1"
+arboard = "3.4"
 
 clap = { version="4", features = ["derive"] }
 globmatch = "0.3"

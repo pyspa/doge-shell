@@ -290,7 +290,7 @@ mod tests {
     #[test]
     fn test_resolve_alias() {
         init();
-        let mut env = Environment::new();
+        let env = Environment::new();
         env.write()
             .alias
             .insert("ll".to_string(), "ls -la".to_string());

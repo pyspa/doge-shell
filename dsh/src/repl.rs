@@ -9,6 +9,7 @@ use crate::shell::{SHELL_TERMINAL, Shell};
 use crate::terminal::renderer::TerminalRenderer;
 use anyhow::Context as _;
 use anyhow::Result;
+use arboard::Clipboard;
 use crossterm::cursor;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::queue;
@@ -1003,6 +1004,16 @@ impl<'a> Repl<'a> {
             }
             (KeyCode::Char('r'), CTRL) => {
                 self.select_history();
+            }
+            (KeyCode::Char('v'), CTRL) => {
+                // Paste clipboard content at current cursor position
+                if let Ok(mut clipboard) = Clipboard::new()
+                    && let Ok(content) = clipboard.get_text()
+                {
+                    // Insert the clipboard content at the current cursor position
+                    self.input.insert_str(&content);
+                    self.completion.clear();
+                }
             }
             _ => {
                 warn!("unsupported key event: {:?}", ev);

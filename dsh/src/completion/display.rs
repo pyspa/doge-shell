@@ -46,36 +46,6 @@ fn truncate_to_width(s: &str, max_width: usize) -> String {
     result
 }
 
-/// Completion candidate display settings
-#[derive(Debug, Clone)]
-pub struct DisplayConfig {
-    /// Maximum display rows
-    pub max_rows: usize,
-    /// Maximum display columns
-    pub max_columns: usize,
-    /// Whether to show descriptions
-    pub show_descriptions: bool,
-    /// Whether to show icons
-    pub show_icons: bool,
-    /// Whether to use color coding
-    pub use_colors: bool,
-    /// Maximum characters per line
-    pub max_width_per_item: usize,
-}
-
-impl Default for DisplayConfig {
-    fn default() -> Self {
-        Self {
-            max_rows: 10,
-            max_columns: 3,
-            show_descriptions: true,
-            show_icons: true,
-            use_colors: true,
-            max_width_per_item: 40,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct CompletionConfig {
     pub max_items: usize,
@@ -839,27 +809,6 @@ impl Candidate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::completion::integrated::{CandidateSource, CandidateType, EnhancedCandidate};
-
-    fn create_test_candidate(text: &str, candidate_type: CandidateType) -> EnhancedCandidate {
-        EnhancedCandidate {
-            text: text.to_string(),
-            description: Some(format!("Description for {text}")),
-            candidate_type,
-            priority: 100,
-            source: CandidateSource::Command,
-        }
-    }
-
-    #[test]
-    fn test_display_config_default() {
-        let config = DisplayConfig::default();
-        assert_eq!(config.max_rows, 10);
-        assert_eq!(config.max_columns, 3);
-        assert!(config.show_descriptions);
-        assert!(config.show_icons);
-        assert!(config.use_colors);
-    }
 
     #[test]
     fn test_terminal_size_calculation() {

@@ -87,6 +87,7 @@ impl<T: CacheableCandidate> CompletionCache<T> {
         }
     }
 
+    #[allow(dead_code)]
     pub fn cached_keys(&self) -> Vec<String> {
         let mut guard = self.entries.write();
         Self::purge_expired_locked(&mut guard);
@@ -170,7 +171,6 @@ mod tests {
             description: None,
             candidate_type: super::super::integrated::CandidateType::Generic,
             priority: 0,
-            source: super::super::integrated::CandidateSource::Command,
         }
     }
 

@@ -1,7 +1,7 @@
 use super::cache::CompletionCache;
 use super::command::CompletionCandidate;
 use super::dynamic::DynamicCompletionRegistry;
-use super::fuzzy::{FuzzyCompletion, SmartCompletion};
+
 use super::generator::CompletionGenerator;
 use super::history::{CompletionContext, HistoryCompletion};
 use super::json_loader::JsonCompletionLoader;
@@ -22,16 +22,14 @@ const DEFAULT_CACHE_TTL_MS: u64 = 3000;
 #[derive(Debug, Clone, Copy)]
 struct CompletionRequest<'a> {
     input: &'a str,
-    cursor_pos: usize,
     current_dir: &'a Path,
     max_results: usize,
 }
 
 impl<'a> CompletionRequest<'a> {
-    fn new(input: &'a str, cursor_pos: usize, current_dir: &'a Path, max_results: usize) -> Self {
+    fn new(input: &'a str, current_dir: &'a Path, max_results: usize) -> Self {
         Self {
             input,
-            cursor_pos,
             current_dir,
             max_results,
         }
@@ -123,10 +121,7 @@ pub struct IntegratedCompletionEngine {
     command_generator: Option<CompletionGenerator>,
     /// Command line parser
     parser: CommandLineParser,
-    /// Existing completion systems
-    fuzzy_completion: FuzzyCompletion,
     history_completion: HistoryCompletion,
-    smart_completion: SmartCompletion,
     /// Dynamic completion registry
     dynamic_registry: DynamicCompletionRegistry,
     /// Short lived completion cache
@@ -139,9 +134,7 @@ impl IntegratedCompletionEngine {
         Self {
             command_generator: None,
             parser: CommandLineParser::new(),
-            fuzzy_completion: FuzzyCompletion::new(),
             history_completion: HistoryCompletion::new(),
-            smart_completion: SmartCompletion::new(),
             dynamic_registry: DynamicCompletionRegistry::with_default_handlers(),
             cache: CompletionCache::new(Duration::from_millis(DEFAULT_CACHE_TTL_MS)),
         }
@@ -234,21 +227,6 @@ impl IntegratedCompletionEngine {
         }
     }
 
-    /// Load history data
-    pub fn load_history(&mut self, history_path: &Path) -> Result<()> {
-        self.history_completion.load_history(history_path)
-    }
-
-    /// Expose cache keys for diagnostics or tests
-    pub fn cached_keys(&self) -> Vec<String> {
-        self.cache.cached_keys()
-    }
-
-    /// Extend cache TTL for a specific key. Returns true if the key existed.
-    pub fn extend_cache_ttl(&self, key: &str) -> bool {
-        self.cache.extend_ttl(key)
-    }
-
     /// Execute integrated completion
     pub async fn complete(
         &self,
@@ -262,7 +240,7 @@ impl IntegratedCompletionEngine {
             input, cursor_pos, current_dir
         );
 
-        let request = CompletionRequest::new(input, cursor_pos, current_dir, max_results);
+        let request = CompletionRequest::new(input, current_dir, max_results);
 
         if !request.input.is_empty()
             && let Some(hit) = self.cache.lookup(request.input)
@@ -342,7 +320,7 @@ impl IntegratedCompletionEngine {
             Ok(dynamic_candidates) => {
                 let enhanced_candidates = dynamic_candidates
                     .into_iter()
-                    .map(|c| self.convert_to_enhanced_candidate(c, CandidateSource::Dynamic))
+                    .map(|c| self.convert_to_enhanced_candidate(c))
                     .collect::<Vec<_>>();
 
                 debug!(
@@ -390,7 +368,7 @@ impl IntegratedCompletionEngine {
             Ok(command_candidates) => {
                 let enhanced_candidates = command_candidates
                     .into_iter()
-                    .map(|c| self.convert_to_enhanced_candidate(c, CandidateSource::Command))
+                    .map(|c| self.convert_to_enhanced_candidate(c))
                     .collect::<Vec<_>>();
 
                 debug!(
@@ -429,17 +407,8 @@ impl IntegratedCompletionEngine {
         CandidateBatch::inclusive(enhanced_candidates)
     }
 
-    fn priority_from_source(source: CandidateSource, bias: i32) -> u32 {
-        let base = source.base_priority() as i32 + bias;
-        base.max(0) as u32
-    }
-
     /// Convert CompletionCandidate to EnhancedCandidate
-    fn convert_to_enhanced_candidate(
-        &self,
-        candidate: CompletionCandidate,
-        source: CandidateSource,
-    ) -> EnhancedCandidate {
+    fn convert_to_enhanced_candidate(&self, candidate: CompletionCandidate) -> EnhancedCandidate {
         EnhancedCandidate {
             text: candidate.text,
             description: candidate.description,
@@ -452,7 +421,6 @@ impl IntegratedCompletionEngine {
                 super::command::CompletionType::Directory => CandidateType::Directory,
             },
             priority: candidate.priority,
-            source,
         }
     }
 
@@ -489,8 +457,9 @@ impl IntegratedCompletionEngine {
             text,
             description,
             candidate_type,
-            priority: source.base_priority(),
-            source,
+            priority: match source {
+                CandidateSource::History => 60,
+            },
         }
     }
 
@@ -568,8 +537,6 @@ pub struct EnhancedCandidate {
     pub candidate_type: CandidateType,
     /// Priority
     pub priority: u32,
-    /// Candidate source
-    pub source: CandidateSource,
 }
 
 impl EnhancedCandidate {
@@ -603,6 +570,7 @@ impl EnhancedCandidate {
     }
 
     /// Get display text with icon and description for skim
+    #[allow(dead_code)]
     pub fn get_display_text(&self) -> String {
         let icon = self.candidate_type.icon();
         match &self.description {
@@ -646,6 +614,7 @@ impl CandidateType {
     }
 
     /// Get display icon
+    #[allow(dead_code)]
     pub fn icon(&self) -> &'static str {
         match self {
             CandidateType::SubCommand => "⚡",
@@ -657,44 +626,12 @@ impl CandidateType {
             CandidateType::Generic => "💡",
         }
     }
-
-    /// Get display color
-    pub fn color(&self) -> crossterm::style::Color {
-        use crossterm::style::Color;
-        match self {
-            CandidateType::SubCommand => Color::Green,
-            CandidateType::LongOption | CandidateType::ShortOption => Color::Blue,
-            CandidateType::Argument => Color::Yellow,
-            CandidateType::File => Color::White,
-            CandidateType::Directory => Color::Cyan,
-            CandidateType::Generic => Color::Grey,
-        }
-    }
 }
 
 /// Candidate source
 #[derive(Debug, Clone, PartialEq)]
 pub enum CandidateSource {
-    /// Command completion system
-    Command,
-    /// Context completion
-    Context,
-    /// History completion
     History,
-    /// Dynamic completion
-    Dynamic,
-}
-
-impl CandidateSource {
-    /// Base priority used for ordering candidates contributed by this source
-    pub fn base_priority(&self) -> u32 {
-        match self {
-            CandidateSource::Dynamic => 120,
-            CandidateSource::Command => 100,
-            CandidateSource::Context => 80,
-            CandidateSource::History => 60,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -731,7 +668,6 @@ mod tests {
             description: Some("Test command".to_string()),
             candidate_type: CandidateType::SubCommand,
             priority: 100,
-            source: CandidateSource::Command,
         };
 
         assert_eq!(candidate.text, "test");
@@ -746,7 +682,6 @@ mod tests {
             description: Some("Record changes to the repository".to_string()),
             candidate_type: CandidateType::SubCommand,
             priority: 100,
-            source: CandidateSource::Command,
         };
 
         let candidate = enhanced_candidate.to_candidate();
@@ -767,43 +702,11 @@ mod tests {
             description: Some("Show detailed output".to_string()),
             candidate_type: CandidateType::LongOption,
             priority: 80,
-            source: CandidateSource::Command,
         };
 
         let display_text = enhanced_candidate.get_display_text();
         assert!(display_text.contains("🔧"));
         assert!(display_text.contains("--verbose"));
         assert!(display_text.contains("Show detailed output"));
-    }
-
-    #[test]
-    fn aggregator_stops_after_exclusive_batch() {
-        let engine = IntegratedCompletionEngine::new();
-        let mut aggregator = CandidateAggregator::new(&engine, 10);
-
-        let history_candidate = EnhancedCandidate {
-            text: "history".to_string(),
-            description: None,
-            candidate_type: CandidateType::Generic,
-            priority: CandidateSource::History.base_priority(),
-            source: CandidateSource::History,
-        };
-
-        assert!(aggregator.extend(CandidateBatch::inclusive(vec![history_candidate])));
-
-        let dynamic_candidate = EnhancedCandidate {
-            text: "dynamic".to_string(),
-            description: None,
-            candidate_type: CandidateType::Generic,
-            priority: CandidateSource::Dynamic.base_priority(),
-            source: CandidateSource::Dynamic,
-        };
-
-        assert!(!aggregator.extend(CandidateBatch::exclusive(vec![dynamic_candidate])));
-
-        let result = aggregator.finalize();
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].text, "dynamic");
-        assert_eq!(result[1].text, "history");
     }
 }

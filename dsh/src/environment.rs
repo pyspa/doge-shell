@@ -181,24 +181,6 @@ impl Environment {
             None
         }
     }
-}
-
-impl std::fmt::Debug for Environment {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
-        f.debug_struct("Environment")
-            .field("alias", &self.alias)
-            .field("abbreviations", &self.abbreviations)
-            .field("autocompletion", &self.autocompletion)
-            .field("direnv_paths", &self.direnv_roots)
-            .field("paths", &self.paths)
-            .field("variables", &self.variables)
-            .field("mcp_servers", &self.mcp_servers)
-            .field("execute_allowlist", &self.execute_allowlist)
-            .finish()
-    }
-}
-
-impl Environment {
     pub fn clear_mcp_servers(&mut self) {
         self.mcp_servers.clear();
     }
@@ -223,6 +205,30 @@ impl Environment {
 
     pub fn execute_allowlist(&self) -> &[String] {
         &self.execute_allowlist
+    }
+
+    /// Resolves an alias from the Environment's alias map.
+    /// If the name is an alias, returns the expanded command; otherwise, returns the original name.
+    pub fn resolve_alias(&self, name: &str) -> String {
+        self.alias
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
+    }
+}
+
+impl std::fmt::Debug for Environment {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
+        f.debug_struct("Environment")
+            .field("alias", &self.alias)
+            .field("abbreviations", &self.abbreviations)
+            .field("autocompletion", &self.autocompletion)
+            .field("direnv_paths", &self.direnv_roots)
+            .field("paths", &self.paths)
+            .field("variables", &self.variables)
+            .field("mcp_servers", &self.mcp_servers)
+            .field("execute_allowlist", &self.execute_allowlist)
+            .finish()
     }
 }
 
@@ -279,5 +285,22 @@ mod tests {
         );
 
         assert_eq!(1, env1.read().variables.len());
+    }
+
+    #[test]
+    fn test_resolve_alias() {
+        init();
+        let mut env = Environment::new();
+        env.write()
+            .alias
+            .insert("ll".to_string(), "ls -la".to_string());
+
+        // Test alias resolution
+        let resolved = env.read().resolve_alias("ll");
+        assert_eq!(resolved, "ls -la".to_string());
+
+        // Test non-alias fallback
+        let resolved = env.read().resolve_alias("unknown");
+        assert_eq!(resolved, "unknown".to_string());
     }
 }

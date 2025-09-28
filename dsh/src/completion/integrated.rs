@@ -204,7 +204,7 @@ impl IntegratedCompletionEngine {
         opts.extend(parsed.specified_options.clone());
 
         ParsedCommandLine {
-            command: parsed.command.clone(),
+            command: self.environment.read().resolve_alias(&parsed.command),
             args,
             options: opts,
             current_arg: Some(parsed.current_token.clone()),

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use super::command::{
     ArgumentType, CommandCompletion, CommandCompletionDatabase, CommandOption, CompletionCandidate,
     SubCommand,

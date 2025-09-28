@@ -27,7 +27,6 @@ mod cache;
 mod command;
 mod display;
 mod dynamic;
-mod fuzzy;
 mod generator;
 mod history;
 pub mod integrated;

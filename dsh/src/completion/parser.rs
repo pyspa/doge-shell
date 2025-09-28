@@ -1,13 +1,7 @@
-#![allow(dead_code)]
 use super::command::ArgumentType;
 use regex::Regex;
 use std::collections::VecDeque;
 
-// Pre-compiled regex patterns for efficient option parsing
-static SHORT_OPTION_REGEX: std::sync::LazyLock<Regex> =
-    std::sync::LazyLock::new(|| Regex::new(r"^-[a-zA-Z]$").unwrap());
-static LONG_OPTION_REGEX: std::sync::LazyLock<Regex> =
-    std::sync::LazyLock::new(|| Regex::new(r"^--[a-zA-Z][a-zA-Z0-9-]{2,}$").unwrap());
 static OPTION_REGEX: std::sync::LazyLock<Regex> =
     std::sync::LazyLock::new(|| Regex::new(r"^-").unwrap());
 static DOUBLE_DASH_REGEX: std::sync::LazyLock<Regex> =

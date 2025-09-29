@@ -686,6 +686,39 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn json_completion_filters_by_current_token() {
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine
+            .initialize_command_completion()
+            .expect("command completion should initialize");
+
+        let input = "git a";
+        let cursor_pos = input.len();
+        let current_dir = std::env::current_dir().expect("current dir available");
+
+        let candidates = engine.complete(input, cursor_pos, &current_dir, 50).await;
+
+        assert!(
+            !candidates.is_empty(),
+            "expected git subcommand suggestions"
+        );
+
+        for candidate in &candidates {
+            assert!(
+                candidate.text.starts_with('a'),
+                "candidate '{}' should be filtered by prefix",
+                candidate.text
+            );
+        }
+
+        assert!(
+            candidates.iter().any(|c| c.text == "add"),
+            "git add should remain available"
+        );
+    }
+
     #[test]
     fn test_enhanced_candidate_display_text() {}
 }

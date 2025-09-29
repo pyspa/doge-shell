@@ -131,10 +131,19 @@ impl<T: CacheableCandidate> CompletionCache<T> {
             let candidates = if exact {
                 entry.candidates.as_ref().clone()
             } else {
+                let last_token = input
+                    .rsplit(|c: char| c.is_whitespace())
+                    .next()
+                    .unwrap_or("");
+
                 entry
                     .candidates
                     .iter()
-                    .filter(|candidate| candidate.completion_text().starts_with(input))
+                    .filter(|candidate| {
+                        let text = candidate.completion_text();
+                        text.starts_with(input)
+                            || (!last_token.is_empty() && text.starts_with(last_token))
+                    })
                     .cloned()
                     .collect()
             };
@@ -189,6 +198,20 @@ mod tests {
         assert!(!result.exact);
         assert_eq!(result.candidates.len(), 1);
         assert_eq!(result.candidates[0].text, "git");
+    }
+
+    #[test]
+    fn cache_filters_using_last_token() {
+        let cache = CompletionCache::new(Duration::from_secs(1));
+        cache.set(
+            "git ".to_string(),
+            vec![candidate("add"), candidate("commit")],
+        );
+
+        let result = cache.lookup("git a").unwrap();
+        assert!(!result.exact);
+        assert_eq!(result.candidates.len(), 1);
+        assert_eq!(result.candidates[0].text, "add");
     }
 
     #[test]

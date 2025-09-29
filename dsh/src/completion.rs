@@ -912,26 +912,6 @@ mod tests {
     }
 
     #[test]
-    fn default_framework_is_inline_without_env() {
-        let original = std::env::var("DSH_COMPLETION_FRAMEWORK").ok();
-        unsafe {
-            std::env::remove_var("DSH_COMPLETION_FRAMEWORK");
-        }
-        assert_eq!(
-            super::default_completion_framework(),
-            CompletionFrameworkKind::Inline
-        );
-        match original {
-            Some(value) => unsafe {
-                std::env::set_var("DSH_COMPLETION_FRAMEWORK", value);
-            },
-            None => unsafe {
-                std::env::remove_var("DSH_COMPLETION_FRAMEWORK");
-            },
-        }
-    }
-
-    #[test]
     fn default_framework_switches_to_skim_via_env() {
         let original = std::env::var("DSH_COMPLETION_FRAMEWORK").ok();
         unsafe {

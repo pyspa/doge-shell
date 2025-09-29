@@ -47,16 +47,20 @@ const INITIAL_CAP: usize = 256;
 
 #[derive(Debug, Clone)]
 pub struct InputConfig {
-    pub fg_color: Color,
-    pub match_color: Color,
-    pub completion_color: Color,
+    pub fg_color: Color,                 // Normal input text (white)
+    pub command_exists_color: Color,     // Command that exists (blue)
+    pub command_not_exists_color: Color, // Command that doesn't exist (red)
+    pub argument_color: Color,           // Arguments (cyan)
+    pub completion_color: Color,         // Completion candidates (dark grey)
 }
 
 impl Default for InputConfig {
     fn default() -> InputConfig {
         InputConfig {
             fg_color: Color::White,
-            match_color: Color::Blue,
+            command_exists_color: Color::Blue,
+            command_not_exists_color: Color::Red,
+            argument_color: Color::Cyan,
             completion_color: Color::DarkGrey,
         }
     }
@@ -70,8 +74,15 @@ pub struct Input {
     indices: Vec<usize>,
 
     pub completion: Option<String>,
-    pub match_index: Option<Vec<usize>>,
+    pub color_ranges: Option<Vec<(usize, usize, ColorType)>>, // (start, end, color_type)
     pub can_execute: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ColorType {
+    CommandExists,
+    CommandNotExists,
+    Argument,
 }
 
 impl Input {
@@ -82,7 +93,7 @@ impl Input {
             input: String::with_capacity(INITIAL_CAP),
             indices: Vec::with_capacity(INITIAL_CAP),
             completion: None,
-            match_index: None,
+            color_ranges: None,
             can_execute: false,
         }
     }
@@ -91,14 +102,18 @@ impl Input {
         self.input = input;
         self.update_indices();
         self.move_to_end();
-        self.match_index = None;
+        self.color_ranges = None;
     }
 
-    pub fn reset_with_match_index(&mut self, input: String, match_index: Vec<usize>) {
+    pub fn reset_with_color_ranges(
+        &mut self,
+        input: String,
+        color_ranges: Vec<(usize, usize, ColorType)>,
+    ) {
         self.input = input;
         self.update_indices();
         self.move_to_end();
-        self.match_index = Some(match_index);
+        self.color_ranges = Some(color_ranges);
     }
 
     pub fn as_str(&self) -> &str {
@@ -113,6 +128,7 @@ impl Input {
         self.cursor = 0;
         self.input.clear();
         self.indices.clear();
+        self.color_ranges = None;
     }
 
     pub fn move_to_begin(&mut self) {
@@ -310,9 +326,9 @@ impl Input {
     pub fn print<W: Write>(&self, out: &mut W) {
         let mut writer = BufWriter::new(out);
 
-        if let Some(match_index) = &self.match_index {
+        if let Some(color_ranges) = &self.color_ranges {
             // Build colored segments to reduce write_fmt calls
-            let colored_output = self.build_colored_string(match_index);
+            let colored_output = self.build_colored_string_from_ranges(color_ranges);
             writer.write_fmt(format_args!("{colored_output}")).ok();
         } else {
             writer
@@ -324,43 +340,45 @@ impl Input {
         writer.flush().ok();
     }
 
-    /// Build a colored string by grouping consecutive characters with the same color
-    fn build_colored_string(&self, match_index: &[usize]) -> String {
+    /// Build a colored string from color ranges
+    fn build_colored_string_from_ranges(
+        &self,
+        color_ranges: &[(usize, usize, ColorType)],
+    ) -> String {
         use crossterm::style::Stylize;
 
+        let input_str = self.as_str();
         let mut result = String::new();
-        let mut current_segment = String::new();
-        let mut current_color = self.config.fg_color;
-        let mut match_iter = match_index.iter();
-        let mut next_match_idx = match_iter.next();
+        let mut last_end = 0;
 
-        for (i, ch) in self.as_str().chars().enumerate() {
-            let color = if let Some(&idx) = next_match_idx {
-                if idx == i {
-                    next_match_idx = match_iter.next();
-                    self.config.match_color
-                } else {
-                    self.config.fg_color
-                }
-            } else {
-                self.config.fg_color
-            };
+        // Sort color ranges by start position to process them in order
+        let mut sorted_ranges = color_ranges.to_vec();
+        sorted_ranges.sort_by(|a, b| a.0.cmp(&b.0));
 
-            // If color changes, flush current segment and start new one
-            if color != current_color {
-                if !current_segment.is_empty() {
-                    result.push_str(&format!("{}", current_segment.clone().with(current_color)));
-                    current_segment.clear();
-                }
-                current_color = color;
+        for (start, end, color_type) in sorted_ranges {
+            // Add any uncolored text before this range
+            if start > last_end {
+                let prefix = &input_str[last_end..start];
+                result.push_str(&format!("{}", prefix.with(self.config.fg_color)));
             }
 
-            current_segment.push(ch);
+            // Add the colored text for this range
+            let colored_text = &input_str[start..end];
+            let color = match color_type {
+                ColorType::CommandExists => self.config.command_exists_color,
+                ColorType::CommandNotExists => self.config.command_not_exists_color,
+                ColorType::Argument => self.config.argument_color,
+            };
+            result.push_str(&format!("{}", colored_text.with(color)));
+
+            // Update the last processed position
+            last_end = end.max(last_end);
         }
 
-        // Flush remaining segment
-        if !current_segment.is_empty() {
-            result.push_str(&format!("{}", current_segment.with(current_color)));
+        // Add any remaining uncolored text after the last range
+        if last_end < input_str.len() {
+            let suffix = &input_str[last_end..];
+            result.push_str(&format!("{}", suffix.with(self.config.fg_color)));
         }
 
         result
@@ -372,8 +390,18 @@ impl Input {
     }
 
     #[allow(dead_code)]
-    pub fn match_color(&self) -> Color {
-        self.config.match_color
+    pub fn command_exists_color(&self) -> Color {
+        self.config.command_exists_color
+    }
+
+    #[allow(dead_code)]
+    pub fn command_not_exists_color(&self) -> Color {
+        self.config.command_not_exists_color
+    }
+
+    #[allow(dead_code)]
+    pub fn argument_color(&self) -> Color {
+        self.config.argument_color
     }
 
     #[allow(dead_code)]

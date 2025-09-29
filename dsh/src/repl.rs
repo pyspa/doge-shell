@@ -518,7 +518,7 @@ impl<'a> Repl<'a> {
         } else {
             completion = self.get_completion_from_history(&input);
 
-            let mut match_index: Vec<usize> = Vec::new();
+            let mut color_ranges: Vec<(usize, usize, crate::input::ColorType)> = Vec::new();
 
             // TODO refactor
             if let Ok(words) = self.input.get_words() {
@@ -527,19 +527,28 @@ impl<'a> Repl<'a> {
                     if word.is_empty() {
                         continue;
                     }
-                    if let Some(_found) = self.shell.environment.read().lookup(word) {
-                        for pos in span.start()..span.end() {
-                            // change color
-                            match_index.push(pos);
-                        }
-                        if let Rule::argv0 = rule {
-                            can_execute = true;
-                        }
-                    }
 
-                    if current && completion.is_none() {
-                        match rule {
-                            Rule::argv0 => {
+                    let env = self.shell.environment.read();
+                    let word_exists = env.lookup(word).is_some();
+                    let is_alias = env.alias.contains_key(word);
+                    let word_is_valid = word_exists || is_alias;
+
+                    match rule {
+                        Rule::argv0 => {
+                            // For command names (argv0), color based on existence
+                            let color_type = if word_is_valid {
+                                crate::input::ColorType::CommandExists
+                            } else {
+                                crate::input::ColorType::CommandNotExists
+                            };
+                            color_ranges.push((span.start(), span.end(), color_type));
+
+                            if word_is_valid {
+                                can_execute = true;
+                            }
+
+                            // Completion logic for command names
+                            if current && completion.is_none() {
                                 if let Some(file) = self.shell.environment.read().search(word) {
                                     if file.len() >= input.len() {
                                         completion = Some(file[input.len()..].to_string());
@@ -557,28 +566,39 @@ impl<'a> Repl<'a> {
                                     break;
                                 }
                             }
-                            Rule::args => {
-                                if let Ok(Some(path)) = completion::path_completion_prefix(word)
-                                    && path.len() >= word.len()
-                                {
-                                    let part = path[word.len()..].to_string();
-                                    completion = Some(path[word.len()..].to_string());
+                        }
+                        Rule::args => {
+                            // For arguments, use cyan color
+                            color_ranges.push((
+                                span.start(),
+                                span.end(),
+                                crate::input::ColorType::Argument,
+                            ));
 
-                                    if let Some((pre, post)) = self.input.split_current_pos() {
-                                        self.input.completion = Some(pre.to_owned() + &part + post);
-                                    } else {
-                                        self.input.completion = Some(input + &part);
-                                    }
-                                    break;
+                            // Completion logic for arguments
+                            if current
+                                && completion.is_none()
+                                && let Ok(Some(path)) = completion::path_completion_prefix(word)
+                                && path.len() >= word.len()
+                            {
+                                let part = path[word.len()..].to_string();
+                                completion = Some(path[word.len()..].to_string());
+
+                                if let Some((pre, post)) = self.input.split_current_pos() {
+                                    self.input.completion = Some(pre.to_owned() + &part + post);
+                                } else {
+                                    self.input.completion = Some(input + &part);
                                 }
+                                break;
                             }
-
-                            _ => {}
+                        }
+                        _ => {
+                            // For other rule types, leave them with default color
                         }
                     }
                 }
             }
-            self.input.match_index = Some(match_index);
+            self.input.color_ranges = Some(color_ranges);
         }
 
         self.input.can_execute = can_execute;
@@ -622,14 +642,26 @@ impl<'a> Repl<'a> {
             (KeyCode::Up, NONE) => {
                 if self.completion.completion_mode() {
                     if let Some(item) = self.completion.backward() {
+                        // Convert match_index to color_ranges (for backward compatibility, assume all matches are commands that exist)
+                        let color_ranges: Vec<(usize, usize, crate::input::ColorType)> = item
+                            .match_index
+                            .iter()
+                            .map(|&idx| (idx, idx + 1, crate::input::ColorType::CommandExists))
+                            .collect();
                         self.input
-                            .reset_with_match_index(item.item.clone(), item.match_index.clone());
+                            .reset_with_color_ranges(item.item.clone(), color_ranges);
                     }
                 } else {
                     self.set_completions();
                     if let Some(item) = self.completion.backward() {
+                        // Convert match_index to color_ranges (for backward compatibility, assume all matches are commands that exist)
+                        let color_ranges: Vec<(usize, usize, crate::input::ColorType)> = item
+                            .match_index
+                            .iter()
+                            .map(|&idx| (idx, idx + 1, crate::input::ColorType::CommandExists))
+                            .collect();
                         self.input
-                            .reset_with_match_index(item.item.clone(), item.match_index.clone());
+                            .reset_with_color_ranges(item.item.clone(), color_ranges);
                     }
                 }
             }
@@ -638,8 +670,14 @@ impl<'a> Repl<'a> {
                 if self.completion.completion_mode()
                     && let Some(item) = self.completion.forward()
                 {
+                    // Convert match_index to color_ranges (for backward compatibility, assume all matches are commands that exist)
+                    let color_ranges: Vec<(usize, usize, crate::input::ColorType)> = item
+                        .match_index
+                        .iter()
+                        .map(|&idx| (idx, idx + 1, crate::input::ColorType::CommandExists))
+                        .collect();
                     self.input
-                        .reset_with_match_index(item.item.clone(), item.match_index.clone());
+                        .reset_with_color_ranges(item.item.clone(), color_ranges);
                 }
             }
             (KeyCode::Left, modifiers) if !modifiers.contains(CTRL) => {
@@ -764,7 +802,7 @@ impl<'a> Repl<'a> {
                 reset_completion = true;
                 self.input.backspace();
                 self.completion.clear();
-                self.input.match_index = None;
+                self.input.color_ranges = None;
             }
             (KeyCode::Tab, NONE) | (KeyCode::BackTab, NONE) => {
                 // Extract the current word at cursor position for completion query

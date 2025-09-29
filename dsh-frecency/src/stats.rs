@@ -140,7 +140,7 @@ impl ItemStats {
             let color = if let Some(idx) = match_index {
                 if *idx == i {
                     match_index = index_iter.next();
-                    Color::Blue
+                    Color::Blue // For compatibility with existing behavior, use blue for matches
                 } else {
                     Color::White
                 }

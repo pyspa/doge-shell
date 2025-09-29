@@ -393,11 +393,11 @@ fn expand_command_alias(
 }
 
 pub fn get_words(input: &str, pos: usize) -> Result<Vec<(Rule, Span<'_>, bool)>> {
-    let pairs = ShellParser::parse(Rule::command, input).map_err(|e| anyhow!(e))?;
+    let pairs = ShellParser::parse(Rule::commands, input).map_err(|e| anyhow!(e))?;
     let mut result: Vec<(Rule, Span<'_>, bool)> = Vec::new();
     for pair in pairs {
         match pair.as_rule() {
-            Rule::command => {
+            Rule::commands | Rule::command => {
                 for pair in pair.into_inner() {
                     let mut res = to_words(pair, pos);
                     result.append(&mut res);
@@ -467,6 +467,14 @@ fn to_words(pair: Pair<Rule>, pos: usize) -> Vec<(Rule, Span, bool)> {
                         }
                     }
 
+                    Rule::commands | Rule::command => {
+                        // Handle nested commands (with &&, ||, ;)
+                        let mut v = to_words(inner_pair, pos);
+                        result.append(&mut v);
+                    }
+                    Rule::command_list_sep => {
+                        // Skip command separators like &&, ||, ;
+                    }
                     _ => {
                         debug!(
                             "to_words missing {:?} {:?}",

@@ -95,39 +95,6 @@ impl JsonCompletionLoader {
                     self.completion_dirs.len()
                 );
 
-                // Then, load from filesystem directories (for user customizations)
-                // for (i, dir) in self.completion_dirs.iter().enumerate() {
-                //     debug!(
-                //         "Checking completion directory {}/{}: {:?}",
-                //         i + 1,
-                //         self.completion_dirs.len(),
-                //         dir
-                //     );
-
-                //     if !dir.exists() {
-                //         debug!("Completion directory does not exist: {:?}", dir);
-                //         continue;
-                //     }
-
-                //     debug!("Loading completions from existing directory: {:?}", dir);
-                //     match self.load_from_directory(dir, &mut database) {
-                //         Ok(count) => {
-                //             loaded_count += count;
-                //             if count > 0 {
-                //                 debug!(
-                //                     "Successfully loaded {} completion files from {:?}",
-                //                     count, dir
-                //                 );
-                //             } else {
-                //                 debug!("No completion files found in {:?}", dir);
-                //             }
-                //         }
-                //         Err(e) => {
-                //             warn!("Failed to load completions from {:?}: {}", dir, e);
-                //         }
-                //     }
-                // }
-
                 debug!(
                     "Completion loading complete: {} files loaded from embedded resources + {} directories",
                     loaded_count,

@@ -64,29 +64,6 @@ impl Default for CompletionConfig {
 }
 
 impl CompletionConfig {
-    #[allow(dead_code)]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    #[allow(dead_code)]
-    pub fn with_max_items(mut self, max_items: usize) -> Self {
-        self.max_items = max_items;
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn with_message_template<S: Into<String>>(mut self, template: S) -> Self {
-        self.more_items_message_template = template.into();
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn with_item_count_display(mut self, show: bool) -> Self {
-        self.show_item_count = show;
-        self
-    }
-
     pub fn format_more_items_message(&self, remaining_count: usize) -> String {
         if self.more_items_message_template.contains("{}") {
             self.more_items_message_template

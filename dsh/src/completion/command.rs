@@ -106,12 +106,6 @@ impl CommandCompletionDatabase {
         self.commands.keys().collect()
     }
 
-    /// Whether the database is empty
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.commands.is_empty()
-    }
-
     /// Number of registered commands
     pub fn len(&self) -> usize {
         self.commands.len()
@@ -208,7 +202,7 @@ mod tests {
     #[test]
     fn test_command_completion_database() {
         let mut db = CommandCompletionDatabase::new();
-        assert!(db.is_empty());
+        assert!(db.commands.is_empty());
         assert_eq!(db.len(), 0);
 
         let git_completion = CommandCompletion {
@@ -219,7 +213,7 @@ mod tests {
         };
 
         db.add_command(git_completion);
-        assert!(!db.is_empty());
+        assert!(!db.commands.is_empty());
         assert_eq!(db.len(), 1);
         assert!(db.get_command("git").is_some());
         assert!(db.get_command("nonexistent").is_none());

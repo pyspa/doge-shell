@@ -1,19 +1,16 @@
 use self::cache::CompletionCache;
-use crate::completion::ui::{CompletionInteraction, CompletionOutcome, TerminalEventSource};
+use self::framework::{CompletionFrameworkKind, CompletionRequest, select_with_framework_kind};
 use crate::dirs::is_executable;
 use crate::input::Input;
 use crate::lisp::Value;
 use crate::repl::Repl;
 use anyhow::Result;
-use crossterm::{cursor, execute};
 use dsh_frecency::ItemStats;
 use regex::Regex;
 use skim::prelude::*;
-use skim::{Skim, SkimItemReceiver, SkimItemSender};
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fs::read_dir;
-use std::io::stdout;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::LazyLock;
@@ -26,6 +23,7 @@ mod cache;
 mod command;
 pub mod display;
 mod dynamic;
+pub mod framework;
 mod generator;
 mod history;
 pub mod integrated;
@@ -37,7 +35,6 @@ mod ui;
 pub use crate::completion::command::CompletionType;
 pub use crate::completion::display::Candidate;
 pub use crate::completion::display::CompletionConfig;
-pub use crate::completion::display::CompletionDisplay;
 
 pub const MAX_RESULT: usize = 500;
 
@@ -288,60 +285,15 @@ impl SkimItem for Candidate {
 }
 
 pub fn select_item_with_skim(items: Vec<Candidate>, query: Option<&str>) -> Option<String> {
-    // Check if there's only one candidate - if so, display it with gray history-style formatting
-    if items.len() == 1 {
-        let candidate = &items[0];
-        let val = candidate.output().to_string();
-
-        return Some(val);
-    }
-
-    // Log the completion candidates before passing them to skim
-    debug!(
-        "select_item_with_skim: {} candidates provided, query: {:?}",
-        items.len(),
-        query
-    );
-    for (i, candidate) in items.iter().enumerate() {
-        debug!("Skim candidate {}: {:?}", i, candidate);
-    }
-
-    // Configure skim fuzzy finder options
-    let options = SkimOptionsBuilder::default()
-        .select_1(true) // Only allow selecting one item
-        .bind(vec!["Enter:accept".to_string()]) // Use Enter to accept selection
-        .query(query.map(|s| s.to_string())) // Optional initial query
-        .build()
-        .unwrap();
-
-    // Create channels to send items to skim
-    let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
-
-    // Send all completion candidates to skim
-    for item in items {
-        let _ = tx_item.send(Arc::new(item));
-    }
-    drop(tx_item); // Close the sender to signal no more items
-
-    // Run skim and get selected items
-    // When no items are provided, skim will show an empty interface
-    // User can still press Enter (with no selection) or ESC to cancel
-    let selected = Skim::run_with(&options, Some(rx_item))
-        .map(|out| match out.final_key {
-            Key::Enter => out.selected_items, // User pressed Enter (may be empty if no items)
-            _ => Vec::new(),                  // User cancelled (ESC, Ctrl+C, etc.)
-        })
-        .unwrap_or_default();
-
-    // Return the selected item if one was chosen
-    if !selected.is_empty() {
-        let val = selected[0].output().to_string();
-        return Some(val);
-    }
-
-    // Return None if no items were selected or if no items were provided
-    // This is consistent with the "silent failure" behavior when no matches are found
-    None
+    let (prompt_text, input_text) = get_prompt_and_input_for_completion();
+    select_completion_items_with_framework(
+        items,
+        query,
+        &prompt_text,
+        &input_text,
+        CompletionConfig::default(),
+        CompletionFrameworkKind::Skim,
+    )
 }
 
 // Helper function to get current prompt and input for completion display
@@ -351,19 +303,24 @@ fn get_prompt_and_input_for_completion() -> (String, String) {
     ("$ ".to_string(), "".to_string())
 }
 
+pub(crate) fn last_word(s: &str) -> &str {
+    s.split_whitespace().last().unwrap_or("")
+}
+
+fn default_completion_framework() -> CompletionFrameworkKind {
+    match std::env::var("DSH_COMPLETION_FRAMEWORK") {
+        Ok(value) if value.eq_ignore_ascii_case("skim") => CompletionFrameworkKind::Skim,
+        Ok(value) if value.eq_ignore_ascii_case("inline") => CompletionFrameworkKind::Inline,
+        _ => CompletionFrameworkKind::Inline,
+    }
+}
+
 pub fn select_completion_items(
     items: Vec<Candidate>,
     query: Option<&str>,
     prompt_text: &str,
     input_text: &str,
 ) -> Option<String> {
-    debug!(
-        "select_completion_items: items={}, query={:?}, prompt_text='{}', input_text='{}'",
-        items.len(),
-        query,
-        prompt_text,
-        input_text
-    );
     select_completion_items_with_config(
         items,
         query,
@@ -373,10 +330,6 @@ pub fn select_completion_items(
     )
 }
 
-fn last_word(s: &str) -> &str {
-    s.split_whitespace().last().unwrap_or("")
-}
-
 pub fn select_completion_items_with_config(
     items: Vec<Candidate>,
     query: Option<&str>,
@@ -384,49 +337,40 @@ pub fn select_completion_items_with_config(
     input_text: &str,
     config: CompletionConfig,
 ) -> Option<String> {
+    select_completion_items_with_framework(
+        items,
+        query,
+        prompt_text,
+        input_text,
+        config,
+        default_completion_framework(),
+    )
+}
+
+pub fn select_completion_items_with_framework(
+    items: Vec<Candidate>,
+    query: Option<&str>,
+    prompt_text: &str,
+    input_text: &str,
+    config: CompletionConfig,
+    framework: CompletionFrameworkKind,
+) -> Option<String> {
     debug!(
-        "select_completion_items_with_config: items={}, query={:?}, prompt_text='{}', input_text='{}'",
+        "select_completion_items_with_framework: items={}, query={:?}, prompt_text='{}', input_text='{}', framework={:?}",
         items.len(),
         query,
         prompt_text,
-        input_text
+        input_text,
+        framework
     );
 
-    // Log the actual content of the completion candidates before display
-    // for (i, candidate) in items.iter().enumerate() {
-    //     debug!("Completion candidate {}: {:?}", i, candidate);
-    // }
-
-    // If no completion candidates are available, return None immediately
-    // This prevents showing an empty completion UI to the user
-    // This is the "silent failure" behavior when no matches are found
     if items.is_empty() {
         debug!("No completion candidates found, returning None");
         return None;
     }
 
-    let mut display =
-        CompletionDisplay::new_with_config(items.clone(), prompt_text, input_text, config);
-
-    let mut controller = CompletionInteraction::new(TerminalEventSource);
-
-    // Run the completion interaction loop
-    // This displays the completion UI and waits for user selection
-    match controller.run(&mut display) {
-        // User selected a completion item
-        Ok(CompletionOutcome::Submitted(value)) => Some(value),
-        Ok(CompletionOutcome::Input(value)) => Some(last_word(input_text).to_owned() + &value),
-        // User cancelled (e.g. pressed ESC) or made no selection
-        // Both cases return None, maintaining the "silent failure" behavior
-        Ok(CompletionOutcome::Cancelled) | Ok(CompletionOutcome::NoSelection) => None,
-        // Error occurred during completion interaction
-        Err(error) => {
-            warn!("Completion interaction failed: {}", error);
-            let _ = display.clear_display();
-            let _ = execute!(stdout(), cursor::Show);
-            None
-        }
-    }
+    let request = CompletionRequest::new(items, query, prompt_text, input_text, config);
+    select_with_framework_kind(framework, request)
 }
 
 // Backward compatibility function
@@ -435,7 +379,14 @@ pub fn select_completion_items_simple(
     query: Option<&str>,
 ) -> Option<String> {
     let (prompt_text, input_text) = get_prompt_and_input_for_completion();
-    select_completion_items(items, query, &prompt_text, &input_text)
+    select_completion_items_with_framework(
+        items,
+        query,
+        &prompt_text,
+        &input_text,
+        CompletionConfig::default(),
+        CompletionFrameworkKind::Inline,
+    )
 }
 
 pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String> {
@@ -958,6 +909,46 @@ mod tests {
         assert_eq!(result.len(), 1);
         // Should keep the first command version
         assert!(result.iter().any(|c| matches!(c, Candidate::Item(name, desc) if name == "/usr/bin/ls" && desc == "(command)")));
+    }
+
+    #[test]
+    fn default_framework_is_inline_without_env() {
+        let original = std::env::var("DSH_COMPLETION_FRAMEWORK").ok();
+        unsafe {
+            std::env::remove_var("DSH_COMPLETION_FRAMEWORK");
+        }
+        assert_eq!(
+            super::default_completion_framework(),
+            CompletionFrameworkKind::Inline
+        );
+        match original {
+            Some(value) => unsafe {
+                std::env::set_var("DSH_COMPLETION_FRAMEWORK", value);
+            },
+            None => unsafe {
+                std::env::remove_var("DSH_COMPLETION_FRAMEWORK");
+            },
+        }
+    }
+
+    #[test]
+    fn default_framework_switches_to_skim_via_env() {
+        let original = std::env::var("DSH_COMPLETION_FRAMEWORK").ok();
+        unsafe {
+            std::env::set_var("DSH_COMPLETION_FRAMEWORK", "skim");
+        }
+        assert_eq!(
+            super::default_completion_framework(),
+            CompletionFrameworkKind::Skim
+        );
+        match original {
+            Some(value) => unsafe {
+                std::env::set_var("DSH_COMPLETION_FRAMEWORK", value);
+            },
+            None => unsafe {
+                std::env::remove_var("DSH_COMPLETION_FRAMEWORK");
+            },
+        }
     }
 
     #[test]

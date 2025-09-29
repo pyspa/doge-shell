@@ -87,13 +87,6 @@ impl<T: CacheableCandidate> CompletionCache<T> {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn cached_keys(&self) -> Vec<String> {
-        let mut guard = self.entries.write();
-        Self::purge_expired_locked(&mut guard);
-        guard.keys().cloned().collect()
-    }
-
     pub fn lookup(&self, input: &str) -> Option<CacheLookup<T>> {
         let now = Instant::now();
         let mut expired = Vec::new();
@@ -204,7 +197,6 @@ mod tests {
         cache.set("gi".to_string(), vec![candidate("git")]);
         std::thread::sleep(Duration::from_millis(20));
         assert!(cache.lookup("gi").is_none());
-        assert!(cache.cached_keys().is_empty());
     }
 
     #[test]

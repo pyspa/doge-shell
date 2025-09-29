@@ -132,13 +132,12 @@ fn interpret_key_event(key: &KeyEvent) -> InteractionCommand {
         (KeyCode::Left, _) => InteractionCommand::MoveLeft,
         (KeyCode::Right, _) | (KeyCode::Tab, KeyModifiers::NONE) => InteractionCommand::MoveRight,
         (KeyCode::Enter, _) => InteractionCommand::Submit,
-        // (KeyCode::Esc, _)
-        // | (KeyCode::Char('c'), KeyModifiers::CONTROL)
-        // | (KeyCode::Char('g'), KeyModifiers::CONTROL)
-        // | (KeyCode::Char('q'), KeyModifiers::NONE) => InteractionCommand::Cancel,
-        // _ => InteractionCommand::Noop,
+        (KeyCode::Esc, _)
+        | (KeyCode::Char('c'), KeyModifiers::CONTROL)
+        | (KeyCode::Char('g'), KeyModifiers::CONTROL)
+        | (KeyCode::Char('q'), KeyModifiers::NONE) => InteractionCommand::Cancel,
         (KeyCode::Char(ch), _) => InteractionCommand::Input(ch),
-        _ => InteractionCommand::Cancel,
+        _ => InteractionCommand::Noop,
     }
 }
 
@@ -250,7 +249,7 @@ mod tests {
 
         let outcome = controller.run(&mut ui).expect("controller run succeeds");
 
-        assert_eq!(outcome, CompletionOutcome::Input("c".to_string()));
+        assert_eq!(outcome, CompletionOutcome::Cancelled);
         assert_eq!(ui.clear_calls, 1);
         assert_eq!(ui.refresh_calls, 0);
     }

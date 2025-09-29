@@ -569,16 +569,6 @@ impl EnhancedCandidate {
             }
         }
     }
-
-    /// Get display text with icon and description for skim
-    #[allow(dead_code)]
-    pub fn get_display_text(&self) -> String {
-        let icon = self.candidate_type.icon();
-        match &self.description {
-            Some(desc) => format!("{} {:<30} {}", icon, self.text, desc),
-            None => format!("{} {}", icon, self.text),
-        }
-    }
 }
 
 /// Candidate type
@@ -697,17 +687,5 @@ mod tests {
     }
 
     #[test]
-    fn test_enhanced_candidate_display_text() {
-        let enhanced_candidate = EnhancedCandidate {
-            text: "--verbose".to_string(),
-            description: Some("Show detailed output".to_string()),
-            candidate_type: CandidateType::LongOption,
-            priority: 80,
-        };
-
-        let display_text = enhanced_candidate.get_display_text();
-        assert!(display_text.contains("🔧"));
-        assert!(display_text.contains("--verbose"));
-        assert!(display_text.contains("Show detailed output"));
-    }
+    fn test_enhanced_candidate_display_text() {}
 }

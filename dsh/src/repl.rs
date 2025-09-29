@@ -369,11 +369,12 @@ impl<'a> Repl<'a> {
     fn stop_history_mode(&mut self) {
         self.history_search = None;
         if let Some(ref mut history) = self.shell.cmd_history
-            && let Some(mut history) = history.try_lock() {
-                history.search_word = None;
-                history.reset_index();
-            }
-            // If we can't get the lock, we just won't be able to stop history mode - no warning needed
+            && let Some(mut history) = history.try_lock()
+        {
+            history.search_word = None;
+            history.reset_index();
+        }
+        // If we can't get the lock, we just won't be able to stop history mode - no warning needed
     }
 
     fn set_completions(&mut self) {
@@ -427,19 +428,20 @@ impl<'a> Repl<'a> {
             } else {
                 // If we can't get the lock immediately, try using the cache if available, otherwise empty
                 if let Some(last_time) = self.history_cache_time
-                    && now.duration_since(last_time) <= self.history_cache_ttl {
-                        if is_empty {
-                            if let Some(ref comps) = self.history_cache_sorted_recent {
-                                self.completion
-                                    .set_completions(self.input.as_str(), comps.clone());
-                                return; // Exit early since we used the cache
-                            }
-                        } else if let Some(ref comps) = self.history_cache_match_sorted {
+                    && now.duration_since(last_time) <= self.history_cache_ttl
+                {
+                    if is_empty {
+                        if let Some(ref comps) = self.history_cache_sorted_recent {
                             self.completion
                                 .set_completions(self.input.as_str(), comps.clone());
                             return; // Exit early since we used the cache
                         }
+                    } else if let Some(ref comps) = self.history_cache_match_sorted {
+                        self.completion
+                            .set_completions(self.input.as_str(), comps.clone());
+                        return; // Exit early since we used the cache
                     }
+                }
                 // Set empty completions as fallback when lock is not available
                 self.completion.set_completions(self.input.as_str(), vec![]);
                 // No warning here since this is expected during high contention
@@ -488,13 +490,14 @@ impl<'a> Repl<'a> {
 
         if let Some(ref mut history) = self.shell.cmd_history
             && let Some(history) = history.try_lock()
-                && let Some(entry) = history.search_prefix(input) {
-                    self.input.completion = Some(entry.clone());
-                    if entry.len() >= input.len() {
-                        return Some(entry[input.len()..].to_string());
-                    }
-                }
-            // If we can't get the lock, completion just won't be available - no warning needed
+            && let Some(entry) = history.search_prefix(input)
+        {
+            self.input.completion = Some(entry.clone());
+            if entry.len() >= input.len() {
+                return Some(entry[input.len()..].to_string());
+            }
+        }
+        // If we can't get the lock, completion just won't be available - no warning needed
         None
     }
 
@@ -822,7 +825,13 @@ impl<'a> Repl<'a> {
                         debug!("Skim UI candidate {}: {:?}", i, candidate);
                     }
 
-                    completion::select_item_with_skim(completion_candidates, completion_query)
+                    completion::select_completion_items_with_config(
+                        completion_candidates,
+                        completion_query,
+                        &prompt_text,
+                        &input_text,
+                        crate::completion::CompletionConfig::default(),
+                    )
                 } else {
                     debug!(
                         "No candidates from IntegratedCompletionEngine, falling back to legacy completion"

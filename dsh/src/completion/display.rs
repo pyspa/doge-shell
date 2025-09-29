@@ -726,7 +726,7 @@ impl Candidate {
                 } else if desc.contains("directory") {
                     '📁' // Directory - folder
                 } else {
-                    '⚙' // Option or other - gear
+                    ' ' // Option or other - gear
                 }
             }
             Candidate::Path(path) => {
@@ -738,7 +738,7 @@ impl Candidate {
             }
             Candidate::Basic(_) => '🔹', // Basic - small blue diamond
             Candidate::Command { .. } => '⚡', // Command - lightning bolt
-            Candidate::Option { .. } => '⚙', // Option - gear
+            Candidate::Option { .. } => ' ', // Option - gear
             Candidate::File { is_dir, .. } => {
                 if *is_dir {
                     '📁' // Directory - folder

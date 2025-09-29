@@ -1,5 +1,4 @@
 use self::cache::CompletionCache;
-use crate::completion::display::CompletionConfig;
 use crate::completion::ui::{CompletionInteraction, CompletionOutcome, TerminalEventSource};
 use crate::dirs::is_executable;
 use crate::input::Input;
@@ -25,7 +24,7 @@ use tracing::warn;
 
 mod cache;
 mod command;
-mod display;
+pub mod display;
 mod dynamic;
 mod generator;
 mod history;
@@ -37,6 +36,7 @@ mod ui;
 // Re-export from completion module
 pub use crate::completion::command::CompletionType;
 pub use crate::completion::display::Candidate;
+pub use crate::completion::display::CompletionConfig;
 pub use crate::completion::display::CompletionDisplay;
 
 pub const MAX_RESULT: usize = 500;

@@ -74,6 +74,7 @@ pub enum CompletionContext {
         arg_type: Option<ArgumentType>,
     },
     /// Unknown (error state)
+    #[allow(dead_code)]
     Unknown,
 }
 

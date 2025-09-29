@@ -107,6 +107,7 @@ impl CommandCompletionDatabase {
     }
 
     /// Whether the database is empty
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.commands.is_empty()
     }

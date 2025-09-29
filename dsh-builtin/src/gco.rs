@@ -33,6 +33,38 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
         return ExitStatus::ExitedWith(1);
     }
 
+    // Check if there's only one candidate - if so, checkout directly without showing skim interface
+    if branch_entries.len() == 1 {
+        let branch = &branch_entries[0];
+        debug!(
+            "gco: only one branch candidate, checking out directly: {}",
+            branch
+        );
+        let args = vec!["checkout", branch];
+        match Command::new("git").args(&args).output() {
+            Ok(output) => {
+                if !output.status.success() {
+                    let error = String::from_utf8_lossy(&output.stderr);
+                    let err = error.trim().to_string();
+                    ctx.write_stderr(&format!("gco: failed to checkout branch: {err}"))
+                        .ok();
+                    return ExitStatus::ExitedWith(1);
+                } else {
+                    let output = String::from_utf8_lossy(&output.stdout);
+                    let output = output.trim().to_string();
+                    ctx.write_stdout(&output.to_string()).ok();
+                }
+            }
+            Err(err) => {
+                let err = err.to_string();
+                ctx.write_stderr(&format!("gco: failed to checkout branch: {err}"))
+                    .ok();
+                return ExitStatus::ExitedWith(1);
+            }
+        }
+        return ExitStatus::ExitedWith(0);
+    }
+
     let options = SkimOptionsBuilder::default()
         .select_1(true)
         .bind(vec!["Enter:accept".to_string()])

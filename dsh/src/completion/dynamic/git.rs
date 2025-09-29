@@ -22,15 +22,29 @@ impl DynamicCompletionHandler for GitCompletionHandler {
 
     fn generate_candidates(
         &self,
-        _parsed_command: &ParsedCommandLine,
+        parsed_command: &ParsedCommandLine,
     ) -> Result<Vec<CompletionCandidate>> {
-        debug!("Generating dynamic completion candidates for 'git' command.");
+        debug!(
+            "Generating dynamic completion candidates for 'git' command. {:?}",
+            parsed_command
+        );
 
         // Since we can't use async directly, we'll use tokio::task::block_in_place
         // to run the async code in a blocking context
         let output = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { Command::new("git").arg("branch").arg("-a").output().await })
+            tokio::runtime::Handle::current().block_on(async {
+                if let Some(arg) = parsed_command.current_arg.as_ref() {
+                    Command::new("git")
+                        .arg("branch")
+                        .arg("-a")
+                        .arg("--list")
+                        .arg(format!("*{}*", arg))
+                        .output()
+                        .await
+                } else {
+                    Command::new("git").arg("branch").arg("-a").output().await
+                }
+            })
         })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -45,6 +59,7 @@ impl DynamicCompletionHandler for GitCompletionHandler {
                 } else {
                     None
                 };
+                let branch = line.trim_start_matches("+ ").trim();
 
                 candidates.push(CompletionCandidate {
                     text: branch.to_string(),

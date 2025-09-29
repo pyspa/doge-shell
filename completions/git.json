@@ -39,13 +39,24 @@
         },
         {
           "long": "--depth",
-          "short": "-d",
           "description": "Create a shallow clone with limited history"
         },
         {
           "long": "--origin",
           "short": "-o",
           "description": "Use <name> instead of 'origin' for remote name"
+        },
+        {
+          "long": "--recursive",
+          "description": "Initialize submodules in the clone"
+        },
+        {
+          "long": "--shallow-submodules",
+          "description": "Limit submodule cloning depth"
+        },
+        {
+          "long": "--single-branch",
+          "description": "Clone only one branch, HEAD or --branch"
         }
       ],
       "arguments": [
@@ -70,8 +81,17 @@
         },
         {
           "long": "--template",
-          "short": "-t",
           "description": "Template directory for initialization"
+        },
+        {
+          "long": "--quiet",
+          "short": "-q",
+          "description": "Only print error and warning messages"
+        },
+        {
+          "long": "--initial-branch",
+          "short": "-b",
+          "description": "Use the specified name for the initial branch in the new repository"
         }
       ],
       "arguments": [
@@ -100,6 +120,16 @@
           "long": "--interactive",
           "short": "-i",
           "description": "Interactive adding"
+        },
+        {
+          "long": "--patch",
+          "short": "-p",
+          "description": "Interactively stage hunks of patch between the index and the work tree"
+        },
+        {
+          "long": "--force",
+          "short": "-f",
+          "description": "Allow adding otherwise ignored files"
         }
       ],
       "arguments": [
@@ -116,7 +146,6 @@
       "options": [
         {
           "long": "--amend",
-          "short": "-a",
           "description": "Amend the last commit"
         },
         {
@@ -126,13 +155,25 @@
         },
         {
           "long": "--author",
-          "short": "-a",
           "description": "Override author info"
         },
         {
           "long": "--all",
           "short": "-a",
           "description": "Stage all changes"
+        },
+        {
+          "long": "--dry-run",
+          "description": "Show what would be committed"
+        },
+        {
+          "long": "--no-verify",
+          "description": "Bypass the pre-commit and commit-msg hooks"
+        },
+        {
+          "long": "--signoff",
+          "short": "-s",
+          "description": "Add a Signed-off-by line by the committer at the end of the commit log message"
         }
       ],
       "arguments": [
@@ -149,12 +190,10 @@
       "options": [
         {
           "long": "--all",
-          "short": "-a",
-          "description": "Push all refs"
+          "description": "Push all branches"
         },
         {
           "long": "--tags",
-          "short": "-t",
           "description": "Push all tags"
         },
         {
@@ -166,6 +205,19 @@
           "long": "--set-upstream",
           "short": "-u",
           "description": "Set upstream for the branch"
+        },
+        {
+          "long": "--dry-run",
+          "description": "Do everything except actually send the updates"
+        },
+        {
+          "long": "--porcelain",
+          "description": "Machine-readable output"
+        },
+        {
+          "long": "--delete",
+          "short": "-d",
+          "description": "Delete remote refs"
         }
       ],
       "arguments": [
@@ -190,13 +242,19 @@
         },
         {
           "long": "--all",
-          "short": "-a",
           "description": "Fetch all remotes"
         },
         {
           "long": "--tags",
-          "short": "-t",
           "description": "Fetch all tags"
+        },
+        {
+          "long": "--ff-only",
+          "description": "Fast-forward only"
+        },
+        {
+          "long": "--no-rebase",
+          "description": "Do not rebase"
         }
       ],
       "arguments": [
@@ -228,6 +286,11 @@
         {
           "long": "--porcelain",
           "description": "Machine-readable output"
+        },
+        {
+          "long": "--untracked-files",
+          "short": "-u",
+          "description": "Show untracked files"
         }
       ],
       "arguments": [],
@@ -250,6 +313,26 @@
         {
           "long": "--create-reflog",
           "description": "Create reflog for new branch"
+        },
+        {
+          "long": "--move",
+          "short": "-m",
+          "description": "Move/rename a branch"
+        },
+        {
+          "long": "--force",
+          "short": "-f",
+          "description": "Force creation, deletion, or rename"
+        },
+        {
+          "long": "--remotes",
+          "short": "-r",
+          "description": "List or delete remote-tracking branches"
+        },
+        {
+          "long": "--all",
+          "short": "-a",
+          "description": "List both remote-tracking and local branches"
         }
       ],
       "arguments": [
@@ -273,6 +356,16 @@
           "long": "--branch",
           "short": "-b",
           "description": "Create and switch to new branch"
+        },
+        {
+          "long": "--patch",
+          "short": "-p",
+          "description": "Interactively select hunks in the difference between the <tree-ish> (or the index, if unspecified) and the working tree"
+        },
+        {
+          "long": "--force",
+          "short": "-f",
+          "description": "When switching branches, proceed even if the index or the working tree differs from HEAD"
         }
       ],
       "arguments": [
@@ -289,22 +382,36 @@
       "options": [
         {
           "long": "--oneline",
-          "short": "-1",
           "description": "One line per commit"
         },
         {
           "long": "--graph",
-          "short": "-g",
           "description": "Show ASCII art commit graph"
         },
         {
           "long": "--author",
-          "short": "-a",
           "description": "Filter by author"
         },
         {
           "long": "--since",
           "description": "Show commits since date"
+        },
+        {
+          "long": "--stat",
+          "description": "Show stats of changes"
+        },
+        {
+          "long": "--patch",
+          "short": "-p",
+          "description": "Show patch of changes"
+        },
+        {
+          "long": "--grep",
+          "description": "Filter by commit message"
+        },
+        {
+          "long": "--all",
+          "description": "Show all branches"
         }
       ],
       "arguments": [

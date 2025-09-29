@@ -16,39 +16,53 @@
   "subcommands": [],
   "options": [
     {
-      "long": "-R",
+      "long": "--recursive",
       "short": "-R",
       "description": "Change files and directories recursively"
     },
     {
-      "long": "-v",
+      "long": "--verbose",
       "short": "-v",
       "description": "Output a diagnostic for every file processed"
     },
     {
-      "long": "-c",
+      "long": "--changes",
       "short": "-c",
       "description": "Like verbose but report only when a change is made"
     },
     {
       "long": "--reference",
-      "short": "-h",
       "description": "Use the owner and group of given reference file"
     },
     {
-      "long": "-H",
-      "short": "-H",
-      "description": "Follow symbolic links on command line"
+      "long": "--dereference",
+      "description": "affect the referent of each symbolic link (this is the default), rather than the symbolic link itself"
     },
     {
-      "long": "-L",
-      "short": "-L",
-      "description": "Follow all symbolic links encountered"
+      "long": "--no-dereference",
+      "short": "-h",
+      "description": "affect symbolic links instead of any referenced file"
     },
     {
-      "long": "-P",
-      "short": "-P",
-      "description": "Do not follow any symbolic links"
+      "long": "--from",
+      "description": "change the owner and/or group of each file only if its current owner and/or group match those specified here."
+    },
+    {
+      "long": "--no-preserve-root",
+      "description": "do not treat '/' specially (the default)"
+    },
+    {
+      "long": "--preserve-root",
+      "description": "fail to operate recursively on '/'"
+    },
+    {
+      "long": "--quiet",
+      "short": "-f",
+      "description": "suppress most error messages"
+    },
+    {
+      "long": "--silent",
+      "description": "suppress most error messages"
     }
   ],
   "arguments": [

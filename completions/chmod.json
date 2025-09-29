@@ -16,24 +16,44 @@
   "subcommands": [],
   "options": [
     {
-      "long": "-R",
+      "long": "--recursive",
       "short": "-R",
       "description": "Change files and directories recursively"
     },
     {
-      "long": "-v",
+      "long": "--verbose",
       "short": "-v",
       "description": "Output a diagnostic for every file processed"
     },
     {
-      "long": "--reference",
+      "long": "--changes",
       "short": "-c",
+      "description": "Like verbose but report only when a change is made"
+    },
+    {
+      "long": "--reference",
       "description": "Use the mode of given reference file"
     },
     {
-      "long": "-f",
+      "long": "--force",
       "short": "-f",
-      "description": "Suppress most diagnostic messages"
+      "description": "Suppress most error messages"
+    },
+    {
+      "long": "--quiet",
+      "description": "Suppress most error messages"
+    },
+    {
+      "long": "--silent",
+      "description": "Suppress most error messages"
+    },
+    {
+      "long": "--no-preserve-root",
+      "description": "Do not treat '/' specially (the default)"
+    },
+    {
+      "long": "--preserve-root",
+      "description": "Fail to operate recursively on '/'"
     }
   ],
   "arguments": [

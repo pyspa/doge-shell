@@ -39,6 +39,28 @@
         {
           "long": "--features",
           "description": "Space or comma separated list of features to activate"
+        },
+        {
+          "long": "--package",
+          "short": "-p",
+          "description": "Package to build"
+        },
+        {
+          "long": "--workspace",
+          "description": "Build all packages in the workspace"
+        },
+        {
+          "long": "--all-targets",
+          "description": "Build all targets"
+        },
+        {
+          "long": "--jobs",
+          "short": "-j",
+          "description": "Number of parallel jobs, defaults to # of CPUs"
+        },
+        {
+          "long": "--target-dir",
+          "description": "Directory for all generated artifacts"
         }
       ],
       "arguments": [],
@@ -59,6 +81,16 @@
         {
           "long": "--example",
           "description": "Name of the example target to run"
+        },
+        {
+          "long": "--package",
+          "short": "-p",
+          "description": "Package to run"
+        },
+        {
+          "long": "--jobs",
+          "short": "-j",
+          "description": "Number of parallel jobs, defaults to # of CPUs"
         }
       ],
       "arguments": [
@@ -84,6 +116,28 @@
         {
           "long": "--doc",
           "description": "Test only this library's documentation"
+        },
+        {
+          "long": "--package",
+          "short": "-p",
+          "description": "Package to test"
+        },
+        {
+          "long": "--workspace",
+          "description": "Test all packages in the workspace"
+        },
+        {
+          "long": "--all-targets",
+          "description": "Test all targets"
+        },
+        {
+          "long": "--jobs",
+          "short": "-j",
+          "description": "Number of parallel jobs, defaults to # of CPUs"
+        },
+        {
+          "long": "--nocapture",
+          "description": "Show output from tests"
         }
       ],
       "arguments": [
@@ -109,6 +163,10 @@
         {
           "long": "--name",
           "description": "Set the resulting package name"
+        },
+        {
+          "long": "--vcs",
+          "description": "Initialize a new repository for the given version control system (git, hg, pijul, or fossil) or do not initialize any version control at all (none)"
         }
       ],
       "arguments": [
@@ -134,6 +192,38 @@
         {
           "long": "--features",
           "description": "Space or comma separated list of features to activate"
+        },
+        {
+          "long": "--path",
+          "description": "Filesystem path to local crate to add"
+        },
+        {
+          "long": "--git",
+          "description": "Git URL to add the specified crate from"
+        },
+        {
+          "long": "--branch",
+          "description": "Branch to use when adding from git"
+        },
+        {
+          "long": "--tag",
+          "description": "Tag to use when adding from git"
+        },
+        {
+          "long": "--rev",
+          "description": "Specific commit to use when adding from git"
+        },
+        {
+          "long": "--optional",
+          "description": "Add as an optional dependency"
+        },
+        {
+          "long": "--no-default-features",
+          "description": "Disable the default features of the dependency"
+        },
+        {
+          "long": "--rename",
+          "description": "Rename the dependency"
         }
       ],
       "arguments": [
@@ -155,6 +245,15 @@
         {
           "long": "--path",
           "description": "Filesystem path to local crate to install"
+        },
+        {
+          "long": "--force",
+          "short": "-f",
+          "description": "Force overwriting existing crates or binaries"
+        },
+        {
+          "long": "--list",
+          "description": "List all installed packages and their versions"
         }
       ],
       "arguments": [

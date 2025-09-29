@@ -24,7 +24,6 @@
     },
     {
       "long": "--quiet",
-      "short": "-q",
       "description": "Do not echo commands"
     },
     {
@@ -68,26 +67,6 @@
       "description": "Print commands but do not execute"
     },
     {
-      "long": "--recurse",
-      "short": "-r",
-      "description": "Do not use built-in rules"
-    },
-    {
-      "long": "--just-print",
-      "short": "-n",
-      "description": "Just print commands (synonym for -n)"
-    },
-    {
-      "long": "--question",
-      "short": "-q",
-      "description": "Return exit status but do not execute"
-    },
-    {
-      "long": "--recon",
-      "short": "-n",
-      "description": "Print commands but do not execute"
-    },
-    {
       "long": "--no-print-directory",
       "description": "Do not print directory changes"
     },
@@ -95,6 +74,31 @@
       "long": "--print-directory",
       "short": "-w",
       "description": "Print directory changes"
+    },
+    {
+      "long": "--always-make",
+      "short": "-B",
+      "description": "Unconditionally make all targets"
+    },
+    {
+      "long": "--include-dir",
+      "short": "-I",
+      "description": "Specifies a directory to search for included makefiles"
+    },
+    {
+      "long": "--print-data-base",
+      "short": "-p",
+      "description": "Print the database of rules and variables"
+    },
+    {
+      "long": "--touch",
+      "short": "-t",
+      "description": "Touch targets, pretending they are up to date"
+    },
+    {
+      "long": "--what-if",
+      "short": "-W",
+      "description": "Pretend that the target has been modified"
     }
   ],
   "subcommands": []

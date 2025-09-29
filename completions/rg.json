@@ -9,6 +9,12 @@
       "takes_value": false
     },
     {
+      "short": "-S",
+      "long": "--smart-case",
+      "description": "Case insensitive unless PATTERN has uppercase.",
+      "takes_value": false
+    },
+    {
       "short": "-w",
       "long": "--word-regexp",
       "description": "Select only matches that match whole words.",
@@ -45,53 +51,107 @@
     },
     {
       "short": "-g",
-      "long": "--glob <GLOB>",
+      "long": "--glob",
       "description": "Include or exclude files with GLOB.",
       "takes_value": true,
       "value_type": { "type": "String" }
     },
     {
-      "long": "--type <TYPE>",
+      "long": "--type",
       "description": "Only search files matching TYPE (e.g., 'rust', 'py'). See 'rg --type-list'.",
       "takes_value": true,
       "value_type": { "type": "Choice", "data": ["rust", "python", "json", "md", "html"] }
     },
     {
-      "long": "--max-columns <NUM>",
+      "long": "--type-list",
+      "description": "Show all supported file types and their globs.",
+      "takes_value": false
+    },
+    {
+      "short": "-A",
+      "long": "--after-context",
+      "description": "Show NUM lines of context after each match.",
+      "takes_value": true,
+      "value_type": { "type": "Number" }
+    },
+    {
+      "short": "-B",
+      "long": "--before-context",
+      "description": "Show NUM lines of context before each match.",
+      "takes_value": true,
+      "value_type": { "type": "Number" }
+    },
+    {
+      "short": "-C",
+      "long": "--context",
+      "description": "Show NUM lines of context before and after each match.",
+      "takes_value": true,
+      "value_type": { "type": "Number" }
+    },
+    {
+      "long": "--context-separator",
+      "description": "The string used to separate non-contiguous context lines.",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "long": "--json",
+      "description": "Output results in JSON format.",
+      "takes_value": false
+    },
+    {
+      "short": "-N",
+      "long": "--no-line-number",
+      "description": "Suppress line numbers.",
+      "takes_value": false
+    },
+    {
+      "long": "--one-file-system",
+      "description": "Do not cross file system boundaries.",
+      "takes_value": false
+    },
+    {
+      "long": "--stats",
+      "description": "Show statistics about the search.",
+      "takes_value": false
+    },
+    {
+      "short": "-u",
+      "long": "--unrestricted",
+      "description": "Search hidden files and directories.",
+      "takes_value": false
+    },
+    {
+      "long": "--max-columns",
       "description": "The maximum number of columns to read from each file.",
       "takes_value": true,
       "value_type": { "type": "Number" }
     },
     {
-      "long": "--color <WHEN>",
+      "long": "--color",
       "description": "When to use color in output (always, never, auto).",
       "takes_value": true,
       "value_type": { "type": "Choice", "data": ["always", "never", "auto"] }
     },
     {
       "short": "-r",
-      "long": "--replace <STRING>",
+      "long": "--replace",
       "description": "Replace matches with STRING.",
       "takes_value": true,
       "value_type": { "type": "String" }
     },
     {
-      "long": "--max-filesize <SIZE>",
+      "long": "--max-filesize",
       "description": "Ignore files larger than SIZE (e.g., '10m' for 10MB).",
       "takes_value": true,
       "value_type": { "type": "String" }
     },
     {
       "short": "-j",
-      "long": "--threads <NUM>",
+      "long": "--threads",
       "description": "Number of threads to use.",
       "takes_value": true,
       "value_type": { "type": "Number" }
-    },
-    {
-      "long": "--smart-case",
-      "description": "Case insensitive unless PATTERN has uppercase.",
-      "takes_value": false
     }
   ],
   "subcommands": [],

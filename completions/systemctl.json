@@ -81,7 +81,15 @@
       "name": "start",
       "description": "Start (activate) one or more units",
       "aliases": [],
-      "options": [],
+      "options": [
+        {
+          "long": "--no-ask-password",
+          "description": "Do not query the user for authentication for privileged operations.",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
       "arguments": [
         {
           "name": "unit",
@@ -99,7 +107,15 @@
       "name": "stop",
       "description": "Stop (deactivate) one or more units",
       "aliases": [],
-      "options": [],
+      "options": [
+        {
+          "long": "--no-ask-password",
+          "description": "Do not query the user for authentication for privileged operations.",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
       "arguments": [
         {
           "name": "unit",
@@ -117,7 +133,15 @@
       "name": "restart",
       "description": "Restart one or more units",
       "aliases": [],
-      "options": [],
+      "options": [
+        {
+          "long": "--no-ask-password",
+          "description": "Do not query the user for authentication for privileged operations.",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
       "arguments": [
         {
           "name": "unit",
@@ -135,7 +159,15 @@
       "name": "reload",
       "description": "Reload one or more units",
       "aliases": [],
-      "options": [],
+      "options": [
+        {
+          "long": "--no-ask-password",
+          "description": "Do not query the user for authentication for privileged operations.",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
       "arguments": [
         {
           "name": "unit",
@@ -210,6 +242,25 @@
           "long": "--lines",
           "short": "-n",
           "description": "Number of journal entries to show",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--full",
+          "short": "-l",
+          "description": "Do not ellipsize unit names and journal entries.",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--output",
+          "short": "-o",
+          "description": "Change output formatting",
           "takes_value": true,
           "value_type": {
             "type": "String"
@@ -300,6 +351,13 @@
           },
           "required": false,
           "multiple": false
+        },
+        {
+          "long": "--legend",
+          "description": "Do not print column headers.",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
         }
       ],
       "arguments": [
@@ -324,6 +382,16 @@
           "long": "--type",
           "short": "-t",
           "description": "List unit files of a particular type",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--state",
+          "description": "List unit files with particular state",
           "takes_value": true,
           "value_type": {
             "type": "String"

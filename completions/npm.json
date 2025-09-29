@@ -62,6 +62,19 @@
         {
           "long": "--only",
           "description": "Only install type (prod, dev)"
+        },
+        {
+          "long": "--no-save",
+          "description": "Prevents saving to dependencies"
+        },
+        {
+          "long": "--package-lock-only",
+          "description": "Only update the package-lock.json"
+        },
+        {
+          "long": "--force",
+          "short": "-f",
+          "description": "Forces npm to fetch remote resources even if a local copy exists on disk"
         }
       ],
       "arguments": [
@@ -192,6 +205,10 @@
           "long": "--global",
           "short": "-g",
           "description": "Remove globally"
+        },
+        {
+          "long": "--no-save",
+          "description": "Prevents removing from dependencies"
         }
       ],
       "arguments": [

@@ -49,6 +49,26 @@
           "long": "--quiet",
           "short": "-q",
           "description": "Suppress output"
+        },
+        {
+          "long": "--build-arg",
+          "description": "Set build-time variables"
+        },
+        {
+          "long": "--cache-from",
+          "description": "Images to consider as cache sources"
+        },
+        {
+          "long": "--progress",
+          "description": "Set type of progress output (auto, plain, tty)"
+        },
+        {
+          "long": "--secret",
+          "description": "Secret file to expose to the build (only if BuildKit enabled)"
+        },
+        {
+          "long": "--ssh",
+          "description": "SSH agent socket or keys to expose to the build (only if BuildKit enabled)"
         }
       ],
       "arguments": [
@@ -100,6 +120,61 @@
           "long": "--volume",
           "short": "-v",
           "description": "Bind mount a volume"
+        },
+        {
+          "long": "--add-host",
+          "description": "Add a custom host-to-IP mapping (host:ip)"
+        },
+        {
+          "long": "--device",
+          "description": "Add a host device to the container"
+        },
+        {
+          "long": "--dns",
+          "description": "Set custom DNS servers"
+        },
+        {
+          "long": "--entrypoint",
+          "description": "Overwrite the default ENTRYPOINT of the image"
+        },
+        {
+          "long": "--expose",
+          "description": "Expose a port or a range of ports"
+        },
+        {
+          "long": "--gpus",
+          "description": "GPU devices to add to the container ('all' to pass all GPUs)"
+        },
+        {
+          "long": "--hostname",
+          "short": "-h",
+          "description": "Container host name"
+        },
+        {
+          "long": "--mac-address",
+          "description": "Container MAC address (e.g., 92:d0:c6:0a:29:33)"
+        },
+        {
+          "long": "--network",
+          "description": "Connect a container to a network"
+        },
+        {
+          "long": "--platform",
+          "description": "Set platform if server is multi-platform capable"
+        },
+        {
+          "long": "--pull",
+          "description": "Pull image before running ('always', 'missing', 'never')"
+        },
+        {
+          "long": "--user",
+          "short": "-u",
+          "description": "Username or UID (format: <name|uid>[:<group|gid>])"
+        },
+        {
+          "long": "--workdir",
+          "short": "-w",
+          "description": "Working directory inside the container"
         }
       ],
       "arguments": [
@@ -125,7 +200,6 @@
         },
         {
           "long": "--format",
-          "short": "-f",
           "description": "Format output using Go template"
         },
         {
@@ -146,6 +220,11 @@
           "long": "--size",
           "short": "-s",
           "description": "Display sizes"
+        },
+        {
+          "long": "--filter",
+          "short": "-f",
+          "description": "Filter output based on conditions"
         }
       ],
       "arguments": [],
@@ -166,7 +245,6 @@
         },
         {
           "long": "--format",
-          "short": "-f",
           "description": "Format output using Go template"
         },
         {
@@ -177,6 +255,11 @@
           "long": "--quiet",
           "short": "-q",
           "description": "Only display IDs"
+        },
+        {
+          "long": "--filter",
+          "short": "-f",
+          "description": "Filter output based on conditions"
         }
       ],
       "arguments": [],
@@ -239,6 +322,11 @@
           "long": "--force",
           "short": "-f",
           "description": "Force removal of running container"
+        },
+        {
+          "long": "--volumes",
+          "short": "-v",
+          "description": "Remove the volumes associated with the container"
         }
       ],
       "arguments": [
@@ -275,12 +363,17 @@
         },
         {
           "long": "--privileged",
-          "short": "-P",
-          "description": "Give extended privileges"
+          "description": "Give extended privileges to the command"
         },
         {
-          "long": "--command",
-          "description": "Command separator"
+          "long": "--workdir",
+          "short": "-w",
+          "description": "Working directory inside the container"
+        },
+        {
+          "long": "--env",
+          "short": "-e",
+          "description": "Set environment variables"
         }
       ],
       "arguments": [

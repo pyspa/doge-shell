@@ -140,6 +140,30 @@
           "takes_value": false,
           "required": false,
           "multiple": false
+        },
+        {
+          "short": "-c",
+          "long": "--clean",
+          "description": "Remove old packages from cache directory (-cc for all)",
+          "takes_value": false,
+          "required": false,
+          "multiple": true
+        },
+        {
+          "short": "-g",
+          "long": "--groups",
+          "description": "View all packages belonging to a group",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-p",
+          "long": "--print",
+          "description": "Print the targets instead of performing the operation",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
         }
       ],
       "arguments": [
@@ -188,6 +212,14 @@
           "short": "-u",
           "long": "--unneeded",
           "description": "Remove targets that are not required by any other packages",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-p",
+          "long": "--print",
+          "description": "Print the targets instead of performing the operation",
           "takes_value": false,
           "required": false,
           "multiple": false
@@ -287,6 +319,21 @@
           "short": "-n",
           "long": "--native",
           "description": "List installed packages only found in sync db(s)",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "short": "-k",
+          "long": "--check",
+          "description": "Check that all files owned by the given package(s) are present on the system.",
+          "takes_value": false,
+          "required": false,
+          "multiple": true
+        },
+        {
+          "long": "--changelog",
+          "description": "View the changelog of a package",
           "takes_value": false,
           "required": false,
           "multiple": false

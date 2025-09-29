@@ -59,6 +59,14 @@
       "long": "-i",
       "short": "-i",
       "description": "Suppress idle processes (interactive mode)"
+    },
+    {
+      "long": "-H",
+      "description": "Threads mode operation"
+    },
+    {
+      "long": "-w",
+      "description": "Output width in columns"
     }
   ],
   "arguments": []

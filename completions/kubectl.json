@@ -60,8 +60,7 @@
         },
         {
           "long": "--show-labels",
-          "short": "-L",
-          "description": "Show labels"
+          "description": "Show labels in the last column"
         },
         {
           "long": "--sort-by",
@@ -69,8 +68,12 @@
         },
         {
           "long": "--field-selector",
-          "short": "-F",
-          "description": "Field selector to filter"
+          "description": "Selector (field query) to filter on"
+        },
+        {
+          "long": "--watch",
+          "short": "-w",
+          "description": "After getting the resources, watch for changes."
         }
       ],
       "arguments": [
@@ -114,7 +117,6 @@
         },
         {
           "long": "--prune",
-          "short": "-p",
           "description": "Delete resources not in config"
         },
         {
@@ -125,6 +127,10 @@
         {
           "long": "--overwrite",
           "description": "Overwrite immutable fields"
+        },
+        {
+          "long": "--server-side",
+          "description": "Apply server-side. Instead of sending a patch, the client will send the full object and the server will calculate the patch."
         }
       ],
       "arguments": [
@@ -152,6 +158,10 @@
           "long": "--recursive",
           "short": "-R",
           "description": "Process recursively"
+        },
+        {
+          "long": "--show-events",
+          "description": "If true, display events related to the described object."
         }
       ],
       "arguments": [
@@ -191,6 +201,10 @@
         {
           "long": "--save-config",
           "description": "Store applied config in annotation"
+        },
+        {
+          "long": "--edit",
+          "description": "Edit the resource before creating it"
         }
       ],
       "arguments": [
@@ -221,8 +235,7 @@
         },
         {
           "long": "--all",
-          "short": "-A",
-          "description": "Delete all resources"
+          "description": "Delete all resources in the namespace of the specified resource types."
         },
         {
           "long": "--force",
@@ -230,8 +243,7 @@
         },
         {
           "long": "--grace-period",
-          "short": "-g",
-          "description": "Period to wait for graceful shutdown"
+          "description": "Period of time in seconds given to the resource to terminate gracefully. A negative value means use the default grace period."
         },
         {
           "long": "--now",
@@ -240,6 +252,10 @@
         {
           "long": "--ignore-not-found",
           "description": "Ignore if resource not found"
+        },
+        {
+          "long": "--cascade",
+          "description": "If true, cascade the deletion of the resources managed by this resource (e.g. Pods created by a ReplicaSet). Default true."
         }
       ],
       "arguments": [
@@ -265,13 +281,11 @@
         },
         {
           "long": "--tail",
-          "short": "-t",
-          "description": "Number of lines from end of logs"
+          "description": "Lines of recent log file to display. Defaults to -1 with no selector, showing all log lines otherwise 10, if details is provided"
         },
         {
           "long": "--timestamps",
-          "short": "-t",
-          "description": "Include timestamps"
+          "description": "Include timestamps on each line in the log output"
         },
         {
           "long": "--pod-running-timeout",
@@ -293,7 +307,11 @@
         },
         {
           "long": "--since",
-          "description": "Logs since time or duration"
+          "description": "Only return logs newer than a relative duration like 5s, 2m, or 3h. Defaults to all logs."
+        },
+        {
+          "long": "--since-time",
+          "description": "Only return logs after a specific date (RFC3339). Defaults to all logs."
         }
       ],
       "arguments": [
@@ -324,8 +342,9 @@
           "description": "Container name"
         },
         {
-          "long": "--command",
-          "description": "Command separator"
+          "long": "--quiet",
+          "short": "-q",
+          "description": "Only output stdout and stderr from the command"
         }
       ],
       "arguments": [

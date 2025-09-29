@@ -22,12 +22,10 @@
     },
     {
       "long": "-i4",
-      "short": "-i4",
       "description": "Select IPv4 files"
     },
     {
       "long": "-i6",
-      "short": "-i6",
       "description": "Select IPv6 files"
     },
     {
@@ -57,8 +55,7 @@
     },
     {
       "long": "-o",
-      "short": "-o",
-      "description": "List open files by process"
+      "description": "Do not list file offset"
     },
     {
       "long": "-n",
@@ -67,8 +64,35 @@
     },
     {
       "long": "-l",
-      "short": "-l",
-      "description": "List port numbers instead of names"
+      "description": "Inhibit conversion of user IDs to login names"
+    },
+    {
+      "long": "+D",
+      "description": "Search for all open instances of directory D and the files and directories it contains at its top level"
+    },
+    {
+      "long": "-N",
+      "description": "Select NFS files"
+    },
+    {
+      "long": "-P",
+      "description": "Inhibit conversion of port numbers to port names for network files"
+    },
+    {
+      "long": "-r",
+      "description": "Repeat listing every t seconds"
+    },
+    {
+      "long": "-t",
+      "description": "Produce terse output with process identifiers only"
+    },
+    {
+      "long": "-U",
+      "description": "Select UNIX domain socket files"
+    },
+    {
+      "long": "+c",
+      "description": "Set command width to W"
     }
   ],
   "arguments": [

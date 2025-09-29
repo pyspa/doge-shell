@@ -16,54 +16,88 @@
   "subcommands": [],
   "options": [
     {
-      "long": "-l",
-      "short": "-l",
-      "description": "Use a long listing format"
-    },
-    {
-      "long": "-a",
+      "long": "--all",
       "short": "-a",
       "description": "Do not ignore entries starting with ."
     },
     {
-      "long": "-h",
-      "short": "-h",
-      "description": "Human-readable sizes (with -l)"
+      "long": "--almost-all",
+      "short": "-A",
+      "description": "Do not list implied . and .."
     },
     {
-      "long": "-R",
+      "long": "--directory",
+      "short": "-d",
+      "description": "List directories themselves, not their contents"
+    },
+    {
+      "long": "--classify",
+      "short": "-F",
+      "description": "Append indicator (one of */=>@|) to entries"
+    },
+    {
+      "long": "--no-group",
+      "short": "-G",
+      "description": "In a long listing, don't print group names"
+    },
+    {
+      "long": "--human-readable",
+      "short": "-h",
+      "description": "With -l and/or -s, print sizes like 1K 234M 2G etc."
+    },
+    {
+      "long": "--inode",
+      "short": "-i",
+      "description": "Print the index number of each file"
+    },
+    {
+      "long": "--long",
+      "short": "-l",
+      "description": "Use a long listing format"
+    },
+    {
+      "short": "-o",
+      "description": "Like -l, but do not list group information"
+    },
+    {
+      "long": "--recursive",
       "short": "-R",
       "description": "List subdirectories recursively"
     },
     {
-      "long": "-t",
-      "short": "-t",
-      "description": "Sort by modification time, newest first"
-    },
-    {
-      "long": "-S",
-      "short": "-S",
-      "description": "Sort by file size"
-    },
-    {
-      "long": "-r",
+      "long": "--reverse",
       "short": "-r",
       "description": "Reverse order while sorting"
     },
     {
-      "long": "-i",
-      "short": "-i",
-      "description": "Print inode number (with -l)"
+      "long": "--size",
+      "short": "-S",
+      "description": "Sort by file size, largest first"
     },
     {
-      "long": "-n",
-      "short": "-n",
-      "description": "Like -l, but list numeric user and group IDs"
+      "long": "--sort",
+      "description": "Sort by WORD instead of name: none (-U), size (-S), time (-t), version (-v), extension (-X)"
+    },
+    {
+      "short": "-X",
+      "description": "Sort alphabetically by entry extension"
+    },
+    {
+      "long": "--time",
+      "short": "-t",
+      "description": "Sort by modification time, newest first"
+    },
+    {
+      "long": "--full-time",
+      "description": "Like -l --time-style=full-iso"
+    },
+    {
+      "long": "--time-style",
+      "description": "Time/date format with -l; see TIME_STYLE in `ls --help`"
     },
     {
       "long": "--color",
-      "short": "-C",
-      "description": "Colorize the output"
+      "description": "Colorize the output; WHEN can be 'always' (default if omitted), 'auto', or 'never'"
     }
   ],
   "arguments": [

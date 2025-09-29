@@ -539,14 +539,14 @@ impl CompletionDisplay {
             queue!(writer, SetForegroundColor(Color::DarkGrey))?;
         } else {
             match candidate.get_type_char() {
-                '⚡' => queue!(writer, SetForegroundColor(Color::Green))?, // Command - lightning bolt
-                '📁' => queue!(writer, SetForegroundColor(Color::Blue))?,  // Directory - folder
+                '⚡' => queue!(writer, SetForegroundColor(Color::White))?, // Command - lightning bolt
+                '📁' => queue!(writer, SetForegroundColor(Color::White))?, // Directory - folder
                 '📄' => queue!(writer, SetForegroundColor(Color::White))?, // File - document
-                '⚙' => queue!(writer, SetForegroundColor(Color::Yellow))?, // Option - gear
+                '⚙' => queue!(writer, SetForegroundColor(Color::White))?,  // Option - gear
                 '🔹' => queue!(writer, SetForegroundColor(Color::White))?, // Basic - small blue diamond
-                '🌿' => queue!(writer, SetForegroundColor(Color::Green))?, // Git branch - herb/branch
-                '📜' => queue!(writer, SetForegroundColor(Color::Cyan))?,  // Script - scroll
-                '🕒' => queue!(writer, SetForegroundColor(Color::Magenta))?, // History - clock
+                '🌿' => queue!(writer, SetForegroundColor(Color::White))?, // Git branch - herb/branch
+                '📜' => queue!(writer, SetForegroundColor(Color::White))?, // Script - scroll
+                '🕒' => queue!(writer, SetForegroundColor(Color::White))?, // History - clock
                 _ => queue!(writer, SetForegroundColor(Color::White))?,
             }
         }

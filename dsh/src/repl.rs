@@ -201,11 +201,11 @@ impl<'a> Repl<'a> {
         self.columns = screen_size.0 as usize;
 
         // Initialize integrated completion engine
-        // debug!("Initializing integrated completion engine...");
+        debug!("Initializing integrated completion engine (this may use cached JSON data)...");
         if let Err(e) = self.integrated_completion.initialize_command_completion() {
             warn!("Failed to initialize command completion: {}", e);
         } else {
-            // debug!("Integrated completion engine initialized successfully");
+            debug!("Integrated completion engine initialized successfully");
         }
         self.lines = screen_size.1 as usize;
         enable_raw_mode().ok();

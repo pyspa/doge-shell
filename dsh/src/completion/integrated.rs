@@ -149,12 +149,12 @@ impl IntegratedCompletionEngine {
 
     /// Initialize JSON completion data
     pub fn initialize_command_completion(&mut self) -> Result<()> {
-        debug!("Initializing command completion system...");
+        debug!("Initializing command completion system (may use cached data)...");
 
         debug!("Creating JsonCompletionLoader...");
         let loader = JsonCompletionLoader::new();
 
-        debug!("Loading completion database...");
+        debug!("Loading completion database (this will use cache if available)...");
         match loader.load_database() {
             Ok(database) => {
                 let command_count = database.len();

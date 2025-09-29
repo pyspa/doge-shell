@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use rust_embed::RustEmbed;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use tracing::{debug, warn};
 
 /// Embedded completion assets using rust-embed
@@ -16,6 +17,9 @@ struct CompletionAssets;
 pub struct JsonCompletionLoader {
     completion_dirs: Vec<PathBuf>,
 }
+
+/// Global cache for the loaded completion database
+static COMPLETION_DATABASE_CACHE: OnceLock<CommandCompletionDatabase> = OnceLock::new();
 
 impl JsonCompletionLoader {
     pub fn new() -> Self {
@@ -54,74 +58,89 @@ impl JsonCompletionLoader {
     }
 
     pub fn load_database(&self) -> Result<CommandCompletionDatabase> {
-        debug!("Starting completion database loading...");
-        let mut database = CommandCompletionDatabase::new();
-        let mut loaded_count = 0;
-        let mut error_count = 0;
-
-        // First, load from embedded resources
-        debug!("Loading completions from embedded resources...");
-        match self.load_from_embedded(&mut database) {
-            Ok(count) => {
-                loaded_count += count;
-                debug!(
-                    "Successfully loaded {} completion files from embedded resources",
-                    count
-                );
+        // Use the static cache to avoid re-parsing JSON files on each call
+        // Since get_or_try_init is unstable, we need to handle the Result manually
+        match COMPLETION_DATABASE_CACHE.get() {
+            Some(database) => {
+                debug!("Using cached completion database (already loaded)");
+                Ok(database.clone())
             }
-            Err(e) => {
-                error_count += 1;
-                warn!("Failed to load completions from embedded resources: {}", e);
+            None => {
+                debug!(
+                    "Starting completion database loading from embedded resources (first time)..."
+                );
+                let mut database = CommandCompletionDatabase::new();
+                let mut loaded_count = 0;
+
+                // First, load from embedded resources
+                debug!("Loading completions from embedded resources...");
+                match self.load_from_embedded(&mut database) {
+                    Ok(count) => {
+                        loaded_count += count;
+                        debug!(
+                            "Successfully loaded {} completion files from embedded resources",
+                            count
+                        );
+                    }
+                    Err(e) => {
+                        warn!("Failed to load completions from embedded resources: {}", e);
+                        // Even on error, we could still store a partially loaded database
+                        // but in this case, if embedded loading fails, we return the error
+                        return Err(e);
+                    }
+                }
+
+                debug!(
+                    "Checking {} completion directories for additional files",
+                    self.completion_dirs.len()
+                );
+
+                // Then, load from filesystem directories (for user customizations)
+                // for (i, dir) in self.completion_dirs.iter().enumerate() {
+                //     debug!(
+                //         "Checking completion directory {}/{}: {:?}",
+                //         i + 1,
+                //         self.completion_dirs.len(),
+                //         dir
+                //     );
+
+                //     if !dir.exists() {
+                //         debug!("Completion directory does not exist: {:?}", dir);
+                //         continue;
+                //     }
+
+                //     debug!("Loading completions from existing directory: {:?}", dir);
+                //     match self.load_from_directory(dir, &mut database) {
+                //         Ok(count) => {
+                //             loaded_count += count;
+                //             if count > 0 {
+                //                 debug!(
+                //                     "Successfully loaded {} completion files from {:?}",
+                //                     count, dir
+                //                 );
+                //             } else {
+                //                 debug!("No completion files found in {:?}", dir);
+                //             }
+                //         }
+                //         Err(e) => {
+                //             warn!("Failed to load completions from {:?}: {}", dir, e);
+                //         }
+                //     }
+                // }
+
+                debug!(
+                    "Completion loading complete: {} files loaded from embedded resources + {} directories",
+                    loaded_count,
+                    self.completion_dirs.len()
+                );
+
+                // Store the result in the cache to avoid reloading on subsequent calls
+                // We only reach this point if loading was successful
+                COMPLETION_DATABASE_CACHE.get_or_init(|| database.clone());
+
+                Ok(database)
             }
         }
-
-        debug!(
-            "Checking {} completion directories for additional files",
-            self.completion_dirs.len()
-        );
-
-        // Then, load from filesystem directories (for user customizations)
-        // for (i, dir) in self.completion_dirs.iter().enumerate() {
-        //     debug!(
-        //         "Checking completion directory {}/{}: {:?}",
-        //         i + 1,
-        //         self.completion_dirs.len(),
-        //         dir
-        //     );
-
-        //     if !dir.exists() {
-        //         debug!("Completion directory does not exist: {:?}", dir);
-        //         continue;
-        //     }
-
-        //     debug!("Loading completions from existing directory: {:?}", dir);
-        //     match self.load_from_directory(dir, &mut database) {
-        //         Ok(count) => {
-        //             loaded_count += count;
-        //             if count > 0 {
-        //                 debug!(
-        //                     "Successfully loaded {} completion files from {:?}",
-        //                     count, dir
-        //                 );
-        //             } else {
-        //                 debug!("No completion files found in {:?}", dir);
-        //             }
-        //         }
-        //         Err(e) => {
-        //             error_count += 1;
-        //             warn!("Failed to load completions from {:?}: {}", dir, e);
-        //         }
-        //     }
-        // }
-
-        debug!(
-            "Completion loading complete: {} files loaded, {} errors from embedded resources + {} directories",
-            loaded_count,
-            error_count,
-            self.completion_dirs.len()
-        );
-
-        Ok(database)
     }
 
     /// Load completion data from embedded resources

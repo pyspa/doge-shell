@@ -147,7 +147,7 @@ impl ShellProxy for Shell {
 
     fn save_path_history(&mut self, path: &str) {
         if let Some(ref mut history) = self.path_history {
-            let mut history = history.lock().unwrap();
+            let mut history = history.lock(); // For non-UI operations, we can use regular lock
             history.add(path);
         }
     }
@@ -170,7 +170,7 @@ impl ShellProxy for Shell {
             }
             "history" => {
                 if let Some(ref mut history) = self.cmd_history {
-                    let mut history = history.lock().unwrap();
+                    let mut history = history.lock(); // For non-UI operations, we can use regular lock
                     let vec = history.sorted(&SortMethod::Recent);
                     for item in vec {
                         ctx.write_stdout(&item.item)?;
@@ -182,7 +182,7 @@ impl ShellProxy for Shell {
                 let path = argv.get(1).map(|s| s.as_str()).unwrap_or("");
                 let path = if let Some(ref mut history) = self.path_history {
                     let history = history.clone();
-                    let history = history.lock().unwrap();
+                    let history = history.lock(); // For non-UI operations, we can use regular lock
                     let results = history.sort_by_match(path);
                     if !results.is_empty() {
                         let path = results[0].item.to_string();

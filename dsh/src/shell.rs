@@ -15,6 +15,7 @@ use libc::{STDIN_FILENO, c_int};
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 use nix::sys::termios::tcgetattr;
 use nix::unistd::{ForkResult, Pid, close, fork, getpid, pipe, setpgid};
+use parking_lot::Mutex as ParkingMutex;
 use parking_lot::RwLock;
 use pest::Parser;
 use pest::iterators::Pair;
@@ -25,7 +26,7 @@ use std::os::fd::RawFd;
 use std::os::unix::io::FromRawFd;
 use std::path::Path;
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::{cell::RefCell, rc::Rc};
 use tracing::{debug, error, warn};
 
@@ -69,8 +70,8 @@ pub struct Shell {
     pub exited: Option<ExitStatus>,
     pub pid: Pid,
     pub pgid: Pid,
-    pub cmd_history: Option<Arc<Mutex<FrecencyHistory>>>,
-    pub path_history: Option<Arc<Mutex<FrecencyHistory>>>,
+    pub cmd_history: Option<Arc<ParkingMutex<FrecencyHistory>>>,
+    pub path_history: Option<Arc<ParkingMutex<FrecencyHistory>>>,
     pub(crate) wait_jobs: Vec<Job>,
     pub lisp_engine: Rc<RefCell<lisp::LispEngine>>,
     next_job_id: usize,
@@ -103,7 +104,7 @@ impl Shell {
         let cmd_history = match FrecencyHistory::from_file("dsh_cmd_history") {
             Ok(history) => {
                 debug!("Successfully loaded command history");
-                Some(Arc::new(Mutex::new(history)))
+                Some(Arc::new(ParkingMutex::new(history)))
             }
             Err(e) => {
                 warn!(
@@ -112,7 +113,7 @@ impl Shell {
                 );
                 // Create a new empty history instead of crashing
                 let history = FrecencyHistory::new();
-                Some(Arc::new(Mutex::new(history)))
+                Some(Arc::new(ParkingMutex::new(history)))
             }
         };
 
@@ -120,7 +121,7 @@ impl Shell {
         let path_history = match FrecencyHistory::from_file("dsh_path_history") {
             Ok(history) => {
                 debug!("Successfully loaded path history");
-                Some(Arc::new(Mutex::new(history)))
+                Some(Arc::new(ParkingMutex::new(history)))
             }
             Err(e) => {
                 warn!(
@@ -129,7 +130,7 @@ impl Shell {
                 );
                 // Create a new empty history instead of crashing
                 let history = FrecencyHistory::new();
-                Some(Arc::new(Mutex::new(history)))
+                Some(Arc::new(ParkingMutex::new(history)))
             }
         };
 
@@ -312,15 +313,9 @@ impl Shell {
         if ctx.save_history
             && let Some(ref mut history) = self.cmd_history
         {
-            match history.lock() {
-                Ok(mut history) => {
-                    history.add(&input);
-                    history.reset_index();
-                }
-                Err(e) => {
-                    warn!("Failed to acquire command history lock: {}", e);
-                }
-            }
+            let mut history = history.lock();
+            history.add(&input);
+            history.reset_index();
         }
         // TODO refactor context
         // let tmode = tcgetattr(0).expect("failed tcgetattr");

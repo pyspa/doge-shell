@@ -19,9 +19,10 @@ use dsh_types::Context;
 use futures::StreamExt;
 use nix::sys::termios::{Termios, tcgetattr};
 use nix::unistd::tcsetpgrp;
+use parking_lot::Mutex as ParkingMutex;
 use parking_lot::RwLock;
 use std::io::Write;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 use tracing::{debug, warn};
@@ -254,11 +255,11 @@ impl<'a> Repl<'a> {
     }
 
     fn save_single_history_helper(
-        history: &mut Option<Arc<Mutex<FrecencyHistory>>>,
+        history: &mut Option<Arc<ParkingMutex<FrecencyHistory>>>,
         history_type: &str,
     ) {
         if let Some(history) = history {
-            if let Ok(mut history_guard) = history.try_lock() {
+            if let Some(mut history_guard) = history.try_lock() {
                 // Only save if there are changes
                 if let Some(ref store) = history_guard.store {
                     if store.changed {
@@ -367,20 +368,12 @@ impl<'a> Repl<'a> {
 
     fn stop_history_mode(&mut self) {
         self.history_search = None;
-        if let Some(ref mut history) = self.shell.cmd_history {
-            match history.lock() {
-                Ok(mut history) => {
-                    history.search_word = None;
-                    history.reset_index();
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to acquire command history lock for stopping history mode: {}",
-                        e
-                    );
-                }
+        if let Some(ref mut history) = self.shell.cmd_history
+            && let Some(mut history) = history.try_lock() {
+                history.search_word = None;
+                history.reset_index();
             }
-        }
+            // If we can't get the lock, we just won't be able to stop history mode - no warning needed
     }
 
     fn set_completions(&mut self) {
@@ -408,39 +401,48 @@ impl<'a> Repl<'a> {
 
         // Fallback to computing with lock, and refresh cache if successful
         if let Some(ref mut history) = self.shell.cmd_history {
-            match history.lock() {
-                Ok(history) => {
-                    // If store changed, invalidate cache
-                    let changed = history.store.as_ref().map(|s| s.changed).unwrap_or(false);
-                    if changed {
-                        self.history_cache_sorted_recent = None;
-                        self.history_cache_match_sorted = None;
-                        self.history_cache_time = None;
+            if let Some(history) = history.try_lock() {
+                // If store changed, invalidate cache
+                let changed = history.store.as_ref().map(|s| s.changed).unwrap_or(false);
+                if changed {
+                    self.history_cache_sorted_recent = None;
+                    self.history_cache_match_sorted = None;
+                    self.history_cache_time = None;
+                }
+
+                let comps = if is_empty {
+                    let list = history.sorted(&dsh_frecency::SortMethod::Recent);
+                    self.history_cache_sorted_recent = Some(list.clone());
+                    list
+                } else {
+                    let list = history.sort_by_match(&input_str);
+                    self.history_cache_match_sorted = Some(list.clone());
+                    list
+                };
+
+                self.history_cache_prefix = input_str;
+                self.history_cache_time = Some(now);
+
+                self.completion.set_completions(self.input.as_str(), comps);
+            } else {
+                // If we can't get the lock immediately, try using the cache if available, otherwise empty
+                if let Some(last_time) = self.history_cache_time
+                    && now.duration_since(last_time) <= self.history_cache_ttl {
+                        if is_empty {
+                            if let Some(ref comps) = self.history_cache_sorted_recent {
+                                self.completion
+                                    .set_completions(self.input.as_str(), comps.clone());
+                                return; // Exit early since we used the cache
+                            }
+                        } else if let Some(ref comps) = self.history_cache_match_sorted {
+                            self.completion
+                                .set_completions(self.input.as_str(), comps.clone());
+                            return; // Exit early since we used the cache
+                        }
                     }
-
-                    let comps = if is_empty {
-                        let list = history.sorted(&dsh_frecency::SortMethod::Recent);
-                        self.history_cache_sorted_recent = Some(list.clone());
-                        list
-                    } else {
-                        let list = history.sort_by_match(&input_str);
-                        self.history_cache_match_sorted = Some(list.clone());
-                        list
-                    };
-
-                    self.history_cache_prefix = input_str;
-                    self.history_cache_time = Some(now);
-
-                    self.completion.set_completions(self.input.as_str(), comps);
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to acquire command history lock for completions: {}",
-                        e
-                    );
-                    // Set empty completions as fallback
-                    self.completion.set_completions(self.input.as_str(), vec![]);
-                }
+                // Set empty completions as fallback when lock is not available
+                self.completion.set_completions(self.input.as_str(), vec![]);
+                // No warning here since this is expected during high contention
             }
         }
     }
@@ -484,24 +486,15 @@ impl<'a> Repl<'a> {
             }
         }
 
-        if let Some(ref mut history) = self.shell.cmd_history {
-            match history.lock() {
-                Ok(history) => {
-                    if let Some(entry) = history.search_prefix(input) {
-                        self.input.completion = Some(entry.clone());
-                        if entry.len() >= input.len() {
-                            return Some(entry[input.len()..].to_string());
-                        }
+        if let Some(ref mut history) = self.shell.cmd_history
+            && let Some(history) = history.try_lock()
+                && let Some(entry) = history.search_prefix(input) {
+                    self.input.completion = Some(entry.clone());
+                    if entry.len() >= input.len() {
+                        return Some(entry[input.len()..].to_string());
                     }
                 }
-                Err(e) => {
-                    warn!(
-                        "Failed to acquire command history lock for completion: {}",
-                        e
-                    );
-                }
-            }
-        }
+            // If we can't get the lock, completion just won't be available - no warning needed
         None
     }
 
@@ -1106,27 +1099,23 @@ impl<'a> Repl<'a> {
     pub fn select_history(&mut self) {
         let query = self.input.as_str();
         if let Some(ref mut history) = self.shell.cmd_history {
-            match history.lock() {
-                Ok(mut history) => {
-                    let histories = history.sorted(&dsh_frecency::SortMethod::Recent);
-                    if let Some(val) = completion::select_item_with_skim(
-                        histories
-                            .into_iter()
-                            .map(|history| completion::Candidate::Basic(history.item))
-                            .collect(),
-                        Some(query),
-                    ) {
-                        // Replace current input with the selected history command
-                        self.input.reset(val);
-                    }
-                    history.reset_index();
+            if let Some(mut history) = history.try_lock() {
+                let histories = history.sorted(&dsh_frecency::SortMethod::Recent);
+                if let Some(val) = completion::select_item_with_skim(
+                    histories
+                        .into_iter()
+                        .map(|history| completion::Candidate::Basic(history.item))
+                        .collect(),
+                    Some(query),
+                ) {
+                    // Replace current input with the selected history command
+                    self.input.reset(val);
                 }
-                Err(e) => {
-                    warn!(
-                        "Failed to acquire command history lock for history selection: {}",
-                        e
-                    );
-                }
+                history.reset_index();
+            } else {
+                warn!(
+                    "Failed to acquire command history lock for history selection - lock is busy"
+                );
             }
         }
     }

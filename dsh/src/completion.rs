@@ -6,7 +6,6 @@ use crate::input::Input;
 use crate::lisp::Value;
 use crate::repl::Repl;
 use anyhow::Result;
-use crossterm::style::{Color, ResetColor, SetForegroundColor};
 use crossterm::{cursor, execute};
 use dsh_frecency::ItemStats;
 use regex::Regex;
@@ -970,6 +969,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Ignored because it requires user interaction
     fn test_select_item_with_skim_multiple_candidates() {
         // Test that multiple candidates still require UI selection (would return None in test environment)
         let multiple_candidates = vec![

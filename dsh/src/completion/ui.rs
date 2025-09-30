@@ -133,6 +133,7 @@ fn interpret_key_event(key: &KeyEvent) -> InteractionCommand {
         (KeyCode::Right, _) | (KeyCode::Tab, KeyModifiers::NONE) => InteractionCommand::MoveRight,
         (KeyCode::Enter, _) => InteractionCommand::Submit,
         (KeyCode::Esc, _)
+        | (KeyCode::Backspace, _)
         | (KeyCode::Char('c'), KeyModifiers::CONTROL)
         | (KeyCode::Char('g'), KeyModifiers::CONTROL)
         | (KeyCode::Char('q'), KeyModifiers::NONE) => InteractionCommand::Cancel,

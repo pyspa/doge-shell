@@ -275,7 +275,12 @@ impl IntegratedCompletionEngine {
         }
 
         // 1. JSON-based command completion
-        let parsed_command = self.parser.parse(input, cursor_pos);
+        let mut parsed_command = self.parser.parse(input, cursor_pos);
+        parsed_command.command = self
+            .environment
+            .read()
+            .resolve_alias(&parsed_command.command);
+
         let command_collection = self.collect_command_candidates(&request, &parsed_command);
         let has_command_specific_data = command_collection.has_command_specific_data;
         if !aggregator.extend(command_collection.batch) {

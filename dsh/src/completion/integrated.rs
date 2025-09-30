@@ -190,48 +190,16 @@ impl IntegratedCompletionEngine {
 
     /// Convert ParsedCommand to ParsedCommandLine for dynamic completion
     fn convert_to_parsed_command_line(&self, input: &str, cursor_pos: usize) -> ParsedCommandLine {
-        let parsed = self.parser.parse(input, cursor_pos);
+        let mut parsed = self.parser.parse(input, cursor_pos);
 
-        // For dynamic completion, we need to combine arguments and options in the order they appear
-        // This is important for commands like "sudo pacman -S" where we need to match the sequence
-        let mut args = Vec::new();
-        args.extend(parsed.specified_arguments.clone());
+        // For dynamic completion, update command with resolved alias
+        parsed.command = self.environment.read().resolve_alias(&parsed.command);
 
-        let mut opts = Vec::new();
-        // For pacman completion specifically, we need to handle the case where options come after arguments
-        // In "sudo pacman -S", "-S" is an option that comes after the argument "pacman"
-        // But for dynamic completion matching, we want to see ["pacman", "-S"]
-        opts.extend(parsed.specified_options.clone());
+        // Update args to use specified_arguments and options to use specified_options
+        parsed.args = parsed.specified_arguments.clone();
+        parsed.options = parsed.specified_options.clone();
 
-        ParsedCommandLine {
-            command: self.environment.read().resolve_alias(&parsed.command),
-            args,
-            options: opts,
-            current_arg: Some(parsed.current_token.clone()),
-            completion_context: match parsed.completion_context {
-                parser::CompletionContext::Command => super::parser::CompletionContext::Command,
-                parser::CompletionContext::SubCommand => {
-                    super::parser::CompletionContext::SubCommand
-                }
-                parser::CompletionContext::ShortOption | parser::CompletionContext::LongOption => {
-                    super::parser::CompletionContext::ShortOption
-                }
-                parser::CompletionContext::OptionValue { .. } => {
-                    super::parser::CompletionContext::OptionValue {
-                        option_name: "".to_string(),
-                        value_type: None,
-                    }
-                }
-                parser::CompletionContext::Argument { .. } => {
-                    super::parser::CompletionContext::Argument {
-                        arg_index: 0,
-                        arg_type: None,
-                    }
-                }
-                parser::CompletionContext::Unknown => super::parser::CompletionContext::Unknown,
-            },
-            cursor_index: cursor_pos,
-        }
+        parsed
     }
 
     /// Execute integrated completion
@@ -275,13 +243,7 @@ impl IntegratedCompletionEngine {
         }
 
         // 1. JSON-based command completion
-        let mut parsed_command = self.parser.parse(input, cursor_pos);
-        parsed_command.command = self
-            .environment
-            .read()
-            .resolve_alias(&parsed_command.command);
-
-        let command_collection = self.collect_command_candidates(&request, &parsed_command);
+        let command_collection = self.collect_command_candidates(&request, &parsed_command_line);
         let has_command_specific_data = command_collection.has_command_specific_data;
         if !aggregator.extend(command_collection.batch) {
             let results = aggregator.finalize();
@@ -307,7 +269,7 @@ impl IntegratedCompletionEngine {
         } else {
             debug!(
                 "Skipping history completion as command '{}' has JSON completion data",
-                parsed_command.command
+                parsed_command_line.command
             );
         }
         let results = aggregator.finalize();
@@ -357,7 +319,7 @@ impl IntegratedCompletionEngine {
     fn collect_command_candidates(
         &self,
         request: &CompletionRequest,
-        parsed_command: &parser::ParsedCommand,
+        parsed_command: &parser::ParsedCommandLine,
     ) -> CommandCollection {
         if parsed_command.completion_context == parser::CompletionContext::Command {
             debug!("No completion context found - skipping JSON completion");

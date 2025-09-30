@@ -2,7 +2,7 @@ use super::command::{
     ArgumentType, CommandCompletion, CommandCompletionDatabase, CommandOption, CompletionCandidate,
     SubCommand,
 };
-use super::parser::{CompletionContext, ParsedCommand};
+use super::parser::{CompletionContext, ParsedCommandLine};
 use anyhow::Result;
 use std::fs;
 use std::path::Path;
@@ -33,8 +33,11 @@ impl CompletionGenerator {
         self.database.get_command(command).is_some()
     }
 
-    /// Generate completion candidates from parsed command
-    pub fn generate_candidates(&self, parsed: &ParsedCommand) -> Result<Vec<CompletionCandidate>> {
+    /// Generate completion candidates from parsed command line
+    pub fn generate_candidates(
+        &self,
+        parsed: &ParsedCommandLine,
+    ) -> Result<Vec<CompletionCandidate>> {
         match &parsed.completion_context {
             CompletionContext::Command => self.generate_command_candidates(&parsed.current_token),
             CompletionContext::SubCommand => self.generate_subcommand_candidates(parsed),
@@ -77,7 +80,7 @@ impl CompletionGenerator {
     /// Generate subcommand completion candidates
     fn generate_subcommand_candidates(
         &self,
-        parsed: &ParsedCommand,
+        parsed: &ParsedCommandLine,
     ) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::new();
 
@@ -139,7 +142,7 @@ impl CompletionGenerator {
     /// Generate short option completion candidates
     fn generate_short_option_candidates(
         &self,
-        parsed: &ParsedCommand,
+        parsed: &ParsedCommandLine,
     ) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::new();
 
@@ -166,7 +169,7 @@ impl CompletionGenerator {
     /// Generate long option completion candidates
     fn generate_long_option_candidates(
         &self,
-        parsed: &ParsedCommand,
+        parsed: &ParsedCommandLine,
     ) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::new();
 
@@ -193,7 +196,7 @@ impl CompletionGenerator {
     /// Generate option value completion candidates
     fn generate_option_value_candidates(
         &self,
-        parsed: &ParsedCommand,
+        parsed: &ParsedCommandLine,
         value_type: Option<&ArgumentType>,
     ) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::new();
@@ -211,7 +214,7 @@ impl CompletionGenerator {
     /// Generate argument completion candidates
     fn generate_argument_candidates(
         &self,
-        parsed: &ParsedCommand,
+        parsed: &ParsedCommandLine,
         arg_type: Option<&ArgumentType>,
     ) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::new();
@@ -508,16 +511,20 @@ mod tests {
         let db = create_test_database();
         let generator = CompletionGenerator::new(db);
 
-        let parsed = ParsedCommand {
+        let parsed = ParsedCommandLine {
             command: "git".to_string(),
             subcommand_path: vec![],
+            args: vec![],
+            options: vec![],
             current_token: "a".to_string(),
+            current_arg: Some("a".to_string()),
             completion_context: CompletionContext::SubCommand,
             specified_options: vec![],
             specified_arguments: vec![],
+            cursor_index: 0,
         };
 
-        let candidates = generator.generate_subcommand_candidates(&parsed).unwrap();
+        let candidates = generator.generate_candidates(&parsed).unwrap();
         assert!(!candidates.is_empty());
 
         let add_candidate = candidates.iter().find(|c| c.text == "add");

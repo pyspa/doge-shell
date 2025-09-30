@@ -819,7 +819,7 @@ mod tests {
     #[test]
     fn test_completion_candidates_generation_from_json() {
         use crate::completion::generator::CompletionGenerator;
-        use crate::completion::parser::{CompletionContext, ParsedCommand};
+        use crate::completion::parser::{CompletionContext, ParsedCommandLine};
 
         let loader = JsonCompletionLoader::new();
         let database = loader.load_database().expect("Failed to load database");
@@ -836,13 +836,17 @@ mod tests {
                 );
 
                 // Test command-level completion
-                let parsed_command = ParsedCommand {
+                let parsed_command = ParsedCommandLine {
                     command: command.to_string(),
                     subcommand_path: vec![],
+                    args: vec![],
+                    options: vec![],
                     current_token: "".to_string(),
+                    current_arg: Some("".to_string()),
                     completion_context: CompletionContext::Command,
                     specified_options: vec![],
                     specified_arguments: vec![],
+                    cursor_index: 0,
                 };
 
                 let candidates = generator.generate_candidates(&parsed_command).unwrap();
@@ -872,17 +876,23 @@ mod tests {
                             command, first_subcommand.name
                         );
 
-                        let parsed_subcommand = ParsedCommand {
+                        let parsed_subcommand = ParsedCommandLine {
                             command: command.to_string(),
                             subcommand_path: vec![],
+                            args: vec![],
+                            options: vec![],
                             current_token: first_subcommand
                                 .name
                                 .chars()
                                 .take(1)
                                 .collect::<String>(), // Use first letter to test filtering
+                            current_arg: Some(
+                                first_subcommand.name.chars().take(1).collect::<String>(),
+                            ),
                             completion_context: CompletionContext::SubCommand,
                             specified_options: vec![],
                             specified_arguments: vec![],
+                            cursor_index: 0,
                         };
 
                         let subcommand_candidates =
@@ -908,7 +918,7 @@ mod tests {
     fn test_completion_files_display_candidates_correctly() {
         use crate::completion::display::Candidate as DisplayCandidate;
         use crate::completion::generator::CompletionGenerator;
-        use crate::completion::parser::{CompletionContext, ParsedCommand};
+        use crate::completion::parser::{CompletionContext, ParsedCommandLine};
 
         let loader = JsonCompletionLoader::new();
         let database = loader.load_database().expect("Failed to load database");
@@ -925,13 +935,17 @@ mod tests {
                 );
 
                 // Generate candidates for subcommands
-                let parsed_command = ParsedCommand {
+                let parsed_command = ParsedCommandLine {
                     command: command.to_string(),
                     subcommand_path: vec![],
+                    args: vec![],
+                    options: vec![],
                     current_token: "".to_string(),
+                    current_arg: Some("".to_string()),
                     completion_context: CompletionContext::SubCommand,
                     specified_options: vec![],
                     specified_arguments: vec![],
+                    cursor_index: 0,
                 };
 
                 let enhanced_candidates = generator.generate_candidates(&parsed_command).unwrap();

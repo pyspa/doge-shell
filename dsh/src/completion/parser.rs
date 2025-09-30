@@ -12,33 +12,24 @@ static DOUBLE_DASH_REGEX: std::sync::LazyLock<Regex> =
 pub struct ParsedCommandLine {
     /// Main command name
     pub command: String,
+    /// Subcommand path (e.g., ["remote", "add"])
+    pub subcommand_path: Vec<String>,
     /// Command arguments
     pub args: Vec<String>,
     /// Command  options
     pub options: Vec<String>,
-    /// Current argument being completed
-    pub current_arg: Option<String>,
-    /// Completion context
-    pub completion_context: CompletionContext,
-    /// Cursor index
-    pub cursor_index: usize,
-}
-
-/// Command line parsing result
-#[derive(Debug, Clone, PartialEq)]
-pub struct ParsedCommand {
-    /// Main command name
-    pub command: String,
-    /// Subcommand path (e.g., ["remote", "add"])
-    pub subcommand_path: Vec<String>,
     /// Currently parsing token
     pub current_token: String,
+    /// Current argument being completed
+    pub current_arg: Option<String>,
     /// Completion context
     pub completion_context: CompletionContext,
     /// Already specified options
     pub specified_options: Vec<String>,
     /// Already specified arguments
     pub specified_arguments: Vec<String>,
+    /// Cursor index
+    pub cursor_index: usize,
 }
 
 /// Parameters for determining completion context
@@ -88,7 +79,7 @@ impl CommandLineParser {
     }
 
     /// Parse command line
-    pub fn parse(&self, input: &str, cursor_pos: usize) -> ParsedCommand {
+    pub fn parse(&self, input: &str, cursor_pos: usize) -> ParsedCommandLine {
         let tokens = self.tokenize(input);
         let cursor_token_index = self.find_cursor_token_index(&tokens, input, cursor_pos);
 
@@ -161,16 +152,20 @@ impl CommandLineParser {
         tokens: Vec<String>,
         cursor_token_index: usize,
         input: &str,
-        _cursor_pos: usize,
-    ) -> ParsedCommand {
+        cursor_pos: usize,
+    ) -> ParsedCommandLine {
         if tokens.is_empty() {
-            return ParsedCommand {
+            return ParsedCommandLine {
                 command: String::new(),
                 subcommand_path: Vec::new(),
+                args: Vec::new(),
+                options: Vec::new(),
                 current_token: String::new(),
+                current_arg: None,
                 completion_context: CompletionContext::Command,
                 specified_options: Vec::new(),
                 specified_arguments: Vec::new(),
+                cursor_index: cursor_pos,
             };
         }
 
@@ -251,13 +246,24 @@ impl CommandLineParser {
             (current_token, context)
         };
 
-        ParsedCommand {
-            command,
-            subcommand_path,
-            current_token,
+        // Create args and options for the unified structure
+        let mut args = Vec::new();
+        args.extend(specified_arguments.clone());
+
+        let mut options = Vec::new();
+        options.extend(specified_options.clone());
+
+        ParsedCommandLine {
+            command: command.clone(),
+            subcommand_path: subcommand_path.clone(),
+            args,
+            options,
+            current_token: current_token.clone(),
+            current_arg: Some(current_token.clone()),
             completion_context,
-            specified_options,
-            specified_arguments,
+            specified_options: specified_options.clone(),
+            specified_arguments: specified_arguments.clone(),
+            cursor_index: cursor_pos,
         }
     }
 

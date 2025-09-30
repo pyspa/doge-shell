@@ -149,13 +149,17 @@ mod tests {
     fn create_parsed_command(command: &str, args: Vec<&str>) -> ParsedCommandLine {
         ParsedCommandLine {
             command: command.to_string(),
+            subcommand_path: vec![],
             args: args.into_iter().map(|s| s.to_string()).collect(),
             options: vec![],
+            current_token: String::new(),
             current_arg: None,
             completion_context: CompletionContext::Argument {
                 arg_index: 0,
                 arg_type: None,
             },
+            specified_options: vec![],
+            specified_arguments: vec![],
             cursor_index: 0,
         }
     }
@@ -167,13 +171,17 @@ mod tests {
     ) -> ParsedCommandLine {
         ParsedCommandLine {
             command: command.to_string(),
+            subcommand_path: vec![],
             args: args.into_iter().map(|s| s.to_string()).collect(),
             options: vec![],
+            current_token: current_arg.map(|s| s.to_string()).unwrap_or_default(),
             current_arg: current_arg.map(|s| s.to_string()),
             completion_context: CompletionContext::Argument {
                 arg_index: 0,
                 arg_type: None,
             },
+            specified_options: vec![],
+            specified_arguments: vec![],
             cursor_index: 0,
         }
     }

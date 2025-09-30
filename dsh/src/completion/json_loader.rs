@@ -553,7 +553,7 @@ mod tests {
 
         // Should include both embedded completions and filesystem completions
         // Embedded: git, cargo, docker, npm, kubectl, make, pacman, systemctl, and others
-        assert_eq!(completions.len(), 16);
+        assert_eq!(completions.len(), 19);
         assert!(completions.contains(&"git".to_string()));
         assert!(completions.contains(&"cargo".to_string()));
         assert!(completions.contains(&"docker".to_string()));

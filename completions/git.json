@@ -377,6 +377,74 @@
       "subcommands": []
     },
     {
+      "name": "switch",
+      "description": "Switch branches",
+      "options": [
+        {
+          "long": "--create",
+          "short": "-c",
+          "description": "Create and switch to a new branch"
+        },
+        {
+          "long": "--force-create",
+          "short": "-C",
+          "description": "Force create and switch to a new branch"
+        },
+        {
+          "long": "--detach",
+          "short": "-d",
+          "description": "Switch to a commit in detached HEAD state"
+        },
+        {
+          "long": "--force",
+          "short": "-f",
+          "description": "Force switch even if the current branch is dirty"
+        },
+        {
+          "long": "--guess",
+          "short": "-g",
+          "description": "Guess branch names (default behavior, this option is deprecated)"
+        },
+        {
+          "long": "--ignore-other-worktrees",
+          "description": "Do not check if another worktree is holding the given ref"
+        },
+        {
+          "long": "--merge",
+          "short": "-m",
+          "description": "Perform a 3-way merge with the new branch"
+        },
+        {
+          "long": "--no-guess",
+          "description": "Do not guess branch names"
+        },
+        {
+          "long": "--no-overwrite-ignore",
+          "description": "Do not overwrite ignored files when switching branches"
+        },
+        {
+          "long": "--no-progress",
+          "description": "Do not show progress indicator"
+        },
+        {
+          "long": "--progress",
+          "description": "Show progress indicator (default)"
+        },
+        {
+          "long": "--quiet",
+          "short": "-q",
+          "description": "Suppress feedback messages"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "branch",
+          "description": "Branch name to switch to"
+        }
+      ],
+      "subcommands": []
+    },
+    {
       "name": "log",
       "description": "Show commit logs",
       "options": [
@@ -418,6 +486,637 @@
         {
           "name": "revision_range",
           "description": "Revision range or path (optional)"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "fetch",
+      "description": "Download objects and refs from another repository",
+      "options": [
+        {
+          "long": "--all",
+          "description": "Fetch all remotes"
+        },
+        {
+          "long": "--prune",
+          "description": "Remove remote-tracking references that no longer exist on the remote"
+        },
+        {
+          "long": "--tags",
+          "description": "Fetch all tags from the remote"
+        },
+        {
+          "long": "--dry-run",
+          "description": "Show what would be done, without making any changes"
+        },
+        {
+          "long": "--force",
+          "short": "-f",
+          "description": "Force updating the local reference"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "remote",
+          "description": "Remote name to fetch from (optional)"
+        },
+        {
+          "name": "branch",
+          "description": "Branch name to fetch (optional)"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "merge",
+      "description": "Join two or more development histories together",
+      "options": [
+        {
+          "long": "--no-ff",
+          "description": "Create a merge commit even when the merge resolves as a fast-forward"
+        },
+        {
+          "long": "--squash",
+          "description": "Squash the changes from the source branch into a single commit"
+        },
+        {
+          "long": "--ff-only",
+          "description": "Abort if fast-forward is not possible"
+        },
+        {
+          "long": "--abort",
+          "description": "Abort the current conflict resolution process"
+        },
+        {
+          "long": "--continue",
+          "description": "Resolve the current conflict"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "branch",
+          "description": "Branch to merge into the current branch"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "rebase",
+      "description": "Reapply commits on top of another base tip",
+      "options": [
+        {
+          "long": "--interactive",
+          "short": "-i",
+          "description": "Make a list of commits to rebase interactively"
+        },
+        {
+          "long": "--continue",
+          "description": "Continue the rebasing process after resolving a merge conflict"
+        },
+        {
+          "long": "--abort",
+          "description": "Abort the rebase operation and reset HEAD to the original branch"
+        },
+        {
+          "long": "--skip",
+          "description": "Skip the current patch and continue rebasing"
+        },
+        {
+          "long": "--onto",
+          "description": "Starting point at which to create the new commits"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "upstream",
+          "description": "Upstream branch to rebase onto"
+        },
+        {
+          "name": "branch",
+          "description": "Branch to rebase (optional, defaults to current)"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "reset",
+      "description": "Reset current HEAD to the specified state",
+      "options": [
+        {
+          "long": "--soft",
+          "description": "Reset only the HEAD"
+        },
+        {
+          "long": "--mixed",
+          "description": "Reset the HEAD and index (default)"
+        },
+        {
+          "long": "--hard",
+          "description": "Reset the HEAD, index and working tree"
+        },
+        {
+          "long": "--keep",
+          "description": "Reset the index but not the working tree"
+        },
+        {
+          "long": "--merge",
+          "description": "Reset the index and working tree, keeping local changes if possible"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "commit",
+          "description": "Commit to reset to (optional, defaults to HEAD)"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "diff",
+      "description": "Show changes between commits, commit and working tree, etc",
+      "options": [
+        {
+          "long": "--cached",
+          "description": "Show changes in the index"
+        },
+        {
+          "long": "--staged",
+          "description": "Show changes in the index (synonym for --cached)"
+        },
+        {
+          "long": "--name-only",
+          "description": "Show only names of changed files"
+        },
+        {
+          "long": "--name-status",
+          "description": "Show only names and status of changed files"
+        },
+        {
+          "long": "--stat",
+          "description": "Show statistics of changes"
+        },
+        {
+          "long": "--patch",
+          "short": "-p",
+          "description": "Show patch of changes"
+        },
+        {
+          "long": "--no-index",
+          "description": "Compare two paths on the filesystem"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "commit1",
+          "description": "First commit to compare (optional)"
+        },
+        {
+          "name": "commit2",
+          "description": "Second commit to compare (optional)"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "tag",
+      "description": "Create, list, delete or verify tags",
+      "options": [
+        {
+          "long": "--list",
+          "short": "-l",
+          "description": "List tags"
+        },
+        {
+          "long": "--delete",
+          "short": "-d",
+          "description": "Delete tags"
+        },
+        {
+          "long": "--annotate",
+          "short": "-a",
+          "description": "Make an annotated tag"
+        },
+        {
+          "long": "--sign",
+          "short": "-s",
+          "description": "Make a GPG-signed tag"
+        },
+        {
+          "long": "--message",
+          "short": "-m",
+          "description": "Tag message"
+        },
+        {
+          "long": "--force",
+          "short": "-f",
+          "description": "Replace an existing tag"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "tagname",
+          "description": "Tag name to create or operate on"
+        },
+        {
+          "name": "commit",
+          "description": "Commit to tag (optional, defaults to HEAD)"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "remote",
+      "description": "Manage set of tracked repositories",
+      "options": [
+        {
+          "long": "--verbose",
+          "short": "-v",
+          "description": "Show more information about remotes"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "subcommand",
+          "description": "Remote subcommand (add, remove, set-url, get-url, etc.)"
+        },
+        {
+          "name": "name",
+          "description": "Remote name"
+        },
+        {
+          "name": "url",
+          "description": "Remote URL"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "stash",
+      "description": "Stash the changes in a dirty working directory away",
+      "options": [
+        {
+          "long": "--patch",
+          "short": "-p",
+          "description": "Interactively select hunks to stash"
+        },
+        {
+          "long": "--include-untracked",
+          "short": "-u",
+          "description": "Include untracked files when stashing"
+        },
+        {
+          "long": "--all",
+          "short": "-a",
+          "description": "Include all files when stashing"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "subcommand",
+          "description": "Stash subcommand (push, pop, apply, list, etc.)"
+        },
+        {
+          "name": "stash_id",
+          "description": "Specific stash to operate on (optional)"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "mv",
+      "description": "Move or rename a file, a directory, or a symlink",
+      "options": [
+        {
+          "long": "--force",
+          "short": "-f",
+          "description": "Force move/rename even if target exists"
+        },
+        {
+          "long": "--dry-run",
+          "short": "-n",
+          "description": "Show what would be moved without actually moving"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "source",
+          "description": "Source file or directory"
+        },
+        {
+          "name": "destination",
+          "description": "Destination file or directory"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "rm",
+      "description": "Remove files from the working tree and from the index",
+      "options": [
+        {
+          "long": "--cached",
+          "description": "Only remove from the index (unstage)"
+        },
+        {
+          "long": "--force",
+          "short": "-f",
+          "description": "Override the up-to-date check"
+        },
+        {
+          "long": "--dry-run",
+          "short": "-n",
+          "description": "Show what would be removed without actually removing"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "files",
+          "description": "Files to remove"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "config",
+      "description": "Get and set repository or global options",
+      "options": [
+        {
+          "long": "--global",
+          "description": "Set global configuration"
+        },
+        {
+          "long": "--local",
+          "description": "Set local repository configuration (default)"
+        },
+        {
+          "long": "--system",
+          "description": "Set system-wide configuration"
+        },
+        {
+          "long": "--list",
+          "short": "-l",
+          "description": "List all configuration entries"
+        },
+        {
+          "long": "--get",
+          "description": "Get a value from configuration"
+        },
+        {
+          "long": "--add",
+          "description": "Add a new value to a multi-valued configuration"
+        },
+        {
+          "long": "--unset",
+          "description": "Remove a configuration entry"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "key",
+          "description": "Configuration key to get/set"
+        },
+        {
+          "name": "value",
+          "description": "Configuration value to set (optional)"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "cherry-pick",
+      "description": "Apply the changes introduced by some existing commits",
+      "options": [
+        {
+          "long": "--edit",
+          "short": "-e",
+          "description": "Edit the commit message before applying"
+        },
+        {
+          "long": "--no-commit",
+          "short": "-n",
+          "description": "Apply changes without making a commit"
+        },
+        {
+          "long": "--signoff",
+          "short": "-s",
+          "description": "Add Signed-off-by line to the commit message"
+        },
+        {
+          "long": "--strategy",
+          "short": "-S",
+          "description": "Use the given merge strategy"
+        },
+        {
+          "long": "--mainline",
+          "short": "-m",
+          "description": "Specify parent number for merge commit"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "commit",
+          "description": "Commit(s) to cherry-pick"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "revert",
+      "description": "Revert some existing commits",
+      "options": [
+        {
+          "long": "--edit",
+          "short": "-e",
+          "description": "Edit the commit message before committing the revert"
+        },
+        {
+          "long": "--no-edit",
+          "description": "Don't edit the commit message"
+        },
+        {
+          "long": "--no-commit",
+          "short": "-n",
+          "description": "Revert but don't commit the result"
+        },
+        {
+          "long": "--signoff",
+          "short": "-s",
+          "description": "Add Signed-off-by line to the commit message"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "commit",
+          "description": "Commit(s) to revert"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "blame",
+      "description": "Show what revision and author last modified each line of a file",
+      "options": [
+        {
+          "long": "--incremental",
+          "description": "Show output incrementally"
+        },
+        {
+          "long": "--line-porcelain",
+          "description": "Show porcelain format with per-line commit information"
+        },
+        {
+          "long": "--show-stats",
+          "description": "Include additional statistics at the end of the blame output"
+        },
+        {
+          "long": "--porcelain",
+          "description": "Show in a format designed for machine consumption"
+        },
+        {
+          "long": "--date",
+          "description": "Show dates formatted according to the string"
+        },
+        {
+          "long": "--incremental",
+          "description": "Show output incrementally in a more readable format"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "file",
+          "description": "File to annotate"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "show",
+      "description": "Show various types of objects",
+      "options": [
+        {
+          "long": "--stat",
+          "description": "Show statistics of changes"
+        },
+        {
+          "long": "--name-only",
+          "description": "Show only names of changed files"
+        },
+        {
+          "long": "--name-status",
+          "description": "Show names and status of changed files"
+        },
+        {
+          "long": "--oneline",
+          "description": "Show commit message on one line"
+        },
+        {
+          "long": "--patch",
+          "short": "-p",
+          "description": "Show the patch of changes"
+        },
+        {
+          "long": "--format",
+          "description": "Specify format for the output"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "object",
+          "description": "Object(s) to show (commit, tag, etc.)"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "archive",
+      "description": "Create an archive of files from a named tree",
+      "options": [
+        {
+          "long": "--format",
+          "description": "Format of the resulting archive"
+        },
+        {
+          "long": "--output",
+          "short": "-o",
+          "description": "Write the archive to this file"
+        },
+        {
+          "long": "--prefix",
+          "description": "Prepend prefix to each filename in the archive"
+        },
+        {
+          "long": "--worktree-attributes",
+          "description": "Read the .gitattributes in the working directory"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "tree-ish",
+          "description": "The tree or commit to produce an archive for"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "clean",
+      "description": "Remove untracked files from the working tree",
+      "options": [
+        {
+          "long": "--dry-run",
+          "short": "-n",
+          "description": "Show what would be done, but do not actually remove files"
+        },
+        {
+          "long": "--force",
+          "short": "-f",
+          "description": "Force the removal of files"
+        },
+        {
+          "long": "--interactive",
+          "short": "-i",
+          "description": "Show what would be done and clean files interactively"
+        },
+        {
+          "long": "--quiet",
+          "short": "-q",
+          "description": "Be quiet, only report errors"
+        },
+        {
+          "long": "--exclude",
+          "description": "Use the specified exclude pattern in addition to .gitignore"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "path",
+          "description": "Path(s) to clean (optional, defaults to current directory)"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "submodule",
+      "description": "Initialize, update or inspect submodules",
+      "options": [
+        {
+          "long": "--quiet",
+          "short": "-q",
+          "description": "Suppress output for most operations"
+        },
+        {
+          "long": "--cached",
+          "description": "Use the commit stored in the index instead of the one in HEAD"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "subcommand",
+          "description": "Submodule subcommand (add, update, init, status, etc.)"
+        },
+        {
+          "name": "args",
+          "description": "Arguments for the submodule subcommand"
         }
       ],
       "subcommands": []

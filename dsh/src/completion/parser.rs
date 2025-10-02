@@ -300,69 +300,63 @@ impl CommandLineParser {
             return false;
         }
 
-        // Common subcommand name patterns (strict version)
-        let common_subcommands = [
-            "add",
-            "remove",
-            "delete",
-            "create",
-            "update",
-            "get",
-            "set",
-            "list",
-            "show",
-            "start",
-            "stop",
-            "restart",
-            "status",
-            "config",
-            "init",
-            "clone",
-            "pull",
-            "push",
-            "commit",
-            "branch",
-            "checkout",
-            "merge",
-            "rebase",
-            "tag",
-            "log",
-            "diff",
-            "build",
-            "run",
-            "test",
-            "install",
-            "uninstall",
-            "upgrade",
-            "clean",
-            "check",
-            "remote",
-            "fetch",
-            "reset",
-            "stash",
-            "cherry-pick",
-            "revert",
-            "blame",
-            "bisect",
-            "new",
-            "publish",
-            "search",
-            "doc",
-            "fmt",
-            "clippy",
-            "bench",
-            "update",
-            "tree",
-            "login",
-            "logout",
-            "whoami",
-            "owner",
-            "yank",
-            "verify-project",
-        ];
+        // More restrictive approach to avoid treating content words as subcommands
+        if token.len() < 2 || token.len() > 15 {
+            return false;
+        }
 
-        // Only allow known subcommands (more strict)
-        common_subcommands.contains(&token)
+        // Check if it looks like typical command patterns rather than content
+        // Commands tend to be verbs or short action words
+        // Content tends to be nouns or descriptive words
+        let chars: Vec<char> = token.chars().collect();
+
+        // Count vowels and consonants
+        let mut vowel_count = 0;
+        let mut consonant_count = 0;
+
+        for c in &chars {
+            if matches!(c.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u') {
+                vowel_count += 1;
+            } else if c.is_alphabetic() {
+                consonant_count += 1;
+            }
+        }
+
+        // Need both vowels and consonants for a balanced word
+        if vowel_count == 0 || consonant_count == 0 {
+            return false;
+        }
+
+        // Avoid words with alternating vowel-consonant patterns typical of content words
+        // e.g. "file" (f-i-l-e) has alternating pattern: consonant-vowel-consonant-vowel
+        // e.g. "data" (d-a-t-a) has alternating pattern: consonant-vowel-consonant-vowel
+        if chars.len() == 4 && vowel_count == 2 {
+            let mut vowel_positions = Vec::new();
+            for c in &chars {
+                vowel_positions.push(matches!(
+                    c.to_ascii_lowercase(),
+                    'a' | 'e' | 'i' | 'o' | 'u'
+                ));
+            }
+
+            let mut alternating = true;
+            for i in 0..vowel_positions.len() - 1 {
+                if vowel_positions[i] == vowel_positions[i + 1] {
+                    alternating = false;
+                    break;
+                }
+            }
+
+            // If it has an alternating pattern, it's more likely a content word
+            if alternating {
+                return false;
+            }
+        }
+
+        // Allow alphanumeric characters, hyphens, and underscores
+        token
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
     }
 
     /// Determine completion context

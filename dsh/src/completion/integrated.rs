@@ -235,6 +235,9 @@ impl IntegratedCompletionEngine {
 
         // 0. Dynamic completion (highest priority, exclusive when available)
         let parsed_command_line = self.convert_to_parsed_command_line(input, cursor_pos);
+
+        debug!("Parsed command line: {:?}", parsed_command_line);
+
         let dynamic_batch = self.collect_dynamic_candidates(&request, &parsed_command_line);
         if !aggregator.extend(dynamic_batch) {
             let results = aggregator.finalize();

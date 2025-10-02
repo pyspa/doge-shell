@@ -296,6 +296,7 @@ mod tests {
 
     #[test]
     fn run_reports_full_command_on_disallowed_program() {
+        let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls"); // Set env to include the allowed command
         let mut proxy = NoopProxy {
             allow: vec!["ls".to_string()],
         };

@@ -13,10 +13,10 @@ impl DynamicCompletionHandler for GitCompletionHandler {
     fn matches(&self, parsed_command: &ParsedCommandLine) -> bool {
         // Match git switch or git checkout commands
         parsed_command.command == "git"
-            && !parsed_command.args.is_empty()
-            && (parsed_command.args[0] == "checkout"
-                || parsed_command.args[0] == "merge"
-                || parsed_command.args[0] == "switch")
+            && (parsed_command
+                .args
+                .first()
+                .is_some_and(|arg| arg == "switch" || arg == "checkout"))
             && parsed_command.args.len() <= 2
     }
 

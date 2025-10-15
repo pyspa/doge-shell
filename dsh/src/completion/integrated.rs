@@ -1,6 +1,7 @@
 use super::cache::CompletionCache;
 use super::command::CompletionCandidate;
 use super::dynamic::DynamicCompletionRegistry;
+use super::framework::CompletionFrameworkKind;
 
 use super::generator::CompletionGenerator;
 use super::history::{CompletionContext, HistoryCompletion};
@@ -11,6 +12,7 @@ use crate::environment::Environment;
 use anyhow::Result;
 use parking_lot::RwLock;
 use regex::Regex;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,6 +45,7 @@ impl<'a> CompletionRequest<'a> {
 struct CandidateBatch {
     candidates: Vec<EnhancedCandidate>,
     exclusive: bool,
+    framework: Option<CompletionFrameworkKind>,
 }
 
 impl CandidateBatch {
@@ -50,6 +53,7 @@ impl CandidateBatch {
         Self {
             candidates: Vec::new(),
             exclusive: false,
+            framework: None,
         }
     }
 
@@ -57,13 +61,18 @@ impl CandidateBatch {
         Self {
             candidates,
             exclusive: false,
+            framework: None,
         }
     }
 
-    fn exclusive(candidates: Vec<EnhancedCandidate>) -> Self {
+    fn exclusive_with_framework(
+        candidates: Vec<EnhancedCandidate>,
+        framework: CompletionFrameworkKind,
+    ) -> Self {
         Self {
             candidates,
             exclusive: true,
+            framework: Some(framework),
         }
     }
 }
@@ -83,10 +92,17 @@ impl CommandCollection {
     }
 }
 
+#[derive(Debug)]
+pub struct CompletionResult {
+    pub candidates: Vec<EnhancedCandidate>,
+    pub framework: CompletionFrameworkKind,
+}
+
 struct CandidateAggregator<'a> {
     engine: &'a IntegratedCompletionEngine,
     max_results: usize,
     collected: Vec<EnhancedCandidate>,
+    framework: Option<CompletionFrameworkKind>,
 }
 
 impl<'a> CandidateAggregator<'a> {
@@ -95,6 +111,7 @@ impl<'a> CandidateAggregator<'a> {
             engine,
             max_results,
             collected: Vec::new(),
+            framework: None,
         }
     }
 
@@ -109,12 +126,24 @@ impl<'a> CandidateAggregator<'a> {
             batch.exclusive
         );
         self.collected.extend(batch.candidates);
+        if self.framework.is_none() {
+            self.framework = batch.framework;
+        }
         !batch.exclusive
     }
 
-    fn finalize(self) -> Vec<EnhancedCandidate> {
-        self.engine
-            .deduplicate_and_sort(self.collected, self.max_results)
+    fn finalize(self) -> CompletionResult {
+        let candidates = self
+            .engine
+            .deduplicate_and_sort(self.collected, self.max_results);
+        let framework = self
+            .framework
+            .unwrap_or_else(super::default_completion_framework);
+
+        CompletionResult {
+            candidates,
+            framework,
+        }
     }
 }
 
@@ -129,6 +158,7 @@ pub struct IntegratedCompletionEngine {
     dynamic_registry: DynamicCompletionRegistry,
     /// Short lived completion cache
     cache: CompletionCache<EnhancedCandidate>,
+    framework_cache: RwLock<HashMap<String, CompletionFrameworkKind>>,
 
     /// Shell environment (for dynamic completion)
     pub environment: Arc<RwLock<Environment>>,
@@ -143,6 +173,7 @@ impl IntegratedCompletionEngine {
             history_completion: HistoryCompletion::new(),
             dynamic_registry: DynamicCompletionRegistry::with_default_handlers(),
             cache: CompletionCache::new(Duration::from_millis(DEFAULT_CACHE_TTL_MS)),
+            framework_cache: RwLock::new(HashMap::new()),
             environment,
         }
     }
@@ -209,7 +240,7 @@ impl IntegratedCompletionEngine {
         cursor_pos: usize,
         current_dir: &Path,
         max_results: usize,
-    ) -> Vec<EnhancedCandidate> {
+    ) -> CompletionResult {
         debug!(
             "Integrated completion for: '{}' at position {} in {:?}",
             input, cursor_pos, current_dir
@@ -227,7 +258,14 @@ impl IntegratedCompletionEngine {
 
             if hit.exact || !hit.candidates.is_empty() {
                 self.cache.extend_ttl(&hit.key);
-                return hit.candidates;
+                let framework = self
+                    .lookup_cached_framework(&hit.key)
+                    .unwrap_or_else(super::default_completion_framework);
+
+                return CompletionResult {
+                    candidates: hit.candidates,
+                    framework,
+                };
             }
         }
 
@@ -241,7 +279,7 @@ impl IntegratedCompletionEngine {
         let dynamic_batch = self.collect_dynamic_candidates(&request, &parsed_command_line);
         if !aggregator.extend(dynamic_batch) {
             let results = aggregator.finalize();
-            self.store_in_cache(request.input, &results);
+            self.store_in_cache(request.input, &results.candidates, results.framework);
             return results;
         }
 
@@ -250,7 +288,7 @@ impl IntegratedCompletionEngine {
         let has_command_specific_data = command_collection.has_command_specific_data;
         if !aggregator.extend(command_collection.batch) {
             let results = aggregator.finalize();
-            self.store_in_cache(request.input, &results);
+            self.store_in_cache(request.input, &results.candidates, results.framework);
             return results;
         }
 
@@ -266,7 +304,7 @@ impl IntegratedCompletionEngine {
             let history_batch = self.collect_history_candidates(&request);
             if !aggregator.extend(history_batch) {
                 let results = aggregator.finalize();
-                self.store_in_cache(request.input, &results);
+                self.store_in_cache(request.input, &results.candidates, results.framework);
                 return results;
             }
         } else {
@@ -276,7 +314,7 @@ impl IntegratedCompletionEngine {
             );
         }
         let results = aggregator.finalize();
-        self.store_in_cache(request.input, &results);
+        self.store_in_cache(request.input, &results.candidates, results.framework);
         results
     }
 
@@ -309,7 +347,10 @@ impl IntegratedCompletionEngine {
                 if enhanced_candidates.is_empty() {
                     CandidateBatch::empty()
                 } else {
-                    CandidateBatch::exclusive(enhanced_candidates)
+                    CandidateBatch::exclusive_with_framework(
+                        enhanced_candidates,
+                        CompletionFrameworkKind::Skim,
+                    )
                 }
             }
             Err(e) => {
@@ -448,13 +489,25 @@ impl IntegratedCompletionEngine {
             .collect()
     }
 
-    fn store_in_cache(&self, key: &str, candidates: &[EnhancedCandidate]) {
+    fn store_in_cache(
+        &self,
+        key: &str,
+        candidates: &[EnhancedCandidate],
+        framework: CompletionFrameworkKind,
+    ) {
         if key.is_empty() {
             return;
         }
         debug!("cache set for '{}'. len: {}", key, candidates.len());
 
         self.cache.set(key.to_string(), candidates.to_vec());
+        self.framework_cache
+            .write()
+            .insert(key.to_string(), framework);
+    }
+
+    fn lookup_cached_framework(&self, key: &str) -> Option<CompletionFrameworkKind> {
+        self.framework_cache.read().get(key).copied()
     }
 
     /// Deduplication and sorting
@@ -668,14 +721,14 @@ mod tests {
         let cursor_pos = input.len();
         let current_dir = std::env::current_dir().expect("current dir available");
 
-        let candidates = engine.complete(input, cursor_pos, &current_dir, 50).await;
+        let completion_result = engine.complete(input, cursor_pos, &current_dir, 50).await;
 
         assert!(
-            !candidates.is_empty(),
+            !completion_result.candidates.is_empty(),
             "expected git subcommand suggestions"
         );
 
-        for candidate in &candidates {
+        for candidate in &completion_result.candidates {
             assert!(
                 candidate.text.starts_with('a'),
                 "candidate '{}' should be filtered by prefix",
@@ -684,8 +737,13 @@ mod tests {
         }
 
         assert!(
-            candidates.iter().any(|c| c.text == "add"),
+            completion_result.candidates.iter().any(|c| c.text == "add"),
             "git add should remain available"
+        );
+
+        assert_eq!(
+            completion_result.framework,
+            crate::completion::framework::CompletionFrameworkKind::Inline
         );
     }
 

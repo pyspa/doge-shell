@@ -307,7 +307,7 @@ pub(crate) fn last_word(s: &str) -> &str {
     s.split_whitespace().last().unwrap_or("")
 }
 
-fn default_completion_framework() -> CompletionFrameworkKind {
+pub(super) fn default_completion_framework() -> CompletionFrameworkKind {
     match std::env::var("DSH_COMPLETION_FRAMEWORK") {
         Ok(value) if value.eq_ignore_ascii_case("skim") => CompletionFrameworkKind::Skim,
         Ok(value) if value.eq_ignore_ascii_case("inline") => CompletionFrameworkKind::Inline,

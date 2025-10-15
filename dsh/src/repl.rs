@@ -1,4 +1,4 @@
-use crate::completion::integrated::IntegratedCompletionEngine;
+use crate::completion::integrated::{CompletionResult, IntegratedCompletionEngine};
 use crate::completion::{self, Completion, MAX_RESULT};
 use crate::dirs;
 use crate::history::FrecencyHistory;
@@ -830,7 +830,10 @@ impl<'a> Repl<'a> {
                 );
 
                 // Get completion candidates from the integrated engine
-                let candidates = self
+                let CompletionResult {
+                    candidates: engine_candidates,
+                    framework: completion_framework,
+                } = self
                     .integrated_completion
                     .complete(
                         &input_text,
@@ -841,34 +844,37 @@ impl<'a> Repl<'a> {
                     .await;
 
                 debug!(
-                    "IntegratedCompletionEngine returned {} candidates",
-                    candidates.len()
+                    "IntegratedCompletionEngine returned {} candidates (framework: {:?})",
+                    engine_candidates.len(),
+                    completion_framework
                 );
-                for (i, candidate) in candidates.iter().enumerate() {
+                for (i, candidate) in engine_candidates.iter().enumerate() {
                     debug!("Integrated engine candidate {}: {:?}", i, candidate);
                 }
 
                 // Attempt to get completion result
                 // First try with integrated completion engine, then fall back to legacy system
-                let completion_result = if !candidates.is_empty() {
+                let completion_result = if !engine_candidates.is_empty() {
                     // If integrated engine returned candidates, show them with skim selector
                     let completion_candidates: Vec<completion::Candidate> =
-                        self.integrated_completion.to_candidates(candidates);
+                        self.integrated_completion.to_candidates(engine_candidates);
 
                     debug!(
-                        "Converted to {} UI candidates for skim",
-                        completion_candidates.len()
+                        "Converted to {} UI candidates for {:?}",
+                        completion_candidates.len(),
+                        completion_framework
                     );
                     for (i, candidate) in completion_candidates.iter().enumerate() {
                         debug!("Skim UI candidate {}: {:?}", i, candidate);
                     }
 
-                    completion::select_completion_items_with_config(
+                    completion::select_completion_items_with_framework(
                         completion_candidates,
                         completion_query,
                         &prompt_text,
                         &input_text,
                         crate::completion::CompletionConfig::default(),
+                        completion_framework,
                     )
                 } else {
                     debug!(

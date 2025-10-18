@@ -2,6 +2,7 @@ use super::CompletionCandidate;
 use super::DynamicCompletionHandler;
 use super::ParsedCommandLine;
 use crate::completion::CompletionType;
+use crate::completion::parser::CompletionContext;
 use anyhow::Result;
 use tokio::process::Command;
 use tracing::debug;
@@ -11,13 +12,23 @@ pub struct GitCompletionHandler;
 
 impl DynamicCompletionHandler for GitCompletionHandler {
     fn matches(&self, parsed_command: &ParsedCommandLine) -> bool {
-        // Match git switch or git checkout commands
-        parsed_command.command == "git"
-            && (parsed_command
-                .args
-                .first()
-                .is_some_and(|arg| arg == "switch" || arg == "checkout"))
-            && parsed_command.args.len() <= 2
+        if parsed_command.command != "git" {
+            return false;
+        }
+
+        let primary = match primary_subcommand(parsed_command) {
+            Some(value) => value,
+            None => return false,
+        };
+
+        if !is_branch_related_primary(primary) {
+            return false;
+        }
+
+        match primary {
+            "push" | "pull" | "fetch" => is_branch_target_for_remote(parsed_command),
+            _ => is_branch_target_position(parsed_command),
+        }
     }
 
     fn generate_candidates(
@@ -76,4 +87,54 @@ impl DynamicCompletionHandler for GitCompletionHandler {
         );
         Ok(candidates)
     }
+}
+
+fn primary_subcommand(parsed_command: &ParsedCommandLine) -> Option<&str> {
+    if let Some(first) = parsed_command.subcommand_path.first() {
+        Some(first.as_str())
+    } else {
+        parsed_command.args.first().map(|arg| arg.as_str())
+    }
+}
+
+fn is_branch_related_primary(primary: &str) -> bool {
+    matches!(
+        primary,
+        "checkout" | "switch" | "merge" | "rebase" | "branch" | "reset" | "push" | "pull" | "fetch"
+    )
+}
+
+fn is_branch_target_position(parsed_command: &ParsedCommandLine) -> bool {
+    if parsed_command.subcommand_path.len() <= 1 && parsed_command.args.is_empty() {
+        if let Some(current_arg) = parsed_command.current_arg.as_deref()
+            && current_arg.is_empty()
+        {
+            return true;
+        }
+
+        matches!(
+            parsed_command.completion_context,
+            CompletionContext::Argument { .. }
+        )
+    } else {
+        true
+    }
+}
+
+fn is_branch_target_for_remote(parsed_command: &ParsedCommandLine) -> bool {
+    let sub_len = parsed_command.subcommand_path.len();
+
+    if sub_len <= 1 {
+        return false;
+    }
+
+    if sub_len > 2 || !parsed_command.args.is_empty() {
+        return true;
+    }
+
+    parsed_command
+        .current_arg
+        .as_deref()
+        .map(|arg| arg.is_empty())
+        .unwrap_or(false)
 }

@@ -144,7 +144,7 @@ impl Default for DynamicCompletionRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::completion::parser::CompletionContext;
+    use crate::completion::parser::{CommandLineParser, CompletionContext};
 
     fn create_parsed_command(command: &str, args: Vec<&str>) -> ParsedCommandLine {
         ParsedCommandLine {
@@ -210,6 +210,45 @@ mod tests {
         assert!(handler.matches(&create_parsed_command("git", vec!["checkout"])));
         assert!(!handler.matches(&create_parsed_command("git", vec!["commit"])));
         assert!(!handler.matches(&create_parsed_command("github", vec!["switch"])));
+    }
+
+    #[test]
+    fn test_git_handler_checkout_trailing_space() {
+        let parser = CommandLineParser::new();
+        let handler = git::GitCompletionHandler;
+        let parsed = parser.parse("git checkout ", "git checkout ".len());
+        assert!(handler.matches(&parsed));
+    }
+
+    #[test]
+    fn test_git_handler_checkout_without_argument() {
+        let parser = CommandLineParser::new();
+        let handler = git::GitCompletionHandler;
+        let parsed = parser.parse("git checkout", "git checkout".len());
+        assert!(!handler.matches(&parsed));
+    }
+
+    #[test]
+    fn test_git_handler_push_needs_branch() {
+        let parser = CommandLineParser::new();
+        let handler = git::GitCompletionHandler;
+
+        let parsed_remote_only = parser.parse("git push origin", "git push origin".len());
+        assert!(!handler.matches(&parsed_remote_only));
+
+        let parsed_trailing = parser.parse("git push origin ", "git push origin ".len());
+        assert!(handler.matches(&parsed_trailing));
+
+        let parsed_with_branch = parser.parse("git push origin main", "git push origin main".len());
+        assert!(handler.matches(&parsed_with_branch));
+    }
+
+    #[test]
+    fn test_git_handler_merge_branch() {
+        let parser = CommandLineParser::new();
+        let handler = git::GitCompletionHandler;
+        let parsed = parser.parse("git merge feature", "git merge feature".len());
+        assert!(handler.matches(&parsed));
     }
 
     #[test]

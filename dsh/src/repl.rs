@@ -1,6 +1,7 @@
 use crate::completion::integrated::{CompletionResult, IntegratedCompletionEngine};
 use crate::completion::{self, Completion, MAX_RESULT};
 use crate::dirs;
+use crate::errors::display_user_error;
 use crate::history::FrecencyHistory;
 use crate::input::{Input, InputConfig, display_width};
 use crate::parser::Rule;
@@ -26,30 +27,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 use tracing::{debug, warn};
-
-/// Display error in a user-friendly format without stack traces
-fn display_user_error(err: &anyhow::Error) {
-    let error_msg = err.to_string();
-
-    // Check if it's a command not found error
-    if error_msg.contains("unknown command:") {
-        if let Some(cmd_start) = error_msg.find("unknown command: ") {
-            let cmd = &error_msg[cmd_start + 17..]; // Skip "unknown command: "
-            eprintln!("dsh: {}: command not found", cmd.trim());
-        } else {
-            eprintln!("dsh: command not found");
-        }
-    } else if error_msg.contains("Shell terminated by double Ctrl+C")
-        || error_msg.contains("Normal exit")
-        || error_msg.contains("Exit by")
-    {
-        // Don't display normal exit messages
-        // debug!("Shell exiting normally: {}", error_msg);
-    } else {
-        // For other errors, display the root cause without debug info
-        eprintln!("dsh: {error_msg}");
-    }
-}
 
 const NONE: KeyModifiers = KeyModifiers::NONE;
 const CTRL: KeyModifiers = KeyModifiers::CONTROL;
@@ -961,7 +938,7 @@ impl<'a> Repl<'a> {
                             debug!("exit: {} : {:?}", self.input.as_str(), code);
                         }
                         Err(err) => {
-                            display_user_error(&err);
+                            display_user_error(&err, false);
                         }
                     }
                     self.input.clear();
@@ -986,7 +963,7 @@ impl<'a> Repl<'a> {
                     });
                     let mut ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);
                     if let Err(err) = self.shell.eval_str(&mut ctx, input, true).await {
-                        display_user_error(&err);
+                        display_user_error(&err, false);
                     }
                     self.input.clear();
                 }

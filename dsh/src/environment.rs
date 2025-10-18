@@ -11,40 +11,12 @@ use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 // Pre-compiled regex patterns for path processing
 static ABSOLUTE_PATH_REGEX: std::sync::LazyLock<Regex> =
     std::sync::LazyLock::new(|| Regex::new(r"^/").unwrap());
 static RELATIVE_PATH_REGEX: std::sync::LazyLock<Regex> =
     std::sync::LazyLock::new(|| Regex::new(r"^\.\/").unwrap());
-#[allow(dead_code)]
-static HOME_PATH_REGEX: std::sync::LazyLock<Regex> =
-    std::sync::LazyLock::new(|| Regex::new(r"^~").unwrap());
-
-/// Environment change notification mechanism
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub struct EnvironmentVersion {
-    version: Arc<AtomicU64>,
-}
-
-#[allow(dead_code)]
-impl EnvironmentVersion {
-    pub fn new() -> Self {
-        Self {
-            version: Arc::new(AtomicU64::new(0)),
-        }
-    }
-
-    pub fn increment(&self) {
-        self.version.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn get(&self) -> u64 {
-        self.version.load(Ordering::Relaxed)
-    }
-}
 
 use tracing::debug;
 

@@ -12,47 +12,6 @@ use crate::terminal::renderer::TerminalRenderer;
 use dsh_types::Context;
 use libc::STDIN_FILENO;
 
-/// RAII wrapper for file descriptors to ensure proper cleanup
-#[allow(dead_code)]
-struct FileDescriptor {
-    fd: RawFd,
-    should_close: bool,
-}
-
-#[allow(dead_code)]
-impl FileDescriptor {
-    fn new(fd: RawFd) -> Self {
-        Self {
-            fd,
-            should_close: true,
-        }
-    }
-
-    fn new_no_close(fd: RawFd) -> Self {
-        Self {
-            fd,
-            should_close: false,
-        }
-    }
-
-    fn raw(&self) -> RawFd {
-        self.fd
-    }
-
-    fn leak(mut self) -> RawFd {
-        self.should_close = false;
-        self.fd
-    }
-}
-
-impl Drop for FileDescriptor {
-    fn drop(&mut self) {
-        if self.should_close && self.fd >= 0 {
-            close(self.fd).ok(); // Ignore errors in destructor
-        }
-    }
-}
-
 struct RawModeGuard {
     disabled: bool,
 }

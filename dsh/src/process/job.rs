@@ -3,7 +3,8 @@ use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::sys::signal::{Signal, killpg};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::{Pid, close, getpgrp, isatty, setpgid, tcsetpgrp};
-use std::os::unix::io::RawFd;
+use std::fs::File;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::time::Duration;
 use tokio::time;
 use tracing::{debug, error};
@@ -237,6 +238,19 @@ impl Job {
         shell: &mut Shell,
         process: &mut JobProcess,
     ) -> Result<()> {
+        let previous_infile = ctx.infile;
+        let mut _input_file_guard: Option<File> = None;
+        let mut input_fd: Option<RawFd> = None;
+
+        if let Some(Redirect::Input(ref path)) = self.redirect {
+            let file = File::open(path)
+                .with_context(|| format!("failed to open input redirect file '{}'", path))?;
+            let fd = file.as_raw_fd();
+            ctx.infile = fd;
+            input_fd = Some(fd);
+            _input_file_guard = Some(file);
+        }
+
         let (pid, mut next_process) = process.launch(ctx, shell, &self.redirect, self.stdout)?;
         if self.pid.is_none() {
             self.pid = Some(pid); // set process pid
@@ -288,7 +302,13 @@ impl Job {
 
         let (stdin, stdout, stderr) = process.get_io();
         if stdin != self.stdin {
-            close(stdin).context("failed close")?;
+            let should_close = match input_fd {
+                Some(fd) => stdin != fd,
+                None => true,
+            };
+            if should_close {
+                close(stdin).context("failed close")?;
+            }
         }
         if stdout != self.stdout {
             close(stdout).context("failed close stdout")?;
@@ -303,6 +323,13 @@ impl Job {
         if let Some(ref redirect) = self.redirect {
             redirect.process(ctx);
         }
+
+        if let Some(fd) = input_fd
+            && ctx.infile == fd
+        {
+            ctx.infile = previous_infile;
+        }
+
         // run next pipeline process
         if let Some(Err(err)) = next_process
             .take()

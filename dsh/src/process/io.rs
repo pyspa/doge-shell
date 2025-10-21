@@ -184,10 +184,7 @@ pub(crate) fn handle_output_redirect(
                 );
                 Ok(Some(pout))
             }
-            _ => {
-                tracing::debug!("🔀 REDIRECT: No matching redirect pattern");
-                Ok(None)
-            }
+            Redirect::Input(_) => Ok(None),
         }
     } else {
         if let Some(out) = ctx.captured_out {

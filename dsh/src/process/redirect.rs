@@ -11,7 +11,7 @@ pub enum Redirect {
     StderrAppend(String),
     StdouterrOutput(String),
     StdouterrAppend(String),
-    Input,
+    Input(String),
 }
 
 impl Redirect {
@@ -65,7 +65,7 @@ impl Redirect {
                     }
                 });
             }
-            Redirect::Input => {}
+            Redirect::Input(_) => {}
         }
     }
 }

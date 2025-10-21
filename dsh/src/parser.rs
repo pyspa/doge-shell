@@ -184,6 +184,8 @@ fn expand_alias_tilde(
         | Rule::stdout_redirect_direction
         | Rule::stderr_redirect_direction
         | Rule::stdouterr_redirect_direction
+        | Rule::stdin_redirect_direction
+        | Rule::stdin_redirect_direction_in
         | Rule::command_subst => {
             argv.push(shellexpand::tilde(pair.as_str()).to_string());
         }
@@ -207,6 +209,12 @@ fn expand_alias_tilde(
         Rule::pipe_command => {
             debug!("expand pipe_command {}", pair.as_str());
             // Pipe character is added by expand_alias function, so don't add it here
+            for inner_pair in pair.into_inner() {
+                let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
+                argv.append(&mut v);
+            }
+        }
+        Rule::redirect => {
             for inner_pair in pair.into_inner() {
                 let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
                 argv.append(&mut v);
@@ -273,7 +281,6 @@ fn expand_alias_tilde(
                     | Rule::command
                     | Rule::simple_command
                     | Rule::args
-                    | Rule::redirect
                     | Rule::span => {
                         for inner_pair in inner_pair.into_inner() {
                             let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
@@ -589,6 +596,7 @@ mod tests {
     use super::*;
     use pest::Parser;
     use std::cell::RefCell;
+    use std::path::PathBuf;
     use std::rc::Rc;
     use tracing::debug;
 
@@ -727,6 +735,57 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn parse_simple_command_with_input_redirect() {
+        init();
+        let mut pairs = ShellParser::parse(Rule::simple_command, "cat < input.txt")
+            .unwrap_or_else(|e| panic!("{}", e));
+
+        let command = pairs.next().expect("simple_command");
+        assert_eq!(Rule::simple_command, command.as_rule());
+
+        let mut inner_pairs = command.into_inner();
+        let argv0 = inner_pairs.next().expect("argv0");
+        assert_eq!(Rule::argv0, argv0.as_rule());
+        assert_eq!("cat", argv0.as_str());
+
+        let args = inner_pairs.next().expect("args");
+        assert_eq!(Rule::args, args.as_rule());
+
+        let mut args_inner = args.into_inner();
+        let redirect = args_inner.next().expect("redirect");
+        assert_eq!(Rule::redirect, redirect.as_rule());
+
+        let mut redirect_inner = redirect.into_inner();
+        let direction = redirect_inner.next().expect("stdin redirect direction");
+        assert_eq!(Rule::stdin_redirect_direction, direction.as_rule());
+
+        let target = redirect_inner.next().expect("redirect target span");
+        assert_eq!(Rule::span, target.as_rule());
+        assert_eq!("input.txt", target.as_str());
+
+        assert!(redirect_inner.next().is_none());
+        assert!(args_inner.next().is_none());
+        assert!(inner_pairs.next().is_none());
+        assert!(pairs.next().is_none());
+    }
+
+    #[test]
+    fn expand_alias_preserves_input_redirect() {
+        init();
+        let env = Environment::new();
+        let mut pairs = ShellParser::parse(Rule::simple_command, "cat < input.txt")
+            .unwrap_or_else(|e| panic!("{}", e));
+        let alias_simple = pairs.next().unwrap();
+        let tokens = expand_alias_tilde(alias_simple, &env.read().alias, &PathBuf::from("."))
+            .expect("tokenize redirect");
+        assert_eq!(tokens, vec!["cat", "<", "input.txt"]);
+
+        let result =
+            expand_alias("cat < input.txt".to_string(), env).expect("alias expansion succeeds");
+        assert_eq!(result, "cat < input.txt");
     }
 
     #[test]

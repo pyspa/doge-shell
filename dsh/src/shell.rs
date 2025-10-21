@@ -483,7 +483,8 @@ impl Shell {
                             for pair in inner_pair.into_inner() {
                                 if let Rule::stdout_redirect_direction
                                 | Rule::stderr_redirect_direction
-                                | Rule::stdouterr_redirect_direction = pair.as_rule()
+                                | Rule::stdouterr_redirect_direction
+                                | Rule::stdin_redirect_direction = pair.as_rule()
                                 {
                                     if let Some(rule) = pair.into_inner().next() {
                                         redirect_rule = Some(rule.as_rule());
@@ -511,6 +512,9 @@ impl Shell {
                                         }
                                         Some(Rule::stdouterr_redirect_direction_append) => {
                                             Some(Redirect::StdouterrAppend(dest.to_string()))
+                                        }
+                                        Some(Rule::stdin_redirect_direction_in) => {
+                                            Some(Redirect::Input(dest.to_string()))
                                         }
                                         _ => None,
                                     };

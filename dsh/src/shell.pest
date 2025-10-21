@@ -29,6 +29,7 @@ literal_d_quoted = ${
 proc_subst_direction_in = { "<(" }
 proc_subst_direction = { proc_subst_direction_in }
 proc_subst = { proc_subst_direction ~ group_list ~ ")" }
+command_subst = { "$(" ~ sp* ~ group_list ~ sp* ~ ")" }
 subshell = { "(" ~ group_list ~ ")" }
 group_list = _{
     commands
@@ -47,7 +48,7 @@ stdouterr_redirect_direction = { ( stdouterr_redirect_direction_append | stdoute
 stderr_redirect_direction = { ( stderr_redirect_direction_append | stderr_redirect_direction_out ) }
 stdout_redirect_direction = { ( stdout_redirect_direction_append | stdout_redirect_direction_out ) }
 redirect = { (stdouterr_redirect_direction | stderr_redirect_direction | stdout_redirect_direction) ~ sp* ~ span }
-span = { quoted | glob_word | word | variable | proc_subst | subshell }
+span = { quoted | glob_word | word | variable | proc_subst | subshell | command_subst }
 argv0 = { span }
 args = { (sp* ~ (redirect|span))+ }
 

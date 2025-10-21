@@ -183,7 +183,8 @@ fn expand_alias_tilde(
         | Rule::literal_d_quoted
         | Rule::stdout_redirect_direction
         | Rule::stderr_redirect_direction
-        | Rule::stdouterr_redirect_direction => {
+        | Rule::stdouterr_redirect_direction
+        | Rule::command_subst => {
             argv.push(shellexpand::tilde(pair.as_str()).to_string());
         }
         Rule::argv0 => {
@@ -230,6 +231,10 @@ fn expand_alias_tilde(
                             argv.append(&mut v);
                         }
                         argv.push(")".to_string());
+                    }
+                    Rule::command_subst => {
+                        debug!("expand command_subst {}", inner_pair.as_str());
+                        argv.push(inner_pair.as_str().to_string());
                     }
                     Rule::subshell => {
                         debug!("expand subshell {}", inner_pair.as_str());

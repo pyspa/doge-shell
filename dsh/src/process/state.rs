@@ -35,6 +35,7 @@ pub enum SubshellType {
     None,
     Subshell,
     ProcessSubstitution,
+    CommandSubstitution,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

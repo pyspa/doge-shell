@@ -196,7 +196,11 @@ fn resolve_allowlist_path() -> Result<Option<PathBuf>, String> {
 mod tests {
     use super::*;
     use dsh_types::Context;
+    use once_cell::sync::Lazy;
+    use std::sync::Mutex;
     use tempfile::tempdir;
+
+    static ENV_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
     struct NoopProxy {
         allow: Vec<String>,
@@ -255,6 +259,7 @@ mod tests {
 
     #[test]
     fn load_allowlist_prefers_env() {
+        let _lock = ENV_LOCK.lock().unwrap();
         let _guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls,git\ncat");
         assert_eq!(
             load_allowed_commands(vec![]).unwrap(),
@@ -264,6 +269,7 @@ mod tests {
 
     #[test]
     fn load_allowlist_reads_config_file() {
+        let _lock = ENV_LOCK.lock().unwrap();
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("allow.json");
         let contents = json!({ "allowed_commands": ["cargo"] }).to_string();
@@ -279,6 +285,7 @@ mod tests {
 
     #[test]
     fn load_allowlist_merges_runtime_entries() {
+        let _lock = ENV_LOCK.lock().unwrap();
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("allow.json");
         let contents = json!({ "allowed_commands": ["cargo"] }).to_string();
@@ -296,6 +303,7 @@ mod tests {
 
     #[test]
     fn run_reports_full_command_on_disallowed_program() {
+        let _lock = ENV_LOCK.lock().unwrap();
         let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls"); // Set env to include the allowed command
         let mut proxy = NoopProxy {
             allow: vec!["ls".to_string()],

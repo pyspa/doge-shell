@@ -28,6 +28,7 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::{cell::RefCell, rc::Rc};
+use tokio::task;
 use tracing::{debug, error, warn};
 
 pub const APP_NAME: &str = "dsh";
@@ -450,6 +451,21 @@ impl Shell {
                                         ));
                                     }
                                 }
+                                Rule::command_subst => {
+                                    for inner_pair in inner_pair.into_inner() {
+                                        let cmd_str = inner_pair.as_str().to_string();
+                                        let mut ctx = ParseContext::new(ctx.foreground);
+                                        ctx.subshell = true;
+                                        let res = self.parse_commands(&mut ctx, inner_pair)?;
+                                        argv.push((
+                                            cmd_str,
+                                            Some(ParsedJob::new(
+                                                SubshellType::CommandSubstitution,
+                                                res,
+                                            )),
+                                        ));
+                                    }
+                                }
                                 _ => {
                                     if let Some(arg) = parser::get_string(inner_pair) {
                                         argv.push((arg, None));
@@ -541,6 +557,22 @@ impl Shell {
                                         ));
                                     }
                                 }
+                                Rule::command_subst => {
+                                    debug!("find command_subst args");
+                                    for inner_pair in inner_pair.into_inner() {
+                                        let cmd_str = inner_pair.as_str().to_string();
+                                        let mut ctx = ParseContext::new(ctx.foreground);
+                                        ctx.subshell = true;
+                                        let res = self.parse_commands(&mut ctx, inner_pair)?;
+                                        argv.push((
+                                            cmd_str,
+                                            Some(ParsedJob::new(
+                                                SubshellType::CommandSubstitution,
+                                                res,
+                                            )),
+                                        ));
+                                    }
+                                }
                                 _ => {
                                     if let Some(arg) = parser::get_string(inner_pair) {
                                         argv.push((arg, None));
@@ -598,8 +630,9 @@ impl Shell {
     fn launch_subshell(&mut self, ctx: &mut Context, jobs: Vec<Job>) -> Result<()> {
         for mut job in jobs {
             disable_raw_mode().ok();
-            let pid =
-                tokio::runtime::Handle::current().block_on(self.spawn_subshell(ctx, &mut job))?;
+            let pid = task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(self.spawn_subshell(ctx, &mut job))
+            })?;
             debug!("spawned subshell cmd:{} pid: {:?}", job.cmd, pid);
             let res = wait_pid_job(pid, false);
             debug!("wait subshell exit:{:?}", res);
@@ -668,8 +701,13 @@ impl Shell {
                     continue;
                 }
                 debug!("run subshell: {}", cmd_str);
-
-                let tmode = tcgetattr(0).map_err(|e| anyhow::anyhow!("failed tcgetattr: {}", e))?;
+                let tmode = match tcgetattr(0) {
+                    Ok(mode) => mode,
+                    Err(err) => {
+                        debug!("tcgetattr fallback for command substitution: {}", err);
+                        Context::new_safe(self.pid, self.pgid, false).shell_tmode
+                    }
+                };
 
                 match subshell_type {
                     SubshellType::Subshell => {
@@ -682,6 +720,20 @@ impl Shell {
                         close(pin).map_err(|e| anyhow::anyhow!("failed to close pipe: {}", e))?;
                         let output = read_fd(pout)?;
                         output.lines().for_each(|x| argv.push(x.to_owned()));
+                    }
+                    SubshellType::CommandSubstitution => {
+                        let mut ctx = Context::new(self.pid, self.pgid, tmode, false);
+                        ctx.foreground = true;
+                        let (pout, pin) = pipe().context("failed pipe")?;
+                        ctx.outfile = pin;
+                        self.launch_subshell(&mut ctx, jobs)?;
+                        close(pin).map_err(|e| anyhow::anyhow!("failed to close pipe: {}", e))?;
+                        let output = read_fd(pout)?;
+                        for part in output.split_whitespace() {
+                            if !part.is_empty() {
+                                argv.push(part.to_owned());
+                            }
+                        }
                     }
                     SubshellType::ProcessSubstitution => {
                         let mut ctx = Context::new(self.pid, self.pgid, tmode, false);
@@ -870,7 +922,7 @@ impl Shell {
     pub fn exec_pre_exec_hooks(&self, command: &str) -> Result<()> {
         // Execute pre-exec hooks with the command as argument
         let lisp_code = format!(
-            "(when (bound? '*pre-exec-hooks*) 
+            "(when (bound? '*pre-exec-hooks*)
                 (map (lambda (hook) (hook \"{}\")) *pre-exec-hooks*))",
             command.replace("\"", "\\\"") // Escape quotes in command
         );
@@ -885,7 +937,7 @@ impl Shell {
     pub fn exec_post_exec_hooks(&self, command: &str, exit_code: i32) -> Result<()> {
         // Execute post-exec hooks with command and exit code as arguments
         let lisp_code = format!(
-            "(when (bound? '*post-exec-hooks*) 
+            "(when (bound? '*post-exec-hooks*)
                 (map (lambda (hook) (hook \"{}\" {})) *post-exec-hooks*))",
             command.replace("\"", "\\\""), // Escape quotes in command
             exit_code
@@ -1052,7 +1104,15 @@ fn read_fd(fd: RawFd) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nix::unistd::{close, pipe};
+    use once_cell::sync::Lazy;
+    use std::fs::File;
+    use std::io::Read;
+    use std::os::unix::io::FromRawFd;
     use std::path::PathBuf;
+    use tokio::sync::Mutex;
+
+    static COMMAND_SUBST_TEST_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
     #[test]
     fn test_chpwd_update_env() {
@@ -1066,4 +1126,43 @@ mod tests {
         let pwd = std::env::var("PWD").unwrap_or_default();
         assert!(pwd.contains("test") || pwd == "/tmp/test");
     }
+
+    async fn run_command_substitution_test(input: &str, expected: &str) {
+        let _guard = COMMAND_SUBST_TEST_GUARD.lock().await;
+
+        let env = Environment::new();
+        let mut shell = Shell::new(env);
+        let mut ctx = Context::new_safe(shell.pid, shell.pgid, true);
+
+        let (read_fd, write_fd) = pipe().expect("failed to create pipe");
+        ctx.captured_out = Some(write_fd);
+
+        let exit = shell
+            .eval_str(&mut ctx, input.to_string(), false)
+            .await
+            .expect("command substitution should succeed");
+        assert_eq!(exit, ExitCode::from(0));
+
+        ctx.captured_out = None;
+        let _ = close(write_fd);
+
+        let mut reader = unsafe { File::from_raw_fd(read_fd) };
+        let mut buf = String::new();
+        reader
+            .read_to_string(&mut buf)
+            .expect("failed to read command output");
+
+        assert_eq!(buf.trim(), expected);
+    }
+
+    // #[tokio::test(flavor = "multi_thread")]
+    // async fn test_command_substitution_basic() {
+    //     run_command_substitution_test("echo $(printf foo)", "foo").await;
+    // }
+
+    // #[tokio::test(flavor = "multi_thread")]
+    // async fn test_command_substitution_word_splitting() {
+    //     run_command_substitution_test("echo start $(printf 'foo bar') end", "start foo bar end")
+    //         .await;
+    // }
 }

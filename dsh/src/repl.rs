@@ -505,10 +505,7 @@ impl<'a> Repl<'a> {
                         continue;
                     }
 
-                    let env = self.shell.environment.read();
-                    let word_exists = env.lookup(word).is_some();
-                    let is_alias = env.alias.contains_key(word);
-                    let word_is_valid = word_exists || is_alias;
+                    let word_is_valid = self.command_is_valid(word);
 
                     match rule {
                         Rule::argv0 => {
@@ -1149,11 +1146,36 @@ impl<'a> Repl<'a> {
             }
         }
     }
+
+    fn command_is_valid(&self, word: &str) -> bool {
+        if word.is_empty() {
+            return false;
+        }
+
+        {
+            let env = self.shell.environment.read();
+            if env.lookup(word).is_some() {
+                return true;
+            }
+
+            if env.alias.contains_key(word) {
+                return true;
+            }
+        }
+
+        if dsh_builtin::get_command(word).is_some() {
+            return true;
+        }
+
+        self.shell.lisp_engine.borrow().is_export(word)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::environment::Environment;
+    use crate::shell::Shell;
     use std::thread;
 
     #[tokio::test]
@@ -1233,5 +1255,29 @@ mod tests {
         // Press after reset is treated as first press
         assert!(!state.on_ctrl_c_pressed());
         assert_eq!(state.press_count, 1);
+    }
+
+    #[test]
+    fn command_is_valid_detects_builtin_and_alias() {
+        let env = Environment::new();
+        {
+            let mut writer = env.write();
+            writer.alias.insert("ll".to_string(), "ls -al".to_string());
+        }
+
+        let mut shell = Shell::new(env.clone());
+        let repl = Repl::new(&mut shell);
+
+        assert!(
+            repl.command_is_valid("cd"),
+            "built-in command should be valid"
+        );
+        assert!(repl.command_is_valid("ll"), "alias should be valid");
+        assert!(
+            !repl.command_is_valid("definitely_not_a_command_42"),
+            "unknown command should not be valid"
+        );
+
+        drop(repl);
     }
 }

@@ -411,12 +411,13 @@ impl CommandLineParser {
         // Redirect target should trigger argument-like completion (file paths)
         if params.cursor_token_index > 0
             && let Some(prev_token) = params.all_tokens.get(params.cursor_token_index - 1)
-                && Self::is_redirect_operator(prev_token) {
-                    return CompletionContext::Argument {
-                        arg_index: params.specified_arguments.len(),
-                        arg_type: None,
-                    };
-                }
+            && Self::is_redirect_operator(prev_token)
+        {
+            return CompletionContext::Argument {
+                arg_index: params.specified_arguments.len(),
+                arg_type: None,
+            };
+        }
 
         if Self::is_redirect_operator(params.current_token) {
             return CompletionContext::Argument {

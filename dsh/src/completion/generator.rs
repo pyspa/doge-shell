@@ -5,7 +5,7 @@ use super::command::{
 use super::parser::{CompletionContext, ParsedCommandLine};
 use anyhow::Result;
 use std::fs;
-use std::path::Path;
+use std::path::{MAIN_SEPARATOR, Path};
 
 /// Completion candidate generator
 pub struct CompletionGenerator {
@@ -269,22 +269,7 @@ impl CompletionGenerator {
     ) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::new();
 
-        let (dir_path, file_prefix) = if current_token.contains('/') {
-            let path = Path::new(current_token);
-            if let Some(parent) = path.parent() {
-                (
-                    parent.to_string_lossy().to_string(),
-                    path.file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string(),
-                )
-            } else {
-                (".".to_string(), current_token.to_string())
-            }
-        } else {
-            (".".to_string(), current_token.to_string())
-        };
+        let (dir_path, file_prefix) = Self::split_dir_and_prefix(current_token);
 
         if let Ok(entries) = fs::read_dir(&dir_path) {
             for entry in entries.flatten() {
@@ -328,22 +313,7 @@ impl CompletionGenerator {
     ) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::new();
 
-        let (dir_path, dir_prefix) = if current_token.contains('/') {
-            let path = Path::new(current_token);
-            if let Some(parent) = path.parent() {
-                (
-                    parent.to_string_lossy().to_string(),
-                    path.file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string(),
-                )
-            } else {
-                (".".to_string(), current_token.to_string())
-            }
-        } else {
-            (".".to_string(), current_token.to_string())
-        };
+        let (dir_path, dir_prefix) = Self::split_dir_and_prefix(current_token);
 
         if let Ok(entries) = fs::read_dir(&dir_path) {
             for entry in entries.flatten() {
@@ -458,12 +428,53 @@ impl CompletionGenerator {
 
         options
     }
+
+    fn split_dir_and_prefix(current_token: &str) -> (String, String) {
+        if current_token.is_empty() {
+            return (".".to_string(), String::new());
+        }
+
+        let path = Path::new(current_token);
+
+        if Self::ends_with_path_separator(current_token) {
+            let dir = Self::normalize_dir_path(path);
+            return (dir, String::new());
+        }
+
+        if let Some(parent) = path.parent() {
+            let dir = Self::normalize_dir_path(parent);
+            let prefix = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            return (dir, prefix);
+        }
+
+        (".".to_string(), current_token.to_string())
+    }
+
+    fn ends_with_path_separator(token: &str) -> bool {
+        token.ends_with(MAIN_SEPARATOR)
+            || (MAIN_SEPARATOR != '/' && token.ends_with('/'))
+            || (MAIN_SEPARATOR != '\\' && token.ends_with('\\'))
+    }
+
+    fn normalize_dir_path(path: &Path) -> String {
+        if path.as_os_str().is_empty() {
+            ".".to_string()
+        } else {
+            path.to_string_lossy().to_string()
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::completion::command::{Argument, CommandCompletion, SubCommand};
+    use std::path::Path;
+    use tempfile::tempdir;
 
     fn create_test_database() -> CommandCompletionDatabase {
         let mut db = CommandCompletionDatabase::new();
@@ -548,6 +559,69 @@ mod tests {
         assert_eq!(
             CompletionGenerator::build_candidate_path("/usr", "bin"),
             "/usr/bin"
+        );
+    }
+
+    #[test]
+    fn file_candidates_expand_directory_with_trailing_separator() {
+        let temp = tempdir().unwrap();
+        std::fs::write(temp.path().join("alpha.txt"), "").unwrap();
+        std::fs::create_dir(temp.path().join("nested")).unwrap();
+
+        let generator = CompletionGenerator::new(CommandCompletionDatabase::new());
+        let token = format!("{}{}", temp.path().display(), MAIN_SEPARATOR);
+
+        let candidates = generator
+            .generate_file_candidates(&token)
+            .expect("file candidates with trailing separator");
+        let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
+
+        let expected_file = Path::new(&token)
+            .join("alpha.txt")
+            .to_string_lossy()
+            .to_string();
+        let expected_dir = Path::new(&token)
+            .join("nested")
+            .to_string_lossy()
+            .to_string();
+
+        assert!(
+            texts.contains(&expected_file),
+            "expected file candidate {} in {:?}",
+            expected_file,
+            texts
+        );
+        assert!(
+            texts.contains(&expected_dir),
+            "expected directory candidate {} in {:?}",
+            expected_dir,
+            texts
+        );
+    }
+
+    #[test]
+    fn directory_candidates_expand_directory_with_trailing_separator() {
+        let temp = tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("nested")).unwrap();
+
+        let generator = CompletionGenerator::new(CommandCompletionDatabase::new());
+        let token = format!("{}{}", temp.path().display(), MAIN_SEPARATOR);
+
+        let candidates = generator
+            .generate_directory_candidates(&token)
+            .expect("directory candidates with trailing separator");
+        let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
+
+        let expected_dir = Path::new(&token)
+            .join("nested")
+            .to_string_lossy()
+            .to_string();
+
+        assert!(
+            texts.contains(&expected_dir),
+            "expected nested directory candidate {} in {:?}",
+            expected_dir,
+            texts
         );
     }
 }

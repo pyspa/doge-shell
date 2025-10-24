@@ -307,11 +307,7 @@ impl CompletionGenerator {
                         }
                     }
 
-                    let full_path = if dir_path == "." {
-                        file_name
-                    } else {
-                        format!("{dir_path}/{file_name}")
-                    };
+                    let full_path = Self::build_candidate_path(&dir_path, &file_name);
 
                     if path.is_dir() {
                         candidates.push(CompletionCandidate::directory(full_path));
@@ -354,11 +350,7 @@ impl CompletionGenerator {
                 let file_name = entry.file_name().to_string_lossy().to_string();
 
                 if file_name.starts_with(&dir_prefix) && entry.path().is_dir() {
-                    let full_path = if dir_path == "." {
-                        file_name
-                    } else {
-                        format!("{dir_path}/{file_name}")
-                    };
+                    let full_path = Self::build_candidate_path(&dir_path, &file_name);
 
                     candidates.push(CompletionCandidate::directory(full_path));
                 }
@@ -366,6 +358,17 @@ impl CompletionGenerator {
         }
 
         Ok(candidates)
+    }
+
+    fn build_candidate_path(dir_path: &str, file_name: &str) -> String {
+        if dir_path == "." || dir_path.is_empty() {
+            return file_name.to_string();
+        }
+
+        Path::new(dir_path)
+            .join(file_name)
+            .to_string_lossy()
+            .to_string()
     }
 
     /// Generate system command completion candidates (simplified version)
@@ -529,5 +532,22 @@ mod tests {
 
         let add_candidate = candidates.iter().find(|c| c.text == "add");
         assert!(add_candidate.is_some());
+    }
+
+    #[test]
+    fn build_candidate_path_handles_root_without_double_slash() {
+        assert_eq!(
+            CompletionGenerator::build_candidate_path("/", "tmp"),
+            "/tmp"
+        );
+    }
+
+    #[test]
+    fn build_candidate_path_preserves_relative_paths() {
+        assert_eq!(CompletionGenerator::build_candidate_path(".", "foo"), "foo");
+        assert_eq!(
+            CompletionGenerator::build_candidate_path("/usr", "bin"),
+            "/usr/bin"
+        );
     }
 }

@@ -491,7 +491,8 @@ impl<'a> Repl<'a> {
         let mut completion: Option<String> = None;
         let mut can_execute = false;
         if input.is_empty() || reset_completion {
-            self.input.completion = None
+            self.input.completion = None;
+            self.input.color_ranges = None;
         } else {
             completion = self.get_completion_from_history(&input);
 
@@ -780,10 +781,14 @@ impl<'a> Repl<'a> {
             }
             (KeyCode::Tab, NONE) | (KeyCode::BackTab, NONE) => {
                 // Extract the current word at cursor position for completion query
-                let completion_query = match self.input.get_cursor_word() {
-                    Ok(Some((_rule, span))) => Some(span.as_str()),
-                    _ => None,
+                let completion_query_owned = match self.input.get_cursor_word() {
+                    Ok(Some((_rule, span))) => Some(span.as_str().to_string()),
+                    _ => self.input.get_completion_word_fallback(),
                 };
+                let completion_query = completion_query_owned.as_deref();
+                let removal_len = completion_query_owned
+                    .as_ref()
+                    .map(|query| query.chars().count());
 
                 // Get the current prompt text and input text for completion display context
                 let prompt_text = self.prompt.read().mark.clone();
@@ -875,8 +880,8 @@ impl<'a> Repl<'a> {
                         self.input.reset(command.to_string());
                     } else {
                         // For regular completions, replace the query part with the selected value
-                        if let Some(q) = completion_query {
-                            self.input.backspacen(q.len()); // Remove the original query text
+                        if let Some(len) = removal_len {
+                            self.input.backspacen(len); // Remove the original query text
                         }
                         self.input.insert_str(val.as_str()); // Insert the completion
                     }

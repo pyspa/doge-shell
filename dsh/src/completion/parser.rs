@@ -196,10 +196,21 @@ impl CommandLineParser {
         }
 
         // Parse options and arguments
-        let mut skip_next = false;
+        let mut skip_next_option_value = false;
+        let mut skip_next_redirect_target = false;
         for (i, token) in tokens_queue.iter().enumerate() {
-            if skip_next {
-                skip_next = false;
+            if skip_next_option_value {
+                skip_next_option_value = false;
+                continue;
+            }
+
+            if skip_next_redirect_target {
+                skip_next_redirect_target = false;
+                continue;
+            }
+
+            if Self::is_redirect_operator(token) {
+                skip_next_redirect_target = true;
                 continue;
             }
 
@@ -211,11 +222,13 @@ impl CommandLineParser {
                     && !OPTION_REGEX.is_match(next_token)
                     && self.option_takes_value(token)
                 {
-                    skip_next = true;
+                    skip_next_option_value = true;
                 }
-            } else {
-                specified_arguments.push(token.clone());
+
+                continue;
             }
+
+            specified_arguments.push(token.clone());
         }
 
         // Determine current token and completion context
@@ -395,6 +408,23 @@ impl CommandLineParser {
             return CompletionContext::Command;
         }
 
+        // Redirect target should trigger argument-like completion (file paths)
+        if params.cursor_token_index > 0
+            && let Some(prev_token) = params.all_tokens.get(params.cursor_token_index - 1)
+                && Self::is_redirect_operator(prev_token) {
+                    return CompletionContext::Argument {
+                        arg_index: params.specified_arguments.len(),
+                        arg_type: None,
+                    };
+                }
+
+        if Self::is_redirect_operator(params.current_token) {
+            return CompletionContext::Argument {
+                arg_index: params.specified_arguments.len(),
+                arg_type: None,
+            };
+        }
+
         // Subcommand or argument
         if params.subcommand_path.is_empty() || self.looks_like_subcommand(params.current_token) {
             // Only allow subcommand completion if there's a space after the command
@@ -430,6 +460,23 @@ impl CommandLineParser {
             option,
             "--message" | "-m" | "--target" | "--features" | "--git" | "--path" | "--name"
         )
+    }
+
+    /// Determine if token represents a redirect operator
+    fn is_redirect_operator(token: &str) -> bool {
+        if matches!(token, ">" | ">>" | "<" | "&>" | "&>>") {
+            return true;
+        }
+
+        if let Some(prefix) = token.strip_suffix(">>") {
+            return prefix.is_empty() || prefix.chars().all(|c| c.is_ascii_digit());
+        }
+
+        if let Some(prefix) = token.strip_suffix('>') {
+            return prefix.is_empty() || prefix.chars().all(|c| c.is_ascii_digit());
+        }
+
+        false
     }
 }
 
@@ -622,5 +669,43 @@ mod tests {
         // Partial subcommand with space after command - should be subcommand completion
         let result = parser.parse("git a", 5);
         assert_eq!(result.completion_context, CompletionContext::SubCommand);
+    }
+
+    #[test]
+    fn test_redirect_triggers_argument_completion() {
+        let parser = CommandLineParser::new();
+        let input = "cat > ";
+        let result = parser.parse(input, input.len());
+
+        if let CompletionContext::Argument { arg_index, .. } = result.completion_context {
+            assert_eq!(arg_index, 0);
+        } else {
+            panic!(
+                "Expected Argument context after redirect, got {:?}",
+                result.completion_context
+            );
+        }
+
+        assert_eq!(result.current_token, "");
+        assert!(result.specified_arguments.is_empty());
+    }
+
+    #[test]
+    fn test_redirect_target_is_not_counted_as_argument() {
+        let parser = CommandLineParser::new();
+        let input = "cat file > out";
+        let result = parser.parse(input, input.len());
+
+        assert_eq!(result.specified_arguments, vec!["file".to_string()]);
+        assert_eq!(result.current_token, "out");
+
+        if let CompletionContext::Argument { arg_index, .. } = result.completion_context {
+            assert_eq!(arg_index, 1);
+        } else {
+            panic!(
+                "Expected Argument context for redirect target, got {:?}",
+                result.completion_context
+            );
+        }
     }
 }

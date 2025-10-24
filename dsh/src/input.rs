@@ -227,6 +227,30 @@ impl Input {
         parser::get_pos_word(self.input.as_str(), self.cursor)
     }
 
+    /// Fallback computation for completion word when parser cannot identify it (e.g. after redirects)
+    pub fn get_completion_word_fallback(&self) -> Option<String> {
+        if self.input.is_empty() || self.cursor == 0 {
+            return None;
+        }
+
+        let chars: Vec<char> = self.input.chars().collect();
+        let mut start = self.cursor;
+
+        while start > 0 {
+            let ch = chars[start - 1];
+            if ch.is_whitespace() || matches!(ch, '|' | '&' | ';' | '(' | ')' | '<' | '>') {
+                break;
+            }
+            start -= 1;
+        }
+
+        if start < self.cursor {
+            Some(chars[start..self.cursor].iter().collect())
+        } else {
+            None
+        }
+    }
+
     /// Get the current word at cursor position for abbreviation expansion
     /// Returns the word that could be an abbreviation
     pub fn get_current_word_for_abbr(&self) -> Option<String> {
@@ -576,5 +600,33 @@ mod tests {
         let prompt_width = display_width("🐕 < ");
         // emoji(2) + space(1) + <(1) + space(1) = 5
         assert_eq!(prompt_width, 5);
+    }
+
+    #[test]
+    fn test_completion_word_fallback_for_redirect() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+        for ch in "cat > fo".chars() {
+            input.insert(ch);
+        }
+
+        let fallback = input.get_completion_word_fallback();
+        assert_eq!(fallback.as_deref(), Some("fo"));
+    }
+
+    #[test]
+    fn test_completion_word_fallback_handles_whitespace_boundary() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+        for ch in "echo foo".chars() {
+            input.insert(ch);
+        }
+
+        let fallback = input.get_completion_word_fallback();
+        assert_eq!(fallback.as_deref(), Some("foo"));
+
+        input.insert(' ');
+        let fallback_after_space = input.get_completion_word_fallback();
+        assert_eq!(fallback_after_space, None);
     }
 }

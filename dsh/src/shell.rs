@@ -88,6 +88,29 @@ impl std::fmt::Debug for Shell {
     }
 }
 
+struct RawModeRestore {
+    restored: bool,
+}
+
+impl RawModeRestore {
+    fn new() -> Self {
+        Self { restored: false }
+    }
+
+    fn restore(&mut self) {
+        if !self.restored {
+            enable_raw_mode().ok();
+            self.restored = true;
+        }
+    }
+}
+
+impl Drop for RawModeRestore {
+    fn drop(&mut self) {
+        self.restore();
+    }
+}
+
 impl Drop for Shell {
     fn drop(&mut self) {
         disable_raw_mode().ok();
@@ -347,6 +370,7 @@ impl Shell {
             }
 
             disable_raw_mode().ok();
+            let mut raw_mode_guard = RawModeRestore::new();
             if force_background {
                 // all job run background
                 job.foreground = false;
@@ -359,16 +383,18 @@ impl Shell {
                 job.cmd, job.foreground, job.redirect, job.list_op,
             );
 
-            match job.launch(ctx, self).await? {
-                process::ProcessState::Running => {
+            let launch_result = job.launch(ctx, self).await;
+            let mut should_break = false;
+            match launch_result {
+                Ok(process::ProcessState::Running) => {
                     debug!("job '{}' still running", job.cmd);
                     self.wait_jobs.push(job);
                 }
-                process::ProcessState::Stopped(pid, _signal) => {
+                Ok(process::ProcessState::Stopped(pid, _signal)) => {
                     debug!("job '{}' stopped pid: {:?}", job.cmd, pid);
                     self.wait_jobs.push(job);
                 }
-                process::ProcessState::Completed(exit, _signal) => {
+                Ok(process::ProcessState::Completed(exit, _signal)) => {
                     debug!("job '{}' completed exit_code: {:?}", job.cmd, exit);
                     last_exit_code = exit;
 
@@ -378,14 +404,23 @@ impl Shell {
                     }
 
                     if job.list_op == process::ListOp::And && exit != 0 {
-                        break;
+                        should_break = true;
                     }
+                }
+                Err(err) => {
+                    ctx.pid = None;
+                    ctx.pgid = None;
+                    raw_mode_guard.restore();
+                    return Err(err);
                 }
             }
             // reset
             ctx.pid = None;
             ctx.pgid = None;
-            enable_raw_mode().ok();
+            raw_mode_guard.restore();
+            if should_break {
+                break;
+            }
         }
 
         enable_raw_mode().ok();

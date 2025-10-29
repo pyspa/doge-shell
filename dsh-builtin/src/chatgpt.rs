@@ -446,24 +446,106 @@ fn git_string<const N: usize>(args: [&str; N]) -> Option<String> {
 }
 
 fn extract_message_content(message: &Value) -> Option<String> {
-    match message.get("content") {
-        Some(Value::String(text)) => Some(text.to_string()),
-        Some(Value::Array(items)) => {
-            let mut buffer = String::new();
-            for item in items {
-                if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
-                    buffer.push_str(text);
-                } else if let Some(text) = item.get("content").and_then(|v| v.as_str()) {
-                    buffer.push_str(text);
-                }
-            }
+    let content = message.get("content")?;
 
-            if buffer.is_empty() {
-                None
-            } else {
-                Some(buffer)
+    let mut segments = Vec::new();
+    collect_text_segments(content, &mut segments);
+
+    let combined = segments.join("");
+    if combined.trim().is_empty() {
+        None
+    } else {
+        Some(combined)
+    }
+}
+
+fn collect_text_segments(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(text) => {
+            if !text.is_empty() {
+                out.push(text.to_string());
             }
         }
-        _ => None,
+        Value::Array(items) => {
+            for item in items {
+                collect_text_segments(item, out);
+            }
+        }
+        Value::Object(map) => {
+            if let Some(text) = map.get("text") {
+                collect_text_segments(text, out);
+            }
+            if let Some(content) = map.get("content") {
+                collect_text_segments(content, out);
+            }
+            if let Some(value_field) = map.get("value") {
+                collect_text_segments(value_field, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn extract_plain_string_content() {
+        let message = json!({
+            "content": "Hello world",
+        });
+
+        assert_eq!(
+            extract_message_content(&message),
+            Some("Hello world".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_array_of_text_segments() {
+        let message = json!({
+            "content": [
+                {"text": "First"},
+                {"content": "Second"},
+            ],
+        });
+
+        assert_eq!(
+            extract_message_content(&message),
+            Some("FirstSecond".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_nested_value_field() {
+        let message = json!({
+            "content": [
+                {
+                    "type": "text",
+                    "text": {
+                        "value": "概要を説明します",
+                        "annotations": []
+                    }
+                }
+            ],
+        });
+
+        assert_eq!(
+            extract_message_content(&message),
+            Some("概要を説明します".to_string())
+        );
+    }
+
+    #[test]
+    fn returns_none_for_whitespace_only() {
+        let message = json!({
+            "content": [
+                {"text": "   \n"},
+            ],
+        });
+
+        assert_eq!(extract_message_content(&message), None);
     }
 }

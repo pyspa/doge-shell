@@ -159,6 +159,15 @@ impl ChatGptClient {
         let builder = self.request_builder_from_messages(messages, temperature, model, tools)?;
         let response = Self::await_with_ctrl_c(builder.send()).await?;
         let data: Value = Self::await_with_ctrl_c(response.json()).await?;
+
+        match serde_json::to_string(&data) {
+            Ok(serialized) => debug!(chat_direction = "response", json = %serialized),
+            Err(err) => debug!(
+                chat_direction = "response",
+                "chat_response_serialization_failed: {err}"
+            ),
+        }
+
         Ok(data)
     }
 
@@ -213,7 +222,13 @@ impl ChatGptClient {
             map.insert("tools".into(), json!(tools));
         }
 
-        debug!("req: {:?}", body);
+        match serde_json::to_string(&body) {
+            Ok(serialized) => debug!(chat_direction = "request", json = %serialized),
+            Err(err) => debug!(
+                chat_direction = "request",
+                "chat_request_serialization_failed: {err}"
+            ),
+        }
 
         let header_value = format!("Bearer {}", &self.api_key);
         let builder = self

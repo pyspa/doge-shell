@@ -13,6 +13,13 @@ pub fn description() -> &'static str {
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     debug!("call z");
     // Delegate to shell's frecency-based directory navigation system
-    proxy.dispatch(ctx, "z", argv).unwrap();
-    ExitStatus::ExitedWith(0)
+    match proxy.dispatch(ctx, "z", argv) {
+        Ok(()) => ExitStatus::ExitedWith(0),
+        Err(e) => {
+            debug!("z command failed: {}", e);
+            ctx.write_stderr(&format!("z: failed to change directory: {}", e))
+                .ok();
+            ExitStatus::ExitedWith(1)
+        }
+    }
 }

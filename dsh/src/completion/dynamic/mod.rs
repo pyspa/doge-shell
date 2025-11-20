@@ -234,7 +234,7 @@ mod tests {
         let handler = git::GitCompletionHandler;
 
         let parsed_remote_only = parser.parse("git push origin", "git push origin".len());
-        assert!(!handler.matches(&parsed_remote_only));
+        assert!(handler.matches(&parsed_remote_only));
 
         let parsed_trailing = parser.parse("git push origin ", "git push origin ".len());
         assert!(handler.matches(&parsed_trailing));

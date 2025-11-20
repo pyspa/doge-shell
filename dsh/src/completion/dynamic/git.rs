@@ -44,7 +44,15 @@ impl DynamicCompletionHandler for GitCompletionHandler {
         // to run the async code in a blocking context
         let output = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
-                if let Some(arg) = parsed_command.current_arg.as_ref() {
+                let primary = primary_subcommand(parsed_command).unwrap_or("");
+                let is_remote_target = matches!(primary, "push" | "pull" | "fetch")
+                    && parsed_command.args.is_empty()
+                    && parsed_command.current_token
+                        == parsed_command.current_arg.clone().unwrap_or_default();
+
+                if is_remote_target {
+                    Command::new("git").arg("remote").output().await
+                } else if let Some(arg) = parsed_command.current_arg.as_ref() {
                     Command::new("git")
                         .arg("branch")
                         .arg("-a")
@@ -124,17 +132,61 @@ fn is_branch_target_position(parsed_command: &ParsedCommandLine) -> bool {
 fn is_branch_target_for_remote(parsed_command: &ParsedCommandLine) -> bool {
     let sub_len = parsed_command.subcommand_path.len();
 
-    if sub_len <= 1 {
+    if sub_len < 1 {
         return false;
     }
 
-    if sub_len > 2 || !parsed_command.args.is_empty() {
-        return true;
-    }
+    // If we are completing the subcommand itself (e.g. "git pu"), don't show branches.
+    if let Some(last_sub) = parsed_command.subcommand_path.last()
+        && parsed_command.current_token == *last_sub {
+            return false;
+        }
 
-    parsed_command
-        .current_arg
-        .as_deref()
-        .map(|arg| arg.is_empty())
-        .unwrap_or(false)
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::completion::parser::CompletionContext;
+
+    #[test]
+    fn test_git_push_matches() {
+        let handler = GitCompletionHandler;
+
+        // Case 1: "git push" (cursor at end)
+        let cmd = ParsedCommandLine {
+            command: "git".to_string(),
+            subcommand_path: vec!["push".to_string()],
+            args: vec![],
+            options: vec![],
+            current_token: "".to_string(),
+            current_arg: Some("".to_string()),
+            completion_context: CompletionContext::Command,
+            specified_options: vec![],
+            specified_arguments: vec![],
+            cursor_index: 8,
+        };
+
+        assert!(handler.matches(&cmd), "Should match 'git push'");
+
+        // Case 2: "git push ori" (cursor at end of ori)
+        let cmd_arg = ParsedCommandLine {
+            command: "git".to_string(),
+            subcommand_path: vec!["push".to_string()],
+            args: vec![],
+            options: vec![],
+            current_token: "ori".to_string(),
+            current_arg: Some("ori".to_string()),
+            completion_context: CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: None,
+            },
+            specified_options: vec![],
+            specified_arguments: vec![],
+            cursor_index: 12,
+        };
+
+        assert!(handler.matches(&cmd_arg), "Should match 'git push ori'");
+    }
 }

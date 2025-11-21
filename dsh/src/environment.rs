@@ -38,6 +38,24 @@ pub struct Environment {
     pub input_preferences: InputPreferences,
 }
 
+fn default_input_preferences() -> InputPreferences {
+    let mut prefs = InputPreferences::default();
+    if ai_credentials_available() {
+        prefs.ai_backfill = true;
+    }
+    prefs
+}
+
+fn ai_credentials_available() -> bool {
+    env_has_nonempty("AI_CHAT_API_KEY")
+        || env_has_nonempty("OPENAI_API_KEY")
+        || env_has_nonempty("OPEN_AI_API_KEY")
+}
+
+fn env_has_nonempty(key: &str) -> bool {
+    matches!(env::var(key), Ok(value) if !value.trim().is_empty())
+}
+
 impl Environment {
     pub fn new() -> Arc<RwLock<Self>> {
         let mut paths = ["/bin", "/usr/bin", "/sbin", "/usr/sbin"]
@@ -62,7 +80,7 @@ impl Environment {
             chpwd_hooks: Vec::new(),
             mcp_servers: Vec::new(),
             execute_allowlist: Vec::new(),
-            input_preferences: InputPreferences::default(),
+            input_preferences: default_input_preferences(),
         }))
     }
 
@@ -300,5 +318,32 @@ mod tests {
         // Test non-alias fallback
         let resolved = env.read().resolve_alias("unknown");
         assert_eq!(resolved, "unknown".to_string());
+    }
+
+    #[test]
+    fn auto_enables_ai_backfill_when_api_key_present() {
+        init();
+
+        let key = "AI_CHAT_API_KEY";
+        let previous = std::env::var(key).ok();
+        unsafe {
+            std::env::set_var(key, "test-key");
+        }
+
+        let prefs = default_input_preferences();
+        assert!(
+            prefs.ai_backfill,
+            "AI suggestions should auto-enable when key is set"
+        );
+
+        if let Some(value) = previous {
+            unsafe {
+                std::env::set_var(key, value);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var(key);
+            }
+        }
     }
 }

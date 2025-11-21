@@ -1,13 +1,16 @@
 use crate::completion::integrated::{CompletionResult, IntegratedCompletionEngine};
 use crate::completion::{self, Completion, MAX_RESULT};
 use crate::dirs;
+use crate::environment::Environment;
 use crate::errors::display_user_error;
 use crate::history::FrecencyHistory;
 use crate::input::{Input, InputConfig, display_width};
 use crate::parser::Rule;
 use crate::prompt::Prompt;
 use crate::shell::{SHELL_TERMINAL, Shell};
-use crate::suggestion::{InputPreferences, SuggestionEngine, SuggestionState};
+use crate::suggestion::{
+    AiSuggestionBackend, InputPreferences, SuggestionBackend, SuggestionEngine, SuggestionState,
+};
 use crate::terminal::renderer::TerminalRenderer;
 use anyhow::Context as _;
 use anyhow::Result;
@@ -17,6 +20,7 @@ use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::queue;
 use crossterm::style::{Print, ResetColor};
 use crossterm::terminal::{self, Clear, ClearType, enable_raw_mode};
+use dsh_openai::{ChatGptClient, OpenAiConfig};
 use dsh_types::Context;
 use futures::StreamExt;
 use nix::sys::termios::{Termios, tcgetattr};
@@ -33,6 +37,7 @@ const NONE: KeyModifiers = KeyModifiers::NONE;
 const CTRL: KeyModifiers = KeyModifiers::CONTROL;
 const ALT: KeyModifiers = KeyModifiers::ALT;
 const SHIFT: KeyModifiers = KeyModifiers::SHIFT;
+const AI_SUGGESTION_REFRESH_MS: u64 = 150;
 
 #[derive(Eq, PartialEq)]
 #[allow(dead_code)]
@@ -153,6 +158,9 @@ impl<'a> Repl<'a> {
         let envronment = Arc::clone(&shell.environment);
         let input_preferences = envronment.read().input_preferences();
         let mut suggestion_engine = SuggestionEngine::new();
+        if let Some(ai_backend) = Self::build_ai_backend(&envronment) {
+            suggestion_engine.set_ai_backend(Some(ai_backend));
+        }
         suggestion_engine.set_preferences(input_preferences);
         Repl {
             shell,
@@ -178,6 +186,33 @@ impl<'a> Repl<'a> {
             suggestion_engine,
             active_suggestion: None,
             input_preferences,
+        }
+    }
+
+    fn build_ai_backend(
+        environment: &Arc<RwLock<Environment>>,
+    ) -> Option<Arc<dyn SuggestionBackend + Send + Sync>> {
+        let env_handle = Arc::clone(environment);
+        let config = OpenAiConfig::from_getter(|key| {
+            let value = {
+                let guard = env_handle.read();
+                guard.get_var(key)
+            };
+            value.or_else(|| std::env::var(key).ok())
+        });
+
+        config.api_key()?;
+
+        match ChatGptClient::try_from_config(&config) {
+            Ok(client) => {
+                let backend: Arc<dyn SuggestionBackend + Send + Sync> =
+                    Arc::new(AiSuggestionBackend::new(client));
+                Some(backend)
+            }
+            Err(err) => {
+                warn!("Failed to initialize AI suggestion backend: {err:?}");
+                None
+            }
         }
     }
 
@@ -361,17 +396,26 @@ impl<'a> Repl<'a> {
         }
     }
 
-    fn refresh_inline_suggestion(&mut self) {
+    fn refresh_inline_suggestion(&mut self) -> bool {
         if self.input.completion.is_some() {
-            self.active_suggestion = None;
-            return;
+            let had_suggestion = self.active_suggestion.take().is_some();
+            return had_suggestion;
         }
 
         self.sync_input_preferences();
         let history_ref = self.shell.cmd_history.as_ref();
-        self.active_suggestion =
+        let next =
             self.suggestion_engine
                 .predict(self.input.as_str(), self.input.cursor(), history_ref);
+
+        let changed = match (&self.active_suggestion, &next) {
+            (Some(prev), Some(curr)) => prev.full != curr.full || prev.source != curr.source,
+            (None, Some(_)) | (Some(_), None) => true,
+            (None, None) => false,
+        };
+
+        self.active_suggestion = next;
+        changed
     }
 
     fn suggestion_suffix(&self, input: &str) -> Option<String> {
@@ -533,7 +577,12 @@ impl<'a> Repl<'a> {
         None
     }
 
-    pub fn print_input(&mut self, out: &mut impl Write, reset_completion: bool) {
+    pub fn print_input(
+        &mut self,
+        out: &mut impl Write,
+        reset_completion: bool,
+        refresh_suggestion: bool,
+    ) {
         // debug!("print_input called, reset_completion: {}", reset_completion);
         queue!(out, cursor::Hide).ok();
         let input = self.input.to_string();
@@ -545,6 +594,7 @@ impl<'a> Repl<'a> {
 
         let mut completion: Option<String> = None;
         let mut can_execute = false;
+        let mut show_ai_pending = false;
         if input.is_empty() || reset_completion {
             self.input.completion = None;
             self.input.color_ranges = None;
@@ -634,7 +684,11 @@ impl<'a> Repl<'a> {
         self.input.can_execute = can_execute;
 
         if completion.is_none() {
-            self.refresh_inline_suggestion();
+            if refresh_suggestion {
+                self.refresh_inline_suggestion();
+            }
+            show_ai_pending =
+                self.active_suggestion.is_none() && self.suggestion_engine.ai_pending();
         } else {
             self.active_suggestion = None;
         }
@@ -655,6 +709,10 @@ impl<'a> Repl<'a> {
 
         // Print the input
         self.input.print(out, ghost_suffix.as_deref());
+
+        if show_ai_pending {
+            queue!(out, Print(" ⧗")).ok();
+        }
 
         self.move_cursor_input_end(out);
 
@@ -1141,7 +1199,7 @@ impl<'a> Repl<'a> {
         if redraw {
             debug!("Redrawing input, reset_completion: {}", reset_completion);
             let mut renderer = TerminalRenderer::new();
-            self.print_input(&mut renderer, reset_completion);
+            self.print_input(&mut renderer, reset_completion, true);
             renderer.flush().ok();
         }
         // Note: For cursor-only movements (redraw=false), cursor positioning
@@ -1181,6 +1239,11 @@ impl<'a> Repl<'a> {
             Duration::from_millis(1000),
         );
         background_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut ai_refresh_interval = interval_at(
+            TokioInstant::now() + Duration::from_millis(AI_SUGGESTION_REFRESH_MS),
+            Duration::from_millis(AI_SUGGESTION_REFRESH_MS),
+        );
+        ai_refresh_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             tokio::select! {
                 _ = background_interval.tick() => {
@@ -1188,6 +1251,16 @@ impl<'a> Repl<'a> {
                     self.save_history_periodic();
                     self.check_background_jobs(true).await?;
                 },
+                _ = ai_refresh_interval.tick() => {
+                    if self.input_preferences.ai_backfill
+                        && self.input.completion.is_none()
+                        && self.refresh_inline_suggestion()
+                    {
+                        let mut renderer = TerminalRenderer::new();
+                        self.print_input(&mut renderer, false, false);
+                        renderer.flush().ok();
+                    }
+                }
                 maybe_event = reader.next() => {
                     match maybe_event {
                         Some(Ok(event)) => {

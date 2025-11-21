@@ -7,6 +7,7 @@ use crate::input::{Input, InputConfig, display_width};
 use crate::parser::Rule;
 use crate::prompt::Prompt;
 use crate::shell::{SHELL_TERMINAL, Shell};
+use crate::suggestion::{InputPreferences, SuggestionEngine, SuggestionState};
 use crate::terminal::renderer::TerminalRenderer;
 use anyhow::Context as _;
 use anyhow::Result;
@@ -111,6 +112,9 @@ pub struct Repl<'a> {
     history_cache_ttl: Duration,
     history_cache_sorted_recent: Option<Vec<dsh_frecency::ItemStats>>,
     history_cache_match_sorted: Option<Vec<dsh_frecency::ItemStats>>,
+    suggestion_engine: SuggestionEngine,
+    active_suggestion: Option<SuggestionState>,
+    input_preferences: InputPreferences,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -147,6 +151,9 @@ impl<'a> Repl<'a> {
         let prompt_mark_width = display_width(&prompt_mark_cache);
 
         let envronment = Arc::clone(&shell.environment);
+        let input_preferences = envronment.read().input_preferences();
+        let mut suggestion_engine = SuggestionEngine::new();
+        suggestion_engine.set_preferences(input_preferences);
         Repl {
             shell,
             input: Input::new(input_config),
@@ -168,6 +175,9 @@ impl<'a> Repl<'a> {
             history_cache_ttl: Duration::from_millis(300),
             history_cache_sorted_recent: None,
             history_cache_match_sorted: None,
+            suggestion_engine,
+            active_suggestion: None,
+            input_preferences,
         }
     }
 
@@ -341,6 +351,51 @@ impl<'a> Repl<'a> {
         out.write_all(b"\r").ok();
         out.write_all(self.prompt_mark_cache.as_bytes()).ok();
         // no out.flush() here
+    }
+
+    fn sync_input_preferences(&mut self) {
+        let prefs = self.shell.environment.read().input_preferences();
+        if prefs != self.input_preferences {
+            self.input_preferences = prefs;
+            self.suggestion_engine.set_preferences(prefs);
+        }
+    }
+
+    fn refresh_inline_suggestion(&mut self) {
+        if self.input.completion.is_some() {
+            self.active_suggestion = None;
+            return;
+        }
+
+        self.sync_input_preferences();
+        let history_ref = self.shell.cmd_history.as_ref();
+        self.active_suggestion =
+            self.suggestion_engine
+                .predict(self.input.as_str(), self.input.cursor(), history_ref);
+    }
+
+    fn suggestion_suffix(&self, input: &str) -> Option<String> {
+        let suggestion = self.active_suggestion.as_ref()?;
+        if !suggestion.full.starts_with(input) || suggestion.full.len() <= input.len() {
+            return None;
+        }
+        Some(suggestion.full[input.len()..].to_string())
+    }
+
+    fn accept_active_suggestion(&mut self) -> bool {
+        let suggestion = match self.active_suggestion.take() {
+            Some(state) => state,
+            None => return false,
+        };
+
+        let current = self.input.as_str().to_string();
+        if !suggestion.full.starts_with(&current) || suggestion.full.len() <= current.len() {
+            return false;
+        }
+
+        let suffix = &suggestion.full[current.len()..];
+        self.input.insert_str(suffix);
+        true
     }
 
     fn stop_history_mode(&mut self) {
@@ -562,7 +617,7 @@ impl<'a> Repl<'a> {
                                 if let Some((pre, post)) = self.input.split_current_pos() {
                                     self.input.completion = Some(pre.to_owned() + &part + post);
                                 } else {
-                                    self.input.completion = Some(input + &part);
+                                    self.input.completion = Some(input.clone() + &part);
                                 }
                                 break;
                             }
@@ -578,6 +633,18 @@ impl<'a> Repl<'a> {
 
         self.input.can_execute = can_execute;
 
+        if completion.is_none() {
+            self.refresh_inline_suggestion();
+        } else {
+            self.active_suggestion = None;
+        }
+
+        let ghost_suffix = if completion.is_none() {
+            self.suggestion_suffix(&input)
+        } else {
+            None
+        };
+
         // Clear the current line and redraw prompt mark + input
         queue!(out, Print("\r"), Clear(ClearType::CurrentLine)).ok();
 
@@ -587,7 +654,7 @@ impl<'a> Repl<'a> {
         queue!(out, Print(self.prompt_mark_cache.as_str())).ok();
 
         // Print the input
-        self.input.print(out);
+        self.input.print(out, ghost_suffix.as_deref());
 
         self.move_cursor_input_end(out);
 
@@ -673,6 +740,17 @@ impl<'a> Repl<'a> {
                 }
             }
             (KeyCode::Right, modifiers)
+                if self.active_suggestion.is_some()
+                    && self.input.completion.is_none()
+                    && self.input.cursor() == self.input.len()
+                    && !modifiers.contains(CTRL) =>
+            {
+                if self.accept_active_suggestion() {
+                    self.completion.clear();
+                    reset_completion = true;
+                }
+            }
+            (KeyCode::Right, modifiers)
                 if self.input.completion.is_some() && !modifiers.contains(CTRL) =>
             {
                 // TODO refactor
@@ -724,6 +802,16 @@ impl<'a> Repl<'a> {
                     return Ok(());
                 } else {
                     return Ok(());
+                }
+            }
+            (KeyCode::Char('f'), CTRL)
+                if self.active_suggestion.is_some()
+                    && self.input.completion.is_none()
+                    && self.input.cursor() == self.input.len() =>
+            {
+                if self.accept_active_suggestion() {
+                    self.completion.clear();
+                    reset_completion = true;
                 }
             }
             (KeyCode::Char(' '), NONE) => {
@@ -944,6 +1032,7 @@ impl<'a> Repl<'a> {
                         }
                     }
                     self.input.clear();
+                    self.active_suggestion = None;
                     self.last_command_time = Some(Instant::now());
                 }
                 // After command execution, show new prompt
@@ -968,6 +1057,7 @@ impl<'a> Repl<'a> {
                         display_user_error(&err, false);
                     }
                     self.input.clear();
+                    self.active_suggestion = None;
                 }
                 // After command execution, show new prompt
                 let mut renderer = TerminalRenderer::new();
@@ -1008,6 +1098,7 @@ impl<'a> Repl<'a> {
                     self.print_prompt(&mut renderer);
                     renderer.flush().ok();
                     self.input.clear();
+                    self.active_suggestion = None;
                     return Ok(());
                 }
             }
@@ -1017,6 +1108,7 @@ impl<'a> Repl<'a> {
                 self.print_prompt(&mut renderer);
                 renderer.flush().ok();
                 self.input.clear();
+                self.active_suggestion = None;
                 return Ok(());
             }
             (KeyCode::Char('d'), CTRL) => {
@@ -1025,6 +1117,7 @@ impl<'a> Repl<'a> {
                 self.print_prompt(&mut renderer);
                 renderer.flush().ok();
                 self.input.clear();
+                self.active_suggestion = None;
                 return Ok(());
             }
             (KeyCode::Char('r'), CTRL) => {

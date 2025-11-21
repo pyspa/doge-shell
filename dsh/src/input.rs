@@ -52,6 +52,7 @@ pub struct InputConfig {
     pub command_not_exists_color: Color, // Command that doesn't exist (red)
     pub argument_color: Color,           // Arguments (cyan)
     pub completion_color: Color,         // Completion candidates (dark grey)
+    pub ghost_color: Color,              // Inline suggestion text (dim gray)
 }
 
 impl Default for InputConfig {
@@ -62,6 +63,7 @@ impl Default for InputConfig {
             command_not_exists_color: Color::Red,
             argument_color: Color::Cyan,
             completion_color: Color::DarkGrey,
+            ghost_color: Color::DarkGrey,
         }
     }
 }
@@ -347,7 +349,7 @@ impl Input {
         parser::get_words(self.input.as_str(), self.cursor)
     }
 
-    pub fn print<W: Write>(&self, out: &mut W) {
+    pub fn print<W: Write>(&self, out: &mut W, ghost_suffix: Option<&str>) {
         let mut writer = BufWriter::new(out);
 
         if let Some(color_ranges) = &self.color_ranges {
@@ -357,6 +359,12 @@ impl Input {
         } else {
             writer
                 .write_fmt(format_args!("{}", self.as_str().with(self.config.fg_color)))
+                .ok();
+        }
+
+        if let Some(suffix) = ghost_suffix.filter(|s| !s.is_empty()) {
+            writer
+                .write_fmt(format_args!("{}", suffix.with(self.config.ghost_color)))
                 .ok();
         }
 
@@ -431,6 +439,11 @@ impl Input {
     #[allow(dead_code)]
     pub fn completion_color(&self) -> Color {
         self.config.completion_color
+    }
+
+    #[allow(dead_code)]
+    pub fn ghost_color(&self) -> Color {
+        self.config.ghost_color
     }
 
     pub fn print_candidates<W: Write>(&mut self, out: &mut W, completion: String) {

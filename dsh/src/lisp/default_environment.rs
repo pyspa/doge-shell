@@ -1,4 +1,5 @@
 use crate::environment::Environment;
+use crate::suggestion::SuggestionMode;
 use crate::{
     lisp,
     lisp::{
@@ -295,6 +296,38 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
                 };
                 shell_env.add_execute_allowlist_entry(command);
             }
+            Ok(Value::NIL)
+        }),
+    );
+
+    env.define(
+        Symbol::from("set-suggestion-mode"),
+        Value::NativeFunc(|env, args| {
+            let symbol = require_typed_arg::<&Symbol>("set-suggestion-mode", &args, 0)?;
+            let mode_name = symbol.to_string();
+            let mode = match mode_name.as_str() {
+                "ghost" => SuggestionMode::Ghost,
+                "off" => SuggestionMode::Off,
+                other => {
+                    return Err(RuntimeError {
+                        msg: format!("Unknown suggestion mode: {other}"),
+                    });
+                }
+            };
+            env.borrow().shell_env.write().set_suggestion_mode(mode);
+            Ok(Value::NIL)
+        }),
+    );
+
+    env.define(
+        Symbol::from("set-suggestion-ai-enabled"),
+        Value::NativeFunc(|env, args| {
+            let flag = require_arg("set-suggestion-ai-enabled", &args, 0)?;
+            let enabled = !(*flag == Value::NIL || *flag == Value::False);
+            env.borrow()
+                .shell_env
+                .write()
+                .set_suggestion_ai_enabled(enabled);
             Ok(Value::NIL)
         }),
     );

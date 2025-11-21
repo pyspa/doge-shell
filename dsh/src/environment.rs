@@ -2,6 +2,7 @@ use crate::completion::AutoComplete;
 use crate::direnv::DirEnvironment;
 use crate::dirs::search_file;
 use crate::shell::APP_NAME;
+use crate::suggestion::{InputPreferences, SuggestionMode};
 use anyhow::Context as _;
 use anyhow::Result;
 use dsh_types::mcp::McpServerConfig;
@@ -34,6 +35,7 @@ pub struct Environment {
     pub chpwd_hooks: Vec<Box<dyn ChangePwdHook>>,
     pub mcp_servers: Vec<McpServerConfig>,
     pub execute_allowlist: Vec<String>,
+    pub input_preferences: InputPreferences,
 }
 
 impl Environment {
@@ -60,6 +62,7 @@ impl Environment {
             chpwd_hooks: Vec::new(),
             mcp_servers: Vec::new(),
             execute_allowlist: Vec::new(),
+            input_preferences: InputPreferences::default(),
         }))
     }
 
@@ -72,6 +75,7 @@ impl Environment {
         let direnv_roots = parent.read().direnv_roots.clone();
         let mcp_servers = parent.read().mcp_servers.clone();
         let execute_allowlist = parent.read().execute_allowlist.clone();
+        let input_preferences = parent.read().input_preferences;
 
         #[allow(clippy::arc_with_non_send_sync)]
         Arc::new(RwLock::new(Environment {
@@ -84,6 +88,7 @@ impl Environment {
             chpwd_hooks: Vec::new(),
             mcp_servers,
             execute_allowlist,
+            input_preferences,
         }))
     }
 
@@ -179,6 +184,26 @@ impl Environment {
         &self.execute_allowlist
     }
 
+    pub fn suggestion_mode(&self) -> SuggestionMode {
+        self.input_preferences.suggestion_mode
+    }
+
+    pub fn set_suggestion_mode(&mut self, mode: SuggestionMode) {
+        self.input_preferences.suggestion_mode = mode;
+    }
+
+    pub fn suggestion_ai_enabled(&self) -> bool {
+        self.input_preferences.ai_backfill
+    }
+
+    pub fn set_suggestion_ai_enabled(&mut self, enabled: bool) {
+        self.input_preferences.ai_backfill = enabled;
+    }
+
+    pub fn input_preferences(&self) -> InputPreferences {
+        self.input_preferences
+    }
+
     /// Resolves an alias from the Environment's alias map.
     /// If the name is an alias, returns the expanded command; otherwise, returns the original name.
     pub fn resolve_alias(&self, name: &str) -> String {
@@ -200,6 +225,7 @@ impl std::fmt::Debug for Environment {
             .field("variables", &self.variables)
             .field("mcp_servers", &self.mcp_servers)
             .field("execute_allowlist", &self.execute_allowlist)
+            .field("input_preferences", &self.input_preferences)
             .finish()
     }
 }

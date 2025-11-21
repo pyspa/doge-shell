@@ -26,6 +26,7 @@ mod prompt;
 mod proxy;
 mod repl;
 mod shell;
+mod suggestion;
 mod terminal;
 
 use crate::errors::display_user_error;

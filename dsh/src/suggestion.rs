@@ -6,6 +6,9 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+use tokio::runtime::Runtime;
+use tokio::sync::Notify;
+use tokio::task;
 use tracing::{debug, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -40,9 +43,10 @@ impl Default for InputPreferences {
 pub enum SuggestionSource {
     History,
     Ai,
+    Completion,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SuggestionState {
     pub full: String,
     pub source: SuggestionSource,
@@ -108,7 +112,8 @@ impl Default for SuggestionConfig {
 
 pub struct SuggestionEngine {
     config: SuggestionConfig,
-    cache: Option<CachedSuggestion>,
+    history_cache: Option<CachedSuggestion>,
+    ai_cache: Option<CachedSuggestion>,
     ai_backend: Option<Arc<dyn SuggestionBackend + Send + Sync>>,
 }
 
@@ -116,7 +121,8 @@ impl SuggestionEngine {
     pub fn new() -> Self {
         Self {
             config: SuggestionConfig::default(),
-            cache: None,
+            history_cache: None,
+            ai_cache: None,
             ai_backend: None,
         }
     }
@@ -124,7 +130,8 @@ impl SuggestionEngine {
     pub fn set_preferences(&mut self, prefs: InputPreferences) {
         self.config.preferences = prefs;
         if !prefs.suggestion_mode.is_enabled() {
-            self.cache = None;
+            self.history_cache = None;
+            self.ai_cache = None;
         }
     }
 
@@ -146,54 +153,62 @@ impl SuggestionEngine {
         input: &str,
         cursor: usize,
         history: Option<&Arc<ParkingMutex<FrecencyHistory>>>,
-    ) -> Option<SuggestionState> {
+    ) -> Vec<SuggestionState> {
         if !self.config.preferences.suggestion_mode.is_enabled() {
-            self.cache = None;
-            return None;
+            self.history_cache = None;
+            self.ai_cache = None;
+            return Vec::new();
         }
 
         if input.is_empty() {
-            self.cache = None;
-            return None;
+            self.history_cache = None;
+            self.ai_cache = None;
+            return Vec::new();
         }
 
         let char_len = input.chars().count();
-        if cursor != char_len {
-            self.cache = None;
-            return None;
+        if cursor > char_len {
+            return Vec::new();
         }
 
-        if let Some(cached) = &self.cache
-            && cached.prefix == input
-            && cached.state.full.starts_with(input)
-            && cached.state.full.len() > input.len()
-            && cached.generated_at.elapsed() <= self.ttl_for(cached.state.source)
-        {
-            return Some(cached.state.clone());
-        }
+        let mut suggestions = Vec::new();
 
-        if let Some(state) = self.history_suggestion(input, history) {
-            self.cache = Some(CachedSuggestion {
+        if let Some(state) = self.use_cache(self.history_cache.as_ref(), input) {
+            suggestions.push(state.clone());
+        } else if let Some(state) = self.history_suggestion(input, history) {
+            self.history_cache = Some(CachedSuggestion {
                 prefix: input.to_string(),
                 state: state.clone(),
                 generated_at: Instant::now(),
             });
-            return Some(state);
+            suggestions.push(state);
+        } else {
+            self.history_cache = None;
         }
 
-        if self.config.preferences.ai_backfill
-            && let Some(state) = self.ai_suggestion(input, cursor, history)
-        {
-            self.cache = Some(CachedSuggestion {
-                prefix: input.to_string(),
-                state: state.clone(),
-                generated_at: Instant::now(),
-            });
-            return Some(state);
+        if self.config.preferences.ai_backfill {
+            if let Some(state) = self.use_cache(self.ai_cache.as_ref(), input) {
+                suggestions.push(state.clone());
+            }
+
+            if let Some(state) = self.ai_suggestion(input, cursor, history) {
+                let duplicate = suggestions
+                    .iter()
+                    .any(|existing| existing.full == state.full && existing.source == state.source);
+                if !duplicate {
+                    suggestions.push(state.clone());
+                }
+                self.ai_cache = Some(CachedSuggestion {
+                    prefix: input.to_string(),
+                    state,
+                    generated_at: Instant::now(),
+                });
+            }
+        } else {
+            self.ai_cache = None;
         }
 
-        self.cache = None;
-        None
+        suggestions
     }
 
     fn history_suggestion(
@@ -237,10 +252,23 @@ impl SuggestionEngine {
         })
     }
 
+    fn use_cache(&self, cache: Option<&CachedSuggestion>, input: &str) -> Option<SuggestionState> {
+        let cached = cache?;
+        if cached.prefix == input
+            && cached.state.full.starts_with(input)
+            && cached.state.full.len() > input.len()
+            && cached.generated_at.elapsed() <= self.ttl_for(cached.state.source)
+        {
+            return Some(cached.state.clone());
+        }
+        None
+    }
+
     fn ttl_for(&self, source: SuggestionSource) -> Duration {
         match source {
             SuggestionSource::History => self.config.history_ttl,
             SuggestionSource::Ai => self.config.ai_ttl,
+            SuggestionSource::Completion => self.config.history_ttl,
         }
     }
 }
@@ -295,9 +323,14 @@ If no meaningful continuation exists, return the user input unchanged."#;
 
 #[derive(Clone)]
 pub struct AiSuggestionBackend {
+    inner: Arc<AiBackendInner>,
+}
+
+struct AiBackendInner {
     client: Arc<ChatGptClient>,
-    state: Arc<ParkingMutex<AiBackendState>>,
+    state: ParkingMutex<AiBackendState>,
     settings: AiBackendSettings,
+    notify: Notify,
 }
 
 #[derive(Debug, Default)]
@@ -334,17 +367,79 @@ impl AiSuggestionBackend {
     }
 
     fn with_settings(client: ChatGptClient, settings: AiBackendSettings) -> Self {
-        Self {
+        let inner = Arc::new(AiBackendInner {
             client: Arc::new(client),
-            state: Arc::new(ParkingMutex::new(AiBackendState::default())),
+            state: ParkingMutex::new(AiBackendState::default()),
             settings,
+            notify: Notify::new(),
+        });
+        let backend = Self {
+            inner: inner.clone(),
+        };
+        backend.spawn_worker(inner);
+        backend
+    }
+
+    fn spawn_worker(&self, inner: Arc<AiBackendInner>) {
+        let runner = self.clone_with_inner(inner);
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                runner.worker_loop().await;
+            });
+        } else {
+            thread::spawn(move || {
+                let runtime = Runtime::new().expect("failed to create runtime for AI backend");
+                runtime.block_on(async move {
+                    runner.worker_loop().await;
+                });
+            });
         }
     }
 
+    fn clone_with_inner(&self, inner: Arc<AiBackendInner>) -> Self {
+        Self { inner }
+    }
+
+    async fn worker_loop(self) {
+        loop {
+            let request = self.next_request().await;
+            let completion = self.fetch_completion_async(&request).await;
+            self.handle_completion(request, completion);
+        }
+    }
+
+    async fn next_request(&self) -> SuggestionRequest {
+        loop {
+            if let Some(request) = {
+                let mut state = self.inner.state.lock();
+                if let Some(req) = state.pending.take() {
+                    state.inflight = true;
+                    Some(req)
+                } else {
+                    state.inflight = false;
+                    None
+                }
+            } {
+                return request;
+            }
+
+            self.inner.notify.notified().await;
+        }
+    }
+
+    async fn fetch_completion_async(&self, request: &SuggestionRequest) -> Option<String> {
+        let backend = self.clone();
+        let request = request.clone();
+        task::spawn_blocking(move || backend.fetch_completion(&request))
+            .await
+            .ok()
+            .flatten()
+    }
+
     fn try_cached(&self, request: &SuggestionRequest) -> Option<String> {
-        let state = self.state.lock();
+        let state = self.inner.state.lock();
         if let Some(cached) = &state.cached
-            && cached.received_at.elapsed() <= self.settings.cache_ttl
+            && cached.received_at.elapsed() <= self.inner.settings.cache_ttl
             && cached.completion.starts_with(&request.input)
             && cached.completion.len() > request.input.len()
         {
@@ -354,59 +449,46 @@ impl AiSuggestionBackend {
     }
 
     fn enqueue(&self, request: SuggestionRequest) {
-        let mut state = self.state.lock();
+        let mut state = self.inner.state.lock();
+        let replace = match &state.pending {
+            Some(existing) => existing.input != request.input,
+            None => true,
+        };
+        if replace {
+            state.pending = Some(request);
+        }
         if state.inflight {
-            let replace = match &state.pending {
-                Some(existing) => existing.input != request.input,
-                None => true,
-            };
-            if replace {
-                state.pending = Some(request);
-            }
             return;
         }
-
-        debug!("ai suggestion backend scheduling request");
         state.inflight = true;
         drop(state);
-        self.spawn_request(request);
-    }
-
-    fn spawn_request(&self, request: SuggestionRequest) {
-        let backend = self.clone();
-        thread::spawn(move || {
-            let completion = backend.fetch_completion(&request);
-            backend.handle_completion(request, completion);
-        });
+        self.inner.notify.notify_one();
     }
 
     fn handle_completion(&self, request: SuggestionRequest, completion: Option<String>) {
         debug!(input = %request.input, "ai suggestion backend completed request");
-        let next_request = {
-            let mut state = self.state.lock();
+        let mut state = self.inner.state.lock();
+        if let Some(completion) = completion {
+            state.cached = Some(AiCachedSuggestion {
+                completion,
+                received_at: Instant::now(),
+            });
+            debug!("ai suggestion backend stored new completion");
+        }
+
+        if state.pending.is_some() {
+            state.inflight = true;
+            self.inner.notify.notify_one();
+        } else {
             state.inflight = false;
-
-            if let Some(completion) = completion {
-                state.cached = Some(AiCachedSuggestion {
-                    completion,
-                    received_at: Instant::now(),
-                });
-                debug!("ai suggestion backend stored new completion");
-            }
-
-            state.pending.take()
-        };
-
-        if let Some(next) = next_request {
-            self.enqueue(next);
         }
     }
 
     fn fetch_completion(&self, request: &SuggestionRequest) -> Option<String> {
         let messages = self.build_messages(request);
-        let response = match self.client.send_chat_request(
+        let response = match self.inner.client.send_chat_request(
             &messages,
-            Some(self.settings.temperature),
+            Some(self.inner.settings.temperature),
             None,
             None,
         ) {
@@ -458,7 +540,7 @@ impl SuggestionBackend for AiSuggestionBackend {
     }
 
     fn is_pending(&self) -> bool {
-        let state = self.state.lock();
+        let state = self.inner.state.lock();
         state.inflight || state.pending.is_some()
     }
 }
@@ -602,8 +684,8 @@ mod tests {
 
         let result = engine.predict("git s", "git s".chars().count(), None);
 
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().full, "git status");
+        assert!(!result.is_empty());
+        assert_eq!(result[0].full, "git status");
         assert_eq!(recorder.calls().len(), 1);
     }
 

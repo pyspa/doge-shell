@@ -9,7 +9,8 @@ use crate::parser::{self, HighlightKind, Rule};
 use crate::prompt::Prompt;
 use crate::shell::{SHELL_TERMINAL, Shell};
 use crate::suggestion::{
-    AiSuggestionBackend, InputPreferences, SuggestionBackend, SuggestionEngine, SuggestionState,
+    AiSuggestionBackend, InputPreferences, SuggestionBackend, SuggestionEngine, SuggestionSource,
+    SuggestionState,
 };
 use crate::terminal::renderer::TerminalRenderer;
 use anyhow::Context as _;
@@ -27,6 +28,7 @@ use nix::sys::termios::{Termios, tcgetattr};
 use nix::unistd::tcsetpgrp;
 use parking_lot::Mutex as ParkingMutex;
 use parking_lot::RwLock;
+use pest::Span as PestSpan;
 use std::io::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -38,6 +40,8 @@ const CTRL: KeyModifiers = KeyModifiers::CONTROL;
 const ALT: KeyModifiers = KeyModifiers::ALT;
 const SHIFT: KeyModifiers = KeyModifiers::SHIFT;
 const AI_SUGGESTION_REFRESH_MS: u64 = 150;
+const MCP_FORM_SUGGESTIONS: &[&str] =
+    &["mcp-add-stdio", "mcp-add-http", "mcp-add-sse", "mcp-clear"];
 
 #[derive(Eq, PartialEq)]
 #[allow(dead_code)]
@@ -119,13 +123,21 @@ pub struct Repl<'a> {
     history_cache_match_sorted: Option<Vec<dsh_frecency::ItemStats>>,
     suggestion_engine: SuggestionEngine,
     active_suggestion: Option<SuggestionState>,
+    suggestion_candidates: Vec<SuggestionState>,
+    suggestion_index: usize,
     input_preferences: InputPreferences,
+    ai_pending_shown: bool,
 }
 
 impl<'a> Drop for Repl<'a> {
     fn drop(&mut self) {
         self.save_history();
     }
+}
+
+enum SuggestionAcceptMode {
+    Full,
+    Word,
 }
 
 impl<'a> Repl<'a> {
@@ -185,7 +197,10 @@ impl<'a> Repl<'a> {
             history_cache_match_sorted: None,
             suggestion_engine,
             active_suggestion: None,
+            suggestion_candidates: Vec::new(),
+            suggestion_index: 0,
             input_preferences,
+            ai_pending_shown: false,
         }
     }
 
@@ -398,24 +413,29 @@ impl<'a> Repl<'a> {
 
     fn refresh_inline_suggestion(&mut self) -> bool {
         if self.input.completion.is_some() {
-            let had_suggestion = self.active_suggestion.take().is_some();
+            let had_suggestion = !self.suggestion_candidates.is_empty();
+            self.clear_suggestion_state();
             return had_suggestion;
         }
 
         self.sync_input_preferences();
         let history_ref = self.shell.cmd_history.as_ref();
-        let next =
+        let current_input = self.input.to_string();
+        let cursor_pos = self.input.cursor();
+        let mut candidates =
             self.suggestion_engine
-                .predict(self.input.as_str(), self.input.cursor(), history_ref);
+                .predict(current_input.as_str(), cursor_pos, history_ref);
 
-        let changed = match (&self.active_suggestion, &next) {
-            (Some(prev), Some(curr)) => prev.full != curr.full || prev.source != curr.source,
-            (None, Some(_)) | (Some(_), None) => true,
-            (None, None) => false,
-        };
+        if let Some(extra) = self.completion_suggestion(current_input.as_str()) {
+            let duplicate = candidates
+                .iter()
+                .any(|item| item.full == extra.full && item.source == extra.source);
+            if !duplicate {
+                candidates.push(extra);
+            }
+        }
 
-        self.active_suggestion = next;
-        changed
+        self.update_suggestion_candidates(candidates)
     }
 
     fn suggestion_suffix(&self, input: &str) -> Option<String> {
@@ -424,6 +444,185 @@ impl<'a> Repl<'a> {
             return None;
         }
         Some(suggestion.full[input.len()..].to_string())
+    }
+
+    fn clear_suggestion_state(&mut self) {
+        self.suggestion_candidates.clear();
+        self.suggestion_index = 0;
+        self.active_suggestion = None;
+    }
+
+    fn rotate_suggestion(&mut self, step: isize) -> bool {
+        let len = self.suggestion_candidates.len();
+        if len <= 1 {
+            return false;
+        }
+        let len = len as isize;
+        let mut next = self.suggestion_index as isize + step;
+        next %= len;
+        if next < 0 {
+            next += len;
+        }
+        if next as usize == self.suggestion_index {
+            return false;
+        }
+        self.suggestion_index = next as usize;
+        self.active_suggestion = self
+            .suggestion_candidates
+            .get(self.suggestion_index)
+            .cloned();
+        true
+    }
+
+    fn update_suggestion_candidates(&mut self, mut candidates: Vec<SuggestionState>) -> bool {
+        candidates.dedup_by(|a, b| a.full == b.full && a.source == b.source);
+        if candidates.is_empty() {
+            let had = !self.suggestion_candidates.is_empty();
+            self.clear_suggestion_state();
+            return had;
+        }
+
+        let changed = candidates != self.suggestion_candidates;
+        if changed {
+            self.suggestion_candidates = candidates;
+            self.suggestion_index = 0;
+        }
+
+        self.active_suggestion = self
+            .suggestion_candidates
+            .get(self.suggestion_index)
+            .cloned();
+        changed
+    }
+
+    fn completion_suggestion(&mut self, input: &str) -> Option<SuggestionState> {
+        if input.is_empty() || self.input.cursor() != self.input.len() {
+            return None;
+        }
+
+        if let Ok(words) = self.input.get_words()
+            && let Some(full) = self.word_based_completion(input, &words)
+        {
+            return Some(SuggestionState {
+                full,
+                source: SuggestionSource::Completion,
+            });
+        }
+
+        Self::mcp_form_completion(input).map(|full| SuggestionState {
+            full,
+            source: SuggestionSource::Completion,
+        })
+    }
+
+    fn word_based_completion(
+        &self,
+        input: &str,
+        words: &[(Rule, PestSpan<'_>, bool)],
+    ) -> Option<String> {
+        for (rule, span, current) in words {
+            if !current {
+                continue;
+            }
+            let word = span.as_str();
+            if word.is_empty() {
+                continue;
+            }
+            match rule {
+                Rule::argv0 => {
+                    if let Some(result) = self.complete_command_word(input, span, word) {
+                        return Some(result);
+                    }
+                }
+                Rule::args => {
+                    if let Some(result) = Self::complete_argument_word(input, span, word) {
+                        return Some(result);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn complete_command_word(
+        &self,
+        input: &str,
+        span: &PestSpan<'_>,
+        word: &str,
+    ) -> Option<String> {
+        let candidate = {
+            let env = self.shell.environment.read();
+            env.search(word)
+        };
+
+        if let Some(name) = candidate
+            && name.len() > word.len()
+        {
+            return Some(Self::replace_range(input, span.start(), span.end(), &name));
+        }
+
+        if let Ok(Some(path)) = completion::path_completion_prefix(word)
+            && dirs::is_dir(&path)
+            && path.len() > word.len()
+        {
+            return Some(Self::replace_range(input, span.start(), span.end(), &path));
+        }
+
+        None
+    }
+
+    fn complete_argument_word(input: &str, span: &PestSpan<'_>, word: &str) -> Option<String> {
+        let path = completion::path_completion_prefix(word).ok().flatten()?;
+        if path.len() <= word.len() {
+            return None;
+        }
+        let suffix = &path[word.len()..];
+        if suffix.is_empty() {
+            return None;
+        }
+        let mut result = input.to_string();
+        result.insert_str(span.end(), suffix);
+        Some(result)
+    }
+
+    fn mcp_form_completion(input: &str) -> Option<String> {
+        let trimmed = input.trim_end();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let token = Self::trailing_symbol(trimmed);
+        if token.is_empty() || !token.starts_with("mcp-") {
+            return None;
+        }
+        for candidate in MCP_FORM_SUGGESTIONS {
+            if candidate.starts_with(token) && candidate.len() > token.len() {
+                let suffix = &candidate[token.len()..];
+                let mut output = trimmed.to_string();
+                output.push_str(suffix);
+                if trimmed.len() < input.len() {
+                    output.push_str(&input[trimmed.len()..]);
+                }
+                return Some(output);
+            }
+        }
+        None
+    }
+
+    fn trailing_symbol(input: &str) -> &str {
+        let boundary = input
+            .rfind(|c: char| c.is_whitespace() || matches!(c, '(' | ')'))
+            .map(|idx| idx + 1)
+            .unwrap_or(0);
+        &input[boundary..]
+    }
+
+    fn replace_range(input: &str, start: usize, end: usize, replacement: &str) -> String {
+        let mut result = String::with_capacity(input.len() + replacement.len());
+        result.push_str(&input[..start]);
+        result.push_str(replacement);
+        result.push_str(&input[end..]);
+        result
     }
 
     fn compute_color_ranges(&self, input: &str) -> (Vec<(usize, usize, ColorType)>, bool) {
@@ -465,15 +664,21 @@ impl<'a> Repl<'a> {
         }
 
         if let Some(err) = error
-            && err.start < err.end && err.end <= len {
-                ranges.push((err.start, err.end, ColorType::Error));
-            }
+            && err.start < err.end
+            && err.end <= len
+        {
+            ranges.push((err.start, err.end, ColorType::Error));
+        }
 
         (ranges, can_execute)
     }
 
     fn accept_active_suggestion(&mut self) -> bool {
-        let suggestion = match self.active_suggestion.take() {
+        self.accept_suggestion(SuggestionAcceptMode::Full)
+    }
+
+    fn accept_suggestion(&mut self, mode: SuggestionAcceptMode) -> bool {
+        let suggestion = match self.active_suggestion.clone() {
             Some(state) => state,
             None => return false,
         };
@@ -484,8 +689,60 @@ impl<'a> Repl<'a> {
         }
 
         let suffix = &suggestion.full[current.len()..];
-        self.input.insert_str(suffix);
+        if suffix.is_empty() {
+            return false;
+        }
+
+        let insert_chunk = match mode {
+            SuggestionAcceptMode::Full => suffix.to_string(),
+            SuggestionAcceptMode::Word => match Self::next_word_chunk(suffix) {
+                Some(chunk) => chunk,
+                None => return false,
+            },
+        };
+
+        let inserted_all = insert_chunk.len() == suffix.len();
+        self.input.insert_str(&insert_chunk);
+
+        if matches!(mode, SuggestionAcceptMode::Full) && inserted_all {
+            self.learn_suggestion(&suggestion.full);
+            self.clear_suggestion_state();
+        }
+
         true
+    }
+
+    fn next_word_chunk(suffix: &str) -> Option<String> {
+        if suffix.is_empty() {
+            return None;
+        }
+
+        let mut end = suffix.len();
+        let mut in_word = false;
+        for (idx, ch) in suffix.char_indices() {
+            if ch.is_whitespace() {
+                if in_word {
+                    end = idx + ch.len_utf8();
+                    break;
+                }
+            } else {
+                in_word = true;
+            }
+        }
+
+        if !in_word {
+            return Some(suffix.to_string());
+        }
+
+        Some(suffix[..end.min(suffix.len())].to_string())
+    }
+
+    fn learn_suggestion(&self, suggestion: &str) {
+        if let Some(history) = &self.shell.cmd_history
+            && let Some(mut history) = history.try_lock()
+        {
+            history.add(suggestion);
+        }
     }
 
     fn stop_history_mode(&mut self) {
@@ -639,7 +896,6 @@ impl<'a> Repl<'a> {
         // );
 
         let mut completion: Option<String> = None;
-        let mut show_ai_pending = false;
         if input.is_empty() || reset_completion {
             self.input.completion = None;
             self.input.color_ranges = None;
@@ -710,10 +966,8 @@ impl<'a> Repl<'a> {
             if refresh_suggestion {
                 self.refresh_inline_suggestion();
             }
-            show_ai_pending =
-                self.active_suggestion.is_none() && self.suggestion_engine.ai_pending();
         } else {
-            self.active_suggestion = None;
+            self.clear_suggestion_state();
         }
 
         let ghost_suffix = if completion.is_none() {
@@ -721,6 +975,8 @@ impl<'a> Repl<'a> {
         } else {
             None
         };
+
+        let ai_pending_now = self.suggestion_engine.ai_pending();
 
         // Clear the current line and redraw prompt mark + input
         queue!(out, Print("\r"), Clear(ClearType::CurrentLine)).ok();
@@ -733,9 +989,11 @@ impl<'a> Repl<'a> {
         // Print the input
         self.input.print(out, ghost_suffix.as_deref());
 
-        if show_ai_pending {
+        if ai_pending_now {
             queue!(out, Print(" ⧗")).ok();
         }
+
+        self.ai_pending_shown = ai_pending_now;
 
         self.move_cursor_input_end(out);
 
@@ -754,6 +1012,7 @@ impl<'a> Repl<'a> {
         let prompt_w = self.prompt_mark_width;
         // compute once per event to avoid duplicate width computation
         let prev_cursor_disp = prompt_w + self.input.cursor_display_width();
+        let cursor = self.input.cursor();
 
         // Reset Ctrl+C state on any key input other than Ctrl+C
         if !matches!((ev.code, ev.modifiers), (KeyCode::Char('c'), CTRL)) {
@@ -803,6 +1062,45 @@ impl<'a> Repl<'a> {
                         .reset_with_color_ranges(item.item.clone(), color_ranges);
                 }
             }
+            (KeyCode::Tab, NONE)
+                if self.active_suggestion.is_some()
+                    && !self.completion.completion_mode()
+                    && self.input.completion.is_none() =>
+            {
+                if self.accept_suggestion(SuggestionAcceptMode::Full) {
+                    self.completion.clear();
+                    reset_completion = true;
+                }
+            }
+            (KeyCode::Right, modifiers)
+                if modifiers.contains(CTRL)
+                    && self.active_suggestion.is_some()
+                    && self.input.completion.is_none()
+                    && self.input.cursor() == self.input.len() =>
+            {
+                if self.accept_suggestion(SuggestionAcceptMode::Word) {
+                    reset_completion = true;
+                }
+            }
+            (KeyCode::Char('f'), ALT)
+                if self.active_suggestion.is_some()
+                    && self.input.completion.is_none()
+                    && self.input.cursor() == self.input.len() =>
+            {
+                if self.accept_suggestion(SuggestionAcceptMode::Word) {
+                    reset_completion = true;
+                }
+            }
+            (KeyCode::Char(']'), ALT) => {
+                if self.rotate_suggestion(1) {
+                    reset_completion = false;
+                }
+            }
+            (KeyCode::Char('['), ALT) => {
+                if self.rotate_suggestion(-1) {
+                    reset_completion = false;
+                }
+            }
             (KeyCode::Left, modifiers) if !modifiers.contains(CTRL) => {
                 if self.input.cursor() > 0 {
                     self.input.completion = None;
@@ -836,7 +1134,6 @@ impl<'a> Repl<'a> {
             {
                 // TODO refactor
                 if let Some(completion) = &self.input.completion {
-                    let cursor = self.input.cursor();
                     let completion_chars = completion.chars().count();
 
                     if cursor >= completion_chars {
@@ -1113,7 +1410,7 @@ impl<'a> Repl<'a> {
                         }
                     }
                     self.input.clear();
-                    self.active_suggestion = None;
+                    self.clear_suggestion_state();
                     self.last_command_time = Some(Instant::now());
                 }
                 // After command execution, show new prompt
@@ -1138,7 +1435,7 @@ impl<'a> Repl<'a> {
                         display_user_error(&err, false);
                     }
                     self.input.clear();
-                    self.active_suggestion = None;
+                    self.clear_suggestion_state();
                 }
                 // After command execution, show new prompt
                 let mut renderer = TerminalRenderer::new();
@@ -1179,7 +1476,7 @@ impl<'a> Repl<'a> {
                     self.print_prompt(&mut renderer);
                     renderer.flush().ok();
                     self.input.clear();
-                    self.active_suggestion = None;
+                    self.clear_suggestion_state();
                     return Ok(());
                 }
             }
@@ -1189,7 +1486,7 @@ impl<'a> Repl<'a> {
                 self.print_prompt(&mut renderer);
                 renderer.flush().ok();
                 self.input.clear();
-                self.active_suggestion = None;
+                self.clear_suggestion_state();
                 return Ok(());
             }
             (KeyCode::Char('d'), CTRL) => {
@@ -1198,7 +1495,7 @@ impl<'a> Repl<'a> {
                 self.print_prompt(&mut renderer);
                 renderer.flush().ok();
                 self.input.clear();
-                self.active_suggestion = None;
+                self.clear_suggestion_state();
                 return Ok(());
             }
             (KeyCode::Char('r'), CTRL) => {
@@ -1275,10 +1572,19 @@ impl<'a> Repl<'a> {
                     self.check_background_jobs(true).await?;
                 },
                 _ = ai_refresh_interval.tick() => {
+                    let mut need_redraw = false;
                     if self.input_preferences.ai_backfill
                         && self.input.completion.is_none()
                         && self.refresh_inline_suggestion()
                     {
+                        need_redraw = true;
+                    }
+
+                    if self.suggestion_engine.ai_pending() != self.ai_pending_shown {
+                        need_redraw = true;
+                    }
+
+                    if need_redraw {
                         let mut renderer = TerminalRenderer::new();
                         self.print_input(&mut renderer, false, false);
                         renderer.flush().ok();

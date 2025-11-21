@@ -51,6 +51,15 @@ pub struct InputConfig {
     pub command_exists_color: Color,     // Command that exists (blue)
     pub command_not_exists_color: Color, // Command that doesn't exist (red)
     pub argument_color: Color,           // Arguments (cyan)
+    pub variable_color: Color,           // Variables (yellow)
+    pub single_quote_color: Color,       // Single quoted strings (green)
+    pub double_quote_color: Color,       // Double quoted strings (Green with bold?)
+    pub redirect_color: Color,           // Redirect operators (magenta)
+    pub operator_color: Color,           // Logical/sequential operators
+    pub pipe_color: Color,               // Pipe symbol
+    pub background_color: Color,         // Background operator
+    pub proc_subst_color: Color,         // Process substitution markers
+    pub error_color: Color,              // Parse errors (red intense)
     pub completion_color: Color,         // Completion candidates (dark grey)
     pub ghost_color: Color,              // Inline suggestion text (dim gray)
 }
@@ -62,6 +71,15 @@ impl Default for InputConfig {
             command_exists_color: Color::Blue,
             command_not_exists_color: Color::Red,
             argument_color: Color::Cyan,
+            variable_color: Color::Yellow,
+            single_quote_color: Color::DarkGreen,
+            double_quote_color: Color::Green,
+            redirect_color: Color::Magenta,
+            operator_color: Color::DarkYellow,
+            pipe_color: Color::DarkCyan,
+            background_color: Color::DarkMagenta,
+            proc_subst_color: Color::DarkBlue,
+            error_color: Color::Red,
             completion_color: Color::DarkGrey,
             ghost_color: Color::DarkGrey,
         }
@@ -85,6 +103,15 @@ pub enum ColorType {
     CommandExists,
     CommandNotExists,
     Argument,
+    Variable,
+    SingleQuote,
+    DoubleQuote,
+    Redirect,
+    Operator,
+    Pipe,
+    Background,
+    ProcSubst,
+    Error,
 }
 
 impl Input {
@@ -400,6 +427,15 @@ impl Input {
                 ColorType::CommandExists => self.config.command_exists_color,
                 ColorType::CommandNotExists => self.config.command_not_exists_color,
                 ColorType::Argument => self.config.argument_color,
+                ColorType::Variable => self.config.variable_color,
+                ColorType::SingleQuote => self.config.single_quote_color,
+                ColorType::DoubleQuote => self.config.double_quote_color,
+                ColorType::Redirect => self.config.redirect_color,
+                ColorType::Operator => self.config.operator_color,
+                ColorType::Pipe => self.config.pipe_color,
+                ColorType::Background => self.config.background_color,
+                ColorType::ProcSubst => self.config.proc_subst_color,
+                ColorType::Error => self.config.error_color,
             };
             result.push_str(&format!("{}", colored_text.with(color)));
 

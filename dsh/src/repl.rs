@@ -4,8 +4,8 @@ use crate::dirs;
 use crate::environment::Environment;
 use crate::errors::display_user_error;
 use crate::history::FrecencyHistory;
-use crate::input::{Input, InputConfig, display_width};
-use crate::parser::Rule;
+use crate::input::{ColorType, Input, InputConfig, display_width};
+use crate::parser::{self, HighlightKind, Rule};
 use crate::prompt::Prompt;
 use crate::shell::{SHELL_TERMINAL, Shell};
 use crate::suggestion::{
@@ -426,6 +426,52 @@ impl<'a> Repl<'a> {
         Some(suggestion.full[input.len()..].to_string())
     }
 
+    fn compute_color_ranges(&self, input: &str) -> (Vec<(usize, usize, ColorType)>, bool) {
+        let highlight = parser::collect_highlight_tokens(input);
+        let mut tokens = highlight.tokens;
+        let error = highlight.error;
+        tokens.sort_by_key(|token| token.start);
+
+        let mut ranges = Vec::with_capacity(tokens.len() + error.as_ref().map(|_| 1).unwrap_or(0));
+        let mut can_execute = false;
+        let len = input.len();
+
+        for token in tokens {
+            if token.start >= token.end || token.end > len {
+                continue;
+            }
+            let color = match token.kind {
+                HighlightKind::Command => {
+                    let word = &input[token.start..token.end];
+                    if self.command_is_valid(word) {
+                        can_execute = true;
+                        ColorType::CommandExists
+                    } else {
+                        ColorType::CommandNotExists
+                    }
+                }
+                HighlightKind::Argument | HighlightKind::Bareword => ColorType::Argument,
+                HighlightKind::Variable => ColorType::Variable,
+                HighlightKind::SingleQuoted => ColorType::SingleQuote,
+                HighlightKind::DoubleQuoted => ColorType::DoubleQuote,
+                HighlightKind::Redirect => ColorType::Redirect,
+                HighlightKind::Pipe => ColorType::Pipe,
+                HighlightKind::Operator => ColorType::Operator,
+                HighlightKind::Background => ColorType::Background,
+                HighlightKind::ProcSubstitution => ColorType::ProcSubst,
+                HighlightKind::Error => ColorType::Error,
+            };
+            ranges.push((token.start, token.end, color));
+        }
+
+        if let Some(err) = error
+            && err.start < err.end && err.end <= len {
+                ranges.push((err.start, err.end, ColorType::Error));
+            }
+
+        (ranges, can_execute)
+    }
+
     fn accept_active_suggestion(&mut self) -> bool {
         let suggestion = match self.active_suggestion.take() {
             Some(state) => state,
@@ -593,15 +639,13 @@ impl<'a> Repl<'a> {
         // );
 
         let mut completion: Option<String> = None;
-        let mut can_execute = false;
         let mut show_ai_pending = false;
         if input.is_empty() || reset_completion {
             self.input.completion = None;
             self.input.color_ranges = None;
+            self.input.can_execute = false;
         } else {
             completion = self.get_completion_from_history(&input);
-
-            let mut color_ranges: Vec<(usize, usize, crate::input::ColorType)> = Vec::new();
 
             // TODO refactor
             if let Ok(words) = self.input.get_words() {
@@ -611,22 +655,8 @@ impl<'a> Repl<'a> {
                         continue;
                     }
 
-                    let word_is_valid = self.command_is_valid(word);
-
                     match rule {
                         Rule::argv0 => {
-                            // For command names (argv0), color based on existence
-                            let color_type = if word_is_valid {
-                                crate::input::ColorType::CommandExists
-                            } else {
-                                crate::input::ColorType::CommandNotExists
-                            };
-                            color_ranges.push((span.start(), span.end(), color_type));
-
-                            if word_is_valid {
-                                can_execute = true;
-                            }
-
                             // Completion logic for command names
                             if current && completion.is_none() {
                                 if let Some(file) = self.shell.environment.read().search(word) {
@@ -648,13 +678,6 @@ impl<'a> Repl<'a> {
                             }
                         }
                         Rule::args => {
-                            // For arguments, use cyan color
-                            color_ranges.push((
-                                span.start(),
-                                span.end(),
-                                crate::input::ColorType::Argument,
-                            ));
-
                             // Completion logic for arguments
                             if current
                                 && completion.is_none()
@@ -678,10 +701,10 @@ impl<'a> Repl<'a> {
                     }
                 }
             }
+            let (color_ranges, can_execute) = self.compute_color_ranges(&input);
             self.input.color_ranges = Some(color_ranges);
+            self.input.can_execute = can_execute;
         }
-
-        self.input.can_execute = can_execute;
 
         if completion.is_none() {
             if refresh_suggestion {

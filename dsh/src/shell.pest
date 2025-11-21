@@ -53,8 +53,8 @@ span = { quoted | glob_word | word | variable | proc_subst | subshell | command_
 argv0 = { span }
 args = { (sp* ~ (redirect|span))+ }
 
-background_op = _{ !("&&") ~ "&" }
-pipeline_op = _{ "|" }
+background_op = { !("&&") ~ "&" }
+pipeline_op = { "|" }
 sequential_op = { ";" }
 and_op = { "&&" }
 or_op = { "||" }

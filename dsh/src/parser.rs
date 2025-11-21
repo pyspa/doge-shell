@@ -3,6 +3,7 @@ use anyhow::{Result, anyhow, bail, ensure};
 use parking_lot::RwLock;
 use pest::Parser;
 use pest::Span;
+use pest::error::InputLocation;
 use pest::iterators::Pair;
 use pest_derive::Parser;
 use std::collections::HashMap;
@@ -13,6 +14,159 @@ use tracing::debug;
 #[derive(Parser)]
 #[grammar = "shell.pest"]
 pub struct ShellParser;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HighlightKind {
+    Command,
+    Argument,
+    Variable,
+    SingleQuoted,
+    DoubleQuoted,
+    Redirect,
+    Pipe,
+    Operator,
+    Background,
+    ProcSubstitution,
+    Error,
+    Bareword,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HighlightToken {
+    pub start: usize,
+    pub end: usize,
+    pub kind: HighlightKind,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct HighlightResult {
+    pub tokens: Vec<HighlightToken>,
+    pub error: Option<HighlightToken>,
+}
+
+pub fn collect_highlight_tokens(input: &str) -> HighlightResult {
+    let mut result = HighlightResult::default();
+    match ShellParser::parse(Rule::commands, input) {
+        Ok(pairs) => {
+            for pair in pairs {
+                collect_highlight_from_pair(pair, HighlightContext::None, &mut result.tokens);
+            }
+        }
+        Err(err) => {
+            result.error = highlight_error_token(input, err.location);
+        }
+    }
+    result
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HighlightContext {
+    None,
+    Command,
+    Argument,
+}
+
+fn collect_highlight_from_pair(
+    pair: Pair<Rule>,
+    ctx: HighlightContext,
+    out: &mut Vec<HighlightToken>,
+) {
+    match pair.as_rule() {
+        Rule::argv0 => {
+            for inner in pair.into_inner() {
+                collect_highlight_from_pair(inner, HighlightContext::Command, out);
+            }
+        }
+        Rule::args => {
+            for inner in pair.into_inner() {
+                collect_highlight_from_pair(inner, HighlightContext::Argument, out);
+            }
+        }
+        Rule::word | Rule::glob_word => {
+            let kind = match ctx {
+                HighlightContext::Command => HighlightKind::Command,
+                HighlightContext::Argument => HighlightKind::Argument,
+                HighlightContext::None => HighlightKind::Bareword,
+            };
+            push_token(pair.as_span(), kind, out);
+        }
+        Rule::variable => push_token(pair.as_span(), HighlightKind::Variable, out),
+        Rule::s_quoted => push_token(pair.as_span(), HighlightKind::SingleQuoted, out),
+        Rule::d_quoted => push_token(pair.as_span(), HighlightKind::DoubleQuoted, out),
+        Rule::stdout_redirect_direction
+        | Rule::stderr_redirect_direction
+        | Rule::stdouterr_redirect_direction
+        | Rule::stdin_redirect_direction
+        | Rule::stdin_redirect_direction_in => {
+            push_token(pair.as_span(), HighlightKind::Redirect, out);
+        }
+        Rule::proc_subst_direction | Rule::proc_subst_direction_in => {
+            push_token(pair.as_span(), HighlightKind::ProcSubstitution, out);
+        }
+        Rule::pipeline_op => push_token(pair.as_span(), HighlightKind::Pipe, out),
+        Rule::background_op => push_token(pair.as_span(), HighlightKind::Background, out),
+        Rule::and_op | Rule::or_op | Rule::sequential_op => {
+            push_token(pair.as_span(), HighlightKind::Operator, out);
+        }
+        _ => {
+            for inner in pair.into_inner() {
+                collect_highlight_from_pair(inner, ctx, out);
+            }
+        }
+    }
+}
+
+fn push_token(span: Span, kind: HighlightKind, out: &mut Vec<HighlightToken>) {
+    let start = span.start();
+    let end = span.end();
+    if start == end {
+        return;
+    }
+    out.push(HighlightToken { start, end, kind });
+}
+
+fn highlight_error_token(input: &str, location: InputLocation) -> Option<HighlightToken> {
+    let len = input.len();
+    match location {
+        InputLocation::Pos(pos) => {
+            if len == 0 {
+                return None;
+            }
+            let mut start = pos.min(len);
+            if start == len {
+                start = start.saturating_sub(1);
+            }
+            let mut end = input[start..]
+                .chars()
+                .next()
+                .map(|ch| start + ch.len_utf8())
+                .unwrap_or(start);
+            if end <= start {
+                end = (start + 1).min(len);
+            }
+            Some(HighlightToken {
+                start,
+                end,
+                kind: HighlightKind::Error,
+            })
+        }
+        InputLocation::Span((start, end)) => {
+            if len == 0 {
+                return None;
+            }
+            let s = start.min(len.saturating_sub(1));
+            let mut e = end.min(len);
+            if e <= s {
+                e = (s + 1).min(len);
+            }
+            Some(HighlightToken {
+                start: s,
+                end: e,
+                kind: HighlightKind::Error,
+            })
+        }
+    }
+}
 
 /// helpers
 pub fn get_string(pair: Pair<Rule>) -> Option<String> {
@@ -226,10 +380,13 @@ fn expand_alias_tilde(
                 match inner_pair.as_rule() {
                     Rule::simple_command_bg => {
                         for inner_pair in inner_pair.into_inner() {
-                            let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
-                            argv.append(&mut v);
+                            if inner_pair.as_rule() == Rule::background_op {
+                                argv.push(inner_pair.as_str().to_string());
+                            } else {
+                                let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
+                                argv.append(&mut v);
+                            }
                         }
-                        argv.push("&".to_string());
                     }
                     Rule::proc_subst => {
                         debug!("expand proc_subst {}", inner_pair.as_str());
@@ -271,10 +428,13 @@ fn expand_alias_tilde(
                         }
                     }
                     Rule::pipe_command => {
-                        argv.push("|".to_string());
                         for inner_pair in inner_pair.into_inner() {
-                            let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
-                            argv.append(&mut v);
+                            if inner_pair.as_rule() == Rule::pipeline_op {
+                                argv.push(inner_pair.as_str().to_string());
+                            } else {
+                                let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
+                                argv.append(&mut v);
+                            }
                         }
                     }
                     Rule::commands
@@ -859,7 +1019,7 @@ mod tests {
                     Rule::pipe_command => {
                         let inner_pair = inner_pair.into_inner();
                         let cmd = inner_pair.as_str();
-                        assert_eq!("sk --ansi --inline-info", cmd);
+                        assert_eq!("| sk --ansi --inline-info", cmd);
                     }
                     _ => {}
                 }
@@ -890,9 +1050,9 @@ mod tests {
                         let inner_pair = inner_pair.into_inner();
                         let cmd = inner_pair.as_str();
                         if i == 1 {
-                            assert_eq!("test  --a1bc --b2=c3", cmd);
+                            assert_eq!("|test  --a1bc --b2=c3", cmd);
                         } else if i == 2 {
-                            assert_eq!("dd", cmd);
+                            assert_eq!("|dd", cmd);
                         }
                     }
 
@@ -948,9 +1108,9 @@ mod tests {
                         let inner_pair = inner_pair.into_inner();
                         let cmd = inner_pair.as_str();
                         if i == 1 {
-                            assert_eq!("sk", cmd);
+                            assert_eq!("| sk", cmd);
                         } else if i == 2 {
-                            assert_eq!("bash -s", cmd);
+                            assert_eq!("| bash -s", cmd);
                         }
                     }
 
@@ -979,7 +1139,7 @@ mod tests {
         for pair in pairs {
             assert_eq!(Rule::simple_command_bg, pair.as_rule());
             let count = pair.clone().into_inner().count();
-            assert_eq!(1, count);
+            assert_eq!(2, count);
 
             for inner_pair in pair.into_inner() {
                 if inner_pair.as_rule() == Rule::simple_command {
@@ -1004,9 +1164,9 @@ mod tests {
                     let inner_pair = inner_pair.into_inner();
                     let cmd = inner_pair.as_str();
                     if i == 0 {
-                        assert_eq!("sleep 20", cmd);
+                        assert_eq!("sleep 20 &", cmd);
                     } else if i == 1 {
-                        assert_eq!("sleep 30", cmd);
+                        assert_eq!("sleep 30 &", cmd);
                     }
                 }
             }

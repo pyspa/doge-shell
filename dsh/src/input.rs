@@ -169,22 +169,47 @@ impl Input {
     }
 
     pub fn insert(&mut self, ch: char) {
-        self.input.insert(self.byte_index(), ch);
-        self.update_indices();
+        let byte_index = self.byte_index();
+        self.input.insert(byte_index, ch);
+
+        let char_len = ch.len_utf8();
+        let insert_pos = self.cursor;
+        self.indices.insert(insert_pos, byte_index);
+        self.shift_indices_from(insert_pos + 1, char_len as isize);
         self.cursor += 1;
     }
 
     pub fn insert_str(&mut self, string: &str) {
-        self.input.insert_str(self.byte_index(), string);
-        self.update_indices();
-        self.cursor += string.chars().count();
+        if string.is_empty() {
+            return;
+        }
+
+        let byte_index = self.byte_index();
+        self.input.insert_str(byte_index, string);
+
+        let inserted_chars = string.chars().count();
+        let mut offsets = Vec::with_capacity(inserted_chars);
+        for (rel, _) in string.char_indices() {
+            offsets.push(byte_index + rel);
+        }
+        let advance = string.len();
+
+        let insert_pos = self.cursor;
+        self.indices.splice(insert_pos..insert_pos, offsets);
+        self.shift_indices_from(insert_pos + inserted_chars, advance as isize);
+        self.cursor += inserted_chars;
     }
 
     pub fn backspace(&mut self) {
         if self.cursor > 0 {
+            let remove_index = self.cursor - 1;
+            let byte_index = self.indices[remove_index];
+            let char_len = self.char_len_at(remove_index);
+
+            self.input.drain(byte_index..byte_index + char_len);
+            self.indices.remove(remove_index);
+            self.shift_indices_from(remove_index, -(char_len as isize));
             self.cursor -= 1;
-            self.input.remove(self.byte_index());
-            self.update_indices();
         }
     }
 
@@ -207,6 +232,36 @@ impl Input {
             self.input.len()
         } else {
             self.indices[self.cursor]
+        }
+    }
+
+    fn shift_indices_from(&mut self, start: usize, delta: isize) {
+        if delta == 0 || start >= self.indices.len() {
+            return;
+        }
+
+        if delta.is_positive() {
+            let delta = delta as usize;
+            for idx in &mut self.indices[start..] {
+                *idx += delta;
+            }
+        } else {
+            let delta = (-delta) as usize;
+            for idx in &mut self.indices[start..] {
+                *idx -= delta;
+            }
+        }
+    }
+
+    fn char_len_at(&self, index: usize) -> usize {
+        if index >= self.indices.len() {
+            return 0;
+        }
+
+        if index + 1 < self.indices.len() {
+            self.indices[index + 1] - self.indices[index]
+        } else {
+            self.input.len().saturating_sub(self.indices[index])
         }
     }
 
@@ -366,10 +421,16 @@ impl Input {
 
     /// Delete character at current cursor position (forward delete)
     pub fn delete_char(&mut self) {
-        if self.cursor < self.len() {
-            self.input.remove(self.byte_index());
-            self.update_indices();
+        if self.cursor >= self.len() {
+            return;
         }
+
+        let byte_index = self.indices[self.cursor];
+        let char_len = self.char_len_at(self.cursor);
+
+        self.input.drain(byte_index..byte_index + char_len);
+        self.indices.remove(self.cursor);
+        self.shift_indices_from(self.cursor, -(char_len as isize));
     }
 
     pub fn get_words(&self) -> Result<Vec<(Rule, Span<'_>, bool)>> {
@@ -607,6 +668,42 @@ mod tests {
         input.move_by(1); // After 'b'
         assert_eq!(input.cursor(), 3);
         assert_eq!(input.cursor_display_width(), 4); // 1 + 2 + 1
+    }
+
+    #[test]
+    fn test_backspace_with_multibyte_characters() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+
+        input.insert('a');
+        input.insert('あ');
+        input.insert('b');
+
+        input.backspace();
+        assert_eq!(input.as_str(), "aあ");
+        assert_eq!(input.cursor(), 2);
+
+        input.backspace();
+        assert_eq!(input.as_str(), "a");
+        assert_eq!(input.cursor(), 1);
+
+        input.backspace();
+        assert_eq!(input.as_str(), "");
+        assert_eq!(input.cursor(), 0);
+    }
+
+    #[test]
+    fn test_delete_char_with_multibyte_characters() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+
+        input.insert_str("ab😀c");
+        input.move_to_end();
+        input.move_by(-2);
+
+        input.delete_char();
+        assert_eq!(input.as_str(), "abc");
+        assert_eq!(input.cursor(), 2);
     }
 
     #[test]

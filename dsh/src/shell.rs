@@ -1143,15 +1143,8 @@ fn read_fd(fd: RawFd) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nix::unistd::{close, pipe};
-    use once_cell::sync::Lazy;
-    use std::fs::File;
-    use std::io::Read;
-    use std::os::unix::io::FromRawFd;
-    use std::path::PathBuf;
-    use tokio::sync::Mutex;
 
-    static COMMAND_SUBST_TEST_GUARD: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+    use std::path::PathBuf;
 
     #[test]
     fn test_chpwd_update_env() {
@@ -1165,43 +1158,4 @@ mod tests {
         let pwd = std::env::var("PWD").unwrap_or_default();
         assert!(pwd.contains("test") || pwd == "/tmp/test");
     }
-
-    async fn run_command_substitution_test(input: &str, expected: &str) {
-        let _guard = COMMAND_SUBST_TEST_GUARD.lock().await;
-
-        let env = Environment::new();
-        let mut shell = Shell::new(env);
-        let mut ctx = Context::new_safe(shell.pid, shell.pgid, true);
-
-        let (read_fd, write_fd) = pipe().expect("failed to create pipe");
-        ctx.captured_out = Some(write_fd);
-
-        let exit = shell
-            .eval_str(&mut ctx, input.to_string(), false)
-            .await
-            .expect("command substitution should succeed");
-        assert_eq!(exit, ExitCode::from(0));
-
-        ctx.captured_out = None;
-        let _ = close(write_fd);
-
-        let mut reader = unsafe { File::from_raw_fd(read_fd) };
-        let mut buf = String::new();
-        reader
-            .read_to_string(&mut buf)
-            .expect("failed to read command output");
-
-        assert_eq!(buf.trim(), expected);
-    }
-
-    // #[tokio::test(flavor = "multi_thread")]
-    // async fn test_command_substitution_basic() {
-    //     run_command_substitution_test("echo $(printf foo)", "foo").await;
-    // }
-
-    // #[tokio::test(flavor = "multi_thread")]
-    // async fn test_command_substitution_word_splitting() {
-    //     run_command_substitution_test("echo start $(printf 'foo bar') end", "start foo bar end")
-    //         .await;
-    // }
 }

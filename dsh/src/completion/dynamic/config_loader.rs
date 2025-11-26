@@ -251,6 +251,11 @@ impl DynamicCompletionHandler for ScriptBasedCompletionHandler {
                     continue;
                 }
 
+                // Filter candidates by the current token prefix to ensure proper filtering
+                if !trimmed.starts_with(&parsed_command.current_token) {
+                    continue;
+                }
+
                 // Create a completion candidate from the processed output line
                 candidates.push(CompletionCandidate {
                     text: trimmed.to_string(),

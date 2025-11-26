@@ -1,0 +1,5 @@
+[[dynamic_completions]]
+command = "sudo"
+description = "Complete with available usernames"
+match_condition = { type = "CustomPattern", params = { command = "sudo", args_must_be_empty = true } }
+shell_command = "getent passwd | cut -d: -f1"

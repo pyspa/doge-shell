@@ -171,7 +171,7 @@ impl IntegratedCompletionEngine {
             command_generator: None,
             parser: CommandLineParser::new(),
             history_completion: HistoryCompletion::new(),
-            dynamic_registry: DynamicCompletionRegistry::with_default_handlers(),
+            dynamic_registry: DynamicCompletionRegistry::with_configured_handlers(),
             cache: CompletionCache::new(Duration::from_millis(DEFAULT_CACHE_TTL_MS)),
             framework_cache: RwLock::new(HashMap::new()),
             environment,

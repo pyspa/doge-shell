@@ -220,16 +220,7 @@
           "description": "Delete remote refs"
         }
       ],
-      "arguments": [
-        {
-          "name": "remote",
-          "description": "Remote name (e.g., origin)"
-        },
-        {
-          "name": "branch",
-          "description": "Branch name to push"
-        }
-      ],
+      "arguments": [],
       "subcommands": []
     },
     {
@@ -257,16 +248,7 @@
           "description": "Do not rebase"
         }
       ],
-      "arguments": [
-        {
-          "name": "remote",
-          "description": "Remote name (optional, defaults to origin)"
-        },
-        {
-          "name": "branch",
-          "description": "Branch name (optional)"
-        }
-      ],
+      "arguments": [],
       "subcommands": []
     },
     {
@@ -368,12 +350,7 @@
           "description": "When switching branches, proceed even if the index or the working tree differs from HEAD"
         }
       ],
-      "arguments": [
-        {
-          "name": "branch_or_path",
-          "description": "Branch name or file path"
-        }
-      ],
+      "arguments": [],
       "subcommands": []
     },
     {
@@ -436,12 +413,7 @@
           "description": "Suppress feedback messages"
         }
       ],
-      "arguments": [
-        {
-          "name": "branch",
-          "description": "Branch name to switch to"
-        }
-      ],
+      "arguments": [],
       "subcommands": []
     },
     {
@@ -516,16 +488,7 @@
           "description": "Force updating the local reference"
         }
       ],
-      "arguments": [
-        {
-          "name": "remote",
-          "description": "Remote name to fetch from (optional)"
-        },
-        {
-          "name": "branch",
-          "description": "Branch name to fetch (optional)"
-        }
-      ],
+      "arguments": [],
       "subcommands": []
     },
     {
@@ -553,12 +516,7 @@
           "description": "Resolve the current conflict"
         }
       ],
-      "arguments": [
-        {
-          "name": "branch",
-          "description": "Branch to merge into the current branch"
-        }
-      ],
+      "arguments": [],
       "subcommands": []
     },
     {
@@ -587,16 +545,7 @@
           "description": "Starting point at which to create the new commits"
         }
       ],
-      "arguments": [
-        {
-          "name": "upstream",
-          "description": "Upstream branch to rebase onto"
-        },
-        {
-          "name": "branch",
-          "description": "Branch to rebase (optional, defaults to current)"
-        }
-      ],
+      "arguments": [],
       "subcommands": []
     },
     {

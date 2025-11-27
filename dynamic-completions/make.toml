@@ -1,0 +1,18 @@
+[[dynamic_completions]]
+command = "make"
+description = "Complete with targets from Makefile"
+match_condition = { type = "StartsWithCommand" }
+shell_command = '''
+if [ -f Makefile ]; then
+    FILE="Makefile"
+elif [ -f makefile ]; then
+    FILE="makefile"
+elif [ -f GNUmakefile ]; then
+    FILE="GNUmakefile"
+else
+    echo ""
+    exit 0
+fi
+grep -E "^[a-zA-Z0-9][^:[:space:]]*:" "$FILE" | sed "s/:.*$//" | grep -v "^\\." | sort | uniq
+'''
+priority = 150

@@ -1,0 +1,6 @@
+[[dynamic_completions]]
+command = "docker"
+subcommands = ["rmi"]
+description = "Complete docker images"
+match_condition = { type = "HasSubcommand" }
+shell_command = "docker images --format '{{.Repository}}:{{.Tag}}' | grep -v '<none>'"

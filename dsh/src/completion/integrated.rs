@@ -323,11 +323,39 @@ impl IntegratedCompletionEngine {
         request: &CompletionRequest,
         parsed_command_line: &ParsedCommandLine,
     ) -> CandidateBatch {
-        if !self.dynamic_registry.matches(parsed_command_line) {
-            return CandidateBatch::empty();
+        // 1. Try direct match first
+        if self.dynamic_registry.matches(parsed_command_line) {
+            debug!("Using dynamic completion for input: '{}'", request.input);
+            return self.generate_dynamic_candidates(request, parsed_command_line);
         }
 
-        debug!("Using dynamic completion for input: '{}'", request.input);
+        // 2. If command is sudo, try to unwrap and match inner command
+        if parsed_command_line.command == "sudo" {
+            if let Some(inner_parsed) = self.unwrap_sudo_command(request.input, parsed_command_line)
+            {
+                debug!(
+                    "Unwrapped sudo command: '{}' -> '{}'",
+                    parsed_command_line.command, inner_parsed.command
+                );
+
+                if self.dynamic_registry.matches(&inner_parsed) {
+                    debug!(
+                        "Using dynamic completion for unwrapped sudo command: '{}'",
+                        inner_parsed.command
+                    );
+                    return self.generate_dynamic_candidates(request, &inner_parsed);
+                }
+            }
+        }
+
+        CandidateBatch::empty()
+    }
+
+    fn generate_dynamic_candidates(
+        &self,
+        request: &CompletionRequest,
+        parsed_command_line: &ParsedCommandLine,
+    ) -> CandidateBatch {
         match self
             .dynamic_registry
             .generate_candidates(parsed_command_line)
@@ -358,6 +386,94 @@ impl IntegratedCompletionEngine {
                 CandidateBatch::empty()
             }
         }
+    }
+
+    /// Unwrap sudo command to get the inner command
+    fn unwrap_sudo_command(
+        &self,
+        input: &str,
+        parsed_command: &ParsedCommandLine,
+    ) -> Option<ParsedCommandLine> {
+        // Basic validation
+        if parsed_command.command != "sudo" {
+            return None;
+        }
+
+        // Find where the inner command starts
+        // sudo [options] <command> [args]
+        // For now, we'll assume simple case: sudo <command> ...
+
+        // If we have arguments, the first argument might be the command
+        // But we also need to check subcommand_path
+        if parsed_command.args.is_empty() && parsed_command.subcommand_path.is_empty() {
+            return None;
+        }
+
+        let mut inner_command_name = "";
+
+        // Check subcommand_path first (it's the most likely place if parser identified it)
+        if !parsed_command.subcommand_path.is_empty() {
+            inner_command_name = parsed_command.subcommand_path[0].as_str();
+        } else {
+            // Parse args to find the command, skipping sudo options
+            let mut iter = parsed_command.args.iter();
+            while let Some(arg) = iter.next() {
+                if arg.starts_with('-') {
+                    // Check for options that take arguments
+                    // -C, -g, -h, -p, -r, -t, -T, -u, -U
+                    // Handle both -u user and -uuser (though -uuser might be one token)
+                    // If arg is exactly -u, next arg is value
+                    let chars: Vec<char> = arg.chars().collect();
+                    if chars.len() == 2 {
+                        match chars[1] {
+                            'C' | 'g' | 'h' | 'p' | 'r' | 't' | 'T' | 'u' | 'U' => {
+                                // Consume next arg as value
+                                iter.next();
+                            }
+                            _ => {}
+                        }
+                    }
+                } else {
+                    // Found the command
+                    inner_command_name = arg.as_str();
+                    break;
+                }
+            }
+        }
+
+        if inner_command_name.is_empty() {
+            return None;
+        }
+
+        // Reconstruct input for the inner command
+        // This is a bit tricky because we need to preserve cursor position relative to the inner command
+        // We'll try to find the inner command in the original input string
+
+        // Find the position of the inner command in the input
+        // This is an approximation, robust implementation would need token positions from parser
+        let inner_cmd_start = input.find(inner_command_name)?;
+
+        // If cursor is before the inner command, we can't complete the inner command
+        // (e.g. "su|do git")
+        // But we only care if cursor is AFTER the start of inner command
+        // Actually, parser.parse takes cursor_pos, so we need to adjust it.
+
+        let new_cursor_pos = if parsed_command.cursor_index >= inner_cmd_start {
+            parsed_command.cursor_index - inner_cmd_start
+        } else {
+            0 // Cursor is before inner command, effectively at start for inner parsing
+        };
+
+        let inner_input = &input[inner_cmd_start..];
+
+        // Parse the inner command
+        let inner_parsed = self.convert_to_parsed_command_line(inner_input, new_cursor_pos);
+
+        // Important: We need to ensure that if we are completing the command name itself
+        // (e.g. "sudo gi|"), the inner parser sees it as Command context
+        // The parser should handle this if we pass "gi|" as input.
+
+        Some(inner_parsed)
     }
 
     fn collect_command_candidates(
@@ -749,4 +865,37 @@ mod tests {
 
     #[test]
     fn test_enhanced_candidate_display_text() {}
+
+    #[tokio::test]
+    async fn test_sudo_dynamic_completion() {
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+
+        // Register a test handler for "testcmd"
+        let config = crate::completion::dynamic::config::DynamicCompletionDef {
+            command: "testcmd".to_string(),
+            subcommands: vec![],
+            description: "Test command".to_string(),
+            match_condition: crate::completion::dynamic::config::MatchCondition::StartsWithCommand,
+            shell_command: "echo candidate1\necho candidate2".to_string(),
+            filter_output: None,
+            priority: 100,
+        };
+        let handler =
+            crate::completion::dynamic::config_loader::ScriptBasedCompletionHandler::new(config);
+        let completer = crate::completion::dynamic::DynamicCompleter::new(handler);
+        engine.dynamic_registry.register_handler(completer);
+
+        let input = "sudo testcmd ";
+        let cursor_pos = input.len();
+        let current_dir = std::env::current_dir().unwrap();
+
+        let result = engine.complete(input, cursor_pos, &current_dir, 50).await;
+
+        assert!(
+            !result.candidates.is_empty(),
+            "Should return candidates for sudo testcmd"
+        );
+        assert!(result.candidates.iter().any(|c| c.text == "candidate1"));
+    }
 }

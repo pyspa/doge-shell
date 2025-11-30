@@ -149,6 +149,15 @@ impl DynamicCompletionRegistry {
         }
     }
 
+    /// Register a dynamic completion handler manually
+    ///
+    /// # Arguments
+    /// * `handler` - The handler to register
+    #[allow(dead_code)]
+    pub fn register_handler(&mut self, handler: DynamicCompleter) {
+        self.handlers.push(handler);
+    }
+
     /// Check if any handler matches the input
     ///
     /// This method checks if any of the registered handlers is relevant for the

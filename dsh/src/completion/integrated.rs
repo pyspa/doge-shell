@@ -4,7 +4,7 @@ use super::dynamic::DynamicCompletionRegistry;
 use super::framework::CompletionFrameworkKind;
 
 use super::generator::CompletionGenerator;
-use super::history::{CompletionContext, HistoryCompletion};
+
 use super::json_loader::JsonCompletionLoader;
 use super::parser::{self, CommandLineParser, ParsedCommandLine};
 use crate::completion::display::Candidate;
@@ -80,14 +80,12 @@ impl CandidateBatch {
 #[derive(Debug)]
 struct CommandCollection {
     batch: CandidateBatch,
-    has_command_specific_data: bool,
 }
 
 impl CommandCollection {
     fn empty() -> Self {
         Self {
             batch: CandidateBatch::empty(),
-            has_command_specific_data: false,
         }
     }
 }
@@ -153,7 +151,7 @@ pub struct IntegratedCompletionEngine {
     command_generator: Option<CompletionGenerator>,
     /// Command line parser
     parser: CommandLineParser,
-    history_completion: HistoryCompletion,
+
     /// Dynamic completion registry
     dynamic_registry: DynamicCompletionRegistry,
     /// Short lived completion cache
@@ -170,7 +168,7 @@ impl IntegratedCompletionEngine {
         Self {
             command_generator: None,
             parser: CommandLineParser::new(),
-            history_completion: HistoryCompletion::new(),
+
             dynamic_registry: DynamicCompletionRegistry::with_configured_handlers(),
             cache: CompletionCache::new(Duration::from_millis(DEFAULT_CACHE_TTL_MS)),
             framework_cache: RwLock::new(HashMap::new()),
@@ -285,7 +283,7 @@ impl IntegratedCompletionEngine {
 
         // 1. JSON-based command completion
         let command_collection = self.collect_command_candidates(&request, &parsed_command_line);
-        let has_command_specific_data = command_collection.has_command_specific_data;
+
         if !aggregator.extend(command_collection.batch) {
             let results = aggregator.finalize();
             self.store_in_cache(request.input, &results.candidates, results.framework);
@@ -300,6 +298,8 @@ impl IntegratedCompletionEngine {
         }
 
         // 3. History-based completion (skipped when command-specific data exists)
+        // History completion removed as per user request
+        /*
         if !has_command_specific_data {
             let history_batch = self.collect_history_candidates(&request);
             if !aggregator.extend(history_batch) {
@@ -313,6 +313,7 @@ impl IntegratedCompletionEngine {
                 parsed_command_line.command
             );
         }
+        */
         let results = aggregator.finalize();
         self.store_in_cache(request.input, &results.candidates, results.framework);
         results
@@ -330,21 +331,20 @@ impl IntegratedCompletionEngine {
         }
 
         // 2. If command is sudo, try to unwrap and match inner command
-        if parsed_command_line.command == "sudo" {
-            if let Some(inner_parsed) = self.unwrap_sudo_command(request.input, parsed_command_line)
-            {
-                debug!(
-                    "Unwrapped sudo command: '{}' -> '{}'",
-                    parsed_command_line.command, inner_parsed.command
-                );
+        if parsed_command_line.command == "sudo"
+            && let Some(inner_parsed) = self.unwrap_sudo_command(request.input, parsed_command_line)
+        {
+            debug!(
+                "Unwrapped sudo command: '{}' -> '{}'",
+                parsed_command_line.command, inner_parsed.command
+            );
 
-                if self.dynamic_registry.matches(&inner_parsed) {
-                    debug!(
-                        "Using dynamic completion for unwrapped sudo command: '{}'",
-                        inner_parsed.command
-                    );
-                    return self.generate_dynamic_candidates(request, &inner_parsed);
-                }
+            if self.dynamic_registry.matches(&inner_parsed) {
+                debug!(
+                    "Using dynamic completion for unwrapped sudo command: '{}'",
+                    inner_parsed.command
+                );
+                return self.generate_dynamic_candidates(request, &inner_parsed);
             }
         }
 
@@ -458,11 +458,7 @@ impl IntegratedCompletionEngine {
         // But we only care if cursor is AFTER the start of inner command
         // Actually, parser.parse takes cursor_pos, so we need to adjust it.
 
-        let new_cursor_pos = if parsed_command.cursor_index >= inner_cmd_start {
-            parsed_command.cursor_index - inner_cmd_start
-        } else {
-            0 // Cursor is before inner command, effectively at start for inner parsing
-        };
+        let new_cursor_pos = parsed_command.cursor_index.saturating_sub(inner_cmd_start);
 
         let inner_input = &input[inner_cmd_start..];
 
@@ -496,8 +492,6 @@ impl IntegratedCompletionEngine {
             request.input
         );
 
-        let has_command_specific_data = generator.has_command_completion(&parsed_command.command);
-
         match generator.generate_candidates(parsed_command) {
             Ok(command_candidates) => {
                 let enhanced_candidates = command_candidates
@@ -513,32 +507,15 @@ impl IntegratedCompletionEngine {
 
                 CommandCollection {
                     batch: CandidateBatch::inclusive(enhanced_candidates),
-                    has_command_specific_data,
                 }
             }
             Err(e) => {
                 warn!("Failed to generate JSON completion candidates: {}", e);
                 CommandCollection {
                     batch: CandidateBatch::empty(),
-                    has_command_specific_data,
                 }
             }
         }
-    }
-
-    fn collect_history_candidates(&self, request: &CompletionRequest) -> CandidateBatch {
-        let context = CompletionContext::new(request.current_dir.to_string_lossy().to_string());
-        let history_candidates = self
-            .history_completion
-            .complete_command(request.input, &context);
-        let enhanced_candidates = history_candidates
-            .into_iter()
-            .map(|c| self.convert_legacy_candidate(c, CandidateSource::History))
-            .collect::<Vec<_>>();
-
-        debug!("Generated {} history candidates", enhanced_candidates.len());
-
-        CandidateBatch::inclusive(enhanced_candidates)
     }
 
     /// Convert CompletionCandidate to EnhancedCandidate
@@ -555,45 +532,6 @@ impl IntegratedCompletionEngine {
                 super::command::CompletionType::Directory => CandidateType::Directory,
             },
             priority: candidate.priority,
-        }
-    }
-
-    /// Convert existing Candidate to EnhancedCandidate
-    fn convert_legacy_candidate(
-        &self,
-        candidate: Candidate,
-        source: CandidateSource,
-    ) -> EnhancedCandidate {
-        let (text, description, candidate_type) = match candidate {
-            Candidate::Item(text, desc) => (text, Some(desc), CandidateType::Generic),
-            Candidate::File { path, is_dir } => (
-                path,
-                None,
-                if is_dir {
-                    CandidateType::Directory
-                } else {
-                    CandidateType::File
-                },
-            ),
-            Candidate::Path(path) => (path, None, CandidateType::File),
-            Candidate::Basic(text) => (text, None, CandidateType::Generic),
-            Candidate::Command { name, description } => {
-                (name, Some(description), CandidateType::SubCommand)
-            }
-            Candidate::History { command, .. } => (command, None, CandidateType::Generic),
-            Candidate::GitBranch { name, .. } => (name, None, CandidateType::Generic),
-            Candidate::Option { name, description } => {
-                (name, Some(description), CandidateType::LongOption)
-            }
-        };
-
-        EnhancedCandidate {
-            text,
-            description,
-            candidate_type,
-            priority: match source {
-                CandidateSource::History => 60,
-            },
         }
     }
 
@@ -756,12 +694,6 @@ impl CandidateType {
             CandidateType::Generic => "💡",
         }
     }
-}
-
-/// Candidate source
-#[derive(Debug, Clone, PartialEq)]
-pub enum CandidateSource {
-    History,
 }
 
 #[cfg(test)]

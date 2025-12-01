@@ -1062,16 +1062,7 @@ impl<'a> Repl<'a> {
                         .reset_with_color_ranges(item.item.clone(), color_ranges);
                 }
             }
-            (KeyCode::Tab, NONE)
-                if self.active_suggestion.is_some()
-                    && !self.completion.completion_mode()
-                    && self.input.completion.is_none() =>
-            {
-                if self.accept_suggestion(SuggestionAcceptMode::Full) {
-                    self.completion.clear();
-                    reset_completion = true;
-                }
-            }
+
             (KeyCode::Right, modifiers)
                 if modifiers.contains(CTRL)
                     && self.active_suggestion.is_some()

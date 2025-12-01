@@ -27,6 +27,7 @@ const DEFAULT_CACHE_TTL_MS: u64 = 3000;
 #[derive(Debug, Clone, Copy)]
 struct CompletionRequest<'a> {
     input: &'a str,
+    #[allow(dead_code)]
     current_dir: &'a Path,
     max_results: usize,
 }
@@ -664,6 +665,7 @@ pub enum CandidateType {
     /// Directory
     Directory,
     /// Generic
+    #[allow(dead_code)]
     Generic,
 }
 

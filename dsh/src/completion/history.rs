@@ -4,17 +4,20 @@ use std::collections::HashMap;
 use tracing::debug;
 
 /// History-based completion using frecency algorithm
+#[allow(dead_code)]
 pub struct HistoryCompletion {
     store: Option<FrecencyStore>,
     command_patterns: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CompletionContext {
     pub current_dir: String,
 }
 
 impl HistoryCompletion {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             store: None,
@@ -23,6 +26,7 @@ impl HistoryCompletion {
     }
 
     /// Get completion suggestions based on history
+    #[allow(dead_code)]
     pub fn suggest(&self, prefix: &str, context: &CompletionContext) -> Vec<Candidate> {
         let mut suggestions = Vec::new();
 
@@ -93,6 +97,7 @@ impl HistoryCompletion {
     }
 
     /// Get command completion based on partial input
+    #[allow(dead_code)]
     pub fn complete_command(&self, partial: &str, context: &CompletionContext) -> Vec<Candidate> {
         debug!(
             "History completion for: {} in {}",
@@ -107,6 +112,7 @@ impl HistoryCompletion {
     }
 
     /// Get recently used commands
+    #[allow(dead_code)]
     fn get_recent_commands(&self, _context: &CompletionContext) -> Vec<Candidate> {
         if let Some(ref store) = self.store {
             let recent_items = store.sorted(&SortMethod::Recent);
@@ -133,6 +139,7 @@ impl Default for HistoryCompletion {
 }
 
 impl CompletionContext {
+    #[allow(dead_code)]
     pub fn new(current_dir: String) -> Self {
         Self { current_dir }
     }

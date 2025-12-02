@@ -20,13 +20,7 @@ Mindset:
 - Confirm you understand the operator's intent; ask when requirements are unclear.
 - Think several steps ahead, minimize side effects, and call out risks or follow-up work.
 - Communicate succinctly: explain reasoning, note assumptions, and propose validation steps when helpful.
-
-Available tools (invoke with strict JSON arguments):
-- `edit` — create or replace a workspace file. Call with `{ "path": "relative/path", "contents": "entire file contents" }`. Paths must stay inside the workspace (relative, no `..`). Always send the full desired file contents; partial edits are rejected.
-- `execute` — run a shell command whose first token is allowlisted by the operator. Call with `{ "command": "program args" }`. Only run commands on the allowlist, and never fabricate command output.
-
-Tool usage rules:
-- Prefer inspecting files or reasoning before editing; avoid speculative tool calls.
+- Prefer inspecting files (using read_file) or reasoning before editing; avoid speculative tool calls.
 - After an `execute` call, summarize the exit code, stdout, and stderr that were observed.
 - Report any tool failure immediately instead of retrying blindly.
 - When no tool is needed, respond normally.
@@ -227,7 +221,7 @@ fn chat_with_tools(
     let mut messages = Vec::new();
     messages.push(json!({
         "role": "system",
-        "content": build_system_prompt(operator_prompt, mcp_manager),
+        "content": build_system_prompt(operator_prompt, mcp_manager, proxy),
     }));
     messages.push(json!({ "role": "user", "content": user_input }));
 
@@ -342,10 +336,14 @@ impl Drop for SpinnerGuard {
     }
 }
 
-fn build_system_prompt(operator_prompt: Option<String>, mcp_manager: &McpManager) -> String {
+fn build_system_prompt(
+    operator_prompt: Option<String>,
+    mcp_manager: &McpManager,
+    proxy: &mut dyn ShellProxy,
+) -> String {
     let mut base = format!(
         "{TOOL_SYSTEM_PROMPT}\n\nEnvironment snapshot:\n{}",
-        environment_snapshot()
+        environment_snapshot(proxy)
     );
 
     if let Some(fragment) = mcp_manager.system_prompt_fragment() {
@@ -371,7 +369,7 @@ fn build_system_prompt(operator_prompt: Option<String>, mcp_manager: &McpManager
     }
 }
 
-fn environment_snapshot() -> String {
+fn environment_snapshot(proxy: &mut dyn ShellProxy) -> String {
     let os_family = std::env::consts::FAMILY;
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
@@ -380,8 +378,21 @@ fn environment_snapshot() -> String {
         .map(|path| path.display().to_string())
         .unwrap_or_else(|err| format!("(failed to resolve current directory: {err})"));
 
+    let mut aliases: Vec<_> = proxy.list_aliases().into_iter().collect();
+    aliases.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let alias_str = if aliases.is_empty() {
+        "none".to_string()
+    } else {
+        aliases
+            .iter()
+            .map(|(name, cmd)| format!("{name}='{cmd}'"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
     format!(
-        "- OS family: {os_family}\n- OS: {os}\n- Architecture: {arch}\n- Current directory: {cwd}\n- Git: {}",
+        "- OS family: {os_family}\n- OS: {os}\n- Architecture: {arch}\n- Current directory: {cwd}\n- Git: {}\n- Aliases: {alias_str}",
         describe_git_state()
     )
 }

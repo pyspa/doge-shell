@@ -1,6 +1,7 @@
 use super::config::{DynamicCompletionConfig, DynamicCompletionDef, MatchCondition};
 use super::{CompletionCandidate, DynamicCompletionHandler, ParsedCommandLine};
 use crate::completion::CompletionType;
+use crate::completion::parser::CompletionContext;
 use anyhow::Result;
 use rust_embed::RustEmbed;
 use tracing::{debug, warn};
@@ -127,6 +128,49 @@ impl DynamicCompletionHandler for ScriptBasedCompletionHandler {
             MatchCondition::ThirdArgument => {
                 // Match when third argument is being completed
                 parsed_command.command == self.config.command && parsed_command.args.len() >= 2
+            }
+            MatchCondition::ArgIndex(expected_index) => {
+                // Check command match
+                if parsed_command.command != self.config.command {
+                    return false;
+                }
+
+                // Check subcommands if configured and determine matched count
+                let matched_subcommands_count = if !self.config.subcommands.is_empty() {
+                    if let Some(first_sub) = parsed_command.subcommand_path.first() {
+                        if !self.config.subcommands.contains(first_sub) {
+                            return false;
+                        }
+                        1
+                    } else {
+                        return false; // Config requires subcommand but none present
+                    }
+                } else {
+                    0
+                };
+
+                // Calculate extra subcommands (which are actually arguments)
+                let extra_subcommands_count = parsed_command
+                    .subcommand_path
+                    .len()
+                    .saturating_sub(matched_subcommands_count);
+
+                match parsed_command.completion_context {
+                    CompletionContext::Argument { arg_index, .. } => {
+                        let effective_index = extra_subcommands_count + arg_index;
+                        effective_index == *expected_index
+                    }
+                    CompletionContext::SubCommand => {
+                        // If we have extra subcommands, the current one is being completed as an argument
+                        if extra_subcommands_count > 0 {
+                            let effective_index = extra_subcommands_count - 1;
+                            effective_index == *expected_index
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                }
             }
             MatchCondition::CustomPattern(pattern) => {
                 // Check command match
@@ -643,6 +687,92 @@ mod tests {
         assert!(
             !handler.matches(&empty_args_command),
             "Should not match sudo without args"
+        );
+    }
+
+    #[test]
+    fn test_arg_index_matching() {
+        let config = DynamicCompletionDef {
+            command: "git".to_string(),
+            subcommands: vec!["push".to_string()],
+            description: "Test arg index".to_string(),
+            match_condition: MatchCondition::ArgIndex(0),
+            shell_command: "echo test".to_string(),
+            filter_output: None,
+            priority: 100,
+        };
+
+        let handler = ScriptBasedCompletionHandler::new(config);
+
+        // Scenario 1: git push [TAB]
+        // subcommand_path: ["push"]
+        // args: []
+        // context: Argument (arg_index: 0)
+        // effective: 0 + 0 = 0 -> Match
+        let match_cmd_0 = ParsedCommandLine {
+            command: "git".to_string(),
+            subcommand_path: vec!["push".to_string()],
+            args: vec![],
+            options: vec![],
+            current_token: "".to_string(),
+            current_arg: None,
+            completion_context: CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: None,
+            },
+            specified_options: vec![],
+            specified_arguments: vec![],
+            cursor_index: 0,
+        };
+        assert!(
+            handler.matches(&match_cmd_0),
+            "Should match arg index 0 (git push [TAB])"
+        );
+
+        // Scenario 2: git push origin [TAB]
+        // subcommand_path: ["push", "origin"] (origin parsed as subcommand)
+        // args: []
+        // context: Argument (arg_index: 0)
+        // effective: 1 + 0 = 1 -> No Match (expected 0)
+        let no_match_cmd_1 = ParsedCommandLine {
+            command: "git".to_string(),
+            subcommand_path: vec!["push".to_string(), "origin".to_string()],
+            args: vec![],
+            options: vec![],
+            current_token: "".to_string(),
+            current_arg: None,
+            completion_context: CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: None,
+            },
+            specified_options: vec![],
+            specified_arguments: vec![],
+            cursor_index: 0,
+        };
+        assert!(
+            !handler.matches(&no_match_cmd_1),
+            "Should NOT match arg index 1 (git push origin [TAB])"
+        );
+
+        // Scenario 3: git push origin[TAB] (completing origin)
+        // subcommand_path: ["push", "origin"]
+        // context: SubCommand
+        // effective: 1 - 1 = 0 -> Match
+        let match_cmd_origin = ParsedCommandLine {
+            command: "git".to_string(),
+            subcommand_path: vec!["push".to_string(), "origin".to_string()],
+            args: vec![],
+            options: vec![],
+            current_token: "origin".to_string(),
+            current_arg: None,
+            completion_context: CompletionContext::SubCommand,
+            specified_options: vec![],
+            specified_arguments: vec![],
+            cursor_index: 0,
+        };
+        assert!(
+            handler.matches(&match_cmd_origin),
+            "Should match arg index 0 (git push origin[TAB])"
         );
     }
 }

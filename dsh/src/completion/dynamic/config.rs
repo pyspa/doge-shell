@@ -97,6 +97,10 @@ pub enum MatchCondition {
     /// Triggers when the user is typing the third argument of a command
     ThirdArgument,
 
+    /// Match when specific argument index is being completed
+    /// Triggers when the user is typing the Nth argument (0-indexed)
+    ArgIndex(usize),
+
     /// Custom match pattern with more complex conditions
     /// Allows for flexible matching using the CustomMatchPattern structure
     CustomPattern(CustomMatchPattern),

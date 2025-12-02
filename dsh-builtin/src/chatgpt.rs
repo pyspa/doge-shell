@@ -285,7 +285,10 @@ fn chat_with_tools(
                     .unwrap_or_default()
                     .to_string();
 
-                let tool_result = execute_tool_call(tool_call, mcp_manager, proxy)?;
+                let tool_result = match execute_tool_call(tool_call, mcp_manager, proxy) {
+                    Ok(res) => res,
+                    Err(err) => format!("Error: {err}"),
+                };
 
                 messages.push(json!({
                     "role": "tool",

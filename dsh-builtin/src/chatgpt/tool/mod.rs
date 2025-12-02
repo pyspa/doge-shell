@@ -130,4 +130,20 @@ mod tests {
         assert!(truncated.contains("... (truncated 10 characters)"));
         assert_eq!(truncated.len(), MAX_OUTPUT_LENGTH + 30); // 30 is length of "\n... (truncated 10 characters)" approx
     }
+
+    #[test]
+    fn test_execute_tool_call_unknown_tool() {
+        let mut proxy = NoopProxy;
+        let mcp = McpManager::load(vec![]);
+        let tool_call = serde_json::json!({
+            "function": {
+                "name": "unknown_tool",
+                "arguments": "{}"
+            }
+        });
+
+        let result = execute_tool_call(&tool_call, &mcp, &mut proxy);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "chat: unsupported tool `unknown_tool`");
+    }
 }

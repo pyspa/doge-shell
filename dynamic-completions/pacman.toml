@@ -1,5 +1,5 @@
 [[dynamic_completions]]
-command = "sudo"
+command = "pacman"
 description = "Complete with available pacman packages for installation"
-match_condition = { type = "CustomPattern", params = { command = "sudo", args_positional = [[0, "pacman"], [1, "S"]], args_must_be_empty = false } }
+match_condition = { type = "CustomPattern", params = { command = "pacman", options_contains = ["S"] } }
 shell_command = "pacman -Slq"

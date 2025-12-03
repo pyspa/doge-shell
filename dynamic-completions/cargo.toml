@@ -1,0 +1,13 @@
+[[dynamic_completions]]
+command = "cargo"
+subcommands = ["run"]
+description = "Complete cargo binary names"
+match_condition = { type = "CustomPattern", params = { command = "cargo", subcommands = ["run"], args_contains = ["--bin"] } }
+shell_command = "find src/bin -name '*.rs' -printf '%f\\n' | sed 's/\\.rs$//'"
+
+[[dynamic_completions]]
+command = "cargo"
+subcommands = ["run"]
+description = "Complete cargo example names"
+match_condition = { type = "CustomPattern", params = { command = "cargo", subcommands = ["run"], args_contains = ["--example"] } }
+shell_command = "find examples -name '*.rs' -printf '%f\\n' | sed 's/\\.rs$//'"

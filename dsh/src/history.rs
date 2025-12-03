@@ -386,13 +386,16 @@ impl FrecencyHistory {
     }
 
     pub fn search_prefix(&self, pattern: &str) -> Option<String> {
-        let results = self.sort_by_match(pattern);
-        for res in results {
-            if res.item.starts_with(pattern) {
-                return Some(res.item);
-            }
+        if let Some(ref store) = self.store {
+            store
+                .items
+                .iter()
+                .filter(|item| item.item.starts_with(pattern))
+                .max_by(|a, b| a.cmp_recent(b))
+                .map(|item| item.item.clone())
+        } else {
+            None
         }
-        None
     }
 
     pub fn sort_by_match(&self, pattern: &str) -> Vec<ItemStats> {

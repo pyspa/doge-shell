@@ -56,7 +56,7 @@ impl ItemStats {
     }
 
     /// Compare the recency of two items
-    fn cmp_recent(&self, other: &ItemStats) -> Ordering {
+    pub fn cmp_recent(&self, other: &ItemStats) -> Ordering {
         self.last_accessed
             .partial_cmp(&other.last_accessed)
             .unwrap_or(Ordering::Less)

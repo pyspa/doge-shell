@@ -603,6 +603,37 @@ impl ShellProxy for Shell {
     fn list_execute_allowlist(&mut self) -> Vec<String> {
         self.environment.read().execute_allowlist.clone()
     }
+
+    // New method implementations for export
+    fn list_exported_vars(&self) -> Vec<(String, String)> {
+        let env = self.environment.read();
+        env.exported_vars
+            .iter()
+            .filter_map(|key| {
+                env.variables
+                    .get(key)
+                    .map(|value| (key.clone(), value.clone()))
+            })
+            .collect()
+    }
+
+    fn export_var(&mut self, key: &str) -> bool {
+        let mut env = self.environment.write();
+        if env.variables.contains_key(key) {
+            env.exported_vars.insert(key.to_string());
+            true
+        } else {
+            // Also allow exporting non-existent variables, they will be exported if set later.
+            env.exported_vars.insert(key.to_string());
+            false
+        }
+    }
+
+    fn set_and_export_var(&mut self, key: String, value: String) {
+        let mut env = self.environment.write();
+        env.variables.insert(key.clone(), value);
+        env.exported_vars.insert(key);
+    }
 }
 
 #[cfg(test)]

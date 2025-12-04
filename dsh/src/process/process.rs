@@ -1,9 +1,13 @@
+use crate::environment::Environment;
 use anyhow::{Context as _, Result};
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
-use nix::unistd::{Pid, close, dup2, execv, setpgid, tcsetpgrp};
+use nix::unistd::{Pid, close, dup2, execve, setpgid, tcsetpgrp};
+use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::os::unix::io::RawFd;
+use std::sync::Arc;
 use tracing::{debug, error};
 
 use super::io::copy_fd;
@@ -13,7 +17,7 @@ use super::wait::wait_pid_job;
 use crate::shell::SHELL_TERMINAL;
 use dsh_types::ExitStatus;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Process {
     pub(crate) cmd: String,
     pub(crate) argv: Vec<String>,
@@ -26,6 +30,22 @@ pub struct Process {
     pub stderr: RawFd,
     pub(crate) cap_stdout: Option<RawFd>,
     pub(crate) cap_stderr: Option<RawFd>,
+}
+
+impl std::fmt::Debug for Process {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Process")
+            .field("cmd", &self.cmd)
+            .field("argv", &self.argv)
+            .field("pid", &self.pid)
+            .field("status", &self.status)
+            .field("state", &self.state)
+            .field("next", &self.next)
+            .field("stdin", &self.stdin)
+            .field("stdout", &self.stdout)
+            .field("stderr", &self.stderr)
+            .finish()
+    }
 }
 
 impl Process {
@@ -99,6 +119,7 @@ impl Process {
         pgid: Pid,
         interactive: bool,
         foreground: bool,
+        environment: Arc<RwLock<Environment>>,
     ) -> Result<()> {
         if interactive {
             debug!(
@@ -125,8 +146,21 @@ impl Process {
             .collect();
         let argv = argv?;
 
+        // Build environment for child process
+        let env_guard = environment.read();
+        let mut env_map: HashMap<String, String> = std::env::vars().collect();
+        for key in &env_guard.exported_vars {
+            if let Some(value) = env_guard.variables.get(key) {
+                env_map.insert(key.clone(), value.clone());
+            }
+        }
+        let envp: Vec<CString> = env_map
+            .into_iter()
+            .map(|(k, v)| CString::new(format!("{}={}", k, v)).unwrap())
+            .collect();
+
         debug!(
-            "launch: execv cmd:{:?} argv:{:?} foreground:{:?} infile:{:?} outfile:{:?} pid:{:?} pgid:{:?}",
+            "launch: execve cmd:{:?} argv:{:?} foreground:{:?} infile:{:?} outfile:{:?} pid:{:?} pgid:{:?}",
             cmd, argv, foreground, self.stdin, self.stdout, pid, pgid,
         );
 
@@ -141,7 +175,7 @@ impl Process {
             copy_fd(self.stdout, STDOUT_FILENO)?;
             copy_fd(self.stderr, STDERR_FILENO)?;
         }
-        match execv(&cmd, &argv) {
+        match execve(&cmd, &argv, &envp) {
             Ok(_) => Ok(()),
             Err(nix::errno::Errno::EACCES) => {
                 error!("Failed to exec {:?} (EACCESS). chmod(1) may help.", cmd);

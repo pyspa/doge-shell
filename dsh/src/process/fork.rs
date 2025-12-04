@@ -63,6 +63,7 @@ pub(crate) fn fork_process(
     ctx: &Context,
     job_pgid: Option<Pid>,
     process: &mut Process,
+    shell: &mut Shell,
 ) -> Result<Pid> {
     debug!("🍴 FORK: Starting fork_process");
     debug!(
@@ -135,7 +136,13 @@ pub(crate) fn fork_process(
             debug!("🍴 FORK: Child process - pid: {}, pgid: {}", pid, pgid);
             debug!("🍴 FORK: Child process about to launch");
 
-            if let Err(e) = process.launch(pid, pgid, ctx.interactive, ctx.foreground) {
+            if let Err(e) = process.launch(
+                pid,
+                pgid,
+                ctx.interactive,
+                ctx.foreground,
+                shell.environment.clone(),
+            ) {
                 error!("🍴 FORK: Child process launch failed: {}", e);
                 std::process::exit(1);
             }

@@ -249,6 +249,13 @@ mod tests {
         fn list_execute_allowlist(&mut self) -> Vec<String> {
             self.allow.clone()
         }
+        fn list_exported_vars(&self) -> Vec<(String, String)> {
+            vec![]
+        }
+        fn export_var(&mut self, _key: &str) -> bool {
+            true
+        }
+        fn set_and_export_var(&mut self, _key: String, _value: String) {}
     }
 
     #[test]

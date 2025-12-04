@@ -8,7 +8,7 @@ use anyhow::Result;
 use dsh_types::mcp::McpServerConfig;
 use parking_lot::RwLock;
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -31,6 +31,7 @@ pub struct Environment {
     pub autocompletion: Vec<AutoComplete>,
     pub paths: Vec<String>,
     pub variables: HashMap<String, String>,
+    pub exported_vars: HashSet<String>,
     pub direnv_roots: Vec<DirEnvironment>,
     pub chpwd_hooks: Vec<Box<dyn ChangePwdHook>>,
     pub mcp_servers: Vec<McpServerConfig>,
@@ -75,6 +76,7 @@ impl Environment {
             abbreviations: HashMap::new(),
             autocompletion: Vec::new(),
             variables: HashMap::new(),
+            exported_vars: HashSet::new(),
             paths,
             direnv_roots: Vec::new(),
             chpwd_hooks: Vec::new(),
@@ -90,6 +92,7 @@ impl Environment {
         let paths = parent.read().paths.clone();
         let autocompletion = parent.read().autocompletion.clone();
         let variables = parent.read().variables.clone();
+        let exported_vars = parent.read().exported_vars.clone();
         let direnv_roots = parent.read().direnv_roots.clone();
         let mcp_servers = parent.read().mcp_servers.clone();
         let execute_allowlist = parent.read().execute_allowlist.clone();
@@ -101,6 +104,7 @@ impl Environment {
             abbreviations,
             autocompletion,
             variables,
+            exported_vars,
             paths,
             direnv_roots,
             chpwd_hooks: Vec::new(),
@@ -173,7 +177,8 @@ impl Environment {
             // expand env var
             std::env::var(var).ok()
         } else {
-            None
+            // For compatibility, also check OS env vars without the '$' prefix
+            std::env::var(key).ok()
         }
     }
     pub fn clear_mcp_servers(&mut self) {
@@ -241,6 +246,7 @@ impl std::fmt::Debug for Environment {
             .field("direnv_paths", &self.direnv_roots)
             .field("paths", &self.paths)
             .field("variables", &self.variables)
+            .field("exported_vars", &self.exported_vars)
             .field("mcp_servers", &self.mcp_servers)
             .field("execute_allowlist", &self.execute_allowlist)
             .field("input_preferences", &self.input_preferences)

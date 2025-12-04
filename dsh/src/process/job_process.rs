@@ -271,7 +271,7 @@ impl JobProcess {
             JobProcess::Command(process) => {
                 ctx.process_count += 1;
                 // fork
-                fork_process(ctx, ctx.pgid, process)?
+                fork_process(ctx, ctx.pgid, process, shell)?
             }
         };
 

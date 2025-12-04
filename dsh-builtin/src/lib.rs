@@ -12,6 +12,7 @@ mod alias;
 mod bg;
 pub mod cd;
 mod chatgpt;
+mod export;
 mod markdown;
 pub use chatgpt::execute_chat_message;
 mod dmv;
@@ -84,6 +85,11 @@ pub trait ShellProxy {
 
     /// Lists execute-tool allowlist entries configured via config.lisp
     fn list_execute_allowlist(&mut self) -> Vec<String>;
+
+    // New methods for export command
+    fn list_exported_vars(&self) -> Vec<(String, String)>;
+    fn export_var(&mut self, key: &str) -> bool;
+    fn set_and_export_var(&mut self, key: String, value: String);
 }
 
 use std::any::Any;
@@ -209,6 +215,13 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             "alias",
             Box::new(BuiltinCommandFn::new(alias::command, alias::description()))
                 as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "export",
+            Box::new(BuiltinCommandFn::new(
+                export::command,
+                export::description(),
+            )) as Box<dyn BuiltinCommandTrait>,
         );
 
         // AI integration commands

@@ -5,7 +5,9 @@ use crate::ShellProxy;
 
 mod edit;
 mod execute;
+mod ls;
 mod read;
+mod search;
 
 const MAX_OUTPUT_LENGTH: usize = 4096;
 
@@ -13,7 +15,9 @@ pub fn build_tools() -> Vec<Value> {
     vec![
         edit::definition(),
         execute::definition(),
+        ls::definition(),
         read::definition(),
+        search::definition(),
     ]
 }
 
@@ -42,7 +46,9 @@ pub fn execute_tool_call(
         match name {
             edit::NAME => edit::run(arguments, proxy)?,
             execute::NAME => execute::run(arguments, proxy)?,
+            ls::NAME => ls::run(arguments, proxy)?,
             read::NAME => read::run(arguments, proxy)?,
+            search::NAME => search::run(arguments, proxy)?,
             other => return Err(format!("chat: unsupported tool `{other}`")),
         }
     };

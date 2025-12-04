@@ -20,9 +20,10 @@ Mindset:
 - Confirm you understand the operator's intent; ask when requirements are unclear.
 - Think several steps ahead, minimize side effects, and call out risks or follow-up work.
 - Communicate succinctly: explain reasoning, note assumptions, and propose validation steps when helpful.
+- Explore the workspace using `ls` and `search` to understand the file structure and locate relevant code before editing.
 - Prefer inspecting files (using read_file) or reasoning before editing; avoid speculative tool calls.
 - After an `execute` call, summarize the exit code, stdout, and stderr that were observed.
-- Report any tool failure immediately instead of retrying blindly.
+- If a tool fails, analyze the error message, correct your arguments, and retry. Do not give up immediately.
 - When no tool is needed, respond normally.
 - Finish every interaction with a summary of actions taken, remaining risks, and suggested next steps.
 "#;
@@ -287,7 +288,9 @@ fn chat_with_tools(
 
                 let tool_result = match execute_tool_call(tool_call, mcp_manager, proxy) {
                     Ok(res) => res,
-                    Err(err) => format!("Error: {err}"),
+                    Err(err) => format!(
+                        "Error: {err}\nPlease analyze the error and retry with corrected arguments."
+                    ),
                 };
 
                 messages.push(json!({

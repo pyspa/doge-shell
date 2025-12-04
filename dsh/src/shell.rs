@@ -430,9 +430,15 @@ impl Shell {
     fn get_jobs(&mut self, input: String) -> Result<Vec<Job>> {
         // TODO tests
 
-        let input = parser::expand_alias(input, Arc::clone(&self.environment))?;
+        let (input_cow, pairs_opt) =
+            parser::parse_with_expansion(&input, Arc::clone(&self.environment))?;
 
-        let mut pairs = ShellParser::parse(Rule::commands, &input).map_err(|e| anyhow!(e))?;
+        let mut pairs = if let Some(pairs) = pairs_opt {
+            pairs
+        } else {
+            ShellParser::parse(Rule::commands, &input_cow).map_err(|e| anyhow!(e))?
+        };
+
         let mut ctx = ParseContext::new(true);
         pairs.next().map_or_else(
             || Ok(Vec::new()),

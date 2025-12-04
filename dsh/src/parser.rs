@@ -49,7 +49,8 @@ pub fn collect_highlight_tokens(input: &str) -> HighlightResult {
     match ShellParser::parse(Rule::commands, input) {
         Ok(pairs) => {
             // 推定されるトークン数で Vec の容量を初期化
-            result.tokens.reserve(pairs.clone().count());
+            // pairs.clone().count() は重いので、入力長からのヒューリスティックを使用
+            result.tokens.reserve(input.len() / 5);
             for pair in pairs {
                 collect_highlight_from_pair(pair, HighlightContext::None, &mut result.tokens);
             }
@@ -478,8 +479,100 @@ fn expand_alias_tilde(
 }
 
 pub fn expand_alias(input: String, environment: Arc<RwLock<Environment>>) -> Result<String> {
+    let (cow, _) = parse_with_expansion(&input, environment)?;
+    Ok(cow.into_owned())
+}
+
+pub fn parse_with_expansion<'a>(
+    input: &'a str,
+    environment: Arc<RwLock<Environment>>,
+) -> Result<(
+    std::borrow::Cow<'a, str>,
+    Option<pest::iterators::Pairs<'a, Rule>>,
+)> {
+    let pairs = ShellParser::parse(Rule::commands, input).map_err(|e| anyhow!(e))?;
+
+    // Check if expansion is needed
+    let mut needs_expansion = false;
+    {
+        let env_read = environment.read();
+
+        // We iterate over a clone of pairs to check for expansion triggers
+        // This is cheaper than re-parsing if we can avoid expansion
+        for pair in pairs.clone() {
+            if check_expansion_needed(pair, &env_read.alias) {
+                needs_expansion = true;
+                break;
+            }
+        }
+    }
+
+    if !needs_expansion {
+        return Ok((std::borrow::Cow::Borrowed(input), Some(pairs)));
+    }
+
+    // If expansion is needed, we fall back to the full expansion logic
+    // We can reuse the pairs we already parsed for the first step of expansion
+    // but expand_alias implementation currently re-parses.
+    // To avoid changing expand_alias logic too much and risking bugs, we just call it.
+    // Ideally expand_alias should take pairs as input.
+
+    // For now, let's just call expand_alias which returns a String
+    let expanded = expand_alias_from_pairs(pairs, environment)?;
+    Ok((std::borrow::Cow::Owned(expanded), None))
+}
+
+fn check_expansion_needed(pair: Pair<Rule>, alias: &HashMap<String, String>) -> bool {
+    match pair.as_rule() {
+        Rule::glob_word => {
+            let s = pair.as_str();
+            s.contains('*') || s.contains('~') || s.contains('$')
+        }
+        Rule::word | Rule::variable | Rule::s_quoted | Rule::d_quoted => {
+            let s = pair.as_str();
+            s.contains('~') || s.contains('$')
+        }
+        Rule::argv0 => {
+            for inner in pair.into_inner() {
+                if check_expansion_needed(inner.clone(), alias) {
+                    return true;
+                }
+                // Check alias for the first word
+                // This is a simplification; a more robust check would mirror expand_alias_tilde
+                // But for argv0, we primarily care if the command itself is an alias
+                if let Some(cmd) = get_string(inner)
+                    && alias.contains_key(&cmd)
+                {
+                    return true;
+                }
+            }
+            false
+        }
+        Rule::commands | Rule::command | Rule::simple_command | Rule::args => {
+            for inner in pair.into_inner() {
+                if check_expansion_needed(inner, alias) {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => {
+            // Recurse for other rules
+            for inner in pair.into_inner() {
+                if check_expansion_needed(inner, alias) {
+                    return true;
+                }
+            }
+            false
+        }
+    }
+}
+
+pub fn expand_alias_from_pairs(
+    pairs: pest::iterators::Pairs<Rule>,
+    environment: Arc<RwLock<Environment>>,
+) -> Result<String> {
     let mut buf: Vec<String> = Vec::new();
-    let pairs = ShellParser::parse(Rule::commands, &input).map_err(|e| anyhow!(e))?;
     let current_dir = std::env::current_dir()?;
     for pair in pairs {
         for pair in pair.into_inner() {

@@ -48,6 +48,8 @@ pub fn collect_highlight_tokens(input: &str) -> HighlightResult {
     let mut result = HighlightResult::default();
     match ShellParser::parse(Rule::commands, input) {
         Ok(pairs) => {
+            // 推定されるトークン数で Vec の容量を初期化
+            result.tokens.reserve(pairs.clone().count());
             for pair in pairs {
                 collect_highlight_from_pair(pair, HighlightContext::None, &mut result.tokens);
             }

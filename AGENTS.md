@@ -1,42 +1,41 @@
-# doge-shell Agent Handbook
+# Repository Guidelines
 
-## Project Snapshot
-- Modern Rust shell with AI-assisted completion, Lisp interpreter, frecency history, and Model Context Protocol (MCP) client support.
-- Primary binary crate lives in `dsh/`; auxiliary crates (`dsh-builtin/`, `dsh-frecency/`, `dsh-types/`, `dsh-openai/`) provide built-ins, ranking, shared types, and OpenAI integration.
-- Completion assets are JSON definitions in `completions/`; repo-wide formatting config sits in `rustfmt.toml`.
-- README highlights built-in commands (`chat`, `gco`, `abbr`, etc.), key bindings, and configuration expectations—consult it when documenting user-facing behavior.
+## プロジェクト構成
+- Rust ワークスペース。主要クレート `dsh` (本体シェル) と補助クレート `dsh-builtin`, `dsh-frecency`, `dsh-types`, `dsh-openai` が `Cargo.toml` に列挙。
+- エントリポイント: `dsh/src/main.rs`。REPL・パーサー・補完・Lisp 実装は `dsh/src` 以下の各モジュールに分割。
+- 統合テストは `dsh/tests`、ユニットテストは各モジュール内に併設。補完スキーマやサンプルは `completions` / `dynamic-completions` に配置。
 
-## Rust Toolchain & Standards
-- Workspace targets Rust Edition 2024; ensure `rustup update stable` so the latest stable compiler and standard library features are available.
-- Follow `rustfmt` using the repository configuration; run `cargo fmt` before committing.
-- Prefer idiomatic 2024 syntax: `use` path inlining, `if let`/`let else`, `async fn`, and pattern matching enhancements where they clarify the code.
-- Keep dependencies current with workspace versions (see root `Cargo.toml`) and avoid pinning older language features unless required for compatibility.
+## ビルド・実行・テスト
+```bash
+cargo build                # デバッグビルド
+cargo build --release      # 最適化ビルド
+cargo run -p dsh -- --help # シェル起動オプションの確認
+cargo run -p dsh --        # シェル本体の起動
+cargo test                 # ワークスペース全体のテスト
+cargo test -p dsh -- --nocapture # dsh クレート限定で出力を表示
+cargo fmt                  # `rustfmt.toml` に沿った整形
+cargo clippy --all-targets --all-features # 静的解析
+```
 
-## Build, Test, and Run
-- `cargo build` for quick feedback; `cargo build --release` for optimized binaries.
-- Launch the shell via `cargo run -p dsh -- [args]`; use `--help`, `-c`, or `-l` options per README examples.
-- Execute tests with `cargo test` or crate-scoped invocations like `cargo test -p dsh`. Add `-- --nocapture` when inspecting interactive output.
-- Lint with `cargo clippy --all-targets --all-features` and keep CI-friendly durations in mind.
+## コーディングスタイル & 命名
+- `rustfmt` 準拠 (4 スペース、Edition 2024)。PR 前に必ず `cargo fmt`。
+- 命名: モジュール/関数は snake_case、型は UpperCamelCase、定数は SCREAMING_SNAKE_CASE。
+- ロジックが複雑な箇所のみ短いコメントを付与。非同期は Tokio パターンに合わせる。
+- 新しい機能は既存ディレクトリ構造に倣い、補完関連は `dsh/src/completion/` 配下に配置。
 
-## Structure & Module Guidance
-- Keep new subsystems organized under `dsh/src/` alongside peers (`completion/`, `process/`, `lisp/`).
-- Shared data structures belong in `dsh-types/`; reusable logic for built-ins in `dsh-builtin/`; AI-specific functionality in `dsh-openai/`.
-- Match README’s feature descriptions when extending functionality (e.g., new MCP transports, job control improvements, additional built-ins).
+## テスト指針
+- 標準の `cargo test` フレームワークを使用。公開 API やバグ修正には回帰テストを追加。
+- テスト名は振る舞いを示す説明的な snake_case で統一 (例: `handles_ctrl_c_signal`)。
+- I/O を伴うテストは可能ならモック・一時ディレクトリを利用し、副作用を隔離。
 
-## Testing Expectations
-- Co-locate unit tests with implementation files; use integration-style tests when exercising async pipelines or shell commands.
-- Name tests descriptively (`handles_pipeline_abort`, `resumes_background_job`) and cover regressions with focused cases.
-- For async scenarios rely on Tokio utilities already in the workspace; avoid lengthy sleeps that slow the suite.
+## コミット & PR ガイド
+- コミットは Conventional Commits に従う: `<type>(<scope>): <subject>`、命令形・72 文字以内。例: `feat(parser): support here-doc`.
+- PR には概要、動機、主要変更点、実行したコマンド (テスト/フォーマット) を記載し、関連 Issue があればリンク。
+- 動作確認が必要な変更は再現手順やスクリーンショットを添付。レビュー可能な粒度でコミットを分割。
 
-## Contribution Workflow
-- Commit messages follow `<type>(<scope>): <subject>` in imperative mood, under 72 characters.
-- Summaries in PRs should call out user-visible changes, configuration updates, and testing evidence (screenshots or logs for UX-affecting work).
-- Keep branches rebased and document new Lisp forms, config keys, or CLI flags in README/AGENTS as appropriate.
-
-## Configuration & Secrets
-- AI features require `AI_CHAT_API_KEY` at runtime; never commit secrets.
-- User configuration defaults to `~/.config/dsh/config.lisp`; document new special forms or environment variables clearly.
-- When expanding MCP support, describe required `config.lisp` or `config.toml` entries mirroring README guidance.
+## セキュリティ・設定の注意
+- API キーやトークンをリポジトリに含めない。必要な場合はローカル環境変数や個人設定ファイル (`~/.config/dsh/config.lisp` など) で管理。
+- サードパーティ通信を伴う機能 (OpenAI/MCP 等) は、ネットワーク不可環境でもフェイルセーフに振る舞うか確認すること。
 
 <!-- BACKLOG.MD MCP GUIDELINES START -->
 

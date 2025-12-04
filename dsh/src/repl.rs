@@ -1385,7 +1385,14 @@ impl<'a> Repl<'a> {
                         warn!("No stored terminal mode available, using default");
                         // Create a default Termios - this is a fallback that may not work perfectly
                         // but prevents crashes
-                        unsafe { std::mem::zeroed() }
+                        use nix::fcntl::{OFlag, open};
+                        use nix::sys::stat::Mode;
+                        use nix::sys::termios::tcgetattr;
+                        tcgetattr(
+                            open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
+                                .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
+                        )
+                        .unwrap_or_else(|e| panic!("Cannot initialize Termios: {}", e))
                     });
                     let mut ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);
                     match self
@@ -1419,7 +1426,14 @@ impl<'a> Repl<'a> {
                     let input = self.input.to_string();
                     let shell_tmode = self.tmode.clone().unwrap_or_else(|| {
                         warn!("No stored terminal mode available, using default");
-                        unsafe { std::mem::zeroed() }
+                        use nix::fcntl::{OFlag, open};
+                        use nix::sys::stat::Mode;
+                        use nix::sys::termios::tcgetattr;
+                        tcgetattr(
+                            open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
+                                .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
+                        )
+                        .unwrap_or_else(|e| panic!("Cannot initialize Termios: {}", e))
                     });
                     let mut ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);
                     if let Err(err) = self.shell.eval_str(&mut ctx, input, true).await {

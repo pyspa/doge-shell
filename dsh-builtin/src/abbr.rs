@@ -247,12 +247,19 @@ mod tests {
 
     #[test]
     fn test_add_abbreviation() {
+        use nix::fcntl::{OFlag, open};
+        use nix::sys::stat::Mode;
+        use nix::sys::termios::{Termios, tcgetattr};
         use nix::unistd::Pid;
         let mut proxy = MockShellProxy::new();
         let ctx = Context::new(
             Pid::from_raw(0),
             Pid::from_raw(0),
-            unsafe { std::mem::zeroed() },
+            tcgetattr(
+                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
+                    .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
+            )
+            .unwrap_or_else(|e| panic!("Cannot initialize Termios for test: {}", e)),
             false,
         );
 
@@ -263,13 +270,20 @@ mod tests {
 
     #[test]
     fn test_remove_abbreviation() {
+        use nix::fcntl::{OFlag, open};
+        use nix::sys::stat::Mode;
+        use nix::sys::termios::{Termios, tcgetattr};
         use nix::unistd::Pid;
         let mut proxy = MockShellProxy::new();
         proxy.add_abbr("gco".to_string(), "git checkout".to_string());
         let ctx = Context::new(
             Pid::from_raw(0),
             Pid::from_raw(0),
-            unsafe { std::mem::zeroed() },
+            tcgetattr(
+                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
+                    .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
+            )
+            .unwrap_or_else(|e| panic!("Cannot initialize Termios for test: {}", e)),
             false,
         );
 
@@ -280,12 +294,19 @@ mod tests {
 
     #[test]
     fn test_invalid_abbreviation_name() {
+        use nix::fcntl::{OFlag, open};
+        use nix::sys::stat::Mode;
+        use nix::sys::termios::{Termios, tcgetattr};
         use nix::unistd::Pid;
         let mut proxy = MockShellProxy::new();
         let ctx = Context::new(
             Pid::from_raw(0),
             Pid::from_raw(0),
-            unsafe { std::mem::zeroed() },
+            tcgetattr(
+                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
+                    .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
+            )
+            .unwrap_or_else(|e| panic!("Cannot initialize Termios for test: {}", e)),
             false,
         );
 

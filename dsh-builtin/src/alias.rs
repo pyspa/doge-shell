@@ -283,11 +283,18 @@ mod tests {
 
     #[test]
     fn test_alias_command_set_and_get() {
+        use nix::fcntl::{OFlag, open};
+        use nix::sys::stat::Mode;
+        use nix::sys::termios::{Termios, tcgetattr};
         use nix::unistd::Pid;
         let ctx = Context::new(
             Pid::from_raw(0),
             Pid::from_raw(0),
-            unsafe { std::mem::zeroed() },
+            tcgetattr(
+                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
+                    .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
+            )
+            .unwrap_or_else(|e| panic!("Cannot initialize Termios for test: {}", e)),
             false,
         );
         let mut proxy = MockShellProxy::new();
@@ -308,11 +315,18 @@ mod tests {
 
     #[test]
     fn test_alias_command_list_empty() {
+        use nix::fcntl::{OFlag, open};
+        use nix::sys::stat::Mode;
+        use nix::sys::termios::{Termios, tcgetattr};
         use nix::unistd::Pid;
         let ctx = Context::new(
             Pid::from_raw(0),
             Pid::from_raw(0),
-            unsafe { std::mem::zeroed() },
+            tcgetattr(
+                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
+                    .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
+            )
+            .unwrap_or_else(|e| panic!("Cannot initialize Termios for test: {}", e)),
             false,
         );
         let mut proxy = MockShellProxy::new();
@@ -325,11 +339,18 @@ mod tests {
 
     #[test]
     fn test_alias_command_invalid_name() {
+        use nix::fcntl::{OFlag, open};
+        use nix::sys::stat::Mode;
+        use nix::sys::termios::{Termios, tcgetattr};
         use nix::unistd::Pid;
         let ctx = Context::new(
             Pid::from_raw(0),
             Pid::from_raw(0),
-            unsafe { std::mem::zeroed() },
+            tcgetattr(
+                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
+                    .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
+            )
+            .unwrap_or_else(|e| panic!("Cannot initialize Termios for test: {}", e)),
             false,
         );
         let mut proxy = MockShellProxy::new();
@@ -342,11 +363,18 @@ mod tests {
 
     #[test]
     fn test_alias_command_not_found() {
+        use nix::fcntl::{OFlag, open};
+        use nix::sys::stat::Mode;
+        use nix::sys::termios::{Termios, tcgetattr};
         use nix::unistd::Pid;
         let ctx = Context::new(
             Pid::from_raw(0),
             Pid::from_raw(0),
-            unsafe { std::mem::zeroed() },
+            tcgetattr(
+                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
+                    .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
+            )
+            .unwrap_or_else(|e| panic!("Cannot initialize Termios for test: {}", e)),
             false,
         );
         let mut proxy = MockShellProxy::new();
@@ -359,11 +387,18 @@ mod tests {
 
     #[test]
     fn test_alias_command_empty_command() {
+        use nix::fcntl::{OFlag, open};
+        use nix::sys::stat::Mode;
+        use nix::sys::termios::{Termios, tcgetattr};
         use nix::unistd::Pid;
         let ctx = Context::new(
             Pid::from_raw(0),
             Pid::from_raw(0),
-            unsafe { std::mem::zeroed() },
+            tcgetattr(
+                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
+                    .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
+            )
+            .unwrap_or_else(|e| panic!("Cannot initialize Termios for test: {}", e)),
             false,
         );
         let mut proxy = MockShellProxy::new();
@@ -376,11 +411,18 @@ mod tests {
 
     #[test]
     fn test_alias_command_with_quotes() {
+        use nix::fcntl::{OFlag, open};
+        use nix::sys::stat::Mode;
+        use nix::sys::termios::{Termios, tcgetattr};
         use nix::unistd::Pid;
         let ctx = Context::new(
             Pid::from_raw(0),
             Pid::from_raw(0),
-            unsafe { std::mem::zeroed() },
+            tcgetattr(
+                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
+                    .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
+            )
+            .unwrap_or_else(|e| panic!("Cannot initialize Termios for test: {}", e)),
             false,
         );
         let mut proxy = MockShellProxy::new();

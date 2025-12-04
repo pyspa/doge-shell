@@ -101,9 +101,14 @@ impl Context {
 
         // Safely get terminal settings
         let shell_tmode = terminal_state.get_tmodes().cloned().unwrap_or_else(|| {
-            // Create default Termios value
-            // In actual implementation, set appropriate default values
-            unsafe { std::mem::zeroed() }
+            use nix::fcntl::{OFlag, open};
+            use nix::sys::stat::Mode;
+            use nix::sys::termios::tcgetattr;
+            tcgetattr(
+                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
+                    .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
+            )
+            .unwrap_or_else(|e| panic!("Cannot initialize Termios: {}", e))
         });
 
         Context {

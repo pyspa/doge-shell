@@ -146,17 +146,18 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
                     let reader = BufReader::new(file);
                     for (line_idx, line) in reader.lines().enumerate() {
                         if let Ok(line_content) = line
-                            && line_content.contains(query) {
-                                if let Ok(cwd_rel) = entry.path().strip_prefix(&current_dir) {
-                                    results.push(format!(
-                                        "{}:{}: {}",
-                                        cwd_rel.display(),
-                                        line_idx + 1,
-                                        line_content.trim()
-                                    ));
-                                }
-                                break; // Only one match per file for now to avoid spam
+                            && line_content.contains(query)
+                        {
+                            if let Ok(cwd_rel) = entry.path().strip_prefix(&current_dir) {
+                                results.push(format!(
+                                    "{}:{}: {}",
+                                    cwd_rel.display(),
+                                    line_idx + 1,
+                                    line_content.trim()
+                                ));
                             }
+                            break; // Only one match per file for now to avoid spam
+                        }
                     }
                 }
             }

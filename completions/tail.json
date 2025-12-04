@@ -1,0 +1,40 @@
+{
+  "command": "tail",
+  "description": "Output the last part of files",
+  "global_options": [
+    {
+      "short": "-n",
+      "long": "--lines",
+      "description": "Output the last NUM lines, instead of the last 10",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-f",
+      "long": "--follow",
+      "description": "Output appended data as the file grows"
+    },
+    {
+      "short": "-c",
+      "long": "--bytes",
+      "description": "Output the last NUM bytes",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-q",
+      "long": "--quiet",
+      "description": "Never print headers giving file names"
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Always print headers giving file names"
+    }
+  ],
+  "subcommands": []
+}

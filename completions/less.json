@@ -1,0 +1,37 @@
+{
+  "command": "less",
+  "description": "Opposite of more",
+  "global_options": [
+    {
+      "short": "-N",
+      "long": "--LINE-NUMBERS",
+      "description": "Show line numbers"
+    },
+    {
+      "short": "-S",
+      "long": "--chop-long-lines",
+      "description": "Chop long lines"
+    },
+    {
+      "short": "-i",
+      "long": "--ignore-case",
+      "description": "Ignore case in searches that do not contain uppercase"
+    },
+    {
+      "short": "-I",
+      "long": "--IGNORE-CASE",
+      "description": "Ignore case in all searches"
+    },
+    {
+      "short": "-F",
+      "long": "--quit-if-one-screen",
+      "description": "Quit if entire file fits on first screen"
+    },
+    {
+      "short": "-R",
+      "long": "--RAW-CONTROL-CHARS",
+      "description": "Output \"raw\" control characters"
+    }
+  ],
+  "subcommands": []
+}

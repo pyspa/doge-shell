@@ -1,0 +1,49 @@
+{
+  "command": "make",
+  "description": "GNU make utility to maintain groups of programs",
+  "global_options": [
+    {
+      "short": "-j",
+      "long": "--jobs",
+      "description": "Specifies the number of jobs (commands) to run simultaneously",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-f",
+      "long": "--file",
+      "description": "Read FILE as a makefile",
+      "takes_value": true,
+      "value_type": {
+        "type": "File"
+      }
+    },
+    {
+      "short": "-B",
+      "long": "--always-make",
+      "description": "Unconditionally make all targets"
+    },
+    {
+      "short": "-C",
+      "long": "--directory",
+      "description": "Change to DIRECTORY before doing anything",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-n",
+      "long": "--just-print",
+      "description": "Print the commands that would be executed, but do not execute them"
+    },
+    {
+      "short": "-s",
+      "long": "--silent",
+      "description": "Silent operation; do not print the commands as they are executed"
+    }
+  ],
+  "subcommands": []
+}

@@ -1,0 +1,73 @@
+{
+  "command": "tar",
+  "description": "An archiving utility",
+  "global_options": [
+    {
+      "short": "-c",
+      "long": "--create",
+      "description": "Create a new archive"
+    },
+    {
+      "short": "-x",
+      "long": "--extract",
+      "description": "Extract files from an archive"
+    },
+    {
+      "short": "-t",
+      "long": "--list",
+      "description": "List the contents of an archive"
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Verbosely list files processed"
+    },
+    {
+      "short": "-f",
+      "long": "--file",
+      "description": "Use archive file or device ARCHIVE",
+      "takes_value": true,
+      "value_type": {
+        "type": "File"
+      }
+    },
+    {
+      "short": "-z",
+      "long": "--gzip",
+      "description": "Filter the archive through gzip"
+    },
+    {
+      "short": "-j",
+      "long": "--bzip2",
+      "description": "Filter the archive through bzip2"
+    },
+    {
+      "short": "-J",
+      "long": "--xz",
+      "description": "Filter the archive through xz"
+    },
+    {
+      "short": "-C",
+      "long": "--directory",
+      "description": "Change to directory DIR",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "long": "--exclude",
+      "description": "Exclude files, given as a PATTERN",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-h",
+      "long": "--dereference",
+      "description": "Follow symlinks; archive and dump the files they point to"
+    }
+  ],
+  "subcommands": []
+}

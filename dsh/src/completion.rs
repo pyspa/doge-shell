@@ -31,6 +31,9 @@ mod json_loader;
 mod parser;
 mod ui;
 
+#[cfg(test)]
+mod extra_tests;
+
 // Re-export from completion module
 pub use crate::completion::command::CompletionType;
 pub use crate::completion::display::Candidate;

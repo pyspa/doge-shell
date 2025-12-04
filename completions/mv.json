@@ -1,0 +1,45 @@
+{
+  "command": "mv",
+  "description": "Move (rename) files",
+  "global_options": [
+    {
+      "short": "-i",
+      "long": "--interactive",
+      "description": "Prompt before overwrite"
+    },
+    {
+      "short": "-f",
+      "long": "--force",
+      "description": "Do not prompt before overwriting"
+    },
+    {
+      "short": "-n",
+      "long": "--no-clobber",
+      "description": "Do not overwrite an existing file"
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Explain what is being done"
+    },
+    {
+      "short": "-u",
+      "long": "--update",
+      "description": "Move only when the SOURCE file is newer than the destination file"
+    },
+    {
+      "short": "-t",
+      "long": "--target-directory",
+      "description": "Move all SOURCE arguments into DIRECTORY",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "long": "--no-target-directory",
+      "description": "Treat DEST as a normal file"
+    }
+  ],
+  "subcommands": []
+}

@@ -204,7 +204,7 @@ mod tests {
         fs::write(&file_path, "content").unwrap();
         fs::create_dir(dir.path().join("subdir")).unwrap();
 
-        let _guard = env::set_current_dir(&dir).unwrap();
+        env::set_current_dir(&dir).unwrap();
         let mut proxy = NoopProxy;
 
         let result = run("{}", &mut proxy).unwrap();
@@ -221,7 +221,7 @@ mod tests {
         fs::create_dir(&subdir).unwrap();
         fs::write(subdir.join("file.txt"), "content").unwrap();
 
-        let _guard = env::set_current_dir(&dir).unwrap();
+        env::set_current_dir(&dir).unwrap();
         let mut proxy = NoopProxy;
 
         let result = run(r#"{"path": "subdir"}"#, &mut proxy).unwrap();

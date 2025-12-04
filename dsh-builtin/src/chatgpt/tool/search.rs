@@ -274,7 +274,7 @@ mod tests {
         let file_path = dir.path().join("test_file.rs");
         fs::write(&file_path, "content").unwrap();
 
-        let _guard = env::set_current_dir(&dir).unwrap();
+        env::set_current_dir(&dir).unwrap();
         let mut proxy = NoopProxy;
 
         let result = run(
@@ -292,7 +292,7 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         fs::write(&file_path, "hello world").unwrap();
 
-        let _guard = env::set_current_dir(&dir).unwrap();
+        env::set_current_dir(&dir).unwrap();
         let mut proxy = NoopProxy;
 
         let result = run(r#"{"query": "world", "type": "content"}"#, &mut proxy).unwrap();

@@ -177,20 +177,10 @@ mod tests {
 
     #[test]
     fn test_reload_command_basic() {
-        use nix::fcntl::{OFlag, open};
-        use nix::sys::stat::Mode;
-        use nix::sys::termios::{Termios, tcgetattr};
-        use nix::unistd::Pid;
-        let ctx = Context::new(
-            Pid::from_raw(0),
-            Pid::from_raw(0),
-            tcgetattr(
-                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
-                    .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
-            )
-            .unwrap_or_else(|e| panic!("Cannot initialize Termios for test: {}", e)),
-            false,
-        );
+        use nix::unistd::getpid;
+        let pid = getpid();
+        let pgid = pid;
+        let ctx = Context::new_safe(pid, pgid, false);
         let mut proxy = MockShellProxy::new();
 
         let argv = vec!["reload".to_string()];
@@ -200,20 +190,10 @@ mod tests {
 
     #[test]
     fn test_reload_command_help_long() {
-        use nix::fcntl::{OFlag, open};
-        use nix::sys::stat::Mode;
-        use nix::sys::termios::{Termios, tcgetattr};
-        use nix::unistd::Pid;
-        let ctx = Context::new(
-            Pid::from_raw(0),
-            Pid::from_raw(0),
-            tcgetattr(
-                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
-                    .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
-            )
-            .unwrap_or_else(|e| panic!("Cannot initialize Termios for test: {}", e)),
-            false,
-        );
+        use nix::unistd::getpid;
+        let pid = getpid();
+        let pgid = pid;
+        let ctx = Context::new_safe(pid, pgid, false);
         let mut proxy = MockShellProxy::new();
 
         let argv = vec!["reload".to_string(), "--help".to_string()];
@@ -223,20 +203,10 @@ mod tests {
 
     #[test]
     fn test_reload_command_help_short() {
-        use nix::fcntl::{OFlag, open};
-        use nix::sys::stat::Mode;
-        use nix::sys::termios::{Termios, tcgetattr};
-        use nix::unistd::Pid;
-        let ctx = Context::new(
-            Pid::from_raw(0),
-            Pid::from_raw(0),
-            tcgetattr(
-                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
-                    .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
-            )
-            .unwrap_or_else(|e| panic!("Cannot initialize Termios for test: {}", e)),
-            false,
-        );
+        use nix::unistd::getpid;
+        let pid = getpid();
+        let pgid = pid;
+        let ctx = Context::new_safe(pid, pgid, false);
         let mut proxy = MockShellProxy::new();
 
         let argv = vec!["reload".to_string(), "-h".to_string()];
@@ -246,20 +216,10 @@ mod tests {
 
     #[test]
     fn test_reload_command_invalid_argument() {
-        use nix::fcntl::{OFlag, open};
-        use nix::sys::stat::Mode;
-        use nix::sys::termios::{Termios, tcgetattr};
-        use nix::unistd::Pid;
-        let ctx = Context::new(
-            Pid::from_raw(0),
-            Pid::from_raw(0),
-            tcgetattr(
-                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
-                    .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
-            )
-            .unwrap_or_else(|e| panic!("Cannot initialize Termios for test: {}", e)),
-            false,
-        );
+        use nix::unistd::getpid;
+        let pid = getpid();
+        let pgid = pid;
+        let ctx = Context::new_safe(pid, pgid, false);
         let mut proxy = MockShellProxy::new();
 
         let argv = vec!["reload".to_string(), "--invalid".to_string()];
@@ -269,20 +229,10 @@ mod tests {
 
     #[test]
     fn test_reload_command_too_many_arguments() {
-        use nix::fcntl::{OFlag, open};
-        use nix::sys::stat::Mode;
-        use nix::sys::termios::{Termios, tcgetattr};
-        use nix::unistd::Pid;
-        let ctx = Context::new(
-            Pid::from_raw(0),
-            Pid::from_raw(0),
-            tcgetattr(
-                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
-                    .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
-            )
-            .unwrap_or_else(|e| panic!("Cannot initialize Termios for test: {}", e)),
-            false,
-        );
+        use nix::unistd::getpid;
+        let pid = getpid();
+        let pgid = pid;
+        let ctx = Context::new_safe(pid, pgid, false);
         let mut proxy = MockShellProxy::new();
 
         let argv = vec!["reload".to_string(), "arg1".to_string(), "arg2".to_string()];
@@ -292,20 +242,10 @@ mod tests {
 
     #[test]
     fn test_reload_command_dispatch_error() {
-        use nix::fcntl::{OFlag, open};
-        use nix::sys::stat::Mode;
-        use nix::sys::termios::{Termios, tcgetattr};
-        use nix::unistd::Pid;
-        let ctx = Context::new(
-            Pid::from_raw(0),
-            Pid::from_raw(0),
-            tcgetattr(
-                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
-                    .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
-            )
-            .unwrap_or_else(|e| panic!("Cannot initialize Termios for test: {}", e)),
-            false,
-        );
+        use nix::unistd::getpid;
+        let pid = getpid();
+        let pgid = pid;
+        let ctx = Context::new_safe(pid, pgid, false);
         let mut proxy = MockShellProxy::with_error(anyhow::anyhow!("test error"));
 
         let argv = vec!["reload".to_string()];
@@ -315,20 +255,10 @@ mod tests {
 
     #[test]
     fn test_reload_command_file_not_found_error() {
-        use nix::fcntl::{OFlag, open};
-        use nix::sys::stat::Mode;
-        use nix::sys::termios::{Termios, tcgetattr};
-        use nix::unistd::Pid;
-        let ctx = Context::new(
-            Pid::from_raw(0),
-            Pid::from_raw(0),
-            tcgetattr(
-                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
-                    .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
-            )
-            .unwrap_or_else(|e| panic!("Cannot initialize Termios for test: {}", e)),
-            false,
-        );
+        use nix::unistd::getpid;
+        let pid = getpid();
+        let pgid = pid;
+        let ctx = Context::new_safe(pid, pgid, false);
         let mut proxy = MockShellProxy::with_error(anyhow::anyhow!(
             "Failed to read config file: ~/.config/dsh/config.lisp: No such file or directory"
         ));
@@ -340,20 +270,10 @@ mod tests {
 
     #[test]
     fn test_reload_command_permission_denied_error() {
-        use nix::fcntl::{OFlag, open};
-        use nix::sys::stat::Mode;
-        use nix::sys::termios::{Termios, tcgetattr};
-        use nix::unistd::Pid;
-        let ctx = Context::new(
-            Pid::from_raw(0),
-            Pid::from_raw(0),
-            tcgetattr(
-                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
-                    .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
-            )
-            .unwrap_or_else(|e| panic!("Cannot initialize Termios for test: {}", e)),
-            false,
-        );
+        use nix::unistd::getpid;
+        let pid = getpid();
+        let pgid = pid;
+        let ctx = Context::new_safe(pid, pgid, false);
         let mut proxy = MockShellProxy::with_error(anyhow::anyhow!("Permission denied"));
 
         let argv = vec!["reload".to_string()];
@@ -363,20 +283,10 @@ mod tests {
 
     #[test]
     fn test_reload_command_lisp_syntax_error() {
-        use nix::fcntl::{OFlag, open};
-        use nix::sys::stat::Mode;
-        use nix::sys::termios::{Termios, tcgetattr};
-        use nix::unistd::Pid;
-        let ctx = Context::new(
-            Pid::from_raw(0),
-            Pid::from_raw(0),
-            tcgetattr(
-                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
-                    .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
-            )
-            .unwrap_or_else(|e| panic!("Cannot initialize Termios for test: {}", e)),
-            false,
-        );
+        use nix::unistd::getpid;
+        let pid = getpid();
+        let pgid = pid;
+        let ctx = Context::new_safe(pid, pgid, false);
         let mut proxy = MockShellProxy::with_error(anyhow::anyhow!(
             "Parse error: unexpected token ')' at index 15"
         ));
@@ -388,20 +298,10 @@ mod tests {
 
     #[test]
     fn test_reload_command_lisp_runtime_error() {
-        use nix::fcntl::{OFlag, open};
-        use nix::sys::stat::Mode;
-        use nix::sys::termios::{Termios, tcgetattr};
-        use nix::unistd::Pid;
-        let ctx = Context::new(
-            Pid::from_raw(0),
-            Pid::from_raw(0),
-            tcgetattr(
-                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
-                    .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
-            )
-            .unwrap_or_else(|e| panic!("Cannot initialize Termios for test: {}", e)),
-            false,
-        );
+        use nix::unistd::getpid;
+        let pid = getpid();
+        let pgid = pid;
+        let ctx = Context::new_safe(pid, pgid, false);
         let mut proxy = MockShellProxy::with_error(anyhow::anyhow!(
             "Runtime error: undefined function 'invalid-func'"
         ));

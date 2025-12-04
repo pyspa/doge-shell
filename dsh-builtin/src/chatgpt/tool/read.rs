@@ -162,7 +162,7 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         fs::write(&file_path, "Hello, world!").unwrap();
 
-        let _guard = env::set_current_dir(&dir).unwrap();
+        env::set_current_dir(&dir).unwrap();
         let mut proxy = NoopProxy;
 
         let result = run(r#"{"path": "test.txt"}"#, &mut proxy).unwrap();
@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn test_read_file_not_found() {
         let dir = tempdir().unwrap();
-        let _guard = env::set_current_dir(&dir).unwrap();
+        env::set_current_dir(&dir).unwrap();
         let mut proxy = NoopProxy;
 
         let result = run(r#"{"path": "missing.txt"}"#, &mut proxy);

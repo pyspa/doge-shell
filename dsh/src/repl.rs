@@ -888,7 +888,7 @@ impl<'a> Repl<'a> {
     ) {
         // debug!("print_input called, reset_completion: {}", reset_completion);
         queue!(out, cursor::Hide).ok();
-        let input = self.input.to_string();
+        let input = self.input.as_str().to_owned();
         let _prompt_display_width = self.prompt_mark_width; // cached at new()/print_prompt()
         // debug!(
         //     "Current input: '{}', prompt_display_width: {}",

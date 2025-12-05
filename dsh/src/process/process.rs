@@ -109,6 +109,8 @@ impl Process {
                 .map_err(|e| anyhow::anyhow!("failed to set SIGTTOU handler: {}", e))?;
             sigaction(Signal::SIGCHLD, &action)
                 .map_err(|e| anyhow::anyhow!("failed to set SIGCHLD handler: {}", e))?;
+            sigaction(Signal::SIGPIPE, &action)
+                .map_err(|e| anyhow::anyhow!("failed to set SIGPIPE handler: {}", e))?;
         }
         Ok(())
     }
@@ -133,6 +135,12 @@ impl Process {
             }
 
             self.set_signals()?;
+        } else {
+            // For non-interactive/background, we still need to reset SIGPIPE as Rust ignores it by default
+            let action = SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
+            unsafe {
+                let _ = sigaction(Signal::SIGPIPE, &action);
+            }
         }
 
         let cmd = CString::new(self.cmd.clone()).context("failed new CString")?;
@@ -154,6 +162,13 @@ impl Process {
                 env_map.insert(key.clone(), value.clone());
             }
         }
+
+        // Ensure TERM is set, falling back to xterm if missing
+        if !env_map.contains_key("TERM") {
+            debug!("TERM environment variable missing, defaulting to xterm");
+            env_map.insert("TERM".to_string(), "xterm-256color".to_string());
+        }
+
         let envp: Vec<CString> = env_map
             .into_iter()
             .map(|(k, v)| CString::new(format!("{}={}", k, v)).unwrap())

@@ -275,7 +275,7 @@ impl GitStatusCache {
             status,
             last_updated: Instant::now(),
             git_root,
-            ttl: Duration::from_secs(5), // Cache valid for 5 seconds
+            ttl: Duration::from_secs(10), // Cache valid for 10 seconds
         }
     }
 

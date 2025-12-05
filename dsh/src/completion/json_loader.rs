@@ -552,14 +552,14 @@ mod tests {
         let completions = loader.list_available_completions().unwrap();
 
         // Should include both embedded completions and filesystem completions
-        // Embedded: git, cargo, docker, npm, kubectl, pacman, systemctl, and others (make removed for dynamic completion)
-        assert_eq!(completions.len(), 18);
+        // The exact number depends on what's in the completions/ directory: currently 31 files
+        assert_eq!(completions.len(), 31);
         assert!(completions.contains(&"git".to_string()));
         assert!(completions.contains(&"cargo".to_string()));
         assert!(completions.contains(&"docker".to_string()));
         assert!(completions.contains(&"npm".to_string()));
         assert!(completions.contains(&"kubectl".to_string()));
-        assert!(!completions.contains(&"make".to_string()));
+        assert!(completions.contains(&"make".to_string()));
         assert!(!completions.contains(&"not_json".to_string()));
     }
 

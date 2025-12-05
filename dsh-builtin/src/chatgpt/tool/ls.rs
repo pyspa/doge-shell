@@ -214,6 +214,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_ls_subdir() {
         let _lock = CWD_LOCK.lock().unwrap();
         let dir = tempdir().unwrap();

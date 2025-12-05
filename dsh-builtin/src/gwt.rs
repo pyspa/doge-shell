@@ -262,8 +262,7 @@ fn get_git_root() -> Result<PathBuf, String> {
 
 /// Sanitize branch name for use as directory name
 fn sanitize_branch_name(branch: &str) -> String {
-    branch
-        .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "-")
+    branch.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "-")
 }
 
 /// Get worktree path for a branch
@@ -405,9 +404,10 @@ fn get_linked_worktrees() -> Result<Vec<String>, String> {
         if let Some(path) = line.strip_prefix("worktree ") {
             // Save previous worktree if it wasn't main
             if let Some(wt) = current_worktree.take()
-                && !is_main {
-                    worktrees.push(wt);
-                }
+                && !is_main
+            {
+                worktrees.push(wt);
+            }
             current_worktree = Some(path.to_string());
             is_main = false;
         } else if line == "bare" {
@@ -419,9 +419,10 @@ fn get_linked_worktrees() -> Result<Vec<String>, String> {
 
     // Don't forget the last worktree
     if let Some(wt) = current_worktree
-        && !is_main {
-            worktrees.push(wt);
-        }
+        && !is_main
+    {
+        worktrees.push(wt);
+    }
 
     // Skip the first one (main worktree)
     if !worktrees.is_empty() {

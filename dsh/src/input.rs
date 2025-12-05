@@ -286,21 +286,10 @@ impl Input {
         let text_to_cursor = &self.input[..cursor_byte_pos];
 
         // Calculate width character by character for better control
-        let width = text_to_cursor
+        text_to_cursor
             .chars()
             .map(|c| c.width().unwrap_or_default())
-            .sum();
-
-        // Debug output for troubleshooting
-        tracing::debug!(
-            "cursor_display_width: cursor={}, byte_pos={}, text='{}', width={}",
-            self.cursor,
-            cursor_byte_pos,
-            text_to_cursor,
-            width
-        );
-
-        width
+            .sum()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -461,6 +450,7 @@ impl Input {
     }
 
     /// Build a colored string from color ranges
+    /// Note: color_ranges must be sorted by start position (ensured by compute_color_ranges)
     fn build_colored_string_from_ranges(
         &self,
         color_ranges: &[(usize, usize, ColorType)],
@@ -468,14 +458,12 @@ impl Input {
         use crossterm::style::Stylize;
 
         let input_str = self.as_str();
-        let mut result = String::new();
+        // Pre-allocate capacity to reduce allocations (input + ANSI codes overhead)
+        let mut result = String::with_capacity(input_str.len() * 2);
         let mut last_end = 0;
 
-        // Sort color ranges by start position to process them in order
-        let mut sorted_ranges = color_ranges.to_vec();
-        sorted_ranges.sort_by(|a, b| a.0.cmp(&b.0));
-
-        for (start, end, color_type) in sorted_ranges {
+        // color_ranges is already sorted by start position in compute_color_ranges
+        for &(start, end, color_type) in color_ranges {
             // Add any uncolored text before this range
             if start > last_end {
                 let prefix = &input_str[last_end..start];

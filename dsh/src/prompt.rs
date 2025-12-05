@@ -74,12 +74,10 @@ impl Prompt {
                 //     git_status.branch, git_status.branch_status
                 // );
                 write!(out, " {} ", "on".reset()).ok();
-                write!(
-                    out,
-                    "{}",
-                    format!("{} {}", BRANCH_MARK, git_status.branch).magenta(),
-                )
-                .ok();
+                // Write branch mark and branch name separately to avoid format! allocation
+                write!(out, "{}", BRANCH_MARK.magenta()).ok();
+                write!(out, " ").ok();
+                write!(out, "{}", git_status.branch.as_str().magenta()).ok();
 
                 if let Some(status) = &git_status.branch_status {
                     write!(out, " [{}]", status.to_string().bold().red()).ok();

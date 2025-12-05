@@ -1,0 +1,105 @@
+{
+  "command": "xargs",
+  "description": "Build and execute command lines from standard input",
+  "global_options": [
+    {
+      "short": "-0",
+      "long": "--null",
+      "description": "Input items are terminated by a null character instead of whitespace"
+    },
+    {
+      "short": "-I",
+      "description": "Replace occurrences of replace-str in the initial-arguments with names read from standard input",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "short": "-n",
+      "long": "--max-args",
+      "description": "Use at most max-args arguments per command line",
+      "takes_value": true,
+      "value_type": { "type": "Number" }
+    },
+    {
+      "short": "-P",
+      "long": "--max-procs",
+      "description": "Run up to max-procs processes at a time",
+      "takes_value": true,
+      "value_type": { "type": "Number" }
+    },
+    {
+      "short": "-d",
+      "long": "--delimiter",
+      "description": "Input items are terminated by the specified character",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "short": "-L",
+      "long": "--max-lines",
+      "description": "Use at most max-lines nonblank input lines per command line",
+      "takes_value": true,
+      "value_type": { "type": "Number" }
+    },
+    {
+      "short": "-s",
+      "long": "--max-chars",
+      "description": "Use at most max-chars characters per command line",
+      "takes_value": true,
+      "value_type": { "type": "Number" }
+    },
+    {
+      "short": "-a",
+      "long": "--arg-file",
+      "description": "Read items from file instead of standard input",
+      "takes_value": true,
+      "value_type": { "type": "File" }
+    },
+    {
+      "short": "-p",
+      "long": "--interactive",
+      "description": "Prompt the user about whether to run each command line"
+    },
+    {
+      "short": "-t",
+      "long": "--verbose",
+      "description": "Print the command line on the standard error output before executing it"
+    },
+    {
+      "short": "-r",
+      "long": "--no-run-if-empty",
+      "description": "If the standard input does not contain any nonblanks, do not run the command"
+    },
+    {
+      "short": "-x",
+      "long": "--exit",
+      "description": "Exit if the size is exceeded"
+    },
+    {
+      "short": "-E",
+      "long": "--eof",
+      "description": "Set the end of file string to eof-str",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "long": "--process-slot-var",
+      "description": "Set the environment variable VAR in child processes",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "long": "--show-limits",
+      "description": "Display the limits on the command-line length"
+    },
+    {
+      "long": "--help",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": []
+}

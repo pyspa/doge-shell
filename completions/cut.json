@@ -1,0 +1,67 @@
+{
+  "command": "cut",
+  "description": "Remove sections from each line of files",
+  "global_options": [
+    {
+      "short": "-b",
+      "long": "--bytes",
+      "description": "Select only these bytes",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "short": "-c",
+      "long": "--characters",
+      "description": "Select only these characters",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "short": "-d",
+      "long": "--delimiter",
+      "description": "Use DELIM instead of TAB for field delimiter",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "short": "-f",
+      "long": "--fields",
+      "description": "Select only these fields",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "short": "-n",
+      "description": "With -b: don't split multibyte characters"
+    },
+    {
+      "short": "-s",
+      "long": "--only-delimited",
+      "description": "Do not print lines not containing delimiters"
+    },
+    {
+      "long": "--output-delimiter",
+      "description": "Use STRING as the output delimiter",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "long": "--complement",
+      "description": "Complement the set of selected bytes, characters or fields"
+    },
+    {
+      "short": "-z",
+      "long": "--zero-terminated",
+      "description": "Line delimiter is NUL, not newline"
+    },
+    {
+      "long": "--help",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": []
+}

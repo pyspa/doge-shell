@@ -1,0 +1,117 @@
+{
+  "command": "sort",
+  "description": "Sort lines of text files",
+  "global_options": [
+    {
+      "short": "-n",
+      "long": "--numeric-sort",
+      "description": "Compare according to string numerical value"
+    },
+    {
+      "short": "-r",
+      "long": "--reverse",
+      "description": "Reverse the result of comparisons"
+    },
+    {
+      "short": "-u",
+      "long": "--unique",
+      "description": "Output only the first of an equal run"
+    },
+    {
+      "short": "-k",
+      "long": "--key",
+      "description": "Sort via a key; KEYDEF gives location and type",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "short": "-t",
+      "long": "--field-separator",
+      "description": "Use SEP instead of non-blank to blank transition",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "short": "-o",
+      "long": "--output",
+      "description": "Write result to FILE instead of standard output",
+      "takes_value": true,
+      "value_type": { "type": "File" }
+    },
+    {
+      "short": "-b",
+      "long": "--ignore-leading-blanks",
+      "description": "Ignore leading blanks"
+    },
+    {
+      "short": "-f",
+      "long": "--ignore-case",
+      "description": "Fold lower case to upper case characters"
+    },
+    {
+      "short": "-i",
+      "long": "--ignore-nonprinting",
+      "description": "Consider only printable characters"
+    },
+    {
+      "short": "-d",
+      "long": "--dictionary-order",
+      "description": "Consider only blanks and alphanumeric characters"
+    },
+    {
+      "short": "-h",
+      "long": "--human-numeric-sort",
+      "description": "Compare human readable numbers (e.g., 2K 1G)"
+    },
+    {
+      "short": "-M",
+      "long": "--month-sort",
+      "description": "Compare (unknown) < 'JAN' < ... < 'DEC'"
+    },
+    {
+      "short": "-V",
+      "long": "--version-sort",
+      "description": "Natural sort of (version) numbers within text"
+    },
+    {
+      "short": "-g",
+      "long": "--general-numeric-sort",
+      "description": "Compare according to general numerical value"
+    },
+    {
+      "short": "-c",
+      "long": "--check",
+      "description": "Check for sorted input; do not sort"
+    },
+    {
+      "short": "-m",
+      "long": "--merge",
+      "description": "Merge already sorted files; do not sort"
+    },
+    {
+      "short": "-s",
+      "long": "--stable",
+      "description": "Stabilize sort by disabling last-resort comparison"
+    },
+    {
+      "short": "-z",
+      "long": "--zero-terminated",
+      "description": "Line delimiter is NUL, not newline"
+    },
+    {
+      "long": "--parallel",
+      "description": "Change the number of sorts run concurrently to N",
+      "takes_value": true,
+      "value_type": { "type": "Number" }
+    },
+    {
+      "long": "--help",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": []
+}

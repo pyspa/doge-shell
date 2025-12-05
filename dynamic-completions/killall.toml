@@ -1,0 +1,5 @@
+[[dynamic_completions]]
+command = "killall"
+description = "Complete with running process names"
+match_condition = { type = "StartsWithCommand" }
+shell_command = "ps -eo comm --no-headers | sort | uniq"

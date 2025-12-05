@@ -1,0 +1,78 @@
+{
+  "command": "ln",
+  "description": "Make links between files",
+  "global_options": [
+    {
+      "short": "-s",
+      "long": "--symbolic",
+      "description": "Make symbolic links instead of hard links"
+    },
+    {
+      "short": "-f",
+      "long": "--force",
+      "description": "Remove existing destination files"
+    },
+    {
+      "short": "-i",
+      "long": "--interactive",
+      "description": "Prompt whether to remove destinations"
+    },
+    {
+      "short": "-n",
+      "long": "--no-dereference",
+      "description": "Treat LINK_NAME as a normal file if it is a symbolic link to a directory"
+    },
+    {
+      "short": "-r",
+      "long": "--relative",
+      "description": "Create symbolic links relative to link location"
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Print name of each linked file"
+    },
+    {
+      "short": "-b",
+      "description": "Make a backup of each existing destination file"
+    },
+    {
+      "short": "-S",
+      "long": "--suffix",
+      "description": "Override the usual backup suffix",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "short": "-t",
+      "long": "--target-directory",
+      "description": "Specify the DIRECTORY in which to create the links",
+      "takes_value": true,
+      "value_type": { "type": "Directory" }
+    },
+    {
+      "short": "-T",
+      "long": "--no-target-directory",
+      "description": "Treat LINK_NAME as a normal file always"
+    },
+    {
+      "short": "-L",
+      "long": "--logical",
+      "description": "Dereference TARGETs that are symbolic links"
+    },
+    {
+      "short": "-P",
+      "long": "--physical",
+      "description": "Make hard links directly to symbolic links"
+    },
+    {
+      "long": "--help",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": []
+}

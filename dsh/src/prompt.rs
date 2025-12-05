@@ -163,32 +163,58 @@ impl Prompt {
     }
 
     /// Get Git status with caching functionality
-    pub fn get_git_status_cached(&mut self) -> Option<GitStatus> {
-        // Early return if Git root doesn't exist
+    /// This method is now non-blocking and returns only cached values.
+    /// Returns None if cache is empty or expired/invalid, but does NOT trigger a refresh.
+    /// Refresh should be triggered asynchronously using fetch_git_status_async and update_git_status.
+    pub fn get_git_status_cached(&self) -> Option<GitStatus> {
         let git_root = self.current_git_root.as_ref()?;
+        let cache = self.git_status_cache.as_ref()?;
 
-        // Check if cache is valid
-        if let Some(ref cache) = self.git_status_cache
-            && cache.is_valid(git_root)
-        {
-            // debug!("Using cached git status for {:?}", git_root);
-            return Some(cache.status.clone());
-        }
-
-        // Get new status if cache is invalid or doesn't exist
-        // debug!("Fetching fresh git status for {:?}", git_root);
-        if let Some(status) = get_git_status() {
-            // Create or update new cache
-            if let Some(ref mut cache) = self.git_status_cache {
-                cache.update(status.clone());
-            } else {
-                self.git_status_cache = Some(GitStatusCache::new(status.clone(), git_root.clone()));
-            }
-            Some(status)
+        if cache.is_valid(git_root) {
+            Some(cache.status.clone())
         } else {
-            // If Git status retrieval fails, clear cache
-            self.git_status_cache = None;
-            None
+            // Return stale data if available?
+            // For now, let's return the stale data but we rely on the caller to check should_refresh
+            // Actually, if it's invalid (different root), we shouldn't return it.
+            // If it's just expired, we might want to return it while updating.
+            // Current is_valid checks both.
+
+            // Let's rely on should_refresh to trigger updates, but here we be conservative.
+            // If strictly invalid (root mismatch), return None.
+            if cache.git_root != *git_root {
+                return None;
+            }
+            // If just expired, return stale data
+            Some(cache.status.clone())
+        }
+    }
+
+    pub fn should_refresh(&self) -> bool {
+        let Some(git_root) = &self.current_git_root else {
+            return false;
+        };
+
+        match &self.git_status_cache {
+            Some(cache) => !cache.is_valid(git_root),
+            None => true,
+        }
+    }
+
+    pub fn update_git_status(&mut self, status: Option<GitStatus>) {
+        let Some(git_root) = &self.current_git_root else {
+            return;
+        };
+
+        if let Some(status) = status {
+            if let Some(ref mut cache) = self.git_status_cache {
+                cache.update(status, git_root.clone());
+            } else {
+                self.git_status_cache = Some(GitStatusCache::new(status, git_root.clone()));
+            }
+        } else {
+            // Failed to get status or not a git repo anymore?
+            // If we are sure it's a git repo but failed, maybe keep old cache?
+            // For now do nothing or clear?
         }
     }
 }
@@ -289,10 +315,100 @@ impl GitStatusCache {
         self.last_updated.elapsed() < self.ttl
     }
 
-    fn update(&mut self, status: GitStatus) {
+    fn update(&mut self, status: GitStatus, git_root: PathBuf) {
         self.status = status;
         self.last_updated = Instant::now();
+        self.git_root = git_root;
     }
+}
+
+pub async fn fetch_git_status_async(path: &Path) -> Option<GitStatus> {
+    // using tokio::process::Command for non-blocking execution
+    use tokio::process::Command;
+
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .arg("--no-optional-locks")
+        .arg("status")
+        .arg("--porcelain=2")
+        .arg("--branch")
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    // Parse output (logic shared with get_git_status, could refactor to shared parser)
+    // For now, duplicate or extract parser.
+    parse_git_status_output(&output.stdout)
+}
+
+fn parse_git_status_output(stdout: &[u8]) -> Option<GitStatus> {
+    let mut status = GitStatus::new();
+    let mut reader = BufReader::new(stdout);
+    let mut buf = String::new();
+
+    let mut branch_status = String::new();
+    let mut modified = false;
+    let mut untrack_file = false;
+
+    while let Ok(size) = reader.read_line(&mut buf) {
+        if size == 0 {
+            break;
+        }
+
+        let splited: Vec<&str> = buf.split_whitespace().collect();
+
+        if buf.starts_with('#') {
+            // branch info
+            if buf.starts_with("# branch.head") {
+                if let Some(branch) = splited.get(2) {
+                    status.branch = branch.to_string();
+                }
+            } else if buf.starts_with("# branch.ab") {
+                if let Some(val) = splited.get(2)
+                    && *val != "+0"
+                {
+                    branch_status = BRANCH_AHEAD.to_string();
+                }
+                if let Some(val) = splited.get(3)
+                    && *val != "-0"
+                {
+                    if branch_status == BRANCH_AHEAD {
+                        branch_status = BRANCH_DIVERGED.to_string();
+                    } else {
+                        branch_status = BRANCH_BEHIND.to_string();
+                    }
+                }
+            }
+        } else if buf.starts_with('1') {
+            modified = true;
+        } else if buf.starts_with('?') {
+            untrack_file = true;
+        }
+        buf.clear();
+    }
+
+    let mut git_status = String::new();
+
+    if modified {
+        git_status += MODIFIED;
+    }
+    if untrack_file {
+        git_status += UNTRACKED;
+    }
+    if !branch_status.is_empty() {
+        git_status += branch_status.as_str();
+    }
+
+    if !git_status.is_empty() {
+        status.branch_status = Some(git_status);
+    }
+
+    Some(status)
 }
 
 fn get_git_root() -> Option<String> {
@@ -330,114 +446,13 @@ fn get_git_root() -> Option<String> {
     None
 }
 
-fn get_git_status() -> Option<GitStatus> {
-    // debug!("get_git_status: Starting git status check");
-    let result = Command::new("git")
-        .arg("-C")
-        .arg(".")
-        .arg("--no-optional-locks")
-        .arg("status")
-        .arg("--porcelain=2")
-        .arg("--branch")
-        .output();
-
-    if let Ok(output) = result {
-        // debug!(
-        //     "get_git_status: Command executed, success={}",
-        //     output.status.success()
-        // );
-        if output.status.success() {
-            let mut status = GitStatus::new();
-            let mut reader = BufReader::new(output.stdout.as_slice());
-            let mut buf = String::new();
-
-            let mut branch_status = String::new();
-            let mut modified = false;
-            let mut untrack_file = false;
-
-            while let Ok(size) = reader.read_line(&mut buf) {
-                if size == 0 {
-                    break;
-                }
-                // debug!("get_git_status: Processing line: {}", buf.trim());
-
-                let splited: Vec<&str> = buf.split_whitespace().collect();
-
-                if buf.starts_with('#') {
-                    // branch info
-                    if buf.starts_with("# branch.head") {
-                        if let Some(branch) = splited.get(2) {
-                            status.branch = branch.to_string();
-                            // debug!("get_git_status: Found branch: {}", status.branch);
-                        }
-                    } else if buf.starts_with("# branch.ab") {
-                        if let Some(val) = splited.get(2)
-                            && *val != "+0"
-                        {
-                            branch_status = BRANCH_AHEAD.to_string();
-                        }
-                        if let Some(val) = splited.get(3)
-                            && *val != "-0"
-                        {
-                            if branch_status == BRANCH_AHEAD {
-                                branch_status = BRANCH_DIVERGED.to_string();
-                            } else {
-                                branch_status = BRANCH_BEHIND.to_string();
-                            }
-                        }
-                    }
-                } else if buf.starts_with('1') {
-                    modified = true;
-                } else if buf.starts_with('?') {
-                    untrack_file = true;
-                }
-                buf.clear();
-            }
-
-            let mut git_status = String::new();
-
-            if modified {
-                git_status += MODIFIED;
-            }
-            if untrack_file {
-                git_status += UNTRACKED;
-            }
-            if !branch_status.is_empty() {
-                git_status += branch_status.as_str();
-            }
-
-            if !git_status.is_empty() {
-                status.branch_status = Some(git_status);
-            }
-
-            // debug!(
-            //     "get_git_status: Final status - branch: {}, status: {:?}",
-            //     status.branch, status.branch_status
-            // );
-            Some(status)
-        } else {
-            // debug!(
-            //     "get_git_status: Command failed with status: {}",
-            //     output.status
-            // );
-            None
-        }
-    } else {
-        // debug!(
-        //     "get_git_status: Failed to execute git command: {:?}",
-        //     result
-        // );
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_git_status_cache() {
+    #[tokio::test]
+    async fn test_git_status_cache() {
         // Test with non-Git directory
         let non_git_dir = PathBuf::from("/tmp");
         let mut prompt = Prompt::new(non_git_dir, "🐕 > ".to_string());
@@ -455,13 +470,16 @@ mod tests {
             git_prompt.current_git_root = Some(PathBuf::from(&git_root));
 
             // First call (no cache)
-            let status1 = git_prompt.get_git_status_cached();
+            assert!(git_prompt.get_git_status_cached().is_none());
+
+            // Populate cache manually (mimic async fetch)
+            if let Some(status) = fetch_git_status_async(&PathBuf::from(&git_root)).await {
+                git_prompt.update_git_status(Some(status));
+            }
 
             // Second call (with cache)
             let status2 = git_prompt.get_git_status_cached();
-
-            // Confirm both results are the same
-            assert_eq!(status1, status2);
+            assert!(status2.is_some());
 
             // Confirm cache exists
             assert!(git_prompt.git_status_cache.is_some());

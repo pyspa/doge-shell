@@ -156,7 +156,7 @@ impl Process {
 
         // Build environment for child process
         let env_guard = environment.read();
-        let mut env_map: HashMap<String, String> = std::env::vars().collect();
+        let mut env_map: HashMap<String, String> = env_guard.system_env_vars.clone();
         for key in &env_guard.exported_vars {
             if let Some(value) = env_guard.variables.get(key) {
                 env_map.insert(key.clone(), value.clone());

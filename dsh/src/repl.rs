@@ -1612,6 +1612,18 @@ impl<'a> Repl<'a> {
                     // Save history every 30 seconds if there have been changes
                     self.save_history_periodic();
                     self.check_background_jobs(true).await?;
+
+                    // Refresh git status
+                    let prompt = Arc::clone(&self.prompt);
+                    let should = prompt.read().should_refresh();
+                    if should {
+                        let path = prompt.read().current_path().to_path_buf();
+                        tokio::spawn(async move {
+                            if let Some(status) = crate::prompt::fetch_git_status_async(&path).await {
+                                prompt.write().update_git_status(Some(status));
+                            }
+                        });
+                    }
                 },
                 _ = ai_refresh_interval.tick() => {
                     let mut need_redraw = false;

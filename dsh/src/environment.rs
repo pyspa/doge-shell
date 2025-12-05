@@ -36,6 +36,7 @@ pub struct Environment {
     pub chpwd_hooks: Vec<Box<dyn ChangePwdHook>>,
     pub mcp_servers: Vec<McpServerConfig>,
     pub execute_allowlist: Vec<String>,
+    pub system_env_vars: HashMap<String, String>,
     pub input_preferences: InputPreferences,
     /// Cache for PATH command lookups to avoid repeated filesystem access
     command_cache: HashMap<String, Option<String>>,
@@ -84,6 +85,7 @@ impl Environment {
             chpwd_hooks: Vec::new(),
             mcp_servers: Vec::new(),
             execute_allowlist: Vec::new(),
+            system_env_vars: env::vars().collect(),
             input_preferences: default_input_preferences(),
             command_cache: HashMap::new(),
         }))
@@ -100,6 +102,7 @@ impl Environment {
         let mcp_servers = parent.read().mcp_servers.clone();
         let execute_allowlist = parent.read().execute_allowlist.clone();
         let input_preferences = parent.read().input_preferences;
+        let system_env_vars = parent.read().system_env_vars.clone();
 
         #[allow(clippy::arc_with_non_send_sync)]
         Arc::new(RwLock::new(Environment {
@@ -113,6 +116,7 @@ impl Environment {
             chpwd_hooks: Vec::new(),
             mcp_servers,
             execute_allowlist,
+            system_env_vars,
             input_preferences,
             command_cache: HashMap::new(),
         }))
@@ -220,10 +224,10 @@ impl Environment {
 
         if let Some(var) = key.strip_prefix('$') {
             // expand env var
-            std::env::var(var).ok()
+            self.system_env_vars.get(var).cloned()
         } else {
             // For compatibility, also check OS env vars without the '$' prefix
-            std::env::var(key).ok()
+            self.system_env_vars.get(key).cloned()
         }
     }
     pub fn clear_mcp_servers(&mut self) {

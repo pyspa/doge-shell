@@ -29,6 +29,7 @@ use nix::unistd::tcsetpgrp;
 use parking_lot::Mutex as ParkingMutex;
 use parking_lot::RwLock;
 use pest::Span as PestSpan;
+use pest::iterators::Pairs;
 use std::io::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -625,8 +626,11 @@ impl<'a> Repl<'a> {
         result
     }
 
-    fn compute_color_ranges(&self, input: &str) -> (Vec<(usize, usize, ColorType)>, bool) {
-        let highlight = parser::collect_highlight_tokens(input);
+    fn highlight_result_to_ranges(
+        &self,
+        highlight: parser::HighlightResult,
+        input: &str,
+    ) -> (Vec<(usize, usize, ColorType)>, bool) {
         let mut tokens = highlight.tokens;
         let error = highlight.error;
 
@@ -676,6 +680,15 @@ impl<'a> Repl<'a> {
         }
 
         (ranges, can_execute)
+    }
+
+    fn compute_color_ranges_from_pairs<'p>(
+        &self,
+        pairs: Pairs<'p, Rule>,
+        input: &str,
+    ) -> (Vec<(usize, usize, ColorType)>, bool) {
+        let highlight = parser::collect_highlight_tokens_from_pairs(pairs, input.len());
+        self.highlight_result_to_ranges(highlight, input)
     }
 
     fn accept_active_suggestion(&mut self) -> bool {
@@ -909,62 +922,81 @@ impl<'a> Repl<'a> {
             completion = self.get_completion_from_history(&input);
 
             // TODO refactor
-            if let Ok(words) = self.input.get_words() {
-                for (ref rule, ref span, current) in words {
-                    let word = span.as_str();
-                    if word.is_empty() {
-                        continue;
-                    }
+            // Perform single parse for both words extraction and highlighting
+            use pest::Parser;
+            match parser::ShellParser::parse(Rule::commands, &input) {
+                Ok(pairs) => {
+                    // 1. Get words for completion check
+                    let words = self.input.get_words_from_pairs(pairs.clone());
 
-                    match rule {
-                        Rule::argv0 => {
-                            // Completion logic for command names
-                            if current && completion.is_none() {
-                                if let Some(file) = self.shell.environment.read().search(word) {
-                                    if file.len() >= input.len() {
-                                        completion = Some(file[input.len()..].to_string());
+                    for (ref rule, ref span, current) in words {
+                        let word = span.as_str();
+                        if word.is_empty() {
+                            continue;
+                        }
+
+                        match rule {
+                            Rule::argv0 => {
+                                // Completion logic for command names
+                                if current && completion.is_none() {
+                                    if let Some(file) = self.shell.environment.read().search(word) {
+                                        if file.len() >= input.len() {
+                                            completion = Some(file[input.len()..].to_string());
+                                        }
+                                        self.input.completion = Some(file);
+                                        break;
+                                    } else if let Ok(Some(dir)) =
+                                        completion::path_completion_prefix(word)
+                                        && dirs::is_dir(&dir)
+                                    {
+                                        if dir.len() >= input.len() {
+                                            completion = Some(dir[input.len()..].to_string());
+                                        }
+                                        self.input.completion = Some(dir.to_string());
+                                        break;
                                     }
-                                    self.input.completion = Some(file);
-                                    break;
-                                } else if let Ok(Some(dir)) =
-                                    completion::path_completion_prefix(word)
-                                    && dirs::is_dir(&dir)
+                                }
+                            }
+                            Rule::args => {
+                                // Completion logic for arguments
+                                if current
+                                    && completion.is_none()
+                                    && let Ok(Some(path)) = completion::path_completion_prefix(word)
+                                    && path.len() >= word.len()
                                 {
-                                    if dir.len() >= input.len() {
-                                        completion = Some(dir[input.len()..].to_string());
+                                    let part = path[word.len()..].to_string();
+                                    completion = Some(path[word.len()..].to_string());
+
+                                    if let Some((pre, post)) = self.input.split_current_pos() {
+                                        self.input.completion = Some(pre.to_owned() + &part + post);
+                                    } else {
+                                        self.input.completion = Some(input.clone() + &part);
                                     }
-                                    self.input.completion = Some(dir.to_string());
                                     break;
                                 }
                             }
-                        }
-                        Rule::args => {
-                            // Completion logic for arguments
-                            if current
-                                && completion.is_none()
-                                && let Ok(Some(path)) = completion::path_completion_prefix(word)
-                                && path.len() >= word.len()
-                            {
-                                let part = path[word.len()..].to_string();
-                                completion = Some(path[word.len()..].to_string());
-
-                                if let Some((pre, post)) = self.input.split_current_pos() {
-                                    self.input.completion = Some(pre.to_owned() + &part + post);
-                                } else {
-                                    self.input.completion = Some(input.clone() + &part);
-                                }
-                                break;
+                            _ => {
+                                // For other rule types, leave them with default color
                             }
                         }
-                        _ => {
-                            // For other rule types, leave them with default color
-                        }
                     }
+
+                    // 2. Compute color ranges using the same pairs
+                    let (color_ranges, can_execute) =
+                        self.compute_color_ranges_from_pairs(pairs, &input);
+                    self.input.color_ranges = Some(color_ranges);
+                    self.input.can_execute = can_execute;
+                }
+                Err(err) => {
+                    // Parsing failed, highlight the error
+                    let mut ranges = Vec::new();
+                    if let Some(token) = parser::highlight_error_token(&input, err.location) {
+                        ranges.push((token.start, token.end, ColorType::Error));
+                    }
+                    self.input.color_ranges = Some(ranges);
+                    self.input.can_execute = false;
                 }
             }
-            let (color_ranges, can_execute) = self.compute_color_ranges(&input);
-            self.input.color_ranges = Some(color_ranges);
-            self.input.can_execute = can_execute;
         }
 
         if completion.is_none() {

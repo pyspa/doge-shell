@@ -2,6 +2,7 @@ use crate::parser::{self, Rule};
 use anyhow::Result;
 use crossterm::style::{Color, Stylize};
 use pest::Span;
+use pest::iterators::Pairs;
 use std::cmp::min;
 use std::fmt;
 use std::io::{BufWriter, Write};
@@ -424,6 +425,10 @@ impl Input {
 
     pub fn get_words(&self) -> Result<Vec<(Rule, Span<'_>, bool)>> {
         parser::get_words(self.input.as_str(), self.cursor)
+    }
+
+    pub fn get_words_from_pairs<'a>(&self, pairs: Pairs<'a, Rule>) -> Vec<(Rule, Span<'a>, bool)> {
+        parser::get_words_from_pairs(pairs, self.cursor)
     }
 
     pub fn print<W: Write>(&self, out: &mut W, ghost_suffix: Option<&str>) {

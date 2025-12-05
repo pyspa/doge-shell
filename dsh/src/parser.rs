@@ -4,7 +4,7 @@ use parking_lot::RwLock;
 use pest::Parser;
 use pest::Span;
 use pest::error::InputLocation;
-use pest::iterators::Pair;
+use pest::iterators::{Pair, Pairs};
 use pest_derive::Parser;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -44,20 +44,16 @@ pub struct HighlightResult {
     pub error: Option<HighlightToken>,
 }
 
-pub fn collect_highlight_tokens(input: &str) -> HighlightResult {
+pub fn collect_highlight_tokens_from_pairs(
+    pairs: Pairs<Rule>,
+    input_len: usize,
+) -> HighlightResult {
     let mut result = HighlightResult::default();
-    match ShellParser::parse(Rule::commands, input) {
-        Ok(pairs) => {
-            // 推定されるトークン数で Vec の容量を初期化
-            // pairs.clone().count() は重いので、入力長からのヒューリスティックを使用
-            result.tokens.reserve(input.len() / 5);
-            for pair in pairs {
-                collect_highlight_from_pair(pair, HighlightContext::None, &mut result.tokens);
-            }
-        }
-        Err(err) => {
-            result.error = highlight_error_token(input, err.location);
-        }
+    // Initialize Vec capacity with estimated token count
+    // pairs.clone().count() is heavy, so use heuristic based on input length
+    result.tokens.reserve(input_len / 5);
+    for pair in pairs {
+        collect_highlight_from_pair(pair, HighlightContext::None, &mut result.tokens);
     }
     result
 }
@@ -128,7 +124,7 @@ fn push_token(span: Span, kind: HighlightKind, out: &mut Vec<HighlightToken>) {
     out.push(HighlightToken { start, end, kind });
 }
 
-fn highlight_error_token(input: &str, location: InputLocation) -> Option<HighlightToken> {
+pub fn highlight_error_token(input: &str, location: InputLocation) -> Option<HighlightToken> {
     let len = input.len();
     match location {
         InputLocation::Pos(pos) => {
@@ -660,9 +656,8 @@ fn expand_command_alias(
     Ok(buf)
 }
 
-pub fn get_words(input: &str, pos: usize) -> Result<Vec<(Rule, Span<'_>, bool)>> {
-    let pairs = ShellParser::parse(Rule::commands, input).map_err(|e| anyhow!(e))?;
-    let mut result: Vec<(Rule, Span<'_>, bool)> = Vec::new();
+pub fn get_words_from_pairs<'a>(pairs: Pairs<'a, Rule>, pos: usize) -> Vec<(Rule, Span<'a>, bool)> {
+    let mut result: Vec<(Rule, Span<'a>, bool)> = Vec::new();
     for pair in pairs {
         match pair.as_rule() {
             Rule::commands | Rule::command => {
@@ -671,10 +666,15 @@ pub fn get_words(input: &str, pos: usize) -> Result<Vec<(Rule, Span<'_>, bool)>>
                     result.append(&mut res);
                 }
             }
-            _ => return Ok(result),
+            _ => return result,
         }
     }
-    Ok(result)
+    result
+}
+
+pub fn get_words(input: &str, pos: usize) -> Result<Vec<(Rule, Span<'_>, bool)>> {
+    let pairs = ShellParser::parse(Rule::commands, input).map_err(|e| anyhow!(e))?;
+    Ok(get_words_from_pairs(pairs, pos))
 }
 
 fn to_words(pair: Pair<Rule>, pos: usize) -> Vec<(Rule, Span, bool)> {

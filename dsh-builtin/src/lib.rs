@@ -19,6 +19,7 @@ mod dmv;
 mod fg;
 mod gco;
 mod glog;
+mod gwt;
 mod help;
 mod history;
 mod jobs;
@@ -256,6 +257,11 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
         builtin.insert(
             "gco",
             Box::new(BuiltinCommandFn::new(gco::command, gco::description()))
+                as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "gwt",
+            Box::new(BuiltinCommandFn::new(gwt::command, gwt::description()))
                 as Box<dyn BuiltinCommandTrait>,
         );
 

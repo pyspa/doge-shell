@@ -1,0 +1,77 @@
+{
+    "command": "diff",
+    "description": "Compare files line by line",
+    "global_options": [
+        {
+            "short": "-u",
+            "long": "--unified",
+            "description": "Output NUM (default 3) lines of unified context."
+        },
+        {
+            "short": "-c",
+            "long": "--context",
+            "description": "Output NUM (default 3) lines of copied context."
+        },
+        {
+            "short": "-i",
+            "long": "--ignore-case",
+            "description": "Ignore case differences in file contents."
+        },
+        {
+            "short": "-E",
+            "long": "--ignore-tab-expansion",
+            "description": "Ignore changes due to tab expansion."
+        },
+        {
+            "short": "-b",
+            "long": "--ignore-space-change",
+            "description": "Ignore changes in the amount of white space."
+        },
+        {
+            "short": "-w",
+            "long": "--ignore-all-space",
+            "description": "Ignore all white space."
+        },
+        {
+            "short": "-B",
+            "long": "--ignore-blank-lines",
+            "description": "Ignore changes whose lines are all blank."
+        },
+        {
+            "short": "-r",
+            "long": "--recursive",
+            "description": "Recursively compare any subdirectories found."
+        },
+        {
+            "short": "-N",
+            "long": "--new-file",
+            "description": "Treat absent files as empty."
+        },
+        {
+            "short": "-q",
+            "long": "--brief",
+            "description": "Output only whether files differ."
+        },
+        {
+            "short": "-s",
+            "long": "--report-identical-files",
+            "description": "Report when two files are the same."
+        },
+        {
+            "short": "-y",
+            "long": "--side-by-side",
+            "description": "Output in two columns."
+        },
+        {
+            "short": "-v",
+            "long": "--version",
+            "description": "Output version info."
+        },
+        {
+            "short": null,
+            "long": "--help",
+            "description": "Output this help."
+        }
+    ],
+    "subcommands": []
+}

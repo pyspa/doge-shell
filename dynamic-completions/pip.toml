@@ -1,0 +1,6 @@
+[[dynamic_completions]]
+command = "pip"
+subcommands = ["uninstall", "show", "inspect"]
+description = "Complete installed package names"
+match_condition = { type = "StartsWithCommand" }
+shell_command = "pip list --format=freeze 2>/dev/null | cut -d= -f1"

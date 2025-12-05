@@ -292,12 +292,15 @@ fn collect_history_context(
         None => return Vec::new(),
     };
 
-    let mut snapshot: Vec<String> = history
-        .sorted(&SortMethod::Recent)
-        .into_iter()
-        .take(limit)
-        .map(|item| item.item)
-        .collect();
+    // Pre-allocate with expected capacity
+    let mut snapshot: Vec<String> = Vec::with_capacity(limit);
+    snapshot.extend(
+        history
+            .sorted(&SortMethod::Recent)
+            .into_iter()
+            .take(limit)
+            .map(|item| item.item),
+    );
 
     if snapshot.len() < limit && !input.is_empty() {
         for item in history.sort_by_match(input) {

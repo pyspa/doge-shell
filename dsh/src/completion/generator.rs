@@ -58,7 +58,7 @@ impl CompletionGenerator {
 
     /// Generate command name completion candidates
     fn generate_command_candidates(&self, current_token: &str) -> Result<Vec<CompletionCandidate>> {
-        let mut candidates = Vec::new();
+        let mut candidates = Vec::with_capacity(32);
 
         // Commands registered in database
         for command_name in self.database.get_command_names() {
@@ -83,7 +83,7 @@ impl CompletionGenerator {
         &self,
         parsed: &ParsedCommandLine,
     ) -> Result<Vec<CompletionCandidate>> {
-        let mut candidates = Vec::new();
+        let mut candidates = Vec::with_capacity(16);
 
         if let Some(command_completion) = self.database.get_command(&parsed.command) {
             let current_subcommand =
@@ -145,7 +145,7 @@ impl CompletionGenerator {
         &self,
         parsed: &ParsedCommandLine,
     ) -> Result<Vec<CompletionCandidate>> {
-        let mut candidates = Vec::new();
+        let mut candidates = Vec::with_capacity(16);
 
         if let Some(command_completion) = self.database.get_command(&parsed.command) {
             let options =
@@ -172,7 +172,7 @@ impl CompletionGenerator {
         &self,
         parsed: &ParsedCommandLine,
     ) -> Result<Vec<CompletionCandidate>> {
-        let mut candidates = Vec::new();
+        let mut candidates = Vec::with_capacity(16);
 
         if let Some(command_completion) = self.database.get_command(&parsed.command) {
             let options =
@@ -268,7 +268,7 @@ impl CompletionGenerator {
         current_token: &str,
         extensions: Option<&Vec<String>>,
     ) -> Result<Vec<CompletionCandidate>> {
-        let mut candidates = Vec::new();
+        let mut candidates = Vec::with_capacity(32);
 
         let (dir_path, file_prefix) = Self::split_dir_and_prefix(current_token);
 
@@ -312,7 +312,7 @@ impl CompletionGenerator {
         &self,
         current_token: &str,
     ) -> Result<Vec<CompletionCandidate>> {
-        let mut candidates = Vec::new();
+        let mut candidates = Vec::with_capacity(16);
 
         let (dir_path, dir_prefix) = Self::split_dir_and_prefix(current_token);
 
@@ -347,7 +347,7 @@ impl CompletionGenerator {
         &self,
         current_token: &str,
     ) -> Result<Vec<CompletionCandidate>> {
-        let mut candidates = Vec::new();
+        let mut candidates = Vec::with_capacity(16);
 
         // List of common commands (in actual implementation, get from PATH)
         let common_commands = [
@@ -371,7 +371,7 @@ impl CompletionGenerator {
         &self,
         current_token: &str,
     ) -> Result<Vec<CompletionCandidate>> {
-        let mut candidates = Vec::new();
+        let mut candidates = Vec::with_capacity(32);
 
         for (key, _) in std::env::vars() {
             if key.starts_with(current_token) {

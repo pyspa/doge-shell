@@ -456,6 +456,7 @@ impl Input {
         color_ranges: &[(usize, usize, ColorType)],
     ) -> String {
         use crossterm::style::Stylize;
+        use std::fmt::Write;
 
         let input_str = self.as_str();
         // Pre-allocate capacity to reduce allocations (input + ANSI codes overhead)
@@ -467,7 +468,7 @@ impl Input {
             // Add any uncolored text before this range
             if start > last_end {
                 let prefix = &input_str[last_end..start];
-                result.push_str(&format!("{}", prefix.with(self.config.fg_color)));
+                let _ = write!(result, "{}", prefix.with(self.config.fg_color));
             }
 
             // Add the colored text for this range
@@ -486,7 +487,7 @@ impl Input {
                 ColorType::ProcSubst => self.config.proc_subst_color,
                 ColorType::Error => self.config.error_color,
             };
-            result.push_str(&format!("{}", colored_text.with(color)));
+            let _ = write!(result, "{}", colored_text.with(color));
 
             // Update the last processed position
             last_end = end.max(last_end);
@@ -495,7 +496,7 @@ impl Input {
         // Add any remaining uncolored text after the last range
         if last_end < input_str.len() {
             let suffix = &input_str[last_end..];
-            result.push_str(&format!("{}", suffix.with(self.config.fg_color)));
+            let _ = write!(result, "{}", suffix.with(self.config.fg_color));
         }
 
         result

@@ -629,7 +629,12 @@ impl<'a> Repl<'a> {
         let highlight = parser::collect_highlight_tokens(input);
         let mut tokens = highlight.tokens;
         let error = highlight.error;
-        tokens.sort_by_key(|token| token.start);
+
+        // Skip sort if already sorted (common case)
+        let needs_sort = tokens.windows(2).any(|w| w[0].start > w[1].start);
+        if needs_sort {
+            tokens.sort_by_key(|token| token.start);
+        }
 
         let mut ranges = Vec::with_capacity(tokens.len() + error.as_ref().map(|_| 1).unwrap_or(0));
         let mut can_execute = false;

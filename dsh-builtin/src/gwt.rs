@@ -271,8 +271,19 @@ fn get_worktree_path(branch: &str) -> Result<PathBuf, String> {
     let parent = git_root
         .parent()
         .ok_or_else(|| "cannot determine parent directory".to_string())?;
-    let sanitized = sanitize_branch_name(branch);
-    Ok(parent.join(&sanitized))
+    let project_name = git_root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "cannot determine project name".to_string())?;
+
+    let dir_name = format_worktree_dir(project_name, branch);
+    Ok(parent.join(dir_name))
+}
+
+/// Format worktree directory name: <project>-<branch>
+fn format_worktree_dir(project: &str, branch: &str) -> String {
+    let sanitized_branch = sanitize_branch_name(branch);
+    format!("{}-{}", project, sanitized_branch)
 }
 
 /// Add a worktree for a branch
@@ -534,6 +545,16 @@ fn open_editor(ctx: &Context, path: &Path) -> ExitStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_format_worktree_dir() {
+        assert_eq!(
+            format_worktree_dir("myrepo", "feature/foo"),
+            "myrepo-feature-foo"
+        );
+        assert_eq!(format_worktree_dir("dsh", "fix/bug"), "dsh-fix-bug");
+        assert_eq!(format_worktree_dir("proj", "main"), "proj-main");
+    }
 
     #[test]
     fn test_sanitize_branch_name() {

@@ -552,8 +552,8 @@ mod tests {
         let completions = loader.list_available_completions().unwrap();
 
         // Should include both embedded completions and filesystem completions
-        // The exact number depends on what's in the completions/ directory: currently 34 files
-        assert_eq!(completions.len(), 53);
+        // The exact number depends on what's in the completions/ directory
+        assert_eq!(completions.len(), 55);
         assert!(completions.contains(&"git".to_string()));
         assert!(completions.contains(&"cargo".to_string()));
         assert!(completions.contains(&"docker".to_string()));
@@ -765,11 +765,14 @@ mod tests {
     #[test]
     fn test_all_embedded_completion_files_load_correctly() {
         let loader = JsonCompletionLoader::new();
-        let available_completions = loader
-            .list_available_completions()
-            .expect("Failed to list available completions");
+        // Directly iterate over embedded assets, do not use list_available_completions
+        // This ensures the test is hermetic and only checks what's compiled in.
+        let embedded_commands: Vec<String> = CompletionAssets::iter()
+            .filter(|path| path.ends_with(".json"))
+            .map(|path| path.strip_suffix(".json").unwrap().to_string())
+            .collect();
 
-        for command_name in available_completions {
+        for command_name in embedded_commands {
             println!("Testing completion file: {}", command_name);
 
             // Load the command completion

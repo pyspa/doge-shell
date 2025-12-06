@@ -1,0 +1,5 @@
+[[dynamic_completions]]
+command = "yay"
+description = "Complete with available pacman/AUR packages for installation"
+match_condition = { type = "CustomPattern", params = { command = "yay", options_contains = ["S"] } }
+shell_command = "yay -Slq"

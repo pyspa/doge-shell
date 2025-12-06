@@ -11,10 +11,7 @@
       "long": "--version",
       "short": "-V",
       "description": "Display version information"
-    }
-  ],
-  "subcommands": [],
-  "options": [
+    },
     {
       "long": "--all",
       "short": "-a",
@@ -100,10 +97,5 @@
       "description": "Colorize the output; WHEN can be 'always' (default if omitted), 'auto', or 'never'"
     }
   ],
-  "arguments": [
-    {
-      "name": "directories",
-      "description": "Directories or files to list (default: current directory)"
-    }
-  ]
+  "subcommands": []
 }

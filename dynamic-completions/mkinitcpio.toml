@@ -1,0 +1,17 @@
+# Rule 1: Complete with available presets for -p option
+[[dynamic_completions]]
+command = "mkinitcpio"
+description = "Complete with available presets"
+# Trigger when '-p' or '--preset' is used
+match_condition = { type = "CustomPattern", params = { command = "mkinitcpio", options_contains_any = ["p", "preset"] } }
+# This command lists files in /etc/mkinitcpio.d, strips the path and the .preset extension.
+shell_command = "find /etc/mkinitcpio.d -name '*.preset' -printf '%f\n' | sed 's/\.preset$//'"
+
+# Rule 2: Complete with available hooks for -H and -S options
+[[dynamic_completions]]
+command = "mkinitcpio"
+description = "Complete with available hooks"
+# Trigger when '-H', '--hookhelp', '-S', or '--skiphook' is used
+match_condition = { type = "CustomPattern", params = { command = "mkinitcpio", options_contains_any = ["H", "hookhelp", "S", "skiphook"] } }
+# This command lists the hooks from the default hooks directory.
+shell_command = "ls /usr/lib/initcpio/hooks"

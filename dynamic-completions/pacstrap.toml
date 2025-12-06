@@ -1,0 +1,10 @@
+# Rule: Complete with AVAILABLE packages for installation
+[[dynamic_completions]]
+command = "pacstrap"
+description = "Complete with available packages from repositories"
+# This should trigger for any argument after the first one (which is the root dir)
+# A simple condition on the command name should be sufficient, assuming the
+# completion engine knows to apply this only to the 'package' arguments defined in the JSON.
+match_condition = { type = "CustomPattern", params = { command = "pacstrap" } }
+# `pacman -Ssq` provides a clean list of package names for completion.
+shell_command = "pacman -Ssq"

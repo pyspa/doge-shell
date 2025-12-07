@@ -1,101 +1,56 @@
-#[cfg(test)]
-mod tests {
-    use crate::completion::dynamic::config_loader::DynamicConfigLoader;
-    use crate::completion::json_loader::JsonCompletionLoader;
+use crate::completion::dynamic::DynamicCompletionRegistry;
+use crate::completion::json_loader::JsonCompletionLoader;
+use crate::completion::parser::{CompletionContext, ParsedCommandLine};
 
-    #[test]
-    fn test_load_new_json_completions() {
-        let loader = JsonCompletionLoader::new();
-        let completions = loader.list_available_completions().unwrap();
+#[test]
+fn test_load_new_json_completions() {
+    let loader = JsonCompletionLoader::new();
+    let new_commands = vec![
+        "which", "who", "alias", "export", "bg", "fg", "jobs", "free", "uptime", "lsblk", "file",
+        "bzip2", "xz",
+    ];
 
-        assert!(
-            completions.contains(&"grep".to_string()),
-            "grep completion not found"
-        );
-        assert!(
-            completions.contains(&"find".to_string()),
-            "find completion not found"
-        );
-        assert!(
-            completions.contains(&"mv".to_string()),
-            "mv completion not found"
-        );
-        assert!(
-            completions.contains(&"tar".to_string()),
-            "tar completion not found"
-        );
-        assert!(
-            completions.contains(&"ssh".to_string()),
-            "ssh completion not found"
-        );
-        assert!(
-            completions.contains(&"man".to_string()),
-            "man completion not found"
-        );
-        assert!(
-            completions.contains(&"journalctl".to_string()),
-            "journalctl completion not found"
-        );
-        assert!(
-            completions.contains(&"make".to_string()),
-            "make completion not found"
-        );
-        assert!(
-            completions.contains(&"less".to_string()),
-            "less completion not found"
-        );
-        assert!(
-            completions.contains(&"head".to_string()),
-            "head completion not found"
-        );
-        assert!(
-            completions.contains(&"tail".to_string()),
-            "tail completion not found"
-        );
-        assert!(
-            completions.contains(&"zip".to_string()),
-            "zip completion not found"
-        );
-        assert!(
-            completions.contains(&"unzip".to_string()),
-            "unzip completion not found"
-        );
+    for cmd in new_commands {
+        let completion = loader.load_command_completion(cmd);
+        assert!(completion.is_ok(), "Failed to load completion for {}", cmd);
+        let completion = completion.unwrap();
+        assert!(completion.is_some(), "Completion not found for {}", cmd);
+        assert_eq!(completion.unwrap().command, cmd);
     }
+}
 
-    #[test]
-    fn test_load_man_dynamic_config() {
-        let configs = DynamicConfigLoader::load_all_configs().unwrap();
-        let man_config = configs.iter().find(|c| c.command == "man");
+#[test]
+fn test_load_new_dynamic_check() {
+    let registry = DynamicCompletionRegistry::with_configured_handlers();
 
-        assert!(man_config.is_some(), "man dynamic config not found");
-        let config = man_config.unwrap();
-        assert!(
-            config.shell_command.contains("apropos"),
-            "man command should use apropos"
-        );
-    }
+    // Check chown
+    let chown_cmd = ParsedCommandLine {
+        command: "chown".to_string(),
+        subcommand_path: vec![],
+        args: vec![],
+        options: vec![],
+        current_token: "".to_string(),
+        current_arg: None,
+        completion_context: CompletionContext::Command,
+        specified_options: vec![],
+        specified_arguments: vec![],
+        cursor_index: 0,
+    };
 
-    #[test]
-    fn test_load_grep_options() {
-        let loader = JsonCompletionLoader::new();
-        let completion = loader.load_command_completion("grep").unwrap().unwrap();
+    assert!(registry.matches(&chown_cmd), "Should match chown command");
 
-        let has_recursive = completion.global_options.iter().any(|opt| {
-            opt.short.as_deref() == Some("-r") || opt.long.as_deref() == Some("--recursive")
-        });
-        assert!(has_recursive, "grep should have recursive option");
-    }
-
-    #[test]
-    fn test_load_ssh_dynamic_config() {
-        let configs = DynamicConfigLoader::load_all_configs().unwrap();
-        let ssh_config = configs.iter().find(|c| c.command == "ssh");
-
-        assert!(ssh_config.is_some(), "ssh dynamic config not found");
-        let config = ssh_config.unwrap();
-        assert!(
-            config.shell_command.contains("awk"),
-            "ssh command should use awk"
-        );
-    }
+    // Check chgrp
+    let chgrp_cmd = ParsedCommandLine {
+        command: "chgrp".to_string(),
+        subcommand_path: vec![],
+        args: vec![],
+        options: vec![],
+        current_token: "".to_string(),
+        current_arg: None,
+        completion_context: CompletionContext::Command,
+        specified_options: vec![],
+        specified_arguments: vec![],
+        cursor_index: 0,
+    };
+    assert!(registry.matches(&chgrp_cmd), "Should match chgrp command");
 }

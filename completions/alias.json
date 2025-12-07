@@ -1,0 +1,6 @@
+{
+  "command": "alias",
+  "description": "Define or display aliases",
+  "global_options": [],
+  "subcommands": []
+}

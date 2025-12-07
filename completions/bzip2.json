@@ -1,0 +1,42 @@
+{
+  "command": "bzip2",
+  "description": "Block-sorting file compressor",
+  "global_options": [
+    {
+      "short": "-d",
+      "long": "--decompress",
+      "description": "Force decompression"
+    },
+    {
+      "short": "-z",
+      "long": "--compress",
+      "description": "Force compression"
+    },
+    {
+      "short": "-k",
+      "long": "--keep",
+      "description": "Keep (don't delete) input files"
+    },
+    {
+      "short": "-f",
+      "long": "--force",
+      "description": "Overwrite existing output files"
+    },
+    {
+      "short": "-t",
+      "long": "--test",
+      "description": "Test file integrity"
+    },
+    {
+      "short": "-q",
+      "long": "--quiet",
+      "description": "Suppress non-critical error messages"
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Verbose mode"
+    }
+  ],
+  "subcommands": []
+}

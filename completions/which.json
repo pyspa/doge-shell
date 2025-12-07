@@ -1,0 +1,12 @@
+{
+  "command": "which",
+  "description": "Locate a command",
+  "global_options": [
+    {
+      "short": "-a",
+      "long": "--all",
+      "description": "Print all matching executables in PATH, not just the first"
+    }
+  ],
+  "subcommands": []
+}

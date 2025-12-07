@@ -661,36 +661,43 @@ fn get_executables(dir: &str, name: &str) -> Vec<Candidate> {
     let mut list = Vec::new();
     match read_dir(dir) {
         Ok(entries) => {
-            let mut entries: Vec<std::fs::DirEntry> = entries.flatten().collect();
-            entries.sort_by_key(|x| x.file_name());
+            // Optimization: Filter entries while iterating to avoid collecting all files in PATH
+            // (which can be thousands) before sorting.
+            let mut candidates: Vec<String> = entries
+                .flatten()
+                .filter_map(|entry| {
+                    let file_name_os = entry.file_name();
+                    let file_name = file_name_os.to_str()?;
 
-            for entry in entries {
-                // Handle potential errors when getting file name
-                let file_name_os = entry.file_name();
-                let file_name = match file_name_os.to_str() {
-                    Some(name) => name,
-                    None => {
-                        // Skip entries with non-UTF-8 names
-                        continue;
+                    // Quick prefix check before more expensive operations
+                    if !file_name.starts_with(name) {
+                        return None;
                     }
-                };
 
-                // Handle potential errors when getting file type
-                let is_file = match entry.file_type() {
-                    Ok(metadata) => metadata.is_file(),
-                    Err(_) => {
-                        // Skip entries where we can't determine file type
-                        continue;
+                    // Check if it's a file (symlink following is handled by is_file usually,
+                    // but we might want to be careful. entry.file_type() uses lstat usually,
+                    // but we want to know if it's executable.)
+                    // Optimization: check file type from entry if possible
+                    if let Ok(ft) = entry.file_type()
+                        && !ft.is_file()
+                        && !ft.is_symlink()
+                    {
+                        return None;
                     }
-                };
 
-                // Apply prefix filtering for command names
-                if file_name.starts_with(name) && is_file && is_executable(&entry) {
-                    list.push(Candidate::Item(
-                        file_name.to_string(),
-                        "(command)".to_string(),
-                    ));
-                }
+                    // Expensive check last
+                    if is_executable(&entry) {
+                        Some(file_name.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            candidates.sort();
+
+            for candle in candidates {
+                list.push(Candidate::Item(candle, "(command)".to_string()));
             }
         }
         Err(_err) => {}

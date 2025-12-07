@@ -415,20 +415,21 @@ fn get_git_root() -> Option<String> {
     // Optimization: Walk up looking for .git before spawning process
     if let Ok(cwd) = std::env::current_dir() {
         let mut p = cwd.as_path();
-        let mut found = false;
         loop {
-            if p.join(".git").exists() {
-                found = true;
+            let git_dir = p.join(".git");
+            if git_dir.exists() {
+                if git_dir.is_dir() {
+                    return Some(p.to_string_lossy().into_owned());
+                }
+                // If it's a file (worktree, submodule), we fall back to git rev-parse for correctness
                 break;
             }
             if let Some(parent) = p.parent() {
                 p = parent;
             } else {
-                break;
+                // Reached root without finding .git
+                return None;
             }
-        }
-        if !found {
-            return None;
         }
     }
 

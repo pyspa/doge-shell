@@ -1,0 +1,120 @@
+{
+  "command": "jq",
+  "description": "Command-line JSON processor",
+  "global_options": [
+    {
+      "long": "--help",
+      "description": "Output help text"
+    },
+    {
+      "long": "--version",
+      "description": "Output version and exit"
+    }
+  ],
+  "options": [
+    {
+      "short": "-c",
+      "long": "--compact-output",
+      "description": "Output JSON on a single line"
+    },
+    {
+      "short": "-n",
+      "long": "--null-input",
+      "description": "Read null as input"
+    },
+    {
+      "short": "-r",
+      "long": "--raw-output",
+      "description": "Output raw strings, not JSON texts"
+    },
+    {
+      "short": "-R",
+      "long": "--raw-input",
+      "description": "Read each line as a string"
+    },
+    {
+      "short": "-C",
+      "long": "--color-output",
+      "description": "Colorize JSON output"
+    },
+    {
+      "short": "-M",
+      "long": "--monochrome-output",
+      "description": "Disable colored output"
+    },
+    {
+      "long": "--tab",
+      "description": "Use tabs for indentation"
+    },
+    {
+      "long": "--indent",
+      "takes_value": true,
+      "description": "Use the given number of spaces for indentation",
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "long": "--unbuffered",
+      "description": "Flush output after each JSON object"
+    },
+    {
+      "long": "--sort-keys",
+      "short": "-S",
+      "description": "Sort keys of objects on output"
+    },
+    {
+      "short": "-f",
+      "long": "--from-file",
+      "takes_value": true,
+      "description": "Read filter from file",
+      "value_type": {
+        "type": "File",
+        "data": {
+          "extensions": ["jq"]
+        }
+      }
+    },
+    {
+      "short": "-L",
+      "takes_value": true,
+      "description": "Example: prepend directory to search list for modules",
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "long": "--arg",
+      "takes_value": true,
+      "multiple": true,
+      "description": "Set a variable to a string value",
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--slurp",
+      "short": "-s",
+      "description": "Read all inputs into an array"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "filter",
+      "description": "jq filter",
+      "required": false
+    },
+    {
+      "name": "files",
+      "description": "Input files",
+      "arg_type": {
+        "type": "File",
+        "data": {
+          "extensions": ["json"]
+        }
+      },
+      "multiple": true,
+      "required": false
+    }
+  ]
+}

@@ -17,7 +17,8 @@ fn test_new_json_completions_load() {
     let commands = vec![
         "gzip", "date", "whoami", "mount", "umount", "passwd", "lsmod", "modprobe", "hostname",
         "unalias", "unset", "watch", "screen", "tmux", "scp", "rsync", "rmdir", "w", "last",
-        "netstat", "nmcli", "whereis", "groups",
+        "netstat", "nmcli", "whereis", "groups", "jq", "tree", "dig", "useradd", "groupadd",
+        "chgrp",
     ];
 
     for cmd in commands {
@@ -148,4 +149,19 @@ fn test_new_dynamic_completions_load() {
         cursor_index: 0,
     });
     assert!(umount_match, "Registry should match umount command");
+
+    // Check sysctl match
+    let sysctl_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
+        command: "sysctl".to_string(),
+        subcommand_path: vec![],
+        args: vec!["-a".to_string()],
+        options: vec![],
+        current_token: "".to_string(),
+        current_arg: None,
+        completion_context: doge_shell::completion::parser::CompletionContext::Command,
+        specified_options: vec![],
+        specified_arguments: vec![],
+        cursor_index: 0,
+    });
+    assert!(sysctl_match, "Registry should match sysctl command");
 }

@@ -17,15 +17,20 @@ const MAX_TOOL_ITERATIONS: usize = 20;
 const TOOL_SYSTEM_PROMPT: &str = r#"You are DogeShell Programmer, an autonomous expert software engineer fluent in POSIX, Windows, and other developer shells and command-line tools. Operate inside doge-shell to deliver practical solutions while keeping the workspace safe.
 
 Mindset:
-- Confirm you understand the operator's intent; ask when requirements are unclear.
-- Think several steps ahead, minimize side effects, and call out risks or follow-up work.
-- Communicate succinctly: explain reasoning, note assumptions, and propose validation steps when helpful.
-- Explore the workspace using `ls` and `search` to understand the file structure and locate relevant code before editing.
-- Prefer inspecting files (using read_file) or reasoning before editing; avoid speculative tool calls.
-- After an `execute` call, summarize the exit code, stdout, and stderr that were observed.
-- If a tool fails, analyze the error message, correct your arguments, and retry. Do not give up immediately.
-- When no tool is needed, respond normally.
-- Finish every interaction with a summary of actions taken, remaining risks, and suggested next steps.
+- Reasoning: Before taking action, briefly explain your step-by-step plan and reasoning.
+- Validation: Always verify your actions. If you write a file, read it back to confirm. If you run a command, check the output carefully.
+- Autonomy: If a tool call fails, analyzing the error is your top priority. Do not ask the user for help immediately; try to fix the arguments or try an alternative approach.
+- Safety: Minimize side effects.
+- Succinctness: Be concise.
+
+Tools:
+- Use `execute` for shell commands.
+- Use `ls` and `search` to explore the codebase.
+- Use `read_file` to inspect file contents.
+- Use `edit` to modify files.
+
+After an `execute` call, summarize the exit code, stdout, and stderr that were observed.
+Finish every interaction with a summary of actions taken, remaining risks, and suggested next steps.
 "#;
 
 mod mcp;
@@ -220,10 +225,19 @@ fn chat_with_tools(
     proxy: &mut dyn ShellProxy,
 ) -> Result<String, String> {
     let mut messages = Vec::new();
+    // 1. Static System Prompt (Cacheable)
     messages.push(json!({
         "role": "system",
-        "content": build_system_prompt(operator_prompt, mcp_manager, proxy),
+        "content": build_system_prompt(operator_prompt, mcp_manager),
     }));
+
+    // 2. Dynamic Context (Environment Snapshot)
+    messages.push(json!({
+        "role": "user",
+        "content": build_dynamic_context(proxy),
+    }));
+
+    // 3. User Input
     messages.push(json!({ "role": "user", "content": user_input }));
 
     let mut tools = build_tools();
@@ -342,15 +356,8 @@ impl Drop for SpinnerGuard {
     }
 }
 
-fn build_system_prompt(
-    operator_prompt: Option<String>,
-    mcp_manager: &McpManager,
-    proxy: &mut dyn ShellProxy,
-) -> String {
-    let mut base = format!(
-        "{TOOL_SYSTEM_PROMPT}\n\nEnvironment snapshot:\n{}",
-        environment_snapshot(proxy)
-    );
+fn build_system_prompt(operator_prompt: Option<String>, mcp_manager: &McpManager) -> String {
+    let mut base = TOOL_SYSTEM_PROMPT.to_string();
 
     if let Some(fragment) = mcp_manager.system_prompt_fragment() {
         base.push_str("\n\nMCP access:");
@@ -373,6 +380,10 @@ fn build_system_prompt(
         }
         None => base,
     }
+}
+
+fn build_dynamic_context(proxy: &mut dyn ShellProxy) -> String {
+    format!("Environment snapshot:\n{}", environment_snapshot(proxy))
 }
 
 fn environment_snapshot(proxy: &mut dyn ShellProxy) -> String {

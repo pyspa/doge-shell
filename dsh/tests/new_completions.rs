@@ -16,7 +16,8 @@ fn test_new_json_completions_load() {
 
     let commands = vec![
         "gzip", "date", "whoami", "mount", "umount", "passwd", "lsmod", "modprobe", "hostname",
-        "unalias", "unset", "watch", "screen", "tmux",
+        "unalias", "unset", "watch", "screen", "tmux", "scp", "rsync", "rmdir", "w", "last",
+        "netstat", "nmcli", "whereis", "groups",
     ];
 
     for cmd in commands {
@@ -102,4 +103,49 @@ fn test_new_dynamic_completions_load() {
         cursor_index: 0,
     });
     assert!(groupmod_match, "Registry should match groupmod command");
+
+    // Check pgrep match
+    let pgrep_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
+        command: "pgrep".to_string(),
+        subcommand_path: vec![],
+        args: vec!["bash".to_string()],
+        options: vec![],
+        current_token: "".to_string(),
+        current_arg: None,
+        completion_context: doge_shell::completion::parser::CompletionContext::Command,
+        specified_options: vec![],
+        specified_arguments: vec![],
+        cursor_index: 0,
+    });
+    assert!(pgrep_match, "Registry should match pgrep command");
+
+    // Check pidof match
+    let pidof_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
+        command: "pidof".to_string(),
+        subcommand_path: vec![],
+        args: vec!["bash".to_string()],
+        options: vec![],
+        current_token: "".to_string(),
+        current_arg: None,
+        completion_context: doge_shell::completion::parser::CompletionContext::Command,
+        specified_options: vec![],
+        specified_arguments: vec![],
+        cursor_index: 0,
+    });
+    assert!(pidof_match, "Registry should match pidof command");
+
+    // Check umount match
+    let umount_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
+        command: "umount".to_string(),
+        subcommand_path: vec![],
+        args: vec!["/mnt".to_string()],
+        options: vec![],
+        current_token: "".to_string(),
+        current_arg: None,
+        completion_context: doge_shell::completion::parser::CompletionContext::Command,
+        specified_options: vec![],
+        specified_arguments: vec![],
+        cursor_index: 0,
+    });
+    assert!(umount_match, "Registry should match umount command");
 }

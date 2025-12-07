@@ -1,0 +1,30 @@
+{
+  "command": "scp",
+  "description": "Secure copy (remote file copy program)",
+  "global_options": [
+    {
+      "short": "-r",
+      "description": "Recursively copy entire directories"
+    },
+    {
+      "short": "-P",
+      "description": "Port to connect to on the remote host"
+    },
+    {
+      "short": "-p",
+      "description": "Preserves modification times, access times, and modes from the original file"
+    },
+    {
+      "short": "-q",
+      "description": "Quiet mode"
+    },
+    {
+      "short": "-C",
+      "description": "Compression enable"
+    },
+    {
+      "short": "-v",
+      "description": "Verbose mode"
+    }
+  ]
+}

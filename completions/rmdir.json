@@ -1,0 +1,24 @@
+{
+  "command": "rmdir",
+  "description": "Remove empty directories",
+  "global_options": [
+    {
+      "short": "-p",
+      "long": "--parents",
+      "description": "Remove DIRECTORY and its ancestors"
+    },
+    {
+      "long": "--ignore-fail-on-non-empty",
+      "description": "Ignore each failure that is solely because a directory is non-empty"
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Output a diagnostic for every directory processed"
+    },
+    {
+      "long": "--help",
+      "description": "Display this help and exit"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+[[dynamic_completions]]
+command = "umount"
+description = "Unmount file systems"
+match_condition = { type = "StartsWithCommand" }
+shell_command = "findmnt -ln -o TARGET"
+filter_output = ""
+priority = 80
+subcommands = []

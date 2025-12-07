@@ -553,7 +553,7 @@ mod tests {
 
         // Should include both embedded completions and filesystem completions
         // The exact number depends on what's in the completions/ directory
-        assert_eq!(completions.len(), 86);
+        assert_eq!(completions.len(), 95);
         assert!(completions.contains(&"git".to_string()));
         assert!(completions.contains(&"cargo".to_string()));
         assert!(completions.contains(&"docker".to_string()));

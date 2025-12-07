@@ -43,7 +43,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 
     match opts.action {
         Action::List => list_worktrees(ctx),
-        Action::Remove => remove_worktree_interactive(ctx),
+        Action::Remove { force } => remove_worktree_interactive(ctx, force),
         Action::Prune => prune_worktrees(ctx),
         Action::Add { branch, create_new } => {
             match add_worktree(ctx, &branch, create_new) {
@@ -92,7 +92,7 @@ struct CommandOptions {
 /// Command action type
 enum Action {
     List,
-    Remove,
+    Remove { force: bool },
     Prune,
     Add { branch: String, create_new: bool },
     ShowUsage,
@@ -113,23 +113,23 @@ fn parse_options(args: &[&str]) -> Result<CommandOptions, String> {
     let mut open_editor = false;
     let mut create_new = false;
     let mut branch: Option<String> = None;
+    let mut remove = false;
+    let mut prune = false;
+    let mut force = false;
 
     let mut i = 0;
     while i < args.len() {
         let arg = args[i];
 
         if arg == "-r" {
-            return Ok(CommandOptions {
-                action: Action::Remove,
-                change_dir: false,
-                open_editor: false,
-            });
+            remove = true;
         } else if arg == "-p" {
-            return Ok(CommandOptions {
-                action: Action::Prune,
-                change_dir: false,
-                open_editor: false,
-            });
+            prune = true;
+        } else if arg == "-f" || arg == "--force" {
+            force = true;
+        } else if arg == "-rf" || arg == "-fr" {
+            remove = true;
+            force = true;
         } else if arg == "-n" {
             // No change directory
             change_dir = false;
@@ -169,7 +169,19 @@ fn parse_options(args: &[&str]) -> Result<CommandOptions, String> {
     }
 
     // Determine final action
-    if let Some(branch) = branch {
+    if remove {
+        Ok(CommandOptions {
+            action: Action::Remove { force },
+            change_dir: false,
+            open_editor: false,
+        })
+    } else if prune {
+        Ok(CommandOptions {
+            action: Action::Prune,
+            change_dir: false,
+            open_editor: false,
+        })
+    } else if let Some(branch) = branch {
         Ok(CommandOptions {
             action: Action::Add { branch, create_new },
             change_dir,
@@ -201,6 +213,8 @@ fn show_usage(ctx: &Context) {
     ctx.write_stderr("  -n             Do not change directory after creation")
         .ok();
     ctx.write_stderr("  -r             Remove worktree (interactive)")
+        .ok();
+    ctx.write_stderr("  -f, --force    Force removal (used with -r)")
         .ok();
     ctx.write_stderr("  -p             Prune stale worktrees")
         .ok();
@@ -340,7 +354,7 @@ fn add_worktree(ctx: &Context, branch: &str, create_new: bool) -> Result<PathBuf
 }
 
 /// Remove worktree interactively using skim
-fn remove_worktree_interactive(ctx: &Context) -> ExitStatus {
+fn remove_worktree_interactive(ctx: &Context, force: bool) -> ExitStatus {
     // Get list of worktrees (excluding main)
     let worktrees = match get_linked_worktrees() {
         Ok(wt) => wt,
@@ -363,7 +377,7 @@ fn remove_worktree_interactive(ctx: &Context) -> ExitStatus {
             worktree
         ))
         .ok();
-        return remove_worktree(ctx, worktree);
+        return remove_worktree(ctx, worktree, force);
     }
 
     // Multiple worktrees - use skim for selection
@@ -391,7 +405,7 @@ fn remove_worktree_interactive(ctx: &Context) -> ExitStatus {
     }
 
     let worktree_path = selected[0].output().to_string();
-    remove_worktree(ctx, &worktree_path)
+    remove_worktree(ctx, &worktree_path, force)
 }
 
 /// Get list of linked worktrees (excluding main worktree)
@@ -444,12 +458,16 @@ fn get_linked_worktrees() -> Result<Vec<String>, String> {
 }
 
 /// Remove a single worktree
-fn remove_worktree(ctx: &Context, path: &str) -> ExitStatus {
-    debug!("Removing worktree: {}", path);
+fn remove_worktree(ctx: &Context, path: &str, force: bool) -> ExitStatus {
+    debug!("Removing worktree: {} (force: {})", path, force);
 
-    let output = Command::new("git")
-        .args(["worktree", "remove", path])
-        .output();
+    let mut args = vec!["worktree", "remove"];
+    if force {
+        args.push("--force");
+    }
+    args.push(path);
+
+    let output = Command::new("git").args(args).output();
 
     match output {
         Ok(output) => {
@@ -636,7 +654,31 @@ mod tests {
     #[test]
     fn test_parse_options_remove() {
         let opts = parse_options(&["-r"]).unwrap();
-        assert!(matches!(opts.action, Action::Remove));
+        if let Action::Remove { force } = opts.action {
+            assert!(!force);
+        } else {
+            panic!("Expected Action::Remove");
+        }
+    }
+
+    #[test]
+    fn test_parse_options_remove_force() {
+        let opts = parse_options(&["-r", "-f"]).unwrap();
+        if let Action::Remove { force } = opts.action {
+            assert!(force);
+        } else {
+            panic!("Expected Action::Remove");
+        }
+    }
+
+    #[test]
+    fn test_parse_options_remove_force_combined() {
+        let opts = parse_options(&["-rf"]).unwrap();
+        if let Action::Remove { force } = opts.action {
+            assert!(force);
+        } else {
+            panic!("Expected Action::Remove");
+        }
     }
 
     #[test]

@@ -300,13 +300,29 @@ fn collect_history_context(
 
     // Pre-allocate with expected capacity
     let mut snapshot: Vec<String> = Vec::with_capacity(limit);
+
+    // 1. Add recent items (context of "what I am doing now")
+    // Take half of the limit for recent items
+    let recent_limit = (limit as f32 * 0.5).ceil() as usize;
     snapshot.extend(
         history
             .sorted(&SortMethod::Recent)
             .into_iter()
-            .take(limit)
+            .take(recent_limit)
             .map(|item| item.item),
     );
+
+    // 2. Add frecent items (context of "what I usually do")
+    // Fill the rest with frecent items, avoiding duplicates
+    let frecent_items = history.sorted(&SortMethod::Frecent);
+    for item in frecent_items {
+        if snapshot.len() >= limit {
+            break;
+        }
+        if !snapshot.contains(&item.item) {
+            snapshot.push(item.item);
+        }
+    }
 
     if snapshot.len() < limit && !input.is_empty() {
         for item in history.sort_by_match(input) {
@@ -328,7 +344,8 @@ const AI_SUGGESTION_SYSTEM_PROMPT: &str = r#"You are an inline completion engine
 - Append only the minimal additional characters needed to form a plausible next command.
 - Contain no commentary, explanations, code fences, or markdown formatting.
 - Avoid trailing whitespace or surrounding quotes.
-If no meaningful continuation exists, return the user input unchanged."#;
+If no meaningful continuation exists, return the user input unchanged.
+Return only the best single-line completion. The output must begin with the provided input and add characters at the end."#;
 
 #[derive(Clone)]
 pub struct AiSuggestionBackend {
@@ -556,16 +573,9 @@ impl SuggestionBackend for AiSuggestionBackend {
 
 fn build_user_payload(request: &SuggestionRequest) -> String {
     let mut payload = String::new();
-    payload.push_str("UserInput: ");
-    payload.push_str(&request.input);
-    payload.push('\n');
-    payload.push_str(&format!("CursorIndex: {}\n", request.cursor));
-    payload.push_str(&format!(
-        "SuggestionMode: {} | AiBackfill: {}\n",
-        suggestion_mode_label(request.preferences.suggestion_mode),
-        request.preferences.ai_backfill
-    ));
 
+    // 1. History (Semi-Static)
+    // Placed first to maximize prefix caching when typing adds characters to Input
     if !request.history_context.is_empty() {
         payload.push_str("RecentHistory:\n");
         for entry in &request.history_context {
@@ -575,9 +585,21 @@ fn build_user_payload(request: &SuggestionRequest) -> String {
         }
     }
 
-    payload.push_str(
-        "Return only the best single-line completion. The output must begin with the provided input and add characters at the end.",
-    );
+    // 2. Mode (Static/Semi-static)
+    payload.push_str(&format!(
+        "SuggestionMode: {} | AiBackfill: {}\n",
+        suggestion_mode_label(request.preferences.suggestion_mode),
+        request.preferences.ai_backfill
+    ));
+
+    // 3. UserInput (Dynamic)
+    payload.push_str("UserInput: ");
+    payload.push_str(&request.input);
+    payload.push('\n');
+
+    // 4. Cursor (Dynamic)
+    payload.push_str(&format!("CursorIndex: {}\n", request.cursor));
+
     payload
 }
 
@@ -721,5 +743,35 @@ mod tests {
         let calls = recorder.calls();
         assert!(!calls.is_empty());
         assert!(!calls[0].history_context.is_empty());
+    }
+
+    #[test]
+    fn test_prompt_structure() {
+        // Use verify that History comes BEFORE Input in build_user_payload output
+        // We can't access build_user_payload directly as it is private, but we can infer from the recorded request
+        // Actually, RecordingBackend stores SuggestionRequest, not the JSON payload.
+        // build_user_payload is called inside fetch_completion (private).
+
+        // Use a test-only public wrapper or expose build_user_payload for tests?
+        // Or just trust the code I wrote?
+        // Ideally I should test `build_user_payload`.
+        // Let's modify `suggestion.rs` to make `build_user_payload` visible for tests.
+
+        let request = SuggestionRequest {
+            input: "git c".to_string(),
+            cursor: 5,
+            preferences: InputPreferences::default(),
+            history_context: vec!["git status".to_string(), "git checkout".to_string()],
+        };
+
+        let payload = build_user_payload(&request);
+
+        let history_idx = payload.find("RecentHistory:");
+        let input_idx = payload.find("UserInput:");
+
+        assert!(history_idx.is_some());
+        assert!(input_idx.is_some());
+        // History must come BEFORE Input
+        assert!(history_idx.unwrap() < input_idx.unwrap());
     }
 }

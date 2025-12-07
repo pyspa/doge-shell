@@ -272,13 +272,6 @@ impl FrecencyHistory {
         Ok(f)
     }
 
-    fn is_change_search_word(&self) -> bool {
-        if let Some(search_word) = &self.search_word {
-            return search_word != &self.prev_search_word;
-        }
-        false
-    }
-
     pub fn set_search_word(&mut self, word: String) {
         if let Some(ref prev) = self.search_word {
             self.prev_search_word = prev.clone();
@@ -398,6 +391,19 @@ impl FrecencyHistory {
     }
 
     pub fn search_prefix(&self, pattern: &str) -> Option<String> {
+        if let Some(ref store) = self.store {
+            store
+                .items
+                .iter()
+                .filter(|item| item.item.starts_with(pattern))
+                .max_by(|a, b| a.cmp_frecent(b))
+                .map(|item| item.item.clone())
+        } else {
+            None
+        }
+    }
+
+    pub fn search_recent_prefix(&self, pattern: &str) -> Option<String> {
         if let Some(ref store) = self.store {
             store
                 .items
@@ -556,6 +562,53 @@ mod tests {
         for item in vec {
             item.print(&mut out);
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_frecency_completion() -> Result<()> {
+        init();
+        // Use a temporary file for this test
+        let temp_dir = tempfile::tempdir()?;
+        let file_path = temp_dir.path().join("frecency_test_history");
+
+        let mut history = FrecencyHistory::new();
+        history.path = Some(file_path.clone());
+        history.store = Some(dsh_frecency::FrecencyStore::default());
+
+        // Add "frequent_cmd" 5 times
+        for _ in 0..5 {
+            history.add("frequent_cmd");
+        }
+
+        // Add "frequent_but_old" 5 times, but simulate time passing if possible?
+        // dsh_frecency uses system time, so consistent time manipulation is hard without mocking.
+        // But assuming same timeframe:
+
+        // Add "recent_cmd" once
+        history.add("recent_cmd");
+
+        // "f frequent_cmd" (5 accesses) vs "r recent_cmd" (1 access)
+
+        // If we search for empty prefix, or common prefix if they had one.
+        // Let's use common prefix "cmd"
+        history.add("cmd_frequent"); // 1
+        history.add("cmd_frequent"); // 2
+        history.add("cmd_frequent"); // 3
+        history.add("cmd_recent"); // 1 (most recent)
+
+        // Search for "cmd"
+        // cmd_frequent: score ~ 3
+        // cmd_recent: score ~ 1 (but decent recency)
+        // Frecency should favor cmd_frequent if weights are standard.
+
+        let result = history.search_prefix("cmd");
+        assert_eq!(result, Some("cmd_frequent".to_string()));
+
+        // Search for "cmd_r" should still find cmd_recent
+        let result_recent = history.search_prefix("cmd_r");
+        assert_eq!(result_recent, Some("cmd_recent".to_string()));
 
         Ok(())
     }

@@ -51,7 +51,7 @@ impl ItemStats {
     }
 
     /// Compare the frequency of two items
-    fn cmp_frequent(&self, other: &ItemStats) -> Ordering {
+    pub fn cmp_frequent(&self, other: &ItemStats) -> Ordering {
         self.num_accesses.cmp(&other.num_accesses)
     }
 
@@ -63,7 +63,7 @@ impl ItemStats {
     }
 
     /// Compare the frecency of two items
-    fn cmp_frecent(&self, other: &ItemStats) -> Ordering {
+    pub fn cmp_frecent(&self, other: &ItemStats) -> Ordering {
         self.frecency
             .partial_cmp(&other.frecency)
             .unwrap_or(Ordering::Less)

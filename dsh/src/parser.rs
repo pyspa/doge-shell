@@ -657,13 +657,12 @@ fn expand_command_alias(
 }
 
 pub fn get_words_from_pairs<'a>(pairs: Pairs<'a, Rule>, pos: usize) -> Vec<(Rule, Span<'a>, bool)> {
-    let mut result: Vec<(Rule, Span<'a>, bool)> = Vec::new();
+    let mut result: Vec<(Rule, Span<'a>, bool)> = Vec::with_capacity(pairs.clone().count());
     for pair in pairs {
         match pair.as_rule() {
             Rule::commands | Rule::command => {
                 for pair in pair.into_inner() {
-                    let mut res = to_words(pair, pos);
-                    result.append(&mut res);
+                    to_words(pair, pos, &mut result);
                 }
             }
             _ => return result,
@@ -677,15 +676,14 @@ pub fn get_words(input: &str, pos: usize) -> Result<Vec<(Rule, Span<'_>, bool)>>
     Ok(get_words_from_pairs(pairs, pos))
 }
 
-fn to_words(pair: Pair<Rule>, pos: usize) -> Vec<(Rule, Span, bool)> {
-    let mut result: Vec<(Rule, Span, bool)> = vec![];
+fn to_words<'a>(pair: Pair<'a, Rule>, pos: usize, out: &mut Vec<(Rule, Span<'a>, bool)>) {
     match pair.as_rule() {
         Rule::argv0 => {
             for pair in pair.into_inner() {
                 for pair in pair.into_inner() {
                     // TODO check subshell
                     if let Some((span, current)) = get_span(pair, pos) {
-                        result.push((Rule::argv0, span, current));
+                        out.push((Rule::argv0, span, current));
                     };
                 }
             }
@@ -694,7 +692,7 @@ fn to_words(pair: Pair<Rule>, pos: usize) -> Vec<(Rule, Span, bool)> {
             for pair in pair.into_inner() {
                 for pair in pair.into_inner() {
                     if let Some((span, current)) = get_span(pair, pos) {
-                        result.push((Rule::args, span, current));
+                        out.push((Rule::args, span, current));
                     };
                 }
             }
@@ -711,8 +709,7 @@ fn to_words(pair: Pair<Rule>, pos: usize) -> Vec<(Rule, Span, bool)> {
                 match inner_pair.as_rule() {
                     Rule::simple_command | Rule::simple_command_bg => {
                         for inner_pair in inner_pair.into_inner() {
-                            let mut v = to_words(inner_pair, pos);
-                            result.append(&mut v);
+                            to_words(inner_pair, pos, out);
                         }
                     }
                     Rule::argv0 => {
@@ -720,7 +717,7 @@ fn to_words(pair: Pair<Rule>, pos: usize) -> Vec<(Rule, Span, bool)> {
                             for pair in pair.into_inner() {
                                 // TODO check subshell
                                 if let Some((span, current)) = get_span(pair, pos) {
-                                    result.push((Rule::argv0, span, current));
+                                    out.push((Rule::argv0, span, current));
                                 };
                             }
                         }
@@ -729,7 +726,7 @@ fn to_words(pair: Pair<Rule>, pos: usize) -> Vec<(Rule, Span, bool)> {
                         for pair in inner_pair.into_inner() {
                             for pair in pair.into_inner() {
                                 if let Some((span, current)) = get_span(pair, pos) {
-                                    result.push((Rule::args, span, current));
+                                    out.push((Rule::args, span, current));
                                 };
                             }
                         }
@@ -737,8 +734,7 @@ fn to_words(pair: Pair<Rule>, pos: usize) -> Vec<(Rule, Span, bool)> {
 
                     Rule::commands | Rule::command => {
                         // Handle nested commands (with &&, ||, ;)
-                        let mut v = to_words(inner_pair, pos);
-                        result.append(&mut v);
+                        to_words(inner_pair, pos, out);
                     }
                     Rule::command_list_sep => {
                         // Skip command separators like &&, ||, ;
@@ -754,7 +750,6 @@ fn to_words(pair: Pair<Rule>, pos: usize) -> Vec<(Rule, Span, bool)> {
             }
         }
     }
-    result
 }
 
 fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {

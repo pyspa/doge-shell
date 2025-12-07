@@ -3,14 +3,18 @@ use anyhow::Result;
 use crossterm::style::{Color, Stylize};
 use pest::Span;
 use pest::iterators::Pairs;
+use std::borrow::Cow;
 use std::cmp::min;
 use std::fmt;
 use std::io::{BufWriter, Write};
 use unicode_width::UnicodeWidthChar;
 
 /// Remove ANSI escape sequences from a string and return the clean string
-fn strip_ansi_codes(input: &str) -> String {
-    let mut result = String::new();
+fn strip_ansi_codes(input: &str) -> Cow<'_, str> {
+    if !input.contains('\x1b') {
+        return Cow::Borrowed(input);
+    }
+    let mut result = String::with_capacity(input.len());
     let mut chars = input.chars();
 
     while let Some(ch) = chars.next() {
@@ -29,7 +33,7 @@ fn strip_ansi_codes(input: &str) -> String {
         }
     }
 
-    result
+    Cow::Owned(result)
 }
 
 /// Calculate the actual display width of a string, accounting for ANSI codes and Unicode width

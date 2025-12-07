@@ -396,8 +396,11 @@ impl<'a> Repl<'a> {
         // draw preprompt only here (initial or after command/bg output)
         prompt.print_preprompt(out);
         // update cached mark and width in case mark changed
-        self.prompt_mark_cache = prompt.mark.clone();
-        self.prompt_mark_width = display_width(&self.prompt_mark_cache);
+        // update cached mark and width in case mark changed
+        if self.prompt_mark_cache != prompt.mark {
+            self.prompt_mark_cache = prompt.mark.clone();
+            self.prompt_mark_width = display_width(&self.prompt_mark_cache);
+        }
         // draw mark only (defer flushing to caller for batching)
         out.write_all(b"\r").ok();
         out.write_all(self.prompt_mark_cache.as_bytes()).ok();

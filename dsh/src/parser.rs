@@ -6,6 +6,7 @@ use pest::Span;
 use pest::error::InputLocation;
 use pest::iterators::{Pair, Pairs};
 use pest_derive::Parser;
+use std::cmp::min;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -51,7 +52,7 @@ pub fn collect_highlight_tokens_from_pairs(
     let mut result = HighlightResult::default();
     // Initialize Vec capacity with estimated token count
     // pairs.clone().count() is heavy, so use heuristic based on input length
-    result.tokens.reserve(input_len / 5);
+    result.tokens.reserve(min(input_len / 5, 256));
     for pair in pairs {
         collect_highlight_from_pair(pair, HighlightContext::None, &mut result.tokens);
     }
@@ -657,7 +658,7 @@ fn expand_command_alias(
 }
 
 pub fn get_words_from_pairs<'a>(pairs: Pairs<'a, Rule>, pos: usize) -> Vec<(Rule, Span<'a>, bool)> {
-    let mut result: Vec<(Rule, Span<'a>, bool)> = Vec::with_capacity(pairs.clone().count());
+    let mut result: Vec<(Rule, Span<'a>, bool)> = Vec::with_capacity(16);
     for pair in pairs {
         match pair.as_rule() {
             Rule::commands | Rule::command => {

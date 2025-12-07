@@ -117,6 +117,12 @@ pub struct SuggestionEngine {
     ai_backend: Option<Arc<dyn SuggestionBackend + Send + Sync>>,
 }
 
+impl Default for SuggestionEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SuggestionEngine {
     pub fn new() -> Self {
         Self {

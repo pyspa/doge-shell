@@ -8,6 +8,12 @@ pub struct TerminalRenderer {
     buffer: Vec<u8>,
 }
 
+impl Default for TerminalRenderer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TerminalRenderer {
     /// Create a renderer with default buffer capacity.
     pub fn new() -> Self {

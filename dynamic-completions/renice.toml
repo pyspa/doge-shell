@@ -1,0 +1,6 @@
+[[dynamic_completions]]
+command = "renice"
+description = "Complete with running process IDs"
+match_condition = { type = "CustomPattern", params = { command = "renice", subcommands = [], args_contains = ["-p"] } }
+shell_command = "ps -e -o pid,comm --no-headers | awk '{print $1 \" \" $2}'"
+priority = 80

@@ -29,6 +29,12 @@ pub struct History {
 }
 
 #[allow(dead_code)]
+impl Default for History {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl History {
     pub fn new() -> Self {
         History {
@@ -228,6 +234,12 @@ impl std::fmt::Debug for FrecencyHistory {
 }
 
 #[allow(dead_code)]
+impl Default for FrecencyHistory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FrecencyHistory {
     pub fn new() -> Self {
         let matcher = SkimMatcherV2::default();

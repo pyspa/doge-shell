@@ -22,13 +22,13 @@ use tracing::warn;
 mod cache;
 mod command;
 pub mod display;
-mod dynamic;
+pub mod dynamic;
 pub mod framework;
 mod generator;
 mod history;
 pub mod integrated;
-mod json_loader;
-mod parser;
+pub mod json_loader;
+pub mod parser;
 mod ui;
 
 #[cfg(test)]
@@ -60,6 +60,12 @@ pub struct Completion {
     pub input: Option<String>,
     pub current_index: usize,
     pub completions: Vec<ItemStats>,
+}
+
+impl Default for Completion {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Completion {

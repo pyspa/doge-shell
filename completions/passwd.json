@@ -1,0 +1,42 @@
+{
+  "command": "passwd",
+  "description": "Change user password",
+  "global_options": [
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Display help"
+    },
+    {
+      "short": "-k",
+      "long": "--keep-tokens",
+      "description": "Keep non-expired authentication tokens"
+    },
+    {
+      "short": "-d",
+      "long": "--delete",
+      "description": "Delete the password for the named account"
+    },
+    {
+      "short": "-l",
+      "long": "--lock",
+      "description": "Lock the password of the named account"
+    },
+    {
+      "short": "-u",
+      "long": "--unlock",
+      "description": "Unlock the password of the named account"
+    },
+    {
+      "short": "-e",
+      "long": "--expire",
+      "description": "Expire the password for the named account"
+    },
+    {
+      "short": "-S",
+      "long": "--status",
+      "description": "Report password status on the named account"
+    }
+  ],
+  "subcommands": []
+}

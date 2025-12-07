@@ -9,8 +9,10 @@ pub struct CommandCompletion {
     /// Command description
     pub description: Option<String>,
     /// List of subcommands
+    #[serde(default)]
     pub subcommands: Vec<SubCommand>,
     /// Global options (common to all subcommands)
+    #[serde(default)]
     pub global_options: Vec<CommandOption>,
 }
 
@@ -22,10 +24,13 @@ pub struct SubCommand {
     /// Subcommand description
     pub description: Option<String>,
     /// Options specific to this subcommand
+    #[serde(default)]
     pub options: Vec<CommandOption>,
     /// Arguments that this subcommand accepts
+    #[serde(default)]
     pub arguments: Vec<Argument>,
     /// Nested subcommands (e.g., git remote add)
+    #[serde(default)]
     pub subcommands: Vec<SubCommand>,
 }
 

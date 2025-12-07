@@ -1,0 +1,47 @@
+{
+  "command": "hostname",
+  "description": "Show or set the system's host name",
+  "global_options": [
+    {
+      "short": "-a",
+      "long": "--alias",
+      "description": "Alias names"
+    },
+    {
+      "short": "-d",
+      "long": "--domain",
+      "description": "DNS domain name"
+    },
+    {
+      "short": "-f",
+      "long": "--fqdn",
+      "description": "Long host name (FQDN)"
+    },
+    {
+      "short": "-A",
+      "long": "--all-fqdns",
+      "description": "All long host names (FQDNs)"
+    },
+    {
+      "short": "-i",
+      "long": "--ip-address",
+      "description": "Addresses for the host name"
+    },
+    {
+      "short": "-I",
+      "long": "--all-ip-addresses",
+      "description": "All addresses for the host"
+    },
+    {
+      "short": "-s",
+      "long": "--short",
+      "description": "Short host name"
+    },
+    {
+      "short": "-y",
+      "long": "--yp",
+      "description": "NIS/YP domain name"
+    }
+  ],
+  "subcommands": []
+}

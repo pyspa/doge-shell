@@ -14,7 +14,10 @@ fn test_new_json_completions_load() {
 
     let loader = JsonCompletionLoader::with_dirs(vec![completions_dir]);
 
-    let commands = vec!["gzip", "date", "whoami"];
+    let commands = vec![
+        "gzip", "date", "whoami", "mount", "umount", "passwd", "lsmod", "modprobe", "hostname",
+        "unalias", "unset", "watch", "screen", "tmux",
+    ];
 
     for cmd in commands {
         match loader.load_command_completion(cmd) {
@@ -69,4 +72,34 @@ fn test_new_dynamic_completions_load() {
         cursor_index: 0,
     });
     assert!(userdel_match, "Registry should match userdel command");
+
+    // Check pwdx match
+    let pwdx_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
+        command: "pwdx".to_string(),
+        subcommand_path: vec![],
+        args: vec!["123".to_string()],
+        options: vec![],
+        current_token: "".to_string(),
+        current_arg: None,
+        completion_context: doge_shell::completion::parser::CompletionContext::Command,
+        specified_options: vec![],
+        specified_arguments: vec![],
+        cursor_index: 0,
+    });
+    assert!(pwdx_match, "Registry should match pwdx command");
+
+    // Check groupmod match
+    let groupmod_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
+        command: "groupmod".to_string(),
+        subcommand_path: vec![],
+        args: vec!["groupname".to_string()],
+        options: vec![],
+        current_token: "".to_string(),
+        current_arg: None,
+        completion_context: doge_shell::completion::parser::CompletionContext::Command,
+        specified_options: vec![],
+        specified_arguments: vec![],
+        cursor_index: 0,
+    });
+    assert!(groupmod_match, "Registry should match groupmod command");
 }

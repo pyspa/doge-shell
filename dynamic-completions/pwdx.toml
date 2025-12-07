@@ -1,0 +1,5 @@
+[[dynamic_completions]]
+command = "pwdx"
+description = "Report current working directory of a process"
+match_condition = { type = "StartsWithCommand" }
+shell_command = "ps -xo pid,comm --no-headers | awk '{print $1 \" \" $2}'"

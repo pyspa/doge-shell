@@ -1,0 +1,47 @@
+{
+  "command": "umount",
+  "description": "Unmount filesystems",
+  "global_options": [
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Display help"
+    },
+    {
+      "short": "-V",
+      "long": "--version",
+      "description": "Display version"
+    },
+    {
+      "short": "-a",
+      "long": "--all",
+      "description": "Unmount all filesystems"
+    },
+    {
+      "short": "-A",
+      "long": "--all-targets",
+      "description": "Unmount all mountpoints for the given device"
+    },
+    {
+      "short": "-f",
+      "long": "--force",
+      "description": "Force unmount (in case of unreachable NFS system)"
+    },
+    {
+      "short": "-l",
+      "long": "--lazy",
+      "description": "Lazy unmount; detach immediately, clean up later"
+    },
+    {
+      "short": "-R",
+      "long": "--recursive",
+      "description": "Recursively unmount directories"
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Verbose mode"
+    }
+  ],
+  "subcommands": []
+}

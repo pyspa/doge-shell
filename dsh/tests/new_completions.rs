@@ -15,10 +15,39 @@ fn test_new_json_completions_load() {
     let loader = JsonCompletionLoader::with_dirs(vec![completions_dir]);
 
     let commands = vec![
-        "gzip", "date", "whoami", "mount", "umount", "passwd", "lsmod", "modprobe", "hostname",
-        "unalias", "unset", "watch", "screen", "tmux", "scp", "rsync", "rmdir", "w", "last",
-        "netstat", "nmcli", "whereis", "groups", "jq", "tree", "dig", "useradd", "groupadd",
-        "chgrp", "cd",
+        "gzip",
+        "date",
+        "whoami",
+        "mount",
+        "umount",
+        "passwd",
+        "lsmod",
+        "modprobe",
+        "hostname",
+        "unalias",
+        "unset",
+        "watch",
+        "screen",
+        "tmux",
+        "scp",
+        "rsync",
+        "rmdir",
+        "w",
+        "last",
+        "netstat",
+        "nmcli",
+        "whereis",
+        "groups",
+        "jq",
+        "tree",
+        "dig",
+        "useradd",
+        "groupadd",
+        "chgrp",
+        "cd",
+        "traceroute",
+        "nohup",
+        "stat",
     ];
 
     for cmd in commands {
@@ -164,4 +193,19 @@ fn test_new_dynamic_completions_load() {
         cursor_index: 0,
     });
     assert!(sysctl_match, "Registry should match sysctl command");
+
+    // Check killall match
+    let killall_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
+        command: "killall".to_string(),
+        subcommand_path: vec![],
+        args: vec![],
+        options: vec![],
+        current_token: "".to_string(),
+        current_arg: None,
+        completion_context: doge_shell::completion::parser::CompletionContext::Command,
+        specified_options: vec![],
+        specified_arguments: vec![],
+        cursor_index: 0,
+    });
+    assert!(killall_match, "Registry should match killall command");
 }

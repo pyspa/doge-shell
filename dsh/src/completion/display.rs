@@ -1041,7 +1041,7 @@ mod tests {
 
         // Verify max_name_width is calculated correctly
         // emoji (2) + space (1) + name width (24)
-        let expected_short_width = 3 + 5; // 8
+        let _expected_short_width = 3 + 5; // 8
         let expected_long_width = 3 + 24; // 27
 
         assert_eq!(layout.max_name_width, expected_long_width);
@@ -1069,7 +1069,7 @@ mod tests {
         // ⚡ short
         // 12345678901234567890
 
-        let visual_width = unicode_display_width(&formatted);
+        let _visual_width = unicode_display_width(&formatted);
         // The formatted string should be padded to match alignment requirements + spaces to fill row if needed?
         // Wait, logic says: padding_needed = target.saturating_sub(current_width)
         // target is max_name_width.min(width)

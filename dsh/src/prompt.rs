@@ -476,30 +476,45 @@ fn parse_git_status_output(stdout: &[u8]) -> Option<GitStatus> {
 }
 
 fn get_git_root() -> Option<String> {
-    // Optimization: Walk up looking for .git before spawning process
     if let Ok(cwd) = std::env::current_dir() {
-        let mut p = cwd.as_path();
-        loop {
-            let git_dir = p.join(".git");
-            if git_dir.exists() {
-                if git_dir.is_dir() {
-                    return Some(p.to_string_lossy().into_owned());
-                }
-                // If it's a file (worktree, submodule), we fall back to git rev-parse for correctness
+        find_git_root(&cwd)
+    } else {
+        None
+    }
+}
+
+fn find_git_root(cwd: &Path) -> Option<String> {
+    // Optimization: Walk up looking for .git before spawning process
+    let mut p = cwd;
+    loop {
+        let git_dir = p.join(".git");
+        if git_dir.exists() {
+            if git_dir.is_dir() {
+                return Some(p.to_string_lossy().into_owned());
+            } else if git_dir.is_file() {
+                // Check if it's a gitdir pointer (worktree or submodule)
+                // Content format: "gitdir: <path>\n"
+                if let Ok(content) = std::fs::read_to_string(&git_dir)
+                    && content.trim().starts_with("gitdir:") {
+                        return Some(p.to_string_lossy().into_owned());
+                    }
+                // If exists but not a directory and doesn't look like a git pointer,
+                // we fall back to git rev-parse to be safe.
                 break;
             }
-            if let Some(parent) = p.parent() {
-                p = parent;
-            } else {
-                // Reached root without finding .git
-                return None;
-            }
+        }
+        if let Some(parent) = p.parent() {
+            p = parent;
+        } else {
+            // Reached root without finding .git
+            return None;
         }
     }
 
     let result = Command::new("git")
         .arg("rev-parse")
         .arg("--show-toplevel")
+        .current_dir(cwd) // Ensure we run from the correct directory
         .output();
 
     if let Ok(output) = result
@@ -689,5 +704,27 @@ mod tests {
         assert!(!branch_status.contains("↓"));
         assert!(branch_status.contains("!")); // Modified
         assert!(branch_status.contains("?")); // Untracked
+    }
+
+    #[test]
+    fn test_get_git_root_with_file() {
+        use std::fs::File;
+        use std::io::Write;
+        use tempfile::tempdir;
+
+        // Create a temp directory simulating a worktree root
+        let dir = tempdir().expect("failed into create temp dir");
+        let dir_path = dir.path();
+
+        // Create a .git file
+        let git_file_path = dir_path.join(".git");
+        let mut file = File::create(git_file_path).expect("failed to create .git file");
+        writeln!(file, "gitdir: /path/to/repo.git/worktrees/my-worktree")
+            .expect("failed to write to .git file");
+
+        // Use the new exposed helper
+        let root = find_git_root(dir_path);
+
+        assert_eq!(root, Some(dir_path.to_string_lossy().into_owned()));
     }
 }

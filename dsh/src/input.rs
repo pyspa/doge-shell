@@ -3,49 +3,55 @@ use anyhow::Result;
 use crossterm::style::{Color, Stylize};
 use pest::Span;
 use pest::iterators::Pairs;
-use std::borrow::Cow;
 use std::cmp::min;
 use std::fmt;
 use std::io::{BufWriter, Write};
 use unicode_width::UnicodeWidthChar;
 
-/// Remove ANSI escape sequences from a string and return the clean string
-fn strip_ansi_codes(input: &str) -> Cow<'_, str> {
-    if !input.contains('\x1b') {
-        return Cow::Borrowed(input);
-    }
-    let mut result = String::with_capacity(input.len());
+/// Calculate the actual display width of a string, accounting for ANSI codes and Unicode width
+pub fn display_width(input: &str) -> usize {
+    let mut width = 0;
+    let mut in_ansi_sequence = false;
     let mut chars = input.chars();
 
     while let Some(ch) = chars.next() {
+        if in_ansi_sequence {
+            // End of ANSI sequence is usually a letter
+            if ch.is_ascii_alphabetic() {
+                in_ansi_sequence = false;
+            }
+            continue;
+        }
+
         if ch == '\x1b' {
-            // Found escape sequence, skip until we find the end
-            if chars.next() == Some('[') {
-                // Skip until we find a letter (end of ANSI sequence)
-                for next_ch in chars.by_ref() {
-                    if next_ch.is_ascii_alphabetic() {
-                        break;
-                    }
+            // Check next char to confirm CSI sequence
+            // We peak by cloning iterator or just consuming one more
+            // Since we are in a loop, we can just check the next char.
+            // But we need to be careful not to consume it if it's not part of sequence (unlikely for \x1b)
+            // Ideally we check if next is '['
+
+            // For simple ANSI stripping: \x1b followed by [ ... letter
+            // We just assume it's an escape sequence start.
+            // Let's peek the next char if possible, or just consume it.
+            // Since we don't have peekable here without allocation/wrapping,
+            // we'll use a slightly different approach or just consume.
+            // However, `chars` is an iterator.
+            // Let's try to be robust.
+
+            // We can consume the next char.
+            if let Some(next) = chars.next() {
+                if next == '[' {
+                    in_ansi_sequence = true;
+                } else {
+                    // It was just an ESC char? Treat as 0 width non-printable or 1?
+                    // Usually ESC is non-printable.
                 }
             }
         } else {
-            result.push(ch);
+            width += unicode_width::UnicodeWidthChar::width_cjk(ch).unwrap_or(0);
         }
     }
-
-    Cow::Owned(result)
-}
-
-/// Calculate the actual display width of a string, accounting for ANSI codes and Unicode width
-pub fn display_width(input: &str) -> usize {
-    let clean_str = strip_ansi_codes(input);
-
-    // Use UnicodeWidthStr::width_cjk for better East Asian character support
-    // This treats ambiguous-width characters as wide (2 columns)
-    clean_str
-        .chars()
-        .map(|c| unicode_width::UnicodeWidthChar::width_cjk(c).unwrap_or_default())
-        .sum()
+    width
 }
 
 #[cfg(test)]
@@ -835,22 +841,11 @@ mod tests {
     }
 
     #[test]
-    fn test_strip_ansi_codes() {
-        // Test plain text
-        assert_eq!(strip_ansi_codes("hello"), "hello");
-
-        // Test text with ANSI color codes
-        assert_eq!(strip_ansi_codes("\x1b[31mred\x1b[0m"), "red");
-        assert_eq!(
-            strip_ansi_codes("\x1b[1;32mbold green\x1b[0m"),
-            "bold green"
-        );
-
-        // Test mixed content
-        assert_eq!(
-            strip_ansi_codes("normal \x1b[31mred\x1b[0m normal"),
-            "normal red normal"
-        );
+    fn test_display_width_ansi() {
+        assert_eq!(display_width("hello"), 5);
+        assert_eq!(display_width("\x1b[31mred\x1b[0m"), 3);
+        assert_eq!(display_width("\x1b[1;32mbold green\x1b[0m"), 10);
+        assert_eq!(display_width("normal \x1b[31mred\x1b[0m normal"), 17);
     }
 
     #[test]

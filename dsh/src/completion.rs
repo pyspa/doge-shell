@@ -635,9 +635,15 @@ fn collect_current_context_candidates(
 
 fn get_commands(paths: &Vec<String>, cmd: &str) -> Vec<Candidate> {
     let mut list = Vec::new();
+    let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     if cmd.starts_with('/') {
         let cmd_path = std::path::Path::new(cmd);
         if cmd_path.exists() && cmd_path.is_file() {
+            // Extract filename for deduplication? Or just add?
+            // Absolute paths usually don't need dedupe against PATH commands by name unless we want to?
+            // Current logic treated them as "(command)".
+            // Let's keep it simple.
             list.push(Candidate::Item(cmd.to_string(), "(command)".to_string()));
         }
     }
@@ -649,59 +655,91 @@ fn get_commands(paths: &Vec<String>, cmd: &str) -> Vec<Candidate> {
     }
 
     for path in paths {
-        let mut cmds = get_executables(path, cmd);
-        list.append(&mut cmds);
+        get_executables_into(path, cmd, &mut list, &mut seen_names);
     }
 
-    // Deduplicate commands from multiple PATH directories
-    deduplicate_candidates(list)
+    // No need to call deduplicate_candidates(list) here if we trust our seen_names logic for commands.
+    // However, deduplicate_candidates also handles file vs command priority.
+    // But get_commands ONLY produces commands.
+    // So we are safe.
+    list
 }
 
-fn get_executables(dir: &str, name: &str) -> Vec<Candidate> {
-    let mut list = Vec::new();
+fn get_executables_into(
+    dir: &str,
+    name: &str,
+    list: &mut Vec<Candidate>,
+    seen: &mut std::collections::HashSet<String>,
+) {
     match read_dir(dir) {
         Ok(entries) => {
             // Optimization: Filter entries while iterating to avoid collecting all files in PATH
             // (which can be thousands) before sorting.
-            let mut candidates: Vec<String> = entries
-                .flatten()
-                .filter_map(|entry| {
-                    let file_name_os = entry.file_name();
-                    let file_name = file_name_os.to_str()?;
+            // We can't easily sort if we stream directly to list.
+            // But sorting per-directory is less important than sorting the final result?
+            // Actually, we usually want the final list sorted.
+            // Existing logic sorted `candidates` from ONE directory.
+            // If we append unsorted, the final list might be unsorted.
+            // `select_completion_items` usually handles sorting via Skim or we might expect sorted input.
+            // Skim sorts. Inline completion might expect sorted?
+            // The existing `get_executables` returns a sorted list.
+            // But `get_commands` appends them in PATH order.
+            // So `list` in `get_commands` is blocked by PATH order (bin matches, then usr/bin matches).
+            // Within `bin`, they are sorted.
 
-                    // Quick prefix check before more expensive operations
-                    if !file_name.starts_with(name) {
-                        return None;
-                    }
+            // Let's collect local candidates, sort them, then push unique ones to global list.
 
-                    // Check if it's a file (symlink following is handled by is_file usually,
-                    // but we might want to be careful. entry.file_type() uses lstat usually,
-                    // but we want to know if it's executable.)
-                    // Optimization: check file type from entry if possible
-                    if let Ok(ft) = entry.file_type()
-                        && !ft.is_file()
-                        && !ft.is_symlink()
-                    {
-                        return None;
-                    }
+            let mut local_candidates: Vec<String> = Vec::new();
 
-                    // Expensive check last
-                    if is_executable(&entry) {
-                        Some(file_name.to_string())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            for entry in entries.flatten() {
+                let file_name_os = entry.file_name();
+                let Some(file_name) = file_name_os.to_str() else {
+                    continue;
+                };
 
-            candidates.sort();
+                if !file_name.starts_with(name) {
+                    continue;
+                }
 
-            for candle in candidates {
-                list.push(Candidate::Item(candle, "(command)".to_string()));
+                // Check seen
+                if seen.contains(file_name) {
+                    continue;
+                }
+
+                // Optimization: check file type from entry if possible
+                if let Ok(ft) = entry.file_type()
+                    && !ft.is_file()
+                    && !ft.is_symlink()
+                {
+                    continue;
+                }
+
+                if is_executable(&entry) {
+                    local_candidates.push(file_name.to_string());
+                }
+            }
+
+            local_candidates.sort();
+
+            for candle in local_candidates {
+                // Double check seen (though we checked before, but sorting prevents race? no race, it's serial)
+                // We checked before `is_executable`.
+                if seen.insert(candle.clone()) {
+                    list.push(Candidate::Item(candle, "(command)".to_string()));
+                }
             }
         }
         Err(_err) => {}
     }
+}
+
+// Keeping signature for compatibility if used elsewhere (it's not pub but module-local)
+// Actually it is not pub.
+#[allow(dead_code)]
+fn get_executables(dir: &str, name: &str) -> Vec<Candidate> {
+    let mut list = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    get_executables_into(dir, name, &mut list, &mut seen);
     list
 }
 

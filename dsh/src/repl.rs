@@ -116,6 +116,8 @@ pub struct Repl<'a> {
     ctrl_c_state: CtrlCState,
     should_exit: bool,
     last_command_time: Option<Instant>,
+    last_duration: Option<Duration>,
+    last_status: i32,
     // short-term cache for history-based completion to reduce lock/sort frequency
     history_cache_prefix: String,
     history_cache_time: Option<Instant>,
@@ -191,6 +193,8 @@ impl<'a> Repl<'a> {
             ctrl_c_state: CtrlCState::new(),
             should_exit: false,
             last_command_time: None,
+            last_duration: None,
+            last_status: 0,
             history_cache_prefix: String::new(),
             history_cache_time: None,
             history_cache_ttl: Duration::from_millis(300),
@@ -393,6 +397,9 @@ impl<'a> Repl<'a> {
         }
 
         let mut prompt = self.prompt.write();
+
+        // Draw right prompt first (same line as preprompt)
+        prompt.print_right_prompt(out, self.columns, self.last_status, self.last_duration);
         // draw preprompt only here (initial or after command/bg output)
         prompt.print_preprompt(out);
         // update cached mark and width in case mark changed
@@ -1420,6 +1427,7 @@ impl<'a> Repl<'a> {
                 self.stop_history_mode();
                 print!("\r\n");
                 if !self.input.is_empty() {
+                    let start_time = Instant::now();
                     self.completion.clear();
                     let shell_tmode = self.tmode.clone().unwrap_or_else(|| {
                         warn!("No stored terminal mode available, using default");
@@ -1442,6 +1450,7 @@ impl<'a> Repl<'a> {
                     {
                         Ok(code) => {
                             debug!("exit: {} : {:?}", self.input.as_str(), code);
+                            self.last_status = code;
                         }
                         Err(err) => {
                             display_user_error(&err, false);
@@ -1450,6 +1459,7 @@ impl<'a> Repl<'a> {
                     self.input.clear();
                     self.clear_suggestion_state();
                     self.last_command_time = Some(Instant::now());
+                    self.last_duration = Some(start_time.elapsed());
                 }
                 // After command execution, show new prompt
                 let mut renderer = TerminalRenderer::new();
@@ -1462,6 +1472,7 @@ impl<'a> Repl<'a> {
                 self.stop_history_mode();
                 print!("\r\n");
                 if !self.input.is_empty() {
+                    let start_time = Instant::now();
                     self.completion.clear();
                     let input = self.input.to_string();
                     let shell_tmode = self.tmode.clone().unwrap_or_else(|| {
@@ -1476,11 +1487,18 @@ impl<'a> Repl<'a> {
                         .unwrap_or_else(|e| panic!("Cannot initialize Termios: {}", e))
                     });
                     let mut ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);
-                    if let Err(err) = self.shell.eval_str(&mut ctx, input, true).await {
-                        display_user_error(&err, false);
+                    match self.shell.eval_str(&mut ctx, input, true).await {
+                        Ok(code) => {
+                            self.last_status = code;
+                        }
+                        Err(err) => {
+                            display_user_error(&err, false);
+                            self.last_status = 1;
+                        }
                     }
                     self.input.clear();
                     self.clear_suggestion_state();
+                    self.last_duration = Some(start_time.elapsed());
                 }
                 // After command execution, show new prompt
                 let mut renderer = TerminalRenderer::new();
@@ -1650,6 +1668,12 @@ impl<'a> Repl<'a> {
                 maybe_event = reader.next() => {
                     match maybe_event {
                         Some(Ok(event)) => {
+                            // match event {
+                            //     Event::Key(KeyEvent { code: KeyCode::Enter, .. }) => {
+                            //         start_time = Some(Instant::now());
+                            //     }
+                            //     _ => {}
+                            // }
                             if let Err(err) = self.handle_event(ShellEvent::Input(event)).await{
                                 self.shell.print_error(format!("Error: {err:?}\r"));
                                 break;

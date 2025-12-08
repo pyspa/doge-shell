@@ -25,7 +25,6 @@ use std::io::prelude::*;
 use std::os::fd::RawFd;
 use std::os::unix::io::FromRawFd;
 use std::path::Path;
-use std::process::ExitCode;
 use std::sync::Arc;
 use std::{cell::RefCell, rc::Rc};
 use tokio::task;
@@ -333,7 +332,7 @@ impl Shell {
         ctx: &mut Context,
         input: String,
         force_background: bool,
-    ) -> Result<ExitCode> {
+    ) -> Result<i32> {
         if ctx.save_history
             && let Some(ref mut history) = self.cmd_history
         {
@@ -349,13 +348,10 @@ impl Shell {
             let message = rest.trim_start();
             let status = execute_chat_message(ctx, self, message, None);
             let code = match status {
-                ExitStatus::ExitedWith(exit) if exit >= 0 => {
-                    let normalized = exit.clamp(0, u8::MAX as i32) as u8;
-                    ExitCode::from(normalized)
-                }
-                ExitStatus::ExitedWith(_) => ExitCode::from(1),
-                ExitStatus::Running(_) => ExitCode::from(0),
-                ExitStatus::Break | ExitStatus::Continue | ExitStatus::Return => ExitCode::from(0),
+                ExitStatus::ExitedWith(exit) if exit >= 0 => exit,
+                ExitStatus::ExitedWith(_) => 1,
+                ExitStatus::Running(_) => 0,
+                ExitStatus::Break | ExitStatus::Continue | ExitStatus::Return => 0,
             };
             enable_raw_mode().ok();
             return Ok(code);
@@ -424,7 +420,7 @@ impl Shell {
         }
 
         enable_raw_mode().ok();
-        Ok(ExitCode::from(last_exit_code))
+        Ok(last_exit_code as i32)
     }
 
     fn get_jobs(&mut self, input: String) -> Result<Vec<Job>> {

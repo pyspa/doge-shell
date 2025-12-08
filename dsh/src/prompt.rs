@@ -1,5 +1,7 @@
 use crate::environment::{ChangePwdHook, Environment};
 use anyhow::Result;
+use crossterm::cursor;
+use crossterm::queue;
 use crossterm::style::Stylize;
 use parking_lot::RwLock;
 use std::collections::HashSet;
@@ -57,7 +59,7 @@ impl Prompt {
     pub fn print_preprompt<W: Write>(&mut self, out: &mut W) {
         write!(out, "{}", "\r".reset()).ok();
 
-        let (path, _is_git_root) = self.get_cwd();
+        let (mut path, _is_git_root) = self.get_cwd();
 
         let has_git = self.under_git();
         // debug!(
@@ -65,32 +67,82 @@ impl Prompt {
         //     path, has_git, self.current_git_root
         // );
 
-        if has_git {
-            write!(out, "{}", path.cyan()).ok();
+        if has_git
+            && let Some(ref git_status) = self.get_git_status_cached() {
+                // Ensure padding if we have prompt content
+                // Write branch mark and branch name
+                let branch_display = format!(
+                    " {} {} {}{}",
+                    "on".reset(),
+                    BRANCH_MARK.magenta(),
+                    git_status.branch.as_str().magenta(),
+                    if let Some(status) = &git_status.branch_status {
+                        format!(" [{}]", status.to_string().bold().red())
+                    } else {
+                        "".to_string()
+                    }
+                );
 
-            if let Some(ref git_status) = self.get_git_status_cached() {
-                // debug!(
-                //     "Git status found: branch={}, status={:?}",
-                //     git_status.branch, git_status.branch_status
-                // );
-                write!(out, " {} ", "on".reset()).ok();
-                // Write branch mark and branch name separately to avoid format! allocation
-                write!(out, "{}", BRANCH_MARK.magenta()).ok();
-                write!(out, " ").ok();
-                write!(out, "{}", git_status.branch.as_str().magenta()).ok();
+                path.push_str(&branch_display);
+            }
 
-                if let Some(status) = &git_status.branch_status {
-                    write!(out, " [{}]", status.to_string().bold().red()).ok();
+        write!(out, "{}", path).ok();
+    }
+
+    pub fn print_right_prompt<W: Write>(
+        &self,
+        out: &mut W,
+        cols: usize,
+        last_status: i32,
+        last_duration: Option<Duration>,
+    ) {
+        let time_str = chrono::Local::now().format("%H:%M:%S").to_string();
+
+        let status_str = if last_status != 0 {
+            format!("{} {} ", "✘".red().bold(), last_status.to_string().red())
+        } else {
+            String::new()
+        };
+
+        let duration_str = if let Some(d) = last_duration {
+            if d.as_secs() >= 2 {
+                let secs = d.as_secs();
+                if secs < 60 {
+                    format!("{}s ", secs)
+                } else {
+                    format!("{}m{}s ", secs / 60, secs % 60)
                 }
-                write!(out, "{}", "\r\n".reset()).ok();
+                .yellow()
+                .to_string()
             } else {
-                // debug!("No git status found");
-                write!(out, "{}", "\r\n".reset()).ok();
+                String::new()
             }
         } else {
-            // debug!("Not under git");
-            write!(out, "{}", path.white()).ok();
-            write!(out, "{}", "\r\n".reset()).ok();
+            String::new()
+        };
+
+        // Construct the full right prompt
+        let right_prompt = format!("{}{}{}", status_str, duration_str, time_str.as_str().dim());
+
+        // Calculate visible length (approximate, ignoring ANSI for simplistic calc or using crate::input::display_width if available)
+        // Since we are in prompt.rs, we might not have easy access to input::display_width readily available as public.
+        // Let's use string len for now but strip ansi if possible, or just assume minimal ansi impact for simple case.
+        // Better: Use `crossterm` functionality or simple approximation.
+        // For accurate alignment, we need visual width.
+        // Attempting to calculate visual width by stripping ANSI codes manually or importing input::display_width if accessible.
+        // crate::input::display_width IS public.
+
+        let right_width = crate::input::display_width(&right_prompt);
+
+        if cols > right_width {
+            let start_col = cols - right_width;
+            queue!(
+                out,
+                cursor::MoveToColumn(start_col as u16),
+                crossterm::style::Print(right_prompt),
+                cursor::MoveToColumn(0) // Reset to start for preprompt which prints \r anyway
+            )
+            .ok();
         }
     }
 

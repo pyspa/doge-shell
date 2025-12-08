@@ -101,36 +101,52 @@ impl CompletionGenerator {
                 }
             } else {
                 // Top-level subcommands
+                let mut added_subcommands = false;
                 for subcommand in &command_completion.subcommands {
                     if subcommand.name.starts_with(&parsed.current_token) {
                         candidates.push(CompletionCandidate::subcommand(
                             subcommand.name.clone(),
                             subcommand.description.clone(),
                         ));
+                        added_subcommands = true;
                     }
                 }
 
-                // If no subcommands exist but global options are available,
-                // show global options as alternatives when there are no subcommands to show
-                if command_completion.subcommands.is_empty()
-                    && !command_completion.global_options.is_empty()
-                {
-                    for option in &command_completion.global_options {
-                        if let Some(ref short) = option.short
-                            && short.starts_with(&parsed.current_token)
-                        {
-                            candidates.push(CompletionCandidate::short_option(
-                                short.clone(),
-                                option.description.clone(),
-                            ));
-                        }
-                        if let Some(ref long) = option.long
-                            && long.starts_with(&parsed.current_token)
-                        {
-                            candidates.push(CompletionCandidate::long_option(
-                                long.clone(),
-                                option.description.clone(),
-                            ));
+                // If no subcommands exist (or match), try to find arguments or global options
+                if !added_subcommands {
+                    // Check if we should suggest arguments
+                    // Only if we haven't exceeded the number of arguments
+                    let arg_index = parsed.specified_arguments.len();
+                    if arg_index < command_completion.arguments.len() {
+                        let arg_def = &command_completion.arguments[arg_index];
+                        // If current token technically matches a subcommand (in parser's view) but we have no subcommands,
+                        // it might be a value for this argument.
+                        let arg_candidates = self.generate_candidates_for_type(
+                            arg_def.arg_type.as_ref().unwrap_or(&ArgumentType::String),
+                            &parsed.current_token,
+                        )?;
+                        candidates.extend(arg_candidates);
+                    }
+
+                    // Also show global options
+                    if !command_completion.global_options.is_empty() {
+                        for option in &command_completion.global_options {
+                            if let Some(ref short) = option.short
+                                && short.starts_with(&parsed.current_token)
+                            {
+                                candidates.push(CompletionCandidate::short_option(
+                                    short.clone(),
+                                    option.description.clone(),
+                                ));
+                            }
+                            if let Some(ref long) = option.long
+                                && long.starts_with(&parsed.current_token)
+                            {
+                                candidates.push(CompletionCandidate::long_option(
+                                    long.clone(),
+                                    option.description.clone(),
+                                ));
+                            }
                         }
                     }
                 }
@@ -492,6 +508,7 @@ mod tests {
                     arguments: vec![Argument {
                         name: "pathspec".to_string(),
                         description: Some("Files to add".to_string()),
+                        arg_type: None,
                     }],
                     subcommands: vec![],
                 },
@@ -503,6 +520,7 @@ mod tests {
                     subcommands: vec![],
                 },
             ],
+            arguments: vec![],
         };
 
         db.add_command(git_completion);
@@ -622,6 +640,69 @@ mod tests {
             texts.contains(&expected_dir),
             "expected nested directory candidate {} in {:?}",
             expected_dir,
+            texts
+        );
+    }
+
+    #[test]
+    fn test_cd_completion_logic() {
+        let mut db = CommandCompletionDatabase::new();
+        let cd_completion = CommandCompletion {
+            command: "cd".to_string(),
+            description: Some("Change directory".to_string()),
+            subcommands: vec![],
+            global_options: vec![],
+            arguments: vec![Argument {
+                name: "directory".to_string(),
+                description: Some("Directory to change to".to_string()),
+                arg_type: Some(ArgumentType::Directory),
+            }],
+        };
+        db.add_command(cd_completion);
+
+        let temp = tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("nested_dir")).unwrap();
+        std::fs::write(temp.path().join("file.txt"), "").unwrap();
+
+        let generator = CompletionGenerator::new(db);
+
+        // Mock parsed command line: "cd [temp_dir]/"
+        let dir_str = format!("{}{}", temp.path().display(), MAIN_SEPARATOR);
+        let parsed = ParsedCommandLine {
+            command: "cd".to_string(),
+            subcommand_path: vec![],
+            args: vec![],
+            options: vec![],
+            current_token: dir_str.clone(),
+            current_arg: Some(dir_str.clone()),
+            completion_context: CompletionContext::SubCommand, // Parser might think it's subcommand context at top level
+            specified_options: vec![],
+            specified_arguments: vec![],
+            cursor_index: 0,
+        };
+
+        let candidates = generator.generate_candidates(&parsed).unwrap();
+        let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
+
+        // Should contain directory but not file
+        let expected_dir = Path::new(&dir_str)
+            .join("nested_dir")
+            .to_string_lossy()
+            .to_string();
+        let expected_file = Path::new(&dir_str)
+            .join("file.txt")
+            .to_string_lossy()
+            .to_string();
+
+        assert!(
+            texts.contains(&expected_dir),
+            "expected directory candidate {} in {:?}",
+            expected_dir,
+            texts
+        );
+        assert!(
+            !texts.contains(&expected_file),
+            "should not contain file candidates: {:?}",
             texts
         );
     }

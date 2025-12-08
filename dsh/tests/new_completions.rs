@@ -18,7 +18,7 @@ fn test_new_json_completions_load() {
         "gzip", "date", "whoami", "mount", "umount", "passwd", "lsmod", "modprobe", "hostname",
         "unalias", "unset", "watch", "screen", "tmux", "scp", "rsync", "rmdir", "w", "last",
         "netstat", "nmcli", "whereis", "groups", "jq", "tree", "dig", "useradd", "groupadd",
-        "chgrp",
+        "chgrp", "cd",
     ];
 
     for cmd in commands {

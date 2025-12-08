@@ -14,6 +14,9 @@ pub struct CommandCompletion {
     /// Global options (common to all subcommands)
     #[serde(default)]
     pub global_options: Vec<CommandOption>,
+    /// Arguments that this command accepts (for top-level commands)
+    #[serde(default)]
+    pub arguments: Vec<Argument>,
 }
 
 /// Subcommand definition
@@ -52,6 +55,9 @@ pub struct Argument {
     pub name: String,
     /// Argument description
     pub description: Option<String>,
+    /// Argument type
+    #[serde(default, rename = "type")]
+    pub arg_type: Option<ArgumentType>,
 }
 
 /// Argument/value types
@@ -215,6 +221,7 @@ mod tests {
             description: Some("Git version control system".to_string()),
             subcommands: vec![],
             global_options: vec![],
+            arguments: vec![],
         };
 
         db.add_command(git_completion);

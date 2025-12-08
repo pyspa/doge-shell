@@ -299,6 +299,19 @@ impl JsonCompletionLoader {
             self.validate_option(option, &completion.command)?;
         }
 
+        // Validate arguments
+        for argument in &completion.arguments {
+            self.validate_argument(argument, &completion.command)?;
+        }
+
+        Ok(())
+    }
+
+    /// Validate argument
+    fn validate_argument(&self, argument: &super::command::Argument, context: &str) -> Result<()> {
+        if argument.name.is_empty() {
+            anyhow::bail!("Argument name cannot be empty in '{}'", context);
+        }
         Ok(())
     }
 
@@ -533,6 +546,7 @@ mod tests {
             description: None,
             subcommands: vec![],
             global_options: vec![],
+            arguments: vec![],
         };
 
         let result = loader.validate_completion(&completion);
@@ -553,7 +567,7 @@ mod tests {
 
         // Should include both embedded completions and filesystem completions
         // The exact number depends on what's in the completions/ directory
-        assert_eq!(completions.len(), 101);
+        assert_eq!(completions.len(), 102);
         assert!(completions.contains(&"git".to_string()));
         assert!(completions.contains(&"cargo".to_string()));
         assert!(completions.contains(&"docker".to_string()));

@@ -495,9 +495,10 @@ fn find_git_root(cwd: &Path) -> Option<String> {
                 // Check if it's a gitdir pointer (worktree or submodule)
                 // Content format: "gitdir: <path>\n"
                 if let Ok(content) = std::fs::read_to_string(&git_dir)
-                    && content.trim().starts_with("gitdir:") {
-                        return Some(p.to_string_lossy().into_owned());
-                    }
+                    && content.trim().starts_with("gitdir:")
+                {
+                    return Some(p.to_string_lossy().into_owned());
+                }
                 // If exists but not a directory and doesn't look like a git pointer,
                 // we fall back to git rev-parse to be safe.
                 break;

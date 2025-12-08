@@ -990,4 +990,112 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn test_candidate_description_retrieval() {
+        // Test Command type
+        let command = Candidate::Command {
+            name: "git".to_string(),
+            description: "Version control".to_string(),
+        };
+        assert_eq!(command.get_description(), Some("Version control"));
+
+        // Test Option type
+        let option = Candidate::Option {
+            name: "--help".to_string(),
+            description: "Show help".to_string(),
+        };
+        assert_eq!(option.get_description(), Some("Show help"));
+
+        // Test Item type
+        let item = Candidate::Item("value".to_string(), "A value".to_string());
+        assert_eq!(item.get_description(), Some("A value"));
+
+        // Test Item type with empty description
+        let empty_item = Candidate::Item("value".to_string(), "".to_string());
+        assert_eq!(empty_item.get_description(), None);
+
+        // Test File type (should be None)
+        let file = Candidate::File {
+            path: "file.txt".to_string(),
+            is_dir: false,
+        };
+        assert_eq!(file.get_description(), None);
+    }
+
+    #[test]
+    fn test_layout_calculation_description_width() {
+        let candidates = vec![
+            Candidate::Command {
+                name: "short".to_string(),
+                description: "desc".to_string(),
+            },
+            Candidate::Command {
+                name: "a_very_long_command_name".to_string(),
+                description: "desc".to_string(),
+            },
+        ];
+
+        let config = CompletionConfig::default();
+        let mut display = CompletionDisplay::new_with_config(candidates, "$ ", "", config);
+        let layout = display.force_layout(80);
+
+        // Verify max_name_width is calculated correctly
+        // emoji (2) + space (1) + name width (24)
+        let expected_short_width = 3 + 5; // 8
+        let expected_long_width = 3 + 24; // 27
+
+        assert_eq!(layout.max_name_width, expected_long_width);
+    }
+
+    #[test]
+    fn test_formatted_display_alignment() {
+        let short_cmd = Candidate::Command {
+            name: "short".to_string(),
+            description: "Short description".to_string(),
+        };
+
+        // If we force a max_name_width larger than this command, it should be padded
+        let max_name_width = 20;
+        let total_width = 40;
+
+        // ⚡ short
+        // Type (2) + Space (1) + "short" (5) = 8 chars visual width
+        // Padding should be max_name_width (20) - current (8) = 12 spaces
+
+        let (formatted, desc) = short_cmd.get_formatted_display(total_width, max_name_width);
+
+        // Check padding
+        // Format is: ICON + space + NAME + PADDING
+        // ⚡ short
+        // 12345678901234567890
+
+        let visual_width = unicode_display_width(&formatted);
+        // The formatted string should be padded to match alignment requirements + spaces to fill row if needed?
+        // Wait, logic says: padding_needed = target.saturating_sub(current_width)
+        // target is max_name_width.min(width)
+        // So expected visual width of the NAME part (including icon) should be max_name_width
+
+        // But get_formatted_display currently appends EXTRA padding if column width is wide
+        // Let's re-read the logic:
+        // let padding_needed = if max_name_width > 0 { ... }
+        // result_name.push_str(&" ".repeat(padding_needed));
+        // So yes, `formatted` should have visual width approx equal to max_name_width (or more if column is wide?)
+
+        // In get_formatted_display:
+        // padding_needed based on align target (max_name_width) OR column width
+        // If max_name_width is passed, we align to IT.
+
+        // Let's verify the padding length specifically
+        let padding_count = formatted.chars().filter(|c| *c == ' ').count();
+        // 1 space after icon + 12 spaces padding = 13 spaces?
+        // "short" has no spaces.
+        assert!(
+            padding_count >= 13,
+            "Expected at least 13 spaces, got {}",
+            padding_count
+        );
+
+        // Verify description is returned
+        assert_eq!(desc, Some("  Short description".to_string()));
+    }
 }

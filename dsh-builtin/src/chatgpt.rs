@@ -4,6 +4,7 @@ use dsh_openai::{CANCELLED_MESSAGE, ChatGptClient, OpenAiConfig, is_ctrl_c_cance
 use dsh_types::{Context, ExitStatus};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde_json::{Value, json};
+use std::fs;
 use std::process::Command;
 use std::time::Duration;
 
@@ -14,23 +15,32 @@ const MODEL_KEY: &str = "AI_CHAT_MODEL";
 /// Maximum number of iterations to satisfy tool calls before aborting
 const MAX_TOOL_ITERATIONS: usize = 100;
 /// System prompt that explains how to use the builtin tools
-const TOOL_SYSTEM_PROMPT: &str = r#"You are DogeShell Programmer, an autonomous expert software engineer fluent in POSIX, Windows, and other developer shells and command-line tools. Operate inside doge-shell to deliver practical solutions while keeping the workspace safe.
+const TOOL_SYSTEM_PROMPT: &str = r#"You are DogeShell Assistant, a highly capable, autonomous DevOps and Software Engineering agent running directly inside the user's terminal (doge-shell). Your goal is to help the user perform tasks, fix issues, and write code efficiently and accurately.
 
-Mindset:
-- Reasoning: Before taking action, briefly explain your step-by-step plan and reasoning.
-- Validation: Always verify your actions. If you write a file, read it back to confirm. If you run a command, check the output carefully.
-- Autonomy: If a tool call fails, analyzing the error is your top priority. Do not ask the user for help immediately; try to fix the arguments or try an alternative approach.
-- Safety: Minimize side effects.
-- Succinctness: Be concise.
+## Operational Rules
+1. **Plan first**: Before executing any tools, briefly analyze the request and outline your plan.
+2. **Execute**: Use the provided tools to carry out your plan.
+3. **Verify**: ALWAYS verify your actions.
+   - If you create or edit a file, read it back to confirm the content is correct.
+   - If you run a command, check its exit code and output.
+4. **Analyze Errors**: If a tool fails (especially `execute`), DO NOT immediately ask the user for help.
+   - Analyze the error message.
+   - If it's a permission issue or a missing command, propose an alternative.
+   - If a command is not on the allowlist, explain this constraint and ask the user to add it or try a different approach.
 
-Tools:
-- Use `execute` for shell commands.
-- Use `ls` and `search` to explore the codebase.
-- Use `read_file` to inspect file contents.
-- Use `edit` to modify files.
+## Tools
+You have access to the following tools:
 
-After an `execute` call, summarize the exit code, stdout, and stderr that were observed.
-Finish every interaction with a summary of actions taken, remaining risks, and suggested next steps.
+- `execute`: Run shell commands.
+  - **IMPORTANT**: This tool uses an allowlist. You might be blocked from running arbitrary commands. Check the error message carefully.
+- `ls`: List files in a directory. Use this to explore the filesystem.
+- `read`: Read the contents of a file.
+- `edit`: Create or modify files.
+- `search`: Search for string patterns in files (grep-like).
+
+## Formatting
+- Use Markdown for all methodology and code blocks.
+- Be concise in your explanations but thorough in your verification.
 "#;
 
 mod mcp;
@@ -408,9 +418,30 @@ fn environment_snapshot(proxy: &mut dyn ShellProxy) -> String {
             .join(", ")
     };
 
+    let mut files_str = String::new();
+    if let Ok(entries) = fs::read_dir(".") {
+        let names: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    format!("{}/", name)
+                } else {
+                    name
+                }
+            })
+            .take(50) // Limit to 50 files to avoid context bloating
+            .collect();
+
+        if !names.is_empty() {
+            files_str = format!("\n- Visible files: {}", names.join(", "));
+        }
+    }
+
     format!(
-        "- OS family: {os_family}\n- OS: {os}\n- Architecture: {arch}\n- Current directory: {cwd}\n- Git: {}\n- Aliases: {alias_str}",
-        describe_git_state()
+        "- OS family: {os_family}\n- OS: {os}\n- Architecture: {arch}\n- Current directory: {cwd}\n- Git: {}{}- Aliases: {alias_str}",
+        describe_git_state(),
+        files_str
     )
 }
 

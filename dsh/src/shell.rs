@@ -899,6 +899,10 @@ impl Shell {
                     current_job.set_process(JobProcess::Builtin(builtin));
                 }
             } else {
+                // Execute command-not-found hooks before showing error
+                // Hooks can perform side effects like suggesting package installation
+                self.exec_command_not_found_hooks(cmd);
+
                 // Try to find similar commands for suggestion
                 let paths = self.environment.read().paths.clone();
                 let builtins: Vec<String> = dsh_builtin::get_all_commands()
@@ -1085,6 +1089,58 @@ impl Shell {
 
         if let Err(e) = self.lisp_engine.borrow().run(&lisp_code) {
             debug!("Failed to execute post-exec hooks: {}", e);
+        }
+        Ok(())
+    }
+
+    /// Execute command-not-found hooks
+    /// Called when an unknown command is entered
+    /// Returns true if a hook handled the command (skipping default error), false otherwise
+    pub fn exec_command_not_found_hooks(&self, command: &str) -> bool {
+        let lisp_code = format!(
+            "(when (bound? '*command-not-found-hooks*)
+                (let ((results (map (lambda (hook) (hook \"{}\")) *command-not-found-hooks*)))
+                  (filter (lambda (r) r) results)))",
+            command.replace("\"", "\\\"")
+        );
+
+        match self.lisp_engine.borrow().run(&lisp_code) {
+            Ok(_) => {
+                // Check if at least one hook returned true (non-nil)
+                // For now, we always return false to let the normal error flow continue
+                // Hooks can perform side effects like suggesting package installation
+                false
+            }
+            Err(e) => {
+                debug!("Failed to execute command-not-found hooks: {}", e);
+                false
+            }
+        }
+    }
+
+    /// Execute completion hooks
+    /// Called when a completion is triggered
+    pub fn exec_completion_hooks(&self, input: &str, cursor: usize) -> Result<()> {
+        let lisp_code = format!(
+            "(when (bound? '*completion-hooks*)
+                (map (lambda (hook) (hook \"{}\" {})) *completion-hooks*))",
+            input.replace("\"", "\\\""),
+            cursor
+        );
+
+        if let Err(e) = self.lisp_engine.borrow().run(&lisp_code) {
+            debug!("Failed to execute completion hooks: {}", e);
+        }
+        Ok(())
+    }
+
+    /// Execute input-timeout hooks
+    /// Called when the user has been idle for a certain period
+    pub fn exec_input_timeout_hooks(&self) -> Result<()> {
+        if let Err(e) = self.lisp_engine.borrow().run(
+            "(when (bound? '*input-timeout-hooks*) (map (lambda (hook) (hook)) *input-timeout-hooks*))",
+        ) {
+            debug!("Failed to execute input-timeout hooks: {}", e);
         }
         Ok(())
     }

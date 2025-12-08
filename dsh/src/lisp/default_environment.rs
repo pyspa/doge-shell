@@ -341,6 +341,19 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
 
     env.define(Symbol::from("*on-chdir-hooks*"), Value::List(List::NIL));
 
+    // New enhanced hooks
+    env.define(
+        Symbol::from("*command-not-found-hooks*"),
+        Value::List(List::NIL),
+    );
+
+    env.define(Symbol::from("*completion-hooks*"), Value::List(List::NIL));
+
+    env.define(
+        Symbol::from("*input-timeout-hooks*"),
+        Value::List(List::NIL),
+    );
+
     // Define add-hook function
     env.define(
         Symbol::from("add-hook"),

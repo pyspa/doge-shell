@@ -1464,6 +1464,11 @@ impl<'a> Repl<'a> {
                     prompt_text, input_text, completion_query
                 );
 
+                // Execute completion hooks
+                let _ = self
+                    .shell
+                    .exec_completion_hooks(&input_text, self.input.cursor());
+
                 // Use the new integrated completion engine with current directory context
                 let current_dir = self.prompt.read().current_path().to_path_buf();
                 let cursor_pos = self.input.cursor();
@@ -1922,6 +1927,9 @@ impl<'a> Repl<'a> {
                     // Save history every 30 seconds if there have been changes
                     self.save_history_periodic();
                     self.check_background_jobs(true).await?;
+
+                    // Execute input-timeout hooks (called periodically when idle)
+                    let _ = self.shell.exec_input_timeout_hooks();
 
                     // Refresh git status
                     let prompt = Arc::clone(&self.prompt);

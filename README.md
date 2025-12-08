@@ -123,6 +123,9 @@ The embedded Lisp interpreter includes many built-in functions:
 - `*pre-exec-hooks*` - Hook list for functions to run before command execution
 - `*post-exec-hooks*` - Hook list for functions to run after command execution
 - `*on-chdir-hooks*` - Hook list for functions to run after changing directory
+- `*command-not-found-hooks*` - Hook list for functions to run when a command is not found (receives command name)
+- `*completion-hooks*` - Hook list for functions to run when TAB completion is triggered (receives input and cursor position)
+- `*input-timeout-hooks*` - Hook list for functions to run periodically when idle (every 1 second)
 
 ### MCP Management Functions
 - `mcp-clear` - Clear all MCP servers

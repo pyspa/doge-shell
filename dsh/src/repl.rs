@@ -1,4 +1,5 @@
 use crate::ai_features::{self, AiService, LiveAiService};
+use crate::command_timing::{self, SharedCommandTiming};
 use crate::completion::integrated::{CompletionResult, IntegratedCompletionEngine};
 use crate::completion::{self, Completion, MAX_RESULT};
 use crate::dirs;
@@ -141,6 +142,7 @@ pub struct Repl<'a> {
     input_preferences: InputPreferences,
     ai_pending_shown: bool,
     ai_service: Option<Arc<dyn AiService + Send + Sync>>,
+    command_timing: SharedCommandTiming,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -149,6 +151,12 @@ impl<'a> Drop for Repl<'a> {
         queue!(renderer, DisableBracketedPaste).ok();
         renderer.flush().ok();
         self.save_history();
+        // Save command timing statistics
+        if let Some(path) = command_timing::get_timing_file_path()
+            && let Err(e) = self.command_timing.write().save_to_file(&path)
+        {
+            warn!("Failed to save command timing: {}", e);
+        }
     }
 }
 
@@ -224,6 +232,7 @@ impl<'a> Repl<'a> {
             input_preferences,
             ai_pending_shown: false,
             ai_service,
+            command_timing: command_timing::create_shared_timing(),
         }
     }
 
@@ -1625,6 +1634,7 @@ impl<'a> Repl<'a> {
                 print!("\r\n");
                 if !self.input.is_empty() {
                     let start_time = Instant::now();
+                    let input_str = self.input.to_string();
                     self.completion.clear();
                     let shell_tmode = self.tmode.clone().unwrap_or_else(|| {
                         warn!("No stored terminal mode available, using default");
@@ -1640,23 +1650,40 @@ impl<'a> Repl<'a> {
                         .unwrap_or_else(|e| panic!("Cannot initialize Termios: {}", e))
                     });
                     let mut ctx = Context::new(self.shell.pid, self.shell.pgid, shell_tmode, true);
-                    match self
+                    let exit_code = match self
                         .shell
-                        .eval_str(&mut ctx, self.input.to_string(), false)
+                        .eval_str(&mut ctx, input_str.clone(), false)
                         .await
                     {
                         Ok(code) => {
                             debug!("exit: {} : {:?}", self.input.as_str(), code);
                             self.last_status = code;
+                            code
                         }
                         Err(err) => {
                             display_user_error(&err, false);
+                            self.last_status = 1;
+                            1
+                        }
+                    };
+
+                    // Record command timing statistics
+                    let elapsed = start_time.elapsed();
+                    if let Some(cmd_name) = command_timing::extract_command_name(&input_str) {
+                        let mut timing = self.command_timing.write();
+                        timing.record(&cmd_name, exit_code, elapsed);
+                        // Save immediately for real-time updates
+                        if let Some(path) = command_timing::get_timing_file_path() {
+                            if let Err(e) = timing.save_to_file(&path) {
+                                debug!("Failed to save command timing: {}", e);
+                            }
                         }
                     }
+
                     self.input.clear();
                     self.clear_suggestion_state();
                     self.last_command_time = Some(Instant::now());
-                    self.last_duration = Some(start_time.elapsed());
+                    self.last_duration = Some(elapsed);
                 }
                 // After command execution, show new prompt
                 let mut renderer = TerminalRenderer::new();

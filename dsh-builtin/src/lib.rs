@@ -15,6 +15,7 @@ mod chatgpt;
 mod export;
 mod markdown;
 pub use chatgpt::execute_chat_message;
+pub mod command_timing;
 mod dmv;
 mod fg;
 mod gco;
@@ -299,6 +300,15 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             "help",
             Box::new(BuiltinCommandFn::new(help::command, help::description()))
                 as Box<dyn BuiltinCommandTrait>,
+        );
+
+        // Performance and statistics commands
+        builtin.insert(
+            "timing",
+            Box::new(BuiltinCommandFn::new(
+                command_timing::command,
+                command_timing::description(),
+            )) as Box<dyn BuiltinCommandTrait>,
         );
 
         Mutex::new(builtin)

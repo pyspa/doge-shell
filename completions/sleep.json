@@ -1,0 +1,20 @@
+{
+  "command": "sleep",
+  "description": "Delay for a specified amount of time",
+  "options": [
+    {
+      "long": "--help",
+      "description": "Display this help and exit"
+    },
+    {
+      "long": "--version",
+      "description": "Output version information and exit"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "number",
+      "description": "Number of seconds (can be followed by suffix s, m, h, d)"
+    }
+  ]
+}

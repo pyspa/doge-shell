@@ -1,0 +1,39 @@
+{
+  "command": "whois",
+  "description": "Client for the whois directory service",
+  "options": [
+    {
+      "long": "--help",
+      "description": "Display this help and exit"
+    },
+    {
+      "long": "--version",
+      "description": "Output version information and exit"
+    },
+    {
+      "short": "-H",
+      "description": "Hide legal disclaimers"
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Explain what is being done"
+    },
+    {
+      "short": "-h",
+      "long": "--host",
+      "description": "Connect to server HOST"
+    },
+    {
+      "short": "-p",
+      "long": "--port",
+      "description": "Connect to PORT"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "object",
+      "description": "Domain or IP address to query"
+    }
+  ]
+}

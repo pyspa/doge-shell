@@ -48,6 +48,9 @@ fn test_new_json_completions_load() {
         "traceroute",
         "nohup",
         "stat",
+        "whois",
+        "base64",
+        "sleep",
     ];
 
     for cmd in commands {

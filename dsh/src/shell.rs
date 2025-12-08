@@ -899,7 +899,23 @@ impl Shell {
                     current_job.set_process(JobProcess::Builtin(builtin));
                 }
             } else {
-                bail!("unknown command: {}", cmd);
+                // Try to find similar commands for suggestion
+                let paths = self.environment.read().paths.clone();
+                let builtins: Vec<String> = dsh_builtin::get_all_commands()
+                    .iter()
+                    .map(|(name, _)| name.to_string())
+                    .collect();
+
+                let suggestions =
+                    crate::command_suggestion::find_similar_commands(cmd, &paths, &builtins);
+
+                if let Some(suggestion_msg) =
+                    crate::command_suggestion::format_suggestions(&suggestions)
+                {
+                    bail!("unknown command: {}\n{}", cmd, suggestion_msg);
+                } else {
+                    bail!("unknown command: {}", cmd);
+                }
             }
         }
         Ok(())

@@ -9,8 +9,17 @@ pub fn display_user_error(err: &anyhow::Error, log_normal: bool) {
 
     if error_msg.contains("unknown command:") {
         if let Some(cmd_start) = error_msg.find("unknown command: ") {
-            let cmd = &error_msg[cmd_start + 17..];
+            let rest = &error_msg[cmd_start + 17..];
+            // Split command name from suggestion (separated by newline)
+            let (cmd, suggestion) = if let Some(newline_pos) = rest.find('\n') {
+                (&rest[..newline_pos], Some(&rest[newline_pos + 1..]))
+            } else {
+                (rest, None)
+            };
             eprintln!("dsh: {}: command not found", cmd.trim());
+            if let Some(suggestion_msg) = suggestion {
+                eprint!("{}", suggestion_msg);
+            }
         } else {
             eprintln!("dsh: command not found");
         }

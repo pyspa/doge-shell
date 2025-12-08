@@ -159,40 +159,17 @@ impl Prompt {
     }
 
     fn get_cwd(&self) -> (String, bool) {
-        if let Some(git_root) = &self.current_git_root {
-            // Under git: show relative path from git root
-            let root_name = git_root
-                .file_name()
-                .map_or("".to_string(), |s| s.to_string_lossy().to_string());
+        let (path_str, is_git_context) = format_prompt_path(
+            &self.current_dir,
+            self.current_git_root.as_deref(),
+            dirs::home_dir().as_deref(),
+        );
 
-            let relative_path = self
-                .current_dir
-                .strip_prefix(git_root)
-                .unwrap_or(&self.current_dir);
-
-            let path_str = if relative_path.as_os_str().is_empty() {
-                root_name
-            } else {
-                format!("{}/{}", root_name, relative_path.display())
-            };
-
-            // Return colored path for git context (Cyan)
-            return (path_str.cyan().to_string(), true);
-        }
-
-        let pathbuf = &self.current_dir;
-        let is_git_root = pathbuf.join(".git").exists();
-
-        let path = if is_git_root {
-            pathbuf
-                .file_name()
-                .map_or("".to_owned(), |s| s.to_string_lossy().into_owned())
+        if is_git_context {
+            (path_str.cyan().to_string(), true)
         } else {
-            let path = pathbuf.display().to_string();
-            let home = dirs::home_dir().map_or("".to_owned(), |p| p.display().to_string());
-            path.replace(&home, "~")
-        };
-        (path, is_git_root)
+            (path_str, false)
+        }
     }
 
     fn under_git(&self) -> bool {
@@ -532,6 +509,93 @@ fn get_git_root() -> Option<String> {
         return Some(out.trim().to_string());
     }
     None
+}
+
+/// Helper function to format the path for the prompt
+/// Returns: (formatted_path, is_git_context)
+fn format_prompt_path(
+    current_dir: &Path,
+    git_root: Option<&Path>,
+    home_dir: Option<&Path>,
+) -> (String, bool) {
+    if let Some(git_root) = git_root
+        && current_dir.starts_with(git_root)
+    {
+        // Under git: show relative path from git root
+        let root_name = git_root
+            .file_name()
+            .map_or("".to_string(), |s| s.to_string_lossy().to_string());
+
+        let relative_path = current_dir.strip_prefix(git_root).unwrap_or(current_dir);
+
+        let path_str = if relative_path.as_os_str().is_empty() {
+            root_name
+        } else {
+            format!("{}/{}", root_name, relative_path.display())
+        };
+
+        return (path_str, true);
+    }
+
+    let is_git_root = current_dir.join(".git").exists();
+    if is_git_root {
+        let path = current_dir
+            .file_name()
+            .map_or("".to_owned(), |s| s.to_string_lossy().into_owned());
+        (path, false)
+    } else {
+        let path = current_dir.display().to_string();
+        if let Some(home) = home_dir {
+            let home_str = home.display().to_string();
+            (path.replace(&home_str, "~"), false)
+        } else {
+            (path, false)
+        }
+    }
+}
+
+#[cfg(test)]
+mod prompt_path_tests {
+    use super::*;
+
+    #[test]
+    fn test_format_prompt_path_standard() {
+        let current = PathBuf::from("/home/user/docs");
+        let home = PathBuf::from("/home/user");
+        let (path, is_git) = format_prompt_path(&current, None, Some(&home));
+        assert_eq!(path, "~/docs");
+        assert!(!is_git);
+    }
+
+    #[test]
+    fn test_format_prompt_path_git_root() {
+        let current = PathBuf::from("/home/user/repo");
+        let git_root = PathBuf::from("/home/user/repo");
+        let home = PathBuf::from("/home/user");
+
+        let (path, is_git) = format_prompt_path(&current, Some(&git_root), Some(&home));
+        assert_eq!(path, "repo");
+        assert!(is_git);
+    }
+
+    #[test]
+    fn test_format_prompt_path_git_subdir() {
+        let current = PathBuf::from("/home/user/repo/src");
+        let git_root = PathBuf::from("/home/user/repo");
+        let home = PathBuf::from("/home/user");
+
+        let (path, is_git) = format_prompt_path(&current, Some(&git_root), Some(&home));
+        assert_eq!(path, "repo/src");
+        assert!(is_git);
+    }
+
+    #[test]
+    fn test_format_prompt_path_no_home() {
+        let current = PathBuf::from("/tmp/test");
+        let (path, is_git) = format_prompt_path(&current, None, None);
+        assert_eq!(path, "/tmp/test");
+        assert!(!is_git);
+    }
 }
 
 #[cfg(test)]

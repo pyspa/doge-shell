@@ -1,0 +1,5 @@
+[[dynamic_completions]]
+command = "pkill"
+description = "Signal processes by name"
+match_condition = { type = "StartsWithCommand" }
+shell_command = "ps -xo comm --no-headers | sort | uniq"

@@ -1,0 +1,47 @@
+{
+  "command": "lspci",
+  "description": "List all PCI devices",
+  "options": [
+    {
+      "short": "-v",
+      "description": "Be verbose"
+    },
+    {
+      "short": "-vv",
+      "description": "Be very verbose"
+    },
+    {
+      "short": "-n",
+      "description": "Show numeric ID's"
+    },
+    {
+      "short": "-nn",
+      "description": "Show both textual and numeric ID's"
+    },
+    {
+      "short": "-b",
+      "description": "Bus-centric view"
+    },
+    {
+      "short": "-s",
+      "description": "Show only devices in specified domain:bus:slot.func"
+    },
+    {
+      "short": "-d",
+      "description": "Show only devices with specified vendor and device ID"
+    },
+    {
+      "short": "-t",
+      "description": "Show bus tree"
+    },
+    {
+      "short": "-k",
+      "description": "Show kernel drivers handling each device"
+    },
+    {
+      "long": "--version",
+      "description": "Show version"
+    }
+  ],
+  "arguments": []
+}

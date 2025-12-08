@@ -1,0 +1,62 @@
+{
+  "command": "nc",
+  "description": "Arbitrary TCP and UDP connections and listens",
+  "options": [
+    {
+      "short": "-4",
+      "description": "Use IPv4 only"
+    },
+    {
+      "short": "-6",
+      "description": "Use IPv6 only"
+    },
+    {
+      "short": "-l",
+      "long": "--listen",
+      "description": "Listen for an incoming connection"
+    },
+    {
+      "short": "-k",
+      "long": "--keep-open",
+      "description": "Keep listening after client disconnects"
+    },
+    {
+      "short": "-u",
+      "long": "--udp",
+      "description": "Use UDP instead of default TCP"
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Set verbosity level"
+    },
+    {
+      "short": "-p",
+      "long": "--source-port",
+      "description": "Source port"
+    },
+    {
+      "short": "-w",
+      "long": "--wait",
+      "description": "Connect timeout"
+    },
+    {
+      "short": "-z",
+      "description": "Zero-I/O mode, report connection status only"
+    },
+    {
+      "long": "--help",
+      "description": "Display this help and exit"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "destination",
+      "description": "Destination address"
+    },
+    {
+      "name": "port",
+      "description": "Port number"
+    }
+  ]
+}

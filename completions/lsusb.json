@@ -1,0 +1,39 @@
+{
+  "command": "lsusb",
+  "description": "List USB devices",
+  "options": [
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Increase verbosity (show descriptors)"
+    },
+    {
+      "short": "-s",
+      "description": "Show only devices in specified bus and/or devnum"
+    },
+    {
+      "short": "-d",
+      "description": "Show only devices with the specified vendor and product ID"
+    },
+    {
+      "short": "-D",
+      "description": "Select device by path"
+    },
+    {
+      "short": "-t",
+      "long": "--tree",
+      "description": "Dump the physical USB device hierarchy as a tree"
+    },
+    {
+      "short": "-V",
+      "long": "--version",
+      "description": "Show version of program"
+    },
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show usage and help"
+    }
+  ],
+  "arguments": []
+}

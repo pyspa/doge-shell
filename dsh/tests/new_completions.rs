@@ -51,6 +51,10 @@ fn test_new_json_completions_load() {
         "whois",
         "base64",
         "sleep",
+        "nc",
+        "id",
+        "lsusb",
+        "lspci",
     ];
 
     for cmd in commands {

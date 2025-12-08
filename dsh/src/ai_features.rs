@@ -38,8 +38,8 @@ impl AiService for LiveAiService {
 
 pub fn sanitize_code_block(content: &str) -> String {
     let content = content.trim_matches(|c| c == '`');
-    if content.starts_with("bash\n") {
-        content[5..].to_string()
+    if let Some(stripped) = content.strip_prefix("bash\n") {
+        stripped.to_string()
     } else {
         content.to_string()
     }

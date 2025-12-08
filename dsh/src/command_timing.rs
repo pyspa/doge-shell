@@ -185,7 +185,7 @@ impl CommandTiming {
     /// Get the top N slowest commands by average duration
     pub fn top_slowest(&self, n: usize) -> Vec<&CommandStats> {
         let mut sorted: Vec<_> = self.stats.values().collect();
-        sorted.sort_by(|a, b| b.average_duration_ms().cmp(&a.average_duration_ms()));
+        sorted.sort_by_key(|b| std::cmp::Reverse(b.average_duration_ms()));
         sorted.into_iter().take(n).collect()
     }
 

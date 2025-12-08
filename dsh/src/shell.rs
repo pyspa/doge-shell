@@ -361,7 +361,7 @@ impl Shell {
             return Ok(code);
         }
 
-        let jobs = self.get_jobs(input)?;
+        let jobs = self.get_jobs(input.clone())?;
         let mut last_exit_code = 0;
         for mut job in jobs {
             // Execute pre-exec hooks
@@ -379,9 +379,42 @@ impl Shell {
             job.job_id = self.get_job_id(); // set job id
 
             debug!(
-                "start job '{:?}' foreground:{:?} redirect:{:?} list_op:{:?}",
-                job.cmd, job.foreground, job.redirect, job.list_op,
+                "start job '{:?}' foreground:{:?} redirect:{:?} list_op:{:?} capture:{:?}",
+                job.cmd, job.foreground, job.redirect, job.list_op, job.capture_output,
             );
+
+            // Handle capture mode with |>
+            if job.capture_output {
+                let (exit, stdout, stderr) = self.execute_with_capture(ctx, &job).await?;
+                last_exit_code = exit as u8;
+
+                // Save to output history
+                {
+                    use crate::output_history::OutputEntry;
+                    let entry =
+                        OutputEntry::new(job.cmd.clone(), stdout.clone(), stderr.clone(), exit);
+                    self.environment.write().output_history.push(entry);
+                    debug!(
+                        "Captured output for '{}': {} bytes stdout, {} bytes stderr",
+                        job.cmd,
+                        stdout.len(),
+                        stderr.len()
+                    );
+                }
+
+                // Also print to terminal
+                if !stdout.is_empty() {
+                    print!("{}", stdout);
+                    std::io::stdout().flush().ok();
+                }
+                if !stderr.is_empty() {
+                    eprint!("{}", stderr);
+                    std::io::stderr().flush().ok();
+                }
+
+                raw_mode_guard.restore();
+                continue;
+            }
 
             let launch_result = job.launch(ctx, self).await;
             let mut should_break = false;
@@ -425,6 +458,45 @@ impl Shell {
 
         enable_raw_mode().ok();
         Ok(last_exit_code as i32)
+    }
+
+    /// Execute a job and capture its stdout and stderr
+    /// Returns (exit_code, stdout, stderr)
+    async fn execute_with_capture(
+        &mut self,
+        _ctx: &mut Context,
+        job: &Job,
+    ) -> Result<(i32, String, String)> {
+        use std::process::{Command, Stdio};
+
+        // Strip the |> suffix from the command
+        let cmd_str = job.cmd.trim();
+        let cmd_str = cmd_str.strip_suffix("|>").unwrap_or(cmd_str).trim();
+
+        debug!("Executing with capture: '{}'", cmd_str);
+
+        // Use sh -c to execute the command
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(cmd_str)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .with_context(|| format!("Failed to execute command: {}", cmd_str))?;
+
+        let exit_code = output.status.code().unwrap_or(1);
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        debug!(
+            "Capture complete: exit={}, stdout={} bytes, stderr={} bytes",
+            exit_code,
+            stdout.len(),
+            stderr.len()
+        );
+
+        Ok((exit_code, stdout, stderr))
     }
 
     fn get_jobs(&mut self, input: String) -> Result<Vec<Job>> {
@@ -910,6 +982,13 @@ impl Shell {
                                 // TODO check?
                             }
                         }
+                    }
+                }
+                Rule::capture_suffix => {
+                    // Set capture_output flag on the last job
+                    if let Some(job) = jobs.last_mut() {
+                        job.capture_output = true;
+                        debug!("Capture mode enabled for job: {}", job.cmd);
                     }
                 }
                 _ => {

@@ -37,6 +37,8 @@ pub struct Job {
     pub state: ProcessState,
     monitors: Vec<OutputMonitor>,
     shell_pgid: Pid,
+    /// Whether to capture output for $OUT variable
+    pub capture_output: bool,
 }
 
 fn last_process_state(process: JobProcess) -> ProcessState {
@@ -76,6 +78,7 @@ impl Job {
             state: ProcessState::Running,
             monitors: Vec::new(),
             shell_pgid,
+            capture_output: false,
         }
     }
 
@@ -98,6 +101,7 @@ impl Job {
             state: ProcessState::Running,
             monitors: Vec::new(),
             shell_pgid,
+            capture_output: false,
         }
     }
 

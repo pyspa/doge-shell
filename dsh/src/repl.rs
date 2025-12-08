@@ -1673,10 +1673,10 @@ impl<'a> Repl<'a> {
                         let mut timing = self.command_timing.write();
                         timing.record(&cmd_name, exit_code, elapsed);
                         // Save immediately for real-time updates
-                        if let Some(path) = command_timing::get_timing_file_path() {
-                            if let Err(e) = timing.save_to_file(&path) {
-                                debug!("Failed to save command timing: {}", e);
-                            }
+                        if let Some(path) = command_timing::get_timing_file_path()
+                            && let Err(e) = timing.save_to_file(&path)
+                        {
+                            debug!("Failed to save command timing: {}", e);
                         }
                     }
 

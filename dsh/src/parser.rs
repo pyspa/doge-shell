@@ -599,8 +599,16 @@ fn expand_command_alias(
                             if val.is_empty() {
                                 buf.push("\"\"".to_string());
                             } else {
-                                let val = val.trim().to_string();
-                                buf.push(val);
+                                // Quote multiline or whitespace-containing values
+                                let needs_quote =
+                                    val.contains('\n') || val.contains(' ') || val.contains('\t');
+                                if needs_quote {
+                                    // Escape existing double quotes and wrap
+                                    let escaped = val.replace('"', r#"\""#);
+                                    buf.push(format!("\"{}\"", escaped));
+                                } else {
+                                    buf.push(val.trim().to_string());
+                                }
                             }
                         } else {
                             buf.push(arg);
@@ -615,8 +623,14 @@ fn expand_command_alias(
                             if val.is_empty() {
                                 buf.push("\"\"".to_string());
                             } else {
-                                let val = val.trim().to_string();
-                                buf.push(val);
+                                let needs_quote =
+                                    val.contains('\n') || val.contains(' ') || val.contains('\t');
+                                if needs_quote {
+                                    let escaped = val.replace('"', r#"\""#);
+                                    buf.push(format!("\"{}\"", escaped));
+                                } else {
+                                    buf.push(val.trim().to_string());
+                                }
                             }
                         } else {
                             buf.push(arg);
@@ -633,8 +647,14 @@ fn expand_command_alias(
                             if val.is_empty() {
                                 buf.push("\"\"".to_string());
                             } else {
-                                let val = val.trim().to_string();
-                                buf.push(val);
+                                let needs_quote =
+                                    val.contains('\n') || val.contains(' ') || val.contains('\t');
+                                if needs_quote {
+                                    let escaped = val.replace('"', r#"\""#);
+                                    buf.push(format!("\"{}\"", escaped));
+                                } else {
+                                    buf.push(val.trim().to_string());
+                                }
                             }
                         } else {
                             buf.push(arg);

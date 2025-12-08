@@ -25,6 +25,7 @@ mod help;
 mod history;
 mod jobs;
 pub mod lisp;
+mod out;
 mod read;
 mod reload;
 pub mod serve;
@@ -309,6 +310,13 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
                 command_timing::command,
                 command_timing::description(),
             )) as Box<dyn BuiltinCommandTrait>,
+        );
+
+        // Output history command
+        builtin.insert(
+            "out",
+            Box::new(BuiltinCommandFn::new(out::command, out::description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
 
         Mutex::new(builtin)

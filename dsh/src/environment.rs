@@ -1,6 +1,7 @@
 use crate::completion::AutoComplete;
 use crate::direnv::DirEnvironment;
 use crate::dirs::search_file;
+use crate::output_history::{self, OutputHistory};
 use crate::shell::APP_NAME;
 use crate::suggestion::{InputPreferences, SuggestionMode};
 use anyhow::Context as _;
@@ -40,6 +41,8 @@ pub struct Environment {
     pub input_preferences: InputPreferences,
     /// Cache for PATH command lookups to avoid repeated filesystem access
     command_cache: HashMap<String, Option<String>>,
+    /// Output history for $OUT[N] and $ERR[N] variables
+    pub output_history: OutputHistory,
 }
 
 fn default_input_preferences() -> InputPreferences {
@@ -88,6 +91,7 @@ impl Environment {
             system_env_vars: env::vars().collect(),
             input_preferences: default_input_preferences(),
             command_cache: HashMap::new(),
+            output_history: OutputHistory::new(),
         }))
     }
 
@@ -119,6 +123,7 @@ impl Environment {
             system_env_vars,
             input_preferences,
             command_cache: HashMap::new(),
+            output_history: OutputHistory::new(),
         }))
     }
 
@@ -217,6 +222,14 @@ impl Environment {
     }
 
     pub fn get_var(&self, key: &str) -> Option<String> {
+        // Check $OUT[N] and $ERR[N] patterns first
+        if let Some(index) = output_history::parse_output_var(key, "OUT") {
+            return self.output_history.get_stdout(index).map(|s| s.to_string());
+        }
+        if let Some(index) = output_history::parse_output_var(key, "ERR") {
+            return self.output_history.get_stderr(index).map(|s| s.to_string());
+        }
+
         let val = self.variables.get(key);
         if val.is_some() {
             return val.map(|x| x.to_string());

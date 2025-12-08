@@ -259,6 +259,51 @@ impl Input {
         }
     }
 
+    pub fn delete_to_end(&mut self) {
+        if self.cursor >= self.len() {
+            return;
+        }
+        let byte_index = self.byte_index();
+
+        // Remove content from string
+        self.input.truncate(byte_index);
+
+        // Remove indices
+        self.indices.truncate(self.cursor);
+
+        // Cursor position remains effectively the same (now at end)
+    }
+
+    pub fn delete_to_beginning(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let byte_index = self.byte_index();
+
+        // Remove content from string
+        self.input.drain(0..byte_index);
+
+        // Remove indices
+        self.indices.drain(0..self.cursor);
+
+        // Shift remaining indices
+        let shift_amount = -(byte_index as isize);
+        let delta = shift_amount;
+        // In this specific case, since we drained from 0, the remaining indices need to be shifted down.
+        // But indices are simply byte offsets.
+        // Example: "abc", cursor at 1 ('b'). indices=[0, 1, 2].
+        // byte_index=1. drain 0..1 removes 'a'. input="bc".
+        // indices drain 0..1 removes 0. indices=[1, 2].
+        // We want indices=[0, 1]. So subtract 1 from everything.
+
+        let delta_abs = delta.unsigned_abs();
+        for idx in &mut self.indices {
+            *idx -= delta_abs;
+        }
+
+        self.cursor = 0;
+    }
+
     pub fn move_word_left(&mut self) {
         if self.cursor == 0 {
             return;
@@ -792,6 +837,78 @@ mod tests {
             strip_ansi_codes("normal \x1b[31mred\x1b[0m normal"),
             "normal red normal"
         );
+    }
+
+    #[test]
+    fn test_delete_to_end() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+
+        // Test at beginning
+        input.reset("hello".to_string());
+        input.move_to_begin();
+        input.delete_to_end();
+        assert_eq!(input.as_str(), "");
+        assert_eq!(input.cursor(), 0);
+
+        // Test in middle
+        input.reset("hello".to_string());
+        input.move_to_begin();
+        input.move_by(2); // "he|llo"
+        input.delete_to_end();
+        assert_eq!(input.as_str(), "he");
+        assert_eq!(input.cursor(), 2);
+
+        // Test at end
+        input.reset("hello".to_string());
+        input.move_to_end();
+        input.delete_to_end();
+        assert_eq!(input.as_str(), "hello");
+        assert_eq!(input.cursor(), 5);
+
+        // Test with multi-byte
+        input.reset("あいうえお".to_string());
+        input.move_to_begin();
+        input.move_by(2); // "あい|うえお"
+        input.delete_to_end();
+        assert_eq!(input.as_str(), "あい");
+        assert_eq!(input.cursor(), 2);
+    }
+
+    #[test]
+    fn test_delete_to_beginning() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+
+        // Test at beginning (nothing happens)
+        input.reset("hello".to_string());
+        input.move_to_begin();
+        input.delete_to_beginning();
+        assert_eq!(input.as_str(), "hello");
+        assert_eq!(input.cursor(), 0);
+
+        // Test in middle
+        input.reset("hello".to_string());
+        input.move_to_begin();
+        input.move_by(2); // "he|llo"
+        input.delete_to_beginning();
+        assert_eq!(input.as_str(), "llo");
+        assert_eq!(input.cursor(), 0);
+
+        // Test at end
+        input.reset("hello".to_string());
+        input.move_to_end();
+        input.delete_to_beginning();
+        assert_eq!(input.as_str(), "");
+        assert_eq!(input.cursor(), 0);
+
+        // Test with multi-byte
+        input.reset("あいうえお".to_string());
+        input.move_to_begin();
+        input.move_by(2); // "あい|うえお"
+        input.delete_to_beginning();
+        assert_eq!(input.as_str(), "うえお");
+        assert_eq!(input.cursor(), 0);
     }
 
     #[test]

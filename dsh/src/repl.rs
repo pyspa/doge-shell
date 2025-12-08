@@ -1651,6 +1651,16 @@ impl<'a> Repl<'a> {
                 self.completion.clear();
                 reset_completion = true;
             }
+            (KeyCode::Char('k'), CTRL) => {
+                self.input.delete_to_end();
+                self.completion.clear();
+                reset_completion = true;
+            }
+            (KeyCode::Char('u'), CTRL) => {
+                self.input.delete_to_beginning();
+                self.completion.clear();
+                reset_completion = true;
+            }
             (KeyCode::Left, modifiers) if modifiers.contains(CTRL) => {
                 self.input.move_word_left();
                 self.completion.clear();

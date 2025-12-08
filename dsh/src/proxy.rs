@@ -153,6 +153,15 @@ impl ShellProxy for Shell {
     }
 
     fn changepwd(&mut self, path: &str) -> Result<()> {
+        // Save current directory as OLDPWD before changing
+        if let Ok(current) = std::env::current_dir() {
+            let old_pwd = current.to_string_lossy().into_owned();
+            self.environment
+                .write()
+                .variables
+                .insert("OLDPWD".to_string(), old_pwd);
+        }
+
         std::env::set_current_dir(path)?;
         self.save_path_history(path);
         self.exec_chpwd_hooks(path)?;

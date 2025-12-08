@@ -14,9 +14,6 @@ use std::time::{Duration, Instant};
 // TODO stash, rename, delete
 
 const BRANCH_MARK: &str = "🐾";
-const BRANCH_AHEAD: &str = "🦮";
-const BRANCH_BEHIND: &str = "🐩";
-const BRANCH_DIVERGED: &str = "🦖";
 #[allow(dead_code)]
 const BRANCH_CONFLICT: &str = "🏴‍☠️";
 const UNTRACKED: &str = "?";
@@ -71,10 +68,26 @@ impl Prompt {
             // Ensure padding if we have prompt content
             // Write branch mark and branch name
             let branch_display = format!(
-                " {} {} {}{}",
+                " {} {} {}{}{}",
                 "on".reset(),
                 BRANCH_MARK.magenta(),
                 git_status.branch.as_str().magenta(),
+                // Ahead/Behind counts
+                if git_status.ahead > 0 || git_status.behind > 0 {
+                    let mut s = String::from(" ");
+                    if git_status.ahead > 0 {
+                        s.push_str(&format!("↑{}", git_status.ahead));
+                        if git_status.behind > 0 {
+                            s.push(' ');
+                        }
+                    }
+                    if git_status.behind > 0 {
+                        s.push_str(&format!("↓{}", git_status.behind));
+                    }
+                    s.cyan().to_string()
+                } else {
+                    "".to_string()
+                },
                 if let Some(status) = &git_status.branch_status {
                     format!(" [{}]", status.to_string().bold().red())
                 } else {
@@ -320,6 +333,8 @@ fn get_git_branch() -> (String, bool) {
 pub struct GitStatus {
     pub branch: String,
     pub branch_status: Option<String>,
+    pub ahead: u32,
+    pub behind: u32,
 }
 
 impl Default for GitStatus {
@@ -333,6 +348,8 @@ impl GitStatus {
         GitStatus {
             branch: "".to_string(),
             branch_status: None,
+            ahead: 0,
+            behind: 0,
         }
     }
 }
@@ -402,7 +419,7 @@ fn parse_git_status_output(stdout: &[u8]) -> Option<GitStatus> {
     let mut reader = BufReader::new(stdout);
     let mut buf = String::new();
 
-    let mut branch_status = String::new();
+    // let branch_status = String::new();
     let mut modified = false;
     let mut untrack_file = false;
 
@@ -420,18 +437,16 @@ fn parse_git_status_output(stdout: &[u8]) -> Option<GitStatus> {
                     status.branch = branch.to_string();
                 }
             } else if buf.starts_with("# branch.ab") {
-                if let Some(val) = splited.get(2)
-                    && *val != "+0"
-                {
-                    branch_status = BRANCH_AHEAD.to_string();
+                if let Some(val) = splited.get(2) {
+                    // +0, +1
+                    if let Ok(count) = val.replace('+', "").parse::<u32>() {
+                        status.ahead = count;
+                    }
                 }
-                if let Some(val) = splited.get(3)
-                    && *val != "-0"
-                {
-                    if branch_status == BRANCH_AHEAD {
-                        branch_status = BRANCH_DIVERGED.to_string();
-                    } else {
-                        branch_status = BRANCH_BEHIND.to_string();
+                if let Some(val) = splited.get(3) {
+                    // -0, -1
+                    if let Ok(count) = val.replace('-', "").parse::<u32>() {
+                        status.behind = count;
                     }
                 }
             }
@@ -451,9 +466,9 @@ fn parse_git_status_output(stdout: &[u8]) -> Option<GitStatus> {
     if untrack_file {
         git_status += UNTRACKED;
     }
-    if !branch_status.is_empty() {
-        git_status += branch_status.as_str();
-    }
+
+    // Note: Ahead/Behind are stored in structured fields and displayed by print_preprompt
+    // We do NOT add them to git_status string here to avoid duplication
 
     if !git_status.is_empty() {
         status.branch_status = Some(git_status);
@@ -571,5 +586,23 @@ mod tests {
 
         // Invalid after TTL expiration
         assert!(!cache.is_valid(&git_root));
+    }
+
+    #[test]
+    fn test_parse_git_status_output() {
+        let output = b"# branch.oid 1234567890\n# branch.head main\n# branch.ab +1 -2\n1 .M N... 100644 100644 100644 123456 123456 file.txt\n? untracked.txt\n";
+
+        let status = parse_git_status_output(output).expect("Should parse successfully");
+
+        assert_eq!(status.branch, "main");
+        assert_eq!(status.ahead, 1);
+        assert_eq!(status.behind, 2);
+
+        // Check branch_status contains ONLY modified/untracked, NOT arrows
+        let branch_status = status.branch_status.unwrap();
+        assert!(!branch_status.contains("↑"));
+        assert!(!branch_status.contains("↓"));
+        assert!(branch_status.contains("!")); // Modified
+        assert!(branch_status.contains("?")); // Untracked
     }
 }

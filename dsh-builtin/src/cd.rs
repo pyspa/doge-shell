@@ -40,6 +40,18 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         // Handle home directory paths (starting with ~)
         Some(dir) if HOME_PATH_REGEX.is_match(dir) => shellexpand::tilde(dir).to_string(),
 
+        // Handle previous directory (cd -)
+        Some("-") => match proxy.get_var("OLDPWD") {
+            Some(old_pwd) => {
+                ctx.write_stdout(&format!("{}\n", old_pwd)).ok();
+                old_pwd
+            }
+            None => {
+                ctx.write_stderr("cd: OLDPWD not set").ok();
+                return ExitStatus::ExitedWith(1);
+            }
+        },
+
         // Handle relative paths
         Some(dir) => {
             let res = Path::new(&current_dir).join(dir).canonicalize();

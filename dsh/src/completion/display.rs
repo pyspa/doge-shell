@@ -95,6 +95,7 @@ pub struct CompletionDisplay {
 pub(crate) struct LayoutCache {
     terminal_width: usize,
     column_width: usize,
+    max_name_width: usize, // Added to align descriptions
     items_per_row: usize,
     total_rows: usize,
 }
@@ -118,19 +119,30 @@ impl CompletionDisplay {
     }
 
     fn calculate_layout(&self, terminal_width: usize) -> LayoutCache {
-        // Calculate the maximum display width needed for each candidate
-        let max_display_width = self
-            .candidates
-            .iter()
-            .map(|c| {
-                let name_width = unicode_display_width(c.get_display_name());
-                let type_char_width = c.get_type_char().width().unwrap_or(2); // Most emojis are 2 chars wide
-                name_width + type_char_width + 1 // type_char + " " + name
-            })
-            .max()
-            .unwrap_or(10);
+        let mut max_name_width = 0;
+        let mut max_total_width = 0;
 
-        debug!("Max display width needed: {}", max_display_width);
+        for c in &self.candidates {
+            let name_width = unicode_display_width(c.get_display_name());
+            let type_char_width = c.get_type_char().width().unwrap_or(2);
+            let desc = c.get_description();
+            let desc_width = if let Some(d) = desc {
+                unicode_display_width(d) + 2 // +2 for spacing/separator
+            } else {
+                0
+            };
+
+            let full_name_width = name_width + type_char_width + 1; // type + space + name
+            max_name_width = max_name_width.max(full_name_width);
+            max_total_width = max_total_width.max(full_name_width + desc_width);
+        }
+
+        let max_display_width = max_total_width.max(10);
+
+        debug!(
+            "Layout calc: max_name_width={}, max_total_width={}",
+            max_name_width, max_display_width
+        );
 
         // Reserve space for selection indicator ("> " or "  ") and inter-column spacing
         let selection_indicator_width = 1; // ">" or " "
@@ -176,6 +188,7 @@ impl CompletionDisplay {
         LayoutCache {
             terminal_width,
             column_width,
+            max_name_width,
             items_per_row: items_per_row.max(1),
             total_rows,
         }
@@ -527,11 +540,11 @@ impl CompletionDisplay {
         }
 
         // Format the item for display with fixed width
-        let formatted = if is_message_item {
+        let (formatted, description_part) = if is_message_item {
             // For message items, don't apply column width formatting
-            candidate.get_display_name().to_string()
+            (candidate.get_display_name().to_string(), None)
         } else {
-            candidate.get_formatted_display(layout.column_width)
+            candidate.get_formatted_display(layout.column_width, layout.max_name_width)
         };
 
         // Add type-specific coloring
@@ -539,19 +552,26 @@ impl CompletionDisplay {
             queue!(writer, SetForegroundColor(Color::DarkGrey))?;
         } else {
             match candidate.get_type_char() {
-                '⚡' => queue!(writer, SetForegroundColor(Color::White))?, // Command - lightning bolt
-                '📁' => queue!(writer, SetForegroundColor(Color::White))?, // Directory - folder
-                '📄' => queue!(writer, SetForegroundColor(Color::White))?, // File - document
-                '⚙' => queue!(writer, SetForegroundColor(Color::White))?,  // Option - gear
+                '⚡' => queue!(writer, SetForegroundColor(Color::Yellow))?, // Command - lightning bolt
+                '📁' => queue!(writer, SetForegroundColor(Color::Blue))?,   // Directory - folder
+                '📄' => queue!(writer, SetForegroundColor(Color::White))?,  // File - document
+                '⚙' => queue!(writer, SetForegroundColor(Color::Cyan))?,    // Option - gear
                 '🔹' => queue!(writer, SetForegroundColor(Color::White))?, // Basic - small blue diamond
-                '🌿' => queue!(writer, SetForegroundColor(Color::White))?, // Git branch - herb/branch
-                '📜' => queue!(writer, SetForegroundColor(Color::White))?, // Script - scroll
-                '🕒' => queue!(writer, SetForegroundColor(Color::White))?, // History - clock
+                '🌿' => queue!(writer, SetForegroundColor(Color::Green))?, // Git branch - herb/branch
+                '📜' => queue!(writer, SetForegroundColor(Color::Yellow))?, // Script - scroll
+                '🕒' => queue!(writer, SetForegroundColor(Color::Magenta))?, // History - clock
                 _ => queue!(writer, SetForegroundColor(Color::White))?,
             }
         }
 
         queue!(writer, Print(formatted))?;
+
+        // Render description if available (dimmed)
+        if let Some(desc) = description_part {
+            queue!(writer, SetForegroundColor(Color::DarkGrey))?;
+            queue!(writer, Print(desc))?;
+        }
+
         queue!(writer, ResetColor)?;
 
         Ok(())
@@ -728,6 +748,17 @@ impl Candidate {
         }
     }
 
+    /// Get the description of the candidate
+    pub fn get_description(&self) -> Option<&str> {
+        match self {
+            Candidate::Item(_, desc) if !desc.is_empty() => Some(desc),
+            Candidate::Command { description, .. } if !description.is_empty() => Some(description),
+            Candidate::Option { description, .. } if !description.is_empty() => Some(description),
+            Candidate::History { frequency: _, .. } => None, // Could format frequency here if desired
+            _ => None,
+        }
+    }
+
     /// Get the display name (without description)
     pub fn get_display_name(&self) -> &str {
         match self {
@@ -742,44 +773,83 @@ impl Candidate {
         }
     }
 
-    /// Get formatted display string with type character
-    pub fn get_formatted_display(&self, width: usize) -> String {
+    /// Get formatted display string with type character and description
+    pub fn get_formatted_display(
+        &self,
+        width: usize,
+        max_name_width: usize,
+    ) -> (String, Option<String>) {
         let type_char = self.get_type_char();
         let name = self.get_display_name();
 
-        // Calculate the width needed for the type character (emoji)
         let type_char_width = type_char.width().unwrap_or(2);
 
-        // Calculate maximum width available for the name
-        // Format: "emoji name" with proper spacing
-        let max_name_width = width.saturating_sub(type_char_width + 1); // type_char + " "
+        // Calculate max width available for the name part (excluding description)
+        // If we have multiple columns, width is constrained by column_width
+        // If we have description space, we want to align descriptions
 
-        // Ensure we have at least some space for the name
-        if max_name_width < 3 {
-            // If width is too small, just return the type character with padding
-            let padding_needed = width.saturating_sub(type_char_width);
-            return format!("{}{}", type_char, " ".repeat(padding_needed));
-        }
+        let mut result_name = String::new();
 
-        // Truncate name if it's too long for the available width
-        let display_name = if unicode_display_width(name) > max_name_width {
-            truncate_to_width(name, max_name_width)
+        // --- 1. Format Name Part (Icon + Name + Padding) ---
+
+        // Calculate effective max width for the name part
+        // If max_name_width is provided (from layout cache), use it to align descriptions
+        // limited by total available width
+        // let target_name_width = if max_name_width > 0 {
+        //      max_name_width.min(width.saturating_sub(2)) // Ensure at least room for 2 chars
+        // } else {
+        //      width.saturating_sub(type_char_width + 1)
+        // };
+
+        let max_content_width = width.saturating_sub(type_char_width + 1);
+
+        // Truncate name if it exceeds available width
+        let display_name = if unicode_display_width(name) > max_content_width {
+            truncate_to_width(name, max_content_width)
         } else {
             name.to_string()
         };
 
-        // Calculate padding needed to make the total width exactly match the requested width
-        let name_display_width = unicode_display_width(&display_name);
-        let content_width = type_char_width + 1 + name_display_width; // type_char + " " + name
-        let padding_needed = width.saturating_sub(content_width);
+        result_name.push(type_char);
+        result_name.push(' ');
+        result_name.push_str(&display_name);
 
-        // Format with proper padding to ensure fixed width
-        format!(
-            "{} {}{}",
-            type_char,
-            display_name,
-            " ".repeat(padding_needed)
-        )
+        // Pad name to align description (or to fill column width)
+        let current_width = type_char_width + 1 + unicode_display_width(&display_name);
+        let padding_needed = if max_name_width > 0 {
+            // Align to max_name_width if meaningful
+            // But don't exceed total width
+            let target = max_name_width.min(width);
+            target.saturating_sub(current_width)
+        } else {
+            width.saturating_sub(current_width)
+        };
+
+        result_name.push_str(&" ".repeat(padding_needed));
+
+        // --- 2. Format Description Part ---
+        let description_part = if let Some(desc) = self.get_description() {
+            let used_width = current_width + padding_needed;
+            let remaining_width = width.saturating_sub(used_width);
+
+            if remaining_width > 3 {
+                // Spacing before description
+                let actual_desc = truncate_to_width(desc, remaining_width.saturating_sub(2));
+                Some(format!("  {}", actual_desc))
+            } else {
+                None
+            }
+        } else {
+            // Fill remaining space with whitespace to ensure background color consistency if selected
+            let used_width = current_width + padding_needed;
+            let remaining = width.saturating_sub(used_width);
+            if remaining > 0 {
+                result_name.push_str(&" ".repeat(remaining));
+            }
+            None
+        };
+
+        (result_name, description_part)
     }
 }
 
@@ -834,7 +904,7 @@ mod tests {
         };
 
         // Test with small width
-        let formatted = candidate.get_formatted_display(20);
+        let (formatted, _) = candidate.get_formatted_display(20, 0);
         let display_width = unicode_display_width(&formatted);
 
         // Should not exceed the requested width significantly
@@ -870,7 +940,7 @@ mod tests {
         let fixed_width = 25;
 
         for candidate in &candidates {
-            let formatted = candidate.get_formatted_display(fixed_width);
+            let (formatted, _) = candidate.get_formatted_display(fixed_width, 0);
             let actual_width = unicode_display_width(&formatted);
 
             // All formatted items should have exactly the same width
@@ -906,7 +976,7 @@ mod tests {
         let fixed_width = 30;
 
         for candidate in &candidates {
-            let formatted = candidate.get_formatted_display(fixed_width);
+            let (formatted, _) = candidate.get_formatted_display(fixed_width, 0);
             let actual_width = unicode_display_width(&formatted);
 
             // All formatted items should have exactly the same width, even with Unicode

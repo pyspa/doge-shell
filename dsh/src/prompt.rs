@@ -67,24 +67,23 @@ impl Prompt {
         //     path, has_git, self.current_git_root
         // );
 
-        if has_git
-            && let Some(ref git_status) = self.get_git_status_cached() {
-                // Ensure padding if we have prompt content
-                // Write branch mark and branch name
-                let branch_display = format!(
-                    " {} {} {}{}",
-                    "on".reset(),
-                    BRANCH_MARK.magenta(),
-                    git_status.branch.as_str().magenta(),
-                    if let Some(status) = &git_status.branch_status {
-                        format!(" [{}]", status.to_string().bold().red())
-                    } else {
-                        "".to_string()
-                    }
-                );
+        if has_git && let Some(ref git_status) = self.get_git_status_cached() {
+            // Ensure padding if we have prompt content
+            // Write branch mark and branch name
+            let branch_display = format!(
+                " {} {} {}{}",
+                "on".reset(),
+                BRANCH_MARK.magenta(),
+                git_status.branch.as_str().magenta(),
+                if let Some(status) = &git_status.branch_status {
+                    format!(" [{}]", status.to_string().bold().red())
+                } else {
+                    "".to_string()
+                }
+            );
 
-                path.push_str(&branch_display);
-            }
+            path.push_str(&branch_display);
+        }
 
         write!(out, "{}", path).ok();
     }

@@ -996,6 +996,22 @@ impl<'a> Repl<'a> {
                         self.compute_color_ranges_from_pairs(pairs, &input);
                     self.input.color_ranges = Some(color_ranges);
                     self.input.can_execute = can_execute;
+
+                    // Apply visual improvements for valid paths
+                    if let Some(ref mut ranges) = self.input.color_ranges {
+                        for (start, end, kind) in ranges.iter_mut() {
+                            // Check if Argument is a valid path
+                            if matches!(kind, crate::input::ColorType::Argument) {
+                                let word = &input[*start..*end];
+                                // Clean up quotes if present for path check
+                                let clean_word = word.trim_matches(|c| c == '\'' || c == '"');
+                                let path = std::path::Path::new(clean_word);
+                                if path.exists() {
+                                    *kind = crate::input::ColorType::ValidPath;
+                                }
+                            }
+                        }
+                    }
                 }
                 Err(err) => {
                     // Parsing failed, highlight the error
@@ -1265,6 +1281,47 @@ impl<'a> Repl<'a> {
                     self.completion.clear();
                 }
             }
+            (KeyCode::Char(ch), NONE) if matches!(ch, '(' | '{' | '[' | '\'' | '"') => {
+                // Auto-pairing logic
+                let pairs = [('(', ')'), ('{', '}'), ('[', ']'), ('\'', '\''), ('"', '"')];
+                let pair = pairs.iter().find(|(o, _)| *o == ch).unwrap();
+                let closing = pair.1;
+
+                self.input.insert(ch);
+                self.input.insert(closing);
+                self.input.move_by(-1);
+
+                if self.completion.is_changed(self.input.as_str()) {
+                    self.completion.clear();
+                }
+            }
+            (KeyCode::Char(ch), NONE) if matches!(ch, ')' | '}' | ']' | '\'' | '"') => {
+                // Overtype logic
+                let current_input = self.input.as_str();
+                let cursor = self.input.cursor();
+
+                if cursor < current_input.len() {
+                    let next_char = current_input[cursor..].chars().next().unwrap();
+                    if next_char == ch {
+                        self.input.move_by(1);
+
+                        // Move cursor relatively
+                        let mut renderer = TerminalRenderer::new();
+                        let new_disp = self.prompt_mark_width + self.input.cursor_display_width();
+                        let prompt_w = self.prompt_mark_width;
+                        let prev_cursor_disp = prompt_w + self.input.cursor_display_width() - 1; // Approx
+                        self.move_cursor_relative(&mut renderer, prev_cursor_disp, new_disp);
+                        queue!(renderer, cursor::Show).ok();
+                        renderer.flush().ok();
+                        return Ok(());
+                    }
+                }
+
+                self.input.insert(ch);
+                if self.completion.is_changed(self.input.as_str()) {
+                    self.completion.clear();
+                }
+            }
             (KeyCode::Char(ch), NONE) => {
                 self.input.insert(ch);
                 if self.completion.is_changed(self.input.as_str()) {
@@ -1278,6 +1335,21 @@ impl<'a> Repl<'a> {
                 }
             }
             (KeyCode::Backspace, NONE) => {
+                // Auto-unpairing logic
+                let cursor = self.input.cursor();
+                if cursor > 0 && cursor < self.input.len() {
+                    let input_str = self.input.as_str();
+                    let prev_char = input_str[..cursor].chars().last();
+                    let next_char = input_str[cursor..].chars().next();
+
+                    if let (Some(p), Some(n)) = (prev_char, next_char) {
+                        let pairs = [('(', ')'), ('{', '}'), ('[', ']'), ('\'', '\''), ('"', '"')];
+                        if pairs.iter().any(|(o, c)| *o == p && *c == n) {
+                            self.input.delete_char(); // Delete closing char
+                        }
+                    }
+                }
+
                 reset_completion = true;
                 self.input.backspace();
                 self.completion.clear();
@@ -1573,6 +1645,35 @@ impl<'a> Repl<'a> {
                     self.input.insert_str(&content);
                     self.completion.clear();
                 }
+            }
+            (KeyCode::Char('w'), CTRL) => {
+                self.input.delete_word_backward();
+                self.completion.clear();
+                reset_completion = true;
+            }
+            (KeyCode::Left, modifiers) if modifiers.contains(CTRL) => {
+                self.input.move_word_left();
+                self.completion.clear();
+
+                // Move cursor relatively
+                let mut renderer = TerminalRenderer::new();
+                let new_disp = self.prompt_mark_width + self.input.cursor_display_width();
+                self.move_cursor_relative(&mut renderer, prev_cursor_disp, new_disp);
+                queue!(renderer, cursor::Show).ok();
+                renderer.flush().ok();
+                return Ok(());
+            }
+            (KeyCode::Right, modifiers) if modifiers.contains(CTRL) => {
+                self.input.move_word_right();
+                self.completion.clear();
+
+                // Move cursor relatively
+                let mut renderer = TerminalRenderer::new();
+                let new_disp = self.prompt_mark_width + self.input.cursor_display_width();
+                self.move_cursor_relative(&mut renderer, prev_cursor_disp, new_disp);
+                queue!(renderer, cursor::Show).ok();
+                renderer.flush().ok();
+                return Ok(());
             }
             _ => {
                 warn!("unsupported key event: {:?}", ev);

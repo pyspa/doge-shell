@@ -67,6 +67,7 @@ pub struct InputConfig {
     pub error_color: Color,              // Parse errors (red intense)
     pub completion_color: Color,         // Completion candidates (dark grey)
     pub ghost_color: Color,              // Inline suggestion text (dim gray)
+    pub valid_path_color: Color,         // Valid path (magenta)
 }
 
 impl Default for InputConfig {
@@ -87,6 +88,7 @@ impl Default for InputConfig {
             error_color: Color::Red,
             completion_color: Color::DarkGrey,
             ghost_color: Color::DarkGrey,
+            valid_path_color: Color::Magenta,
         }
     }
 }
@@ -117,6 +119,7 @@ pub enum ColorType {
     Background,
     ProcSubst,
     Error,
+    ValidPath,
 }
 
 impl Input {
@@ -230,6 +233,73 @@ impl Input {
         } else {
             self.cursor = min(self.len(), self.cursor + offset.unsigned_abs());
         }
+    }
+
+    pub fn delete_word_backward(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+
+        let chars: Vec<char> = self.input.chars().collect();
+        let mut idx = self.cursor;
+
+        // Skip trailing spaces
+        while idx > 0 && chars[idx - 1].is_whitespace() {
+            idx -= 1;
+        }
+
+        // Find start of word
+        while idx > 0 && !chars[idx - 1].is_whitespace() {
+            idx -= 1;
+        }
+
+        let word_len = self.cursor - idx;
+        for _ in 0..word_len {
+            self.backspace();
+        }
+    }
+
+    pub fn move_word_left(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+
+        let chars: Vec<char> = self.input.chars().collect();
+        let mut idx = self.cursor;
+
+        // Skip spaces to the left
+        while idx > 0 && chars[idx - 1].is_whitespace() {
+            idx -= 1;
+        }
+
+        // Skip non-spaces
+        while idx > 0 && !chars[idx - 1].is_whitespace() {
+            idx -= 1;
+        }
+
+        self.cursor = idx;
+    }
+
+    pub fn move_word_right(&mut self) {
+        if self.cursor >= self.len() {
+            return;
+        }
+
+        let chars: Vec<char> = self.input.chars().collect();
+        let mut idx = self.cursor;
+        let len = chars.len();
+
+        // Skip non-spaces to the right (current word)
+        while idx < len && !chars[idx].is_whitespace() {
+            idx += 1;
+        }
+
+        // Skip spaces to next word
+        while idx < len && chars[idx].is_whitespace() {
+            idx += 1;
+        }
+
+        self.cursor = idx;
     }
 
     fn byte_index(&self) -> usize {
@@ -495,6 +565,7 @@ impl Input {
                 ColorType::Background => self.config.background_color,
                 ColorType::ProcSubst => self.config.proc_subst_color,
                 ColorType::Error => self.config.error_color,
+                ColorType::ValidPath => self.config.valid_path_color,
             };
             let _ = write!(result, "{}", colored_text.with(color));
 
@@ -772,5 +843,62 @@ mod tests {
         input.insert(' ');
         let fallback_after_space = input.get_completion_word_fallback();
         assert_eq!(fallback_after_space, None);
+    }
+
+    #[test]
+    fn test_word_navigation_and_deletion() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+        input.insert_str("echo hello world");
+
+        // Initial state: "echo hello world|"
+        assert_eq!(input.cursor(), 16);
+
+        // Test Ctrl+W (delete "world")
+        input.delete_word_backward();
+        assert_eq!(input.as_str(), "echo hello ");
+        assert_eq!(input.cursor(), 11);
+
+        // Test delete "hello"
+        input.delete_word_backward();
+        assert_eq!(input.as_str(), "echo ");
+        assert_eq!(input.cursor(), 5);
+
+        // Test delete "echo"
+        input.delete_word_backward();
+        assert_eq!(input.as_str(), "");
+        assert_eq!(input.cursor(), 0);
+
+        // restore
+        input.insert_str("one two three");
+        // "one two three|"
+
+        // Test Move Left
+        input.move_word_left(); // to start of "three"
+        assert_eq!(input.cursor(), 8); // "one two |three"
+
+        input.move_word_left(); // to start of "two"
+        assert_eq!(input.cursor(), 4); // "one |two three"
+
+        input.move_word_left(); // to start of "one"
+        assert_eq!(input.cursor(), 0); // "|one two three"
+
+        // Test Move Right
+        input.move_word_right(); // to end of "one"
+        assert_eq!(input.cursor(), 4); // "one| two three" (wait, logic moves to end of word or start of next?)
+        // Let's check logic:
+        // skip non-spaces (current word) -> "one" skipped
+        // skip spaces -> " " skipped
+        // stops at "t" of "two"?
+        // My implementation:
+        // while idx < len && !chars[idx].is_whitespace() { idx += 1; } // skips "one", lands on space at 3
+        // while idx < len && chars[idx].is_whitespace() { idx += 1; } // skips space, lands on 't' at 4
+        assert_eq!(input.cursor(), 4);
+
+        input.move_word_right();
+        assert_eq!(input.cursor(), 8); // start of "three"
+
+        input.move_word_right();
+        assert_eq!(input.cursor(), 13); // end of string
     }
 }

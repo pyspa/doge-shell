@@ -49,6 +49,9 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 
 ### Other Features
 - **Git Integration**: Commands for Git operations (`gco`, `glog`, etc.)
+- **Auto-Correction Suggestion**: Suggests similar commands when a typo is detected (e.g., "Did you mean: git ?" when typing `gti`)
+- **Command Output History**: Capture command output with `|>` operator and reference it with `$OUT` variable
+- **Command Timing Statistics**: Track execution time and frequency with `timing` command
 - **UUID Generation**: Built-in UUID generation with `uuid` command
 - **URL Shortening**: URL shortening with `dmv` command
 - **Web Server**: Built-in static file server with `serve` command
@@ -83,6 +86,8 @@ The shell includes many built-in commands:
 | `uuid` | Generate UUIDs |
 | `dmv` | URL shortener |
 | `reload` | Reload shell configuration |
+| `timing` | Show command execution statistics |
+| `out` | Display captured command output history |
 | `help` | Show help information |
 
 ## 🧠 Lisp Functions

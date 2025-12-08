@@ -1498,6 +1498,33 @@ impl<'a> Repl<'a> {
 
                 self.input.completion.take();
                 self.stop_history_mode();
+
+                // Transient Prompt Logic
+                // Transient Prompt Logic
+                if self
+                    .shell
+                    .environment
+                    .read()
+                    .input_preferences
+                    .transient_prompt
+                {
+                    use crate::input::display_width;
+
+                    let mut stdout = std::io::stdout();
+                    let input_width = display_width(self.input.as_str());
+                    let prompt_width = self.prompt_mark_width;
+                    let cols = self.columns;
+
+                    render_transient_prompt_to(
+                        &mut stdout,
+                        &self.input,
+                        input_width,
+                        prompt_width,
+                        cols as u16,
+                    )
+                    .ok();
+                }
+
                 print!("\r\n");
                 if !self.input.is_empty() {
                     let start_time = Instant::now();
@@ -1972,5 +1999,87 @@ mod tests {
         );
 
         drop(repl);
+    }
+}
+
+/// Helper function to render the transient prompt
+/// Extracted for testability
+fn render_transient_prompt_to<W: Write>(
+    out: &mut W,
+    input: &Input,
+    input_width: usize,
+    prompt_width: usize,
+    cols: u16,
+) -> Result<()> {
+    use crossterm::style::Stylize;
+
+    // Calculate how many lines the prompt+input occupies
+    // Note: Preprompt is always one extra line above
+    let input_lines = (prompt_width + input_width) / (cols as usize);
+    let total_lines = 1 + input_lines; // +1 for preprompt
+
+    queue!(
+        out,
+        cursor::Hide,
+        cursor::MoveToColumn(0),
+        cursor::MoveUp(total_lines as u16),
+        terminal::Clear(ClearType::FromCursorDown)
+    )
+    .ok();
+
+    // Print transient prompt symbol (Green ❯)
+    // We use write! instead of print! to support the generic writer
+    queue!(out, Print("❯".green()), Print(" ")).ok();
+
+    // Render the input with existing syntax highlighting
+    input.print(out, None);
+
+    queue!(out, cursor::Show).ok();
+    out.flush().ok();
+    Ok(())
+}
+
+#[cfg(test)]
+mod transient_tests {
+    use super::*;
+    use crate::input::InputConfig;
+
+    #[test]
+    fn test_render_transient_prompt() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+        input.insert_str("echo hello");
+
+        let mut buffer = Vec::new();
+        // Assume prompt width 2 ("$ "), cols 80, input width 10 ("echo hello")
+        // input_lines = (2 + 10) / 80 = 0
+        // total_lines = 1 + 0 = 1
+
+        let result = render_transient_prompt_to(
+            &mut buffer,
+            &input,
+            10, // input_width
+            2,  // prompt_width
+            80, // cols
+        );
+
+        assert!(result.is_ok());
+
+        let output = String::from_utf8(buffer).expect("Buffer should be valid UTF-8");
+
+        // Verify key components of the output sequence
+        // 1. Hide Cursor
+        assert!(output.contains("\x1b[?25l"));
+        // 2. Move lines up (1 line) (ansi code might vary depending on crossterm, usually [A)
+        // crossterm uses MoveUp(n) -> CSI n A
+        assert!(output.contains("\x1b[1A"));
+        // 3. Clear from cursor down -> CSI J
+        assert!(output.contains("\x1b[J"));
+        // 4. Prompt Symbol (Green ❯) - ANSI codes for green
+        assert!(output.contains("❯"));
+        // 5. Input content
+        assert!(output.contains("echo hello"));
+        // 6. Show Cursor
+        assert!(output.contains("\x1b[?25h"));
     }
 }

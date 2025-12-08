@@ -28,6 +28,7 @@ impl SuggestionMode {
 pub struct InputPreferences {
     pub suggestion_mode: SuggestionMode,
     pub ai_backfill: bool,
+    pub transient_prompt: bool,
 }
 
 impl Default for InputPreferences {
@@ -35,6 +36,7 @@ impl Default for InputPreferences {
         Self {
             suggestion_mode: SuggestionMode::Ghost,
             ai_backfill: false,
+            transient_prompt: true,
         }
     }
 }
@@ -711,6 +713,7 @@ mod tests {
         engine.set_preferences(InputPreferences {
             suggestion_mode: SuggestionMode::Ghost,
             ai_backfill: true,
+            transient_prompt: true,
         });
 
         let result = engine.predict("git s", "git s".chars().count(), None);
@@ -730,6 +733,7 @@ mod tests {
         engine.set_preferences(InputPreferences {
             suggestion_mode: SuggestionMode::Ghost,
             ai_backfill: true,
+            transient_prompt: true,
         });
 
         let mut history = FrecencyHistory::new();

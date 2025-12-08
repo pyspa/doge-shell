@@ -17,7 +17,10 @@ use anyhow::Context as _;
 use anyhow::Result;
 use arboard::Clipboard;
 use crossterm::cursor;
-use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+    DisableBracketedPaste, EnableBracketedPaste, Event, EventStream, KeyCode, KeyEvent,
+    KeyModifiers,
+};
 use crossterm::queue;
 use crossterm::style::{Print, ResetColor};
 use crossterm::terminal::{self, Clear, ClearType, enable_raw_mode};
@@ -48,26 +51,29 @@ const MCP_FORM_SUGGESTIONS: &[&str] =
 #[allow(dead_code)]
 pub enum ShellEvent {
     Input(Event),
+    Paste(String),
     ScreenResized,
 }
 
-/// State management for detecting double Ctrl+C press
+/// State management for detecting double key presses (Ctrl+C, Esc)
 #[derive(Debug)]
-struct CtrlCState {
+struct DoublePressState {
     first_press_time: Option<Instant>,
     press_count: u8,
+    timeout: Duration,
 }
 
-impl CtrlCState {
-    fn new() -> Self {
+impl DoublePressState {
+    fn new(timeout_ms: u64) -> Self {
         Self {
             first_press_time: None,
             press_count: 0,
+            timeout: Duration::from_millis(timeout_ms),
         }
     }
 
-    /// Handle Ctrl+C press. Returns true if it's the second press
-    fn on_ctrl_c_pressed(&mut self) -> bool {
+    /// Handle key press. Returns true if it's the second press within timeout
+    fn on_pressed(&mut self) -> bool {
         let now = Instant::now();
 
         match self.first_press_time {
@@ -78,12 +84,14 @@ impl CtrlCState {
                 false
             }
             Some(first_time) => {
-                if now.duration_since(first_time) <= Duration::from_secs(3) {
-                    // Second press within 3 seconds
+                if now.duration_since(first_time) <= self.timeout {
+                    // Second press within timeout
                     self.press_count = 2;
+                    // Reset to allow immediate next sequence detection
+                    self.first_press_time = None;
                     true
                 } else {
-                    // More than 3 seconds passed, treat as first press
+                    // Timeout passed, treat as new first press
                     self.first_press_time = Some(now);
                     self.press_count = 1;
                     false
@@ -113,7 +121,8 @@ pub struct Repl<'a> {
     // Cached prompt mark and its display width to avoid recomputation on each redraw
     prompt_mark_cache: String,
     prompt_mark_width: usize,
-    ctrl_c_state: CtrlCState,
+    ctrl_c_state: DoublePressState,
+    esc_state: DoublePressState,
     should_exit: bool,
     last_command_time: Option<Instant>,
     last_duration: Option<Duration>,
@@ -134,6 +143,9 @@ pub struct Repl<'a> {
 
 impl<'a> Drop for Repl<'a> {
     fn drop(&mut self) {
+        let mut renderer = TerminalRenderer::new();
+        queue!(renderer, DisableBracketedPaste).ok();
+        renderer.flush().ok();
         self.save_history();
     }
 }
@@ -190,7 +202,8 @@ impl<'a> Repl<'a> {
             prompt,
             prompt_mark_cache,
             prompt_mark_width,
-            ctrl_c_state: CtrlCState::new(),
+            ctrl_c_state: DoublePressState::new(3000), // 3 seconds for Ctrl+C
+            esc_state: DoublePressState::new(400),     // 400ms for Esc (sudo toggle)
             should_exit: false,
             last_command_time: None,
             last_duration: None,
@@ -251,7 +264,11 @@ impl<'a> Repl<'a> {
             debug!("Integrated completion engine initialized successfully");
         }
         self.lines = screen_size.1 as usize;
+        self.lines = screen_size.1 as usize;
         enable_raw_mode().ok();
+        let mut renderer = TerminalRenderer::new();
+        queue!(renderer, EnableBracketedPaste).ok();
+        renderer.flush().ok();
     }
 
     async fn check_background_jobs(&mut self, output: bool) -> Result<()> {
@@ -860,9 +877,15 @@ impl<'a> Repl<'a> {
     async fn handle_event(&mut self, ev: ShellEvent) -> Result<()> {
         match ev {
             ShellEvent::Input(input) => {
-                if let Event::Key(key) = input {
-                    self.handle_key_event(&key).await?
+                match input {
+                    Event::Key(key) => self.handle_key_event(&key).await?,
+                    Event::Paste(text) => self.handle_paste_event(&text).await?,
+                    _ => {}
                 }
+                Ok(())
+            }
+            ShellEvent::Paste(text) => {
+                self.handle_paste_event(&text).await?;
                 Ok(())
             }
             ShellEvent::ScreenResized => {
@@ -878,6 +901,22 @@ impl<'a> Repl<'a> {
                 Ok(())
             }
         }
+    }
+
+    async fn handle_paste_event(&mut self, text: &str) -> Result<()> {
+        // Safe Paste: normalize newlines and insert into buffer without execution
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        // We replace newlines with spaces or just keep them if the input supports multiline?
+        // Typically shells replace internal newlines with separate commands or just insert them.
+        // For safety, we insert as-is. The user sees the newlines and must press Enter to execute.
+        // If the text ends with newline, we should probably trim it to avoid accidental execution?
+        // But the user might WANT to paste and run.
+        // Safe Paste means we put it in the buffer. Use insert_str.
+        self.input.insert_str(&normalized);
+        let mut renderer = TerminalRenderer::new();
+        self.print_input(&mut renderer, true, true);
+        renderer.flush().ok();
+        Ok(())
     }
 
     fn get_completion_from_history(&mut self, input: &str) -> Option<String> {
@@ -1621,7 +1660,7 @@ impl<'a> Repl<'a> {
             (KeyCode::Char('c'), CTRL) => {
                 let mut renderer = TerminalRenderer::new();
 
-                if self.ctrl_c_state.on_ctrl_c_pressed() {
+                if self.ctrl_c_state.on_pressed() {
                     // Second Ctrl+C - exit shell normally
                     // queue message and flush once here
                     queue!(renderer, Print("\r\nExiting shell...\r\n")).ok();
@@ -1711,6 +1750,32 @@ impl<'a> Repl<'a> {
                 self.move_cursor_relative(&mut renderer, prev_cursor_disp, new_disp);
                 queue!(renderer, cursor::Show).ok();
                 renderer.flush().ok();
+                return Ok(());
+            }
+            (KeyCode::Esc, NONE) => {
+                if self.esc_state.on_pressed() {
+                    // Double Esc detected - toggle sudo
+                    self.toggle_sudo().await?;
+                    // Reset state to avoid triple press issues
+                    self.esc_state.reset();
+                } else {
+                    // Single Esc - standard behavior is often to clear line or cancel completion?
+                    // Existing behavior usually falls through to _ (unsupported) or is handled else where?
+                    // If I consume it here, I must ensure I don't break other things.
+                    // But Esc is usually handled. Is it?
+                    // I checked earlier and didn't see explicit Esc handler.
+                    // If completion is active, Esc should cancel completion.
+                    if self.input.completion.is_some() || self.active_suggestion.is_some() {
+                        self.completion.clear();
+                        self.clear_suggestion_state();
+                        let mut renderer = TerminalRenderer::new();
+                        self.print_input(&mut renderer, true, true);
+                        renderer.flush().ok();
+                    } else {
+                        // Maybe clear line? Or do nothing?
+                        // Let's do nothing on single, just wait for potential second.
+                    }
+                }
                 return Ok(());
             }
             _ => {
@@ -1889,6 +1954,22 @@ impl<'a> Repl<'a> {
 
         self.shell.lisp_engine.borrow().is_export(word)
     }
+
+    async fn toggle_sudo(&mut self) -> Result<()> {
+        let mut input = self.input.as_str().to_string();
+        if input.starts_with("sudo ") {
+            // Remove sudo
+            input = input[5..].to_string();
+        } else {
+            // Add sudo
+            input.insert_str(0, "sudo ");
+        }
+        self.input.reset(input);
+        let mut renderer = TerminalRenderer::new();
+        self.print_input(&mut renderer, true, true);
+        renderer.flush().ok();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1926,46 +2007,46 @@ mod tests {
 
     #[test]
     fn test_ctrl_c_state_single_press() {
-        let mut state = CtrlCState::new();
+        let mut state = DoublePressState::new(3000);
 
         // First press returns false
-        assert!(!state.on_ctrl_c_pressed());
+        assert!(!state.on_pressed());
         assert_eq!(state.press_count, 1);
         assert!(state.first_press_time.is_some());
     }
 
     #[test]
     fn test_ctrl_c_state_double_press_within_timeout() {
-        let mut state = CtrlCState::new();
+        let mut state = DoublePressState::new(3000);
 
         // First press
-        assert!(!state.on_ctrl_c_pressed());
+        assert!(!state.on_pressed());
 
         // Second press after short time
         thread::sleep(std::time::Duration::from_millis(100));
-        assert!(state.on_ctrl_c_pressed());
+        assert!(state.on_pressed());
         assert_eq!(state.press_count, 2);
     }
 
     #[test]
     fn test_ctrl_c_state_double_press_after_timeout() {
-        let mut state = CtrlCState::new();
+        let mut state = DoublePressState::new(3000);
 
         // First press
-        assert!(!state.on_ctrl_c_pressed());
+        assert!(!state.on_pressed());
 
         // Press after more than 3 seconds (treated as new first press)
         thread::sleep(std::time::Duration::from_secs(4));
-        assert!(!state.on_ctrl_c_pressed());
+        assert!(!state.on_pressed());
         assert_eq!(state.press_count, 1);
     }
 
     #[test]
     fn test_ctrl_c_state_reset() {
-        let mut state = CtrlCState::new();
+        let mut state = DoublePressState::new(3000);
 
         // First press
-        assert!(!state.on_ctrl_c_pressed());
+        assert!(!state.on_pressed());
 
         // Reset
         state.reset();
@@ -1973,7 +2054,7 @@ mod tests {
         assert!(state.first_press_time.is_none());
 
         // Press after reset is treated as first press
-        assert!(!state.on_ctrl_c_pressed());
+        assert!(!state.on_pressed());
         assert_eq!(state.press_count, 1);
     }
 

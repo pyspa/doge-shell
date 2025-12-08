@@ -440,6 +440,15 @@ impl Input {
         parser::get_pos_word(self.input.as_str(), self.cursor)
     }
 
+    /// Get the character at the given cursor index (not byte index)
+    pub fn char_at(&self, idx: usize) -> Option<char> {
+        if idx >= self.indices.len() {
+            return None;
+        }
+        let byte_pos = self.indices[idx];
+        self.input[byte_pos..].chars().next()
+    }
+
     /// Fallback computation for completion word when parser cannot identify it (e.g. after redirects)
     pub fn get_completion_word_fallback(&self) -> Option<String> {
         if self.input.is_empty() || self.cursor == 0 {

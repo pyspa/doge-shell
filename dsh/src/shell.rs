@@ -346,6 +346,10 @@ impl Shell {
         if let Some(rest) = input.trim_start().strip_prefix('!') {
             disable_raw_mode().ok();
             let message = rest.trim_start();
+            debug!(
+                "AI_CHAT_EXEC: input='{}', extracted message='{}'",
+                input, message
+            );
             let status = execute_chat_message(ctx, self, message, None);
             let code = match status {
                 ExitStatus::ExitedWith(exit) if exit >= 0 => exit,

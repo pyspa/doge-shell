@@ -1378,9 +1378,8 @@ impl<'a> Repl<'a> {
                 // Auto-unpairing logic
                 let cursor = self.input.cursor();
                 if cursor > 0 && cursor < self.input.len() {
-                    let input_str = self.input.as_str();
-                    let prev_char = input_str[..cursor].chars().last();
-                    let next_char = input_str[cursor..].chars().next();
+                    let prev_char = self.input.char_at(cursor - 1);
+                    let next_char = self.input.char_at(cursor);
 
                     if let (Some(p), Some(n)) = (prev_char, next_char) {
                         let pairs = [('(', ')'), ('{', '}'), ('[', ']'), ('\'', '\''), ('"', '"')];

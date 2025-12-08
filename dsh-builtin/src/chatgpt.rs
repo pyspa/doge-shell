@@ -12,7 +12,7 @@ const PROMPT_KEY: &str = "CHAT_PROMPT";
 /// Primary configuration key for storing the default model
 const MODEL_KEY: &str = "AI_CHAT_MODEL";
 /// Maximum number of iterations to satisfy tool calls before aborting
-const MAX_TOOL_ITERATIONS: usize = 20;
+const MAX_TOOL_ITERATIONS: usize = 100;
 /// System prompt that explains how to use the builtin tools
 const TOOL_SYSTEM_PROMPT: &str = r#"You are DogeShell Programmer, an autonomous expert software engineer fluent in POSIX, Windows, and other developer shells and command-line tools. Operate inside doge-shell to deliver practical solutions while keeping the workspace safe.
 

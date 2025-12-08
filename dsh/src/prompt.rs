@@ -146,8 +146,8 @@ impl Prompt {
 
         let right_width = crate::input::display_width(&right_prompt);
 
-        if cols > right_width {
-            let start_col = cols - right_width;
+        if cols > right_width + 1 {
+            let start_col = cols - right_width - 1;
             queue!(
                 out,
                 cursor::MoveToColumn(start_col as u16),
@@ -159,6 +159,27 @@ impl Prompt {
     }
 
     fn get_cwd(&self) -> (String, bool) {
+        if let Some(git_root) = &self.current_git_root {
+            // Under git: show relative path from git root
+            let root_name = git_root
+                .file_name()
+                .map_or("".to_string(), |s| s.to_string_lossy().to_string());
+
+            let relative_path = self
+                .current_dir
+                .strip_prefix(git_root)
+                .unwrap_or(&self.current_dir);
+
+            let path_str = if relative_path.as_os_str().is_empty() {
+                root_name
+            } else {
+                format!("{}/{}", root_name, relative_path.display())
+            };
+
+            // Return colored path for git context (Cyan)
+            return (path_str.cyan().to_string(), true);
+        }
+
         let pathbuf = &self.current_dir;
         let is_git_root = pathbuf.join(".git").exists();
 

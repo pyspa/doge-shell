@@ -402,6 +402,7 @@ impl<'a> Repl<'a> {
         prompt.print_right_prompt(out, self.columns, self.last_status, self.last_duration);
         // draw preprompt only here (initial or after command/bg output)
         prompt.print_preprompt(out);
+        out.write_all(b"\r\n").ok();
         // update cached mark and width in case mark changed
         // update cached mark and width in case mark changed
         if self.prompt_mark_cache != prompt.mark {

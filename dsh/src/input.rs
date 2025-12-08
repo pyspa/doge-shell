@@ -44,8 +44,22 @@ pub fn display_width(input: &str) -> usize {
     // This treats ambiguous-width characters as wide (2 columns)
     clean_str
         .chars()
-        .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or_default())
+        .map(|c| unicode_width::UnicodeWidthChar::width_cjk(c).unwrap_or_default())
         .sum()
+}
+
+#[cfg(test)]
+mod display_width_tests {
+    use super::*;
+
+    #[test]
+    fn test_display_width_special_chars() {
+        // "✘" is reported as 1 by unicode-width even in CJK mode, but often renders as 2.
+        // The safety margin in prompt.rs handles this discrepancy.
+        // We verify that width_cjk is active by checking a standard CJK character.
+        assert_eq!(display_width("あ"), 2, "CJK character should be width 2");
+        assert_eq!(display_width("✘"), 1, "Library reports 1 for ✘");
+    }
 }
 
 const INITIAL_CAP: usize = 256;

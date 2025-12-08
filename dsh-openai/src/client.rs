@@ -28,7 +28,7 @@ pub fn is_ctrl_c_cancelled(err: &Error) -> bool {
     err.downcast_ref::<RequestCancelled>().is_some()
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ChatGptClient {
     api_key: String,
     default_model: String,

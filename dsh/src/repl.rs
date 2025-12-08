@@ -1,3 +1,4 @@
+use crate::ai_features::{self, AiService, LiveAiService};
 use crate::completion::integrated::{CompletionResult, IntegratedCompletionEngine};
 use crate::completion::{self, Completion, MAX_RESULT};
 use crate::dirs;
@@ -139,6 +140,7 @@ pub struct Repl<'a> {
     suggestion_index: usize,
     input_preferences: InputPreferences,
     ai_pending_shown: bool,
+    ai_service: Option<Arc<dyn AiService + Send + Sync>>,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -185,8 +187,10 @@ impl<'a> Repl<'a> {
         let envronment = Arc::clone(&shell.environment);
         let input_preferences = envronment.read().input_preferences();
         let mut suggestion_engine = SuggestionEngine::new();
-        if let Some(ai_backend) = Self::build_ai_backend(&envronment) {
+        let mut ai_service: Option<Arc<dyn AiService + Send + Sync>> = None;
+        if let Some((ai_backend, client)) = Self::build_ai_backend(&envronment) {
             suggestion_engine.set_ai_backend(Some(ai_backend));
+            ai_service = Some(Arc::new(LiveAiService::new(client)));
         }
         suggestion_engine.set_preferences(input_preferences);
         Repl {
@@ -219,12 +223,13 @@ impl<'a> Repl<'a> {
             suggestion_index: 0,
             input_preferences,
             ai_pending_shown: false,
+            ai_service,
         }
     }
 
     fn build_ai_backend(
         environment: &Arc<RwLock<Environment>>,
-    ) -> Option<Arc<dyn SuggestionBackend + Send + Sync>> {
+    ) -> Option<(Arc<dyn SuggestionBackend + Send + Sync>, ChatGptClient)> {
         let env_handle = Arc::clone(environment);
         let config = OpenAiConfig::from_getter(|key| {
             let value = {
@@ -239,8 +244,8 @@ impl<'a> Repl<'a> {
         match ChatGptClient::try_from_config(&config) {
             Ok(client) => {
                 let backend: Arc<dyn SuggestionBackend + Send + Sync> =
-                    Arc::new(AiSuggestionBackend::new(client));
-                Some(backend)
+                    Arc::new(AiSuggestionBackend::new(client.clone()));
+                Some((backend, client))
             }
             Err(err) => {
                 warn!("Failed to initialize AI suggestion backend: {err:?}");
@@ -1395,6 +1400,42 @@ impl<'a> Repl<'a> {
                 self.input.color_ranges = None;
             }
             (KeyCode::Tab, NONE) | (KeyCode::BackTab, NONE) => {
+                // Check for Smart Pipe Expansion (|? query)
+                // We check if the cursor is at the end of a block starting with |?
+                if let Some(smart_pipe_query) = self.detect_smart_pipe() {
+                    match self.expand_smart_pipe(smart_pipe_query).await {
+                        Ok(expanded) => {
+                            // Replace |? ... with expanded command
+                            // We need to find where |? starts logic again or just use the detection result
+                            // The detect_smart_pipe should ideally return range too.
+                            // For now let's re-find it or simplify.
+                            // detect_smart_pipe returns the query string.
+                            // We assume the cursor is at the end.
+                            // We assume usage pattern: `cmd |? something<TAB>`
+
+                            // Remove the query and "|? " prefix
+                            // Query length + 3 ("|? ")
+
+                            // Careful with whitespace.
+                            // Simple Approach: Find the last "|?" and replace from there.
+
+                            let input_str = self.input.as_str();
+                            if let Some(idx) = input_str.rfind("|?") {
+                                let prefix = &input_str[..idx]; // keep "|?" out? No we want to replace "|? ..."
+                                let mut new_input = prefix.to_string();
+                                new_input.push_str("| ");
+                                new_input.push_str(&expanded);
+                                self.input.reset(new_input);
+                                self.completion.clear();
+                                return Ok(());
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Smart pipe expansion failed: {}", e);
+                        }
+                    }
+                }
+
                 // Extract the current word at cursor position for completion query
                 let completion_query_owned = match self.input.get_cursor_word() {
                     Ok(Some((_rule, span))) => Some(span.as_str().to_string()),
@@ -1523,6 +1564,24 @@ impl<'a> Repl<'a> {
                 // leading to the "No completion selected" case above.
             }
             (KeyCode::Enter, NONE) => {
+                // Generative Command (??)
+                if self.input.as_str().trim_start().starts_with("??") {
+                    let query = self.input.as_str().trim_start()[2..].trim().to_string();
+                    if !query.is_empty() {
+                        match self.run_generative_command(&query).await {
+                            Ok(generated) => {
+                                self.input.reset(generated);
+                                // Don't execute immediately, let user review
+                                return Ok(());
+                            }
+                            Err(e) => {
+                                warn!("Generative command failed: {}", e);
+                                // Fall through to normal execution (which will likely fail but that's fine)
+                            }
+                        }
+                    }
+                }
+
                 // Handle abbreviation expansion on Enter if cursor is at end of a word
                 if let Some(word) = self.input.get_current_word_for_abbr()
                     && let Some(expansion) = self.shell.environment.read().abbreviations.get(&word)
@@ -1968,6 +2027,32 @@ impl<'a> Repl<'a> {
         self.print_input(&mut renderer, true, true);
         renderer.flush().ok();
         Ok(())
+    }
+    async fn expand_smart_pipe(&self, query: String) -> Result<String> {
+        let service = self
+            .ai_service
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("AI client not configured"))?;
+        ai_features::expand_smart_pipe(service.as_ref(), &query).await
+    }
+
+    async fn run_generative_command(&self, query: &str) -> Result<String> {
+        let service = self
+            .ai_service
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("AI client not configured"))?;
+        ai_features::run_generative_command(service.as_ref(), query).await
+    }
+
+    fn detect_smart_pipe(&self) -> Option<String> {
+        let input = self.input.as_str();
+        if let Some(idx) = input.rfind("|?") {
+            let query = input[idx + 2..].trim();
+            if !query.is_empty() {
+                return Some(query.to_string());
+            }
+        }
+        None
     }
 }
 

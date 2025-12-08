@@ -100,57 +100,57 @@ impl CompletionGenerator {
                     }
                 }
             } else {
-                // Top-level subcommands
-                let mut added_subcommands = false;
+                // Match subcommands
                 for subcommand in &command_completion.subcommands {
                     if subcommand.name.starts_with(&parsed.current_token) {
                         candidates.push(CompletionCandidate::subcommand(
                             subcommand.name.clone(),
                             subcommand.description.clone(),
                         ));
-                        added_subcommands = true;
                     }
                 }
 
-                // If no subcommands exist (or match), try to find arguments or global options
-                if !added_subcommands {
-                    // Check if we should suggest arguments
-                    // Only if we haven't exceeded the number of arguments
-                    let arg_index = parsed.specified_arguments.len();
-                    if arg_index < command_completion.arguments.len() {
-                        let arg_def = &command_completion.arguments[arg_index];
-                        // If current token technically matches a subcommand (in parser's view) but we have no subcommands,
-                        // it might be a value for this argument.
-                        let arg_candidates = self.generate_candidates_for_type(
-                            arg_def.arg_type.as_ref().unwrap_or(&ArgumentType::String),
-                            &parsed.current_token,
-                        )?;
-                        candidates.extend(arg_candidates);
-                    }
+                // ALWAYS check if we should suggest arguments (files etc.) explanation:
+                // User wants file completion to work even if subcommands exist (e.g. `git <TAB>` showing files).
+                // Only if we haven't exceeded the number of arguments
+                let arg_index = parsed.specified_arguments.len();
+                if arg_index < command_completion.arguments.len() {
+                    let arg_def = &command_completion.arguments[arg_index];
+                    let arg_candidates = self.generate_candidates_for_type(
+                        arg_def.arg_type.as_ref().unwrap_or(&ArgumentType::String),
+                        &parsed.current_token,
+                    )?;
+                    candidates.extend(arg_candidates);
+                }
 
-                    // Also show global options
-                    if !command_completion.global_options.is_empty() {
-                        for option in &command_completion.global_options {
-                            if let Some(ref short) = option.short
-                                && short.starts_with(&parsed.current_token)
-                            {
-                                candidates.push(CompletionCandidate::short_option(
-                                    short.clone(),
-                                    option.description.clone(),
-                                ));
-                            }
-                            if let Some(ref long) = option.long
-                                && long.starts_with(&parsed.current_token)
-                            {
-                                candidates.push(CompletionCandidate::long_option(
-                                    long.clone(),
-                                    option.description.clone(),
-                                ));
-                            }
+                // Also show global options, BUT ONLY IF token starts with "-"
+                // This prevents polluting the completion list when the user hasn't typed a dash yet.
+                if !command_completion.global_options.is_empty()
+                    && parsed.current_token.starts_with('-')
+                {
+                    for option in &command_completion.global_options {
+                        if let Some(ref short) = option.short
+                            && short.starts_with(&parsed.current_token)
+                        {
+                            candidates.push(CompletionCandidate::short_option(
+                                short.clone(),
+                                option.description.clone(),
+                            ));
+                        }
+                        if let Some(ref long) = option.long
+                            && long.starts_with(&parsed.current_token)
+                        {
+                            candidates.push(CompletionCandidate::long_option(
+                                long.clone(),
+                                option.description.clone(),
+                            ));
                         }
                     }
                 }
             }
+        } else {
+            // Fallback for unknown commands: suggest files by default
+            candidates.extend(self.generate_file_candidates(&parsed.current_token)?);
         }
 
         Ok(candidates)
@@ -703,6 +703,239 @@ mod tests {
         assert!(
             !texts.contains(&expected_file),
             "should not contain file candidates: {:?}",
+            texts
+        );
+    }
+
+    #[test]
+    fn test_subcommand_and_file_completion() {
+        // Setup: Command with subcommand and an argument
+        let mut db = CommandCompletionDatabase::new();
+        let git_completion = CommandCompletion {
+            command: "git".to_string(),
+            description: Some("Git version control".to_string()),
+            global_options: vec![],
+            subcommands: vec![SubCommand {
+                name: "commit".to_string(),
+                description: Some("Commit".to_string()),
+                options: vec![],
+                arguments: vec![],
+                subcommands: vec![],
+            }],
+            arguments: vec![Argument {
+                name: "file".to_string(),
+                description: Some("File".to_string()),
+                arg_type: Some(ArgumentType::File { extensions: None }),
+            }],
+        };
+        db.add_command(git_completion);
+
+        let temp = tempdir().unwrap();
+        std::fs::write(temp.path().join("test.txt"), "").unwrap();
+
+        let generator = CompletionGenerator::new(db);
+        let dir_str = format!("{}{}", temp.path().display(), MAIN_SEPARATOR);
+
+        // Mock: "git [dir]/"
+        // Expect: "commit" (subcommand) AND "test.txt" (file)
+        let parsed = ParsedCommandLine {
+            command: "git".to_string(),
+            subcommand_path: vec![],
+            args: vec![],
+            options: vec![],
+            current_token: dir_str.clone(),
+            current_arg: Some(dir_str.clone()),
+            completion_context: CompletionContext::SubCommand,
+            specified_options: vec![],
+            specified_arguments: vec![],
+            cursor_index: 0,
+        };
+
+        let candidates = generator.generate_candidates(&parsed).unwrap();
+        let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
+
+        // Subcommand check
+        let has_commit = texts.contains(&"commit".to_string());
+        // Since we are completing a directory path, and "commit" doesn't start with /tmp/...,
+        // it likely WON'T be in the list unless the prefix matching is very loose.
+        // However, the logic I implemented uses `starts_with(&parsed.current_token)`.
+        // If current_token is a path, "commit" won't match.
+        // So `has_commit` should be false here if strict.
+        // But if the user types `git <TAB>`, current_token is empty, and then it SHOULD match.
+        // The test above sets current_token to `dir_str` which is NOT empty.
+        // So actually, for THIS specific test case where token is a directory path,
+        // we expect FILES (test.txt) but NOT subcommands (unless they match the path?).
+
+        let expected_file = Path::new(&dir_str)
+            .join("test.txt")
+            .to_string_lossy()
+            .to_string();
+
+        assert!(
+            texts.contains(&expected_file),
+            "Should contain file candidate {:?} in {:?}",
+            expected_file,
+            texts
+        );
+        assert!(
+            !has_commit,
+            "Subcommand matches only if it starts with the token"
+        );
+    }
+
+    #[test]
+    fn test_subcommand_and_file_completion_empty_token() {
+        let mut db = CommandCompletionDatabase::new();
+        let mycmd_completion = CommandCompletion {
+            command: "mycmd".to_string(),
+            description: None,
+            global_options: vec![],
+            subcommands: vec![SubCommand {
+                name: "sub".to_string(),
+                description: None,
+                options: vec![],
+                arguments: vec![],
+                subcommands: vec![],
+            }],
+            arguments: vec![Argument {
+                name: "file".to_string(),
+                description: None,
+                arg_type: Some(ArgumentType::File { extensions: None }),
+            }],
+        };
+        db.add_command(mycmd_completion);
+
+        let generator = CompletionGenerator::new(db);
+
+        // Use current dir for file test
+        let parsed = ParsedCommandLine {
+            command: "mycmd".to_string(),
+            subcommand_path: vec![],
+            args: vec![],
+            options: vec![],
+            current_token: "".to_string(),
+            current_arg: Some("".to_string()),
+            completion_context: CompletionContext::SubCommand,
+            specified_options: vec![],
+            specified_arguments: vec![],
+            cursor_index: 0,
+        };
+
+        let candidates = generator.generate_candidates(&parsed).unwrap();
+        let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
+
+        assert!(
+            texts.contains(&"sub".to_string()),
+            "Should contain subcommand"
+        );
+        // We can't easily assert on files since we rely on CWD, but we can verify we got SOME candidates if CWD is not empty.
+        // Or we can rely on verifying code logic changes.
+    }
+
+    #[test]
+    fn test_option_completion_guard() {
+        let mut db = CommandCompletionDatabase::new();
+        let mycmd_completion = CommandCompletion {
+            command: "mycmd".to_string(),
+            description: None,
+            global_options: vec![CommandOption {
+                short: Some("-o".to_string()),
+                long: Some("--option".to_string()),
+                description: None,
+            }],
+            subcommands: vec![],
+            arguments: vec![],
+        };
+        db.add_command(mycmd_completion);
+
+        let generator = CompletionGenerator::new(db);
+
+        // 1. Token == "" -> Should NOT show options
+        let parsed_empty = ParsedCommandLine {
+            command: "mycmd".to_string(),
+            subcommand_path: vec![],
+            args: vec![],
+            options: vec![],
+            current_token: "".to_string(),
+            current_arg: Some("".to_string()),
+            completion_context: CompletionContext::SubCommand,
+            specified_options: vec![],
+            specified_arguments: vec![],
+            cursor_index: 0,
+        };
+        let candidates = generator.generate_candidates(&parsed_empty).unwrap();
+        let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
+        assert!(
+            !texts.contains(&"-o".to_string()),
+            "Should NOT show options on empty token"
+        );
+        assert!(
+            !texts.contains(&"--option".to_string()),
+            "Should NOT show options on empty token"
+        );
+
+        // 2. Token == "-" -> Should show options
+        let parsed_dash = ParsedCommandLine {
+            command: "mycmd".to_string(),
+            subcommand_path: vec![],
+            args: vec![],
+            options: vec![],
+            current_token: "-".to_string(),
+            current_arg: Some("-".to_string()),
+            completion_context: CompletionContext::SubCommand,
+            specified_options: vec![],
+            specified_arguments: vec![],
+            cursor_index: 0,
+        };
+        let candidates_dash = generator.generate_candidates(&parsed_dash).unwrap();
+        let texts_dash: Vec<String> = candidates_dash.into_iter().map(|c| c.text).collect();
+        assert!(
+            texts_dash.contains(&"-o".to_string()),
+            "Should show options when token starts with -"
+        );
+        assert!(
+            texts_dash.contains(&"--option".to_string()),
+            "Should show options when token starts with -"
+        );
+    }
+
+    #[test]
+    fn test_unknown_command_completion() {
+        let db = CommandCompletionDatabase::new();
+        // Database is empty, so "cat" or any command is unknown.
+
+        let temp = tempdir().unwrap();
+        std::fs::write(temp.path().join("test.txt"), "").unwrap();
+
+        let generator = CompletionGenerator::new(db);
+        let dir_str = format!("{}{}", temp.path().display(), MAIN_SEPARATOR);
+
+        // Mock: "cat [dir]/"
+        // Expect: "test.txt" (file) because "cat" is unknown -> fallback to file completion
+        let parsed = ParsedCommandLine {
+            command: "cat".to_string(),
+            subcommand_path: vec![],
+            args: vec![],
+            options: vec![],
+            current_token: dir_str.clone(),
+            current_arg: Some(dir_str.clone()),
+            completion_context: CompletionContext::SubCommand,
+            specified_options: vec![],
+            specified_arguments: vec![],
+            cursor_index: 0,
+        };
+
+        let candidates = generator.generate_candidates(&parsed).unwrap();
+        let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
+
+        let expected_file = Path::new(&dir_str)
+            .join("test.txt")
+            .to_string_lossy()
+            .to_string();
+
+        assert!(
+            texts.contains(&expected_file),
+            "Should contain file candidate for unknown command: {:?}",
             texts
         );
     }

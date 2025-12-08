@@ -15,6 +15,7 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 - **Pipes and Redirections**: Support for pipes (`|`), input/output redirection (`>`, `>>`, `<`), and error redirection
 - **Signal Handling**: Proper handling of signals like SIGINT, SIGQUIT, SIGTSTP
 - **Subshells**: Support for command substitution and process substitution
+- **Safe Paste**: Bracketed paste support ensures pasted multi-line text is not executed immediately
 
 ### Advanced Features
 - **Frecency-based History**: Intelligent command history using frecency scoring (frequency + recency)
@@ -31,6 +32,8 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 - **History Search**: Interactive history search with Ctrl+R
 - **Command Abbreviations**: Define and use abbreviations with `abbr` command
 - **AI-Powered Completion**: OpenAI integration for intelligent command completion suggestions
+- **Right Prompt**: Displays command execution status and duration on the right side
+- **Transient Prompt**: Automatically collapses the prompt after command execution to keep the terminal clean
 
 ### Lisp Interpreter
 - **Embedded Lisp**: Built-in Lisp interpreter for shell scripting
@@ -334,6 +337,10 @@ dsh import bash --path /path/to/bash_history
 - `Ctrl+C` - Cancel current command (press twice to exit shell)
 - `Ctrl+L` - Clear screen
 - `Ctrl+D` - Show exit hint (use `exit` to leave)
+- `Ctrl+K` - Delete from cursor to end of line
+- `Ctrl+U` - Delete from cursor to beginning of line
+- `Ctrl+W` - Delete word backward
+- `Esc` (double press) - Toggle `sudo` prefix for the current command
 
 ## 🤖 AI Integration
 
@@ -351,9 +358,27 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    !explain how to use the grep command
    ```
 
-4. Use the `chat` command for extended conversations:
-   ```bash
    chat "How do I compress a directory with tar?"
+   ```
+
+5. **Smart Pipe Expansion (`|?`)**:
+   Describe how you want to filter or process data in natural language, and let AI expand it into shell commands.
+   ```bash
+   # Type:
+   ls -l |? sort by size and take top 5<Tab>
+   
+   # Expands to:
+   ls -l | sort -rn -k 5 | head -n 5
+   ```
+
+6. **Generative Command (`??`)**:
+   Describe what you want to do in natural language at the start of the line, and let AI generate the command for you.
+   ```bash
+   # Type:
+   ?? undo last git commit<Enter>
+   
+   # Expands to:
+   git reset --soft HEAD~1
    ```
 
 ## 📁 Project Structure

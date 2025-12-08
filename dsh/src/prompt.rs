@@ -333,6 +333,7 @@ pub struct GitStatus {
     pub branch_status: Option<String>,
     pub ahead: u32,
     pub behind: u32,
+    pub oid: Option<String>,
 }
 
 impl Default for GitStatus {
@@ -348,6 +349,7 @@ impl GitStatus {
             branch_status: None,
             ahead: 0,
             behind: 0,
+            oid: None,
         }
     }
 }
@@ -367,7 +369,7 @@ impl GitStatusCache {
             status,
             last_updated: Instant::now(),
             git_root,
-            ttl: Duration::from_secs(5), // Cache valid for 5 seconds
+            ttl: Duration::from_secs(2), // Cache valid for 2 seconds
         }
     }
 
@@ -430,7 +432,11 @@ fn parse_git_status_output(stdout: &[u8]) -> Option<GitStatus> {
 
         if buf.starts_with('#') {
             // branch info
-            if buf.starts_with("# branch.head") {
+            if buf.starts_with("# branch.oid") {
+                if let Some(oid) = splited.get(2) {
+                    status.oid = Some(oid.to_string());
+                }
+            } else if buf.starts_with("# branch.head") {
                 if let Some(branch) = splited.get(2) {
                     status.branch = branch.to_string();
                 }
@@ -470,6 +476,12 @@ fn parse_git_status_output(stdout: &[u8]) -> Option<GitStatus> {
 
     if !git_status.is_empty() {
         status.branch_status = Some(git_status);
+    }
+
+    if status.branch == "(detached)"
+        && let Some(oid) = &status.oid
+    {
+        status.branch = oid.chars().take(8).collect();
     }
 
     Some(status)
@@ -705,6 +717,16 @@ mod tests {
         assert!(!branch_status.contains("↓"));
         assert!(branch_status.contains("!")); // Modified
         assert!(branch_status.contains("?")); // Untracked
+    }
+
+    #[test]
+    fn test_parse_git_status_output_detached() {
+        let output =
+            b"# branch.oid 1234567890abcdef\n# branch.head (detached)\n# branch.ab +0 -0\n";
+        let status = parse_git_status_output(output).expect("Should parse successfully");
+
+        assert_eq!(status.branch, "12345678");
+        assert_eq!(status.oid, Some("1234567890abcdef".to_string()));
     }
 
     #[test]

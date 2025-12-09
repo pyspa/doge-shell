@@ -128,6 +128,16 @@ pub async fn run_shell() -> ExitCode {
             tracing::warn!("Failed to load directory history: {}", e);
         }
     }
+
+    // Load config.lisp to initialize aliases, variables, and other settings
+    if let Err(e) = shell.lisp_engine.borrow().run_config_lisp() {
+        // Only warn if it's not a "file not found" error (config.lisp is optional)
+        let err_str = e.to_string();
+        if !err_str.contains("No such file or directory") && !err_str.contains("config file") {
+            tracing::warn!("Failed to load config.lisp: {}", e);
+        }
+    }
+
     let mut ctx = create_context(&shell);
 
     if let Some(lisp_script) = cli.lisp.as_deref() {

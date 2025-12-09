@@ -515,6 +515,34 @@ fn test_expand_alias() -> Result<()> {
 }
 
 #[test]
+fn test_simple_alias_like_ll() -> Result<()> {
+    init();
+    let env = crate::environment::Environment::new();
+
+    env.write()
+        .alias
+        .insert("ll".to_string(), "exa -al".to_string());
+    env.write().alias.insert("g".to_string(), "git".to_string());
+
+    // Test simple alias 'll'
+    let input = r#"ll"#.to_string();
+    let replaced = expand_alias(input, Arc::clone(&env))?;
+    assert_eq!(replaced, r#"exa -al"#.to_string());
+
+    // Test alias with arguments
+    let input = r#"ll -h"#.to_string();
+    let replaced = expand_alias(input, Arc::clone(&env))?;
+    assert_eq!(replaced, r#"exa -al -h"#.to_string());
+
+    // Test single letter alias
+    let input = r#"g status"#.to_string();
+    let replaced = expand_alias(input, Arc::clone(&env))?;
+    assert_eq!(replaced, r#"git status"#.to_string());
+
+    Ok(())
+}
+
+#[test]
 fn parse_commands() {
     init();
     let pairs = ShellParser::parse(Rule::commands, "sleep 10 ; echo 'test' ")

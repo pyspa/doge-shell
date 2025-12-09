@@ -229,7 +229,7 @@ impl Input {
     }
 
     pub fn backspace(&mut self) {
-        if self.cursor > 0 {
+        if self.cursor > 0 && self.cursor <= self.indices.len() {
             let remove_index = self.cursor - 1;
             let byte_index = self.indices[remove_index];
             let char_len = self.char_len_at(remove_index);
@@ -557,9 +557,8 @@ impl Input {
         }
     }
 
-    /// Delete character at current cursor position (forward delete)
     pub fn delete_char(&mut self) {
-        if self.cursor >= self.len() {
+        if self.cursor >= self.len() || self.cursor >= self.indices.len() {
             return;
         }
 

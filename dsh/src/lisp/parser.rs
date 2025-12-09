@@ -22,8 +22,14 @@ pub fn parse(code: &str) -> impl Iterator<Item = Result<Value, ParseError>> + '_
             } else {
                 Some(Err(res.unwrap_err()))
             }
+        } else if index < code.len() {
+            let err_index = index;
+            index = code.len(); // Stop iteration
+            Some(Err(ParseError {
+                msg: format!("Unexpected token at index {}", err_index),
+            }))
         } else {
-            None // TODO: Err if we don't parse the whole input?
+            None
         }
     })
 }
@@ -359,3 +365,25 @@ fn next_char_is_break(code: &str, index: usize) -> bool {
 }
 
 const SPECIAL_TOKENS: [char; 5] = ['(', ')', '\'', ',', ';'];
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_unexpected_token() {
+        let code = "(+ 1 2) )";
+        let mut parser = parse(code);
+
+        // First expression OK
+        let first = parser.next();
+        assert!(first.is_some());
+        assert!(first.unwrap().is_ok());
+
+        // Second should be Error
+        let second = parser.next();
+        assert!(second.is_some());
+        let res = second.unwrap();
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().msg, "Unexpected token at index 8");
+    }
+}

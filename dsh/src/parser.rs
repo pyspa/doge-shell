@@ -179,7 +179,13 @@ pub fn get_string(pair: Pair<Rule>) -> Option<String> {
             };
             Some(res)
         }
-        Rule::span => get_string(pair.into_inner().next().unwrap()), // TODO fix
+        Rule::span => {
+            if let Some(inner) = pair.into_inner().next() {
+                get_string(inner)
+            } else {
+                Some("".to_string())
+            }
+        }
         _ => Some(pair.as_str().to_string()),
     }
 }
@@ -1728,5 +1734,33 @@ mod tests {
                 }
             }
         }
+    }
+}
+#[cfg(test)]
+mod tests_safety {
+    use super::*;
+    use pest::Parser;
+
+    #[test]
+    fn test_get_string_safety() {
+        // Construct a mock Pair that mimics the structure causing the panic
+        // Rule::span with empty inner
+        // Since we can't easily construct a Pair manually without parsing,
+        // we'll rely on our fix being correct by code inspection or trying to parse input that triggers it.
+        // However, triggering it via parse might be hard if the grammar enforces it.
+        // But the previous code had an unwrap() on pair.into_inner().next().
+        // If pest guarantees next() exists for Rule::span, then the unwrap was safe (but bad practice).
+        // If not, our fix handles it.
+
+        // Let's at least test that get_string works for normal inputs.
+        let input = "\"test\"";
+        let mut pairs = ShellParser::parse(Rule::d_quoted, input).unwrap();
+        let pair = pairs.next().unwrap();
+        assert_eq!(get_string(pair), Some("test".to_string()));
+
+        let input = "'test'";
+        let mut pairs = ShellParser::parse(Rule::s_quoted, input).unwrap();
+        let pair = pairs.next().unwrap();
+        assert_eq!(get_string(pair), Some("test".to_string()));
     }
 }

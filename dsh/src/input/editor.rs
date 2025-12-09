@@ -1,3 +1,4 @@
+use super::config::{ColorType, InputConfig};
 use crate::parser::{self, Rule};
 use anyhow::Result;
 use crossterm::style::{Color, Stylize};
@@ -8,110 +9,7 @@ use std::fmt;
 use std::io::{BufWriter, Write};
 use unicode_width::UnicodeWidthChar;
 
-/// Calculate the actual display width of a string, accounting for ANSI codes and Unicode width
-pub fn display_width(input: &str) -> usize {
-    let mut width = 0;
-    let mut in_ansi_sequence = false;
-    let mut chars = input.chars();
-
-    while let Some(ch) = chars.next() {
-        if in_ansi_sequence {
-            // End of ANSI sequence is usually a letter
-            if ch.is_ascii_alphabetic() {
-                in_ansi_sequence = false;
-            }
-            continue;
-        }
-
-        if ch == '\x1b' {
-            // Check next char to confirm CSI sequence
-            // We peak by cloning iterator or just consuming one more
-            // Since we are in a loop, we can just check the next char.
-            // But we need to be careful not to consume it if it's not part of sequence (unlikely for \x1b)
-            // Ideally we check if next is '['
-
-            // For simple ANSI stripping: \x1b followed by [ ... letter
-            // We just assume it's an escape sequence start.
-            // Let's peek the next char if possible, or just consume it.
-            // Since we don't have peekable here without allocation/wrapping,
-            // we'll use a slightly different approach or just consume.
-            // However, `chars` is an iterator.
-            // Let's try to be robust.
-
-            // We can consume the next char.
-            if let Some(next) = chars.next() {
-                if next == '[' {
-                    in_ansi_sequence = true;
-                } else {
-                    // It was just an ESC char? Treat as 0 width non-printable or 1?
-                    // Usually ESC is non-printable.
-                }
-            }
-        } else {
-            width += unicode_width::UnicodeWidthChar::width_cjk(ch).unwrap_or(0);
-        }
-    }
-    width
-}
-
-#[cfg(test)]
-mod display_width_tests {
-    use super::*;
-
-    #[test]
-    fn test_display_width_special_chars() {
-        // "✘" is reported as 1 by unicode-width even in CJK mode, but often renders as 2.
-        // The safety margin in prompt.rs handles this discrepancy.
-        // We verify that width_cjk is active by checking a standard CJK character.
-        assert_eq!(display_width("あ"), 2, "CJK character should be width 2");
-        assert_eq!(display_width("✘"), 1, "Library reports 1 for ✘");
-    }
-}
-
 const INITIAL_CAP: usize = 256;
-
-#[derive(Debug, Clone)]
-pub struct InputConfig {
-    pub fg_color: Color,                 // Normal input text (white)
-    pub command_exists_color: Color,     // Command that exists (blue)
-    pub command_not_exists_color: Color, // Command that doesn't exist (red)
-    pub argument_color: Color,           // Arguments (cyan)
-    pub variable_color: Color,           // Variables (yellow)
-    pub single_quote_color: Color,       // Single quoted strings (green)
-    pub double_quote_color: Color,       // Double quoted strings (Green with bold?)
-    pub redirect_color: Color,           // Redirect operators (magenta)
-    pub operator_color: Color,           // Logical/sequential operators
-    pub pipe_color: Color,               // Pipe symbol
-    pub background_color: Color,         // Background operator
-    pub proc_subst_color: Color,         // Process substitution markers
-    pub error_color: Color,              // Parse errors (red intense)
-    pub completion_color: Color,         // Completion candidates (dark grey)
-    pub ghost_color: Color,              // Inline suggestion text (dim gray)
-    pub valid_path_color: Color,         // Valid path (magenta)
-}
-
-impl Default for InputConfig {
-    fn default() -> InputConfig {
-        InputConfig {
-            fg_color: Color::White,
-            command_exists_color: Color::Blue,
-            command_not_exists_color: Color::Red,
-            argument_color: Color::Cyan,
-            variable_color: Color::Yellow,
-            single_quote_color: Color::DarkGreen,
-            double_quote_color: Color::Green,
-            redirect_color: Color::Magenta,
-            operator_color: Color::DarkYellow,
-            pipe_color: Color::DarkCyan,
-            background_color: Color::DarkMagenta,
-            proc_subst_color: Color::DarkBlue,
-            error_color: Color::Red,
-            completion_color: Color::DarkGrey,
-            ghost_color: Color::DarkGrey,
-            valid_path_color: Color::Magenta,
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct Input {
@@ -123,23 +21,6 @@ pub struct Input {
     pub completion: Option<String>,
     pub color_ranges: Option<Vec<(usize, usize, ColorType)>>, // (start, end, color_type)
     pub can_execute: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum ColorType {
-    CommandExists,
-    CommandNotExists,
-    Argument,
-    Variable,
-    SingleQuote,
-    DoubleQuote,
-    Redirect,
-    Operator,
-    Pipe,
-    Background,
-    ProcSubst,
-    Error,
-    ValidPath,
 }
 
 impl Input {
@@ -746,7 +627,7 @@ mod tests {
         let config = InputConfig::default();
         let mut input = Input::new(config);
 
-        // Character input test (using actual method names)
+        // Character input test
         input.insert('h');
         input.insert('i');
         assert_eq!(input.as_str(), "hi");
@@ -848,13 +729,7 @@ mod tests {
         assert_eq!(input.cursor(), 2);
     }
 
-    #[test]
-    fn test_display_width_ansi() {
-        assert_eq!(display_width("hello"), 5);
-        assert_eq!(display_width("\x1b[31mred\x1b[0m"), 3);
-        assert_eq!(display_width("\x1b[1;32mbold green\x1b[0m"), 10);
-        assert_eq!(display_width("normal \x1b[31mred\x1b[0m normal"), 17);
-    }
+    // Moved display_width tests to utils.rs
 
     #[test]
     fn test_delete_to_end() {
@@ -929,29 +804,6 @@ mod tests {
     }
 
     #[test]
-    fn test_display_width() {
-        // Test ASCII
-        assert_eq!(display_width("hello"), 5);
-
-        // Test Unicode
-        assert_eq!(display_width("こんにちは"), 10); // 5 Japanese chars * 2 width each
-
-        // Test emoji (dog emoji width is 2)
-        let dog_width = display_width("🐕");
-        assert_eq!(dog_width, 2);
-
-        // Test mixed with ANSI codes
-        let ansi_test = display_width("\x1b[31m🐕\x1b[0m < ");
-        // emoji(2) + space(1) + <(1) + space(1) = 5
-        assert_eq!(ansi_test, 5);
-
-        // Test the actual prompt format
-        let prompt_width = display_width("🐕 < ");
-        // emoji(2) + space(1) + <(1) + space(1) = 5
-        assert_eq!(prompt_width, 5);
-    }
-
-    #[test]
     fn test_completion_word_fallback_for_redirect() {
         let config = InputConfig::default();
         let mut input = Input::new(config);
@@ -1019,15 +871,7 @@ mod tests {
 
         // Test Move Right
         input.move_word_right(); // to end of "one"
-        assert_eq!(input.cursor(), 4); // "one| two three" (wait, logic moves to end of word or start of next?)
-        // Let's check logic:
-        // skip non-spaces (current word) -> "one" skipped
-        // skip spaces -> " " skipped
-        // stops at "t" of "two"?
-        // My implementation:
-        // while idx < len && !chars[idx].is_whitespace() { idx += 1; } // skips "one", lands on space at 3
-        // while idx < len && chars[idx].is_whitespace() { idx += 1; } // skips space, lands on 't' at 4
-        assert_eq!(input.cursor(), 4);
+        assert_eq!(input.cursor(), 4); // "one| two three"
 
         input.move_word_right();
         assert_eq!(input.cursor(), 8); // start of "three"

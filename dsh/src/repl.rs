@@ -1337,9 +1337,14 @@ impl<'a> Repl<'a> {
             }
             (KeyCode::Char(ch), NONE) if matches!(ch, '(' | '{' | '[' | '\'' | '"') => {
                 // Auto-pairing logic
-                let pairs = [('(', ')'), ('{', '}'), ('[', ']'), ('\'', '\''), ('"', '"')];
-                let pair = pairs.iter().find(|(o, _)| *o == ch).unwrap();
-                let closing = pair.1;
+                let closing = match ch {
+                    '(' => ')',
+                    '{' => '}',
+                    '[' => ']',
+                    '\'' => '\'',
+                    '"' => '"',
+                    _ => ch, // Should not happen due to guard
+                };
 
                 self.input.insert(ch);
                 self.input.insert(closing);

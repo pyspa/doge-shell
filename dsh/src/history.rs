@@ -47,18 +47,21 @@ impl History {
         }
     }
 
-    pub fn from_file(name: &str) -> Self {
-        let file_path = environment::get_data_file(name).unwrap();
-        let path = file_path.into_os_string().into_string().unwrap();
+    pub fn from_file(name: &str) -> Result<Self> {
+        let file_path = environment::get_data_file(name)?;
+        let path = file_path
+            .into_os_string()
+            .into_string()
+            .map_err(|_| anyhow::anyhow!("Invalid path encoding"))?;
 
-        History {
+        Ok(History {
             path: Some(path),
             open_file: None,
             histories: Vec::new(),
             size: 10000,
             current_index: 0,
             search_word: None,
-        }
+        })
     }
 
     fn get(&self, index: usize) -> Option<String> {
@@ -258,7 +261,17 @@ impl FrecencyHistory {
         let file_path = environment::get_data_file(name)?;
         let matcher = SkimMatcherV2::default();
 
-        let store = read_store(&file_path).unwrap_or_default();
+        let store = match read_store(&file_path) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to read history store from {:?}: {}. Starting with empty store.",
+                    file_path,
+                    e
+                );
+                FrecencyStore::default()
+            }
+        };
 
         let f = FrecencyHistory {
             path: Some(file_path),
@@ -467,7 +480,7 @@ mod tests {
     #[test]
     fn test_new() {
         init();
-        let history = History::from_file("dsh_cmd_history");
+        let history = History::from_file("dsh_cmd_history").unwrap();
         let mut data_dir = dirs::data_dir().unwrap();
         data_dir.push(shell::APP_NAME);
         data_dir.push("dsh_cmd_history");
@@ -478,7 +491,7 @@ mod tests {
     #[test]
     fn test_open() -> Result<()> {
         init();
-        let mut history = History::from_file("dsh_cmd_history");
+        let mut history = History::from_file("dsh_cmd_history")?;
         let history = history.open()?;
         history.close()
     }
@@ -487,7 +500,7 @@ mod tests {
     #[ignore]
     fn test_load() -> Result<()> {
         init();
-        let mut history = History::from_file("dsh_cmd_history");
+        let mut history = History::from_file("dsh_cmd_history")?;
         let s = history.load()?;
         tracing::debug!("loaded {:?}", s);
         Ok(())
@@ -500,7 +513,7 @@ mod tests {
         let cmd1 = "docker";
         let cmd2 = "docker-compose";
 
-        let mut history = History::from_file("dsh_cmd_history");
+        let mut history = History::from_file("dsh_cmd_history")?;
 
         let s = history.load()?;
         tracing::debug!("loaded {:?}", s);

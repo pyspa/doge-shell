@@ -108,7 +108,7 @@ pub async fn generate_commit_message<S: AiService + ?Sized>(
 
     // Truncate diff if it's too long to avoid token limits (rudimentary handling)
     let truncated_diff = if diff.len() > 8000 {
-        format!("{}\n...(truncated)", &diff[..8000])
+        format!("{}\\n...(truncated)", &diff[..8000])
     } else {
         diff.to_string()
     };
@@ -120,6 +120,136 @@ pub async fn generate_commit_message<S: AiService + ?Sized>(
 
     let content = service.send_request(messages, Some(0.3)).await?;
     Ok(sanitize_code_block(&content))
+}
+
+/// Explain a shell command in natural language
+pub async fn explain_command<S: AiService + ?Sized>(service: &S, command: &str) -> Result<String> {
+    let system_prompt = "You are a shell command expert. Explain the given command in a clear and concise way. \
+    Break down each part of the command (command name, options, arguments). \
+    Keep the explanation brief but informative. Use markdown formatting for clarity.";
+
+    let messages = vec![
+        json!({"role": "system", "content": system_prompt}),
+        json!({"role": "user", "content": format!("Explain this command:\n```\n{}\n```", command)}),
+    ];
+
+    service.send_request(messages, Some(0.2)).await
+}
+
+/// Suggest improvements for a shell command
+pub async fn suggest_improvement<S: AiService + ?Sized>(
+    service: &S,
+    command: &str,
+) -> Result<String> {
+    let system_prompt = "You are a shell command expert. Analyze the given command and suggest improvements. \
+    Consider: efficiency, readability, safety, and best practices. \
+    If the command is already optimal, say so. Provide the improved command if applicable. \
+    Keep your response concise and practical.";
+
+    let messages = vec![
+        json!({"role": "system", "content": system_prompt}),
+        json!({"role": "user", "content": format!("Suggest improvements for:\n```\n{}\n```", command)}),
+    ];
+
+    service.send_request(messages, Some(0.3)).await
+}
+
+/// Check if a command is potentially dangerous
+pub async fn check_safety<S: AiService + ?Sized>(service: &S, command: &str) -> Result<String> {
+    let system_prompt = "You are a security-conscious shell expert. Analyze the given command for potential dangers. \
+    Check for: destructive operations (rm -rf), permission issues, data loss risks, security vulnerabilities. \
+    Rate the risk level (Safe/Caution/Dangerous) and explain why. Be concise but thorough.";
+
+    let messages = vec![
+        json!({"role": "system", "content": system_prompt}),
+        json!({"role": "user", "content": format!("Check safety of:\n```\n{}\n```", command)}),
+    ];
+
+    service.send_request(messages, Some(0.1)).await
+}
+
+/// Diagnose command output (especially errors)
+pub async fn diagnose_output<S: AiService + ?Sized>(
+    service: &S,
+    command: &str,
+    output: &str,
+    exit_code: i32,
+) -> Result<String> {
+    let system_prompt = "You are a debugging expert. Analyze the command output and diagnose any issues. \
+    Focus on error messages and their root causes. Provide clear, actionable solutions. \
+    If the output indicates success, confirm it briefly.";
+
+    // Truncate output if too long
+    let truncated_output = if output.len() > 4000 {
+        format!("{}...(truncated)", &output[..4000])
+    } else {
+        output.to_string()
+    };
+
+    let query = format!(
+        "Command: `{}`\nExit code: {}\nOutput:\n```\n{}\n```",
+        command, exit_code, truncated_output
+    );
+
+    let messages = vec![
+        json!({"role": "system", "content": system_prompt}),
+        json!({"role": "user", "content": query}),
+    ];
+
+    service.send_request(messages, Some(0.2)).await
+}
+
+/// Describe the current directory structure
+pub async fn describe_directory<S: AiService + ?Sized>(
+    service: &S,
+    dir_listing: &str,
+    cwd: &str,
+) -> Result<String> {
+    let system_prompt = "You are a project analyst. Based on the directory listing, describe what type of project this is. \
+    Identify the technology stack, framework, and purpose if possible. \
+    Suggest relevant commands the user might want to run. Be concise.";
+
+    let query = format!(
+        "Current directory: {}\n\nFiles:\n```\n{}\n```",
+        cwd, dir_listing
+    );
+
+    let messages = vec![
+        json!({"role": "system", "content": system_prompt}),
+        json!({"role": "user", "content": query}),
+    ];
+
+    service.send_request(messages, Some(0.3)).await
+}
+
+/// Suggest next commands based on context
+pub async fn suggest_next_commands<S: AiService + ?Sized>(
+    service: &S,
+    recent_commands: &[String],
+    cwd: &str,
+    dir_listing: &str,
+) -> Result<String> {
+    let system_prompt = "You are a helpful shell assistant. Based on the user's recent commands and current context, \
+    suggest 3-5 useful commands they might want to run next. \
+    Format as a numbered list. Be practical and context-aware.";
+
+    let recent = if recent_commands.is_empty() {
+        "None".to_string()
+    } else {
+        recent_commands.join("\n")
+    };
+
+    let query = format!(
+        "Recent commands:\n{}\n\nCurrent directory: {}\n\nFiles:\n```\n{}\n```",
+        recent, cwd, dir_listing
+    );
+
+    let messages = vec![
+        json!({"role": "system", "content": system_prompt}),
+        json!({"role": "user", "content": query}),
+    ];
+
+    service.send_request(messages, Some(0.4)).await
 }
 
 #[cfg(test)]
@@ -197,5 +327,48 @@ mod tests {
         let diff = "diff --git a/file.txt b/file.txt...";
         let result = generate_commit_message(&service, diff).await.unwrap();
         assert_eq!(result, "feat: add new feature");
+    }
+
+    #[tokio::test]
+    async fn test_explain_command() {
+        let service = MockAiService::new("This command lists files");
+        let result = explain_command(&service, "ls -la").await.unwrap();
+        assert_eq!(result, "This command lists files");
+
+        let messages = service.last_messages.lock().unwrap();
+        assert_eq!(messages[0]["role"], "system");
+        assert!(messages[1]["content"].as_str().unwrap().contains("ls -la"));
+    }
+
+    #[tokio::test]
+    async fn test_check_safety() {
+        let service = MockAiService::new("**Dangerous**: This command will delete all files");
+        let result = check_safety(&service, "rm -rf /").await.unwrap();
+        assert!(result.contains("Dangerous"));
+
+        let messages = service.last_messages.lock().unwrap();
+        assert!(
+            messages[1]["content"]
+                .as_str()
+                .unwrap()
+                .contains("rm -rf /")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_diagnose_output() {
+        let service = MockAiService::new("Command not found. Try installing git.");
+        let result = diagnose_output(&service, "gti status", "command not found: gti", 127)
+            .await
+            .unwrap();
+        assert!(result.contains("not found"));
+
+        let messages = service.last_messages.lock().unwrap();
+        assert!(
+            messages[1]["content"]
+                .as_str()
+                .unwrap()
+                .contains("Exit code: 127")
+        );
     }
 }

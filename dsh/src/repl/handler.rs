@@ -434,6 +434,11 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
                 }
             }
         }
+        // AI Quick Actions (Alt+a)
+        (KeyCode::Char('a'), ALT) => {
+            repl.show_ai_quick_actions().await?;
+            return Ok(());
+        }
         (KeyCode::Tab, NONE) | (KeyCode::BackTab, NONE) => {
             // Check for Smart Pipe Expansion (|? query)
             // We check if the cursor is at the end of a block starting with |?

@@ -389,6 +389,25 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    git reset --soft HEAD~1
    ```
 
+7. **Auto-Fix (Error Recovery) (`Alt+f`)**:
+   If a command fails, press `Alt+f` to have AI suggest a fix for the last failed command.
+   ```bash
+   # Type a wrong command:
+   git stats
+   # Command fails...
+   
+   # Press Alt+f, command input becomes:
+   git status
+   ```
+
+8. **Smart Git Commit (`Alt+c`)**:
+   Stage your changes, then press `Alt+c` to generate a commit message based on the diff.
+   ```bash
+   git add .
+   # Press Alt+c, command input becomes:
+   git commit -m "feat: implement new features..."
+   ```
+
 ## 📁 Project Structure
 
 - `dsh/` - Main shell executable and core implementation

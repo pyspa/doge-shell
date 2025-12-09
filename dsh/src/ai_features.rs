@@ -75,6 +75,53 @@ pub async fn run_generative_command<S: AiService + ?Sized>(
     Ok(sanitize_code_block(&content))
 }
 
+pub async fn fix_command<S: AiService + ?Sized>(
+    service: &S,
+    command: &str,
+    exit_code: i32,
+) -> Result<String> {
+    let system_prompt = "You are a shell command expert. The user executed a command that failed. \
+    Given the failed command and its exit code, output ONLY the corrected command. \
+    Do not output markdown code blocks. Output ONLY the command code. \
+    If you are unsure, output the original command.";
+
+    let query = format!("Command: `{}`\nExit Code: {}", command, exit_code);
+
+    let messages = vec![
+        json!({"role": "system", "content": system_prompt}),
+        json!({"role": "user", "content": query}),
+    ];
+
+    let content = service.send_request(messages, Some(0.1)).await?;
+    Ok(sanitize_code_block(&content))
+}
+
+pub async fn generate_commit_message<S: AiService + ?Sized>(
+    service: &S,
+    diff: &str,
+) -> Result<String> {
+    let system_prompt = "You are an expert developer. Generate a concise and descriptive git commit message based on the provided diff. \
+    Follow the Conventional Commits specification if possible (e.g., 'feat: ...', 'fix: ...'). \
+    Output ONLY the commit message. Do not include markdown code blocks. \
+    The message should be a single line if it's short, or a summary line followed by a blank line and details if complex. \
+    However, for this interaction, prefer a single line summary.";
+
+    // Truncate diff if it's too long to avoid token limits (rudimentary handling)
+    let truncated_diff = if diff.len() > 8000 {
+        format!("{}\n...(truncated)", &diff[..8000])
+    } else {
+        diff.to_string()
+    };
+
+    let messages = vec![
+        json!({"role": "system", "content": system_prompt}),
+        json!({"role": "user", "content": truncated_diff}),
+    ];
+
+    let content = service.send_request(messages, Some(0.3)).await?;
+    Ok(sanitize_code_block(&content))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,5 +178,24 @@ mod tests {
         assert_eq!(sanitize_code_block("ls -l"), "ls -l");
         assert_eq!(sanitize_code_block("`ls -l`"), "ls -l");
         assert_eq!(sanitize_code_block("```bash\nls -l\n```"), "ls -l\n");
+    }
+
+    #[tokio::test]
+    async fn test_fix_command() {
+        let service = MockAiService::new("ls -la");
+        let result = fix_command(&service, "lss -la", 127).await.unwrap();
+        assert_eq!(result, "ls -la");
+
+        let messages = service.last_messages.lock().unwrap();
+        assert_eq!(messages[1]["role"], "user");
+        assert!(messages[1]["content"].as_str().unwrap().contains("lss -la"));
+    }
+
+    #[tokio::test]
+    async fn test_generate_commit_message() {
+        let service = MockAiService::new("feat: add new feature");
+        let diff = "diff --git a/file.txt b/file.txt...";
+        let result = generate_commit_message(&service, diff).await.unwrap();
+        assert_eq!(result, "feat: add new feature");
     }
 }

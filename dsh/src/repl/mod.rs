@@ -69,6 +69,68 @@ pub struct AiActionMenuItem {
     pub description: String,
 }
 
+/// Build AI action menu items based on input state
+/// This is a pure function for testability
+pub fn build_ai_action_menu(input: &str) -> Vec<AiActionMenuItem> {
+    let has_command = !input.trim().is_empty();
+
+    if has_command {
+        // Menu for when user has typed a command
+        vec![
+            AiActionMenuItem {
+                action: AiAction::ExplainCommand,
+                label: "📖 Explain Command".to_string(),
+                description: "Explain what this command does".to_string(),
+            },
+            AiActionMenuItem {
+                action: AiAction::SuggestImprovement,
+                label: "✨ Suggest Improvement".to_string(),
+                description: "Suggest a more efficient version".to_string(),
+            },
+            AiActionMenuItem {
+                action: AiAction::CheckSafety,
+                label: "🛡️ Check Safety".to_string(),
+                description: "Check for potential dangers".to_string(),
+            },
+        ]
+    } else {
+        // Menu for empty input
+        vec![
+            AiActionMenuItem {
+                action: AiAction::DiagnoseError,
+                label: "🔍 Diagnose Last Error".to_string(),
+                description: "Analyze the last command output".to_string(),
+            },
+            AiActionMenuItem {
+                action: AiAction::DescribeDirectory,
+                label: "📁 Describe Directory".to_string(),
+                description: "Describe the current directory".to_string(),
+            },
+            AiActionMenuItem {
+                action: AiAction::SuggestCommands,
+                label: "💡 Suggest Commands".to_string(),
+                description: "Suggest useful commands based on context".to_string(),
+            },
+        ]
+    }
+}
+
+/// Format directory entries for AI context
+/// This is a pure function for testability
+pub fn format_directory_listing(entries: Vec<(String, bool)>) -> String {
+    let mut files: Vec<String> = entries
+        .into_iter()
+        .take(30) // Limit to avoid token overflow
+        .map(
+            |(name, is_dir)| {
+                if is_dir { format!("{}/", name) } else { name }
+            },
+        )
+        .collect();
+    files.sort();
+    files.join("\n")
+}
+
 pub struct Repl<'a> {
     pub shell: &'a mut Shell,
     pub(crate) input: Input,
@@ -1222,47 +1284,7 @@ impl<'a> Repl<'a> {
     /// Get AI action menu items based on current context
     fn get_ai_action_menu(&self) -> Vec<AiActionMenuItem> {
         let input = self.input.as_str();
-        let has_command = !input.trim().is_empty();
-
-        if has_command {
-            // Menu for when user has typed a command
-            vec![
-                AiActionMenuItem {
-                    action: AiAction::ExplainCommand,
-                    label: "📖 Explain Command".to_string(),
-                    description: "Explain what this command does".to_string(),
-                },
-                AiActionMenuItem {
-                    action: AiAction::SuggestImprovement,
-                    label: "✨ Suggest Improvement".to_string(),
-                    description: "Suggest a more efficient version".to_string(),
-                },
-                AiActionMenuItem {
-                    action: AiAction::CheckSafety,
-                    label: "🛡️ Check Safety".to_string(),
-                    description: "Check for potential dangers".to_string(),
-                },
-            ]
-        } else {
-            // Menu for empty input
-            vec![
-                AiActionMenuItem {
-                    action: AiAction::DiagnoseError,
-                    label: "🔍 Diagnose Last Error".to_string(),
-                    description: "Analyze the last command output".to_string(),
-                },
-                AiActionMenuItem {
-                    action: AiAction::DescribeDirectory,
-                    label: "📁 Describe Directory".to_string(),
-                    description: "Describe the current directory".to_string(),
-                },
-                AiActionMenuItem {
-                    action: AiAction::SuggestCommands,
-                    label: "💡 Suggest Commands".to_string(),
-                    description: "Suggest useful commands based on context".to_string(),
-                },
-            ]
-        }
+        build_ai_action_menu(input)
     }
 
     /// Execute the selected AI action
@@ -1519,6 +1541,64 @@ mod tests {
         );
 
         drop(repl);
+    }
+
+    #[test]
+    fn test_build_ai_action_menu_with_command() {
+        // When input has a command, show command-related actions
+        let menu = build_ai_action_menu("ls -la");
+        assert_eq!(menu.len(), 3);
+        assert_eq!(menu[0].action, AiAction::ExplainCommand);
+        assert_eq!(menu[1].action, AiAction::SuggestImprovement);
+        assert_eq!(menu[2].action, AiAction::CheckSafety);
+    }
+
+    #[test]
+    fn test_build_ai_action_menu_empty_input() {
+        // When input is empty, show context-related actions
+        let menu = build_ai_action_menu("");
+        assert_eq!(menu.len(), 3);
+        assert_eq!(menu[0].action, AiAction::DiagnoseError);
+        assert_eq!(menu[1].action, AiAction::DescribeDirectory);
+        assert_eq!(menu[2].action, AiAction::SuggestCommands);
+    }
+
+    #[test]
+    fn test_build_ai_action_menu_whitespace_only() {
+        // Whitespace-only input should be treated as empty
+        let menu = build_ai_action_menu("   ");
+        assert_eq!(menu.len(), 3);
+        assert_eq!(menu[0].action, AiAction::DiagnoseError);
+    }
+
+    #[test]
+    fn test_format_directory_listing_basic() {
+        let entries = vec![
+            ("file1.txt".to_string(), false),
+            ("dir1".to_string(), true),
+            ("file2.rs".to_string(), false),
+        ];
+        let result = format_directory_listing(entries);
+        // Should be sorted and directories should have trailing /
+        assert_eq!(result, "dir1/\nfile1.txt\nfile2.rs");
+    }
+
+    #[test]
+    fn test_format_directory_listing_limit() {
+        // Create more than 30 entries
+        let entries: Vec<(String, bool)> = (0..50)
+            .map(|i| (format!("file{:02}.txt", i), false))
+            .collect();
+        let result = format_directory_listing(entries);
+        // Should be limited to 30 entries
+        assert_eq!(result.lines().count(), 30);
+    }
+
+    #[test]
+    fn test_format_directory_listing_empty() {
+        let entries: Vec<(String, bool)> = vec![];
+        let result = format_directory_listing(entries);
+        assert_eq!(result, "");
     }
 }
 

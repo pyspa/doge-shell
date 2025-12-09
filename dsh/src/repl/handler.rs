@@ -929,7 +929,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
     }
 
     if redraw {
-        debug!("Redrawing input, reset_completion: {}", reset_completion);
+        // debug!("Redrawing input, reset_completion: {}", reset_completion);
         let mut renderer = TerminalRenderer::new();
         repl.print_input(&mut renderer, reset_completion, true);
         renderer.flush().ok();

@@ -123,7 +123,6 @@ pub fn terminate_background_jobs(shell: &mut Shell) -> Result<()> {
 pub async fn check_job_state(shell: &mut Shell) -> Result<Vec<Job>> {
     // Fast path: no jobs to check
     if shell.wait_jobs.is_empty() {
-        debug!("CHECK_JOB_STATE_EMPTY: No jobs to check, skipping");
         return Ok(Vec::new());
     }
 

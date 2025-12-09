@@ -201,7 +201,7 @@ fn eval_inner(
                             cmd = Some(str.clone());
                         }
                         _ => {
-                            println!("autocomplete unknown value: {val:?}");
+                            // println!("autocomplete unknown value: {val:?}");
                         }
                     }
 

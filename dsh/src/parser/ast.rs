@@ -112,7 +112,7 @@ fn search_pos_word(pair: Pair<Rule>, pos: usize) -> Option<(Rule, Span)> {
         }
         _ => {
             // TODO check search_pos_word
-            println!("search_pos_word {:?} {:?}", pair.as_rule(), pair.as_str());
+            // println!("search_pos_word {:?} {:?}", pair.as_rule(), pair.as_str());
         }
     }
     None
@@ -223,11 +223,11 @@ fn to_words<'a>(pair: Pair<'a, Rule>, pos: usize, out: &mut Vec<(Rule, Span<'a>,
                         // Skip command separators like &&, ||, ;
                     }
                     _ => {
-                        debug!(
-                            "to_words missing {:?} {:?}",
-                            inner_pair.as_rule(),
-                            inner_pair.as_str()
-                        );
+                        // debug!(
+                        //    "to_words missing {:?} {:?}",
+                        //    inner_pair.as_rule(),
+                        //    inner_pair.as_str()
+                        //);
                     }
                 }
             }

@@ -1,4 +1,7 @@
 use anyhow::Result;
+use flate2::Compression;
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
 use nix::fcntl::{FlockArg, flock};
 use std::fs::{File, create_dir_all};
 use std::io::{BufReader, BufWriter};
@@ -33,7 +36,9 @@ pub fn read_store(path: &PathBuf) -> Result<FrecencyStore> {
     if path.is_file() {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
-        let store: FrecencyStoreSerializer = bincode::deserialize_from(reader)?;
+        let mut decoder = GzDecoder::new(reader);
+        let store: FrecencyStoreSerializer =
+            bincode::serde::decode_from_std_read(&mut decoder, bincode::config::standard())?;
         Ok(FrecencyStore::from(&store))
     } else {
         Ok(FrecencyStore::default())
@@ -55,7 +60,13 @@ pub fn write_store(store: &FrecencyStore, path: &PathBuf) -> Result<()> {
     let fd = file.as_raw_fd();
     flock(fd, FlockArg::LockExclusive)?;
     let writer = BufWriter::new(file);
-    bincode::serialize_into(writer, &FrecencyStoreSerializer::from(store))?;
+    let mut encoder = GzEncoder::new(writer, Compression::default());
+    bincode::serde::encode_into_std_write(
+        FrecencyStoreSerializer::from(store),
+        &mut encoder,
+        bincode::config::standard(),
+    )?;
+    encoder.finish()?;
 
     tracing::debug!("Successfully wrote frecency store to {}", path.display());
     Ok(())
@@ -65,3 +76,27 @@ pub use crate::stats::ItemStats;
 pub use crate::stats::ItemStatsSerializer;
 pub use crate::store::FrecencyStore;
 pub use crate::store::FrecencyStoreSerializer;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_read_write_store() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("frecency.bin");
+        let mut store = FrecencyStore::default();
+        store.add("foo");
+        store.add("bar");
+
+        write_store(&store, &path)?;
+
+        let loaded_store = read_store(&path)?;
+        assert_eq!(store.items.len(), loaded_store.items.len());
+        assert_eq!(loaded_store.items[0].item, "bar");
+        assert_eq!(loaded_store.items[1].item, "foo");
+
+        Ok(())
+    }
+}

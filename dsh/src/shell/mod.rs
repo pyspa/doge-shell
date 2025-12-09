@@ -124,9 +124,6 @@ impl Shell {
         eval::eval_str(self, ctx, input, force_background).await
     }
 
-    /// Execute a job and capture its stdout and stderr
-    /// Returns (exit_code, stdout, stderr)
-
     fn launch_subshell(&mut self, ctx: &mut Context, jobs: Vec<Job>) -> Result<()> {
         eval::launch_subshell(self, ctx, jobs)
     }

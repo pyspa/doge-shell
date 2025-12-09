@@ -14,9 +14,7 @@ use crate::terminal::renderer::TerminalRenderer;
 use anyhow::Context as _;
 use anyhow::Result;
 use crossterm::cursor;
-use crossterm::event::{
-    DisableBracketedPaste, EnableBracketedPaste, EventStream, KeyEvent, KeyModifiers,
-};
+use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, EventStream, KeyEvent};
 use crossterm::queue;
 use crossterm::style::{Print, ResetColor};
 use crossterm::terminal::{self, Clear, ClearType, enable_raw_mode};
@@ -34,10 +32,6 @@ use std::time::{Duration, Instant};
 use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 use tracing::{debug, warn};
 
-const NONE: KeyModifiers = KeyModifiers::NONE;
-const CTRL: KeyModifiers = KeyModifiers::CONTROL;
-const ALT: KeyModifiers = KeyModifiers::ALT;
-const SHIFT: KeyModifiers = KeyModifiers::SHIFT;
 const AI_SUGGESTION_REFRESH_MS: u64 = 150;
 const MCP_FORM_SUGGESTIONS: &[&str] =
     &["mcp-add-stdio", "mcp-add-http", "mcp-add-sse", "mcp-clear"];

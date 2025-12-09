@@ -1360,8 +1360,10 @@ impl<'a> Repl<'a> {
                 let cursor = self.input.cursor();
 
                 if cursor < current_input.len() {
-                    let next_char = current_input[cursor..].chars().next().unwrap();
-                    if next_char == ch {
+                    // Safe access to next char
+                    if let Some(next_char) = current_input[cursor..].chars().next()
+                        && next_char == ch
+                    {
                         self.input.move_by(1);
 
                         // Move cursor relatively
@@ -1370,8 +1372,12 @@ impl<'a> Repl<'a> {
                         let prompt_w = self.prompt_mark_width;
                         let prev_cursor_disp = prompt_w + self.input.cursor_display_width() - 1; // Approx
                         self.move_cursor_relative(&mut renderer, prev_cursor_disp, new_disp);
-                        queue!(renderer, cursor::Show).ok();
-                        renderer.flush().ok();
+                        if let Err(e) = queue!(renderer, cursor::Show) {
+                            warn!("Failed to show cursor: {}", e);
+                        }
+                        if let Err(e) = renderer.flush() {
+                            warn!("Failed to flush renderer: {}", e);
+                        }
                         return Ok(());
                     }
                 }

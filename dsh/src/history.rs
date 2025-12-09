@@ -366,11 +366,11 @@ impl FrecencyHistory {
     }
 
     pub fn save(&mut self) -> Result<()> {
-        let file_path = self.path.clone().unwrap();
-        if let Some(ref store) = self.store
+        if let Some(ref file_path) = self.path
+            && let Some(ref store) = self.store
             && store.changed
         {
-            let result = write_store(store, &file_path);
+            let result = write_store(store, file_path);
             if result.is_ok() {
                 // Reset the changed flag after successful save
                 let store_mut = self.store.as_mut().unwrap();
@@ -622,6 +622,19 @@ mod tests {
         // Search for "cmd_r" should still find cmd_recent
         let result_recent = history.search_prefix("cmd_r");
         assert_eq!(result_recent, Some("cmd_recent".to_string()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_save_no_path() -> Result<()> {
+        init();
+        let mut history = FrecencyHistory::new();
+        // Path is None by default
+        assert!(history.path.is_none());
+
+        // Should not panic
+        history.save()?;
 
         Ok(())
     }

@@ -699,6 +699,8 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
                     }
                 };
 
+                repl.cache.invalidate();
+
                 // Record command timing statistics
                 let elapsed = start_time.elapsed();
                 if let Some(cmd_name) = command_timing::extract_command_name(&input_str) {
@@ -753,6 +755,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
                         repl.last_status = 1;
                     }
                 }
+                repl.cache.invalidate();
                 repl.input.clear();
                 repl.suggestion_manager.clear();
                 repl.last_duration = Some(start_time.elapsed());

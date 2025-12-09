@@ -16,6 +16,7 @@ use crossterm::queue;
 use crossterm::style::Print;
 use crossterm::terminal::{Clear, ClearType};
 use dsh_types::Context;
+use nix::sys::termios::Termios;
 use std::io::Write;
 use std::time::Instant;
 use tracing::{debug, warn};
@@ -24,6 +25,25 @@ const NONE: KeyModifiers = KeyModifiers::NONE;
 const CTRL: KeyModifiers = KeyModifiers::CONTROL;
 const ALT: KeyModifiers = KeyModifiers::ALT;
 const SHIFT: KeyModifiers = KeyModifiers::SHIFT;
+
+/// Safely get Termios, avoiding panic on TTY access failure.
+/// Returns Ok(Termios) if successful, Err with descriptive message otherwise.
+fn get_tmode_safe(stored_tmode: &Option<Termios>) -> anyhow::Result<Termios> {
+    if let Some(tmode) = stored_tmode {
+        return Ok(tmode.clone());
+    }
+
+    use nix::fcntl::{OFlag, open};
+    use nix::sys::stat::Mode;
+    use nix::sys::termios::tcgetattr;
+
+    warn!("No stored terminal mode available, attempting to get from /dev/tty");
+
+    let tty_fd = open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
+        .map_err(|e| anyhow::anyhow!("Cannot open /dev/tty: {}", e))?;
+
+    tcgetattr(tty_fd).map_err(|e| anyhow::anyhow!("Cannot get terminal attributes: {}", e))
+}
 
 pub(crate) async fn check_background_jobs(repl: &mut Repl<'_>, output: bool) -> Result<()> {
     let jobs = repl.shell.check_job_state().await?;
@@ -673,19 +693,18 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
                 let input_str = repl.input.to_string();
                 repl.last_command_string = input_str.clone();
                 repl.completion.clear();
-                let shell_tmode = repl.tmode.clone().unwrap_or_else(|| {
-                    warn!("No stored terminal mode available, using default");
-                    // Create a default Termios - this is a fallback that may not work perfectly
-                    // but prevents crashes
-                    use nix::fcntl::{OFlag, open};
-                    use nix::sys::stat::Mode;
-                    use nix::sys::termios::tcgetattr;
-                    tcgetattr(
-                        open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
-                            .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
-                    )
-                    .unwrap_or_else(|e| panic!("Cannot initialize Termios: {}", e))
-                });
+                let shell_tmode = match get_tmode_safe(&repl.tmode) {
+                    Ok(tmode) => tmode,
+                    Err(e) => {
+                        warn!("Cannot get terminal mode: {}", e);
+                        eprintln!("dsh: terminal initialization error: {}", e);
+                        // Show new prompt and skip command execution
+                        let mut renderer = TerminalRenderer::new();
+                        repl.print_prompt(&mut renderer);
+                        renderer.flush().ok();
+                        return Ok(());
+                    }
+                };
                 let mut ctx = Context::new(repl.shell.pid, repl.shell.pgid, shell_tmode, true);
                 let exit_code = match repl
                     .shell
@@ -739,17 +758,17 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
                 repl.completion.clear();
                 let input = repl.input.to_string();
                 repl.last_command_string = input.clone();
-                let shell_tmode = repl.tmode.clone().unwrap_or_else(|| {
-                    warn!("No stored terminal mode available, using default");
-                    use nix::fcntl::{OFlag, open};
-                    use nix::sys::stat::Mode;
-                    use nix::sys::termios::tcgetattr;
-                    tcgetattr(
-                        open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
-                            .unwrap_or_else(|_| panic!("Cannot open /dev/tty")),
-                    )
-                    .unwrap_or_else(|e| panic!("Cannot initialize Termios: {}", e))
-                });
+                let shell_tmode = match get_tmode_safe(&repl.tmode) {
+                    Ok(tmode) => tmode,
+                    Err(e) => {
+                        warn!("Cannot get terminal mode for background execution: {}", e);
+                        eprintln!("dsh: terminal initialization error: {}", e);
+                        let mut renderer = TerminalRenderer::new();
+                        repl.print_prompt(&mut renderer);
+                        renderer.flush().ok();
+                        return Ok(());
+                    }
+                };
                 let mut ctx = Context::new(repl.shell.pid, repl.shell.pgid, shell_tmode, true);
                 match repl.shell.eval_str(&mut ctx, input, true).await {
                     Ok(code) => {

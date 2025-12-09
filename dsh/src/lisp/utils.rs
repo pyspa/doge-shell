@@ -95,7 +95,10 @@ pub fn make_list(vec: Vec<String>) -> Value {
 
 #[allow(dead_code)]
 pub fn unquote(s: &str) -> String {
-    let quote = s.chars().next().unwrap();
+    let quote = match s.chars().next() {
+        Some(c) => c,
+        None => return String::new(), // Empty string
+    };
 
     if quote != '"' && quote != '\'' && quote != '`' {
         return s.to_string();

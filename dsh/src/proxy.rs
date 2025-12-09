@@ -216,7 +216,7 @@ impl ShellProxy for Shell {
                         .iter()
                         .map(|job| Job {
                             job: job.job_id,
-                            pid: job.pid.unwrap().as_raw(),
+                            pid: job.pid.map(|p| p.as_raw()).unwrap_or(-1),
                             state: format!("{}", job.state),
                             command: job.cmd.clone(),
                         })

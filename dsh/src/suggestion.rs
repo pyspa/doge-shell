@@ -416,7 +416,13 @@ impl AiSuggestionBackend {
             });
         } else {
             thread::spawn(move || {
-                let runtime = Runtime::new().expect("failed to create runtime for AI backend");
+                let runtime = match Runtime::new() {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        warn!("Failed to create runtime for AI backend: {}", e);
+                        return; // Exit thread without panic
+                    }
+                };
                 runtime.block_on(async move {
                     runner.worker_loop().await;
                 });

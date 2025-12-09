@@ -348,42 +348,35 @@ pub fn create_context_for_command(shell: &Shell) -> Context {
     };
 
     // For command execution in test environments, try to get Termios from any available file descriptor
-    // that's a TTY. If none are available, we'll use the terminal_state's tmodes.
+    // that's a TTY. If none are available, fall back to new_safe which doesn't require TTY.
     let shell_tmode = if let Some(tmodes) = &terminal_state.tmodes {
         tmodes.clone()
     } else {
         // Try to get terminal settings from any standard file descriptor that might be a TTY
-        tcgetattr(stdin_fd)
+        match tcgetattr(stdin_fd)
             .or_else(|_| tcgetattr(stdout_fd))
             .or_else(|_| tcgetattr(stderr_fd))
-            .unwrap_or_else(|_| {
-                // For test environments where no TTY is available, we still need a Termios
-                // The fundamental issue is that we can't construct Termios directly.
-                // We need to find an alternative approach to get a valid Termios.
-
-                // In environments where no TTY is available (like in the failing tests),
-                // the only real option is to avoid this path entirely or provide a mock termios.
-                // Since we can't construct one directly, we'll have to handle this in a different way.
-
-                // This is problematic since we need to handle the case where no TTY exists
-                // For test environments specifically, we would ideally have a way to use
-                // a minimal Termios or a mock one, but that's not available in nix.
-
-                // One way around this is to catch the situation where we're in test mode
-                // and use a different initialization strategy, but this would require
-                // changes to how the shell initializes context.
-
-                // For now, we'll try to access /dev/tty as a final fallback:
+        {
+            Ok(tmodes) => tmodes,
+            Err(_) => {
+                // For environments where no TTY is available (test environments, pipes, etc.),
+                // try /dev/tty as a last resort
                 use nix::fcntl::{OFlag, open};
                 use nix::sys::stat::Mode;
 
-                // In test environments where no TTY is accessible at all,
-                // we need to accept that we can't create a Termios and provide an alternative
-                open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
+                match open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
                     .ok()
                     .and_then(|tty_fd| tcgetattr(tty_fd).ok())
-                    .expect("Command execution in test environment requires TTY access (no available terminal descriptors)")
-            })
+                {
+                    Some(tmodes) => tmodes,
+                    None => {
+                        // No TTY available at all - use Context::new_safe which handles this
+                        debug!("No TTY available for command execution, using safe context");
+                        return Context::new_safe(shell.pid, shell.pgid, false);
+                    }
+                }
+            }
+        }
     };
 
     Context {

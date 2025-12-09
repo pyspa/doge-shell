@@ -129,7 +129,12 @@ impl CommandLineParser {
 
         for (i, token) in tokens.iter().enumerate() {
             // Find token start position
-            while pos < input.len() && input.chars().nth(pos).unwrap().is_whitespace() {
+            while pos < input.len() {
+                if let Some(c) = input.chars().nth(pos)
+                    && !c.is_whitespace()
+                {
+                    break;
+                }
                 pos += 1;
             }
 

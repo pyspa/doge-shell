@@ -321,26 +321,9 @@ pub struct DynamicConfigLoader;
 impl DynamicConfigLoader {
     /// Load all configuration files (embedded and user)
     pub fn load_all_configs() -> Result<Vec<DynamicCompletionDef>> {
-        let mut all_configs = Vec::new();
-
-        // Load from embedded resources
-        for file_path in DynamicCompletionAssets::iter() {
-            if file_path.ends_with(".toml")
-                && let Some(file_data) = DynamicCompletionAssets::get(&file_path)
-            {
-                match Self::parse_config_file(&file_data.data) {
-                    Ok(configs) => all_configs.extend(configs),
-                    Err(e) => {
-                        warn!("Failed to parse embedded config {}: {}", file_path, e);
-                    }
-                }
-            }
-        }
-
-        // TODO: Load from user config directory (~/.config/dsh/dynamic-completions/)
-        // This would be implemented in a follow-up if needed
-
-        Ok(all_configs)
+        // TOML loading is temporarily disabled to unify with JSON-based completions
+        debug!("TOML configuration loading is disabled");
+        Ok(Vec::new())
     }
 
     /// Parse a configuration file

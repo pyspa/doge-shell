@@ -1027,4 +1027,52 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_git_completion_loading() {
+        use crate::completion::command::ArgumentType;
+
+        // Initialize loader
+        let loader = JsonCompletionLoader::new();
+        let mut database = CommandCompletionDatabase::new();
+
+        // Load database from embedded
+        let result = loader.load_from_embedded(&mut database);
+        assert!(
+            result.is_ok(),
+            "Failed to load from embedded resources: {:?}",
+            result.err()
+        );
+
+        // Verify git command exists
+        let git_cmd = database.get_command("git");
+        assert!(git_cmd.is_some(), "git command not found in database");
+        let git_cmd = git_cmd.unwrap();
+
+        // Verify switch subcommand
+        let switch_sub = git_cmd.subcommands.iter().find(|s| s.name == "switch");
+        assert!(switch_sub.is_some(), "git switch subcommand not found");
+        let switch_sub = switch_sub.unwrap();
+
+        // Verify argument type is Script
+        assert!(
+            !switch_sub.arguments.is_empty(),
+            "git switch has no arguments"
+        );
+        let branch_arg = &switch_sub.arguments[0];
+
+        match &branch_arg.arg_type {
+            Some(ArgumentType::Script(script)) => {
+                assert!(
+                    script.contains("git branch"),
+                    "Script content mismatch: {}",
+                    script
+                );
+            }
+            _ => panic!(
+                "Expected Script argument type for git switch, found {:?}",
+                branch_arg.arg_type
+            ),
+        }
+    }
 }

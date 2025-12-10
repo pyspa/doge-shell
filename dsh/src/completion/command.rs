@@ -85,6 +85,8 @@ pub enum ArgumentType {
     Url,
     /// Regular expression pattern
     Regex,
+    /// Script to execute for dynamic completion
+    Script(String),
 }
 
 /// Command completion database

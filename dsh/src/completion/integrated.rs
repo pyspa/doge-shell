@@ -66,6 +66,17 @@ impl CandidateBatch {
         }
     }
 
+    fn inclusive_with_framework(
+        candidates: Vec<EnhancedCandidate>,
+        framework: CompletionFrameworkKind,
+    ) -> Self {
+        Self {
+            candidates,
+            exclusive: false,
+            framework: Some(framework),
+        }
+    }
+
     fn exclusive_with_framework(
         candidates: Vec<EnhancedCandidate>,
         framework: CompletionFrameworkKind,
@@ -506,8 +517,12 @@ impl IntegratedCompletionEngine {
                     request.input
                 );
 
+                // Use Skim for command/argument completion
                 CommandCollection {
-                    batch: CandidateBatch::inclusive(enhanced_candidates),
+                    batch: CandidateBatch::inclusive_with_framework(
+                        enhanced_candidates,
+                        CompletionFrameworkKind::Skim,
+                    ),
                 }
             }
             Err(e) => {

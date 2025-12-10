@@ -335,6 +335,17 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
     // Define global hook variables
     env.define(Symbol::from("*pre-prompt-hooks*"), Value::List(List::NIL));
 
+    env.define(Symbol::from("openai_usage_limit"), Value::NIL);
+
+    // GitHub Integration
+    env.define(Symbol::from("*github-pat*"), Value::NIL);
+    env.define(
+        Symbol::from("*github-notify-interval*"),
+        Value::from("60".to_string()),
+    );
+    env.define(Symbol::from("*github-notifications-filter*"), Value::NIL);
+    env.define(Symbol::from("*github-icon*"), Value::from("🐙".to_string()));
+
     env.define(Symbol::from("*pre-exec-hooks*"), Value::List(List::NIL));
 
     env.define(Symbol::from("*post-exec-hooks*"), Value::List(List::NIL));

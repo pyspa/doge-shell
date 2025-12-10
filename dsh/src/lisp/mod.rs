@@ -4,7 +4,8 @@ use crate::lisp::interpreter::eval;
 #[cfg(test)]
 use crate::lisp::model::IntType;
 pub use crate::lisp::model::Value;
-use crate::lisp::model::{Env, List, RuntimeError, Symbol};
+pub use crate::lisp::model::{Env, Symbol};
+use crate::lisp::model::{List, RuntimeError};
 use crate::lisp::parser::parse;
 use anyhow::Context;
 use parking_lot::RwLock;

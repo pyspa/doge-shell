@@ -22,7 +22,7 @@ static RELATIVE_PATH_REGEX: std::sync::LazyLock<Regex> =
 
 use tracing::debug;
 
-pub trait ChangePwdHook {
+pub trait ChangePwdHook: Send + Sync {
     fn call(&self, pwd: &Path, env: Arc<RwLock<Environment>>) -> Result<()>;
 }
 
@@ -34,7 +34,7 @@ pub struct Environment {
     pub variables: HashMap<String, String>,
     pub exported_vars: HashSet<String>,
     pub direnv_roots: Vec<DirEnvironment>,
-    pub chpwd_hooks: Vec<Box<dyn ChangePwdHook>>,
+    pub chpwd_hooks: Vec<Box<dyn ChangePwdHook + Send + Sync>>,
     pub mcp_servers: Vec<McpServerConfig>,
     pub execute_allowlist: Vec<String>,
     pub system_env_vars: HashMap<String, String>,

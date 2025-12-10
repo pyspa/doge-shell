@@ -1,4 +1,5 @@
 use crate::environment::{ChangePwdHook, Environment};
+use crate::github::GitHubStatus;
 use anyhow::Result;
 use crossterm::cursor;
 use crossterm::queue;
@@ -33,6 +34,8 @@ impl ChangePwdHook for Arc<RwLock<Prompt>> {
 pub struct Prompt {
     pub current_dir: PathBuf,
     pub mark: String,
+    pub github_status: Option<Arc<RwLock<GitHubStatus>>>,
+    pub github_icon: String,
     current_git_root: Option<PathBuf>,
     git_root_cache: HashSet<String>,
     git_status_cache: Option<GitStatusCache>,
@@ -43,6 +46,8 @@ impl Prompt {
         let mut prompt = Prompt {
             current_dir: current_dir.clone(),
             mark,
+            github_status: None,
+            github_icon: "🐙".to_string(), // Default icon
             current_git_root: None,
             git_root_cache: HashSet::new(),
             git_status_cache: None,
@@ -96,6 +101,22 @@ impl Prompt {
             );
 
             path.push_str(&branch_display);
+
+            // Display GitHub notifications if available and under git
+            if let Some(status_lock) = &self.github_status {
+                let status = status_lock.read();
+                if status.notification_count > 0 {
+                    let notify_display = format!(
+                        " {} {}",
+                        self.github_icon.as_str().yellow(),
+                        status.notification_count.to_string().yellow().bold()
+                    );
+                    path.push_str(&notify_display);
+                } else if status.has_error {
+                    let notify_display = format!(" {}", "🔔!".red().bold());
+                    path.push_str(&notify_display);
+                }
+            }
         }
 
         write!(out, "{}", path).ok();
@@ -172,7 +193,7 @@ impl Prompt {
         }
     }
 
-    fn under_git(&self) -> bool {
+    pub fn under_git(&self) -> bool {
         if let Some(git_root) = &self.current_git_root {
             self.current_dir.starts_with(git_root)
         } else {

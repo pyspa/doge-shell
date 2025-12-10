@@ -19,6 +19,7 @@ pub mod direnv;
 pub mod dirs;
 pub mod environment;
 pub mod errors;
+pub mod github;
 pub mod history;
 pub mod history_import;
 pub mod input;

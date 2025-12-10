@@ -6,6 +6,7 @@ use crate::dirs;
 use crate::environment::Environment;
 use crate::history::FrecencyHistory;
 use crate::input::{ColorType, Input, InputConfig, display_width};
+use crate::lisp::{Symbol, Value};
 use crate::parser::{self, HighlightKind, Rule};
 use crate::prompt::Prompt;
 use crate::shell::{SHELL_TERMINAL, Shell};
@@ -199,6 +200,61 @@ impl<'a> Repl<'a> {
             .chpwd_hooks
             .push(Box::new(Arc::clone(&prompt)));
         let input_config = InputConfig::default();
+
+        // Initialize GitHub integration
+        let github_status = Arc::new(RwLock::new(crate::github::GitHubStatus::default()));
+        prompt.write().github_status = Some(github_status.clone());
+
+        let github_config = {
+            let lisp_engine = shell.lisp_engine.borrow();
+            let env = lisp_engine.env.borrow();
+
+            let pat = match env.get(&Symbol::from("*github-pat*")) {
+                Some(Value::String(s)) => Some(s.clone()),
+                _ => None,
+            };
+
+            if let Some(Value::String(icon)) = env.get(&Symbol::from("*github-icon*")) {
+                prompt.write().github_icon = icon.clone();
+            }
+
+            let interval = match env.get(&Symbol::from("*github-notify-interval*")) {
+                Some(Value::String(s)) => s.parse::<u64>().unwrap_or(60),
+                Some(Value::Int(i)) => i.try_into().unwrap_or(60),
+                _ => 60,
+            };
+
+            let filter = match env.get(&Symbol::from("*github-notifications-filter*")) {
+                Some(Value::String(s)) => Some(s.clone()),
+                _ => None,
+            };
+
+            if pat.is_some() {
+                debug!(
+                    "GitHub integration enabled. Interval: {}, Filter: {:?}",
+                    interval, filter
+                );
+            } else {
+                debug!("GitHub integration disabled (no PAT found).");
+            }
+
+            Arc::new(RwLock::new(crate::github::GitHubConfig {
+                pat,
+                interval,
+                filter,
+            }))
+        };
+
+        let config_for_task = Arc::clone(&github_config);
+        let prompt_for_github = Arc::clone(&prompt);
+        let status_for_github = Arc::clone(&github_status);
+
+        // Spawn background task
+        tokio::spawn(crate::github::background_github_task(
+            config_for_task,
+            prompt_for_github,
+            status_for_github,
+        ));
 
         let prompt_mark_cache = prompt.read().mark.clone();
         let prompt_mark_width = display_width(&prompt_mark_cache);
@@ -1519,8 +1575,8 @@ mod tests {
         assert_eq!(state.press_count, 1);
     }
 
-    #[test]
-    fn command_is_valid_detects_builtin_and_alias() {
+    #[tokio::test]
+    async fn command_is_valid_detects_builtin_and_alias() {
         let env = Environment::new();
         {
             let mut writer = env.write();

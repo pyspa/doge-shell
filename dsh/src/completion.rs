@@ -25,6 +25,7 @@ pub mod display;
 pub mod dynamic;
 pub mod framework;
 mod generator;
+pub mod generators;
 mod history;
 pub mod integrated;
 pub mod json_loader;

@@ -2,10 +2,10 @@ use super::command::{
     ArgumentType, CommandCompletion, CommandCompletionDatabase, CommandOption, CompletionCandidate,
     SubCommand,
 };
+use super::generators::filesystem::FileSystemGenerator;
+use super::generators::script::ScriptGenerator;
 use super::parser::{CompletionContext, ParsedCommandLine};
 use anyhow::Result;
-use std::fs;
-use std::path::{MAIN_SEPARATOR, Path};
 
 /// Completion candidate generator
 pub struct CompletionGenerator {
@@ -217,7 +217,9 @@ impl CompletionGenerator {
             }
         } else {
             // Fallback for unknown commands: suggest files by default
-            candidates.extend(self.generate_file_candidates(&parsed.current_token)?);
+            candidates.extend(FileSystemGenerator::generate_file_candidates(
+                &parsed.current_token,
+            )?);
         }
 
         Ok(candidates)
@@ -334,7 +336,9 @@ impl CompletionGenerator {
 
             // Default to file completion if no candidates generated yet
             if candidates.is_empty() {
-                candidates.extend(self.generate_file_candidates(&parsed.current_token)?);
+                candidates.extend(FileSystemGenerator::generate_file_candidates(
+                    &parsed.current_token,
+                )?);
             }
         }
 
@@ -348,9 +352,15 @@ impl CompletionGenerator {
         parsed: &ParsedCommandLine,
     ) -> Result<Vec<CompletionCandidate>> {
         match arg_type {
-            ArgumentType::File { extensions } => self
-                .generate_file_candidates_with_filter(&parsed.current_token, extensions.as_ref()),
-            ArgumentType::Directory => self.generate_directory_candidates(&parsed.current_token),
+            ArgumentType::File { extensions } => {
+                FileSystemGenerator::generate_file_candidates_with_filter(
+                    &parsed.current_token,
+                    extensions.as_ref(),
+                )
+            }
+            ArgumentType::Directory => {
+                FileSystemGenerator::generate_directory_candidates(&parsed.current_token)
+            }
             ArgumentType::Choice(choices) => Ok(choices
                 .iter()
                 .filter(|choice| choice.starts_with(&parsed.current_token))
@@ -360,146 +370,11 @@ impl CompletionGenerator {
             ArgumentType::Environment => {
                 self.generate_environment_variable_candidates(&parsed.current_token)
             }
-            ArgumentType::Script(command) => self.generate_script_candidates(command, parsed),
+            ArgumentType::Script(command) => {
+                ScriptGenerator::default().generate_script_candidates(command, parsed)
+            }
             _ => Ok(Vec::new()),
         }
-    }
-
-    /// Generate completion candidates by executing a shell script
-    fn generate_script_candidates(
-        &self,
-        command_template: &str,
-        parsed: &ParsedCommandLine,
-    ) -> Result<Vec<CompletionCandidate>> {
-        // Simple variable substitution
-        let mut command = command_template.to_string();
-        command = command.replace("$COMMAND", &parsed.command);
-        if let Some(arg) = &parsed.current_arg {
-            command = command.replace("$CURRENT_TOKEN", arg);
-        } else {
-            command = command.replace("$CURRENT_TOKEN", "");
-        }
-        if let Some(first_sub) = parsed.subcommand_path.first() {
-            command = command.replace("$SUBCOMMAND", first_sub);
-        } else {
-            command = command.replace("$SUBCOMMAND", "");
-        }
-
-        // Execute command
-        // eprintln!("Executing script command: '{}'", command);
-        let output = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(&command)
-            .output()?;
-
-        if !output.status.success() {
-            //eprintln!("Script failed with status: {}", output.status);
-            //let stderr = String::from_utf8_lossy(&output.stderr);
-            //eprintln!("Script stderr: {}", stderr);
-            return Ok(Vec::new());
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        //eprintln!("Script stdout: '{}'", stdout);
-        let mut candidates = Vec::new();
-
-        for line in stdout.lines() {
-            let trimmed = line.trim();
-            if !trimmed.is_empty() && trimmed.starts_with(&parsed.current_token) {
-                candidates.push(CompletionCandidate::argument(trimmed.to_string(), None));
-            } else {
-                //eprintln!(
-                //    "Skipping line '{}' (token: '{}')",
-                //    trimmed, parsed.current_token
-                // ;
-            }
-        }
-        Ok(candidates)
-    }
-
-    /// Generate file completion candidates
-    fn generate_file_candidates(&self, current_token: &str) -> Result<Vec<CompletionCandidate>> {
-        self.generate_file_candidates_with_filter(current_token, None)
-    }
-
-    /// Generate file completion candidates with filter
-    fn generate_file_candidates_with_filter(
-        &self,
-        current_token: &str,
-        extensions: Option<&Vec<String>>,
-    ) -> Result<Vec<CompletionCandidate>> {
-        let mut candidates = Vec::with_capacity(32);
-
-        let (dir_path, file_prefix) = Self::split_dir_and_prefix(current_token);
-
-        if let Ok(entries) = fs::read_dir(&dir_path) {
-            for entry in entries.flatten() {
-                let file_name = entry.file_name().to_string_lossy().to_string();
-
-                if file_name.starts_with(&file_prefix) {
-                    let path = entry.path();
-
-                    // Extension filter
-                    if let Some(exts) = extensions
-                        && path.is_file()
-                    {
-                        if let Some(ext) = path.extension() {
-                            let ext_str = format!(".{}", ext.to_string_lossy());
-                            if !exts.contains(&ext_str) {
-                                continue;
-                            }
-                        } else {
-                            continue;
-                        }
-                    }
-
-                    let full_path = Self::build_candidate_path(&dir_path, &file_name);
-
-                    if path.is_dir() {
-                        candidates.push(CompletionCandidate::directory(full_path));
-                    } else {
-                        candidates.push(CompletionCandidate::file(full_path));
-                    }
-                }
-            }
-        }
-
-        Ok(candidates)
-    }
-
-    /// Generate directory completion candidates
-    fn generate_directory_candidates(
-        &self,
-        current_token: &str,
-    ) -> Result<Vec<CompletionCandidate>> {
-        let mut candidates = Vec::with_capacity(16);
-
-        let (dir_path, dir_prefix) = Self::split_dir_and_prefix(current_token);
-
-        if let Ok(entries) = fs::read_dir(&dir_path) {
-            for entry in entries.flatten() {
-                let file_name = entry.file_name().to_string_lossy().to_string();
-
-                if file_name.starts_with(&dir_prefix) && entry.path().is_dir() {
-                    let full_path = Self::build_candidate_path(&dir_path, &file_name);
-
-                    candidates.push(CompletionCandidate::directory(full_path));
-                }
-            }
-        }
-
-        Ok(candidates)
-    }
-
-    fn build_candidate_path(dir_path: &str, file_name: &str) -> String {
-        if dir_path == "." || dir_path.is_empty() {
-            return file_name.to_string();
-        }
-
-        Path::new(dir_path)
-            .join(file_name)
-            .to_string_lossy()
-            .to_string()
     }
 
     /// Generate system command completion candidates (simplified version)
@@ -589,53 +464,15 @@ impl CompletionGenerator {
 
         options
     }
-
-    fn split_dir_and_prefix(current_token: &str) -> (String, String) {
-        if current_token.is_empty() {
-            return (".".to_string(), String::new());
-        }
-
-        let path = Path::new(current_token);
-
-        if Self::ends_with_path_separator(current_token) {
-            let dir = Self::normalize_dir_path(path);
-            return (dir, String::new());
-        }
-
-        if let Some(parent) = path.parent() {
-            let dir = Self::normalize_dir_path(parent);
-            let prefix = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            return (dir, prefix);
-        }
-
-        (".".to_string(), current_token.to_string())
-    }
-
-    fn ends_with_path_separator(token: &str) -> bool {
-        token.ends_with(MAIN_SEPARATOR)
-            || (MAIN_SEPARATOR != '/' && token.ends_with('/'))
-            || (MAIN_SEPARATOR != '\\' && token.ends_with('\\'))
-    }
-
-    fn normalize_dir_path(path: &Path) -> String {
-        if path.as_os_str().is_empty() {
-            ".".to_string()
-        } else {
-            path.to_string_lossy().to_string()
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::FileSystemGenerator;
     use super::*;
     use crate::completion::command::{Argument, CommandCompletion, SubCommand};
     use crate::completion::parser::CommandLineParser;
-    use std::path::Path;
+    use std::path::{MAIN_SEPARATOR, Path};
     use tempfile::tempdir;
 
     fn create_test_database() -> CommandCompletionDatabase {
@@ -712,16 +549,16 @@ mod tests {
     #[test]
     fn build_candidate_path_handles_root_without_double_slash() {
         assert_eq!(
-            CompletionGenerator::build_candidate_path("/", "tmp"),
+            FileSystemGenerator::build_candidate_path("/", "tmp"),
             "/tmp"
         );
     }
 
     #[test]
     fn build_candidate_path_preserves_relative_paths() {
-        assert_eq!(CompletionGenerator::build_candidate_path(".", "foo"), "foo");
+        assert_eq!(FileSystemGenerator::build_candidate_path(".", "foo"), "foo");
         assert_eq!(
-            CompletionGenerator::build_candidate_path("/usr", "bin"),
+            FileSystemGenerator::build_candidate_path("/usr", "bin"),
             "/usr/bin"
         );
     }
@@ -732,11 +569,10 @@ mod tests {
         std::fs::write(temp.path().join("alpha.txt"), "").unwrap();
         std::fs::create_dir(temp.path().join("nested")).unwrap();
 
-        let generator = CompletionGenerator::new(CommandCompletionDatabase::new());
+        let _generator = CompletionGenerator::new(CommandCompletionDatabase::new());
         let token = format!("{}{}", temp.path().display(), MAIN_SEPARATOR);
 
-        let candidates = generator
-            .generate_file_candidates(&token)
+        let candidates = FileSystemGenerator::generate_file_candidates(&token)
             .expect("file candidates with trailing separator");
         let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
 
@@ -768,11 +604,10 @@ mod tests {
         let temp = tempdir().unwrap();
         std::fs::create_dir(temp.path().join("nested")).unwrap();
 
-        let generator = CompletionGenerator::new(CommandCompletionDatabase::new());
+        let _generator = CompletionGenerator::new(CommandCompletionDatabase::new());
         let token = format!("{}{}", temp.path().display(), MAIN_SEPARATOR);
 
-        let candidates = generator
-            .generate_directory_candidates(&token)
+        let candidates = FileSystemGenerator::generate_directory_candidates(&token)
             .expect("directory candidates with trailing separator");
         let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
 

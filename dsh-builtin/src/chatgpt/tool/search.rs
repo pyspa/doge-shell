@@ -120,7 +120,7 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
                         || glob.matches(entry.file_name().to_str().unwrap_or(""))
                     {
                         // Get path relative to CWD for output
-                        if let Ok(cwd_rel) = entry.path().strip_prefix(&current_dir) {
+                        if let Ok(cwd_rel) = entry.path().strip_prefix(&normalized_current_dir) {
                             results.push(cwd_rel.display().to_string());
                         }
                     }
@@ -148,7 +148,8 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
                         if let Ok(line_content) = line
                             && line_content.contains(query)
                         {
-                            if let Ok(cwd_rel) = entry.path().strip_prefix(&current_dir) {
+                            if let Ok(cwd_rel) = entry.path().strip_prefix(&normalized_current_dir)
+                            {
                                 results.push(format!(
                                     "{}:{}: {}",
                                     cwd_rel.display(),
@@ -272,7 +273,7 @@ mod tests {
 
     #[test]
     fn test_search_filename() {
-        let _lock = CWD_LOCK.lock().unwrap();
+        let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("test_file.rs");
         fs::write(&file_path, "content").unwrap();
@@ -290,7 +291,7 @@ mod tests {
 
     #[test]
     fn test_search_content() {
-        let _lock = CWD_LOCK.lock().unwrap();
+        let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
         fs::write(&file_path, "hello world").unwrap();

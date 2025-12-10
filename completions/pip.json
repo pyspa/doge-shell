@@ -1,0 +1,99 @@
+{
+  "command": "pip",
+  "description": "Python package manager",
+  "subcommands": [
+    {
+      "name": "install",
+      "description": "Install packages",
+      "options": [
+        { "short": "-r", "long": "--requirement", "description": "Install from requirements file" },
+        { "short": "-U", "long": "--upgrade", "description": "Upgrade packages" },
+        { "short": "-e", "long": "--editable", "description": "Install in editable mode" },
+        { "long": "--user", "description": "Install to user site-packages" },
+        { "long": "--no-deps", "description": "Don't install dependencies" },
+        { "long": "--pre", "description": "Include pre-release versions" }
+      ]
+    },
+    {
+      "name": "uninstall",
+      "description": "Uninstall packages",
+      "options": [
+        { "short": "-y", "long": "--yes", "description": "Don't ask for confirmation" }
+      ],
+      "arguments": [
+        {
+          "name": "package",
+          "description": "Package to uninstall",
+          "type": {
+            "type": "Script",
+            "data": "pip list --format=freeze 2>/dev/null | cut -d= -f1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "list",
+      "description": "List installed packages",
+      "options": [
+        { "short": "-o", "long": "--outdated", "description": "List outdated packages" },
+        { "short": "-u", "long": "--uptodate", "description": "List up-to-date packages" },
+        { "long": "--format", "description": "Output format (columns, freeze, json)" }
+      ]
+    },
+    {
+      "name": "show",
+      "description": "Show package information",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "Package to show",
+          "type": {
+            "type": "Script",
+            "data": "pip list --format=freeze 2>/dev/null | cut -d= -f1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "freeze",
+      "description": "Output installed packages in requirements format"
+    },
+    {
+      "name": "search",
+      "description": "Search PyPI for packages"
+    },
+    {
+      "name": "download",
+      "description": "Download packages"
+    },
+    {
+      "name": "wheel",
+      "description": "Build wheels from requirements"
+    },
+    {
+      "name": "check",
+      "description": "Verify installed packages have compatible dependencies"
+    },
+    {
+      "name": "config",
+      "description": "Manage pip configuration"
+    },
+    {
+      "name": "cache",
+      "description": "Manage pip's cache",
+      "subcommands": [
+        { "name": "dir", "description": "Show cache directory" },
+        { "name": "info", "description": "Show cache information" },
+        { "name": "list", "description": "List cache entries" },
+        { "name": "purge", "description": "Remove all cache entries" },
+        { "name": "remove", "description": "Remove specific entries" }
+      ]
+    }
+  ],
+  "global_options": [
+    { "short": "-V", "long": "--version", "description": "Show version" },
+    { "short": "-v", "long": "--verbose", "description": "Verbose output" },
+    { "short": "-q", "long": "--quiet", "description": "Quiet output" },
+    { "long": "--no-cache-dir", "description": "Disable cache" }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "command": "python",
+  "description": "Python interpreter",
+  "global_options": [
+    {
+      "short": "-c",
+      "description": "Execute command"
+    },
+    {
+      "short": "-m",
+      "description": "Run library module as a script"
+    },
+    {
+      "short": "-i",
+      "description": "Interactive mode after running script"
+    },
+    {
+      "short": "-V",
+      "long": "--version",
+      "description": "Print version"
+    },
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Print help"
+    },
+    {
+      "short": "-u",
+      "description": "Unbuffered stdout/stderr"
+    },
+    {
+      "short": "-v",
+      "description": "Verbose mode"
+    },
+    {
+      "short": "-O",
+      "description": "Optimize bytecode"
+    },
+    {
+      "short": "-B",
+      "description": "Don't write .pyc files"
+    },
+    {
+      "short": "-q",
+      "description": "Quiet mode"
+    },
+    {
+      "long": "--check-hash-based-pycs",
+      "description": "Control hash-based .pyc validation"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "script",
+      "description": "Python script to execute",
+      "type": {
+        "type": "File",
+        "data": { "extensions": [".py"] }
+      }
+    }
+  ]
+}

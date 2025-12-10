@@ -1,0 +1,66 @@
+{
+  "command": "pgrep",
+  "description": "Look up processes by name",
+  "global_options": [
+    {
+      "long": "--list-name",
+      "short": "-l",
+      "description": "List PID and process name"
+    },
+    {
+      "long": "--list-full",
+      "short": "-a",
+      "description": "List PID and full command line"
+    },
+    {
+      "long": "--count",
+      "short": "-c",
+      "description": "Count matching processes"
+    },
+    {
+      "long": "--full",
+      "short": "-f",
+      "description": "Match against full command line"
+    },
+    {
+      "long": "--exact",
+      "short": "-x",
+      "description": "Match exactly with the process name"
+    },
+    {
+      "long": "--newest",
+      "short": "-n",
+      "description": "Select only the newest process"
+    },
+    {
+      "long": "--oldest",
+      "short": "-o",
+      "description": "Select only the oldest process"
+    },
+    {
+      "long": "--parent",
+      "short": "-P",
+      "description": "Select processes with matching parent PID"
+    },
+    {
+      "long": "--terminal",
+      "short": "-t",
+      "description": "Select by controlling terminal"
+    },
+    {
+      "long": "--uid",
+      "short": "-u",
+      "description": "Match by effective user ID"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "pattern",
+      "description": "Process name pattern to match",
+      "type": {
+        "type": "Script",
+        "data": "ps -eo comm --no-headers | sort -u"
+      }
+    }
+  ]
+}

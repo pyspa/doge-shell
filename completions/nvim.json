@@ -1,0 +1,89 @@
+{
+  "command": "nvim",
+  "description": "Neovim text editor",
+  "global_options": [
+    {
+      "short": "-R",
+      "description": "Read-only mode"
+    },
+    {
+      "short": "-d",
+      "description": "Diff mode"
+    },
+    {
+      "short": "-o",
+      "description": "Open files in horizontal splits"
+    },
+    {
+      "short": "-O",
+      "description": "Open files in vertical splits"
+    },
+    {
+      "short": "-p",
+      "description": "Open files in tabs"
+    },
+    {
+      "short": "-u",
+      "description": "Use specific config file"
+    },
+    {
+      "short": "-c",
+      "description": "Execute command after loading"
+    },
+    {
+      "short": "-S",
+      "description": "Source file after loading"
+    },
+    {
+      "short": "-s",
+      "description": "Read script from file"
+    },
+    {
+      "short": "-n",
+      "description": "No swap file"
+    },
+    {
+      "short": "-r",
+      "description": "Recover from swap file"
+    },
+    {
+      "long": "--noplugin",
+      "description": "Skip loading plugins"
+    },
+    {
+      "long": "--headless",
+      "description": "Run without UI"
+    },
+    {
+      "long": "--embed",
+      "description": "Run as RPC server"
+    },
+    {
+      "long": "--listen",
+      "description": "Serve RPC on address"
+    },
+    {
+      "long": "--clean",
+      "description": "Skip user config"
+    },
+    {
+      "short": "-v",
+      "long": "--version",
+      "description": "Show version"
+    },
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show help"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "file",
+      "description": "File to edit",
+      "type": {
+        "type": "File"
+      }
+    }
+  ]
+}

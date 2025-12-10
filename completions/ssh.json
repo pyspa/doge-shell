@@ -67,5 +67,15 @@
       }
     }
   ],
+  "arguments": [
+    {
+      "name": "destination",
+      "description": "Remote host to connect to",
+      "type": {
+        "type": "Script",
+        "data": "cat ~/.ssh/known_hosts 2>/dev/null | cut -d' ' -f1 | cut -d',' -f1 | grep -v '^\\[' | sort -u"
+      }
+    }
+  ],
   "subcommands": []
 }

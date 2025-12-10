@@ -1,0 +1,168 @@
+{
+  "command": "gh",
+  "description": "GitHub CLI",
+  "global_options": [
+    {
+      "long": "--help",
+      "description": "Show help"
+    },
+    {
+      "long": "--version",
+      "description": "Show version"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "pr",
+      "description": "Manage pull requests",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List pull requests",
+          "options": [
+            { "short": "-s", "long": "--state", "description": "Filter by state (open, closed, merged, all)" },
+            { "short": "-l", "long": "--label", "description": "Filter by label" },
+            { "short": "-a", "long": "--author", "description": "Filter by author" }
+          ]
+        },
+        {
+          "name": "view",
+          "description": "View a pull request",
+          "arguments": [
+            {
+              "name": "number",
+              "description": "PR number",
+              "type": {
+                "type": "Script",
+                "data": "gh pr list --json number --jq '.[].number' 2>/dev/null"
+              }
+            }
+          ]
+        },
+        {
+          "name": "checkout",
+          "description": "Check out a pull request locally",
+          "arguments": [
+            {
+              "name": "number",
+              "description": "PR number",
+              "type": {
+                "type": "Script",
+                "data": "gh pr list --json number --jq '.[].number' 2>/dev/null"
+              }
+            }
+          ]
+        },
+        { "name": "create", "description": "Create a pull request" },
+        { "name": "close", "description": "Close a pull request" },
+        { "name": "merge", "description": "Merge a pull request" },
+        { "name": "ready", "description": "Mark a pull request as ready for review" },
+        { "name": "diff", "description": "View changes in a pull request" },
+        { "name": "comment", "description": "Add a comment to a pull request" }
+      ]
+    },
+    {
+      "name": "issue",
+      "description": "Manage issues",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List issues",
+          "options": [
+            { "short": "-s", "long": "--state", "description": "Filter by state (open, closed, all)" },
+            { "short": "-l", "long": "--label", "description": "Filter by label" },
+            { "short": "-a", "long": "--assignee", "description": "Filter by assignee" }
+          ]
+        },
+        {
+          "name": "view",
+          "description": "View an issue",
+          "arguments": [
+            {
+              "name": "number",
+              "description": "Issue number",
+              "type": {
+                "type": "Script",
+                "data": "gh issue list --json number --jq '.[].number' 2>/dev/null"
+              }
+            }
+          ]
+        },
+        { "name": "create", "description": "Create an issue" },
+        { "name": "close", "description": "Close an issue" },
+        { "name": "reopen", "description": "Reopen an issue" },
+        { "name": "comment", "description": "Add a comment to an issue" }
+      ]
+    },
+    {
+      "name": "repo",
+      "description": "Manage repositories",
+      "subcommands": [
+        { "name": "clone", "description": "Clone a repository" },
+        { "name": "create", "description": "Create a repository" },
+        { "name": "fork", "description": "Fork a repository" },
+        { "name": "view", "description": "View a repository" },
+        { "name": "list", "description": "List repositories" }
+      ]
+    },
+    {
+      "name": "workflow",
+      "description": "View and run GitHub Actions workflows",
+      "subcommands": [
+        { "name": "list", "description": "List workflows" },
+        { "name": "run", "description": "Run a workflow" },
+        { "name": "view", "description": "View a workflow run" }
+      ]
+    },
+    {
+      "name": "run",
+      "description": "View and manage workflow runs",
+      "subcommands": [
+        { "name": "list", "description": "List workflow runs" },
+        {
+          "name": "view",
+          "description": "View a specific run",
+          "arguments": [
+            {
+              "name": "run_id",
+              "description": "Run ID",
+              "type": {
+                "type": "Script",
+                "data": "gh run list --json databaseId --jq '.[].databaseId' 2>/dev/null | head -20"
+              }
+            }
+          ]
+        },
+        { "name": "watch", "description": "Watch a run until it completes" },
+        { "name": "download", "description": "Download artifacts from a run" },
+        { "name": "rerun", "description": "Rerun a failed run" },
+        { "name": "cancel", "description": "Cancel a workflow run" }
+      ]
+    },
+    {
+      "name": "auth",
+      "description": "Authenticate with GitHub",
+      "subcommands": [
+        { "name": "login", "description": "Authenticate with a GitHub host" },
+        { "name": "logout", "description": "Log out of a GitHub host" },
+        { "name": "status", "description": "View authentication status" },
+        { "name": "refresh", "description": "Refresh stored authentication" }
+      ]
+    },
+    {
+      "name": "browse",
+      "description": "Open repository in web browser"
+    },
+    {
+      "name": "gist",
+      "description": "Manage gists",
+      "subcommands": [
+        { "name": "create", "description": "Create a gist" },
+        { "name": "list", "description": "List gists" },
+        { "name": "view", "description": "View a gist" },
+        { "name": "edit", "description": "Edit a gist" },
+        { "name": "delete", "description": "Delete a gist" }
+      ]
+    }
+  ]
+}

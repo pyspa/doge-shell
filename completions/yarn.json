@@ -1,0 +1,73 @@
+{
+  "command": "yarn",
+  "description": "Yarn package manager",
+  "subcommands": [
+    {
+      "name": "add",
+      "description": "Add a package",
+      "options": [
+        { "short": "-D", "long": "--dev", "description": "Add as dev dependency" },
+        { "short": "-P", "long": "--peer", "description": "Add as peer dependency" },
+        { "short": "-O", "long": "--optional", "description": "Add as optional dependency" },
+        { "short": "-E", "long": "--exact", "description": "Install exact version" }
+      ]
+    },
+    {
+      "name": "remove",
+      "description": "Remove a package",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "Package to remove",
+          "type": {
+            "type": "Script",
+            "data": "cat package.json 2>/dev/null | jq -r '.dependencies // {} | keys[]' 2>/dev/null; cat package.json 2>/dev/null | jq -r '.devDependencies // {} | keys[]' 2>/dev/null"
+          }
+        }
+      ]
+    },
+    { "name": "install", "description": "Install all dependencies" },
+    { "name": "upgrade", "description": "Upgrade packages" },
+    { "name": "upgrade-interactive", "description": "Interactive upgrade" },
+    { "name": "init", "description": "Initialize a new package" },
+    { "name": "run", "description": "Run a script",
+      "arguments": [
+        {
+          "name": "script",
+          "description": "Script to run",
+          "type": {
+            "type": "Script",
+            "data": "cat package.json 2>/dev/null | jq -r '.scripts // {} | keys[]' 2>/dev/null"
+          }
+        }
+      ]
+    },
+    { "name": "test", "description": "Run tests" },
+    { "name": "build", "description": "Run build script" },
+    { "name": "start", "description": "Run start script" },
+    { "name": "publish", "description": "Publish package" },
+    { "name": "info", "description": "Show package information" },
+    { "name": "why", "description": "Show why a package is installed" },
+    { "name": "list", "description": "List installed packages" },
+    { "name": "outdated", "description": "List outdated packages" },
+    { "name": "cache", "description": "Manage cache",
+      "subcommands": [
+        { "name": "clean", "description": "Clean cache" },
+        { "name": "dir", "description": "Show cache directory" }
+      ]
+    },
+    { "name": "global", "description": "Manage global packages",
+      "subcommands": [
+        { "name": "add", "description": "Add global package" },
+        { "name": "remove", "description": "Remove global package" },
+        { "name": "list", "description": "List global packages" }
+      ]
+    }
+  ],
+  "global_options": [
+    { "short": "-v", "long": "--version", "description": "Show version" },
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "long": "--offline", "description": "Offline mode" },
+    { "long": "--silent", "description": "Silent mode" }
+  ]
+}

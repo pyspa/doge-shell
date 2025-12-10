@@ -1,0 +1,65 @@
+{
+  "command": "sudo",
+  "description": "Execute command as another user",
+  "global_options": [
+    {
+      "short": "-u",
+      "long": "--user",
+      "description": "Run command as specified user"
+    },
+    {
+      "short": "-i",
+      "long": "--login",
+      "description": "Run login shell as the target user"
+    },
+    {
+      "short": "-s",
+      "long": "--shell",
+      "description": "Run the shell specified by the SHELL variable"
+    },
+    {
+      "short": "-E",
+      "long": "--preserve-env",
+      "description": "Preserve user environment when running command"
+    },
+    {
+      "short": "-k",
+      "long": "--reset-timestamp",
+      "description": "Invalidate the user's timestamp"
+    },
+    {
+      "short": "-v",
+      "long": "--validate",
+      "description": "Update user's timestamp without running a command"
+    },
+    {
+      "short": "-n",
+      "long": "--non-interactive",
+      "description": "Non-interactive mode, no prompts"
+    },
+    {
+      "short": "-l",
+      "long": "--list",
+      "description": "List user's privileges or check a specific command"
+    },
+    {
+      "short": "-b",
+      "long": "--background",
+      "description": "Run command in the background"
+    },
+    {
+      "short": "-H",
+      "long": "--set-home",
+      "description": "Set HOME to target user's home directory"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "command",
+      "description": "Command to execute",
+      "type": {
+        "type": "Command"
+      }
+    }
+  ]
+}

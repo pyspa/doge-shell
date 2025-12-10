@@ -1,0 +1,119 @@
+{
+  "command": "go",
+  "description": "Go programming language tool",
+  "subcommands": [
+    {
+      "name": "build",
+      "description": "Compile packages and dependencies",
+      "options": [
+        { "short": "-o", "description": "Output file or directory" },
+        { "short": "-v", "description": "Verbose output" },
+        { "short": "-x", "description": "Print commands" },
+        { "long": "-race", "description": "Enable race detector" },
+        { "long": "-ldflags", "description": "Linker flags" },
+        { "long": "-tags", "description": "Build tags" }
+      ]
+    },
+    {
+      "name": "run",
+      "description": "Compile and run Go program",
+      "arguments": [
+        {
+          "name": "file",
+          "description": "Go source file",
+          "type": {
+            "type": "File",
+            "data": { "extensions": [".go"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "test",
+      "description": "Run tests",
+      "options": [
+        { "short": "-v", "description": "Verbose output" },
+        { "long": "-cover", "description": "Enable coverage" },
+        { "long": "-race", "description": "Enable race detector" },
+        { "long": "-run", "description": "Run only matching tests" },
+        { "long": "-bench", "description": "Run benchmarks" },
+        { "long": "-count", "description": "Run tests n times" },
+        { "long": "-timeout", "description": "Test timeout" }
+      ]
+    },
+    {
+      "name": "mod",
+      "description": "Module maintenance",
+      "subcommands": [
+        { "name": "init", "description": "Initialize new module" },
+        { "name": "tidy", "description": "Add missing and remove unused modules" },
+        { "name": "download", "description": "Download modules to local cache" },
+        { "name": "verify", "description": "Verify dependencies" },
+        { "name": "graph", "description": "Print module requirement graph" },
+        { "name": "vendor", "description": "Make vendored copy of dependencies" },
+        { "name": "why", "description": "Explain why packages are needed" }
+      ]
+    },
+    {
+      "name": "get",
+      "description": "Download and install packages",
+      "options": [
+        { "short": "-u", "description": "Update packages" },
+        { "short": "-v", "description": "Verbose output" },
+        { "short": "-d", "description": "Download only" }
+      ]
+    },
+    {
+      "name": "install",
+      "description": "Compile and install packages"
+    },
+    {
+      "name": "fmt",
+      "description": "Format Go source files"
+    },
+    {
+      "name": "vet",
+      "description": "Report likely mistakes in packages"
+    },
+    {
+      "name": "doc",
+      "description": "Show documentation"
+    },
+    {
+      "name": "clean",
+      "description": "Remove object files and cached files"
+    },
+    {
+      "name": "env",
+      "description": "Print Go environment information"
+    },
+    {
+      "name": "version",
+      "description": "Print Go version"
+    },
+    {
+      "name": "generate",
+      "description": "Generate Go files by processing source"
+    },
+    {
+      "name": "list",
+      "description": "List packages or modules",
+      "options": [
+        { "short": "-m", "description": "List modules" },
+        { "long": "-json", "description": "JSON output" }
+      ]
+    },
+    {
+      "name": "work",
+      "description": "Workspace maintenance",
+      "subcommands": [
+        { "name": "init", "description": "Initialize workspace" },
+        { "name": "use", "description": "Add modules to workspace" },
+        { "name": "sync", "description": "Sync workspace build list" }
+      ]
+    }
+  ],
+  "global_options": [
+    { "short": "-h", "description": "Show help" }
+  ]
+}

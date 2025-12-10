@@ -45,5 +45,15 @@
       "description": "Silent operation; do not print the commands as they are executed"
     }
   ],
+  "arguments": [
+    {
+      "name": "target",
+      "description": "Build target",
+      "type": {
+        "type": "Script",
+        "data": "make -qp 2>/dev/null | awk -F':' '/^[a-zA-Z0-9][^$#\\/\\t=]*:([^=]|$)/ {split($1,A,/ /);for(i in A)print A[i]}' | sort -u | grep -v Makefile"
+      }
+    }
+  ],
   "subcommands": []
 }

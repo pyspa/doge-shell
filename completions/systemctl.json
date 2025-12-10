@@ -95,7 +95,8 @@
           "name": "unit",
           "description": "Unit name to start",
           "arg_type": {
-            "type": "String"
+            "type": "Script",
+            "data": "systemctl list-unit-files --no-pager --no-legend 2>/dev/null | awk '{print $1}'"
           },
           "required": true,
           "multiple": true

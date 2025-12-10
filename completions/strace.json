@@ -1,0 +1,62 @@
+{
+  "command": "strace",
+  "description": "Trace system calls and signals",
+  "global_options": [
+    {
+      "short": "-p",
+      "description": "Trace process with specified PID",
+      "takes_value": true,
+      "value_type": {
+        "type": "Script",
+        "data": "ps -eo pid,comm --no-headers | awk '{print $1 \" \" $2}'"
+      }
+    },
+    {
+      "short": "-f",
+      "description": "Trace child processes"
+    },
+    {
+      "short": "-e",
+      "description": "Filter traced system calls",
+      "takes_value": true
+    },
+    {
+      "short": "-o",
+      "description": "Write output to file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File"
+      }
+    },
+    {
+      "short": "-c",
+      "description": "Count time, calls, and errors for each syscall"
+    },
+    {
+      "short": "-t",
+      "description": "Prefix each line with time of day"
+    },
+    {
+      "short": "-T",
+      "description": "Show time spent in syscalls"
+    },
+    {
+      "short": "-s",
+      "description": "Maximum string size to print",
+      "takes_value": true
+    },
+    {
+      "short": "-v",
+      "description": "Verbose mode"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "command",
+      "description": "Command to trace",
+      "type": {
+        "type": "Command"
+      }
+    }
+  ]
+}

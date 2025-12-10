@@ -1,0 +1,109 @@
+{
+  "command": "fd",
+  "description": "A fast alternative to find",
+  "global_options": [
+    {
+      "short": "-H",
+      "long": "--hidden",
+      "description": "Include hidden files"
+    },
+    {
+      "short": "-I",
+      "long": "--no-ignore",
+      "description": "Do not respect ignore files"
+    },
+    {
+      "short": "-s",
+      "long": "--case-sensitive",
+      "description": "Case-sensitive search"
+    },
+    {
+      "short": "-i",
+      "long": "--ignore-case",
+      "description": "Case-insensitive search"
+    },
+    {
+      "short": "-g",
+      "long": "--glob",
+      "description": "Glob-based search"
+    },
+    {
+      "short": "-F",
+      "long": "--fixed-strings",
+      "description": "Treat pattern as literal"
+    },
+    {
+      "short": "-a",
+      "long": "--absolute-path",
+      "description": "Show absolute paths"
+    },
+    {
+      "short": "-l",
+      "long": "--list-details",
+      "description": "Show detailed output"
+    },
+    {
+      "short": "-L",
+      "long": "--follow",
+      "description": "Follow symlinks"
+    },
+    {
+      "short": "-p",
+      "long": "--full-path",
+      "description": "Match against full path"
+    },
+    {
+      "short": "-d",
+      "long": "--max-depth",
+      "description": "Maximum search depth"
+    },
+    {
+      "short": "-t",
+      "long": "--type",
+      "description": "Filter by type (f, d, l, x, e, s, p)"
+    },
+    {
+      "short": "-e",
+      "long": "--extension",
+      "description": "Filter by extension"
+    },
+    {
+      "short": "-E",
+      "long": "--exclude",
+      "description": "Exclude pattern"
+    },
+    {
+      "short": "-x",
+      "long": "--exec",
+      "description": "Execute command for each result"
+    },
+    {
+      "short": "-X",
+      "long": "--exec-batch",
+      "description": "Execute command with results as args"
+    },
+    {
+      "short": "-c",
+      "long": "--color",
+      "description": "Color output (auto, always, never)"
+    },
+    {
+      "short": "-0",
+      "long": "--print0",
+      "description": "Null-separated output"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "pattern",
+      "description": "Search pattern"
+    },
+    {
+      "name": "path",
+      "description": "Search path",
+      "type": {
+        "type": "Directory"
+      }
+    }
+  ]
+}

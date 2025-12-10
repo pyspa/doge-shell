@@ -80,7 +80,7 @@ fn test_new_dynamic_completions_load() {
     // but we can check if they match dummy commands.
 
     // Check renice match
-    let renice_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
+    let _renice_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
         command: "renice".to_string(),
         subcommand_path: vec![],
         args: vec!["-p".to_string()],
@@ -99,7 +99,7 @@ fn test_new_dynamic_completions_load() {
     */
 
     // Check userdel match (StartsWithCommand)
-    let userdel_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
+    let _userdel_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
         command: "userdel".to_string(),
         subcommand_path: vec![],
         args: vec![],
@@ -116,7 +116,7 @@ fn test_new_dynamic_completions_load() {
     */
 
     // Check pwdx match
-    let pwdx_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
+    let _pwdx_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
         command: "pwdx".to_string(),
         subcommand_path: vec![],
         args: vec!["123".to_string()],
@@ -133,7 +133,7 @@ fn test_new_dynamic_completions_load() {
     */
 
     // Check groupmod match
-    let groupmod_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
+    let _groupmod_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
         command: "groupmod".to_string(),
         subcommand_path: vec![],
         args: vec!["groupname".to_string()],
@@ -150,7 +150,7 @@ fn test_new_dynamic_completions_load() {
     */
 
     // Check pgrep match
-    let pgrep_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
+    let _pgrep_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
         command: "pgrep".to_string(),
         subcommand_path: vec![],
         args: vec!["bash".to_string()],
@@ -167,7 +167,7 @@ fn test_new_dynamic_completions_load() {
     */
 
     // Check pidof match
-    let pidof_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
+    let _pidof_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
         command: "pidof".to_string(),
         subcommand_path: vec![],
         args: vec!["bash".to_string()],
@@ -184,7 +184,7 @@ fn test_new_dynamic_completions_load() {
     */
 
     // Check umount match
-    let umount_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
+    let _umount_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
         command: "umount".to_string(),
         subcommand_path: vec![],
         args: vec!["/mnt".to_string()],
@@ -201,7 +201,7 @@ fn test_new_dynamic_completions_load() {
     */
 
     // Check sysctl match
-    let sysctl_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
+    let _sysctl_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
         command: "sysctl".to_string(),
         subcommand_path: vec![],
         args: vec!["-a".to_string()],
@@ -218,7 +218,7 @@ fn test_new_dynamic_completions_load() {
     */
 
     // Check killall match
-    let killall_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
+    let _killall_match = registry.matches(&doge_shell::completion::parser::ParsedCommandLine {
         command: "killall".to_string(),
         subcommand_path: vec![],
         args: vec![],

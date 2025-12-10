@@ -35,23 +35,90 @@ impl CompletionGenerator {
     }
 
     /// Generate completion candidates from parsed command line
+    ///
+    /// This method also corrects the parsed command line if the parser
+    /// incorrectly identified arguments as subcommands.
+    pub fn correct_parsed_command_line(&self, parsed: &ParsedCommandLine) -> ParsedCommandLine {
+        if let Some(command_completion) = self.database.get_command(&parsed.command) {
+            let mut valid_subcommands = Vec::new();
+            let mut invalid_subcommands = Vec::new();
+            let mut current_subcommands = &command_completion.subcommands;
+
+            let mut path_valid = true;
+            for sub_name in &parsed.subcommand_path {
+                if path_valid {
+                    if let Some(sub) = current_subcommands.iter().find(|s| &s.name == sub_name) {
+                        valid_subcommands.push(sub_name.clone());
+                        current_subcommands = &sub.subcommands;
+                    } else {
+                        path_valid = false;
+                        invalid_subcommands.push(sub_name.clone());
+                    }
+                } else {
+                    invalid_subcommands.push(sub_name.clone());
+                }
+            }
+
+            if !invalid_subcommands.is_empty() {
+                let mut new_parsed = parsed.clone();
+                new_parsed.subcommand_path = valid_subcommands;
+
+                // Move invalid subcommands to arguments
+                // Prepend them to existing arguments
+                let mut new_args = invalid_subcommands;
+                new_args.extend(new_parsed.specified_arguments);
+                new_parsed.specified_arguments = new_args.clone();
+                new_parsed.args = new_args.clone();
+
+                // Recalculate completion context
+                // We must recalculate if we changed specified_arguments, regardless of previous context
+                // Logic: if we moved subcommands to args, we are definitely in Argument context (or should be)
+                // UNLESS we are at the very beginning of a new argument?
+                // Actually, if we appended to specified_arguments, we are modifying the argument list.
+
+                let arg_index = new_parsed.specified_arguments.len().saturating_sub(
+                    if new_parsed
+                        .specified_arguments
+                        .contains(&new_parsed.current_token)
+                    {
+                        1
+                    } else {
+                        0
+                    },
+                );
+                new_parsed.completion_context = CompletionContext::Argument {
+                    arg_index,
+                    arg_type: None,
+                };
+
+                return new_parsed;
+            }
+        }
+
+        parsed.clone()
+    }
+
+    /// Generate completion candidates from parsed command line
     pub fn generate_candidates(
         &self,
         parsed: &ParsedCommandLine,
     ) -> Result<Vec<CompletionCandidate>> {
-        match &parsed.completion_context {
-            CompletionContext::Command => self.generate_command_candidates(&parsed.current_token),
-            CompletionContext::SubCommand => self.generate_subcommand_candidates(parsed),
-            CompletionContext::ShortOption => self.generate_short_option_candidates(parsed),
-            CompletionContext::LongOption => self.generate_long_option_candidates(parsed),
+        let corrected = self.correct_parsed_command_line(parsed);
+        match &corrected.completion_context {
+            CompletionContext::Command => {
+                self.generate_command_candidates(&corrected.current_token)
+            }
+            CompletionContext::SubCommand => self.generate_subcommand_candidates(&corrected),
+            CompletionContext::ShortOption => self.generate_short_option_candidates(&corrected),
+            CompletionContext::LongOption => self.generate_long_option_candidates(&corrected),
             CompletionContext::OptionValue {
                 option_name: _,
                 value_type,
-            } => self.generate_option_value_candidates(parsed, value_type.as_ref()),
+            } => self.generate_option_value_candidates(&corrected, value_type.as_ref()),
             CompletionContext::Argument {
                 arg_index: _,
                 arg_type,
-            } => self.generate_argument_candidates(parsed, arg_type.as_ref()),
+            } => self.generate_argument_candidates(&corrected, arg_type.as_ref()),
             CompletionContext::Unknown => Ok(Vec::new()),
         }
     }
@@ -1095,6 +1162,130 @@ mod tests {
             texts_dash.contains(&"--option".to_string()),
             "Should show options when token starts with -"
         );
+    }
+
+    #[test]
+    fn test_argument_correction_logic() {
+        let mut db = CommandCompletionDatabase::new();
+        let git_completion = CommandCompletion {
+            command: "git".to_string(),
+            description: Some("Git".to_string()),
+            global_options: vec![],
+            subcommands: vec![SubCommand {
+                name: "push".to_string(),
+                description: Some("Push".to_string()),
+                options: vec![],
+                arguments: vec![
+                    Argument {
+                        name: "remote".to_string(),
+                        description: None,
+                        arg_type: None,
+                    },
+                    Argument {
+                        name: "branch".to_string(),
+                        description: None,
+                        arg_type: None,
+                    },
+                ],
+                subcommands: vec![],
+            }],
+            arguments: vec![],
+        };
+        db.add_command(git_completion);
+        let generator = CompletionGenerator::new(db);
+
+        // Case: "git push origin " -> parser thinks origin is subcommand
+        let parsed = ParsedCommandLine {
+            command: "git".to_string(),
+            subcommand_path: vec!["push".to_string(), "origin".to_string()],
+            args: vec![],
+            options: vec![],
+            current_token: "".to_string(),
+            current_arg: None,
+            completion_context: CompletionContext::SubCommand,
+            specified_options: vec![],
+            specified_arguments: vec![],
+            cursor_index: 0,
+        };
+
+        let corrected = generator.correct_parsed_command_line(&parsed);
+
+        assert_eq!(corrected.subcommand_path, vec!["push".to_string()]);
+        assert_eq!(corrected.specified_arguments, vec!["origin".to_string()]);
+
+        if let CompletionContext::Argument { arg_index, .. } = corrected.completion_context {
+            assert_eq!(arg_index, 1);
+        } else {
+            panic!(
+                "Expected Argument context, got {:?}",
+                corrected.completion_context
+            );
+        }
+    }
+
+    #[test]
+    fn test_argument_correction_logic_with_argument_context() {
+        let mut db = CommandCompletionDatabase::new();
+        let git_completion = CommandCompletion {
+            command: "git".to_string(),
+            description: Some("Git".to_string()),
+            global_options: vec![],
+            subcommands: vec![SubCommand {
+                name: "push".to_string(),
+                description: Some("Push".to_string()),
+                options: vec![],
+                arguments: vec![
+                    Argument {
+                        name: "remote".to_string(),
+                        description: None,
+                        arg_type: None,
+                    },
+                    Argument {
+                        name: "branch".to_string(),
+                        description: None,
+                        arg_type: None,
+                    },
+                ],
+                subcommands: vec![],
+            }],
+            arguments: vec![],
+        };
+        db.add_command(git_completion);
+        let generator = CompletionGenerator::new(db);
+
+        // Case: "git push origin " -> parser thinks origin is subcommand BUT returns Argument context
+        // because current token "" doesn't look like subcommand.
+        let parsed = ParsedCommandLine {
+            command: "git".to_string(),
+            subcommand_path: vec!["push".to_string(), "origin".to_string()],
+            args: vec![],
+            options: vec![],
+            current_token: "".to_string(),
+            current_arg: None,
+            // Parser determined Argument context because "origin" was in path but "" is not subcommand compatible
+            // But arg_index is 0 because specified_arguments is empty
+            completion_context: CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: None,
+            },
+            specified_options: vec![],
+            specified_arguments: vec![],
+            cursor_index: 0,
+        };
+
+        let corrected = generator.correct_parsed_command_line(&parsed);
+
+        assert_eq!(corrected.subcommand_path, vec!["push".to_string()]);
+        assert_eq!(corrected.specified_arguments, vec!["origin".to_string()]);
+
+        if let CompletionContext::Argument { arg_index, .. } = corrected.completion_context {
+            assert_eq!(arg_index, 1, "Should correct arg_index to 1");
+        } else {
+            panic!(
+                "Expected Argument context, got {:?}",
+                corrected.completion_context
+            );
+        }
     }
 
     #[test]

@@ -2,6 +2,7 @@ use super::*;
 use serde::{Deserialize, Serialize};
 
 /// A collection of statistics about the stored items
+#[derive(Clone)]
 pub struct FrecencyStore {
     pub reference_time: f64,
     pub half_life: f32,

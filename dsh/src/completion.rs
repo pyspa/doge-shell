@@ -47,6 +47,9 @@ const LEGACY_CACHE_TTL_MS: u64 = 3000;
 static LEGACY_COMPLETION_CACHE: LazyLock<CompletionCache<Candidate>> =
     LazyLock::new(|| CompletionCache::new(Duration::from_millis(LEGACY_CACHE_TTL_MS)));
 
+static PATH_COMPLETION_CACHE: LazyLock<CompletionCache<Candidate>> =
+    LazyLock::new(|| CompletionCache::new(Duration::from_millis(2000)));
+
 #[derive(Debug, Clone)]
 pub struct AutoComplete {
     pub target: String,
@@ -200,6 +203,14 @@ pub fn path_completion() -> Result<Vec<Candidate>> {
 
 pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
     let path_str = path.display().to_string();
+
+    // Check cache first
+    if let Some(hit) = PATH_COMPLETION_CACHE.lookup(&path_str) {
+        // We accept empty results from cache too if that directory is truly empty
+        // But invalid/expired cache is handled by lookup returning None
+        return Ok(hit.candidates);
+    }
+
     let exp_str = shellexpand::tilde(&path_str).to_string();
     let expand = path_str != exp_str;
 
@@ -235,6 +246,10 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
         }
     }
     files.sort();
+
+    // Update cache
+    PATH_COMPLETION_CACHE.set(path_str, files.clone());
+
     Ok(files)
 }
 

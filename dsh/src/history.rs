@@ -372,13 +372,34 @@ impl FrecencyHistory {
         {
             let result = write_store(store, file_path);
             if result.is_ok() {
-                // Reset the changed flag after successful save
                 let store_mut = self.store.as_mut().unwrap();
                 store_mut.changed = false;
             }
             return result;
         }
         Ok(())
+    }
+
+    /// Save history to disk in a background task to prevent blocking the main thread
+    pub fn save_background(&mut self) {
+        if let Some(ref file_path) = self.path
+            && let Some(ref mut store) = self.store
+            && store.changed
+        {
+            // Clone the store to move into the background thread
+            let store_clone = (*store).clone();
+            let path_clone = file_path.clone();
+
+            // Reset dirty flag immediately since we are persisting the current state
+            store.changed = false;
+
+            // Spawn blocking task for I/O
+            tokio::task::spawn_blocking(move || {
+                if let Err(e) = write_store(&store_clone, &path_clone) {
+                    tracing::warn!("Failed to save history in background: {}", e);
+                }
+            });
+        }
     }
 
     pub fn add(&mut self, history: &str) {

@@ -463,9 +463,8 @@ impl Input {
         let mut writer = BufWriter::new(out);
 
         if let Some(color_ranges) = &self.color_ranges {
-            // Build colored segments to reduce write_fmt calls
-            let colored_output = self.build_colored_string_from_ranges(color_ranges);
-            writer.write_fmt(format_args!("{colored_output}")).ok();
+            // Write colored segments directly to reduce allocation
+            self.write_colored_ranges_to(&mut writer, color_ranges).ok();
         } else {
             writer
                 .write_fmt(format_args!("{}", self.as_str().with(self.config.fg_color)))
@@ -482,18 +481,16 @@ impl Input {
         writer.flush().ok();
     }
 
-    /// Build a colored string from color ranges
+    /// Write colored string from color ranges directly to writer
     /// Note: color_ranges must be sorted by start position (ensured by compute_color_ranges)
-    fn build_colored_string_from_ranges(
+    fn write_colored_ranges_to<W: Write>(
         &self,
+        writer: &mut W,
         color_ranges: &[(usize, usize, ColorType)],
-    ) -> String {
+    ) -> std::io::Result<()> {
         use crossterm::style::Stylize;
-        use std::fmt::Write;
 
         let input_str = self.as_str();
-        // Pre-allocate capacity to reduce allocations (input + ANSI codes overhead)
-        let mut result = String::with_capacity(input_str.len() * 2);
         let mut last_end = 0;
 
         // color_ranges is already sorted by start position in compute_color_ranges
@@ -501,7 +498,7 @@ impl Input {
             // Add any uncolored text before this range
             if start > last_end {
                 let prefix = &input_str[last_end..start];
-                let _ = write!(result, "{}", prefix.with(self.config.fg_color));
+                write!(writer, "{}", prefix.with(self.config.fg_color))?;
             }
 
             // Add the colored text for this range
@@ -521,7 +518,7 @@ impl Input {
                 ColorType::Error => self.config.error_color,
                 ColorType::ValidPath => self.config.valid_path_color,
             };
-            let _ = write!(result, "{}", colored_text.with(color));
+            write!(writer, "{}", colored_text.with(color))?;
 
             // Update the last processed position
             last_end = end.max(last_end);
@@ -530,10 +527,10 @@ impl Input {
         // Add any remaining uncolored text after the last range
         if last_end < input_str.len() {
             let suffix = &input_str[last_end..];
-            let _ = write!(result, "{}", suffix.with(self.config.fg_color));
+            write!(writer, "{}", suffix.with(self.config.fg_color))?;
         }
 
-        result
+        Ok(())
     }
 
     #[allow(dead_code)]

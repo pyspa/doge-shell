@@ -398,20 +398,24 @@ impl<'a> Repl<'a> {
     }
 
     fn save_history(&mut self) {
-        Self::save_single_history_helper(&mut self.shell.cmd_history, "command");
-        Self::save_single_history_helper(&mut self.shell.path_history, "path");
+        Self::save_single_history_helper(&mut self.shell.cmd_history, "command", false);
+        Self::save_single_history_helper(&mut self.shell.path_history, "path", false);
     }
 
     fn save_single_history_helper(
         history: &mut Option<Arc<ParkingMutex<FrecencyHistory>>>,
         history_type: &str,
+        background: bool,
     ) {
         if let Some(history) = history {
             if let Some(mut history_guard) = history.try_lock() {
                 // Only save if there are changes
                 if let Some(ref store) = history_guard.store {
                     if store.changed {
-                        if let Err(e) = history_guard.save() {
+                        if background {
+                            history_guard.save_background();
+                            // debug!("{} history saving in background", history_type);
+                        } else if let Err(e) = history_guard.save() {
                             warn!("Failed to save {} history: {}", history_type, e);
                         } else {
                             // debug!("{} history saved successfully", history_type);
@@ -428,8 +432,8 @@ impl<'a> Repl<'a> {
 
     fn save_history_periodic(&mut self) {
         // Save both command and path history if they have changes
-        Self::save_single_history_helper(&mut self.shell.cmd_history, "command");
-        Self::save_single_history_helper(&mut self.shell.path_history, "path");
+        Self::save_single_history_helper(&mut self.shell.cmd_history, "command", true);
+        Self::save_single_history_helper(&mut self.shell.path_history, "path", true);
     }
 
     pub(crate) fn move_cursor_input_end<W: Write>(&self, out: &mut W) {
@@ -1154,6 +1158,18 @@ impl<'a> Repl<'a> {
 
                     // Refresh git status
                     let prompt = Arc::clone(&self.prompt);
+
+                    // Check if we need to discover/update git root (async)
+                    let needs_root_check = prompt.read().needs_git_check;
+                    if needs_root_check {
+                        let cwd = prompt.read().current_dir.clone();
+                        let p_clone = Arc::clone(&prompt);
+                        tokio::spawn(async move {
+                            let root = crate::prompt::find_git_root_async(cwd).await;
+                            p_clone.write().update_git_root(root);
+                        });
+                    }
+
                     let should = prompt.read().should_refresh();
                     if should {
                         let path = prompt.read().current_path().to_path_buf();

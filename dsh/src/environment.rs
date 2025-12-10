@@ -40,7 +40,7 @@ pub struct Environment {
     pub system_env_vars: HashMap<String, String>,
     pub input_preferences: InputPreferences,
     /// Cache for PATH command lookups to avoid repeated filesystem access
-    command_cache: HashMap<String, Option<String>>,
+    command_cache: RwLock<HashMap<String, Option<String>>>,
     /// Output history for $OUT[N] and $ERR[N] variables
     pub output_history: OutputHistory,
 }
@@ -90,7 +90,7 @@ impl Environment {
             execute_allowlist: Vec::new(),
             system_env_vars: env::vars().collect(),
             input_preferences: default_input_preferences(),
-            command_cache: HashMap::new(),
+            command_cache: RwLock::new(HashMap::new()),
             output_history: OutputHistory::new(),
         }))
     }
@@ -122,7 +122,7 @@ impl Environment {
             execute_allowlist,
             system_env_vars,
             input_preferences,
-            command_cache: HashMap::new(),
+            command_cache: RwLock::new(HashMap::new()),
             output_history: OutputHistory::new(),
         }))
     }
@@ -146,35 +146,26 @@ impl Environment {
         }
 
         // Check cache first for PATH lookups
-        if let Some(cached) = self.command_cache.get(cmd) {
-            return cached.clone();
+        {
+            if let Some(cached) = self.command_cache.read().get(cmd) {
+                return cached.clone();
+            }
         }
 
         // Cache miss: search PATH directories
-        for path in &self.paths {
-            let cmd_path = Path::new(path).join(cmd);
-            if cmd_path.exists() && cmd_path.is_file() {
-                return cmd_path.to_str().map(|s| s.to_string());
-            }
-        }
-        None
+        let result = self.lookup_path_uncached(cmd);
+
+        // Update cache
+        self.command_cache
+            .write()
+            .insert(cmd.to_string(), result.clone());
+        result
     }
 
     /// Lookup command with cache update (mutable version for cache population)
+    /// Note: With the new interior mutability, this is functionally the same as lookup
     pub fn lookup_cached(&mut self, cmd: &str) -> Option<String> {
-        if ABSOLUTE_PATH_REGEX.is_match(cmd) || RELATIVE_PATH_REGEX.is_match(cmd) {
-            return self.lookup(cmd);
-        }
-
-        // Check cache first
-        if let Some(cached) = self.command_cache.get(cmd) {
-            return cached.clone();
-        }
-
-        // Cache miss: search PATH directories and cache the result
-        let result = self.lookup_path_uncached(cmd);
-        self.command_cache.insert(cmd.to_string(), result.clone());
-        result
+        self.lookup(cmd)
     }
 
     fn lookup_path_uncached(&self, cmd: &str) -> Option<String> {
@@ -213,12 +204,12 @@ impl Environment {
         }
         self.paths = paths;
         // Clear command cache when PATH changes
-        self.command_cache.clear();
+        self.command_cache.write().clear();
     }
 
     /// Clear the command lookup cache
     pub fn clear_command_cache(&mut self) {
-        self.command_cache.clear();
+        self.command_cache.get_mut().clear();
     }
 
     pub fn get_var(&self, key: &str) -> Option<String> {

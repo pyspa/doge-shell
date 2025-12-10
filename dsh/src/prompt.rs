@@ -37,6 +37,7 @@ pub struct Prompt {
     pub github_status: Option<Arc<RwLock<GitHubStatus>>>,
     pub github_icon: String,
     current_git_root: Option<PathBuf>,
+    pub needs_git_check: bool,
     git_root_cache: HashSet<String>,
     git_status_cache: Option<GitStatusCache>,
 }
@@ -49,6 +50,7 @@ impl Prompt {
             github_status: None,
             github_icon: "🐙".to_string(), // Default icon
             current_git_root: None,
+            needs_git_check: true,
             git_root_cache: HashSet::new(),
             git_status_cache: None,
         };
@@ -201,14 +203,13 @@ impl Prompt {
         }
     }
 
-    fn get_git_root(&self) -> Option<String> {
+    fn get_git_root_cached_only(&self) -> Option<String> {
         for git_root in &self.git_root_cache {
             if self.current_dir.starts_with(git_root) {
                 return Some(git_root.to_string());
             }
         }
-
-        get_git_root()
+        None
     }
 
     pub fn current_path(&self) -> &Path {
@@ -218,31 +219,39 @@ impl Prompt {
     pub fn set_current(&mut self, path: &Path) {
         self.current_dir = path.to_path_buf();
         // debug!("set current dir {:?}", self.current_dir,);
-        if let Some(git_root) = &self.current_git_root {
-            let changed = !&self.current_dir.starts_with(git_root);
-            // debug!("change_git_root: {:?}", changed);
 
-            if changed {
-                if let Some(root) = self.get_git_root() {
-                    // debug!("Found new git root: {}", root);
-                    self.current_git_root = Some(PathBuf::from(&root));
-                    self.git_root_cache.insert(root);
-                    // Git root changed, so clear cache
-                    self.git_status_cache = None;
-                } else {
-                    // debug!("No git root found, clearing current_git_root");
-                    self.current_git_root = None;
-                }
+        let mut root_changed = false;
+        if let Some(git_root) = &self.current_git_root {
+            if !self.current_dir.starts_with(git_root) {
+                root_changed = true;
             }
-        } else if let Some(root) = self.get_git_root() {
-            // debug!("Setting initial git root: {}", root);
-            self.current_git_root = Some(PathBuf::from(&root));
-            self.git_root_cache.insert(root);
-            // New Git root, so clear cache
-            self.git_status_cache = None;
         } else {
-            // debug!("No git root found for initial setup");
+            root_changed = true;
         }
+
+        if root_changed {
+            if let Some(root) = self.get_git_root_cached_only() {
+                // debug!("Found cached git root: {}", root);
+                self.current_git_root = Some(PathBuf::from(&root));
+                self.git_status_cache = None;
+                self.needs_git_check = false;
+            } else {
+                // Cache miss, need to check (async)
+                // debug!("No cached git root found, scheduling check");
+                self.current_git_root = None;
+                self.needs_git_check = true;
+            }
+        }
+    }
+
+    pub fn update_git_root(&mut self, root: Option<PathBuf>) {
+        self.current_git_root = root.clone();
+        if let Some(r) = root {
+            self.git_root_cache.insert(r.to_string_lossy().to_string());
+        }
+        self.needs_git_check = false;
+        // Status cache is invalid if root changed (handled by is_valid check or just clear)
+        self.git_status_cache = None;
     }
 
     /// Get Git status with caching functionality
@@ -508,12 +517,12 @@ fn parse_git_status_output(stdout: &[u8]) -> Option<GitStatus> {
     Some(status)
 }
 
-fn get_git_root() -> Option<String> {
-    if let Ok(cwd) = std::env::current_dir() {
-        find_git_root(&cwd)
-    } else {
-        None
-    }
+pub async fn find_git_root_async(cwd: PathBuf) -> Option<PathBuf> {
+    // Optimization: Walk up looking for .git before spawning process
+    // This part is safe to run in thread pool
+    tokio::task::spawn_blocking(move || find_git_root(&cwd).map(PathBuf::from))
+        .await
+        .unwrap_or(None)
 }
 
 fn find_git_root(cwd: &Path) -> Option<String> {
@@ -665,7 +674,7 @@ mod tests {
         assert!(prompt.get_git_status_cached().is_none());
 
         // Test with actual Git repository
-        if let Some(git_root) = get_git_root() {
+        if let Some(git_root) = find_git_root(&std::env::current_dir().unwrap()) {
             let git_dir = PathBuf::from(&git_root);
             let mut git_prompt = Prompt::new(git_dir, "🐕 > ".to_string());
             git_prompt.current_git_root = Some(PathBuf::from(&git_root));

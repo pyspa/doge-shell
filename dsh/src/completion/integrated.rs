@@ -808,7 +808,7 @@ mod tests {
 
         assert_eq!(
             completion_result.framework,
-            crate::completion::framework::CompletionFrameworkKind::Inline
+            crate::completion::framework::CompletionFrameworkKind::Skim
         );
     }
 

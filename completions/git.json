@@ -76,6 +76,78 @@
           }
         }
       ]
+    },
+    {
+      "name": "pull",
+      "description": "Fetch from and integrate with another repository or a local branch",
+      "arguments": [
+        {
+          "name": "remote",
+          "description": "Remote repository",
+          "type": {
+            "type": "Script",
+            "data": "git remote"
+          }
+        },
+        {
+          "name": "branch",
+          "description": "Branch to pull",
+          "type": {
+            "type": "Script",
+            "data": "git branch --format='%(refname:short)'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "fetch",
+      "description": "Download objects and refs from another repository",
+      "arguments": [
+        {
+          "name": "remote",
+          "description": "Remote repository",
+          "type": {
+            "type": "Script",
+            "data": "git remote"
+          }
+        },
+        {
+          "name": "branch",
+          "description": "Branch to fetch",
+          "type": {
+            "type": "Script",
+            "data": "git branch --format='%(refname:short)'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "merge",
+      "description": "Join two or more development histories together",
+      "arguments": [
+        {
+          "name": "branch",
+          "description": "Branch to merge",
+          "type": {
+            "type": "Script",
+            "data": "git branch --format='%(refname:short)'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "rebase",
+      "description": "Reapply commits on top of another base tip",
+      "arguments": [
+        {
+          "name": "branch",
+          "description": "Branch to rebase onto",
+          "type": {
+            "type": "Script",
+            "data": "git branch --format='%(refname:short)'"
+          }
+        }
+      ]
     }
   ]
 }

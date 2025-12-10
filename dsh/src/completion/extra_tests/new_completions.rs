@@ -1,6 +1,4 @@
-use crate::completion::dynamic::DynamicCompletionRegistry;
 use crate::completion::json_loader::JsonCompletionLoader;
-use crate::completion::parser::{CompletionContext, ParsedCommandLine};
 
 #[test]
 fn test_load_new_json_completions() {
@@ -17,44 +15,4 @@ fn test_load_new_json_completions() {
         assert!(completion.is_some(), "Completion not found for {}", cmd);
         assert_eq!(completion.unwrap().command, cmd);
     }
-}
-
-#[test]
-fn test_load_new_dynamic_check() {
-    let _registry = DynamicCompletionRegistry::with_configured_handlers();
-
-    // Check chown
-    let _chown_cmd = ParsedCommandLine {
-        command: "chown".to_string(),
-        subcommand_path: vec![],
-        args: vec![],
-        options: vec![],
-        current_token: "".to_string(),
-        current_arg: None,
-        completion_context: CompletionContext::Command,
-        specified_options: vec![],
-        specified_arguments: vec![],
-        cursor_index: 0,
-    };
-
-    /*
-    assert!(registry.matches(&chown_cmd), "Should match chown command");
-    */
-
-    // Check chgrp
-    let _chgrp_cmd = ParsedCommandLine {
-        command: "chgrp".to_string(),
-        subcommand_path: vec![],
-        args: vec![],
-        options: vec![],
-        current_token: "".to_string(),
-        current_arg: None,
-        completion_context: CompletionContext::Command,
-        specified_options: vec![],
-        specified_arguments: vec![],
-        cursor_index: 0,
-    };
-    /*
-    assert!(registry.matches(&chgrp_cmd), "Should match chgrp command");
-    */
 }

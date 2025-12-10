@@ -180,7 +180,11 @@
       "arguments": [
         {
           "name": "image",
-          "description": "Image name or ID"
+          "description": "Image name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker images --format '{{.Repository}}:{{.Tag}}' | grep -v '<none>'"
+          }
         },
         {
           "name": "command",
@@ -309,7 +313,11 @@
       "arguments": [
         {
           "name": "container",
-          "description": "Container name or ID"
+          "description": "Container name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker ps --format '{{.Names}}'"
+          }
         }
       ],
       "subcommands": []
@@ -332,7 +340,11 @@
       "arguments": [
         {
           "name": "container",
-          "description": "Container name or ID"
+          "description": "Container name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker ps --format '{{.Names}}'"
+          }
         }
       ],
       "subcommands": []
@@ -379,7 +391,11 @@
       "arguments": [
         {
           "name": "container",
-          "description": "Container name or ID"
+          "description": "Container name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker ps --format '{{.Names}}'"
+          }
         },
         {
           "name": "command",
@@ -387,6 +403,76 @@
         }
       ],
       "subcommands": []
+    },
+    {
+      "name": "start",
+      "description": "Start one or more stopped containers",
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker ps -a --format '{{.Names}}'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "restart",
+      "description": "Restart one or more containers",
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker ps -a --format '{{.Names}}'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "kill",
+      "description": "Kill one or more running containers",
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker ps --format '{{.Names}}'"
+          }
+        }
+      ]
+    },
+    {
+       "name": "logs",
+       "description": "Fetch the logs of a container",
+       "arguments": [
+        {
+          "name": "container",
+          "description": "Container name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker ps -a --format '{{.Names}}'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "rmi",
+      "description": "Remove one or more images",
+      "arguments": [
+        {
+          "name": "image",
+          "description": "Image name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker images --format '{{.Repository}}:{{.Tag}}' | grep -v '<none>'"
+          }
+        }
+      ]
     }
   ]
 }

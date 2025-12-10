@@ -1,0 +1,14 @@
+{
+  "command": "kill",
+  "description": "Terminate process",
+  "arguments": [
+    {
+      "name": "pid",
+      "description": "Process ID to kill",
+      "type": {
+        "type": "Script",
+        "data": "ps -xo pid,comm --no-headers | awk '{print $1 \" \" $2}'"
+      }
+    }
+  ]
+}

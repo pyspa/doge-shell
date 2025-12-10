@@ -58,8 +58,21 @@ impl<R: ScriptRunner> ScriptGenerator<R> {
 
         for line in stdout.lines() {
             let trimmed = line.trim();
-            if !trimmed.is_empty() && trimmed.starts_with(&parsed.current_token) {
-                candidates.push(CompletionCandidate::argument(trimmed.to_string(), None));
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let (value, description) = if let Some((val, desc)) = trimmed.split_once('\t') {
+                (val, Some(desc.to_string()))
+            } else {
+                (trimmed, None)
+            };
+
+            if value.starts_with(&parsed.current_token) {
+                candidates.push(CompletionCandidate::argument(
+                    value.to_string(),
+                    description,
+                ));
             }
         }
         Ok(candidates)
@@ -128,5 +141,37 @@ mod tests {
 
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].text, "branch1");
+    }
+
+    #[test]
+    fn test_script_description_parsing() {
+        let runner = MockScriptRunner::new("echo test", "value1\tdescription1\nvalue2");
+        let generator = ScriptGenerator::new(runner);
+
+        let parsed = ParsedCommandLine {
+            command: "test".to_string(),
+            subcommand_path: vec![],
+            args: vec![],
+            options: vec![],
+            current_token: "val".to_string(),
+            current_arg: Some("val".to_string()),
+            completion_context: CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: None,
+            },
+            specified_options: vec![],
+            specified_arguments: vec![],
+            cursor_index: 0,
+        };
+
+        let result = generator
+            .generate_script_candidates("echo test", &parsed)
+            .unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].text, "value1");
+        assert_eq!(result[0].description, Some("description1".to_string()));
+        assert_eq!(result[1].text, "value2");
+        assert_eq!(result[1].description, None);
     }
 }

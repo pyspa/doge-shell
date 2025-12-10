@@ -31,7 +31,8 @@
       "description": "Show messages for the specified systemd unit",
       "takes_value": true,
       "value_type": {
-        "type": "String"
+        "type": "Script",
+        "data": "systemctl list-units --all --no-pager --no-legend | awk '{print $1}'"
       }
     },
     {

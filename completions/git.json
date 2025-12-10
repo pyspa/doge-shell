@@ -148,6 +148,149 @@
           }
         }
       ]
+    },
+    {
+      "name": "log",
+      "description": "Show commit logs",
+      "arguments": [
+        {
+          "name": "revision",
+          "description": "Revision to show",
+          "required": false,
+          "type": {
+            "type": "Script",
+            "data": "git branch --format='%(refname:short)'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "diff",
+      "description": "Show changes between commits, commit and working tree, etc",
+      "arguments": [
+        {
+          "name": "revision",
+          "description": "Revision or file",
+          "required": false,
+          "type": {
+            "type": "Script",
+            "data": "git branch --format='%(refname:short)'"
+          }
+        }
+      ]
+    },
+    {
+       "name": "show",
+       "description": "Show various types of objects",
+       "arguments": [
+         {
+           "name": "object",
+           "description": "Object to show",
+           "required": true,
+           "type": {
+             "type": "Script",
+             "data": "git branch --format='%(refname:short)'"
+           }
+         }
+       ]
+    },
+    {
+      "name": "reset",
+      "description": "Reset current HEAD to the specified state",
+      "arguments": [
+        {
+          "name": "commit",
+          "description": "Commit to reset to",
+          "required": false,
+          "type": {
+            "type": "Script",
+            "data": "git branch --format='%(refname:short)'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "branch",
+      "description": "List, create, or delete branches",
+      "arguments": [
+         {
+            "name": "branchname",
+            "description": "Branch name",
+            "required": false,
+            "type": {
+               "type": "Script",
+               "data": "git branch --format='%(refname:short)'"
+            }
+         }
+      ]
+    },
+    {
+      "name": "tag",
+      "description": "Create, list, delete or verify a tag object signed with GPG",
+      "arguments": [
+         {
+           "name": "tagname",
+           "description": "Tag name",
+           "required": false,
+           "type": {
+             "type": "Script",
+             "data": "git tag"
+           }
+         }
+      ]
+    },
+    {
+       "name": "stash",
+       "description": "Stash the changes in a dirty working directory away",
+       "subcommands": [
+          {
+             "name": "list",
+             "description": "List the stash entries",
+             "arguments": []
+          },
+          {
+             "name": "pop",
+             "description": "Remove a single stashed state from the stash list and apply it",
+             "arguments": [
+                {
+                   "name": "stash",
+                   "description": "Stash to pop",
+                   "arg_type": {
+                      "type": "Script",
+                      "data": "git stash list | awk -F: '{print $1}'"
+                   }
+                }
+             ]
+          },
+          {
+             "name": "apply",
+             "description": "Like pop, but do not remove the state from the stash list",
+             "arguments": [
+                {
+                   "name": "stash",
+                   "description": "Stash to apply",
+                   "arg_type": {
+                      "type": "Script",
+                      "data": "git stash list | awk -F: '{print $1}'"
+                   }
+                }
+             ]
+          },
+          {
+             "name": "drop",
+             "description": "Remove a single stashed state from the stash list",
+             "arguments": [
+                {
+                   "name": "stash",
+                   "description": "Stash to drop",
+                   "arg_type": {
+                      "type": "Script",
+                      "data": "git stash list | awk -F: '{print $1}'"
+                   }
+                }
+             ]
+          }
+       ]
     }
   ]
 }

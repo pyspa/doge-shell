@@ -7,7 +7,7 @@
       "description": "Process ID to kill",
       "type": {
         "type": "Script",
-        "data": "ps -xo pid,comm --no-headers | awk '{print $1 \" \" $2}'"
+        "data": "ps -xo pid,comm --no-headers | awk '{print $1 \"\\t\" $2}'"
       }
     }
   ]

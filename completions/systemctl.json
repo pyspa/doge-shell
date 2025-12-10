@@ -122,7 +122,8 @@
           "name": "unit",
           "description": "Unit name to stop",
           "arg_type": {
-            "type": "String"
+            "type": "Script",
+            "data": "systemctl list-units --state=running --no-pager --no-legend | awk '{print $1}'"
           },
           "required": true,
           "multiple": true
@@ -148,7 +149,8 @@
           "name": "unit",
           "description": "Unit name to restart",
           "arg_type": {
-            "type": "String"
+            "type": "Script",
+            "data": "systemctl list-units --state=running --no-pager --no-legend | awk '{print $1}'"
           },
           "required": true,
           "multiple": true
@@ -174,7 +176,8 @@
           "name": "unit",
           "description": "Unit name to reload",
           "arg_type": {
-            "type": "String"
+            "type": "Script",
+            "data": "systemctl list-units --state=running --no-pager --no-legend | awk '{print $1}'"
           },
           "required": true,
           "multiple": true
@@ -200,7 +203,8 @@
           "name": "unit",
           "description": "Unit name to enable",
           "arg_type": {
-            "type": "String"
+            "type": "Script",
+            "data": "systemctl list-unit-files --state=disabled --no-pager --no-legend 2>/dev/null | awk '{print $1}'"
           },
           "required": true,
           "multiple": true
@@ -226,7 +230,8 @@
           "name": "unit",
           "description": "Unit name to disable",
           "arg_type": {
-            "type": "String"
+            "type": "Script",
+            "data": "systemctl list-unit-files --state=enabled --no-pager --no-legend 2>/dev/null | awk '{print $1}'"
           },
           "required": true,
           "multiple": true
@@ -275,7 +280,8 @@
           "name": "unit",
           "description": "Unit name to show status for",
           "arg_type": {
-            "type": "String"
+             "type": "Script",
+             "data": "systemctl list-units --all --no-pager --no-legend | awk '{print $1}'"
           },
           "required": false,
           "multiple": true
@@ -440,7 +446,8 @@
           "name": "unit",
           "description": "Unit name to mask",
           "arg_type": {
-            "type": "String"
+            "type": "Script",
+            "data": "systemctl list-units --all --no-pager --no-legend | awk '{print $1}'"
           },
           "required": true,
           "multiple": true
@@ -458,7 +465,8 @@
           "name": "unit",
           "description": "Unit name to unmask",
           "arg_type": {
-            "type": "String"
+            "type": "Script",
+            "data": "systemctl list-units --all --no-pager --no-legend | awk '{print $1}'"
           },
           "required": true,
           "multiple": true

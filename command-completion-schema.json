@@ -275,6 +275,21 @@
               "enum": ["Regex"]
             }
           }
+        },
+        {
+          "type": "object",
+          "title": "Script Type",
+          "required": ["type", "data"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["Script"]
+            },
+            "data": {
+              "type": "string",
+              "description": "Shell command to execute for generating completions"
+            }
+          }
         }
       ]
     }

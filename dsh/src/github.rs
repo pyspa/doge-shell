@@ -55,6 +55,14 @@ impl GitHubClient {
             && let Some(reason_val) = f.strip_prefix("reason:")
         {
             let allowed_reasons: Vec<&str> = reason_val.split(',').map(|s| s.trim()).collect();
+
+            // Debug log to see what we got
+            for n in &notifications {
+                if let Some(r) = n["reason"].as_str() {
+                    debug!("Notification reason: {}", r);
+                }
+            }
+
             let filtered_count = notifications
                 .iter()
                 .filter(|n| {

@@ -119,13 +119,11 @@ pub fn command(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
     let cmd = cmd_args.remove(0);
     match Command::new(cmd).args(cmd_args).output() {
         Ok(output) => {
-            let stdout = String::from_utf8(output.stdout)
-                .expect("fail get stdout")
+            let stdout = String::from_utf8_lossy(&output.stdout)
                 .trim_end()
                 .to_string();
 
-            let stderr = String::from_utf8(output.stderr)
-                .expect("fail get stdout")
+            let stderr = String::from_utf8_lossy(&output.stderr)
                 .trim_end()
                 .to_string();
 

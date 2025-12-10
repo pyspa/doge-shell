@@ -1,5 +1,5 @@
 use crate::{process::ProcessState, shell::Shell};
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use dsh_builtin::ShellProxy;
 use dsh_frecency::SortMethod;
 use dsh_types::{Context, mcp::McpServerConfig};
@@ -261,7 +261,11 @@ impl ShellProxy for Shell {
             }
             "read" => {
                 let mut stdin = Vec::new();
-                unsafe { File::from_raw_fd(ctx.infile).read_to_end(&mut stdin).ok() };
+                unsafe {
+                    File::from_raw_fd(ctx.infile)
+                        .read_to_end(&mut stdin)
+                        .context("read: failed to read input")?;
+                };
                 let key = format!("${}", argv[1]);
                 let output = match std::str::from_utf8(&stdin) {
                     Ok(s) => s.trim_end_matches('\n').to_owned(),

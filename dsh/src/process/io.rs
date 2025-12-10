@@ -18,15 +18,23 @@ struct RawModeGuard {
 
 impl RawModeGuard {
     fn new() -> Self {
-        let disabled = disable_raw_mode().is_ok();
+        let disabled = match disable_raw_mode() {
+            Ok(_) => true,
+            Err(e) => {
+                tracing::warn!("failed to disable raw mode: {}", e);
+                false
+            }
+        };
         Self { disabled }
     }
 }
 
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
-        if self.disabled {
-            enable_raw_mode().ok();
+        if self.disabled
+            && let Err(e) = enable_raw_mode()
+        {
+            tracing::warn!("failed to restore raw mode: {}", e);
         }
     }
 }

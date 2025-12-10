@@ -507,7 +507,11 @@ fn parse_jobs(
 
 fn read_fd(fd: RawFd) -> Result<String> {
     let mut raw_stdout = Vec::new();
-    unsafe { File::from_raw_fd(fd).read_to_end(&mut raw_stdout).ok() };
+    unsafe {
+        File::from_raw_fd(fd)
+            .read_to_end(&mut raw_stdout)
+            .context("failed to read from fd")?;
+    };
 
     let output = std::str::from_utf8(&raw_stdout)
         .inspect_err(|_err| {

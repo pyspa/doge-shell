@@ -18,7 +18,8 @@
       "description": "Analyze core dump file",
       "takes_value": true,
       "value_type": {
-        "type": "File"
+        "type": "File",
+        "data": {}
       }
     },
     {
@@ -27,7 +28,8 @@
       "description": "Execute GDB commands from file",
       "takes_value": true,
       "value_type": {
-        "type": "File"
+        "type": "File",
+        "data": {}
       }
     },
     {
@@ -58,7 +60,8 @@
       "description": "Read symbols from file",
       "takes_value": true,
       "value_type": {
-        "type": "File"
+        "type": "File",
+        "data": {}
       }
     },
     {
@@ -71,7 +74,8 @@
       "name": "program",
       "description": "Program to debug",
       "type": {
-        "type": "File"
+        "type": "File",
+        "data": {}
       }
     }
   ]

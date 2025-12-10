@@ -369,8 +369,9 @@ impl JsonCompletionLoader {
         }
 
         if let Some(ref long) = option.long {
-            // Long options must start with exactly two dashes, followed by at least one non-whitespace character
-            if !long.starts_with("--") || long.len() <= 2 {
+            // Long options usually start with --, but some commands (like go, java) use -
+            // So we just ensure it starts with - and has some content, and is not just "--"
+            if !long.starts_with("-") || long.len() < 2 || long == "--" {
                 anyhow::bail!("Invalid long option format '{}' in '{}'", long, context);
             }
         }

@@ -25,7 +25,8 @@
       "description": "Write output to file",
       "takes_value": true,
       "value_type": {
-        "type": "File"
+        "type": "File",
+        "data": {}
       }
     },
     {

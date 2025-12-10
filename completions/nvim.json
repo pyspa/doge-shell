@@ -82,7 +82,8 @@
       "name": "file",
       "description": "File to edit",
       "type": {
-        "type": "File"
+        "type": "File",
+        "data": {}
       }
     }
   ]

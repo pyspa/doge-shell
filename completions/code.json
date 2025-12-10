@@ -87,7 +87,8 @@
       "name": "file_or_folder",
       "description": "File or folder to open",
       "type": {
-        "type": "File"
+        "type": "File",
+        "data": {}
       }
     }
   ]

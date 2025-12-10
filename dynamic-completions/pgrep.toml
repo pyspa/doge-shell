@@ -1,8 +1,0 @@
-[[dynamic_completions]]
-command = "pgrep"
-description = "Look up or signal processes based on name and other attributes"
-match_condition = { type = "StartsWithCommand" }
-shell_command = "ps -e -o comm= | sort -u"
-filter_output = ""
-priority = 80
-subcommands = []

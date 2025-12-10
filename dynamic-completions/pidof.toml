@@ -1,8 +1,0 @@
-[[dynamic_completions]]
-command = "pidof"
-description = "Find the process ID of a running program"
-match_condition = { type = "StartsWithCommand" }
-shell_command = "ps -e -o comm= | sort -u"
-filter_output = ""
-priority = 80
-subcommands = []

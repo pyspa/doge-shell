@@ -1,8 +1,0 @@
-[[dynamic_completions]]
-command = "chgrp"
-description = "Change group ownership"
-shell_command = "awk -F: '{print $1}' /etc/group"
-priority = 80
-filter_output = ""
-subcommands = []
-match_condition = { type = "StartsWithCommand" }

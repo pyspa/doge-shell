@@ -1,5 +1,0 @@
-[[dynamic_completions]]
-command = "ssh"
-description = "Complete with hosts from ~/.ssh/config"
-match_condition = { type = "StartsWithCommand" }
-shell_command = "awk '/^Host / {print $2}' ~/.ssh/config 2>/dev/null | grep -v '*'"

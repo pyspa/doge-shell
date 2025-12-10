@@ -1,5 +1,0 @@
-[[dynamic_completions]]
-command = "man"
-description = "Complete with manual pages"
-match_condition = { type = "StartsWithCommand" }
-shell_command = "apropos . | awk '{print $1}' | sed 's/(.*)//'"

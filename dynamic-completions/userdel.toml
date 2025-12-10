@@ -1,6 +1,0 @@
-[[dynamic_completions]]
-command = "userdel"
-description = "Complete with system users"
-match_condition = { type = "StartsWithCommand" }
-shell_command = "cat /etc/passwd | cut -d: -f1"
-priority = 80

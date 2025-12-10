@@ -1,6 +1,0 @@
-[[dynamic_completions]]
-command = "systemctl"
-subcommands = ["start", "stop", "restart", "status", "enable", "disable"]
-description = "Complete systemd unit names"
-match_condition = { type = "HasSubcommand" }
-shell_command = "systemctl list-units --all --type=service --no-legend --no-pager | awk '{print $1}'"

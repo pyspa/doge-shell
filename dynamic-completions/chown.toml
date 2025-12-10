@@ -1,8 +1,0 @@
-[[dynamic_completions]]
-command = "chown"
-description = "Change file owner and group"
-shell_command = "awk -F: '{print $1}' /etc/passwd"
-priority = 80
-filter_output = ""
-subcommands = []
-match_condition = { type = "StartsWithCommand" }

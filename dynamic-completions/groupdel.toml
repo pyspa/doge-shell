@@ -1,6 +1,0 @@
-[[dynamic_completions]]
-command = "groupdel"
-description = "Complete with system groups"
-match_condition = { type = "StartsWithCommand" }
-shell_command = "cat /etc/group | cut -d: -f1"
-priority = 80

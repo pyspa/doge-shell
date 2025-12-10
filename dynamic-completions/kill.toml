@@ -1,5 +1,0 @@
-[[dynamic_completions]]
-command = "kill"
-description = "Complete with running process IDs and names"
-match_condition = { type = "StartsWithCommand" }
-shell_command = "ps -xo pid,comm --no-headers | awk '{print $1 \" \" $2}'"

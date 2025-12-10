@@ -1,8 +1,0 @@
-[[dynamic_completions]]
-command = "groupmod"
-description = "Modify a group definition on the system"
-match_condition = { type = "StartsWithCommand" }
-shell_command = "awk -F: '{print $1}' /etc/group"
-priority = 80
-filter_output = ""
-subcommands = []

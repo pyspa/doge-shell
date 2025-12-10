@@ -52,6 +52,12 @@ impl<R: ScriptRunner> ScriptGenerator<R> {
             command = command.replace("$SUBCOMMAND", "");
         }
 
+        // Quote arguments to prevent injection if possible, but basic replacement for now
+        for (i, arg) in parsed.specified_arguments.iter().enumerate() {
+            let key = format!("$ARG_{}", i);
+            command = command.replace(&key, arg);
+        }
+
         // Execute command
         let stdout = self.runner.run(&command)?;
         let mut candidates = Vec::new();
@@ -173,5 +179,37 @@ mod tests {
         assert_eq!(result[0].description, Some("description1".to_string()));
         assert_eq!(result[1].text, "value2");
         assert_eq!(result[1].description, None);
+    }
+
+    #[test]
+    fn test_script_arg_substitution() {
+        let runner = MockScriptRunner::new("echo foo", "result");
+
+        let generator = ScriptGenerator::new(runner);
+
+        let parsed = ParsedCommandLine {
+            command: "test".to_string(),
+            subcommand_path: vec![],
+            args: vec![],
+            options: vec![],
+            current_token: "".to_string(),
+            current_arg: None,
+            completion_context: CompletionContext::Argument {
+                arg_index: 1,
+                arg_type: None,
+            },
+            specified_options: vec![],
+            specified_arguments: vec!["foo".to_string()],
+            cursor_index: 0,
+        };
+
+        let template = "echo $ARG_0";
+
+        let result = generator
+            .generate_script_candidates(template, &parsed)
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].text, "result");
     }
 }

@@ -101,7 +101,11 @@
       "arguments": [
         {
           "name": "script",
-          "description": "Script name from package.json"
+          "description": "Script name from package.json",
+          "type": {
+            "type": "Script",
+            "data": "node -p \"const s = require('./package.json').scripts; s ? Object.keys(s).join('\\n') : ''\" 2>/dev/null"
+          }
         }
       ],
       "subcommands": []

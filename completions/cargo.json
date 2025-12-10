@@ -43,7 +43,12 @@
         {
           "long": "--package",
           "short": "-p",
-          "description": "Package to build"
+          "description": "Package to build",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
+          }
         },
         {
           "long": "--workspace",
@@ -76,16 +81,31 @@
         },
         {
           "long": "--bin",
-          "description": "Name of the bin target to run"
+          "description": "Name of the bin target to run",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(t['name']) for p in json.load(sys.stdin)['packages'] for t in p['targets'] if 'bin' in t['kind']]\""
+          }
         },
         {
           "long": "--example",
-          "description": "Name of the example target to run"
+          "description": "Name of the example target to run",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(t['name']) for p in json.load(sys.stdin)['packages'] for t in p['targets'] if 'example' in t['kind']]\""
+          }
         },
         {
           "long": "--package",
           "short": "-p",
-          "description": "Package to run"
+          "description": "Package to run",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
+          }
         },
         {
           "long": "--jobs",
@@ -120,7 +140,12 @@
         {
           "long": "--package",
           "short": "-p",
-          "description": "Package to test"
+          "description": "Package to test",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
+          }
         },
         {
           "long": "--workspace",

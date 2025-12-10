@@ -1,9 +1,9 @@
-use super::config::{DynamicCompletionConfig, DynamicCompletionDef, MatchCondition};
+use super::config::{DynamicCompletionDef, MatchCondition};
 use super::{CompletionCandidate, DynamicCompletionHandler, ParsedCommandLine};
 use crate::completion::CompletionType;
 use crate::completion::parser::CompletionContext;
 use anyhow::Result;
-use rust_embed::RustEmbed;
+
 use tracing::{debug, warn};
 
 /// Embedded resource struct for storing dynamic completion configurations
@@ -14,9 +14,6 @@ use tracing::{debug, warn};
 ///
 /// The configurations are stored relative to the dsh crate directory and will be
 /// available at runtime without requiring external file access.
-#[derive(RustEmbed)]
-#[folder = "../dynamic-completions/"]
-struct DynamicCompletionAssets;
 
 /// A script-based completion handler that uses external commands
 ///
@@ -324,13 +321,6 @@ impl DynamicConfigLoader {
         // TOML loading is temporarily disabled to unify with JSON-based completions
         debug!("TOML configuration loading is disabled");
         Ok(Vec::new())
-    }
-
-    /// Parse a configuration file
-    fn parse_config_file(content: &[u8]) -> Result<Vec<DynamicCompletionDef>> {
-        let content_str = std::str::from_utf8(content)?;
-        let config: DynamicCompletionConfig = toml::from_str(content_str)?;
-        Ok(config.dynamic_completions)
     }
 }
 

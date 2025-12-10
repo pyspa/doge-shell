@@ -120,6 +120,9 @@ mod tests {
     }
 
     impl ShellProxy for MockShellProxy {
+        fn get_current_dir(&self) -> anyhow::Result<std::path::PathBuf> {
+            Ok(std::env::current_dir()?)
+        }
         fn exit_shell(&mut self) {}
 
         fn dispatch(&mut self, _ctx: &Context, cmd: &str, argv: Vec<String>) -> anyhow::Result<()> {

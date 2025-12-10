@@ -216,6 +216,9 @@ mod tests {
 
     struct NoopProxy;
     impl ShellProxy for NoopProxy {
+        fn get_current_dir(&self) -> anyhow::Result<std::path::PathBuf> {
+            Ok(std::env::current_dir()?)
+        }
         fn exit_shell(&mut self) {}
         fn dispatch(
             &mut self,

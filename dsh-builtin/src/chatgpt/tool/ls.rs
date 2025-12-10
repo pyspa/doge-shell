@@ -1,6 +1,6 @@
 use crate::ShellProxy;
 use serde_json::{Value, json};
-use std::env;
+
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -47,7 +47,8 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
     }
 
     // Get current working directory
-    let current_dir = env::current_dir()
+    let current_dir = _proxy
+        .get_current_dir()
         .map_err(|err| format!("chat: failed to get current working directory: {err}"))?;
 
     // Convert the relative path to an absolute path by joining with current directory
@@ -137,13 +138,12 @@ fn normalize_path(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use dsh_types::Context;
-    use once_cell::sync::Lazy;
-    use std::sync::Mutex;
+
     use tempfile::tempdir;
 
-    static CWD_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-
-    struct NoopProxy;
+    struct NoopProxy {
+        cwd: PathBuf,
+    }
     impl ShellProxy for NoopProxy {
         fn exit_shell(&mut self) {}
         fn dispatch(
@@ -194,18 +194,22 @@ mod tests {
             true
         }
         fn set_and_export_var(&mut self, _key: String, _value: String) {}
+        fn get_current_dir(&self) -> anyhow::Result<PathBuf> {
+            Ok(self.cwd.clone())
+        }
     }
 
     #[test]
     fn test_ls_current_dir() {
-        let _lock = CWD_LOCK.lock().unwrap();
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
         fs::write(&file_path, "content").unwrap();
         fs::create_dir(dir.path().join("subdir")).unwrap();
 
-        env::set_current_dir(&dir).unwrap();
-        let mut proxy = NoopProxy;
+        // env::set_current_dir(&dir).unwrap(); // REMOVED
+        let mut proxy = NoopProxy {
+            cwd: dir.path().to_path_buf(),
+        };
 
         let result = run("{}", &mut proxy).unwrap();
         assert!(result.contains("subdir"));
@@ -216,14 +220,15 @@ mod tests {
     #[test]
     #[ignore]
     fn test_ls_subdir() {
-        let _lock = CWD_LOCK.lock().unwrap();
         let dir = tempdir().unwrap();
         let subdir = dir.path().join("subdir");
         fs::create_dir(&subdir).unwrap();
         fs::write(subdir.join("file.txt"), "content").unwrap();
 
-        env::set_current_dir(&dir).unwrap();
-        let mut proxy = NoopProxy;
+        // env::set_current_dir(&dir).unwrap(); // REMOVED
+        let mut proxy = NoopProxy {
+            cwd: dir.path().to_path_buf(),
+        };
 
         let result = run(r#"{"path": "subdir"}"#, &mut proxy).unwrap();
         assert!(result.contains("file.txt"));
@@ -231,7 +236,9 @@ mod tests {
 
     #[test]
     fn test_ls_outside_workspace() {
-        let mut proxy = NoopProxy;
+        let mut proxy = NoopProxy {
+            cwd: PathBuf::from("."),
+        };
         let result = run(r#"{"path": ".."}"#, &mut proxy);
         assert!(result.is_err());
     }

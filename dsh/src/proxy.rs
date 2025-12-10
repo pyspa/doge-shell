@@ -647,6 +647,10 @@ impl ShellProxy for Shell {
         env.variables.insert(key.clone(), value);
         env.exported_vars.insert(key);
     }
+
+    fn get_current_dir(&self) -> Result<std::path::PathBuf> {
+        std::env::current_dir().context("failed to get current directory")
+    }
 }
 
 #[cfg(test)]

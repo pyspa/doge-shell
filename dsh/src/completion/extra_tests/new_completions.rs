@@ -21,10 +21,10 @@ fn test_load_new_json_completions() {
 
 #[test]
 fn test_load_new_dynamic_check() {
-    let registry = DynamicCompletionRegistry::with_configured_handlers();
+    let _registry = DynamicCompletionRegistry::with_configured_handlers();
 
     // Check chown
-    let chown_cmd = ParsedCommandLine {
+    let _chown_cmd = ParsedCommandLine {
         command: "chown".to_string(),
         subcommand_path: vec![],
         args: vec![],
@@ -42,7 +42,7 @@ fn test_load_new_dynamic_check() {
     */
 
     // Check chgrp
-    let chgrp_cmd = ParsedCommandLine {
+    let _chgrp_cmd = ParsedCommandLine {
         command: "chgrp".to_string(),
         subcommand_path: vec![],
         args: vec![],

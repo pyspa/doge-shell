@@ -58,7 +58,7 @@ impl CandidateBatch {
         }
     }
 
-    fn inclusive(candidates: Vec<EnhancedCandidate>) -> Self {
+    fn _inclusive(candidates: Vec<EnhancedCandidate>) -> Self {
         Self {
             candidates,
             exclusive: false,

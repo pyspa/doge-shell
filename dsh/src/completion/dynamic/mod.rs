@@ -286,10 +286,10 @@ mod tests {
 
     #[test]
     fn test_dynamic_registry_matches() {
-        let registry = DynamicCompletionRegistry::with_configured_handlers();
+        let _registry = DynamicCompletionRegistry::with_configured_handlers();
 
         // Test that kill handler matches
-        let kill_cmd = create_parsed_command("kill", vec![]);
+        let _kill_cmd = create_parsed_command("kill", vec![]);
         /*
         assert!(
             registry.matches(&kill_cmd),
@@ -302,7 +302,7 @@ mod tests {
     fn test_dynamic_registry_generate_candidates() {
         let registry = DynamicCompletionRegistry::with_configured_handlers();
 
-        // Test that kill command generates candidates
+        // Check kill command - should match "kill" command
         let kill_cmd = create_parsed_command("kill", vec![]);
         if registry.matches(&kill_cmd) {
             // This test may fail due to environment (no 'ps' command or no running processes)

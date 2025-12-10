@@ -93,6 +93,9 @@ pub trait ShellProxy {
     fn list_exported_vars(&self) -> Vec<(String, String)>;
     fn export_var(&mut self, key: &str) -> bool;
     fn set_and_export_var(&mut self, key: String, value: String);
+
+    /// Gets the current working directory
+    fn get_current_dir(&self) -> Result<std::path::PathBuf>;
 }
 
 use std::any::Any;

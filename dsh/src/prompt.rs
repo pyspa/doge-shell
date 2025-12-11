@@ -74,35 +74,34 @@ impl Prompt {
         let mut status_to_display = self.get_git_status_cached();
         let real_branch = self.get_head_branch();
 
-        if has_git
-            && let Some(ref real) = real_branch {
-                let mut cache_invalid = false;
-                if let Some(ref status) = status_to_display {
-                    if status.branch != *real {
-                        cache_invalid = true;
-                    }
-                } else {
+        if has_git && let Some(ref real) = real_branch {
+            let mut cache_invalid = false;
+            if let Some(ref status) = status_to_display {
+                if status.branch != *real {
                     cache_invalid = true;
                 }
-
-                if cache_invalid {
-                    // Create a temporary status with the real branch name
-                    let mut new_status = GitStatus::new();
-                    new_status.branch = real.clone();
-
-                    if status_to_display.is_some() {
-                        // If we had a previous status but branch changed, keep the old status OID
-                        // just in case, but clear ahead/behind/modified as they are likely wrong.
-                        // Actually, cleaner to show nothing but branch name.
-                    }
-
-                    status_to_display = Some(new_status);
-
-                    // Force invalidation of cache so async task picks it up
-                    self.git_status_cache = None;
-                    self.needs_git_check = true;
-                }
+            } else {
+                cache_invalid = true;
             }
+
+            if cache_invalid {
+                // Create a temporary status with the real branch name
+                let mut new_status = GitStatus::new();
+                new_status.branch = real.clone();
+
+                if status_to_display.is_some() {
+                    // If we had a previous status but branch changed, keep the old status OID
+                    // just in case, but clear ahead/behind/modified as they are likely wrong.
+                    // Actually, cleaner to show nothing but branch name.
+                }
+
+                status_to_display = Some(new_status);
+
+                // Force invalidation of cache so async task picks it up
+                self.git_status_cache = None;
+                self.needs_git_check = true;
+            }
+        }
 
         if has_git && let Some(ref git_status) = status_to_display {
             // Ensure padding if we have prompt content

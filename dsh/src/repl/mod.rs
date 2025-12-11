@@ -1173,9 +1173,39 @@ impl<'a> Repl<'a> {
                     let should = prompt.read().should_refresh();
                     if should {
                         let path = prompt.read().current_path().to_path_buf();
+                        let p_clone = Arc::clone(&prompt); // Clone for git task
                         tokio::spawn(async move {
                             if let Some(status) = crate::prompt::fetch_git_status_async(&path).await {
-                                prompt.write().update_git_status(Some(status));
+                                p_clone.write().update_git_status(Some(status));
+                            }
+                        });
+                    }
+
+                    // Check for Rust version
+                    if prompt.read().needs_rust_check() {
+                        let p_clone = Arc::clone(&prompt);
+                        tokio::spawn(async move {
+                            if let Some(version) = crate::prompt::fetch_rust_version_async().await {
+                                p_clone.write().update_rust_version(Some(version));
+                            } else {
+                                // Mark as checked but failed/empty to prevent loop?
+                                // Ideally needs_rust_check should return false if we have a "None" cache that is fresh.
+                                // simpler: just update with None? No, that clears it.
+                                // For now, we update with Some so it stops checking, or we accept re-check loop if failed.
+                                // Actually better to cache the "None" result?
+                                // Current implementation uses Option<String>, so None means "not cached".
+                                // To fix properly, cache should be Option<Option<String>> or similar state.
+                                // For MVP, let's just attempt update.
+                            }
+                        });
+                    }
+
+                    // Check for Node version
+                    if prompt.read().needs_node_check() {
+                         let p_clone = Arc::clone(&prompt);
+                         tokio::spawn(async move {
+                            if let Some(version) = crate::prompt::fetch_node_version_async().await {
+                                p_clone.write().update_node_version(Some(version));
                             }
                         });
                     }

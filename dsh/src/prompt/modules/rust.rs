@@ -24,8 +24,11 @@ impl PromptModule for RustModule {
 
     fn render(&self, context: &PromptContext) -> Option<String> {
         let cargo_toml = context.current_dir.join("Cargo.toml");
-        if cargo_toml.exists() {
-            // TODO: Fetch rust version asynchronously
+
+        if let Some(version) = &context.rust_version {
+            Some(format!(" {} {}", "🦀".red().bold(), version.as_str().dim()))
+        } else if cargo_toml.exists() {
+            // Still loading or failed
             Some(format!(" {}", "🦀".red().bold()))
         } else {
             None

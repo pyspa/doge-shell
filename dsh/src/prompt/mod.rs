@@ -115,6 +115,10 @@ pub struct Prompt {
     git_root_cache: HashSet<String>,
     git_status_cache: Option<GitStatusCache>,
 
+    // Language Support
+    rust_version_cache: Option<String>,
+    node_version_cache: Option<String>,
+
     // Module system
     modules: Vec<Box<dyn PromptModule>>,
 }
@@ -130,9 +134,11 @@ impl Prompt {
             needs_git_check: true,
             git_root_cache: HashSet::new(),
             git_status_cache: None,
+            rust_version_cache: None,
+            node_version_cache: None,
             modules: vec![
                 Box::new(DirectoryModule::new()),
-                Box::new(GitModule::new(BRANCH_MARK.to_string())), // We pass the default, but Prompt also has 'mark' field?
+                Box::new(GitModule::new(BRANCH_MARK.to_string())),
                 Box::new(NodeModule::new()),
                 Box::new(RustModule::new()),
             ],
@@ -182,6 +188,8 @@ impl Prompt {
             current_dir: self.current_dir.clone(),
             git_root: self.current_git_root.clone(),
             git_status: status_to_display,
+            rust_version: self.rust_version_cache.clone(),
+            node_version: self.node_version_cache.clone(),
         };
 
         // 2. Render Modules
@@ -195,21 +203,20 @@ impl Prompt {
 
         // 3. GitHub Status (Internal Legacy - could be modularized later)
         // Display GitHub notifications if available and under git
-        if has_git
-            && let Some(status_lock) = &self.github_status {
-                let status = status_lock.read();
-                if status.notification_count > 0 {
-                    let notify_display = format!(
-                        " {} {}",
-                        self.github_icon.as_str().yellow(),
-                        status.notification_count.to_string().yellow().bold()
-                    );
-                    prompt_content.push_str(&notify_display);
-                } else if status.has_error {
-                    let notify_display = format!(" {}", "🔔!".red().bold());
-                    prompt_content.push_str(&notify_display);
-                }
+        if has_git && let Some(status_lock) = &self.github_status {
+            let status = status_lock.read();
+            if status.notification_count > 0 {
+                let notify_display = format!(
+                    " {} {}",
+                    self.github_icon.as_str().yellow(),
+                    status.notification_count.to_string().yellow().bold()
+                );
+                prompt_content.push_str(&notify_display);
+            } else if status.has_error {
+                let notify_display = format!(" {}", "🔔!".red().bold());
+                prompt_content.push_str(&notify_display);
             }
+        }
 
         write!(out, "{}", prompt_content).ok();
     }
@@ -394,6 +401,23 @@ impl Prompt {
         }
         None
     }
+    pub fn update_rust_version(&mut self, version: Option<String>) {
+        self.rust_version_cache = version;
+    }
+
+    pub fn update_node_version(&mut self, version: Option<String>) {
+        self.node_version_cache = version;
+    }
+
+    pub fn needs_rust_check(&self) -> bool {
+        self.rust_version_cache.is_none() && self.current_dir.join("Cargo.toml").exists()
+    }
+
+    pub fn needs_node_check(&self) -> bool {
+        self.node_version_cache.is_none()
+            && (self.current_dir.join("package.json").exists()
+                || self.current_dir.join("node_modules").exists())
+    }
 }
 
 // Standalone functions (kept for async task compatibility)
@@ -445,13 +469,15 @@ fn parse_git_status_output(stdout: &[u8]) -> Option<GitStatus> {
                 }
             } else if buf.starts_with("# branch.ab") {
                 if let Some(val) = splited.get(2)
-                    && let Ok(count) = val.replace('+', "").parse::<u32>() {
-                        status.ahead = count;
-                    }
+                    && let Ok(count) = val.replace('+', "").parse::<u32>()
+                {
+                    status.ahead = count;
+                }
                 if let Some(val) = splited.get(3)
-                    && let Ok(count) = val.replace('-', "").parse::<u32>() {
-                        status.behind = count;
-                    }
+                    && let Ok(count) = val.replace('-', "").parse::<u32>()
+                {
+                    status.behind = count;
+                }
             }
         } else if buf.starts_with('1') {
             modified = true;
@@ -525,4 +551,31 @@ fn find_git_root(cwd: &Path) -> Option<String> {
         return Some(out.trim().to_string());
     }
     None
+}
+
+pub async fn fetch_rust_version_async() -> Option<String> {
+    use tokio::process::Command;
+    let output = Command::new("rustc").arg("--version").output().await.ok()?;
+
+    if output.status.success() {
+        // rustc 1.75.0 (82e1608df 2023-12-21)
+        let out = String::from_utf8_lossy(&output.stdout);
+        let version = out.split_whitespace().nth(1)?;
+        Some(version.to_string())
+    } else {
+        None
+    }
+}
+
+pub async fn fetch_node_version_async() -> Option<String> {
+    use tokio::process::Command;
+    let output = Command::new("node").arg("--version").output().await.ok()?;
+
+    if output.status.success() {
+        // v20.10.0
+        let out = String::from_utf8_lossy(&output.stdout);
+        Some(out.trim().to_string())
+    } else {
+        None
+    }
 }

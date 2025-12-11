@@ -26,8 +26,14 @@ impl PromptModule for NodeModule {
         let package_json = context.current_dir.join("package.json");
         let node_modules = context.current_dir.join("node_modules");
 
-        if package_json.exists() || node_modules.exists() {
-            // TODO: Fetch node version asynchronously
+        if let Some(version) = &context.node_version {
+            Some(format!(
+                " {} {}",
+                "⬢".green().bold(),
+                version.as_str().dim()
+            ))
+        } else if package_json.exists() || node_modules.exists() {
+            // Still loading
             Some(format!(" {}", "⬢".green().bold()))
         } else {
             None

@@ -473,6 +473,241 @@
           }
         }
       ]
+    },
+    {
+      "name": "compose",
+      "description": "Docker Compose",
+      "subcommands": [
+        {
+          "name": "up",
+          "description": "Create and start containers",
+          "options": [
+            {
+              "long": "--detach",
+              "short": "-d",
+              "description": "Detached mode: Run containers in the background"
+            }
+          ]
+        },
+        {
+          "name": "down",
+          "description": "Stop and remove containers, networks",
+          "options": []
+        },
+        {
+          "name": "ps",
+          "description": "List containers",
+          "options": []
+        },
+        {
+          "name": "logs",
+          "description": "View output from containers",
+          "options": [
+            {
+              "long": "--follow",
+              "short": "-f",
+              "description": "Follow log output"
+            }
+          ]
+        },
+        {
+          "name": "build",
+          "description": "Build or rebuild services",
+          "options": []
+        },
+        {
+          "name": "exec",
+          "description": "Execute a command in a running container",
+          "options": []
+        },
+        {
+          "name": "restart",
+          "description": "Restart containers",
+          "options": []
+        },
+        {
+          "name": "start",
+          "description": "Start services",
+          "options": []
+        },
+        {
+          "name": "stop",
+          "description": "Stop services",
+          "options": []
+        }
+      ]
+    },
+    {
+      "name": "network",
+      "description": "Manage networks",
+      "subcommands": [
+        {
+          "name": "ls",
+          "description": "List networks",
+          "options": []
+        },
+        {
+          "name": "create",
+          "description": "Create a network",
+          "options": []
+        },
+        {
+          "name": "rm",
+          "description": "Remove one or more networks",
+          "options": []
+        },
+        {
+          "name": "inspect",
+          "description": "Display detailed information on one or more networks",
+          "options": []
+        },
+        {
+          "name": "connect",
+          "description": "Connect a container to a network",
+          "options": []
+        },
+        {
+          "name": "disconnect",
+          "description": "Disconnect a container from a network",
+          "options": []
+        }
+      ]
+    },
+    {
+      "name": "volume",
+      "description": "Manage volumes",
+      "subcommands": [
+        {
+          "name": "ls",
+          "description": "List volumes",
+          "options": []
+        },
+        {
+          "name": "create",
+          "description": "Create a volume",
+          "options": []
+        },
+        {
+          "name": "rm",
+          "description": "Remove one or more volumes",
+          "options": []
+        },
+        {
+          "name": "inspect",
+          "description": "Display detailed information on one or more volumes",
+          "options": []
+        },
+        {
+          "name": "prune",
+          "description": "Remove all unused local volumes",
+          "options": []
+        }
+      ]
+    },
+    {
+      "name": "system",
+      "description": "Manage Docker",
+      "subcommands": [
+        {
+          "name": "df",
+          "description": "Show docker disk usage",
+          "options": []
+        },
+        {
+          "name": "prune",
+          "description": "Remove unused data",
+          "options": []
+        },
+        {
+          "name": "info",
+          "description": "Display system-wide information",
+          "options": []
+        }
+      ]
+    },
+    {
+      "name": "inspect",
+      "description": "Return low-level information on Docker objects",
+      "arguments": [
+        {
+          "name": "object",
+          "description": "Name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker ps -a --format '{{.Names}}' && docker images --format '{{.Repository}}:{{.Tag}}'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "push",
+      "description": "Push an image or a repository to a registry",
+      "arguments": [
+        {
+          "name": "image",
+          "description": "Image name",
+          "type": {
+            "type": "Script",
+            "data": "docker images --format '{{.Repository}}:{{.Tag}}'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "tag",
+      "description": "Create a tag TARGET_IMAGE that refers to SOURCE_IMAGE",
+      "arguments": [
+        {
+          "name": "source",
+          "description": "Source image",
+          "type": {
+            "type": "Script",
+            "data": "docker images --format '{{.Repository}}:{{.Tag}}'"
+          }
+        },
+        {
+          "name": "target",
+          "description": "Target image"
+        }
+      ]
+    },
+    {
+      "name": "cp",
+      "description": "Copy files/folders between a container and the local filesystem",
+      "arguments": [
+        {
+          "name": "source",
+          "description": "Source path"
+        },
+        {
+          "name": "dest",
+          "description": "Destination path"
+        }
+      ]
+    },
+    {
+      "name": "login",
+      "description": "Log in to a Docker registry",
+      "options": [
+        {
+          "long": "--username",
+          "short": "-u",
+          "description": "Username"
+        },
+        {
+          "long": "--password",
+          "short": "-p",
+          "description": "Password"
+        },
+        {
+          "long": "--password-stdin",
+          "description": "Take the password from stdin"
+        }
+      ]
+    },
+    {
+      "name": "logout",
+      "description": "Log out from a Docker registry"
     }
   ]
 }

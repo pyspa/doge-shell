@@ -71,7 +71,40 @@ impl Prompt {
         //     path, has_git, self.current_git_root
         // );
 
-        if has_git && let Some(ref git_status) = self.get_git_status_cached() {
+        let mut status_to_display = self.get_git_status_cached();
+        let real_branch = self.get_head_branch();
+
+        if has_git
+            && let Some(ref real) = real_branch {
+                let mut cache_invalid = false;
+                if let Some(ref status) = status_to_display {
+                    if status.branch != *real {
+                        cache_invalid = true;
+                    }
+                } else {
+                    cache_invalid = true;
+                }
+
+                if cache_invalid {
+                    // Create a temporary status with the real branch name
+                    let mut new_status = GitStatus::new();
+                    new_status.branch = real.clone();
+
+                    if status_to_display.is_some() {
+                        // If we had a previous status but branch changed, keep the old status OID
+                        // just in case, but clear ahead/behind/modified as they are likely wrong.
+                        // Actually, cleaner to show nothing but branch name.
+                    }
+
+                    status_to_display = Some(new_status);
+
+                    // Force invalidation of cache so async task picks it up
+                    self.git_status_cache = None;
+                    self.needs_git_check = true;
+                }
+            }
+
+        if has_git && let Some(ref git_status) = status_to_display {
             // Ensure padding if we have prompt content
             // Write branch mark and branch name
             let branch_display = format!(
@@ -308,6 +341,45 @@ impl Prompt {
             // If we are sure it's a git repo but failed, maybe keep old cache?
             // For now do nothing or clear?
         }
+    }
+
+    fn get_head_branch(&self) -> Option<String> {
+        let git_root = self.current_git_root.as_ref()?;
+        let git_dir = git_root.join(".git");
+
+        // Resolve .git file (worktree/submodule) if necessary
+        let git_dir = if git_dir.is_file() {
+            if let Ok(content) = std::fs::read_to_string(&git_dir) {
+                if let Some(path) = content.trim().strip_prefix("gitdir: ") {
+                    git_root.join(path.trim())
+                } else {
+                    return None;
+                }
+            } else {
+                return None;
+            }
+        } else {
+            git_dir
+        };
+
+        if !git_dir.exists() {
+            return None;
+        }
+
+        let head_path = git_dir.join("HEAD");
+        if let Ok(head_content) = std::fs::read_to_string(head_path) {
+            let content = head_content.trim();
+            if let Some(branch_ref) = content.strip_prefix("ref: refs/heads/") {
+                return Some(branch_ref.to_string());
+            } else {
+                // Detached HEAD or other state
+                if content.len() >= 7 {
+                    return Some(content[..7].to_string());
+                }
+                return Some("DETACHED".to_string());
+            }
+        }
+        None
     }
 }
 
@@ -779,5 +851,53 @@ mod tests {
         let root = find_git_root(dir_path);
 
         assert_eq!(root, Some(dir_path.to_string_lossy().into_owned()));
+    }
+
+    #[test]
+    fn test_get_head_branch() {
+        use std::fs::File;
+        use std::io::Write;
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("failed into create temp dir");
+        let dir_path = dir.path();
+
+        // Setup .git/HEAD
+        let git_dir = dir_path.join(".git");
+        std::fs::create_dir(&git_dir).expect("failed to create .git dir");
+        let head_path = git_dir.join("HEAD");
+
+        // Case 1: Standard branch ref
+        {
+            let mut file = File::create(&head_path).expect("failed to create HEAD");
+            writeln!(file, "ref: refs/heads/main").expect("failed to write HEAD");
+
+            let mut prompt = Prompt::new(dir_path.to_path_buf(), "🐕 > ".to_string());
+            prompt.update_git_root(Some(dir_path.to_path_buf()));
+
+            assert_eq!(prompt.get_head_branch(), Some("main".to_string()));
+        }
+
+        // Case 2: Changed branch ref
+        {
+            let mut file = File::create(&head_path).expect("failed to create HEAD");
+            writeln!(file, "ref: refs/heads/feature/test").expect("failed to write HEAD");
+
+            let mut prompt = Prompt::new(dir_path.to_path_buf(), "🐕 > ".to_string());
+            prompt.update_git_root(Some(dir_path.to_path_buf()));
+
+            assert_eq!(prompt.get_head_branch(), Some("feature/test".to_string()));
+        }
+
+        // Case 3: Detached HEAD (SHA)
+        {
+            let mut file = File::create(&head_path).expect("failed to create HEAD");
+            writeln!(file, "a1b2c3d4e5f6g7h8i9j0").expect("failed to write HEAD");
+
+            let mut prompt = Prompt::new(dir_path.to_path_buf(), "🐕 > ".to_string());
+            prompt.update_git_root(Some(dir_path.to_path_buf()));
+
+            assert_eq!(prompt.get_head_branch(), Some("a1b2c3d".to_string()));
+        }
     }
 }

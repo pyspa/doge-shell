@@ -10,4 +10,6 @@ pub struct PromptContext {
     pub git_status: Option<GitStatus>,
     pub rust_version: Option<String>,
     pub node_version: Option<String>,
+    pub python_version: Option<String>,
+    pub go_version: Option<String>,
 }

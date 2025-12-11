@@ -19,7 +19,9 @@ use context::PromptContext;
 use modules::PromptModule;
 use modules::directory::DirectoryModule;
 use modules::git::GitModule;
+use modules::go::GoModule;
 use modules::nodejs::NodeModule;
+use modules::python::PythonModule;
 use modules::rust::RustModule;
 
 // Re-export for compatibility
@@ -118,6 +120,8 @@ pub struct Prompt {
     // Language Support
     rust_version_cache: Option<String>,
     node_version_cache: Option<String>,
+    python_version_cache: Option<String>,
+    go_version_cache: Option<String>,
 
     // Module system
     modules: Vec<Box<dyn PromptModule>>,
@@ -136,11 +140,15 @@ impl Prompt {
             git_status_cache: None,
             rust_version_cache: None,
             node_version_cache: None,
+            python_version_cache: None,
+            go_version_cache: None,
             modules: vec![
                 Box::new(DirectoryModule::new()),
                 Box::new(GitModule::new(BRANCH_MARK.to_string())),
                 Box::new(NodeModule::new()),
                 Box::new(RustModule::new()),
+                Box::new(PythonModule::new()),
+                Box::new(GoModule::new()),
             ],
         };
 
@@ -190,6 +198,8 @@ impl Prompt {
             git_status: status_to_display,
             rust_version: self.rust_version_cache.clone(),
             node_version: self.node_version_cache.clone(),
+            python_version: self.python_version_cache.clone(),
+            go_version: self.go_version_cache.clone(),
         };
 
         // 2. Render Modules
@@ -418,6 +428,27 @@ impl Prompt {
             && (self.current_dir.join("package.json").exists()
                 || self.current_dir.join("node_modules").exists())
     }
+
+    pub fn update_python_version(&mut self, version: Option<String>) {
+        self.python_version_cache = version;
+    }
+
+    pub fn update_go_version(&mut self, version: Option<String>) {
+        self.go_version_cache = version;
+    }
+
+    pub fn needs_python_check(&self) -> bool {
+        self.python_version_cache.is_none()
+            && (self.current_dir.join("requirements.txt").exists()
+                || self.current_dir.join("pyproject.toml").exists()
+                || self.current_dir.join("Pipfile").exists()
+                || self.current_dir.join(".venv").exists()
+                || self.current_dir.join("venv").exists())
+    }
+
+    pub fn needs_go_check(&self) -> bool {
+        self.go_version_cache.is_none() && self.current_dir.join("go.mod").exists()
+    }
 }
 
 // Standalone functions (kept for async task compatibility)
@@ -575,6 +606,51 @@ pub async fn fetch_node_version_async() -> Option<String> {
         // v20.10.0
         let out = String::from_utf8_lossy(&output.stdout);
         Some(out.trim().to_string())
+    } else {
+        None
+    }
+}
+
+pub async fn fetch_python_version_async() -> Option<String> {
+    use tokio::process::Command;
+    // Try python3 first, then python
+    let mut cmd = Command::new("python3");
+    cmd.arg("--version");
+
+    let result = cmd.output().await;
+    let output = match result {
+        Ok(o) => o,
+        Err(_) => Command::new("python")
+            .arg("--version")
+            .output()
+            .await
+            .ok()?,
+    };
+
+    if output.status.success() {
+        // Python 3.10.12
+        let out = String::from_utf8_lossy(&output.stdout);
+        let version = out.split_whitespace().nth(1)?;
+        Some(version.to_string())
+    } else {
+        None
+    }
+}
+
+pub async fn fetch_go_version_async() -> Option<String> {
+    use tokio::process::Command;
+    let output = Command::new("go").arg("version").output().await.ok()?;
+
+    if output.status.success() {
+        // go version go1.21.5 linux/amd64
+        let out = String::from_utf8_lossy(&output.stdout);
+        let version_tag = out.split_whitespace().nth(2)?; // go1.21.5
+        Some(
+            version_tag
+                .strip_prefix("go")
+                .unwrap_or(version_tag)
+                .to_string(),
+        )
     } else {
         None
     }

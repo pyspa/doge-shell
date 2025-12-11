@@ -2,7 +2,9 @@ use crate::prompt::context::PromptContext;
 
 pub mod directory;
 pub mod git;
+pub mod go;
 pub mod nodejs;
+pub mod python;
 pub mod rust;
 
 pub trait PromptModule: Send + Sync + std::fmt::Debug {

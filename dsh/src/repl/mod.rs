@@ -1209,6 +1209,26 @@ impl<'a> Repl<'a> {
                             }
                         });
                     }
+
+                    // Check for Python version
+                    if prompt.read().needs_python_check() {
+                         let p_clone = Arc::clone(&prompt);
+                         tokio::spawn(async move {
+                            if let Some(version) = crate::prompt::fetch_python_version_async().await {
+                                p_clone.write().update_python_version(Some(version));
+                            }
+                        });
+                    }
+
+                    // Check for Go version
+                    if prompt.read().needs_go_check() {
+                         let p_clone = Arc::clone(&prompt);
+                         tokio::spawn(async move {
+                            if let Some(version) = crate::prompt::fetch_go_version_async().await {
+                                p_clone.write().update_go_version(Some(version));
+                            }
+                        });
+                    }
                 },
                 _ = ai_refresh_interval.tick() => {
                     let mut need_redraw = false;

@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn test_history_fuzzy_match() {
-        let mut completion = HistoryCompletion::new();
+        let completion = HistoryCompletion::new();
         // Just verify it compiles and runs without panic for now
         let context = CompletionContext::new("/tmp".to_string());
         let _ = completion.suggest("gcm", &context);

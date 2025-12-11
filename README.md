@@ -9,6 +9,7 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 ## ✨ Features
 
 ### Core Shell Features
+
 - **Interactive Command Line**: Full-featured interactive shell with readline-like functionality
 - **Command Execution**: Execute external commands, built-in commands, and shell scripts
 - **Background Processing**: Run commands in background with `&` and manage jobs
@@ -18,6 +19,7 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 - **Safe Paste**: Bracketed paste support ensures pasted multi-line text is not executed immediately
 
 ### Advanced Features
+
 - **Frecency-based History**: Intelligent command history using frecency scoring (frequency + recency)
 - **Directory Navigation**: Smart directory history and jump with `z` command
 - **Path Management**: Dynamic PATH management with `add_path` command
@@ -27,6 +29,7 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 - **Abbreviations**: Define and use abbreviations with `abbr` command
 
 ### Completion & UI
+
 - **Context-Aware Completion**: Intelligent tab completion for commands, files, and options
 - **Skim Integration**: Fuzzy finding interface for completion using [skim](https://github.com/lotabout/skim)
 - **History Search**: Interactive history search with Ctrl+R
@@ -36,18 +39,21 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 - **Transient Prompt**: Automatically collapses the prompt after command execution to keep the terminal clean
 
 ### Lisp Interpreter
+
 - **Embedded Lisp**: Built-in Lisp interpreter for shell scripting
 - **Configuration**: Shell configuration in Lisp with `~/.config/dsh/config.lisp`
 - **Custom Commands**: Define custom shell commands using Lisp
 - **Extensibility**: Extend shell functionality with Lisp functions
 
 ### Model Context Protocol (MCP) Integration
+
 - **MCP Client**: Connect to external Model Context Protocol servers
 - **Multiple Transport**: Support for stdio, HTTP, and SSE transports
 - **Dynamic Tools**: Automatic discovery of MCP server tools
 - **Configuration**: MCP servers can be configured in both config.lisp and config.toml
 
 ### Other Features
+
 - **Git Integration**: Commands for Git operations (`gco`, `glog`, etc.)
 - **Auto-Correction Suggestion**: Suggests similar commands when a typo is detected (e.g., "Did you mean: git ?" when typing `gti`)
 - **Command Output History**: Capture command output with `|>` operator and reference it with `$OUT` variable
@@ -95,6 +101,7 @@ The shell includes many built-in commands:
 The embedded Lisp interpreter includes many built-in functions:
 
 ### Core Functions
+
 - `print` - Print a value
 - `is_null`, `is_number`, `is_symbol`, `is_boolean`, `is_procedure`, `is_pair` - Type checking
 - `car`, `cdr`, `cons`, `list`, `nth`, `sort`, `reverse` - List operations
@@ -106,6 +113,7 @@ The embedded Lisp interpreter includes many built-in functions:
 - `eval`, `apply` - Meta functions
 
 ### Shell Integration Functions
+
 - `alias` - Set command aliases from Lisp
 - `abbr` - Set abbreviations from Lisp
 - `command` - Execute external commands and capture output
@@ -117,6 +125,7 @@ The embedded Lisp interpreter includes many built-in functions:
 - `allow-direnv` - Configure direnv roots
 
 ### Hook System Functions
+
 - `add-hook` - Add a function to a hook list
 - `bound?` - Check if a symbol is bound
 - `*pre-prompt-hooks*` - Hook list for functions to run before prompt is displayed
@@ -128,6 +137,7 @@ The embedded Lisp interpreter includes many built-in functions:
 - `*input-timeout-hooks*` - Hook list for functions to run periodically when idle (every 1 second)
 
 ### MCP Management Functions
+
 - `mcp-clear` - Clear all MCP servers
 - `mcp-add-stdio` - Add an MCP server with stdio transport
 - `mcp-add-http` - Add an MCP server with HTTP transport
@@ -241,9 +251,11 @@ Create a `~/.config/dsh/config.lisp` file to configure your shell:
 MCP (Model Context Protocol) allows the shell to connect to external services that provide tools for AI assistants. You can configure MCP servers in your `config.lisp` file using these functions:
 
 #### `(mcp-clear)`
+
 Removes all currently configured MCP servers.
 
 #### `(mcp-add-stdio label command args env-vars cwd description)`
+
 Adds an MCP server that communicates via standard input/output streams.
 
 - `label`: A unique identifier for the server
@@ -254,6 +266,7 @@ Adds an MCP server that communicates via standard input/output streams.
 - `description`: Optional description of the server
 
 Example:
+
 ```lisp
 (mcp-add-stdio 
   "git-tools" 
@@ -266,6 +279,7 @@ Example:
 ```
 
 #### `(mcp-add-http label url auth-header allow-stateless description)`
+
 Adds an MCP server that communicates via HTTP requests.
 
 - `label`: A unique identifier for the server
@@ -275,6 +289,7 @@ Adds an MCP server that communicates via HTTP requests.
 - `description`: Optional description of the server
 
 Example:
+
 ```lisp
 (mcp-add-http 
   "remote-api" 
@@ -286,6 +301,7 @@ Example:
 ```
 
 #### `(mcp-add-sse label url description)`
+
 Adds an MCP server that communicates via Server-Sent Events.
 
 - `label`: A unique identifier for the server
@@ -293,6 +309,7 @@ Adds an MCP server that communicates via Server-Sent Events.
 - `description`: Optional description of the server
 
 Example:
+
 ```lisp
 (mcp-add-sse 
   "events-service" 
@@ -318,6 +335,7 @@ servers = [
 ## 🔧 Usage
 
 ### Basic Usage
+
 ```bash
 # Start the shell interactively
 dsh
@@ -330,7 +348,9 @@ dsh -l "(print \"Hello from Lisp!\")"
 ```
 
 ### Import History
+
 Import command history from other shells:
+
 ```bash
 # Import from fish shell
 dsh import fish
@@ -340,6 +360,7 @@ dsh import bash --path /path/to/bash_history
 ```
 
 ### Key Bindings
+
 - `Tab` - Context-aware completion
 - `Ctrl+R` - Interactive history search
 - `Ctrl+C` - Cancel current command (press twice to exit shell)
@@ -355,6 +376,7 @@ dsh import bash --path /path/to/bash_history
 The shell includes AI-powered command completion using OpenAI. To use this feature:
 
 1. Set your OpenAI API key in the environment:
+
    ```bash
    export AI_CHAT_API_KEY="your-api-key-here"
    ```
@@ -362,15 +384,19 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
 2. The shell will automatically provide command suggestions when available.
 
 3. Use `!` prefix to chat with the AI directly:
+
    ```bash
    !explain how to use the grep command
    ```
 
    chat "How do I compress a directory with tar?"
+
    ```
 
 5. **Smart Pipe Expansion (`|?`)**:
+
    Describe how you want to filter or process data in natural language, and let AI expand it into shell commands.
+
    ```bash
    # Type:
    ls -l |? sort by size and take top 5<Tab>
@@ -381,6 +407,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
 
 6. **Generative Command (`??`)**:
    Describe what you want to do in natural language at the start of the line, and let AI generate the command for you.
+
    ```bash
    # Type:
    ?? undo last git commit<Enter>
@@ -391,6 +418,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
 
 7. **Auto-Fix (Error Recovery) (`Alt+f`)**:
    If a command fails, press `Alt+f` to have AI suggest a fix for the last failed command.
+
    ```bash
    # Type a wrong command:
    git stats
@@ -402,11 +430,44 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
 
 8. **Smart Git Commit (`Alt+c`)**:
    Stage your changes, then press `Alt+c` to generate a commit message based on the diff.
+
    ```bash
    git add .
    # Press Alt+c, command input becomes:
    git commit -m "feat: implement new features..."
    ```
+
+9. **AI Output Pipe (`|!`)**:
+   Pipe command output to AI for analysis with a natural language query.
+
+   ```bash
+   # Analyze log files:
+   docker logs app |! "summarize the errors"
+   
+   # Find specific information:
+   kubectl get pods |! "which pods are failing?"
+   
+   # Get file statistics:
+   ls -la |! "what is the largest file?"
+   ```
+
+10. **Error Diagnosis (`Alt+d`)**:
+    When a command fails, press `Alt+d` to have AI diagnose the error and suggest fixes.
+
+    ```bash
+    gti status  # Typo - command fails
+    # Press Alt+d, AI analyzes the error and suggests:
+    # "The command 'gti' was not found. Did you mean 'git'?"
+    ```
+
+11. **AI Quick Actions (`Alt+a`)**:
+    Press `Alt+a` to open a menu of AI-powered actions including:
+    - Explain Command
+    - Suggest Improvement
+    - Check Safety
+    - Diagnose Error
+    - Describe Directory
+    - Suggest Commands
 
 ## 📁 Project Structure
 

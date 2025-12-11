@@ -29,6 +29,8 @@ pub struct InputPreferences {
     pub suggestion_mode: SuggestionMode,
     pub ai_backfill: bool,
     pub transient_prompt: bool,
+    /// When enabled, show a hint to diagnose errors after command failures
+    pub auto_diagnose: bool,
 }
 
 impl Default for InputPreferences {
@@ -37,6 +39,7 @@ impl Default for InputPreferences {
             suggestion_mode: SuggestionMode::Ghost,
             ai_backfill: false,
             transient_prompt: true,
+            auto_diagnose: false,
         }
     }
 }
@@ -720,6 +723,7 @@ mod tests {
             suggestion_mode: SuggestionMode::Ghost,
             ai_backfill: true,
             transient_prompt: true,
+            auto_diagnose: false,
         });
 
         let result = engine.predict("git s", "git s".chars().count(), None);
@@ -740,6 +744,7 @@ mod tests {
             suggestion_mode: SuggestionMode::Ghost,
             ai_backfill: true,
             transient_prompt: true,
+            auto_diagnose: false,
         });
 
         let mut history = FrecencyHistory::new();

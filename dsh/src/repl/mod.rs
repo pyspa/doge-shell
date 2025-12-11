@@ -1580,6 +1580,111 @@ impl<'a> Repl<'a> {
         }
         None
     }
+
+    /// Detect AI Output Pipe pattern: `command |! "query"`
+    /// Returns (command, query) if pattern is found
+    fn detect_ai_pipe(&self) -> Option<(String, String)> {
+        let input = self.input.as_str();
+        if let Some(idx) = input.rfind("|!") {
+            let command = input[..idx].trim().to_string();
+            let query_part = input[idx + 2..].trim();
+
+            // Extract query from quotes or as plain text
+            let query = if (query_part.starts_with('"') && query_part.ends_with('"')
+                || query_part.starts_with('\'') && query_part.ends_with('\''))
+                && query_part.len() > 1
+            {
+                query_part[1..query_part.len() - 1].to_string()
+            } else {
+                query_part.to_string()
+            };
+
+            if !command.is_empty() && !query.is_empty() {
+                return Some((command, query));
+            }
+        }
+        None
+    }
+
+    /// Execute command, capture output, and send to AI for analysis
+    async fn run_ai_pipe(&mut self, command: String, query: String) -> Result<()> {
+        use std::process::Command;
+
+        let mut renderer = TerminalRenderer::new();
+        queue!(renderer, Print("\r\n🔄 Running command...\r\n")).ok();
+        renderer.flush().ok();
+
+        // Execute the command and capture output
+        let output = Command::new("sh").arg("-c").arg(&command).output();
+
+        let (stdout, stderr, exit_code) = match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                let exit_code = out.status.code().unwrap_or(-1);
+                (stdout, stderr, exit_code)
+            }
+            Err(e) => {
+                queue!(
+                    renderer,
+                    Print(format!("❌ Failed to execute command: {}\r\n", e))
+                )
+                .ok();
+                renderer.flush().ok();
+                return Ok(());
+            }
+        };
+
+        // Combine stdout and stderr for analysis
+        let combined_output = if stderr.is_empty() {
+            stdout
+        } else if stdout.is_empty() {
+            stderr
+        } else {
+            format!("STDOUT:\n{}\n\nSTDERR:\n{}", stdout, stderr)
+        };
+
+        // Check if AI service is available
+        let Some(service) = self.ai_service.clone() else {
+            queue!(
+                renderer,
+                Print("❌ AI service not configured. Set OPENAI_API_KEY or AI_CHAT_API_KEY.\r\n")
+            )
+            .ok();
+            renderer.flush().ok();
+            return Ok(());
+        };
+
+        queue!(renderer, Print("🤖 Analyzing output...\r\n")).ok();
+        renderer.flush().ok();
+
+        // Call AI to analyze the output
+        match ai_features::analyze_output(service.as_ref(), &command, &combined_output, &query)
+            .await
+        {
+            Ok(response) => {
+                // Display the AI response with markdown rendering if possible
+                queue!(renderer, Print("\r")).ok();
+                queue!(renderer, Clear(ClearType::CurrentLine)).ok();
+                for line in response.lines() {
+                    queue!(renderer, Print(format!("{}\r\n", line))).ok();
+                }
+                queue!(renderer, Print("\r\n")).ok();
+            }
+            Err(e) => {
+                queue!(renderer, Print(format!("❌ AI analysis failed: {}\r\n", e))).ok();
+            }
+        }
+
+        self.last_status = exit_code;
+        self.last_command_string = command;
+
+        renderer.flush().ok();
+        self.print_prompt(&mut renderer);
+        renderer.flush().ok();
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1792,6 +1897,7 @@ pub(crate) fn render_transient_prompt_to<W: Write>(
 mod ai_tests {
 
     use crate::ai_features::AiService;
+    use crate::environment::Environment;
     use crate::repl::Repl;
     use crate::shell::Shell;
     use anyhow::Result;
@@ -1862,5 +1968,97 @@ mod ai_tests {
             repl.input.to_string(),
             "git commit -m \"feat: initial commit\""
         );
+    }
+
+    #[tokio::test]
+    async fn test_detect_ai_pipe_with_double_quoted_query() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input
+            .reset("ls -la |! \"show largest files\"".to_string());
+        let result = repl.detect_ai_pipe();
+        assert!(result.is_some());
+        let (command, query) = result.unwrap();
+        assert_eq!(command, "ls -la");
+        assert_eq!(query, "show largest files");
+    }
+
+    #[tokio::test]
+    async fn test_detect_ai_pipe_with_single_quoted_query() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input
+            .reset("docker ps |! 'find running containers'".to_string());
+        let result = repl.detect_ai_pipe();
+        assert!(result.is_some());
+        let (command, query) = result.unwrap();
+        assert_eq!(command, "docker ps");
+        assert_eq!(query, "find running containers");
+    }
+
+    #[tokio::test]
+    async fn test_detect_ai_pipe_with_unquoted_query() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input.reset("cat file.txt |! summarize".to_string());
+        let result = repl.detect_ai_pipe();
+        assert!(result.is_some());
+        let (command, query) = result.unwrap();
+        assert_eq!(command, "cat file.txt");
+        assert_eq!(query, "summarize");
+    }
+
+    #[tokio::test]
+    async fn test_detect_ai_pipe_empty_query() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input.reset("ls -la |! ".to_string());
+        let result = repl.detect_ai_pipe();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_detect_ai_pipe_empty_command() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input.reset("|! \"query\"".to_string());
+        let result = repl.detect_ai_pipe();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_detect_ai_pipe_no_pattern() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input.reset("ls -la | grep foo".to_string());
+        let result = repl.detect_ai_pipe();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_detect_ai_pipe_complex_command() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input
+            .reset("kubectl get pods -n default |! \"問題のあるPodを見つけて\"".to_string());
+        let result = repl.detect_ai_pipe();
+        assert!(result.is_some());
+        let (command, query) = result.unwrap();
+        assert_eq!(command, "kubectl get pods -n default");
+        assert_eq!(query, "問題のあるPodを見つけて");
     }
 }

@@ -459,6 +459,52 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             repl.show_ai_quick_actions().await?;
             return Ok(());
         }
+        // Error Diagnosis (Alt+d)
+        (KeyCode::Char('d'), ALT) => {
+            if repl.ai_service.is_some() && repl.last_status != 0 {
+                let mut renderer = TerminalRenderer::new();
+                queue!(renderer, Print("\r\n🔍 Diagnosing error...\r\n")).ok();
+                renderer.flush().ok();
+
+                // Get the last command and output for diagnosis
+                let command = repl.last_command_string.clone();
+                let output = repl
+                    .shell
+                    .environment
+                    .read()
+                    .output_history
+                    .get_stderr(1)
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+                let exit_code = repl.last_status;
+
+                if let Some(service) = &repl.ai_service {
+                    match crate::ai_features::diagnose_output(
+                        service.as_ref(),
+                        &command,
+                        &output,
+                        exit_code,
+                    )
+                    .await
+                    {
+                        Ok(diagnosis) => {
+                            for line in diagnosis.lines() {
+                                queue!(renderer, Print(format!("{}\r\n", line))).ok();
+                            }
+                            queue!(renderer, Print("\r\n")).ok();
+                        }
+                        Err(e) => {
+                            queue!(renderer, Print(format!("❌ Diagnosis failed: {}\r\n", e))).ok();
+                        }
+                    }
+                }
+
+                renderer.flush().ok();
+                repl.print_prompt(&mut renderer);
+                renderer.flush().ok();
+            }
+            return Ok(());
+        }
         (KeyCode::Tab, NONE) | (KeyCode::BackTab, NONE) => {
             // Check for Smart Pipe Expansion (|? query)
             // We check if the cursor is at the end of a block starting with |?
@@ -629,6 +675,13 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             // leading to the "No completion selected" case above.
         }
         (KeyCode::Enter, NONE) => {
+            // AI Output Pipe (|!)
+            if let Some((command, query)) = repl.detect_ai_pipe() {
+                repl.input.clear();
+                repl.run_ai_pipe(command, query).await?;
+                return Ok(());
+            }
+
             // Generative Command (??)
             if repl.input.as_str().trim_start().starts_with("??") {
                 let query = repl.input.as_str().trim_start()[2..].trim().to_string();
@@ -742,6 +795,21 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
                 repl.suggestion_manager.clear();
                 repl.last_command_time = Some(Instant::now());
                 repl.last_duration = Some(elapsed);
+
+                // Show error diagnosis hint if auto_diagnose is enabled
+                if exit_code != 0
+                    && repl.ai_service.is_some()
+                    && repl
+                        .shell
+                        .environment
+                        .read()
+                        .input_preferences
+                        .auto_diagnose
+                {
+                    let mut renderer = TerminalRenderer::new();
+                    queue!(renderer, Print("💡 Press Alt+d to diagnose this error\r\n")).ok();
+                    renderer.flush().ok();
+                }
             }
             // After command execution, show new prompt
             let mut renderer = TerminalRenderer::new();

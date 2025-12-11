@@ -252,6 +252,37 @@ pub async fn suggest_next_commands<S: AiService + ?Sized>(
     service.send_request(messages, Some(0.4)).await
 }
 
+/// Analyze command output with AI based on a user query
+pub async fn analyze_output<S: AiService + ?Sized>(
+    service: &S,
+    command: &str,
+    output: &str,
+    query: &str,
+) -> Result<String> {
+    let system_prompt = "You are a shell output analyst. \
+    Analyze the following command output and respond to the user's query. \
+    Be concise and practical. Use markdown formatting for clarity.";
+
+    // Truncate output if too long to avoid token limits
+    let truncated_output = if output.len() > 8000 {
+        format!("{}...(truncated)", &output[..8000])
+    } else {
+        output.to_string()
+    };
+
+    let user_message = format!(
+        "Command: `{}`\n\nOutput:\n```\n{}\n```\n\nQuery: {}",
+        command, truncated_output, query
+    );
+
+    let messages = vec![
+        json!({"role": "system", "content": system_prompt}),
+        json!({"role": "user", "content": user_message}),
+    ];
+
+    service.send_request(messages, Some(0.2)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,6 +400,42 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("Exit code: 127")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_analyze_output() {
+        let service =
+            MockAiService::new("The connection was refused because the server is not running.");
+        let result = analyze_output(
+            &service,
+            "curl http://localhost:8080",
+            "curl: (7) Failed to connect to localhost port 8080: Connection refused",
+            "何が問題か教えて",
+        )
+        .await
+        .unwrap();
+        assert!(result.contains("refused"));
+
+        let messages = service.last_messages.lock().unwrap();
+        assert_eq!(messages[0]["role"], "system");
+        assert!(
+            messages[1]["content"]
+                .as_str()
+                .unwrap()
+                .contains("curl http://localhost:8080")
+        );
+        assert!(
+            messages[1]["content"]
+                .as_str()
+                .unwrap()
+                .contains("Connection refused")
+        );
+        assert!(
+            messages[1]["content"]
+                .as_str()
+                .unwrap()
+                .contains("何が問題か教えて")
         );
     }
 }

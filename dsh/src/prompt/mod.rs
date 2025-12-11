@@ -17,9 +17,12 @@ pub mod modules;
 
 use context::PromptContext;
 use modules::PromptModule;
+use modules::aws::AwsModule;
 use modules::directory::DirectoryModule;
+use modules::docker::DockerModule;
 use modules::git::GitModule;
 use modules::go::GoModule;
+use modules::kubernetes::KubernetesModule;
 use modules::nodejs::NodeModule;
 use modules::python::PythonModule;
 use modules::rust::RustModule;
@@ -123,6 +126,12 @@ pub struct Prompt {
     python_version_cache: Option<String>,
     go_version_cache: Option<String>,
 
+    // Cloud Context
+    k8s_context_cache: Option<String>,
+    k8s_namespace_cache: Option<String>,
+    aws_profile_cache: Option<String>,
+    docker_context_cache: Option<String>,
+
     // Module system
     modules: Vec<Box<dyn PromptModule>>,
 }
@@ -142,6 +151,13 @@ impl Prompt {
             node_version_cache: None,
             python_version_cache: None,
             go_version_cache: None,
+
+            // Cloud Context
+            k8s_context_cache: None,
+            k8s_namespace_cache: None,
+            aws_profile_cache: None,
+            docker_context_cache: None,
+
             modules: vec![
                 Box::new(DirectoryModule::new()),
                 Box::new(GitModule::new(BRANCH_MARK.to_string())),
@@ -149,6 +165,9 @@ impl Prompt {
                 Box::new(RustModule::new()),
                 Box::new(PythonModule::new()),
                 Box::new(GoModule::new()),
+                Box::new(KubernetesModule::new()),
+                Box::new(AwsModule::new()),
+                Box::new(DockerModule::new()),
             ],
         };
 
@@ -200,6 +219,10 @@ impl Prompt {
             node_version: self.node_version_cache.clone(),
             python_version: self.python_version_cache.clone(),
             go_version: self.go_version_cache.clone(),
+            k8s_context: self.k8s_context_cache.clone(),
+            k8s_namespace: self.k8s_namespace_cache.clone(),
+            aws_profile: self.aws_profile_cache.clone(),
+            docker_context: self.docker_context_cache.clone(),
         };
 
         // 2. Render Modules
@@ -449,6 +472,33 @@ impl Prompt {
     pub fn needs_go_check(&self) -> bool {
         self.go_version_cache.is_none() && self.current_dir.join("go.mod").exists()
     }
+
+    pub fn update_k8s_info(&mut self, context: Option<String>, namespace: Option<String>) {
+        self.k8s_context_cache = context;
+        self.k8s_namespace_cache = namespace;
+    }
+
+    pub fn update_aws_profile(&mut self, profile: Option<String>) {
+        self.aws_profile_cache = profile;
+    }
+
+    pub fn update_docker_context(&mut self, context: Option<String>) {
+        self.docker_context_cache = context;
+    }
+
+    pub fn should_check_k8s(&self) -> bool {
+        self.k8s_context_cache.is_none()
+        // Improve condition: check for env var KUBECONFIG or ~/.kube/config existence?
+        // For now, always check if not cached, async task handles file check efficiently.
+    }
+
+    pub fn should_check_aws(&self) -> bool {
+        self.aws_profile_cache.is_none()
+    }
+
+    pub fn should_check_docker(&self) -> bool {
+        self.docker_context_cache.is_none()
+    }
 }
 
 // Standalone functions (kept for async task compatibility)
@@ -651,6 +701,62 @@ pub async fn fetch_go_version_async() -> Option<String> {
                 .unwrap_or(version_tag)
                 .to_string(),
         )
+    } else {
+        None
+    }
+}
+
+pub async fn fetch_k8s_info_async() -> Option<(String, Option<String>)> {
+    use tokio::process::Command;
+    // Check for KUBECONFIG env var or default file existence roughly
+    // For speed, just try running kubectl config view --minify
+    let output = Command::new("kubectl")
+        .arg("config")
+        .arg("view")
+        .arg("--minify")
+        .arg("--output")
+        .arg("jsonpath={.current-context}|{.contexts[0].context.namespace}")
+        .output()
+        .await
+        .ok()?;
+
+    if output.status.success() {
+        let out = String::from_utf8_lossy(&output.stdout);
+        let parts: Vec<&str> = out.split('|').collect();
+        let context = parts.first().map(|s| s.to_string())?;
+        let namespace = parts
+            .get(1)
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty());
+        Some((context, namespace))
+    } else {
+        None
+    }
+}
+
+pub fn fetch_aws_profile() -> Option<String> {
+    std::env::var("AWS_PROFILE")
+        .ok()
+        .or_else(|| std::env::var("AWS_DEFAULT_PROFILE").ok())
+}
+
+pub async fn fetch_docker_context_async() -> Option<String> {
+    use tokio::process::Command;
+    // Check DOCKER_CONTEXT env var first
+    if let Ok(ctx) = std::env::var("DOCKER_CONTEXT") {
+        return Some(ctx);
+    }
+
+    let output = Command::new("docker")
+        .arg("context")
+        .arg("show")
+        .output()
+        .await
+        .ok()?;
+
+    if output.status.success() {
+        let out = String::from_utf8_lossy(&output.stdout);
+        Some(out.trim().to_string())
     } else {
         None
     }

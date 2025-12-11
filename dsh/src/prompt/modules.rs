@@ -1,8 +1,11 @@
 use crate::prompt::context::PromptContext;
 
+pub mod aws;
 pub mod directory;
+pub mod docker;
 pub mod git;
 pub mod go;
+pub mod kubernetes;
 pub mod nodejs;
 pub mod python;
 pub mod rust;

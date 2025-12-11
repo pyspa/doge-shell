@@ -1229,6 +1229,32 @@ impl<'a> Repl<'a> {
                             }
                         });
                     }
+
+                    // Cloud Context Checks
+                    if prompt.read().should_check_k8s() {
+                         let p_clone = Arc::clone(&prompt);
+                         tokio::spawn(async move {
+                            if let Some((context, namespace)) = crate::prompt::fetch_k8s_info_async().await {
+                                p_clone.write().update_k8s_info(Some(context), namespace);
+                            }
+                        });
+                    }
+
+                    if prompt.read().should_check_aws() {
+                        // AWS is fast (env var), can do inline or spawn
+                        let profile = crate::prompt::fetch_aws_profile();
+                        prompt.write().update_aws_profile(profile);
+                    }
+
+                    if prompt.read().should_check_docker() {
+                         let p_clone = Arc::clone(&prompt);
+                         tokio::spawn(async move {
+                            if let Some(context) = crate::prompt::fetch_docker_context_async().await {
+                                p_clone.write().update_docker_context(Some(context));
+                            }
+                        });
+                    }
+
                 },
                 _ = ai_refresh_interval.tick() => {
                     let mut need_redraw = false;

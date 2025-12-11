@@ -12,4 +12,8 @@ pub struct PromptContext {
     pub node_version: Option<String>,
     pub python_version: Option<String>,
     pub go_version: Option<String>,
+    pub k8s_context: Option<String>,
+    pub k8s_namespace: Option<String>,
+    pub aws_profile: Option<String>,
+    pub docker_context: Option<String>,
 }

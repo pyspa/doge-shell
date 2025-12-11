@@ -506,20 +506,27 @@ impl<'a> Repl<'a> {
             debug!("Error executing pre-prompt hooks: {}", e);
         }
 
-        let mut prompt = self.prompt.write();
+        // Update status and render preprompt (acquire write lock)
+        // print_preprompt requires mutable access as it might invalidate cache
+        let mut buffer = Vec::new();
+        let new_mark;
+        {
+            let mut prompt = self.prompt.write();
+            prompt.update_status(self.last_status, self.last_duration);
+            prompt.print_preprompt(&mut buffer);
+            new_mark = prompt.mark.clone();
+        }
 
-        // Update status for modular prompt
-        prompt.update_status(self.last_status, self.last_duration);
-
-        // draw preprompt (now includes system modules)
-        prompt.print_preprompt(out);
+        // Perform I/O without holding the lock
+        out.write_all(&buffer).ok();
         out.write_all(b"\r\n").ok();
-        // update cached mark and width in case mark changed
-        // update cached mark and width in case mark changed
-        if self.prompt_mark_cache != prompt.mark {
-            self.prompt_mark_cache = prompt.mark.clone();
+
+        // Update cached mark and width in case mark changed
+        if self.prompt_mark_cache != new_mark {
+            self.prompt_mark_cache = new_mark;
             self.prompt_mark_width = display_width(&self.prompt_mark_cache);
         }
+
         // draw mark only (defer flushing to caller for batching)
         out.write_all(b"\r").ok();
         out.write_all(self.prompt_mark_cache.as_bytes()).ok();

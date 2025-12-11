@@ -721,7 +721,7 @@ impl Job {
                     (pid, ProcessState::Stopped(pid, signal))
                 }
                 Ok(Ok(WaitStatus::StillAlive)) => {
-                    time::sleep(Duration::from_millis(1000)).await;
+                    time::sleep(Duration::from_millis(100)).await;
                     continue;
                 }
                 Ok(Err(nix::errno::Errno::ECHILD)) => {

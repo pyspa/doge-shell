@@ -50,7 +50,7 @@ pub async fn eval_str(
         return Ok(code);
     }
 
-    let jobs = get_jobs(shell, input.clone())?;
+    let jobs = get_jobs(shell, &input)?;
     let mut last_exit_code = 0;
     for mut job in jobs {
         // Execute pre-exec hooks
@@ -187,11 +187,11 @@ async fn execute_with_capture(
     Ok((exit_code, stdout, stderr))
 }
 
-fn get_jobs(shell: &mut Shell, input: String) -> Result<Vec<Job>> {
+fn get_jobs(shell: &mut Shell, input: &str) -> Result<Vec<Job>> {
     // TODO tests
 
     let (input_cow, pairs_opt) =
-        parser::parse_with_expansion(&input, Arc::clone(&shell.environment))?;
+        parser::parse_with_expansion(input, Arc::clone(&shell.environment))?;
 
     let mut pairs = if let Some(pairs) = pairs_opt {
         pairs

@@ -6,6 +6,8 @@ use crate::lisp::Value;
 use crate::repl::Repl;
 use anyhow::Result;
 use dsh_frecency::ItemStats;
+use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
 use regex::Regex;
 use skim::prelude::*;
 use std::borrow::Cow;
@@ -135,6 +137,14 @@ impl Completion {
     }
 }
 
+fn fuzzy_match_score(choice: &str, pattern: &str) -> Option<i64> {
+    if pattern.is_empty() {
+        return Some(0);
+    }
+    let matcher = SkimMatcherV2::default();
+    matcher.fuzzy_match(choice, pattern)
+}
+
 pub fn path_completion_prefix(input: &str) -> Result<Option<String>> {
     let pbuf = PathBuf::from(input);
     let absolute = pbuf.is_absolute();
@@ -163,22 +173,46 @@ pub fn path_completion_prefix(input: &str) -> Result<Option<String>> {
         path_completion()?
     };
 
+    let mut best_match: Option<(String, i64)> = None;
+
     for cand in paths.iter() {
         if let Candidate::Path(path) = cand {
             let path_str = path.to_string();
-            if path.starts_with(&search) {
-                return Ok(Some(path_str));
+
+            // Check full path match
+            if let Some(score) = fuzzy_match_score(&path_str, &search) {
+                match best_match {
+                    Some((_, best_score)) if score > best_score => {
+                        best_match = Some((path_str.clone(), score));
+                    }
+                    None => {
+                        best_match = Some((path_str.clone(), score));
+                    }
+                    _ => {}
+                }
             }
 
+            // Check stripped path match (relative path)
             if let Ok(striped) = PathBuf::from(path).strip_prefix("./") {
                 let striped_str = striped.display().to_string();
-                if striped_str.starts_with(&search) {
-                    return Ok(Some(path_str[2..].to_string()));
+                if let Some(score) = fuzzy_match_score(&striped_str, &search) {
+                    // Adjust score slightly to prefer shorter/exact matches or keep logic simple?
+                    // Verify if better than current best
+                    match best_match {
+                        Some((_, best_score)) if score > best_score => {
+                            best_match = Some((path_str[2..].to_string(), score));
+                        }
+                        None => {
+                            best_match = Some((path_str[2..].to_string(), score));
+                        }
+                        _ => {}
+                    }
                 }
             }
         }
     }
-    Ok(None)
+
+    Ok(best_match.map(|(p, _)| p))
 }
 
 fn path_is_dir(path: &PathBuf) -> Result<bool> {
@@ -898,10 +932,9 @@ fn get_file_completions_with_filter(
 
                 // Apply prefix filter if provided
                 if let Some(filter) = filter_prefix
-                    && !file_name.starts_with(filter)
-                {
-                    continue;
-                }
+                    && fuzzy_match_score(file_name, filter).is_none() {
+                        continue;
+                    }
 
                 let candidate = if is_file {
                     Candidate::Item(format!("{prefix}{file_name}"), "(file)".to_string())
@@ -1022,5 +1055,106 @@ mod tests {
         // The important thing is that it doesn't immediately return the first item
         // Since we can't easily test the actual UI behavior in unit tests,
         // we rely on the fact that logic will be tested in integration
+    }
+
+    #[test]
+    fn test_fuzzy_match_score() {
+        // Exact match
+        let score_exact = super::fuzzy_match_score("test", "test").unwrap();
+        assert!(score_exact > 0);
+
+        // Prefix match
+        let score_prefix = super::fuzzy_match_score("terminal", "term").unwrap();
+        assert!(score_prefix > 0);
+
+        // Fuzzy match
+        let score_fuzzy = super::fuzzy_match_score("terminal", "trm").unwrap();
+        assert!(score_fuzzy > 0);
+
+        // No match
+        let score_none = super::fuzzy_match_score("terminal", "xyz");
+        assert!(score_none.is_none());
+
+        // Match comparison
+        // "src/completion.rs" should match "cmp"
+        let score_cmp = super::fuzzy_match_score("src/completion.rs", "cmp").unwrap();
+        assert!(score_cmp > 0);
+    }
+
+    #[test]
+    fn test_fuzzy_file_completion_with_temp_dir() {
+        use std::fs::File;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path().to_str().unwrap();
+
+        // Create some files
+        File::create(dir.path().join("completion.rs")).unwrap();
+        File::create(dir.path().join("command.rs")).unwrap();
+        File::create(dir.path().join("cache.rs")).unwrap();
+        File::create(dir.path().join("notes.txt")).unwrap();
+
+        // Test fuzzy match "cmp" -> should find completion.rs
+        let results = super::get_file_completions_with_filter(dir_path, "", Some("cmp"));
+        assert!(!results.is_empty());
+        assert!(
+            results
+                .iter()
+                .any(|c| matches!(c, Candidate::Item(name, _) if name.contains("completion.rs")))
+        );
+
+        // Test fuzzy match "cc" -> should find cache.rs (and maybe command.rs / completion.rs depending on score, but definitely cache.rs)
+        let results_cc = super::get_file_completions_with_filter(dir_path, "", Some("cc"));
+        assert!(!results_cc.is_empty());
+        assert!(
+            results_cc
+                .iter()
+                .any(|c| matches!(c, Candidate::Item(name, _) if name.contains("cache.rs")))
+        );
+
+        // Test no match
+        let results_none = super::get_file_completions_with_filter(dir_path, "", Some("xyz"));
+        assert!(results_none.is_empty());
+    }
+
+    #[test]
+    fn test_path_completion_prefix_fuzzy() {
+        use std::fs::File;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+
+        // Create files: apple.txt, application.rs, banana.md
+        File::create(dir_path.join("apple.txt")).unwrap();
+        File::create(dir_path.join("application.rs")).unwrap();
+        File::create(dir_path.join("banana.md")).unwrap();
+
+        // Construct paths for input
+        let dir_str = dir_path.to_str().unwrap();
+
+        // Case 1: "apl" -> "apple.txt"
+        let input_apl = format!("{}/apl", dir_str);
+        let result_apl = super::path_completion_prefix(&input_apl).unwrap();
+
+        assert!(result_apl.is_some());
+        let val = result_apl.unwrap();
+        assert!(
+            val.ends_with("apple.txt"),
+            "Expected apple.txt, got {}",
+            val
+        );
+
+        // Case 2: "bn" -> "banana.md"
+        let input_bn = format!("{}/bn", dir_str);
+        let result_bn = super::path_completion_prefix(&input_bn).unwrap();
+        assert!(result_bn.is_some());
+        assert!(result_bn.unwrap().ends_with("banana.md"));
+
+        // Case 3: "z" -> no match
+        let input_z = format!("{}/z", dir_str);
+        let result_z = super::path_completion_prefix(&input_z).unwrap();
+        assert!(result_z.is_none());
     }
 }

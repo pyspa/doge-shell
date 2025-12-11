@@ -14,18 +14,23 @@ use std::time::{Duration, Instant};
 
 pub mod context;
 pub mod modules;
+#[cfg(test)]
+mod tests;
 
 use context::PromptContext;
 use modules::PromptModule;
 use modules::aws::AwsModule;
 use modules::directory::DirectoryModule;
 use modules::docker::DockerModule;
+use modules::execution_time::ExecutionTimeModule;
+use modules::exit_status::ExitStatusModule;
 use modules::git::GitModule;
 use modules::go::GoModule;
 use modules::kubernetes::KubernetesModule;
 use modules::nodejs::NodeModule;
 use modules::python::PythonModule;
 use modules::rust::RustModule;
+use modules::time::TimeModule;
 
 // Re-export for compatibility
 pub use crate::prompt::context::PromptContext as Context; // just in case
@@ -131,6 +136,8 @@ pub struct Prompt {
     k8s_namespace_cache: Option<String>,
     aws_profile_cache: Option<String>,
     docker_context_cache: Option<String>,
+    last_exit_status: i32,
+    last_duration: Option<Duration>,
 
     // Module system
     modules: Vec<Box<dyn PromptModule>>,
@@ -157,6 +164,8 @@ impl Prompt {
             k8s_namespace_cache: None,
             aws_profile_cache: None,
             docker_context_cache: None,
+            last_exit_status: 0,
+            last_duration: None,
 
             modules: vec![
                 Box::new(DirectoryModule::new()),
@@ -168,6 +177,9 @@ impl Prompt {
                 Box::new(KubernetesModule::new()),
                 Box::new(AwsModule::new()),
                 Box::new(DockerModule::new()),
+                Box::new(ExecutionTimeModule::new()),
+                Box::new(ExitStatusModule::new()),
+                Box::new(TimeModule::new()),
             ],
         };
 
@@ -223,6 +235,8 @@ impl Prompt {
             k8s_namespace: self.k8s_namespace_cache.clone(),
             aws_profile: self.aws_profile_cache.clone(),
             docker_context: self.docker_context_cache.clone(),
+            last_exit_status: self.last_exit_status,
+            last_duration: self.last_duration,
         };
 
         // 2. Render Modules
@@ -498,6 +512,11 @@ impl Prompt {
 
     pub fn should_check_docker(&self) -> bool {
         self.docker_context_cache.is_none()
+    }
+
+    pub fn update_status(&mut self, exit_status: i32, duration: Option<Duration>) {
+        self.last_exit_status = exit_status;
+        self.last_duration = duration;
     }
 }
 

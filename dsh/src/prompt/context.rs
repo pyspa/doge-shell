@@ -16,4 +16,6 @@ pub struct PromptContext {
     pub k8s_namespace: Option<String>,
     pub aws_profile: Option<String>,
     pub docker_context: Option<String>,
+    pub last_exit_status: i32,
+    pub last_duration: Option<std::time::Duration>,
 }

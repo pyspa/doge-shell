@@ -508,9 +508,10 @@ impl<'a> Repl<'a> {
 
         let mut prompt = self.prompt.write();
 
-        // Draw right prompt first (same line as preprompt)
-        prompt.print_right_prompt(out, self.columns, self.last_status, self.last_duration);
-        // draw preprompt only here (initial or after command/bg output)
+        // Update status for modular prompt
+        prompt.update_status(self.last_status, self.last_duration);
+
+        // draw preprompt (now includes system modules)
         prompt.print_preprompt(out);
         out.write_all(b"\r\n").ok();
         // update cached mark and width in case mark changed

@@ -841,7 +841,7 @@ mod tests {
 
         let loader = JsonCompletionLoader::new();
         let database = loader.load_database().expect("Failed to load database");
-        let generator = CompletionGenerator::new(database);
+        let generator = CompletionGenerator::new(&database);
 
         // Test with the commands we know exist in the test files
         let test_commands = ["git", "cargo", "docker", "rg"];
@@ -940,7 +940,7 @@ mod tests {
 
         let loader = JsonCompletionLoader::new();
         let database = loader.load_database().expect("Failed to load database");
-        let generator = CompletionGenerator::new(database);
+        let generator = CompletionGenerator::new(&database);
 
         // Test specific commands to make sure they can produce displayable candidates
         let test_commands = ["git", "cargo"];

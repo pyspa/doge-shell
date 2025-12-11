@@ -8,14 +8,15 @@ use super::parser::{CompletionContext, ParsedCommandLine};
 use anyhow::Result;
 
 /// Completion candidate generator
-pub struct CompletionGenerator {
+/// Completion candidate generator
+pub struct CompletionGenerator<'a> {
     /// Command completion database
-    database: CommandCompletionDatabase,
+    database: &'a CommandCompletionDatabase,
 }
 
-impl CompletionGenerator {
+impl<'a> CompletionGenerator<'a> {
     /// Create a new generator
-    pub fn new(database: CommandCompletionDatabase) -> Self {
+    pub fn new(database: &'a CommandCompletionDatabase) -> Self {
         Self { database }
     }
 
@@ -418,11 +419,11 @@ impl CompletionGenerator {
     }
 
     /// Find current subcommand
-    fn find_current_subcommand<'a>(
+    fn find_current_subcommand<'b>(
         &self,
-        command_completion: &'a CommandCompletion,
+        command_completion: &'b CommandCompletion,
         subcommand_path: &[String],
-    ) -> Option<&'a SubCommand> {
+    ) -> Option<&'b SubCommand> {
         if subcommand_path.is_empty() {
             return None;
         }
@@ -446,11 +447,11 @@ impl CompletionGenerator {
     }
 
     /// Collect available options
-    fn collect_available_options<'a>(
+    fn collect_available_options<'b>(
         &self,
-        command_completion: &'a CommandCompletion,
+        command_completion: &'b CommandCompletion,
         subcommand_path: &[String],
-    ) -> Vec<&'a CommandOption> {
+    ) -> Vec<&'b CommandOption> {
         let mut options = Vec::new();
 
         // Global options
@@ -512,7 +513,7 @@ mod tests {
     #[test]
     fn test_generate_command_candidates() {
         let db = create_test_database();
-        let generator = CompletionGenerator::new(db);
+        let generator = CompletionGenerator::new(&db);
 
         let candidates = generator.generate_command_candidates("gi").unwrap();
         assert!(!candidates.is_empty());
@@ -524,7 +525,7 @@ mod tests {
     #[test]
     fn test_generate_subcommand_candidates() {
         let db = create_test_database();
-        let generator = CompletionGenerator::new(db);
+        let generator = CompletionGenerator::new(&db);
 
         let parsed = ParsedCommandLine {
             command: "git".to_string(),
@@ -569,7 +570,8 @@ mod tests {
         std::fs::write(temp.path().join("alpha.txt"), "").unwrap();
         std::fs::create_dir(temp.path().join("nested")).unwrap();
 
-        let _generator = CompletionGenerator::new(CommandCompletionDatabase::new());
+        let db = CommandCompletionDatabase::new();
+        let _generator = CompletionGenerator::new(&db);
         let token = format!("{}{}", temp.path().display(), MAIN_SEPARATOR);
 
         let candidates = FileSystemGenerator::generate_file_candidates(&token)
@@ -604,7 +606,8 @@ mod tests {
         let temp = tempdir().unwrap();
         std::fs::create_dir(temp.path().join("nested")).unwrap();
 
-        let _generator = CompletionGenerator::new(CommandCompletionDatabase::new());
+        let db = CommandCompletionDatabase::new();
+        let _generator = CompletionGenerator::new(&db);
         let token = format!("{}{}", temp.path().display(), MAIN_SEPARATOR);
 
         let candidates = FileSystemGenerator::generate_directory_candidates(&token)
@@ -644,7 +647,7 @@ mod tests {
         std::fs::create_dir(temp.path().join("nested_dir")).unwrap();
         std::fs::write(temp.path().join("file.txt"), "").unwrap();
 
-        let generator = CompletionGenerator::new(db);
+        let generator = CompletionGenerator::new(&db);
 
         // Mock parsed command line: "cd [temp_dir]/"
         let dir_str = format!("{}{}", temp.path().display(), MAIN_SEPARATOR);
@@ -713,7 +716,7 @@ mod tests {
         let temp = tempdir().unwrap();
         std::fs::write(temp.path().join("test.txt"), "").unwrap();
 
-        let generator = CompletionGenerator::new(db);
+        let generator = CompletionGenerator::new(&db);
         let dir_str = format!("{}{}", temp.path().display(), MAIN_SEPARATOR);
 
         // Mock: "git [dir]/"
@@ -785,7 +788,7 @@ mod tests {
         };
         db.add_command(mycmd_completion);
 
-        let generator = CompletionGenerator::new(db);
+        let generator = CompletionGenerator::new(&db);
         let token = ""; // Empty token
 
         let parsed = ParsedCommandLine {
@@ -828,7 +831,7 @@ mod tests {
             }],
         };
         db.add_command(script_completion);
-        let generator = CompletionGenerator::new(db);
+        let generator = CompletionGenerator::new(&db);
 
         let parsed = ParsedCommandLine {
             command: "scriptcmd".to_string(),
@@ -873,7 +876,7 @@ mod tests {
             }],
         };
         db.add_command(script_completion);
-        let generator = CompletionGenerator::new(db);
+        let generator = CompletionGenerator::new(&db);
 
         let parsed = ParsedCommandLine {
             command: "substcmd".to_string(),
@@ -919,7 +922,7 @@ mod tests {
             }],
         };
         db2.add_command(script_completion2);
-        let generator2 = CompletionGenerator::new(db2);
+        let generator2 = CompletionGenerator::new(&db2);
 
         let mut parsed2 = parsed.clone();
         parsed2.command = "substcmd2".to_string();
@@ -946,7 +949,7 @@ mod tests {
         };
         db.add_command(mycmd_completion);
 
-        let generator = CompletionGenerator::new(db);
+        let generator = CompletionGenerator::new(&db);
 
         // 1. Token == "" -> Should NOT show options
         let parsed_empty = ParsedCommandLine {
@@ -1052,7 +1055,7 @@ mod tests {
 
     fn run_completion_test_cases(cases: Vec<CompletionTestCase>) {
         let db = create_complex_test_database();
-        let generator = CompletionGenerator::new(db);
+        let generator = CompletionGenerator::new(&db);
         let parser = CommandLineParser::new();
 
         for case in cases {
@@ -1187,7 +1190,7 @@ mod tests {
             arguments: vec![],
         };
         db.add_command(git_completion);
-        let generator = CompletionGenerator::new(db);
+        let generator = CompletionGenerator::new(&db);
 
         // Unit test helper
         let check = |path: Vec<&str>, context: CompletionContext, expected_arg_index: usize| {
@@ -1230,7 +1233,7 @@ mod tests {
         let db = CommandCompletionDatabase::new();
         let temp = tempdir().unwrap();
         std::fs::write(temp.path().join("test.txt"), "").unwrap();
-        let generator = CompletionGenerator::new(db);
+        let generator = CompletionGenerator::new(&db);
         let dir_str = format!("{}{}", temp.path().display(), MAIN_SEPARATOR);
 
         let parsed = ParsedCommandLine {

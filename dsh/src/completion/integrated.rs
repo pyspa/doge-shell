@@ -1,5 +1,5 @@
 use super::cache::CompletionCache;
-use super::command::CompletionCandidate;
+use super::command::{CommandCompletionDatabase, CompletionCandidate};
 
 use super::framework::CompletionFrameworkKind;
 
@@ -10,7 +10,7 @@ use super::parser::{self, CommandLineParser, ParsedCommandLine};
 use crate::completion::display::Candidate;
 use crate::environment::Environment;
 use anyhow::Result;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use regex::Regex;
 use std::collections::HashMap;
 use std::path::Path;
@@ -30,14 +30,16 @@ struct CompletionRequest<'a> {
     #[allow(dead_code)]
     current_dir: &'a Path,
     max_results: usize,
+    cursor_pos: usize,
 }
 
 impl<'a> CompletionRequest<'a> {
-    fn new(input: &'a str, current_dir: &'a Path, max_results: usize) -> Self {
+    fn new(input: &'a str, current_dir: &'a Path, max_results: usize, cursor_pos: usize) -> Self {
         Self {
             input,
             current_dir,
             max_results,
+            cursor_pos,
         }
     }
 }
@@ -143,10 +145,13 @@ impl<'a> CandidateAggregator<'a> {
         !batch.exclusive
     }
 
-    fn finalize(self) -> CompletionResult {
-        let candidates = self
-            .engine
-            .deduplicate_and_sort(self.collected, self.max_results);
+    fn finalize(
+        self,
+        history: Option<&Arc<parking_lot::Mutex<crate::history::FrecencyHistory>>>,
+    ) -> CompletionResult {
+        let candidates =
+            self.engine
+                .deduplicate_and_sort(self.collected, self.max_results, history);
         let framework = self
             .framework
             .unwrap_or_else(super::default_completion_framework);
@@ -161,7 +166,8 @@ impl<'a> CandidateAggregator<'a> {
 /// Integrated completion engine - integrates all completion features
 pub struct IntegratedCompletionEngine {
     /// JSON-based command completion
-    command_generator: Option<CompletionGenerator>,
+    command_completion: Arc<Mutex<CommandCompletionDatabase>>,
+    loader: Option<JsonCompletionLoader>,
     /// Command line parser
     parser: CommandLineParser,
 
@@ -179,7 +185,8 @@ impl IntegratedCompletionEngine {
     /// Create a new integrated completion engine
     pub fn new(environment: Arc<RwLock<Environment>>) -> Self {
         Self {
-            command_generator: None,
+            command_completion: Arc::new(Mutex::new(CommandCompletionDatabase::new())),
+            loader: None,
             parser: CommandLineParser::new(),
 
             cache: CompletionCache::new(Duration::from_millis(DEFAULT_CACHE_TTL_MS)),
@@ -188,44 +195,12 @@ impl IntegratedCompletionEngine {
         }
     }
 
-    /// Initialize JSON completion data
+    /// Initialize the command completion database
+    /// This now sets up the loader but does not eagerly load everything
     pub fn initialize_command_completion(&mut self) -> Result<()> {
-        debug!("Initializing command completion system (may use cached data)...");
-
-        debug!("Creating JsonCompletionLoader...");
         let loader = JsonCompletionLoader::new();
-
-        debug!("Loading completion database (this will use cache if available)...");
-        match loader.load_database() {
-            Ok(database) => {
-                let command_count = database.len();
-                debug!("Loaded completion database with {} commands", command_count);
-
-                if command_count > 0 {
-                    debug!("Creating CompletionGenerator with database...");
-                    self.command_generator = Some(CompletionGenerator::new(database));
-                    debug!(
-                        "Command completion initialized successfully with {} commands",
-                        command_count
-                    );
-
-                    // Debug: List loaded commands
-                    if let Some(ref generator) = self.command_generator {
-                        debug!(
-                            "Available commands in database: {:?}",
-                            generator.get_available_commands()
-                        );
-                    }
-                } else {
-                    warn!("No command completion data found - completion database is empty");
-                }
-            }
-            Err(e) => {
-                warn!("Failed to load command completion data: {}", e);
-                return Err(e);
-            }
-        }
-
+        // We start with an empty database and load on demand
+        self.loader = Some(loader);
         Ok(())
     }
 
@@ -250,13 +225,14 @@ impl IntegratedCompletionEngine {
         cursor_pos: usize,
         current_dir: &Path,
         max_results: usize,
+        history: Option<&Arc<parking_lot::Mutex<crate::history::FrecencyHistory>>>,
     ) -> CompletionResult {
         debug!(
             "Integrated completion for: '{}' at position {} in {:?}",
             input, cursor_pos, current_dir
         );
 
-        let request = CompletionRequest::new(input, current_dir, max_results);
+        let request = CompletionRequest::new(input, current_dir, max_results, cursor_pos);
 
         if !request.input.is_empty()
             && let Some(hit) = self.cache.lookup(request.input)
@@ -287,7 +263,7 @@ impl IntegratedCompletionEngine {
         let command_collection = self.collect_command_candidates(&request, &parsed_command_line);
 
         if !aggregator.extend(command_collection.batch) {
-            let results = aggregator.finalize();
+            let results = aggregator.finalize(history);
             self.store_in_cache(request.input, &results.candidates, results.framework);
             return results;
         }
@@ -316,7 +292,7 @@ impl IntegratedCompletionEngine {
             );
         }
         */
-        let results = aggregator.finalize();
+        let results = aggregator.finalize(history);
         self.store_in_cache(request.input, &results.candidates, results.framework);
         results
     }
@@ -324,24 +300,39 @@ impl IntegratedCompletionEngine {
     fn collect_command_candidates(
         &self,
         request: &CompletionRequest,
-        parsed_command: &parser::ParsedCommandLine,
+        parsed_command_line: &parser::ParsedCommandLine,
     ) -> CommandCollection {
-        if parsed_command.completion_context == parser::CompletionContext::Command {
+        if parsed_command_line.completion_context == parser::CompletionContext::Command {
             debug!("No completion context found - skipping JSON completion");
             return CommandCollection::empty();
         }
 
-        let Some(generator) = &self.command_generator else {
-            debug!("No JSON completion generator available - skipping JSON completion");
-            return CommandCollection::empty();
-        };
+        // Check if we need to load completion for this command
+        if let Some(loader) = &self.loader {
+            let command_name = &parsed_command_line.command;
+            let mut db = self.command_completion.lock();
 
-        debug!(
-            "Using JSON completion generator for input: '{}'",
-            request.input
-        );
+            if db.get_command(command_name).is_none() {
+                debug!("Lazy loading completion for command: {}", command_name);
+                match loader.load_command_completion(command_name) {
+                    Ok(Some(completion)) => {
+                        db.add_command(completion);
+                    }
+                    Ok(None) => {
+                        debug!("No completion definition found for {}", command_name);
+                    }
+                    Err(e) => {
+                        warn!("Failed to load completion for {}: {}", command_name, e);
+                    }
+                }
+            }
+        }
 
-        match generator.generate_candidates(parsed_command) {
+        let db_lock = self.command_completion.lock();
+
+        let completion_generator = CompletionGenerator::new(&db_lock);
+
+        match completion_generator.generate_candidates(parsed_command_line) {
             Ok(command_candidates) => {
                 let enhanced_candidates = command_candidates
                     .into_iter()
@@ -354,7 +345,6 @@ impl IntegratedCompletionEngine {
                     request.input
                 );
 
-                // Use Skim for command/argument completion
                 CommandCollection {
                     batch: CandidateBatch::inclusive_with_framework(
                         enhanced_candidates,
@@ -422,7 +412,37 @@ impl IntegratedCompletionEngine {
         &self,
         mut candidates: Vec<EnhancedCandidate>,
         max_results: usize,
+        history: Option<&Arc<parking_lot::Mutex<crate::history::FrecencyHistory>>>,
     ) -> Vec<EnhancedCandidate> {
+        // Boost priority based on history
+        if let Some(history_arc) = history {
+            let history = history_arc.lock();
+            if let Some(store) = &history.store {
+                for candidate in &mut candidates {
+                    // Simple heuristic: check if candidate text appears in history items
+                    // Ideally we should form the fuil command context, but for now
+                    // we boost if the candidate word itself appears frequently in history
+                    // OR if we can check "cmd candidate"
+                    // Since we don't have easy context here, we'll try a basic approach:
+                    // If candidate is a subcommand (or similar), its value is high if used often.
+
+                    // NOTE: This is a simplification. A better approach requires passing the parsed command context.
+                    // For now, let's assume `candidate.text` is significant.
+
+                    // boost = frequency count log or similar
+                    let count = store
+                        .items
+                        .iter()
+                        .filter(|i| i.item.contains(&candidate.text)) // Loose match
+                        .count();
+
+                    if count > 0 {
+                        candidate.priority += (count as u32).min(1000);
+                    }
+                }
+            }
+        }
+
         // Text-based deduplication (keep higher priority ones)
         candidates.sort_by(|a, b| {
             b.priority
@@ -557,7 +577,7 @@ mod tests {
     #[test]
     fn test_integrated_completion_engine_creation() {
         let engine = IntegratedCompletionEngine::new(Environment::new());
-        assert!(engine.command_generator.is_none());
+        assert!(engine.loader.is_none());
     }
 
     #[test]
@@ -623,7 +643,9 @@ mod tests {
         let cursor_pos = input.len();
         let current_dir = std::env::current_dir().expect("current dir available");
 
-        let completion_result = engine.complete(input, cursor_pos, &current_dir, 50).await;
+        let completion_result = engine
+            .complete(input, cursor_pos, &current_dir, 50, None)
+            .await;
 
         assert!(
             !completion_result.candidates.is_empty(),

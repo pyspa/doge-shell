@@ -586,6 +586,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
                     cursor_pos,
                     &current_dir,
                     MAX_RESULT, // maximum number of candidates to return
+                    repl.shell.cmd_history.as_ref(),
                 )
                 .await;
 

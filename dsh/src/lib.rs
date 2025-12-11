@@ -208,6 +208,9 @@ pub fn init_tracing() -> Result<()> {
 
 pub fn setup_panic_handler() {
     std::panic::set_hook(Box::new(|panic_info| {
+        // Attempt to restore terminal state first
+        let _ = crossterm::terminal::disable_raw_mode();
+
         let thread = std::thread::current();
         let thread_name = thread.name().unwrap_or("unnamed");
 

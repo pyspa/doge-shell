@@ -137,7 +137,7 @@ impl Completion {
     }
 }
 
-fn fuzzy_match_score(choice: &str, pattern: &str) -> Option<i64> {
+pub fn fuzzy_match_score(choice: &str, pattern: &str) -> Option<i64> {
     if pattern.is_empty() {
         return Some(0);
     }
@@ -747,7 +747,7 @@ fn get_executables_into(
                     continue;
                 };
 
-                if !file_name.starts_with(name) {
+                if fuzzy_match_score(file_name, name).is_none() {
                     continue;
                 }
 
@@ -932,9 +932,10 @@ fn get_file_completions_with_filter(
 
                 // Apply prefix filter if provided
                 if let Some(filter) = filter_prefix
-                    && fuzzy_match_score(file_name, filter).is_none() {
-                        continue;
-                    }
+                    && fuzzy_match_score(file_name, filter).is_none()
+                {
+                    continue;
+                }
 
                 let candidate = if is_file {
                     Candidate::Item(format!("{prefix}{file_name}"), "(file)".to_string())
@@ -1156,5 +1157,111 @@ mod tests {
         let input_z = format!("{}/z", dir_str);
         let result_z = super::path_completion_prefix(&input_z).unwrap();
         assert!(result_z.is_none());
+    }
+
+    #[test]
+    fn test_get_executables_fuzzy() {
+        use std::fs::File;
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+
+        let cargo_path = dir_path.join("cargo");
+        let docker_path = dir_path.join("docker");
+
+        {
+            let f = File::create(&cargo_path).unwrap();
+            #[cfg(unix)]
+            {
+                let mut perms = f.metadata().unwrap().permissions();
+                perms.set_mode(0o755);
+                f.set_permissions(perms).unwrap();
+            }
+        }
+
+        {
+            let f = File::create(&docker_path).unwrap();
+            #[cfg(unix)]
+            {
+                let mut perms = f.metadata().unwrap().permissions();
+                perms.set_mode(0o755);
+                f.set_permissions(perms).unwrap();
+            }
+        }
+
+        // We use private get_executables for testing logic
+        // "cgo" -> "cargo"
+        let results_cgo = super::get_executables(dir_path.to_str().unwrap(), "cgo");
+        assert!(!results_cgo.is_empty());
+        assert!(
+            results_cgo
+                .iter()
+                .any(|c| matches!(c, Candidate::Item(name, _) if name == "cargo"))
+        );
+
+        // "dck" -> "docker"
+        let results_dck = super::get_executables(dir_path.to_str().unwrap(), "dck");
+        assert!(!results_dck.is_empty());
+        assert!(
+            results_dck
+                .iter()
+                .any(|c| matches!(c, Candidate::Item(name, _) if name == "docker"))
+        );
+
+        // "xyz" -> none
+        let results_none = super::get_executables(dir_path.to_str().unwrap(), "xyz");
+        assert!(results_none.is_empty());
+    }
+
+    #[test]
+    fn test_path_completion_relative() {
+        use std::fs::File;
+        use tempfile::tempdir;
+
+        // This test simulates path_completion_prefix interacting with "./" paths
+        // We can't easily mock "full" path completion context without changing current dir
+        // But we can test ranking logic if we had relative paths.
+
+        let dir = tempdir().unwrap();
+        let dir_path = dir.path();
+        File::create(dir_path.join("README.md")).unwrap();
+
+        let dir_str = dir_path.to_str().unwrap();
+
+        // Input: "R" -> "README.md"
+        // But input usually needs to be relative or absolute path.
+        // path_completion_prefix logic:
+        // if input is just "R" -> parent is None/"" -> uses current dir.
+        // We can't change current dir easily in multi-threaded test environment safely
+        // without affecting other tests.
+        // So we test absolute path behavior which we can control.
+
+        let input = format!("{}/R", dir_str);
+        let result = super::path_completion_prefix(&input).unwrap();
+        assert!(result.unwrap().ends_with("README.md"));
+
+        // Test fuzzy: "RME" -> "README.md"
+        let input_fuzzy = format!("{}/RME", dir_str);
+        let result_fuzzy = super::path_completion_prefix(&input_fuzzy).unwrap();
+        assert!(result_fuzzy.unwrap().ends_with("README.md"));
+    }
+
+    #[test]
+    fn test_fuzzy_match_ranking() {
+        // "test" matches "test" (score X)
+        // "test" matches "test_file" (score Y)
+        // Exact match should have higher score or be preferred?
+        // Let's verify score property.
+
+        let score_exact = super::fuzzy_match_score("test", "test").unwrap();
+        let score_prefix = super::fuzzy_match_score("test_file", "test").unwrap();
+        let score_fuzzy = super::fuzzy_match_score("t_e_s_t", "test").unwrap();
+
+        // Exact match usually scores highest in Skim
+        assert!(score_exact >= score_prefix);
+        assert!(score_prefix > score_fuzzy);
     }
 }

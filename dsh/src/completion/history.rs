@@ -35,7 +35,7 @@ impl HistoryCompletion {
             let frecency_items: Vec<_> = store
                 .items
                 .iter()
-                .filter(|item| item.item.starts_with(prefix))
+                .filter(|item| crate::completion::fuzzy_match_score(&item.item, prefix).is_some())
                 .take(20)
                 .collect();
 
@@ -168,5 +168,13 @@ mod tests {
         let context = CompletionContext::new("/tmp".to_string());
         let suggestions = completion.suggest("test", &context);
         assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn test_history_fuzzy_match() {
+        let mut completion = HistoryCompletion::new();
+        // Just verify it compiles and runs without panic for now
+        let context = CompletionContext::new("/tmp".to_string());
+        let _ = completion.suggest("gcm", &context);
     }
 }

@@ -365,8 +365,9 @@ impl CommandLineParser {
             return false;
         }
 
-        // More restrictive approach to avoid treating content words as subcommands
-        if token.len() < 2 || token.len() > 15 {
+        // Be liberal here: most non-option tokens can be potential subcommands.
+        // Invalid ones will be reclassified as arguments by CompletionGenerator.
+        if token.len() < 2 || token.len() > 32 {
             return false;
         }
 
@@ -387,15 +388,10 @@ impl CommandLineParser {
             }
         }
 
-        // Need both vowels and consonants for a balanced word
-        if vowel_count == 0 || consonant_count == 0 {
-            return false;
-        }
-
         // Avoid words with alternating vowel-consonant patterns typical of content words
         // e.g. "file" (f-i-l-e) has alternating pattern: consonant-vowel-consonant-vowel
         // e.g. "data" (d-a-t-a) has alternating pattern: consonant-vowel-consonant-vowel
-        if chars.len() == 4 && vowel_count == 2 {
+        if chars.len() == 4 && vowel_count == 2 && consonant_count == 2 {
             let mut vowel_positions = Vec::new();
             for c in &chars {
                 vowel_positions.push(matches!(
@@ -607,6 +603,40 @@ mod tests {
         assert_eq!(result.command, "git");
         assert_eq!(result.subcommand_path, vec!["remote", "add"]);
         assert_eq!(result.completion_context, CompletionContext::SubCommand);
+    }
+
+    #[test]
+    fn test_parse_consonant_only_subcommand() {
+        let parser = CommandLineParser::new();
+        let input = "git rm ";
+        let result = parser.parse(input, input.len());
+
+        assert_eq!(result.command, "git");
+        assert_eq!(result.subcommand_path, vec!["rm"]);
+        assert_eq!(
+            result.completion_context,
+            CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: None
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_long_subcommand_name() {
+        let parser = CommandLineParser::new();
+        let input = "foo upgrade-interactive ";
+        let result = parser.parse(input, input.len());
+
+        assert_eq!(result.command, "foo");
+        assert_eq!(result.subcommand_path, vec!["upgrade-interactive"]);
+        assert_eq!(
+            result.completion_context,
+            CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: None
+            }
+        );
     }
 
     #[test]

@@ -25,7 +25,7 @@
           "description": "Branch to checkout",
           "type": {
             "type": "Script",
-            "data": "git branch --format='%(refname:short)'"
+            "data": "(git branch --format='%(refname:short)'; git branch -r --format='%(refname:short)' | cut -d/ -f2- | grep -v '^HEAD$') | sort -u"
           }
         }
       ]
@@ -72,7 +72,7 @@
           "description": "Branch to push",
           "type": {
             "type": "Script",
-            "data": "git branch --format='%(refname:short)'"
+            "data": "remote=\"$ARG_0\"; [ -z \"$remote\" ] && remote=\"*\"; git branch -r --format='%(refname:short)' --list \"$remote/*\" | cut -d/ -f2- | grep -v '^HEAD$'"
           }
         }
       ]
@@ -94,7 +94,7 @@
           "description": "Branch to pull",
           "type": {
             "type": "Script",
-            "data": "git branch --format='%(refname:short)'"
+            "data": "remote=\"$ARG_0\"; [ -z \"$remote\" ] && remote=\"*\"; git branch -r --format='%(refname:short)' --list \"$remote/*\" | cut -d/ -f2- | grep -v '^HEAD$'"
           }
         }
       ]
@@ -116,7 +116,7 @@
           "description": "Branch to fetch",
           "type": {
             "type": "Script",
-            "data": "git branch --format='%(refname:short)'"
+            "data": "remote=\"$ARG_0\"; [ -z \"$remote\" ] && remote=\"*\"; git branch -r --format='%(refname:short)' --list \"$remote/*\" | cut -d/ -f2- | grep -v '^HEAD$'"
           }
         }
       ]

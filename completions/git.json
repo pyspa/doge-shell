@@ -56,6 +56,10 @@
         ]
     },
     {
+      "name": "status",
+      "description": "Show the working tree status"
+    },
+    {
       "name": "push",
       "description": "Update remote refs along with associated objects",
       "arguments": [

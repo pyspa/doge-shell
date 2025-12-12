@@ -44,17 +44,16 @@ impl FileSystemGenerator {
                 continue;
             }
 
-            if !is_dir
-                && let Some(exts) = extensions {
-                    let ext_ok = Path::new(file_name)
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .map(|e| format!(".{e}"))
-                        .is_some_and(|e| exts.contains(&e));
-                    if !ext_ok {
-                        continue;
-                    }
+            if !is_dir && let Some(exts) = extensions {
+                let ext_ok = Path::new(file_name)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| format!(".{e}"))
+                    .is_some_and(|e| exts.contains(&e));
+                if !ext_ok {
+                    continue;
                 }
+            }
 
             let full_path = Self::build_candidate_path(&dir_path, file_name);
             if is_dir {

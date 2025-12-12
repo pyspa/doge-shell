@@ -52,63 +52,90 @@ impl<'a> CompletionGenerator<'a> {
     /// This method also corrects the parsed command line if the parser
     /// incorrectly identified arguments as subcommands.
     pub fn correct_parsed_command_line(&self, parsed: &ParsedCommandLine) -> ParsedCommandLine {
-        if let Some(command_completion) = self.database.get_command(&parsed.command) {
-            let mut valid_subcommands = Vec::new();
-            let mut invalid_subcommands = Vec::new();
-            let mut current_subcommands = &command_completion.subcommands;
+        let Some(command_completion) = self.database.get_command(&parsed.command) else {
+            return parsed.clone();
+        };
 
-            let mut path_valid = true;
-            for sub_name in &parsed.subcommand_path {
-                if path_valid {
-                    if let Some(sub) = current_subcommands.iter().find(|s| &s.name == sub_name) {
-                        valid_subcommands.push(sub_name.clone());
-                        current_subcommands = &sub.subcommands;
-                    } else {
-                        path_valid = false;
-                        invalid_subcommands.push(sub_name.clone());
-                    }
-                } else {
-                    invalid_subcommands.push(sub_name.clone());
-                }
+        let mut valid_subcommands = Vec::new();
+        let mut invalid_subcommands = Vec::new();
+        let mut current_subcommands = &command_completion.subcommands;
+
+        for (idx, sub_name) in parsed.subcommand_path.iter().enumerate() {
+            let is_last = idx + 1 == parsed.subcommand_path.len();
+            let is_completion_target = sub_name == &parsed.current_token;
+
+            if let Some(sub) = current_subcommands.iter().find(|s| &s.name == sub_name) {
+                valid_subcommands.push(sub_name.clone());
+                current_subcommands = &sub.subcommands;
+                continue;
             }
 
-            if !invalid_subcommands.is_empty() {
+            // If the last token in the subcommand path is the current completion target,
+            // and there exists a subcommand that starts with it, treat it as a partial
+            // subcommand rather than an argument.
+            if is_last
+                && is_completion_target
+                && current_subcommands
+                    .iter()
+                    .any(|s| s.name.starts_with(sub_name))
+            {
                 let mut new_parsed = parsed.clone();
                 new_parsed.subcommand_path = valid_subcommands;
-
-                // Move invalid subcommands to arguments
-                // Prepend them to existing arguments
-                let mut new_args = invalid_subcommands;
-                new_args.extend(new_parsed.specified_arguments);
-                new_parsed.specified_arguments = new_args.clone();
-                new_parsed.args = new_args.clone();
-
-                // Recalculate completion context
-                // We must recalculate if we changed specified_arguments, regardless of previous context
-                // Logic: if we moved subcommands to args, we are definitely in Argument context (or should be)
-                // UNLESS we are at the very beginning of a new argument?
-                // Actually, if we appended to specified_arguments, we are modifying the argument list.
-
-                let arg_index = new_parsed.specified_arguments.len().saturating_sub(
-                    if new_parsed
-                        .specified_arguments
-                        .contains(&new_parsed.current_token)
-                    {
-                        1
-                    } else {
-                        0
-                    },
-                );
-                new_parsed.completion_context = CompletionContext::Argument {
-                    arg_index,
-                    arg_type: None,
-                };
-
+                new_parsed.completion_context = CompletionContext::SubCommand;
                 return new_parsed;
             }
+
+            // Otherwise, treat this and remaining tokens as arguments.
+            invalid_subcommands.push(sub_name.clone());
+            invalid_subcommands.extend(parsed.subcommand_path[idx + 1..].iter().cloned());
+            break;
         }
 
-        parsed.clone()
+        let mut new_parsed = parsed.clone();
+        new_parsed.subcommand_path = valid_subcommands;
+
+        if !invalid_subcommands.is_empty() {
+            // Move invalid subcommands to arguments
+            // Prepend them to existing arguments
+            let mut new_args = invalid_subcommands;
+            new_args.extend(new_parsed.specified_arguments);
+            new_parsed.specified_arguments = new_args.clone();
+            new_parsed.args = new_args.clone();
+
+            // Recalculate completion context: once tokens are reclassified as arguments,
+            // we should complete an argument at the corresponding index.
+            let arg_index = new_parsed.specified_arguments.len().saturating_sub(
+                if new_parsed
+                    .specified_arguments
+                    .contains(&new_parsed.current_token)
+                {
+                    1
+                } else {
+                    0
+                },
+            );
+            new_parsed.completion_context = CompletionContext::Argument {
+                arg_index,
+                arg_type: None,
+            };
+
+            return new_parsed;
+        }
+
+        // If the parser decided we're completing an argument, but the current (sub)command
+        // has nested subcommands that match the current token, switch to subcommand completion.
+        if matches!(
+            new_parsed.completion_context,
+            CompletionContext::Argument { .. }
+        ) && !current_subcommands.is_empty()
+            && current_subcommands
+                .iter()
+                .any(|s| s.name.starts_with(&new_parsed.current_token))
+        {
+            new_parsed.completion_context = CompletionContext::SubCommand;
+        }
+
+        new_parsed
     }
 
     /// Generate completion candidates from parsed command line
@@ -614,6 +641,104 @@ mod tests {
 
         let add_candidate = candidates.iter().find(|c| c.text == "add");
         assert!(add_candidate.is_some());
+    }
+
+    #[test]
+    fn test_partial_subcommand_is_not_reclassified_as_argument() {
+        let mut db = CommandCompletionDatabase::new();
+        let docker_completion = CommandCompletion {
+            command: "docker".to_string(),
+            description: None,
+            global_options: vec![],
+            subcommands: vec![
+                SubCommand {
+                    name: "compose".to_string(),
+                    description: None,
+                    options: vec![],
+                    arguments: vec![],
+                    subcommands: vec![],
+                },
+                SubCommand {
+                    name: "build".to_string(),
+                    description: None,
+                    options: vec![],
+                    arguments: vec![],
+                    subcommands: vec![],
+                },
+            ],
+            arguments: vec![],
+        };
+        db.add_command(docker_completion);
+
+        let parser = CommandLineParser::new();
+        let input = "docker com";
+        let parsed = parser.parse(input, input.len());
+        let generator = CompletionGenerator::new(&db);
+
+        let corrected = generator.correct_parsed_command_line(&parsed);
+        assert_eq!(corrected.completion_context, CompletionContext::SubCommand);
+        assert!(corrected.subcommand_path.is_empty());
+
+        let candidates = generator.generate_candidates(&parsed).unwrap();
+        assert!(candidates.iter().any(|c| c.text == "compose"));
+    }
+
+    #[test]
+    fn test_nested_subcommand_completion_after_space_and_short_prefix() {
+        let mut db = CommandCompletionDatabase::new();
+        let docker_completion = CommandCompletion {
+            command: "docker".to_string(),
+            description: None,
+            global_options: vec![],
+            subcommands: vec![SubCommand {
+                name: "compose".to_string(),
+                description: None,
+                options: vec![],
+                arguments: vec![],
+                subcommands: vec![
+                    SubCommand {
+                        name: "up".to_string(),
+                        description: None,
+                        options: vec![],
+                        arguments: vec![],
+                        subcommands: vec![],
+                    },
+                    SubCommand {
+                        name: "down".to_string(),
+                        description: None,
+                        options: vec![],
+                        arguments: vec![],
+                        subcommands: vec![],
+                    },
+                ],
+            }],
+            arguments: vec![],
+        };
+        db.add_command(docker_completion);
+        let generator = CompletionGenerator::new(&db);
+        let parser = CommandLineParser::new();
+
+        // After a valid subcommand with trailing space, nested subcommands should be suggested.
+        let input_space = "docker compose ";
+        let parsed_space = parser.parse(input_space, input_space.len());
+        let corrected_space = generator.correct_parsed_command_line(&parsed_space);
+        assert_eq!(
+            corrected_space.completion_context,
+            CompletionContext::SubCommand
+        );
+        let candidates_space = generator.generate_candidates(&parsed_space).unwrap();
+        assert!(candidates_space.iter().any(|c| c.text == "up"));
+
+        // Even a 1-character prefix should still complete nested subcommands.
+        let input_prefix = "docker compose u";
+        let parsed_prefix = parser.parse(input_prefix, input_prefix.len());
+        let corrected_prefix = generator.correct_parsed_command_line(&parsed_prefix);
+        assert_eq!(
+            corrected_prefix.completion_context,
+            CompletionContext::SubCommand
+        );
+        let candidates_prefix = generator.generate_candidates(&parsed_prefix).unwrap();
+        assert!(candidates_prefix.iter().any(|c| c.text == "up"));
     }
 
     #[test]

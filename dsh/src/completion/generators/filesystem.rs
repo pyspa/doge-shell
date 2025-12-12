@@ -1,7 +1,7 @@
 use crate::completion::command::CompletionCandidate;
+use crate::completion::{Candidate, fuzzy_match_score, path_completion_path};
 use anyhow::Result;
-use std::fs;
-use std::path::{MAIN_SEPARATOR, Path};
+use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 
 pub struct FileSystemGenerator;
 
@@ -20,35 +20,47 @@ impl FileSystemGenerator {
 
         let (dir_path, file_prefix) = Self::split_dir_and_prefix(current_token);
 
-        if let Ok(entries) = fs::read_dir(&dir_path) {
-            for entry in entries.flatten() {
-                let file_name = entry.file_name().to_string_lossy().to_string();
+        // Reuse legacy path listing cache for better performance.
+        let listing = path_completion_path(PathBuf::from(&dir_path)).unwrap_or_default();
 
-                if file_name.starts_with(&file_prefix) {
-                    let path = entry.path();
+        for cand in listing {
+            let Candidate::Path(path_str) = cand else {
+                continue;
+            };
 
-                    // Extension filter
-                    if let Some(exts) = extensions
-                        && path.is_file()
-                    {
-                        if let Some(ext) = path.extension() {
-                            let ext_str = format!(".{}", ext.to_string_lossy());
-                            if !exts.contains(&ext_str) {
-                                continue;
-                            }
-                        } else {
-                            continue;
-                        }
-                    }
+            let is_dir = path_str.ends_with(MAIN_SEPARATOR)
+                || (MAIN_SEPARATOR != '/' && path_str.ends_with('/'))
+                || (MAIN_SEPARATOR != '\\' && path_str.ends_with('\\'));
 
-                    let full_path = Self::build_candidate_path(&dir_path, &file_name);
+            let trimmed = path_str.trim_end_matches(&['/', '\\'][..]);
+            let Some(file_name) = Path::new(trimmed).file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
 
-                    if path.is_dir() {
-                        candidates.push(CompletionCandidate::directory(full_path));
-                    } else {
-                        candidates.push(CompletionCandidate::file(full_path));
+            if !file_prefix.is_empty()
+                && !file_name.starts_with(&file_prefix)
+                && fuzzy_match_score(file_name, &file_prefix).is_none()
+            {
+                continue;
+            }
+
+            if !is_dir
+                && let Some(exts) = extensions {
+                    let ext_ok = Path::new(file_name)
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| format!(".{e}"))
+                        .is_some_and(|e| exts.contains(&e));
+                    if !ext_ok {
+                        continue;
                     }
                 }
+
+            let full_path = Self::build_candidate_path(&dir_path, file_name);
+            if is_dir {
+                candidates.push(CompletionCandidate::directory(full_path));
+            } else {
+                candidates.push(CompletionCandidate::file(full_path));
             }
         }
 
@@ -61,16 +73,35 @@ impl FileSystemGenerator {
 
         let (dir_path, dir_prefix) = Self::split_dir_and_prefix(current_token);
 
-        if let Ok(entries) = fs::read_dir(&dir_path) {
-            for entry in entries.flatten() {
-                let file_name = entry.file_name().to_string_lossy().to_string();
+        let listing = path_completion_path(PathBuf::from(&dir_path)).unwrap_or_default();
 
-                if file_name.starts_with(&dir_prefix) && entry.path().is_dir() {
-                    let full_path = Self::build_candidate_path(&dir_path, &file_name);
+        for cand in listing {
+            let Candidate::Path(path_str) = cand else {
+                continue;
+            };
 
-                    candidates.push(CompletionCandidate::directory(full_path));
-                }
+            let is_dir = path_str.ends_with(MAIN_SEPARATOR)
+                || (MAIN_SEPARATOR != '/' && path_str.ends_with('/'))
+                || (MAIN_SEPARATOR != '\\' && path_str.ends_with('\\'));
+
+            if !is_dir {
+                continue;
             }
+
+            let trimmed = path_str.trim_end_matches(&['/', '\\'][..]);
+            let Some(file_name) = Path::new(trimmed).file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+
+            if !dir_prefix.is_empty()
+                && !file_name.starts_with(&dir_prefix)
+                && fuzzy_match_score(file_name, &dir_prefix).is_none()
+            {
+                continue;
+            }
+
+            let full_path = Self::build_candidate_path(&dir_path, file_name);
+            candidates.push(CompletionCandidate::directory(full_path));
         }
 
         Ok(candidates)
@@ -125,5 +156,35 @@ impl FileSystemGenerator {
             .join(file_name)
             .to_string_lossy()
             .to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn file_candidates_support_fuzzy_match() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("apple.txt"), "").unwrap();
+        std::fs::write(dir.path().join("application.rs"), "").unwrap();
+
+        let token = dir.path().join("apl").to_string_lossy().to_string();
+        let candidates =
+            FileSystemGenerator::generate_file_candidates(&token).expect("file candidates");
+        let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
+
+        let expected = dir
+            .path()
+            .join("application.rs")
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            texts.contains(&expected),
+            "expected fuzzy matched file {:?} in {:?}",
+            expected,
+            texts
+        );
     }
 }

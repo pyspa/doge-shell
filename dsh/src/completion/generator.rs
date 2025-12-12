@@ -1,11 +1,23 @@
+use super::cache::CompletionCache;
 use super::command::{
     ArgumentType, CommandCompletion, CommandCompletionDatabase, CommandOption, CompletionCandidate,
     SubCommand,
 };
+use super::fuzzy_match_score;
 use super::generators::filesystem::FileSystemGenerator;
 use super::generators::script::ScriptGenerator;
 use super::parser::{CompletionContext, ParsedCommandLine};
+use crate::dirs::is_executable;
 use anyhow::Result;
+use std::collections::HashSet;
+use std::fs::read_dir;
+use std::path::Path;
+use std::sync::LazyLock;
+use std::time::Duration;
+
+const SYSTEM_COMMAND_CACHE_TTL_MS: u64 = 2000;
+static SYSTEM_COMMAND_CACHE: LazyLock<CompletionCache<CompletionCandidate>> =
+    LazyLock::new(|| CompletionCache::new(Duration::from_millis(SYSTEM_COMMAND_CACHE_TTL_MS)));
 
 /// Completion candidate generator
 /// Completion candidate generator
@@ -383,20 +395,77 @@ impl<'a> CompletionGenerator<'a> {
         &self,
         current_token: &str,
     ) -> Result<Vec<CompletionCandidate>> {
-        let mut candidates = Vec::with_capacity(16);
+        if !current_token.is_empty()
+            && let Some(hit) = SYSTEM_COMMAND_CACHE.lookup(current_token)
+        {
+            return Ok(hit.candidates);
+        }
 
-        // List of common commands (in actual implementation, get from PATH)
-        let common_commands = [
-            "ls", "cd", "pwd", "mkdir", "rmdir", "rm", "cp", "mv", "cat", "less", "more", "grep",
-            "find", "which", "whereis", "man", "help", "echo", "printf", "git", "cargo", "rustc",
-            "npm", "node", "python", "python3", "pip", "docker", "kubectl", "ssh", "scp", "curl",
-            "wget", "tar", "zip", "unzip",
-        ];
+        let mut candidates = Vec::with_capacity(32);
+        let mut seen_names: HashSet<String> = HashSet::new();
 
-        for cmd in &common_commands {
-            if cmd.starts_with(current_token) {
-                candidates.push(CompletionCandidate::subcommand(cmd.to_string(), None));
+        if (current_token.starts_with('/') || current_token.starts_with("./"))
+            && Path::new(current_token).is_file()
+        {
+            candidates.push(CompletionCandidate::subcommand(
+                current_token.to_string(),
+                None,
+            ));
+            seen_names.insert(current_token.to_string());
+        }
+
+        let paths: Vec<std::path::PathBuf> = std::env::var_os("PATH")
+            .map(|p| std::env::split_paths(&p).collect())
+            .unwrap_or_default();
+
+        for path in paths {
+            if candidates.len() >= super::MAX_RESULT {
+                break;
             }
+
+            if let Ok(entries) = read_dir(&path) {
+                let mut local_candidates: Vec<String> = Vec::new();
+
+                for entry in entries.flatten() {
+                    let file_name_os = entry.file_name();
+                    let Some(file_name) = file_name_os.to_str() else {
+                        continue;
+                    };
+
+                    if fuzzy_match_score(file_name, current_token).is_none() {
+                        continue;
+                    }
+
+                    if seen_names.contains(file_name) {
+                        continue;
+                    }
+
+                    if let Ok(ft) = entry.file_type()
+                        && !ft.is_file()
+                        && !ft.is_symlink()
+                    {
+                        continue;
+                    }
+
+                    if is_executable(&entry) {
+                        local_candidates.push(file_name.to_string());
+                    }
+                }
+
+                local_candidates.sort();
+                for cmd in local_candidates {
+                    if candidates.len() >= super::MAX_RESULT {
+                        break;
+                    }
+                    if seen_names.insert(cmd.clone()) {
+                        candidates.push(CompletionCandidate::subcommand(cmd, None));
+                    }
+                }
+            }
+        }
+
+        if !current_token.is_empty() {
+            SYSTEM_COMMAND_CACHE.set(current_token.to_string(), candidates.clone());
         }
 
         Ok(candidates)
@@ -1255,5 +1324,50 @@ mod tests {
             .to_string_lossy()
             .to_string();
         assert!(candidates.iter().any(|c| c.text == text));
+    }
+
+    #[test]
+    fn system_command_candidates_scan_path() {
+        static PATH_LOCK: LazyLock<parking_lot::Mutex<()>> =
+            LazyLock::new(|| parking_lot::Mutex::new(()));
+        let _guard = PATH_LOCK.lock();
+
+        let dir = tempdir().unwrap();
+        let cmd_path = dir.path().join("my-test-cmd");
+        std::fs::write(&cmd_path, "").unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&cmd_path).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&cmd_path, perms).unwrap();
+        }
+
+        let old_path = std::env::var_os("PATH");
+        let new_path = match &old_path {
+            Some(p) => format!("{}:{}", dir.path().display(), p.to_string_lossy()),
+            None => dir.path().display().to_string(),
+        };
+        unsafe { std::env::set_var("PATH", &new_path) };
+
+        let db = CommandCompletionDatabase::new();
+        let generator = CompletionGenerator::new(&db);
+        let candidates = generator
+            .generate_system_command_candidates("my-")
+            .expect("system candidates");
+        let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
+
+        assert!(
+            texts.contains(&"my-test-cmd".to_string()),
+            "expected PATH command in {:?}",
+            texts
+        );
+
+        if let Some(p) = old_path {
+            unsafe { std::env::set_var("PATH", p) };
+        } else {
+            unsafe { std::env::remove_var("PATH") };
+        }
     }
 }

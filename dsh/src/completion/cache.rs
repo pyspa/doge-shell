@@ -1,3 +1,4 @@
+use super::command::CompletionCandidate;
 use super::display::Candidate;
 use super::integrated::EnhancedCandidate;
 use parking_lot::RwLock;
@@ -20,6 +21,12 @@ impl CacheableCandidate for EnhancedCandidate {
 impl CacheableCandidate for Candidate {
     fn completion_text(&self) -> &str {
         self.get_display_name()
+    }
+}
+
+impl CacheableCandidate for CompletionCandidate {
+    fn completion_text(&self) -> &str {
+        &self.text
     }
 }
 

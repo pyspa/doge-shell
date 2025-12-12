@@ -419,6 +419,14 @@ impl IntegratedCompletionEngine {
             let history = history_arc.lock();
             if let Some(store) = &history.store {
                 for candidate in &mut candidates {
+                    // File/path candidates can be numerous and are rarely meaningful to
+                    // boost by history; skipping them keeps completion latency low.
+                    if matches!(
+                        candidate.candidate_type,
+                        CandidateType::File | CandidateType::Directory
+                    ) {
+                        continue;
+                    }
                     // Simple heuristic: check if candidate text appears in history items
                     // Ideally we should form the fuil command context, but for now
                     // we boost if the candidate word itself appears frequently in history
@@ -573,6 +581,7 @@ impl CandidateType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dsh_frecency::FrecencyStore;
 
     #[test]
     fn test_integrated_completion_engine_creation() {
@@ -669,6 +678,41 @@ mod tests {
             completion_result.framework,
             crate::completion::framework::CompletionFrameworkKind::Skim
         );
+    }
+
+    #[test]
+    fn history_boost_skips_file_candidates() {
+        let environment = Environment::new();
+        let engine = IntegratedCompletionEngine::new(environment);
+
+        let mut history = crate::history::FrecencyHistory::new();
+        let mut store = FrecencyStore::default();
+        store.add("bar.txt");
+        store.add("bar");
+        history.store = Some(store);
+        let history_arc = std::sync::Arc::new(parking_lot::Mutex::new(history));
+
+        let candidates = vec![
+            EnhancedCandidate {
+                text: "bar.txt".to_string(),
+                description: None,
+                candidate_type: CandidateType::File,
+                priority: 0,
+            },
+            EnhancedCandidate {
+                text: "bar".to_string(),
+                description: None,
+                candidate_type: CandidateType::Argument,
+                priority: 0,
+            },
+        ];
+
+        let boosted = engine.deduplicate_and_sort(candidates, 10, Some(&history_arc));
+        let file_candidate = boosted.iter().find(|c| c.text == "bar.txt").unwrap();
+        let arg_candidate = boosted.iter().find(|c| c.text == "bar").unwrap();
+
+        assert_eq!(file_candidate.priority, 0);
+        assert!(arg_candidate.priority > 0);
     }
 
     #[test]

@@ -7,6 +7,15 @@ static OPTION_REGEX: std::sync::LazyLock<Regex> =
 static DOUBLE_DASH_REGEX: std::sync::LazyLock<Regex> =
     std::sync::LazyLock::new(|| Regex::new(r"^--").unwrap());
 
+#[derive(Debug, Clone)]
+struct TokenSpan {
+    text: String,
+    /// start position as character index (inclusive)
+    start: usize,
+    /// end position as character index (exclusive)
+    end: usize,
+}
+
 /// Command line parsing result for dynamic completion
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedCommandLine {
@@ -80,8 +89,9 @@ impl CommandLineParser {
 
     /// Parse command line
     pub fn parse(&self, input: &str, cursor_pos: usize) -> ParsedCommandLine {
-        let tokens = self.tokenize(input);
-        let cursor_token_index = self.find_cursor_token_index(&tokens, input, cursor_pos);
+        let spans = self.tokenize_with_positions(input);
+        let tokens: Vec<String> = spans.iter().map(|s| s.text.clone()).collect();
+        let cursor_token_index = self.find_cursor_token_index(&spans, cursor_pos);
 
         self.analyze_tokens(tokens, cursor_token_index, input, cursor_pos)
     }
@@ -123,32 +133,70 @@ impl CommandLineParser {
         tokens
     }
 
-    /// Find token index corresponding to cursor position
-    fn find_cursor_token_index(&self, tokens: &[String], input: &str, cursor_pos: usize) -> usize {
-        let mut pos = 0;
+    /// Split input string into tokens and keep their character spans.
+    fn tokenize_with_positions(&self, input: &str) -> Vec<TokenSpan> {
+        let mut spans = Vec::new();
+        let mut current_token = String::new();
+        let mut token_start: Option<usize> = None;
+        let mut in_quotes = false;
+        let mut quote_char = '"';
 
-        for (i, token) in tokens.iter().enumerate() {
-            // Find token start position
-            while pos < input.len() {
-                if let Some(c) = input.chars().nth(pos)
-                    && !c.is_whitespace()
-                {
-                    break;
+        for (i, ch) in input.chars().enumerate() {
+            match ch {
+                '"' | '\'' if !in_quotes => {
+                    in_quotes = true;
+                    quote_char = ch;
+                    if token_start.is_none() {
+                        token_start = Some(i);
+                    }
+                    current_token.push(ch);
                 }
-                pos += 1;
+                ch if in_quotes && ch == quote_char => {
+                    in_quotes = false;
+                    current_token.push(ch);
+                }
+                ' ' | '\t' if !in_quotes => {
+                    if !current_token.is_empty() {
+                        let start = token_start.unwrap_or(i);
+                        spans.push(TokenSpan {
+                            text: current_token.clone(),
+                            start,
+                            end: i,
+                        });
+                        current_token.clear();
+                        token_start = None;
+                    }
+                }
+                _ => {
+                    if token_start.is_none() {
+                        token_start = Some(i);
+                    }
+                    current_token.push(ch);
+                }
             }
-
-            let token_start = pos;
-            let token_end = pos + token.len();
-
-            if cursor_pos >= token_start && cursor_pos <= token_end {
-                return i;
-            }
-
-            pos = token_end;
         }
 
-        tokens.len() // When cursor is at the end
+        if !current_token.is_empty() {
+            let start = token_start.unwrap_or(0);
+            let end = input.chars().count();
+            spans.push(TokenSpan {
+                text: current_token,
+                start,
+                end,
+            });
+        }
+
+        spans
+    }
+
+    /// Find token index corresponding to cursor position (character index).
+    fn find_cursor_token_index(&self, spans: &[TokenSpan], cursor_pos: usize) -> usize {
+        for (i, span) in spans.iter().enumerate() {
+            if cursor_pos >= span.start && cursor_pos <= span.end {
+                return i;
+            }
+        }
+        spans.len()
     }
 
     /// Analyze tokens to determine completion context
@@ -184,17 +232,16 @@ impl CommandLineParser {
         let has_space_after_command = self.has_space_after_command(input, &command);
 
         // Parse subcommands
-        let mut subcommand_count = 0;
         while let Some(token) = tokens_queue.front() {
             if OPTION_REGEX.is_match(token) {
                 break; // End subcommand parsing when options start
             }
 
             // Determine if it's an argument or subcommand (simplified version)
-            // Only treat the first few tokens as subcommands
-            if subcommand_count < 2 && self.looks_like_subcommand(token) {
+            // Treat consecutive "subcommand-like" tokens as subcommands.
+            // Invalid ones will be reclassified as arguments by CompletionGenerator.
+            if self.looks_like_subcommand(token) {
                 subcommand_path.push(tokens_queue.pop_front().unwrap());
-                subcommand_count += 1;
             } else {
                 break; // End subcommand parsing when arguments start
             }
@@ -287,14 +334,14 @@ impl CommandLineParser {
 
     /// Check if there's a space after the command
     fn has_space_after_command(&self, input: &str, command: &str) -> bool {
-        if let Some(command_end_pos) = input.find(command) {
-            let after_command_pos = command_end_pos + command.len();
-            if after_command_pos < input.len() {
-                let char_after_command = input.chars().nth(after_command_pos);
-                return char_after_command.is_some_and(|c| c.is_whitespace());
-            }
+        let trimmed = input.trim_start_matches(|c: char| c.is_whitespace());
+        if !trimmed.starts_with(command) {
+            return false;
         }
-        false
+        trimmed
+            .chars()
+            .nth(command.chars().count())
+            .is_some_and(|c| c.is_whitespace())
     }
 
     /// Determine if token looks like a subcommand
@@ -560,6 +607,24 @@ mod tests {
         assert_eq!(result.command, "git");
         assert_eq!(result.subcommand_path, vec!["remote", "add"]);
         assert_eq!(result.completion_context, CompletionContext::SubCommand);
+    }
+
+    #[test]
+    fn test_cursor_token_index_handles_multibyte_tokens() {
+        let parser = CommandLineParser::new();
+        let input = "cmd あい うえ";
+        // Cursor is on the third token ("うえ") in character index.
+        let result = parser.parse(input, 7);
+        assert_eq!(result.current_token, "うえ");
+    }
+
+    #[test]
+    fn test_parse_more_than_two_subcommands() {
+        let parser = CommandLineParser::new();
+        // Use tokens that satisfy looks_like_subcommand heuristic.
+        let input = "foo alpha delta omega";
+        let result = parser.parse(input, input.len());
+        assert_eq!(result.subcommand_path, vec!["alpha", "delta", "omega"]);
     }
 
     #[test]

@@ -1,11 +1,11 @@
 use super::cache::CompletionCache;
-use super::command::{
-    ArgumentType, CommandCompletion, CommandCompletionDatabase, CommandOption, CompletionCandidate,
-    SubCommand,
-};
+use super::command::{ArgumentType, CommandCompletionDatabase, CompletionCandidate};
+use super::context::ContextCorrector;
 use super::fuzzy_match_score;
 use super::generators::filesystem::FileSystemGenerator;
+use super::generators::option::OptionGenerator;
 use super::generators::script::ScriptGenerator;
+use super::generators::subcommand::SubCommandGenerator;
 use super::parser::{CompletionContext, ParsedCommandLine};
 use crate::dirs::is_executable;
 use anyhow::Result;
@@ -52,99 +52,7 @@ impl<'a> CompletionGenerator<'a> {
     /// This method also corrects the parsed command line if the parser
     /// incorrectly identified arguments as subcommands.
     pub fn correct_parsed_command_line(&self, parsed: &ParsedCommandLine) -> ParsedCommandLine {
-        let Some(command_completion) = self.database.get_command(&parsed.command) else {
-            return parsed.clone();
-        };
-
-        let mut valid_subcommands = Vec::new();
-        let mut invalid_subcommands = Vec::new();
-        let mut current_subcommands = &command_completion.subcommands;
-
-        for (idx, sub_name) in parsed.subcommand_path.iter().enumerate() {
-            let is_last = idx + 1 == parsed.subcommand_path.len();
-            let is_completion_target = sub_name == &parsed.current_token;
-
-            if let Some(sub) = current_subcommands.iter().find(|s| &s.name == sub_name) {
-                valid_subcommands.push(sub_name.clone());
-                current_subcommands = &sub.subcommands;
-                continue;
-            }
-
-            // If the last token in the subcommand path is the current completion target,
-            // and there exists a subcommand that starts with it, treat it as a partial
-            // subcommand rather than an argument.
-            if is_last
-                && is_completion_target
-                && current_subcommands
-                    .iter()
-                    .any(|s| s.name.starts_with(sub_name))
-            {
-                let mut new_parsed = parsed.clone();
-                new_parsed.subcommand_path = valid_subcommands;
-                new_parsed.completion_context = CompletionContext::SubCommand;
-                return new_parsed;
-            }
-
-            // Otherwise, treat this and remaining tokens as arguments.
-            invalid_subcommands.push(sub_name.clone());
-            invalid_subcommands.extend(parsed.subcommand_path[idx + 1..].iter().cloned());
-            break;
-        }
-
-        let mut new_parsed = parsed.clone();
-        new_parsed.subcommand_path = valid_subcommands;
-
-        if !invalid_subcommands.is_empty() {
-            // Move invalid subcommands to arguments
-            // Prepend them to existing arguments
-            let mut new_args = invalid_subcommands;
-            new_args.extend(new_parsed.specified_arguments);
-            new_parsed.specified_arguments = new_args.clone();
-            new_parsed.args = new_args.clone();
-
-            // Recalculate completion context: once tokens are reclassified as arguments,
-            // we should complete an argument at the corresponding index.
-            // However, if the user explicitly typed an option (starting with -),
-            // we should preserve the option context (applied to the parent command).
-            if matches!(
-                parsed.completion_context,
-                CompletionContext::ShortOption | CompletionContext::LongOption
-            ) {
-                new_parsed.completion_context = parsed.completion_context.clone();
-            } else {
-                let arg_index = new_parsed.specified_arguments.len().saturating_sub(
-                    if new_parsed
-                        .specified_arguments
-                        .contains(&new_parsed.current_token)
-                    {
-                        1
-                    } else {
-                        0
-                    },
-                );
-                new_parsed.completion_context = CompletionContext::Argument {
-                    arg_index,
-                    arg_type: None,
-                };
-            }
-
-            return new_parsed;
-        }
-
-        // If the parser decided we're completing an argument, but the current (sub)command
-        // has nested subcommands that match the current token, switch to subcommand completion.
-        if matches!(
-            new_parsed.completion_context,
-            CompletionContext::Argument { .. }
-        ) && !current_subcommands.is_empty()
-            && current_subcommands
-                .iter()
-                .any(|s| s.name.starts_with(&new_parsed.current_token))
-        {
-            new_parsed.completion_context = CompletionContext::SubCommand;
-        }
-
-        new_parsed
+        ContextCorrector::new(self.database).correct_parsed_command_line(parsed)
     }
 
     /// Generate completion candidates from parsed command line
@@ -199,79 +107,14 @@ impl<'a> CompletionGenerator<'a> {
         &self,
         parsed: &ParsedCommandLine,
     ) -> Result<Vec<CompletionCandidate>> {
-        let mut candidates = Vec::with_capacity(16);
-
         if let Some(command_completion) = self.database.get_command(&parsed.command) {
-            let current_subcommand =
-                self.find_current_subcommand(command_completion, &parsed.subcommand_path);
-
-            if let Some(subcommand) = current_subcommand {
-                // Nested subcommand candidates
-                for sub in &subcommand.subcommands {
-                    if sub.name.starts_with(&parsed.current_token) {
-                        candidates.push(CompletionCandidate::subcommand(
-                            sub.name.clone(),
-                            sub.description.clone(),
-                        ));
-                    }
-                }
-            } else {
-                // Match subcommands
-                for subcommand in &command_completion.subcommands {
-                    if subcommand.name.starts_with(&parsed.current_token) {
-                        candidates.push(CompletionCandidate::subcommand(
-                            subcommand.name.clone(),
-                            subcommand.description.clone(),
-                        ));
-                    }
-                }
-
-                // ALWAYS check if we should suggest arguments (files etc.) explanation:
-                // User wants file completion to work even if subcommands exist (e.g. `git <TAB>` showing files).
-                // Only if we haven't exceeded the number of arguments
-                let arg_index = parsed.specified_arguments.len();
-                if arg_index < command_completion.arguments.len() {
-                    let arg_def = &command_completion.arguments[arg_index];
-                    let arg_candidates = self.generate_candidates_for_type(
-                        arg_def.arg_type.as_ref().unwrap_or(&ArgumentType::String),
-                        parsed,
-                    )?;
-                    candidates.extend(arg_candidates);
-                }
-
-                // Also show global options, BUT ONLY IF token starts with "-"
-                // This prevents polluting the completion list when the user hasn't typed a dash yet.
-                if !command_completion.global_options.is_empty()
-                    && parsed.current_token.starts_with('-')
-                {
-                    for option in &command_completion.global_options {
-                        if let Some(ref short) = option.short
-                            && short.starts_with(&parsed.current_token)
-                        {
-                            candidates.push(CompletionCandidate::short_option(
-                                short.clone(),
-                                option.description.clone(),
-                            ));
-                        }
-                        if let Some(ref long) = option.long
-                            && long.starts_with(&parsed.current_token)
-                        {
-                            candidates.push(CompletionCandidate::long_option(
-                                long.clone(),
-                                option.description.clone(),
-                            ));
-                        }
-                    }
-                }
-            }
+            SubCommandGenerator::generate_candidates(command_completion, parsed, |arg_type, p| {
+                self.generate_candidates_for_type(arg_type, p)
+            })
         } else {
             // Fallback for unknown commands: suggest files by default
-            candidates.extend(FileSystemGenerator::generate_file_candidates(
-                &parsed.current_token,
-            )?);
+            FileSystemGenerator::generate_file_candidates(&parsed.current_token)
         }
-
-        Ok(candidates)
     }
 
     /// Generate short option completion candidates
@@ -279,26 +122,11 @@ impl<'a> CompletionGenerator<'a> {
         &self,
         parsed: &ParsedCommandLine,
     ) -> Result<Vec<CompletionCandidate>> {
-        let mut candidates = Vec::with_capacity(16);
-
         if let Some(command_completion) = self.database.get_command(&parsed.command) {
-            let options =
-                self.collect_available_options(command_completion, &parsed.subcommand_path);
-
-            for option in options {
-                if let Some(ref short) = option.short
-                    && short.starts_with(&parsed.current_token)
-                    && !parsed.specified_options.contains(short)
-                {
-                    candidates.push(CompletionCandidate::short_option(
-                        short.clone(),
-                        option.description.clone(),
-                    ));
-                }
-            }
+            OptionGenerator::generate_short_option_candidates(command_completion, parsed)
+        } else {
+            Ok(Vec::new())
         }
-
-        Ok(candidates)
     }
 
     /// Generate long option completion candidates
@@ -306,37 +134,11 @@ impl<'a> CompletionGenerator<'a> {
         &self,
         parsed: &ParsedCommandLine,
     ) -> Result<Vec<CompletionCandidate>> {
-        let mut candidates = Vec::with_capacity(16);
-
         if let Some(command_completion) = self.database.get_command(&parsed.command) {
-            let options =
-                self.collect_available_options(command_completion, &parsed.subcommand_path);
-
-            for option in options {
-                if let Some(ref long) = option.long
-                    && long.starts_with(&parsed.current_token)
-                    && !parsed.specified_options.contains(long)
-                {
-                    candidates.push(CompletionCandidate::long_option(
-                        long.clone(),
-                        option.description.clone(),
-                    ));
-                }
-
-                // Also check short options because the parser treats single "-" as LongOption context
-                if let Some(ref short) = option.short
-                    && short.starts_with(&parsed.current_token)
-                    && !parsed.specified_options.contains(short)
-                {
-                    candidates.push(CompletionCandidate::short_option(
-                        short.clone(),
-                        option.description.clone(),
-                    ));
-                }
-            }
+            OptionGenerator::generate_long_option_candidates(command_completion, parsed)
+        } else {
+            Ok(Vec::new())
         }
-
-        Ok(candidates)
     }
 
     /// Generate option value completion candidates
@@ -533,61 +335,13 @@ impl<'a> CompletionGenerator<'a> {
 
         Ok(candidates)
     }
-
-    /// Find current subcommand
-    fn find_current_subcommand<'b>(
-        &self,
-        command_completion: &'b CommandCompletion,
-        subcommand_path: &[String],
-    ) -> Option<&'b SubCommand> {
-        if subcommand_path.is_empty() {
-            return None;
-        }
-
-        let mut current_subcommands = &command_completion.subcommands;
-        let mut current_subcommand = None;
-
-        for subcommand_name in subcommand_path {
-            current_subcommand = current_subcommands
-                .iter()
-                .find(|sc| sc.name == *subcommand_name);
-
-            if let Some(sc) = current_subcommand {
-                current_subcommands = &sc.subcommands;
-            } else {
-                return None;
-            }
-        }
-
-        current_subcommand
-    }
-
-    /// Collect available options
-    fn collect_available_options<'b>(
-        &self,
-        command_completion: &'b CommandCompletion,
-        subcommand_path: &[String],
-    ) -> Vec<&'b CommandOption> {
-        let mut options = Vec::new();
-
-        // Global options
-        options.extend(&command_completion.global_options);
-
-        // Subcommand options
-        if let Some(subcommand) = self.find_current_subcommand(command_completion, subcommand_path)
-        {
-            options.extend(&subcommand.options);
-        }
-
-        options
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::FileSystemGenerator;
     use super::*;
-    use crate::completion::command::{Argument, CommandCompletion, SubCommand};
+    use crate::completion::command::{Argument, CommandCompletion, CommandOption, SubCommand};
     use crate::completion::parser::CommandLineParser;
     use std::path::{MAIN_SEPARATOR, Path};
     use tempfile::tempdir;
@@ -1286,7 +1040,7 @@ mod tests {
             options: vec![],
             current_token: "-".to_string(),
             current_arg: Some("-".to_string()),
-            completion_context: CompletionContext::SubCommand,
+            completion_context: CompletionContext::LongOption,
             specified_options: vec![],
             specified_arguments: vec![],
             cursor_index: 0,

@@ -1,0 +1,122 @@
+use super::command::CommandCompletionDatabase;
+use super::parser::{CompletionContext, ParsedCommandLine};
+
+/// Responsible for correcting parsed command line based on completion database
+pub struct ContextCorrector<'a> {
+    database: &'a CommandCompletionDatabase,
+}
+
+impl<'a> ContextCorrector<'a> {
+    pub fn new(database: &'a CommandCompletionDatabase) -> Self {
+        Self { database }
+    }
+
+    /// Correct the parsed command line if the parser incorrectly identified arguments as subcommands.
+    pub fn correct_parsed_command_line(&self, parsed: &ParsedCommandLine) -> ParsedCommandLine {
+        let Some(command_completion) = self.database.get_command(&parsed.command) else {
+            return parsed.clone();
+        };
+
+        let mut new_parsed = parsed.clone();
+        let mut valid_subcommands = Vec::new();
+        let mut current_subcommands = &command_completion.subcommands;
+        let mut split_index = parsed.subcommand_path.len();
+
+        // 1. Identify valid subcommand chain
+        for (idx, sub_name) in parsed.subcommand_path.iter().enumerate() {
+            if let Some(sub) = current_subcommands.iter().find(|s| &s.name == sub_name) {
+                valid_subcommands.push(sub_name.clone());
+                current_subcommands = &sub.subcommands;
+            } else {
+                split_index = idx;
+                break;
+            }
+        }
+
+        // 2. Handle the split point
+        // If we consumed everything, or stopped at the last token
+        if split_index < parsed.subcommand_path.len() {
+            // We have some invalid subcommands.
+            let invalid_tokens = &parsed.subcommand_path[split_index..];
+            let first_invalid = &invalid_tokens[0];
+            let is_last_token = split_index + 1 == parsed.subcommand_path.len();
+            let is_completion_target = first_invalid == &parsed.current_token;
+
+            if is_last_token && is_completion_target {
+                // The cursor is on this token.
+                // Check if it is a partial subcommand match
+                let is_partial_subcommand = current_subcommands
+                    .iter()
+                    .any(|s| s.name.starts_with(first_invalid));
+
+                // Check if it looks like an option
+                let is_option = first_invalid.starts_with('-');
+
+                if is_partial_subcommand && !is_option {
+                    // Treat as SubCommand completion
+                    new_parsed.subcommand_path = valid_subcommands;
+                    // We don't push the partial token to valid_subcommands for the path,
+                    // but we do want the context to be SubCommand.
+                    new_parsed.completion_context = CompletionContext::SubCommand;
+                    return new_parsed;
+                } else if is_option {
+                    // Check original context to decide Short vs Long, or default to Long
+                    if parsed.completion_context == CompletionContext::ShortOption {
+                        new_parsed.completion_context = CompletionContext::ShortOption;
+                    } else {
+                        new_parsed.completion_context = CompletionContext::LongOption;
+                    }
+                    // The token is an option, so valid subcommands path stops before it.
+                    new_parsed.subcommand_path = valid_subcommands;
+                    return new_parsed;
+                }
+            }
+
+            // If strictly invalid (not a partial match, or intermediate token), treat as arguments.
+            let mut new_args = invalid_tokens.to_vec();
+            new_args.extend(new_parsed.specified_arguments);
+            new_parsed.specified_arguments = new_args;
+            new_parsed.subcommand_path = valid_subcommands;
+
+            // Recalculate completion context
+            // If user explicitly typed an option (starting with -), preserve Option context.
+            if matches!(
+                parsed.completion_context,
+                CompletionContext::ShortOption | CompletionContext::LongOption
+            ) {
+                new_parsed.completion_context = parsed.completion_context.clone();
+            } else {
+                let arg_index = new_parsed.specified_arguments.len().saturating_sub(
+                    if new_parsed
+                        .specified_arguments
+                        .contains(&new_parsed.current_token)
+                    {
+                        1
+                    } else {
+                        0
+                    },
+                );
+                new_parsed.completion_context = CompletionContext::Argument {
+                    arg_index,
+                    arg_type: None,
+                };
+            }
+            return new_parsed;
+        }
+
+        // 3. Fallback: consumed all subcommands successfully
+        // If the context was Argument but we are actually at a point where subcommands are possible?
+        if matches!(
+            new_parsed.completion_context,
+            CompletionContext::Argument { .. }
+        ) && !current_subcommands.is_empty()
+            && current_subcommands
+                .iter()
+                .any(|s| s.name.starts_with(&new_parsed.current_token))
+        {
+            new_parsed.completion_context = CompletionContext::SubCommand;
+        }
+
+        new_parsed
+    }
+}

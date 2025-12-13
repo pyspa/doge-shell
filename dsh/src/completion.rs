@@ -23,6 +23,7 @@ use tracing::warn;
 
 pub mod cache;
 pub mod command;
+pub mod context;
 pub mod display;
 
 pub mod framework;

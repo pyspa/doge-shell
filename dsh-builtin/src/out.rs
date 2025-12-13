@@ -135,3 +135,123 @@ fn print_help() {
     println!("  out --list    List all stored outputs");
     println!("  echo $OUT     Use most recent output in a command");
 }
+
+/// Description for the internal print last stdout command
+pub fn print_last_stdout_description() -> &'static str {
+    "Internal command to print the last stdout (used for Smart Pipe)"
+}
+
+/// Internal command to print the last stdout
+///
+/// This is used effectively for the "Smart Pipe" feature where starting a command
+/// with `|` pipes the previous output to the new command.
+pub fn print_last_stdout(
+    _ctx: &Context,
+    _argv: Vec<String>,
+    proxy: &mut dyn ShellProxy,
+) -> ExitStatus {
+    // Simply fetch "OUT" (which resolves to OUT[1]) and print it
+    if let Some(output) = proxy.get_var("OUT") {
+        print!("{}", output);
+        // Ensure we end with a newline if the output didn't have one (though typically it might)
+        // Actually, for piping, we should probably just print exactly what was captured.
+        // But OutputEntry.stdout is a String, so it's textual.
+        if !output.ends_with('\n') {
+            println!();
+        }
+    }
+    ExitStatus::ExitedWith(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dsh_types::mcp::McpServerConfig;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    struct MockShellProxy {
+        vars: HashMap<String, String>,
+    }
+
+    impl MockShellProxy {
+        fn new() -> Self {
+            Self {
+                vars: HashMap::new(),
+            }
+        }
+    }
+
+    impl ShellProxy for MockShellProxy {
+        fn get_var(&mut self, key: &str) -> Option<String> {
+            self.vars.get(key).cloned()
+        }
+
+        // Stubs for other methods
+        fn exit_shell(&mut self) {}
+        fn dispatch(
+            &mut self,
+            _ctx: &Context,
+            _cmd: &str,
+            _argv: Vec<String>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn save_path_history(&mut self, _path: &str) {}
+        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn insert_path(&mut self, _index: usize, _path: &str) {}
+        fn set_var(&mut self, key: String, value: String) {
+            self.vars.insert(key, value);
+        }
+        fn set_env_var(&mut self, _key: String, _value: String) {}
+        fn get_alias(&mut self, _name: &str) -> Option<String> {
+            None
+        }
+        fn set_alias(&mut self, _name: String, _command: String) {}
+        fn list_aliases(&mut self) -> HashMap<String, String> {
+            HashMap::new()
+        }
+        fn add_abbr(&mut self, _name: String, _expansion: String) {}
+        fn remove_abbr(&mut self, _name: &str) -> bool {
+            false
+        }
+        fn list_abbrs(&self) -> Vec<(String, String)> {
+            Vec::new()
+        }
+        fn get_abbr(&self, _name: &str) -> Option<String> {
+            None
+        }
+        fn list_mcp_servers(&mut self) -> Vec<McpServerConfig> {
+            Vec::new()
+        }
+        fn list_execute_allowlist(&mut self) -> Vec<String> {
+            Vec::new()
+        }
+        fn list_exported_vars(&self) -> Vec<(String, String)> {
+            Vec::new()
+        }
+        fn export_var(&mut self, _key: &str) -> bool {
+            false
+        }
+        fn set_and_export_var(&mut self, _key: String, _value: String) {}
+        fn get_current_dir(&self) -> anyhow::Result<PathBuf> {
+            Ok(PathBuf::from("/"))
+        }
+    }
+
+    #[test]
+    fn test_print_last_stdout() {
+        use nix::unistd::Pid;
+        let mut proxy = MockShellProxy::new();
+        proxy
+            .vars
+            .insert("OUT".to_string(), "hello world".to_string());
+
+        let ctx = Context::new_safe(Pid::from_raw(1), Pid::from_raw(1), true);
+        let status = print_last_stdout(&ctx, vec![], &mut proxy);
+
+        assert_eq!(status, ExitStatus::ExitedWith(0));
+    }
+}

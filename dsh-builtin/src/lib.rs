@@ -321,6 +321,13 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             Box::new(BuiltinCommandFn::new(out::command, out::description()))
                 as Box<dyn BuiltinCommandTrait>,
         );
+        builtin.insert(
+            "__dsh_print_last_stdout",
+            Box::new(BuiltinCommandFn::new(
+                out::print_last_stdout,
+                out::print_last_stdout_description(),
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
 
         Mutex::new(builtin)
     });

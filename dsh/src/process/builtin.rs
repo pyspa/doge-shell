@@ -20,6 +20,8 @@ pub struct BuiltinProcess {
     pub stdin: RawFd,
     pub stdout: RawFd,
     pub stderr: RawFd,
+    pub(crate) cap_stdout: Option<RawFd>,
+    pub(crate) cap_stderr: Option<RawFd>,
 }
 
 impl PartialEq for BuiltinProcess {
@@ -60,6 +62,8 @@ impl BuiltinProcess {
             stdin: STDIN_FILENO,
             stdout: STDOUT_FILENO,
             stderr: STDERR_FILENO,
+            cap_stdout: None,
+            cap_stderr: None,
         }
     }
 

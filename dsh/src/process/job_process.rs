@@ -214,7 +214,7 @@ impl JobProcess {
 
     pub fn get_cap_out(&self) -> (Option<RawFd>, Option<RawFd>) {
         match self {
-            JobProcess::Builtin(_p) => (None, None),
+            JobProcess::Builtin(p) => (p.cap_stdout, p.cap_stderr),
             JobProcess::Command(p) => (p.cap_stdout, p.cap_stderr),
         }
     }
@@ -246,7 +246,39 @@ impl JobProcess {
                 create_pipe(ctx)? // create pipe
             }
             None => {
-                handle_output_redirect(ctx, redirect, stdout)? // check redirect
+                let redirected = handle_output_redirect(ctx, redirect, stdout)?;
+                if redirected.is_none() && redirect.is_none() {
+                    // No redirect, enable automatic capture
+                    use nix::unistd::pipe;
+                    use tracing::error;
+
+                    // Stdout pipe
+                    if let Ok((pout, pin)) = pipe() {
+                        match self {
+                            JobProcess::Command(p) => p.cap_stdout = Some(pout),
+                            JobProcess::Builtin(p) => p.cap_stdout = Some(pout),
+                        }
+                        ctx.outfile = pin;
+                    } else {
+                        error!("failed to create capture pipe for stdout");
+                    }
+
+                    // Stderr pipe (Tee stderr too for consistency?)
+                    // For now let's capture stderr as well so we can show it if needed,
+                    // or at least not have mixed output issues.
+                    if let Ok((pout, pin)) = pipe() {
+                        match self {
+                            JobProcess::Command(p) => p.cap_stderr = Some(pout),
+                            JobProcess::Builtin(p) => p.cap_stderr = Some(pout),
+                        }
+                        ctx.errfile = pin;
+                    } else {
+                        error!("failed to create capture pipe for stderr");
+                    }
+                    None
+                } else {
+                    redirected
+                }
             }
         };
 

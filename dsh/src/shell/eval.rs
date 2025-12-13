@@ -48,6 +48,9 @@ pub async fn eval_str(
         return Ok(code);
     }
 
+    // Smart Pipe transformation
+    let input = transform_input_for_smart_pipe(input);
+
     let jobs = get_jobs(shell, &input)?;
     let mut last_exit_code = 0;
     for mut job in jobs {
@@ -250,6 +253,17 @@ async fn spawn_subshell(shell: &mut Shell, ctx: &mut Context, job: &mut Job) -> 
     }
 }
 
+fn transform_input_for_smart_pipe(input: String) -> String {
+    let trimmed = input.trim_start();
+    // Check if it starts with | but not |> (capture) or || (OR operator)
+    if trimmed.starts_with('|') && !trimmed.starts_with("|>") && !trimmed.starts_with("||") {
+        debug!("Smart Pipe triggered: prepending output history");
+        format!("__dsh_print_last_stdout {}", input)
+    } else {
+        input
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,5 +297,36 @@ mod tests {
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].cmd, "echo a &");
         assert!(!jobs[0].foreground);
+    }
+
+    #[test]
+    fn test_transform_input_for_smart_pipe() {
+        // Normal cases (no change)
+        assert_eq!(
+            transform_input_for_smart_pipe("ls -la".to_string()),
+            "ls -la"
+        );
+        assert_eq!(
+            transform_input_for_smart_pipe("echo hello".to_string()),
+            "echo hello"
+        );
+        assert_eq!(
+            transform_input_for_smart_pipe("|| echo fail".to_string()),
+            "|| echo fail"
+        );
+        assert_eq!(
+            transform_input_for_smart_pipe("|> out.txt".to_string()),
+            "|> out.txt"
+        );
+
+        // Smart pipe cases
+        assert_eq!(
+            transform_input_for_smart_pipe("| grep foo".to_string()),
+            "__dsh_print_last_stdout | grep foo"
+        );
+        assert_eq!(
+            transform_input_for_smart_pipe("  | grep foo".to_string()),
+            "__dsh_print_last_stdout   | grep foo"
+        );
     }
 }

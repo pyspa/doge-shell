@@ -347,6 +347,22 @@ dsh -c "echo 'Hello, World!'"
 dsh -l "(print \"Hello from Lisp!\")"
 ```
 
+### Smart Pipe
+
+Use `|` at the start of a command to pipe the output of the immediately preceding command.
+
+```bash
+# First command
+echo "Hello, World!"
+
+# Pipe the output to the next command
+| tr '[:upper:]' '[:lower:]'
+# Output: hello, world!
+```
+
+This works with any command (external or built-in) as the shell automatically captures the standard output.
+
+
 ### Import History
 
 Import command history from other shells:

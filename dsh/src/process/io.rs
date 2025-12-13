@@ -57,6 +57,7 @@ const MONITOR_TIMEOUT: u64 = 200;
 pub struct OutputMonitor {
     pub(crate) reader: io::BufReader<fs::File>,
     pub(crate) outputed: bool,
+    pub captured_output: String,
 }
 
 impl OutputMonitor {
@@ -66,6 +67,7 @@ impl OutputMonitor {
         OutputMonitor {
             reader,
             outputed: false,
+            captured_output: String::new(),
         }
     }
 
@@ -75,6 +77,9 @@ impl OutputMonitor {
             buffer.push_str(first_prefix);
         }
         buffer.push_str(line);
+        // Also capture the raw line (we might want to be careful about prefixes/newlines)
+        // The line from read_line includes the newline character usually.
+        self.captured_output.push_str(line);
     }
 
     fn flush_buffer(&mut self, buffer: &str) -> Result<()> {

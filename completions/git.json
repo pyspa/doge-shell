@@ -1,6 +1,70 @@
 {
   "command": "git",
   "description": "Distributed version control system",
+  "global_options": [
+    {
+        "short": "-v",
+        "long": "--version",
+        "description": "Show version info"
+    },
+    {
+        "long": "--help",
+        "description": "Show help info"
+    },
+    {
+        "short": "-C",
+        "description": "Run as if git was started in <path>"
+    },
+    {
+        "short": "-c",
+        "description": "Pass a configuration parameter to command"
+    },
+    {
+        "long": "--exec-path",
+        "description": "Path to wherever your core git programs are installed"
+    },
+    {
+        "long": "--html-path",
+        "description": "Path to wherever your html documentation are installed"
+    },
+    {
+        "long": "--man-path",
+        "description": "Path to wherever your man pages are installed"
+    },
+    {
+        "long": "--info-path",
+        "description": "Path to wherever your info pages are installed"
+    },
+    {
+        "short": "-p",
+        "long": "--paginate",
+        "description": "Pipe all output into less"
+    },
+    {
+        "long": "--no-pager",
+        "description": "Do not pipe git output into a pager"
+    },
+    {
+        "long": "--no-replace-objects",
+        "description": "Do not use replacement refs to replace git objects"
+    },
+    {
+        "long": "--bare",
+        "description": "Treat the repository as a bare repository"
+    },
+    {
+        "long": "--git-dir",
+        "description": "Set the path to the repository"
+    },
+    {
+        "long": "--work-tree",
+        "description": "Set the path to the working tree"
+    },
+    {
+        "long": "--namespace",
+        "description": "Set the git namespace"
+    }
+  ],
   "subcommands": [
     {
       "name": "switch",

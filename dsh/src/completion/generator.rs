@@ -104,20 +104,29 @@ impl<'a> CompletionGenerator<'a> {
 
             // Recalculate completion context: once tokens are reclassified as arguments,
             // we should complete an argument at the corresponding index.
-            let arg_index = new_parsed.specified_arguments.len().saturating_sub(
-                if new_parsed
-                    .specified_arguments
-                    .contains(&new_parsed.current_token)
-                {
-                    1
-                } else {
-                    0
-                },
-            );
-            new_parsed.completion_context = CompletionContext::Argument {
-                arg_index,
-                arg_type: None,
-            };
+            // However, if the user explicitly typed an option (starting with -),
+            // we should preserve the option context (applied to the parent command).
+            if matches!(
+                parsed.completion_context,
+                CompletionContext::ShortOption | CompletionContext::LongOption
+            ) {
+                new_parsed.completion_context = parsed.completion_context.clone();
+            } else {
+                let arg_index = new_parsed.specified_arguments.len().saturating_sub(
+                    if new_parsed
+                        .specified_arguments
+                        .contains(&new_parsed.current_token)
+                    {
+                        1
+                    } else {
+                        0
+                    },
+                );
+                new_parsed.completion_context = CompletionContext::Argument {
+                    arg_index,
+                    arg_type: None,
+                };
+            }
 
             return new_parsed;
         }
@@ -310,6 +319,17 @@ impl<'a> CompletionGenerator<'a> {
                 {
                     candidates.push(CompletionCandidate::long_option(
                         long.clone(),
+                        option.description.clone(),
+                    ));
+                }
+
+                // Also check short options because the parser treats single "-" as LongOption context
+                if let Some(ref short) = option.short
+                    && short.starts_with(&parsed.current_token)
+                    && !parsed.specified_options.contains(short)
+                {
+                    candidates.push(CompletionCandidate::short_option(
+                        short.clone(),
                         option.description.clone(),
                     ));
                 }
@@ -742,6 +762,50 @@ mod tests {
     }
 
     #[test]
+    fn test_short_and_long_options_generated_for_single_dash() {
+        let mut db = CommandCompletionDatabase::new();
+        let git_completion = CommandCompletion {
+            command: "git".to_string(),
+            description: None,
+            global_options: vec![],
+            subcommands: vec![SubCommand {
+                name: "commit".to_string(),
+                description: None,
+                options: vec![
+                    CommandOption {
+                        short: Some("-m".to_string()),
+                        long: Some("--message".to_string()),
+                        description: None,
+                    },
+                    CommandOption {
+                        short: Some("-a".to_string()),
+                        long: Some("--all".to_string()),
+                        description: None,
+                    },
+                ],
+                arguments: vec![],
+                subcommands: vec![],
+            }],
+            arguments: vec![],
+        };
+        db.add_command(git_completion);
+
+        let parser = CommandLineParser::new();
+        // "-" is parsed as LongOption context by verify logic
+        let input = "git commit -";
+        let parsed = parser.parse(input, input.len());
+        let generator = CompletionGenerator::new(&db);
+
+        let candidates = generator.generate_candidates(&parsed).unwrap();
+
+        // Should contain both long and short options
+        assert!(candidates.iter().any(|c| c.text == "--message"));
+        assert!(candidates.iter().any(|c| c.text == "--all"));
+        assert!(candidates.iter().any(|c| c.text == "-m"));
+        assert!(candidates.iter().any(|c| c.text == "-a"));
+    }
+
+    #[test]
     fn build_candidate_path_handles_root_without_double_slash() {
         assert_eq!(
             FileSystemGenerator::build_candidate_path("/", "tmp"),
@@ -793,6 +857,51 @@ mod tests {
             expected_dir,
             texts
         );
+    }
+
+    #[test]
+    fn test_git_add_completion_options_with_single_dash() {
+        let mut db = CommandCompletionDatabase::new();
+        let git_completion = CommandCompletion {
+            command: "git".to_string(),
+            description: None,
+            global_options: vec![],
+            subcommands: vec![SubCommand {
+                name: "add".to_string(),
+                description: None,
+                options: vec![
+                    CommandOption {
+                        short: Some("-A".to_string()),
+                        long: Some("--all".to_string()),
+                        description: None,
+                    },
+                    CommandOption {
+                        short: Some("-u".to_string()),
+                        long: Some("--update".to_string()),
+                        description: None,
+                    },
+                ],
+                arguments: vec![],
+                subcommands: vec![],
+            }],
+            arguments: vec![],
+        };
+        db.add_command(git_completion);
+
+        let parser = CommandLineParser::new();
+        // Case 1: "git add -" should trigger LongOption context but verify both short/long
+        let input = "git add -";
+        let parsed = parser.parse(input, input.len());
+        // Verify parser context assumption
+        assert_eq!(parsed.completion_context, CompletionContext::LongOption);
+
+        let generator = CompletionGenerator::new(&db);
+        let candidates = generator.generate_candidates(&parsed).unwrap();
+
+        assert!(candidates.iter().any(|c| c.text == "-A"));
+        assert!(candidates.iter().any(|c| c.text == "--all"));
+        assert!(candidates.iter().any(|c| c.text == "-u"));
+        assert!(candidates.iter().any(|c| c.text == "--update"));
     }
 
     #[test]

@@ -21,12 +21,12 @@ use std::{process::Command, sync::Arc};
 use tracing::debug;
 use tracing::warn;
 
-mod cache;
-mod command;
+pub mod cache;
+pub mod command;
 pub mod display;
 
 pub mod framework;
-mod generator;
+pub mod generator;
 pub mod generators;
 mod history;
 pub mod integrated;

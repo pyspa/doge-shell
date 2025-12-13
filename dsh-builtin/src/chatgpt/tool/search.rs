@@ -1,6 +1,5 @@
 use crate::ShellProxy;
 use serde_json::{Value, json};
-use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Component, Path, PathBuf};
@@ -68,7 +67,8 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
     }
 
     // Get current working directory
-    let current_dir = env::current_dir()
+    let current_dir = _proxy
+        .get_current_dir()
         .map_err(|err| format!("chat: failed to get current working directory: {err}"))?;
 
     // Convert the relative path to an absolute path by joining with current directory
@@ -209,16 +209,14 @@ fn normalize_path(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use dsh_types::Context;
-    use once_cell::sync::Lazy;
-    use std::sync::Mutex;
     use tempfile::tempdir;
 
-    static CWD_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-
-    struct NoopProxy;
+    struct NoopProxy {
+        cwd: PathBuf,
+    }
     impl ShellProxy for NoopProxy {
         fn get_current_dir(&self) -> anyhow::Result<std::path::PathBuf> {
-            Ok(std::env::current_dir()?)
+            Ok(self.cwd.clone())
         }
         fn exit_shell(&mut self) {}
         fn dispatch(
@@ -273,13 +271,13 @@ mod tests {
 
     #[test]
     fn test_search_filename() {
-        let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("test_file.rs");
         fs::write(&file_path, "content").unwrap();
 
-        env::set_current_dir(&dir).unwrap();
-        let mut proxy = NoopProxy;
+        let mut proxy = NoopProxy {
+            cwd: dir.path().to_path_buf(),
+        };
 
         let result = run(
             r#"{"query": "test_file.rs", "type": "filename"}"#,
@@ -291,13 +289,13 @@ mod tests {
 
     #[test]
     fn test_search_content() {
-        let _lock = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
         fs::write(&file_path, "hello world").unwrap();
 
-        env::set_current_dir(&dir).unwrap();
-        let mut proxy = NoopProxy;
+        let mut proxy = NoopProxy {
+            cwd: dir.path().to_path_buf(),
+        };
 
         let result = run(r#"{"query": "world", "type": "content"}"#, &mut proxy).unwrap();
         assert!(result.contains("test.txt"));

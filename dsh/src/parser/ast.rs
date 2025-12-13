@@ -111,7 +111,6 @@ fn search_pos_word(pair: Pair<Rule>, pos: usize) -> Option<(Rule, Span)> {
             }
         }
         _ => {
-            // TODO check search_pos_word
             // println!("search_pos_word {:?} {:?}", pair.as_rule(), pair.as_str());
         }
     }
@@ -164,7 +163,6 @@ fn to_words<'a>(pair: Pair<'a, Rule>, pos: usize, out: &mut Vec<(Rule, Span<'a>,
         Rule::argv0 => {
             for pair in pair.into_inner() {
                 for pair in pair.into_inner() {
-                    // TODO check subshell
                     if let Some((span, current)) = get_span(pair, pos) {
                         out.push((Rule::argv0, span, current));
                     };
@@ -198,7 +196,6 @@ fn to_words<'a>(pair: Pair<'a, Rule>, pos: usize, out: &mut Vec<(Rule, Span<'a>,
                     Rule::argv0 => {
                         for pair in inner_pair.into_inner() {
                             for pair in pair.into_inner() {
-                                // TODO check subshell
                                 if let Some((span, current)) = get_span(pair, pos) {
                                     out.push((Rule::argv0, span, current));
                                 };

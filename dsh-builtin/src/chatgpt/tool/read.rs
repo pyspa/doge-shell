@@ -1,6 +1,5 @@
 use crate::ShellProxy;
 use serde_json::{Value, json};
-use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -54,7 +53,8 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
     }
 
     // Get current working directory
-    let current_dir = env::current_dir()
+    let current_dir = _proxy
+        .get_current_dir()
         .map_err(|err| format!("chat: failed to get current working directory: {err}"))?;
 
     // Convert the relative path to an absolute path by joining with current directory
@@ -103,10 +103,12 @@ mod tests {
     use dsh_types::Context;
     use tempfile::tempdir;
 
-    struct NoopProxy;
+    struct NoopProxy {
+        cwd: std::path::PathBuf,
+    }
     impl ShellProxy for NoopProxy {
         fn get_current_dir(&self) -> anyhow::Result<std::path::PathBuf> {
-            Ok(std::env::current_dir()?)
+            Ok(self.cwd.clone())
         }
         fn exit_shell(&mut self) {}
         fn dispatch(
@@ -165,8 +167,9 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         fs::write(&file_path, "Hello, world!").unwrap();
 
-        env::set_current_dir(&dir).unwrap();
-        let mut proxy = NoopProxy;
+        let mut proxy = NoopProxy {
+            cwd: dir.path().to_path_buf(),
+        };
 
         let result = run(r#"{"path": "test.txt"}"#, &mut proxy).unwrap();
         assert_eq!(result, "Hello, world!");
@@ -175,8 +178,9 @@ mod tests {
     #[test]
     fn test_read_file_not_found() {
         let dir = tempdir().unwrap();
-        env::set_current_dir(&dir).unwrap();
-        let mut proxy = NoopProxy;
+        let mut proxy = NoopProxy {
+            cwd: dir.path().to_path_buf(),
+        };
 
         let result = run(r#"{"path": "missing.txt"}"#, &mut proxy);
         assert!(result.is_err());
@@ -184,7 +188,9 @@ mod tests {
 
     #[test]
     fn test_read_file_absolute_path() {
-        let mut proxy = NoopProxy;
+        let mut proxy = NoopProxy {
+            cwd: std::path::PathBuf::from("."),
+        };
         let result = run(r#"{"path": "/etc/passwd"}"#, &mut proxy);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("must be relative"));
@@ -192,7 +198,9 @@ mod tests {
 
     #[test]
     fn test_read_file_parent_traversal() {
-        let mut proxy = NoopProxy;
+        let mut proxy = NoopProxy {
+            cwd: std::path::PathBuf::from("."),
+        };
         let result = run(r#"{"path": "../secret.txt"}"#, &mut proxy);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("must not contain `..`"));

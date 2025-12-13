@@ -29,8 +29,6 @@ pub async fn eval_str(
         history.add(&input);
         history.reset_index();
     }
-    // TODO refactor context
-    // let tmode = tcgetattr(0).expect("failed tcgetattr");
 
     if let Some(rest) = input.trim_start().strip_prefix('!') {
         disable_raw_mode().ok();
@@ -188,8 +186,6 @@ async fn execute_with_capture(
 }
 
 fn get_jobs(shell: &mut Shell, input: &str) -> Result<Vec<Job>> {
-    // TODO tests
-
     let (input_cow, pairs_opt) =
         parser::parse_with_expansion(input, Arc::clone(&shell.environment))?;
 
@@ -244,7 +240,6 @@ async fn spawn_subshell(shell: &mut Shell, ctx: &mut Context, job: &mut Job) -> 
 
             if let Ok(ProcessState::Completed(exit, _)) = res {
                 if exit != 0 {
-                    // TODO check
                     debug!("job exit code {:?}", exit);
                 }
                 std::process::exit(i32::from(exit));
@@ -252,5 +247,41 @@ async fn spawn_subshell(shell: &mut Shell, ctx: &mut Context, job: &mut Job) -> 
                 std::process::exit(-1);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::environment::Environment;
+    use crate::shell::Shell;
+
+    #[test]
+    fn test_get_jobs_simple() {
+        let env = Environment::new();
+        let mut shell = Shell::new(env);
+        let jobs = get_jobs(&mut shell, "echo hello").unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].cmd, "echo hello");
+    }
+
+    #[test]
+    fn test_get_jobs_sequence() {
+        let env = Environment::new();
+        let mut shell = Shell::new(env);
+        let jobs = get_jobs(&mut shell, "echo a; echo b").unwrap();
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].cmd, "echo a");
+        assert_eq!(jobs[1].cmd, "echo b");
+    }
+
+    #[test]
+    fn test_get_jobs_background() {
+        let env = Environment::new();
+        let mut shell = Shell::new(env);
+        let jobs = get_jobs(&mut shell, "echo a &").unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].cmd, "echo a &");
+        assert!(!jobs[0].foreground);
     }
 }

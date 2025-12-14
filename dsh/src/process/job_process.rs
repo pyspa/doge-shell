@@ -1,6 +1,6 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use nix::sys::signal::Signal;
-use nix::unistd::{Pid, getpid};
+use nix::unistd::{Pid, getpid, pipe};
 use std::os::unix::io::RawFd;
 use tracing::debug;
 
@@ -246,13 +246,20 @@ impl JobProcess {
                 create_pipe(ctx)? // create pipe
             }
             None => {
-                // REMOVED: Automatic capture pipe creation
-                // This was causing stdout to be a pipe instead of TTY,
-                // which broke color output for commands like `ls --color=auto`
-                // that check isatty(stdout) before emitting ANSI colors.
-                //
-                // If capture is needed, use explicit capture mode (|>) or redirect.
-                handle_output_redirect(ctx, redirect, stdout)?
+                // Automatic capture for non-interactive mode (e.g. smart pipe tests)
+                // We don't do this in interactive mode to preserve TTY (colors, etc.)
+                if !ctx.interactive && redirect.is_none() {
+                    let (pout, pin) = pipe().context("failed pipe")?;
+                    ctx.outfile = pin;
+                    match self {
+                        JobProcess::Builtin(p) => p.cap_stdout = Some(pout),
+                        JobProcess::Command(p) => p.cap_stdout = Some(pout),
+                    }
+                    None
+                } else {
+                    // Manual capture or redirect
+                    handle_output_redirect(ctx, redirect, stdout)?
+                }
             }
         };
 

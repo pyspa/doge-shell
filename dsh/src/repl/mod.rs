@@ -44,6 +44,7 @@ use cache::*;
 mod suggestion_manager;
 use suggestion_manager::*;
 mod handler;
+pub mod key_action;
 
 /// AI Quick Actions available to the user
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

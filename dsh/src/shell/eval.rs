@@ -59,8 +59,13 @@ pub async fn eval_str(
             debug!("Error executing pre-exec hooks: {}", e);
         }
 
+        // Save current terminal state BEFORE disabling raw mode
+        // This captures the raw mode state for proper restoration
+        debug!("EVAL_STR: Saving terminal state before job execution");
+        let raw_mode_guard = RawModeRestore::new();
+        debug!("EVAL_STR: About to disable_raw_mode for job execution");
         disable_raw_mode().ok();
-        let mut raw_mode_guard = RawModeRestore::new();
+        debug!("EVAL_STR: disable_raw_mode completed");
         if force_background {
             // all job run background
             job.foreground = false;
@@ -101,7 +106,6 @@ pub async fn eval_str(
                 std::io::stderr().flush().ok();
             }
 
-            raw_mode_guard.restore();
             continue;
         }
 
@@ -132,20 +136,20 @@ pub async fn eval_str(
             Err(err) => {
                 ctx.pid = None;
                 ctx.pgid = None;
-                raw_mode_guard.restore();
+                drop(raw_mode_guard); // Restore terminal state via Drop
                 return Err(err);
             }
         }
         // reset
         ctx.pid = None;
         ctx.pgid = None;
-        raw_mode_guard.restore();
         if should_break {
             break;
         }
     }
 
-    enable_raw_mode().ok();
+    // Terminal state is restored by raw_mode_guard drop at end of each job iteration
+    debug!("EVAL_STR: Job loop completed");
     Ok(last_exit_code as i32)
 }
 

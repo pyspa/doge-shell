@@ -126,6 +126,12 @@ pub(crate) async fn handle_paste_event(repl: &mut Repl<'_>, text: &str) -> Resul
     Ok(())
 }
 pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Result<()> {
+    // DEBUG: Log all key events to trace the issue
+    debug!(
+        "KEY_EVENT_RECEIVED: code={:?}, modifiers={:?}, kind={:?}",
+        ev.code, ev.modifiers, ev.kind
+    );
+
     let redraw = true;
     let mut reset_completion = false;
     // compute previous and new cursor display positions for relative move
@@ -675,7 +681,12 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             // If legacy completion also finds no matches, completion::input_completion returns None,
             // leading to the "No completion selected" case above.
         }
-        (KeyCode::Enter, NONE) => {
+        // Enter key - also handle Ctrl+J (LF) which may be sent after raw mode restoration
+        (KeyCode::Enter, NONE) | (KeyCode::Char('j'), CTRL) => {
+            debug!(
+                "ENTER_KEY_HANDLER: Starting Enter key processing, input='{}'",
+                repl.input.as_str()
+            );
             // AI Output Pipe (|!)
             if let Some((command, query)) = repl.detect_ai_pipe() {
                 repl.input.clear();
@@ -872,6 +883,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             repl.input.move_to_end();
         }
         (KeyCode::Char('c'), CTRL) => {
+            debug!("CTRL_C_HANDLER: Ctrl+C pressed, processing...");
             let mut renderer = TerminalRenderer::new();
 
             if repl.ctrl_c_state.on_pressed() {

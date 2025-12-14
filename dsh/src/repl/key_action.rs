@@ -46,6 +46,9 @@ pub enum KeyAction {
     Execute,
     ExecuteBackground,
 
+    // Command Palette
+    OpenCommandPalette,
+
     // AI機能
     AiAutoFix,
     AiSmartCommit,
@@ -196,6 +199,9 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
         // Enter: 実行
         (KeyCode::Enter, NONE) => KeyAction::Execute,
         (KeyCode::Enter, ALT) => KeyAction::ExecuteBackground,
+
+        // Alt+x: Command Palette
+        (KeyCode::Char('x'), ALT) => KeyAction::OpenCommandPalette,
 
         // 行頭・行末移動
         (KeyCode::Char('a'), CTRL) => KeyAction::CursorToBegin,

@@ -12,6 +12,7 @@ use std::process::ExitCode;
 use tracing::debug;
 
 pub mod ai_features;
+pub mod command_palette;
 pub mod command_suggestion;
 pub mod command_timing;
 pub mod completion;

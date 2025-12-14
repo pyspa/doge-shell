@@ -1,3 +1,4 @@
+use crate::command_palette::CommandPalette;
 use crate::command_timing;
 use crate::completion;
 use crate::completion::MAX_RESULT;
@@ -793,6 +794,13 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
         }
         KeyAction::ExecuteBackground => {
             handle_execute_background(repl).await?;
+            return Ok(());
+        }
+        KeyAction::OpenCommandPalette => {
+            CommandPalette::run(repl.shell)?;
+            let mut renderer = TerminalRenderer::new();
+            repl.print_prompt(&mut renderer);
+            renderer.flush().ok();
             return Ok(());
         }
         KeyAction::AcceptCompletion => {

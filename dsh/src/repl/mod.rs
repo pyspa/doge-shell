@@ -180,6 +180,9 @@ impl<'a> Drop for Repl<'a> {
 
 impl<'a> Repl<'a> {
     pub fn new(shell: &'a mut Shell) -> Self {
+        // Initialize Command Palette actions
+        crate::command_palette::register_builtin_actions();
+
         let current = std::env::current_dir().unwrap_or_else(|e| {
             warn!(
                 "Failed to get current directory: {}, using home directory",

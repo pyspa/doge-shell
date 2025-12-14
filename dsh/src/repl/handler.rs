@@ -438,6 +438,126 @@ async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()> {
     Ok(())
 }
 
+fn apply_history_item(input: &mut crate::input::Input, item: &dsh_frecency::ItemStats) {
+    let color_ranges: Vec<(usize, usize, crate::input::ColorType)> = item
+        .match_index
+        .iter()
+        .map(|&idx| (idx, idx + 1, crate::input::ColorType::CommandExists))
+        .collect();
+    input.reset_with_color_ranges(item.item.clone(), color_ranges);
+}
+
+fn handle_history_previous(repl: &mut Repl<'_>) {
+    if repl.completion.completion_mode() {
+        if let Some(item) = repl.completion.backward() {
+            apply_history_item(&mut repl.input, item);
+        }
+    } else {
+        repl.set_completions();
+        if let Some(item) = repl.completion.backward() {
+            apply_history_item(&mut repl.input, item);
+        }
+    }
+}
+
+fn handle_history_next(repl: &mut Repl<'_>) {
+    if repl.completion.completion_mode()
+        && let Some(item) = repl.completion.forward()
+    {
+        apply_history_item(&mut repl.input, item);
+    }
+}
+
+async fn handle_ai_smart_commit(repl: &mut Repl<'_>) {
+    if repl.ai_service.is_some() {
+        let output = std::process::Command::new("git")
+            .args(["diff", "--cached"])
+            .output();
+
+        match output {
+            Ok(output) if output.status.success() => {
+                let diff = String::from_utf8_lossy(&output.stdout).to_string();
+                if !diff.trim().is_empty() {
+                    let mut renderer = TerminalRenderer::new();
+                    queue!(renderer, Print(" 🤖 Generating..."), cursor::Hide).ok();
+                    renderer.flush().ok();
+
+                    repl.perform_smart_commit_logic(&diff).await;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+async fn handle_ai_diagnose(repl: &mut Repl<'_>) -> Result<()> {
+    if repl.ai_service.is_some() && repl.last_status != 0 {
+        let mut renderer = TerminalRenderer::new();
+        queue!(renderer, Print("\r\n🔍 Diagnosing error...\r\n")).ok();
+        renderer.flush().ok();
+
+        let command = repl.last_command_string.clone();
+        let output = repl
+            .shell
+            .environment
+            .read()
+            .output_history
+            .get_stderr(1)
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        let exit_code = repl.last_status;
+
+        if let Some(service) = &repl.ai_service {
+            match crate::ai_features::diagnose_output(
+                service.as_ref(),
+                &command,
+                &output,
+                exit_code,
+            )
+            .await
+            {
+                Ok(diagnosis) => {
+                    for line in diagnosis.lines() {
+                        queue!(renderer, Print(format!("{}\r\n", line))).ok();
+                    }
+                    queue!(renderer, Print("\r\n")).ok();
+                }
+                Err(e) => {
+                    queue!(renderer, Print(format!("❌ Diagnosis failed: {}\r\n", e))).ok();
+                }
+            }
+        }
+
+        renderer.flush().ok();
+        repl.print_prompt(&mut renderer);
+        renderer.flush().ok();
+    }
+    Ok(())
+}
+
+fn handle_interrupt(repl: &mut Repl<'_>) -> Result<()> {
+    debug!("CTRL_C_HANDLER: Ctrl+C pressed, processing...");
+    let mut renderer = TerminalRenderer::new();
+
+    if repl.ctrl_c_state.on_pressed() {
+        queue!(renderer, Print("\r\nExiting shell...\r\n")).ok();
+        renderer.flush().ok();
+        repl.should_exit = true;
+        Ok(())
+    } else {
+        queue!(
+            renderer,
+            Print("\r\n(Press Ctrl+C again within 3 seconds to exit)\r\n")
+        )
+        .ok();
+        repl.print_prompt(&mut renderer);
+        renderer.flush().ok();
+        repl.input.clear();
+        repl.suggestion_manager.clear();
+        Ok(())
+    }
+}
+
 pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Result<()> {
     // DEBUG: Log all key events to trace the issue
     debug!(
@@ -451,7 +571,6 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
     let prompt_w = repl.prompt_mark_width;
     // compute once per event to avoid duplicate width computation
     let prev_cursor_disp = prompt_w + repl.input.cursor_display_width();
-    let cursor = repl.input.cursor();
 
     // Reset Ctrl+C state on any key input other than Ctrl+C
     if !matches!((ev.code, ev.modifiers), (KeyCode::Char('c'), CTRL)) {
@@ -505,41 +624,10 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             reset_completion = true;
         }
         KeyAction::HistoryPrevious => {
-            if repl.completion.completion_mode() {
-                if let Some(item) = repl.completion.backward() {
-                    let color_ranges: Vec<(usize, usize, crate::input::ColorType)> = item
-                        .match_index
-                        .iter()
-                        .map(|&idx| (idx, idx + 1, crate::input::ColorType::CommandExists))
-                        .collect();
-                    repl.input
-                        .reset_with_color_ranges(item.item.clone(), color_ranges);
-                }
-            } else {
-                repl.set_completions();
-                if let Some(item) = repl.completion.backward() {
-                    let color_ranges: Vec<(usize, usize, crate::input::ColorType)> = item
-                        .match_index
-                        .iter()
-                        .map(|&idx| (idx, idx + 1, crate::input::ColorType::CommandExists))
-                        .collect();
-                    repl.input
-                        .reset_with_color_ranges(item.item.clone(), color_ranges);
-                }
-            }
+            handle_history_previous(repl);
         }
         KeyAction::HistoryNext => {
-            if repl.completion.completion_mode()
-                && let Some(item) = repl.completion.forward()
-            {
-                let color_ranges: Vec<(usize, usize, crate::input::ColorType)> = item
-                    .match_index
-                    .iter()
-                    .map(|&idx| (idx, idx + 1, crate::input::ColorType::CommandExists))
-                    .collect();
-                repl.input
-                    .reset_with_color_ranges(item.item.clone(), color_ranges);
-            }
+            handle_history_next(repl);
         }
         KeyAction::HistorySearch => {
             repl.select_history();
@@ -619,12 +707,12 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             return Ok(());
         }
         KeyAction::ExpandAbbreviationAndInsertSpace => {
-            if let Some(word) = repl.input.get_current_word_for_abbr() {
-                if let Some(expansion) = repl.shell.environment.read().abbreviations.get(&word) {
-                    let expansion = expansion.clone();
-                    if repl.input.replace_current_word(&expansion) {
-                        reset_completion = true;
-                    }
+            if let Some(word) = repl.input.get_current_word_for_abbr()
+                && let Some(expansion) = repl.shell.environment.read().abbreviations.get(&word)
+            {
+                let expansion = expansion.clone();
+                if repl.input.replace_current_word(&expansion) {
+                    reset_completion = true;
                 }
             }
 
@@ -685,73 +773,14 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             repl.perform_auto_fix().await;
         }
         KeyAction::AiSmartCommit => {
-            if repl.ai_service.is_some() {
-                let output = std::process::Command::new("git")
-                    .args(["diff", "--cached"])
-                    .output();
-
-                match output {
-                    Ok(output) if output.status.success() => {
-                        let diff = String::from_utf8_lossy(&output.stdout).to_string();
-                        if !diff.trim().is_empty() {
-                            let mut renderer = TerminalRenderer::new();
-                            queue!(renderer, Print(" 🤖 Generating..."), cursor::Hide).ok();
-                            renderer.flush().ok();
-
-                            repl.perform_smart_commit_logic(&diff).await;
-                        }
-                    }
-                    _ => {}
-                }
-            }
+            handle_ai_smart_commit(repl).await;
         }
         KeyAction::AiQuickActions => {
             repl.show_ai_quick_actions().await?;
             return Ok(());
         }
         KeyAction::AiDiagnose => {
-            if repl.ai_service.is_some() && repl.last_status != 0 {
-                let mut renderer = TerminalRenderer::new();
-                queue!(renderer, Print("\r\n🔍 Diagnosing error...\r\n")).ok();
-                renderer.flush().ok();
-
-                let command = repl.last_command_string.clone();
-                let output = repl
-                    .shell
-                    .environment
-                    .read()
-                    .output_history
-                    .get_stderr(1)
-                    .map(|s| s.to_string())
-                    .unwrap_or_default();
-                let exit_code = repl.last_status;
-
-                if let Some(service) = &repl.ai_service {
-                    match crate::ai_features::diagnose_output(
-                        service.as_ref(),
-                        &command,
-                        &output,
-                        exit_code,
-                    )
-                    .await
-                    {
-                        Ok(diagnosis) => {
-                            for line in diagnosis.lines() {
-                                queue!(renderer, Print(format!("{}\r\n", line))).ok();
-                            }
-                            queue!(renderer, Print("\r\n")).ok();
-                        }
-                        Err(e) => {
-                            queue!(renderer, Print(format!("❌ Diagnosis failed: {}\r\n", e))).ok();
-                        }
-                    }
-                }
-
-                renderer.flush().ok();
-                repl.print_prompt(&mut renderer);
-                renderer.flush().ok();
-            }
-            return Ok(());
+            return handle_ai_diagnose(repl).await;
         }
         KeyAction::TriggerCompletion => {
             if handle_trigger_completion(repl).await? {
@@ -773,26 +802,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             repl.completion.clear();
         }
         KeyAction::Interrupt => {
-            debug!("CTRL_C_HANDLER: Ctrl+C pressed, processing...");
-            let mut renderer = TerminalRenderer::new();
-
-            if repl.ctrl_c_state.on_pressed() {
-                queue!(renderer, Print("\r\nExiting shell...\r\n")).ok();
-                renderer.flush().ok();
-                repl.should_exit = true;
-                return Ok(());
-            } else {
-                queue!(
-                    renderer,
-                    Print("\r\n(Press Ctrl+C again within 3 seconds to exit)\r\n")
-                )
-                .ok();
-                repl.print_prompt(&mut renderer);
-                renderer.flush().ok();
-                repl.input.clear();
-                repl.suggestion_manager.clear();
-                return Ok(());
-            }
+            return handle_interrupt(repl);
         }
         KeyAction::ClearScreen => {
             let mut renderer = TerminalRenderer::new();

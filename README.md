@@ -20,6 +20,7 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 
 ### Advanced Features
 
+- **Command Palette**: Unified interface for accessing shell commands and features with `Alt+x`
 - **Frecency-based History**: Intelligent command history using frecency scoring (frequency + recency)
 - **Directory Navigation**: Smart directory history and jump with `z` command
 - **Path Management**: Dynamic PATH management with `add_path` command
@@ -385,7 +386,19 @@ dsh import bash --path /path/to/bash_history
 - `Ctrl+K` - Delete from cursor to end of line
 - `Ctrl+U` - Delete from cursor to beginning of line
 - `Ctrl+W` - Delete word backward
+- `Alt+x` - Open Command Palette
 - `Esc` (double press) - Toggle `sudo` prefix for the current command
+
+## 💻 Command Palette
+
+Access all shell capabilities through a unified fuzzy-search interface, similar to VS Code's Command Palette.
+
+- **Trigger**: Press `Alt+x` to open.
+- **Features**:
+  - Run internal commands (Clear Screen, Reload Config, etc.)
+  - Access AI features (Explain, Fix, etc.)
+  - Execute Git operations
+  - Extensible via `Action` trait and Lisp interface (coming soon)
 
 ## 🤖 AI Integration
 

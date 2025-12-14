@@ -246,39 +246,14 @@ impl JobProcess {
                 create_pipe(ctx)? // create pipe
             }
             None => {
-                let redirected = handle_output_redirect(ctx, redirect, stdout)?;
-                if redirected.is_none() && redirect.is_none() {
-                    // No redirect, enable automatic capture
-                    use nix::unistd::pipe;
-                    use tracing::error;
-
-                    // Stdout pipe
-                    if let Ok((pout, pin)) = pipe() {
-                        match self {
-                            JobProcess::Command(p) => p.cap_stdout = Some(pout),
-                            JobProcess::Builtin(p) => p.cap_stdout = Some(pout),
-                        }
-                        ctx.outfile = pin;
-                    } else {
-                        error!("failed to create capture pipe for stdout");
-                    }
-
-                    // Stderr pipe (Tee stderr too for consistency?)
-                    // For now let's capture stderr as well so we can show it if needed,
-                    // or at least not have mixed output issues.
-                    if let Ok((pout, pin)) = pipe() {
-                        match self {
-                            JobProcess::Command(p) => p.cap_stderr = Some(pout),
-                            JobProcess::Builtin(p) => p.cap_stderr = Some(pout),
-                        }
-                        ctx.errfile = pin;
-                    } else {
-                        error!("failed to create capture pipe for stderr");
-                    }
-                    None
-                } else {
-                    redirected
-                }
+                
+                // REMOVED: Automatic capture pipe creation
+                // This was causing stdout to be a pipe instead of TTY,
+                // which broke color output for commands like `ls --color=auto`
+                // that check isatty(stdout) before emitting ANSI colors.
+                //
+                // If capture is needed, use explicit capture mode (|>) or redirect.
+                handle_output_redirect(ctx, redirect, stdout)?
             }
         };
 

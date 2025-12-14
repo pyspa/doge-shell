@@ -5,6 +5,7 @@ use crate::completion::integrated::CompletionResult;
 use crate::errors::display_user_error;
 // Was missing? repl: &mut Repl might imply Input is visible via Repl, but Repl struct has input field.
 use crate::repl::Repl;
+use crate::repl::key_action::{KeyAction, KeyContext, determine_key_action};
 use crate::repl::render_transient_prompt_to;
 use crate::repl::state::{ShellEvent, SuggestionAcceptMode};
 use crate::terminal::renderer::TerminalRenderer;
@@ -145,6 +146,70 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
         repl.ctrl_c_state.reset();
     }
 
+    // --- KeyAction-based dispatch for simple actions ---
+    // Build KeyContext from current state
+    let ctx = KeyContext {
+        cursor_at_end: repl.input.cursor() == repl.input.len(),
+        input_empty: repl.input.is_empty(),
+        has_suggestion: repl.suggestion_manager.active.is_some(),
+        has_completion: repl.input.completion.is_some(),
+        completion_mode: repl.completion.completion_mode(),
+        cursor_at_start: repl.input.cursor() == 0,
+        next_char: repl.input.char_at(repl.input.cursor()),
+    };
+
+    // Determine action using pure function
+    let action = determine_key_action(ev, &ctx);
+
+    // Handle simple actions that don't need complex state management
+    match action {
+        KeyAction::CursorToBegin => {
+            repl.input.move_to_begin();
+            // Handle cursor-only movement without full redraw
+            let new_cursor_disp = prompt_w + repl.input.cursor_display_width();
+            let mut renderer = TerminalRenderer::new();
+            repl.move_cursor_relative(&mut renderer, prev_cursor_disp, new_cursor_disp);
+            renderer.flush().ok();
+            return Ok(());
+        }
+        KeyAction::CursorToEnd => {
+            repl.input.move_to_end();
+            let new_cursor_disp = prompt_w + repl.input.cursor_display_width();
+            let mut renderer = TerminalRenderer::new();
+            repl.move_cursor_relative(&mut renderer, prev_cursor_disp, new_cursor_disp);
+            renderer.flush().ok();
+            return Ok(());
+        }
+        KeyAction::DeleteWordBackward => {
+            repl.input.delete_word_backward();
+            reset_completion = true;
+        }
+        KeyAction::DeleteToEnd => {
+            repl.input.delete_to_end();
+            reset_completion = true;
+        }
+        KeyAction::DeleteToBeginning => {
+            repl.input.delete_to_beginning();
+            reset_completion = true;
+        }
+        // Fall through to legacy match for other actions
+        _ => {}
+    }
+
+    // If we handled an action that needs redraw (not return), do it here
+    if reset_completion
+        && !matches!(
+            action,
+            KeyAction::Unsupported | KeyAction::CursorToBegin | KeyAction::CursorToEnd
+        )
+    {
+        let mut renderer = TerminalRenderer::new();
+        repl.print_input(&mut renderer, reset_completion, true);
+        renderer.flush().ok();
+        return Ok(());
+    }
+
+    // --- Legacy match-based dispatch ---
     match (ev.code, ev.modifiers) {
         // history
         (KeyCode::Up, NONE) => {

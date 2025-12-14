@@ -129,6 +129,11 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
             KeyAction::AcceptSuggestionFull
         }
 
+        // 補完（ゴーストテキスト）受け入れ（Right）
+        (KeyCode::Right, m) if ctx.has_completion && ctx.cursor_at_end && !m.contains(CTRL) => {
+            KeyAction::AcceptCompletion
+        }
+
         // カーソル移動（Right）
         (KeyCode::Right, m) if !m.contains(CTRL) => KeyAction::CursorRight,
         (KeyCode::Right, m) if m.contains(CTRL) => KeyAction::CursorWordRight,
@@ -725,5 +730,16 @@ mod tests {
             determine_key_action(&k, &ctx_default()),
             KeyAction::TriggerCompletion
         );
+    }
+
+    #[test]
+    fn test_right_accepts_completion_when_active() {
+        let k = key(KeyCode::Right, NONE);
+        let ctx = KeyContext {
+            cursor_at_end: true,
+            has_completion: true,
+            ..ctx_default()
+        };
+        assert_eq!(determine_key_action(&k, &ctx), KeyAction::AcceptCompletion);
     }
 }

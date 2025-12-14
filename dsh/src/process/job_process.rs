@@ -246,7 +246,6 @@ impl JobProcess {
                 create_pipe(ctx)? // create pipe
             }
             None => {
-                
                 // REMOVED: Automatic capture pipe creation
                 // This was causing stdout to be a pipe instead of TTY,
                 // which broke color output for commands like `ls --color=auto`

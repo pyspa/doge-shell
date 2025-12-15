@@ -466,7 +466,9 @@ impl IntegratedCompletionEngine {
 
                         // Context-aware boosting
                         if let Some(cmd) = command_context {
-                            if item.item.starts_with(cmd) {
+                            // Check exact match or prefix with space boundary
+                            // This prevents false positives like "google-chrome" boosting "go" context
+                            if item.item == cmd || item.item.starts_with(&(cmd.to_string() + " ")) {
                                 // High boost if the history entry starts with the current command
                                 // and contains the candidate
                                 score += 500;
@@ -791,5 +793,64 @@ mod tests {
 
         // Ensure the boost is substantial (our logic adds 500)
         assert!(score_git >= 500);
+    }
+
+    #[test]
+    fn test_context_aware_frecency_boost_edge_cases() {
+        let environment = Environment::new();
+        let engine = IntegratedCompletionEngine::new(environment);
+
+        // Setup history
+        let mut history = crate::history::FrecencyHistory::new();
+        let mut store = FrecencyStore::default();
+        store.add("git checkout");
+        history.store = Some(store);
+        let history_arc = std::sync::Arc::new(parking_lot::Mutex::new(history));
+
+        let create_candidate = || EnhancedCandidate {
+            text: "checkout".to_string(), // Matches "git checkout"
+            description: None,
+            candidate_type: CandidateType::SubCommand,
+            priority: 0,
+        };
+
+        // Case 1: No context (None)
+        // Should only get base boost from matching text "checkout" inside "git checkout"
+        let candidates_none = vec![create_candidate()];
+        let boosted_none =
+            engine.deduplicate_and_sort(candidates_none, 10, Some(&history_arc), None);
+        let score_none = boosted_none[0].priority;
+
+        // Case 2: Matching context ("git")
+        // Should get high boost
+        let candidates_git = vec![create_candidate()];
+        let boosted_git =
+            engine.deduplicate_and_sort(candidates_git, 10, Some(&history_arc), Some("git"));
+        let score_git = boosted_git[0].priority;
+
+        assert!(
+            score_git > score_none,
+            "Git context should boost higher than no context"
+        );
+        assert!(
+            score_none > 0,
+            "Even without context, text match should give some boost"
+        );
+
+        // Case 3: Mismatching context ("docker")
+        // Should behave same as None/Low boost, or strictly less if logic changes?
+        // Logic: if context is some, and doesn't match start, it skips the BIG boost.
+        // But the item "git checkout" does NOT start with "docker".
+        // So no BIG boost.
+        // Base boost (+10) still applies because item contains "checkout".
+        let candidates_docker = vec![create_candidate()];
+        let boosted_docker =
+            engine.deduplicate_and_sort(candidates_docker, 10, Some(&history_arc), Some("docker"));
+        let score_docker = boosted_docker[0].priority;
+
+        assert_eq!(
+            score_docker, score_none,
+            "Mismatch context should have same score as no context (base match)"
+        );
     }
 }

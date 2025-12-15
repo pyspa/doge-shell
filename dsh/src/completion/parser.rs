@@ -10,9 +10,9 @@ static DOUBLE_DASH_REGEX: std::sync::LazyLock<Regex> =
 #[derive(Debug, Clone)]
 struct TokenSpan {
     text: String,
-    /// start position as character index (inclusive)
+    /// start position as byte index (inclusive)
     start: usize,
-    /// end position as character index (exclusive)
+    /// end position as byte index (exclusive)
     end: usize,
 }
 
@@ -90,47 +90,41 @@ impl CommandLineParser {
     /// Parse command line
     pub fn parse(&self, input: &str, cursor_pos: usize) -> ParsedCommandLine {
         let spans = self.tokenize_with_positions(input);
-        let tokens: Vec<String> = spans.iter().map(|s| s.text.clone()).collect();
-        let cursor_token_index = self.find_cursor_token_index(&spans, cursor_pos);
+        let mut tokens: Vec<String> = spans.iter().map(|s| s.text.clone()).collect();
+        let (cursor_token_index, is_inside_token) =
+            self.find_cursor_token_index(&spans, cursor_pos);
+
+        // Adjust tokens based on cursor position
+        if is_inside_token {
+            if cursor_token_index < tokens.len() {
+                let span = &spans[cursor_token_index];
+                let relative_pos = cursor_pos.saturating_sub(span.start);
+                if relative_pos < span.text.len() {
+                    // Start from relative_pos and backtrack to find a valid char boundary
+                    // This handles cases where cursor is in the middle of a multibyte char
+                    let mut safe_pos = relative_pos;
+                    while !span.text.is_char_boundary(safe_pos) && safe_pos > 0 {
+                        safe_pos -= 1;
+                    }
+                    tokens[cursor_token_index] = span.text[..safe_pos].to_string();
+                }
+            }
+        } else {
+            // Insert empty token at cursor position (gap)
+            if cursor_token_index <= tokens.len() {
+                tokens.insert(cursor_token_index, String::new());
+            }
+        }
 
         self.analyze_tokens(tokens, cursor_token_index, input, cursor_pos)
     }
 
     /// Split input string into tokens
     fn tokenize(&self, input: &str) -> Vec<String> {
-        let mut tokens = Vec::new();
-        let mut current_token = String::new();
-        let mut in_quotes = false;
-        let mut quote_char = '"';
-
-        for ch in input.chars() {
-            match ch {
-                '"' | '\'' if !in_quotes => {
-                    in_quotes = true;
-                    quote_char = ch;
-                    current_token.push(ch);
-                }
-                ch if in_quotes && ch == quote_char => {
-                    in_quotes = false;
-                    current_token.push(ch);
-                }
-                ' ' | '\t' if !in_quotes => {
-                    if !current_token.is_empty() {
-                        tokens.push(current_token.clone());
-                        current_token.clear();
-                    }
-                }
-                _ => {
-                    current_token.push(ch);
-                }
-            }
-        }
-
-        if !current_token.is_empty() {
-            tokens.push(current_token);
-        }
-
-        tokens
+        self.tokenize_with_positions(input)
+            .into_iter()
+            .map(|s| s.text)
+            .collect()
     }
 
     /// Split input string into tokens and keep their character spans.
@@ -141,7 +135,7 @@ impl CommandLineParser {
         let mut in_quotes = false;
         let mut quote_char = '"';
 
-        for (i, ch) in input.chars().enumerate() {
+        for (i, ch) in input.char_indices() {
             match ch {
                 '"' | '\'' if !in_quotes => {
                     in_quotes = true;
@@ -177,8 +171,8 @@ impl CommandLineParser {
         }
 
         if !current_token.is_empty() {
-            let start = token_start.unwrap_or(0);
-            let end = input.chars().count();
+            let start = token_start.unwrap_or(input.len());
+            let end = input.len();
             spans.push(TokenSpan {
                 text: current_token,
                 start,
@@ -189,14 +183,24 @@ impl CommandLineParser {
         spans
     }
 
-    /// Find token index corresponding to cursor position (character index).
-    fn find_cursor_token_index(&self, spans: &[TokenSpan], cursor_pos: usize) -> usize {
+    /// Find token index corresponding to cursor position (byte index).
+    /// Returns (index, is_inside_token)
+    /// If is_inside_token is true, we are appending/modifying tokens[index].
+    /// If is_inside_token is false, we are inserting *before* tokens[index] (gap).
+    fn find_cursor_token_index(&self, spans: &[TokenSpan], cursor_pos: usize) -> (usize, bool) {
         for (i, span) in spans.iter().enumerate() {
-            if cursor_pos >= span.start && cursor_pos <= span.end {
-                return i;
+            if cursor_pos <= span.end {
+                if cursor_pos >= span.start {
+                    // Inside or at the end of this token
+                    return (i, true);
+                } else {
+                    // In the gap before this token
+                    return (i, false);
+                }
             }
         }
-        spans.len()
+        // After all tokens
+        (spans.len(), false)
     }
 
     /// Analyze tokens to determine completion context
@@ -643,9 +647,22 @@ mod tests {
     fn test_cursor_token_index_handles_multibyte_tokens() {
         let parser = CommandLineParser::new();
         let input = "cmd あい うえ";
-        // Cursor is on the third token ("うえ") in character index.
-        let result = parser.parse(input, 7);
-        assert_eq!(result.current_token, "うえ");
+        // Cursor is inside the third token ("うえ") after "う" (3 bytes).
+        // "cmd " (4) + "あい " (7) + "う" (3) = 14
+        let result = parser.parse(input, 14);
+        assert_eq!(result.current_token, "う");
+    }
+
+    #[test]
+    fn test_cursor_inside_multibyte_char() {
+        let parser = CommandLineParser::new();
+        let input = "cmd あ";
+        // "あ" is 3 bytes (e.g., e3 81 82).
+        // Cursor at 5 (inside "あ", which is 4..7).
+        // 5 - 4 = 1. Inside first byte or second byte.
+        // Should truncate to ""
+        let result = parser.parse(input, 5);
+        assert_eq!(result.current_token, "");
     }
 
     #[test]

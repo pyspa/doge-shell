@@ -250,17 +250,48 @@ impl Prompt {
 
         // 3. GitHub Status (Internal Legacy - could be modularized later)
         // Display GitHub notifications if available and under git
+        // 3. GitHub Status
         if has_git && let Some(status_lock) = &self.github_status {
             let status = status_lock.read();
-            if status.notification_count > 0 {
-                let notify_display = format!(
-                    " {} {}",
-                    self.github_icon.as_str().yellow(),
-                    status.notification_count.to_string().yellow().bold()
-                );
-                prompt_content.push_str(&notify_display);
+            if status.total() > 0 {
+                let mut notify_display = format!(" [ {} ", self.github_icon.as_str().white());
+
+                if status.review_count > 0 {
+                    notify_display.push_str(&format!(
+                        "{} {} ",
+                        "🔍".cyan().bold(),
+                        status.review_count.to_string().cyan().bold()
+                    ));
+                }
+
+                if status.mention_count > 0 {
+                    notify_display.push_str(&format!(
+                        "{} {} ",
+                        "🔔".yellow(),
+                        status.mention_count.to_string().yellow()
+                    ));
+                }
+
+                if status.other_count > 0 {
+                    notify_display.push_str(&format!(
+                        "{} {} ",
+                        "📬".dim(),
+                        status.other_count.to_string().dim()
+                    ));
+                }
+
+                // Remove trailing space before closing bracket if needed, but the loop adds one.
+                // Let's just push bracket and handle trimming.
+                let trimmed = notify_display.trim_end();
+                let final_display = format!("{}]", trimmed);
+
+                prompt_content.push_str(&final_display);
             } else if status.has_error {
-                let notify_display = format!(" {}", "🔔!".red().bold());
+                let notify_display = format!(
+                    " [ {} {} ]",
+                    self.github_icon.as_str().red(),
+                    "ERROR".red().bold()
+                );
                 prompt_content.push_str(&notify_display);
             }
         }

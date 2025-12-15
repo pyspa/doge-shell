@@ -63,6 +63,21 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 - **URL Shortening**: URL shortening with `dmv` command
 - **Web Server**: Built-in static file server with `serve` command
 - **Configuration Reload**: Runtime configuration reloading with `reload` command
+### GitHub Integration
+
+Monitor your GitHub notifications directly from the prompt. Grouped by priority:
+- `🐙`: GitHub Status (Header)
+- `🔍`: Review Requested (Cyan)
+- `🔔`: Mentions/Assignments (Yellow)
+- `📬`: Other Notifications (Dimmed)
+
+**Configuration**:
+Set your Personal Access Token (PAT) and update interval in `config.lisp`.
+
+```lisp
+(vset "*github-pat*" "your_token_here")
+(vset "*github-notify-interval*" "60") ;; seconds
+```
 
 ## 🔧 Built-in Commands
 

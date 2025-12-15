@@ -9,8 +9,16 @@ use tracing::{debug, error};
 
 #[derive(Debug, Clone, Default)]
 pub struct GitHubStatus {
-    pub notification_count: usize,
+    pub review_count: usize,
+    pub mention_count: usize,
+    pub other_count: usize,
     pub has_error: bool,
+}
+
+impl GitHubStatus {
+    pub fn total(&self) -> usize {
+        self.review_count + self.mention_count + self.other_count
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -36,12 +44,9 @@ impl GitHubClient {
         Self { client, pat }
     }
 
-    pub async fn fetch_notifications(&self, filter: Option<&str>) -> Result<usize> {
+    pub async fn fetch_notifications(&self, filter: Option<&str>) -> Result<GitHubStatus> {
         let url = "https://api.github.com/notifications";
         let request = self.client.request(Method::GET, url).bearer_auth(&self.pat);
-
-        // We don't use query param filters effectively here because the API is limited.
-        // We fetch unread notifications and filter client-side.
 
         let response = request.send().await?;
 
@@ -51,37 +56,55 @@ impl GitHubClient {
 
         let notifications: Vec<serde_json::Value> = response.json().await?;
 
-        if let Some(f) = filter
-            && let Some(reason_val) = f.strip_prefix("reason:")
-        {
-            let allowed_reasons: Vec<&str> = reason_val.split(',').map(|s| s.trim()).collect();
+        // Use the decoupled parsing function
+        let status = parse_notifications(&notifications, filter);
 
-            // Debug log to see what we got
-            for n in &notifications {
-                if let Some(r) = n["reason"].as_str() {
-                    debug!("Notification reason: {}", r);
-                }
+        debug!(
+            "GitHub notifications: review={}, mention={}, other={}",
+            status.review_count, status.mention_count, status.other_count
+        );
+
+        Ok(status)
+    }
+}
+
+fn parse_notifications(notifications: &[serde_json::Value], filter: Option<&str>) -> GitHubStatus {
+    // Filter logic if needed (legacy filter string support)
+    let allowed_reasons: Option<Vec<&str>> = if let Some(f) = filter
+        && let Some(reason_val) = f.strip_prefix("reason:")
+    {
+        Some(reason_val.split(',').map(|s| s.trim()).collect())
+    } else {
+        None
+    };
+
+    let mut status = GitHubStatus::default();
+
+    for n in notifications {
+        let reason = n["reason"].as_str().unwrap_or("");
+
+        // Debug logging for reasons is now inside here or could be passed a logger?
+        // Keeping it simple for now, maybe reduce log spam or rely on caller?
+        // The original code debug logged filtered stats.
+
+        // Check legacy filter first
+        if let Some(allowed) = &allowed_reasons
+            && !allowed.contains(&reason) {
+                continue;
             }
 
-            let filtered_count = notifications
-                .iter()
-                .filter(|n| {
-                    n["reason"]
-                        .as_str()
-                        .is_some_and(|r| allowed_reasons.contains(&r))
-                })
-                .count();
-            debug!(
-                "Filtered notifications (filter: '{}'): {} / {}",
-                f,
-                filtered_count,
-                notifications.len()
-            );
-            return Ok(filtered_count);
+        match reason {
+            "review_requested" => status.review_count += 1,
+            "mention" | "assign" => status.mention_count += 1,
+            _ => status.other_count += 1,
         }
-
-        Ok(notifications.len())
     }
+
+    // Original debug log was: "Filtered notifications (filter: '{}'): {} / {}"
+    // We can't easily reproduce exact same side-effect logging here without passing more context,
+    // but the core logic is preserved.
+
+    status
 }
 
 pub async fn background_github_task(
@@ -118,35 +141,16 @@ pub async fn background_github_task(
 
         if !should_check {
             debug!("Not in Git repository, skipping GitHub check");
-            // Clear status if not in git dir? Or keep previous?
-            // User said "Check ... only ... is fine".
-            // Display also checks under_git.
-            // If we don't check, maybe we shouldn't clear, just preserve old state?
-            // But if we move out of git dir, prompt won't show it anyway.
-            // If we move back, we might see old state until next tick.
-            // Given 60s interval, "old state" might be stale.
-            // Maybe we should trigger a check on directory change?
-            // But `chpwd` is synchronous hook.
-            // For now, simple polling is fine.
             continue;
         }
-
-        // Update timer interval if needed (heuristic: if config changed significantly)
-        // For simplicity, we just use the timer. If user changes interval, it applies next run.
-        // But `tokio::time::interval` doesn't change period easily.
-        // We could reconstruct `timer` if we really wanted dynamic interval,
-        // but for now let's assume 60s or just sleep.
-        // Actually, let's use `tokio::time::sleep` for dynamic interval support.
 
         if let Some(pat_str) = pat {
             let client = GitHubClient::new(pat_str);
             debug!("Checking GitHub notifications...");
             match client.fetch_notifications(filter.as_deref()).await {
-                Ok(count) => {
+                Ok(new_status) => {
                     let mut status = github_status.write();
-                    status.notification_count = count;
-                    status.has_error = false;
-                    debug!("GitHub notifications: {}", count);
+                    *status = new_status;
                 }
                 Err(e) => {
                     error!("Failed to fetch GitHub notifications: {}", e);
@@ -155,25 +159,6 @@ pub async fn background_github_task(
                 }
             }
         }
-
-        // If using sleep loop instead of interval:
-        // tokio::time::sleep(Duration::from_secs(interval_secs)).await;
-        // But the `timer` above is `interval` which is robust.
-        // Mixing them is bad. Let's just stick to the loop but maybe reset timer?
-        // Let's just respect the loop tick for now (60s default).
-        // If we want to support custom interval, we should change the loop structure.
-
-        // Improved loop for dynamic interval:
-        /*
-        loop {
-            let interval_secs = ... get from env ...
-            tokio::time::sleep(Duration::from_secs(interval_secs)).await;
-            ... work ...
-        }
-        */
-        // But strict "1 minute" was requested ("1分ごとなど").
-        // "config.lispで設定します" ("configure in config.lisp").
-        // So dynamic interval IS a requirement.
     }
 }
 
@@ -193,7 +178,6 @@ pub async fn background_github_task_dynamic(
 
         tokio::time::sleep(Duration::from_secs(interval_secs)).await;
 
-        // duplicate logic from above... helper function?
         check_github(environment.clone(), prompt.clone(), github_status.clone()).await;
     }
 }
@@ -222,10 +206,9 @@ async fn check_github(
     if let Some(pat_str) = pat {
         let client = GitHubClient::new(pat_str);
         match client.fetch_notifications(filter.as_deref()).await {
-            Ok(count) => {
+            Ok(new_status) => {
                 let mut status = github_status.write();
-                status.notification_count = count;
-                status.has_error = false;
+                *status = new_status;
             }
             Err(e) => {
                 error!("Failed to fetch GitHub notifications: {}", e);
@@ -233,5 +216,53 @@ async fn check_github(
                 status.has_error = true;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_parse_notifications_counts() {
+        let data = vec![
+            json!({ "reason": "review_requested" }),
+            json!({ "reason": "review_requested" }),
+            json!({ "reason": "mention" }),
+            json!({ "reason": "assign" }),
+            json!({ "reason": "subscribed" }),
+            json!({ "reason": "comment" }),
+        ];
+
+        let status = parse_notifications(&data, None);
+
+        assert_eq!(status.review_count, 2);
+        assert_eq!(status.mention_count, 2); // mention + assign
+        assert_eq!(status.other_count, 2); // subscribed + comment
+        assert_eq!(status.total(), 6);
+    }
+
+    #[test]
+    fn test_parse_notifications_filter() {
+        let data = vec![
+            json!({ "reason": "review_requested" }),
+            json!({ "reason": "mention" }),
+            json!({ "reason": "other" }),
+        ];
+
+        let filter = Some("reason:review_requested,mention");
+        let status = parse_notifications(&data, filter);
+
+        assert_eq!(status.review_count, 1);
+        assert_eq!(status.mention_count, 1);
+        assert_eq!(status.other_count, 0);
+    }
+
+    #[test]
+    fn test_parse_notifications_empty() {
+        let data = vec![];
+        let status = parse_notifications(&data, None);
+        assert_eq!(status.total(), 0);
     }
 }

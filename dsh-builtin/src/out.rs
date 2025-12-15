@@ -239,6 +239,9 @@ mod tests {
         fn get_current_dir(&self) -> anyhow::Result<PathBuf> {
             Ok(PathBuf::from("/"))
         }
+        fn get_lisp_var(&self, _key: &str) -> Option<String> {
+            None
+        }
     }
 
     #[test]

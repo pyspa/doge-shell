@@ -97,6 +97,9 @@ pub trait ShellProxy {
 
     /// Gets the current working directory
     fn get_current_dir(&self) -> Result<std::path::PathBuf>;
+
+    /// Retrieves a variable from the Lisp environment
+    fn get_lisp_var(&self, key: &str) -> Option<String>;
 }
 
 use std::any::Any;
@@ -269,6 +272,13 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             "gwt",
             Box::new(BuiltinCommandFn::new(gwt::command, gwt::description()))
                 as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "gh-notify",
+            Box::new(BuiltinCommandFn::new(
+                gh_notify::command,
+                gh_notify::description(),
+            )) as Box<dyn BuiltinCommandTrait>,
         );
 
         // Utility commands

@@ -1,7 +1,7 @@
 use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
 use reqwest::blocking::Client;
-use reqwest::header::{AUTHORIZATION, USER_AGENT};
+use reqwest::header::AUTHORIZATION;
 use serde::Deserialize;
 use skim::prelude::*;
 use std::borrow::Cow;
@@ -14,6 +14,7 @@ pub fn description() -> &'static str {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
 struct Notification {
     id: String,
     subject: Subject,
@@ -23,6 +24,7 @@ struct Notification {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
 struct Subject {
     title: String,
     #[serde(rename = "type")]
@@ -55,47 +57,38 @@ impl SkimItem for NotificationItem {
 
 pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     // Get PAT
-    let pat = match proxy.get_var("*github-pat*") {
-        Some(token) => token,
-        None => {
-            if let Ok(token) = std::env::var("GITHUB_TOKEN") {
-                token
-            } else {
-                ctx.write_stderr("gh-notify: *github-pat* variable or GITHUB_TOKEN env not set")
-                    .ok();
-                return ExitStatus::ExitedWith(1);
-            }
-        }
-    };
-
-    // Fetch notifications
-    let client = Client::new();
-    let url = "https://api.github.com/notifications";
-
-    let response = match client
-        .get(url)
-        .header(USER_AGENT, "doge-shell")
-        .header(AUTHORIZATION, format!("Bearer {}", pat))
-        .send()
-    {
-        Ok(res) => res,
-        Err(e) => {
-            ctx.write_stderr(&format!("gh-notify: HTTP request failed: {}", e))
-                .ok();
-            return ExitStatus::ExitedWith(1);
-        }
-    };
-
-    if !response.status().is_success() {
-        ctx.write_stderr(&format!("gh-notify: API error: {}", response.status()))
+    let pat = if let Some(token) = proxy.get_var("*github-pat*") {
+        token
+    } else if let Some(token) = proxy.get_lisp_var("*github-pat*") {
+        token
+    } else if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+        token
+    } else {
+        ctx.write_stderr("gh-notify: *github-pat* variable or GITHUB_TOKEN env not set")
             .ok();
         return ExitStatus::ExitedWith(1);
-    }
+    };
 
-    let notifications = match response.json::<Vec<Notification>>() {
-        Ok(n) => n,
+    // Configure client with timeout
+    let client_builder = Client::builder()
+        .user_agent("doge-shell")
+        .timeout(std::time::Duration::from_secs(10));
+
+    // Fetch notifications in a separate thread
+    let pat_clone = pat.clone();
+    let handle = std::thread::spawn(move || {
+        let client = client_builder.build().map_err(|e| e.to_string())?;
+        fetch_notifications(&client, &pat_clone, "https://api.github.com/notifications")
+    });
+
+    let notifications = match handle.join() {
+        Ok(Ok(n)) => n,
+        Ok(Err(e)) => {
+            ctx.write_stderr(&format!("gh-notify: {}", e)).ok();
+            return ExitStatus::ExitedWith(1);
+        }
         Err(e) => {
-            ctx.write_stderr(&format!("gh-notify: Failed to parse JSON: {}", e))
+            ctx.write_stderr(&format!("gh-notify: Thread panic: {:?}", e))
                 .ok();
             return ExitStatus::ExitedWith(1);
         }
@@ -144,35 +137,32 @@ pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) ->
     let selected_key = selected_text.as_ref();
 
     if let Some(n) = notification_map.get(selected_key) {
-        // Construct URL to open
-        let target_url = if let Some(api_url) = &n.subject.url {
-            match client
-                .get(api_url)
-                .header(USER_AGENT, "doge-shell")
-                .header(AUTHORIZATION, format!("Bearer {}", pat))
-                .send()
-            {
-                Ok(res) => match res.json::<serde_json::Value>() {
-                    Ok(json) => json
-                        .get("html_url")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
-                    Err(_) => None,
-                },
-                Err(_) => None,
-            }
-        } else {
-            None
+        let pat_clone = pat.clone();
+        let api_url_opt = n.subject.url.clone();
+        let fallback_url = n.repository.html_url.clone();
+
+        // Resolve URL in a separate thread
+        let handle = std::thread::spawn(move || {
+            let client = Client::builder()
+                .user_agent("doge-shell")
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .ok()?;
+            resolve_url(&client, &pat_clone, api_url_opt)
+        });
+
+        let target_url = match handle.join() {
+            Ok(Some(url)) => url,
+            _ => fallback_url,
         };
 
-        let final_url = target_url.unwrap_or_else(|| n.repository.html_url.clone());
         let open_cmd = if cfg!(target_os = "macos") {
             "open"
         } else {
             "xdg-open"
         };
 
-        if let Err(e) = Command::new(open_cmd).arg(&final_url).spawn() {
+        if let Err(e) = Command::new(open_cmd).arg(&target_url).spawn() {
             ctx.write_stderr(&format!("gh-notify: Failed to open browser: {}", e))
                 .ok();
             return ExitStatus::ExitedWith(1);
@@ -180,6 +170,43 @@ pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) ->
     }
 
     ExitStatus::ExitedWith(0)
+}
+
+fn fetch_notifications(client: &Client, pat: &str, url: &str) -> Result<Vec<Notification>, String> {
+    let response = client
+        .get(url)
+        .header(AUTHORIZATION, format!("Bearer {}", pat))
+        .send()
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+
+    response
+        .json::<Vec<Notification>>()
+        .map_err(|e| format!("Failed to parse JSON: {}", e))
+}
+
+fn resolve_url(client: &Client, pat: &str, api_url_opt: Option<String>) -> Option<String> {
+    if let Some(api_url) = api_url_opt {
+        match client
+            .get(&api_url)
+            .header(AUTHORIZATION, format!("Bearer {}", pat))
+            .send()
+        {
+            Ok(res) => match res.json::<serde_json::Value>() {
+                Ok(json) => json
+                    .get("html_url")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                Err(_) => None,
+            },
+            Err(_) => None,
+        }
+    } else {
+        None
+    }
 }
 
 fn format_notification_display(n: &Notification) -> String {
@@ -199,6 +226,8 @@ fn format_notification_display(n: &Notification) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::time::Duration;
 
     #[test]
     fn test_format_notification_display() {
@@ -243,5 +272,30 @@ mod tests {
 
         let display = format_notification_display(&n);
         assert_eq!(display, "🔔 [owner/repo] Issue Title (mention)");
+    }
+
+    #[test]
+    fn test_fetch_notifications_connection_error() {
+        // Bind a random port and immediately drop it or let it close
+        // Actually picking a free port and NOT listening on it is the best way to get Connection Refused
+        // But finding a free port safely is tricky.
+        // Instead, let's use a timeout.
+        let client = Client::builder()
+            .timeout(Duration::from_millis(100))
+            .build()
+            .unwrap();
+
+        // This IP is reserved for documentation and should not be reachable (TEST-NET-1)
+        // It will timeout.
+        let result = fetch_notifications(&client, "dummy_token", "http://192.0.2.1");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("HTTP request failed"));
+    }
+
+    #[test]
+    fn test_resolve_url_none() {
+        let client = Client::new();
+        assert_eq!(resolve_url(&client, "token", None), None);
     }
 }

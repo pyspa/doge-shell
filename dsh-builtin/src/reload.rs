@@ -144,6 +144,9 @@ mod tests {
         }
         fn set_var(&mut self, _key: String, _value: String) {}
         fn set_env_var(&mut self, _key: String, _value: String) {}
+        fn get_lisp_var(&self, _key: &str) -> Option<String> {
+            None
+        }
         fn get_alias(&mut self, _name: &str) -> Option<String> {
             None
         }

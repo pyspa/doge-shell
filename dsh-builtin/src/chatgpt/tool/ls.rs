@@ -194,6 +194,9 @@ mod tests {
             true
         }
         fn set_and_export_var(&mut self, _key: String, _value: String) {}
+        fn get_lisp_var(&self, _key: &str) -> Option<String> {
+            None
+        }
         fn get_current_dir(&self) -> anyhow::Result<PathBuf> {
             Ok(self.cwd.clone())
         }

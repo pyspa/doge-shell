@@ -542,6 +542,16 @@ impl ShellProxy for Shell {
         self.environment.read().get_var(key)
     }
 
+    fn get_lisp_var(&self, key: &str) -> Option<String> {
+        let lisp_engine = self.lisp_engine.borrow();
+        let env = lisp_engine.env.borrow();
+        match env.get(&crate::lisp::Symbol::from(key)) {
+            Some(crate::lisp::Value::String(s)) => Some(s.clone()),
+            Some(crate::lisp::Value::Int(i)) => Some(i.to_string()),
+            _ => None,
+        }
+    }
+
     fn set_var(&mut self, key: String, value: String) {
         self.environment.write().variables.insert(key, value);
     }

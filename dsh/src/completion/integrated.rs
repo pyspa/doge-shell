@@ -116,15 +116,21 @@ struct CandidateAggregator<'a> {
     max_results: usize,
     collected: Vec<EnhancedCandidate>,
     framework: Option<CompletionFrameworkKind>,
+    command_context: Option<String>,
 }
 
 impl<'a> CandidateAggregator<'a> {
-    fn new(engine: &'a IntegratedCompletionEngine, max_results: usize) -> Self {
+    fn new(
+        engine: &'a IntegratedCompletionEngine,
+        max_results: usize,
+        command_context: Option<String>,
+    ) -> Self {
         Self {
             engine,
             max_results,
             collected: Vec::new(),
             framework: None,
+            command_context,
         }
     }
 
@@ -149,9 +155,12 @@ impl<'a> CandidateAggregator<'a> {
         self,
         history: Option<&Arc<parking_lot::Mutex<crate::history::FrecencyHistory>>>,
     ) -> CompletionResult {
-        let candidates =
-            self.engine
-                .deduplicate_and_sort(self.collected, self.max_results, history);
+        let candidates = self.engine.deduplicate_and_sort(
+            self.collected,
+            self.max_results,
+            history,
+            self.command_context.as_deref(),
+        );
         let framework = self
             .framework
             .unwrap_or_else(super::default_completion_framework);
@@ -255,9 +264,15 @@ impl IntegratedCompletionEngine {
             }
         }
 
-        let mut aggregator = CandidateAggregator::new(self, request.max_results);
-
         let parsed_command_line = self.convert_to_parsed_command_line(input, cursor_pos);
+        let command_context = if !parsed_command_line.command.is_empty() {
+            Some(parsed_command_line.command.clone())
+        } else {
+            None
+        };
+
+        let mut aggregator =
+            CandidateAggregator::new(self, request.max_results, command_context.clone());
 
         // 1. JSON-based command completion
         let command_collection = self.collect_command_candidates(&request, &parsed_command_line);
@@ -413,6 +428,7 @@ impl IntegratedCompletionEngine {
         mut candidates: Vec<EnhancedCandidate>,
         max_results: usize,
         history: Option<&Arc<parking_lot::Mutex<crate::history::FrecencyHistory>>>,
+        command_context: Option<&str>,
     ) -> Vec<EnhancedCandidate> {
         // Boost priority based on history
         if let Some(history_arc) = history {
@@ -438,14 +454,31 @@ impl IntegratedCompletionEngine {
                     // For now, let's assume `candidate.text` is significant.
 
                     // boost = frequency count log or similar
-                    let count = store
-                        .items
-                        .iter()
-                        .filter(|i| i.item.contains(&candidate.text)) // Loose match
-                        .count();
+                    // Check if candidate text appears in history items
+                    // We prioritize items that match the current command context
+                    for item in &store.items {
+                        // Skip if item doesn't contain the candidate text at all
+                        if !item.item.contains(&candidate.text) {
+                            continue;
+                        }
 
-                    if count > 0 {
-                        candidate.priority += (count as u32).min(1000);
+                        let mut score = 0;
+
+                        // Context-aware boosting
+                        if let Some(cmd) = command_context {
+                            if item.item.starts_with(cmd) {
+                                // High boost if the history entry starts with the current command
+                                // and contains the candidate
+                                score += 500;
+                            }
+                        }
+
+                        // Base frequency boosting
+                        // We take a log-like approach or cap it to avoid overwhelming typical priority
+                        // Only add if we haven't already added a huge boost or cumulative
+                        score += 10;
+
+                        candidate.priority = candidate.priority.saturating_add(score);
                     }
                 }
             }
@@ -707,7 +740,7 @@ mod tests {
             },
         ];
 
-        let boosted = engine.deduplicate_and_sort(candidates, 10, Some(&history_arc));
+        let boosted = engine.deduplicate_and_sort(candidates, 10, Some(&history_arc), None);
         let file_candidate = boosted.iter().find(|c| c.text == "bar.txt").unwrap();
         let arg_candidate = boosted.iter().find(|c| c.text == "bar").unwrap();
 
@@ -716,5 +749,47 @@ mod tests {
     }
 
     #[test]
-    fn test_enhanced_candidate_display_text() {}
+    fn test_context_aware_frecency_boost() {
+        let environment = Environment::new();
+        let engine = IntegratedCompletionEngine::new(environment);
+
+        let mut history = crate::history::FrecencyHistory::new();
+        let mut store = FrecencyStore::default();
+        // Add history items: "git checkout" is frequent, "docker checkout" also exists
+        store.add("git checkout");
+        store.add("docker checkout");
+        history.store = Some(store);
+        let history_arc = std::sync::Arc::new(parking_lot::Mutex::new(history));
+
+        let create_candidate = || EnhancedCandidate {
+            text: "checkout".to_string(),
+            description: None,
+            candidate_type: CandidateType::SubCommand,
+            priority: 0,
+        };
+
+        // Case 1: Context is "git"
+        let candidates_git = vec![create_candidate()];
+        let boosted_git =
+            engine.deduplicate_and_sort(candidates_git, 10, Some(&history_arc), Some("git"));
+        let score_git = boosted_git[0].priority;
+
+        // Case 2: Context is "npm" (irrelevant)
+        let candidates_npm = vec![create_candidate()];
+        let boosted_npm =
+            engine.deduplicate_and_sort(candidates_npm, 10, Some(&history_arc), Some("npm"));
+        let score_npm = boosted_npm[0].priority;
+
+        // "git" context should boost "git checkout" history item highly
+        // "npm" context should only get base boost
+        assert!(
+            score_git > score_npm,
+            "Context match should produce higher priority. git: {}, npm: {}",
+            score_git,
+            score_npm
+        );
+
+        // Ensure the boost is substantial (our logic adds 500)
+        assert!(score_git >= 500);
+    }
 }

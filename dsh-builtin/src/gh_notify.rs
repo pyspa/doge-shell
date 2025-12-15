@@ -6,6 +6,7 @@ use serde::Deserialize;
 use skim::prelude::*;
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::io::IsTerminal;
 use std::process::Command;
 use std::sync::Arc;
 
@@ -21,6 +22,12 @@ struct Notification {
     repository: Repository,
     reason: String,
     updated_at: String,
+    #[serde(default = "default_unread")]
+    unread: bool,
+}
+
+fn default_unread() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -56,6 +63,13 @@ impl SkimItem for NotificationItem {
 }
 
 pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    // Check if running in a terminal
+    if !std::io::stdout().is_terminal() {
+        ctx.write_stderr("gh-notify: Standard output is not a terminal")
+            .ok();
+        return ExitStatus::ExitedWith(1);
+    }
+
     // Get PAT
     let pat = if let Some(token) = proxy.get_var("*github-pat*") {
         token
@@ -78,7 +92,11 @@ pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) ->
     let pat_clone = pat.clone();
     let handle = std::thread::spawn(move || {
         let client = client_builder.build().map_err(|e| e.to_string())?;
-        fetch_notifications(&client, &pat_clone, "https://api.github.com/notifications")
+        fetch_notifications(
+            &client,
+            &pat_clone,
+            "https://api.github.com/notifications?all=false",
+        )
     });
 
     let notifications = match handle.join() {
@@ -117,17 +135,30 @@ pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) ->
     drop(tx_item);
 
     // Run Skim
-    let options = SkimOptionsBuilder::default()
-        .height("50%".to_string())
+    let options = match SkimOptionsBuilder::default()
         .multi(false)
         .prompt("GitHub> ".to_string())
         .bind(vec!["Enter:accept".to_string(), "Esc:abort".to_string()])
         .build()
-        .unwrap();
+    {
+        Ok(opt) => opt,
+        Err(e) => {
+            ctx.write_stderr(&format!("gh-notify: Failed to build options: {}", e))
+                .ok();
+            return ExitStatus::ExitedWith(1);
+        }
+    };
 
-    let selected_items = Skim::run_with(&options, Some(rx_item))
-        .map(|out| out.selected_items)
-        .unwrap_or_default();
+    let output = match Skim::run_with(&options, Some(rx_item)) {
+        Some(out) => out,
+        None => return ExitStatus::ExitedWith(0),
+    };
+
+    if output.is_abort {
+        return ExitStatus::ExitedWith(0);
+    }
+
+    let selected_items = output.selected_items;
 
     if selected_items.is_empty() {
         return ExitStatus::ExitedWith(0);
@@ -183,9 +214,12 @@ fn fetch_notifications(client: &Client, pat: &str, url: &str) -> Result<Vec<Noti
         return Err(format!("API error: {}", response.status()));
     }
 
-    response
+    let notifications: Vec<Notification> = response
         .json::<Vec<Notification>>()
-        .map_err(|e| format!("Failed to parse JSON: {}", e))
+        .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+
+    // Client-side filtering to strictly ensure only unread notifications are returned
+    Ok(notifications.into_iter().filter(|n| n.unread).collect())
 }
 
 fn resolve_url(client: &Client, pat: &str, api_url_opt: Option<String>) -> Option<String> {
@@ -244,6 +278,7 @@ mod tests {
             },
             reason: "review_requested".to_string(),
             updated_at: "2023-01-01T00:00:00Z".to_string(),
+            unread: true,
         };
 
         let display = format_notification_display(&n);
@@ -268,6 +303,7 @@ mod tests {
             },
             reason: "mention".to_string(),
             updated_at: "2023-01-01T00:00:00Z".to_string(),
+            unread: true,
         };
 
         let display = format_notification_display(&n);

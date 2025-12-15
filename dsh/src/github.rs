@@ -45,7 +45,7 @@ impl GitHubClient {
     }
 
     pub async fn fetch_notifications(&self, filter: Option<&str>) -> Result<GitHubStatus> {
-        let url = "https://api.github.com/notifications";
+        let url = "https://api.github.com/notifications?all=false";
         let request = self.client.request(Method::GET, url).bearer_auth(&self.pat);
 
         let response = request.send().await?;

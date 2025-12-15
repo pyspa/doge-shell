@@ -4,6 +4,28 @@ use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use tracing::{debug, error};
 
+use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, sigaction};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static RECEIVED_SIGINT: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn handle_sigint(_: i32) {
+    RECEIVED_SIGINT.store(true, Ordering::SeqCst);
+}
+
+pub(crate) fn install_sigint_handler() -> Result<()> {
+    let handler = SigHandler::Handler(handle_sigint);
+    let action = SigAction::new(handler, SaFlags::empty(), SigSet::empty());
+    unsafe {
+        sigaction(Signal::SIGINT, &action)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn check_and_clear_sigint() -> bool {
+    RECEIVED_SIGINT.swap(false, Ordering::SeqCst)
+}
+
 pub(crate) fn send_signal(pid: Pid, signal: Signal) -> Result<()> {
     debug!("📡 SIGNAL: Sending signal {:?} to pid {}", signal, pid);
     match kill(pid, signal) {

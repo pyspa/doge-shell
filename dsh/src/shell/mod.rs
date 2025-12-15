@@ -76,11 +76,15 @@ impl Shell {
     }
 
     pub fn set_signals(&mut self) {
+        // Handle SIGINT with our custom handler
+        use crate::process::signal::install_sigint_handler;
+        if let Err(e) = install_sigint_handler() {
+            warn!("Failed to install SIGINT handler: {}", e);
+        }
+
         let action = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
         unsafe {
-            if let Err(e) = sigaction(Signal::SIGINT, &action) {
-                warn!("Failed to set SIGINT handler: {}", e);
-            }
+            // IGNORE other shell-management logic signals for now
             if let Err(e) = sigaction(Signal::SIGQUIT, &action) {
                 warn!("Failed to set SIGQUIT handler: {}", e);
             }

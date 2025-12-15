@@ -645,6 +645,18 @@ impl Job {
         debug!("wait_process_no_hang started for job: {}", self.id);
         let mut send_killpg = false;
         loop {
+            // Check for manual SIGINT forwarding
+            if crate::process::signal::check_and_clear_sigint() {
+                debug!("wait_process_no_hang: Detected SIGINT in parent shell, forwarding to job");
+                if let Some(pgid) = self.pgid {
+                    debug!("Forwarding SIGINT to pgid: {}", pgid);
+                    let _ = killpg(pgid, Signal::SIGINT);
+                } else if let Some(pid) = self.pid {
+                    debug!("Forwarding SIGINT to pid: {}", pid);
+                    let _ = nix::sys::signal::kill(pid, Signal::SIGINT);
+                }
+            }
+
             debug!("waitpid loop iteration...");
 
             self.check_background_all_output().await?;
@@ -673,6 +685,10 @@ impl Job {
                 Ok(Err(nix::errno::Errno::ECHILD)) => {
                     self.check_background_all_output().await?;
                     break;
+                }
+                Ok(Err(nix::errno::Errno::EINTR)) => {
+                    debug!("⏳ WAIT: waitpid interrupted by signal (EINTR), continuing");
+                    continue;
                 }
                 status => {
                     error!("unexpected waitpid event: {:?}", status);
@@ -737,6 +753,20 @@ impl Job {
         debug!("wait_process_no_hang_sync started for job: {}", self.id);
         let mut send_killpg = false;
         loop {
+            // Check for manual SIGINT forwarding
+            if crate::process::signal::check_and_clear_sigint() {
+                debug!(
+                    "wait_process_no_hang_sync: Detected SIGINT in parent shell, forwarding to job"
+                );
+                if let Some(pgid) = self.pgid {
+                    debug!("Forwarding SIGINT to pgid: {}", pgid);
+                    let _ = killpg(pgid, Signal::SIGINT);
+                } else if let Some(pid) = self.pid {
+                    debug!("Forwarding SIGINT to pid: {}", pid);
+                    let _ = nix::sys::signal::kill(pid, Signal::SIGINT);
+                }
+            }
+
             debug!("waitpid loop iteration...");
 
             let (pid, state) =
@@ -759,6 +789,10 @@ impl Job {
                     }
                     Err(nix::errno::Errno::ECHILD) => {
                         break;
+                    }
+                    Err(nix::errno::Errno::EINTR) => {
+                        debug!("⏳ WAIT: waitpid interrupted by signal (EINTR), continuing");
+                        continue;
                     }
                     status => {
                         error!("unexpected waitpid event: {:?}", status);

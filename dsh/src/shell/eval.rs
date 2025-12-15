@@ -59,8 +59,11 @@ pub async fn eval_str(
         }
 
         // Disable raw mode for command execution (cooked mode allows proper newline handling)
-        debug!("EVAL_STR: Disabling raw mode for job execution");
-        disable_raw_mode().ok();
+        if let Err(e) = disable_raw_mode() {
+            debug!("EVAL_STR: Failed to disable raw mode: {}", e);
+        } else {
+            debug!("EVAL_STR: Successfully disabled raw mode");
+        }
 
         if force_background {
             // all job run background

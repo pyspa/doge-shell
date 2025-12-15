@@ -130,11 +130,13 @@ impl Process {
             );
             setpgid(pid, pgid).context("failed setpgid")?;
 
+            // Set signals BEFORE setting foreground process group to avoid race condition
+            // where we receive a signal while still ignoring it (inherited from shell)
+            self.set_signals()?;
+
             if foreground {
                 tcsetpgrp(SHELL_TERMINAL, pgid).context("failed tcsetpgrp")?;
             }
-
-            self.set_signals()?;
         } else {
             // For non-interactive/background, we still need to reset SIGPIPE as Rust ignores it by default
             let action = SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());

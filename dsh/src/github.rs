@@ -89,9 +89,10 @@ fn parse_notifications(notifications: &[serde_json::Value], filter: Option<&str>
 
         // Check legacy filter first
         if let Some(allowed) = &allowed_reasons
-            && !allowed.contains(&reason) {
-                continue;
-            }
+            && !allowed.contains(&reason)
+        {
+            continue;
+        }
 
         match reason {
             "review_requested" => status.review_count += 1,

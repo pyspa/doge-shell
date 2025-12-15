@@ -79,6 +79,13 @@ Set your Personal Access Token (PAT) and update interval in `config.lisp`.
 (vset "*github-notify-interval*" "60") ;; seconds
 ```
 
+### `gh-notify` Command
+
+Run `gh-notify` to view notifications directly in an interactive list.
+- **Select**: Use arrow keys to navigate.
+- **Open**: Press `Enter` to open the notification in your browser.
+
+
 ## 🔧 Built-in Commands
 
 The shell includes many built-in commands:
@@ -101,6 +108,7 @@ The shell includes many built-in commands:
 | `chat` | Chat with AI assistant |
 | `chat_prompt` | Set AI assistant system prompt |
 | `chat_model` | Set AI model |
+| `gh-notify` | View GitHub notifications interactively |
 | `glog` | Git log with interactive selection |
 | `gco` | Git checkout with interactive branch selection |
 | `add_path` | Add path to PATH environment variable |

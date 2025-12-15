@@ -19,6 +19,7 @@ pub mod command_timing;
 mod dmv;
 mod fg;
 mod gco;
+pub mod gh_notify;
 mod glog;
 mod gwt;
 mod help;

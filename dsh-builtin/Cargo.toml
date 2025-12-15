@@ -23,6 +23,7 @@ skim.workspace = true
 serde_json.workspace = true
 xdg.workspace = true
 serde.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
 
 getopts = "0.2.23"
 regex = "1.11"

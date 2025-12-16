@@ -180,10 +180,20 @@ impl Environment {
 
     pub fn search(&self, cmd: &str) -> Option<String> {
         if ABSOLUTE_PATH_REGEX.is_match(cmd) {
-            // TODO
+            let cmd_path = Path::new(cmd);
+            if cmd_path.exists() && cmd_path.is_file() {
+                return Some(cmd.to_string());
+            } else {
+                return None;
+            }
         }
         if RELATIVE_PATH_REGEX.is_match(cmd) {
-            // TODO
+            let cmd_path = Path::new(cmd);
+            if cmd_path.exists() && cmd_path.is_file() {
+                return Some(cmd.to_string());
+            } else {
+                return None;
+            }
         }
         for path in &self.paths {
             if let Some(file) = search_file(path, cmd) {
@@ -404,5 +414,35 @@ mod tests {
                 std::env::remove_var(key);
             }
         }
+    }
+    #[test]
+    fn test_search() {
+        init();
+        let env = Environment::new();
+        // Test absolute path
+        let abs_path = "/usr/bin/env";
+        if Path::new(abs_path).exists() {
+            let p = env.read().search(abs_path);
+            assert_eq!(Some(abs_path.to_string()), p);
+        }
+
+        // Test relative path (assumes running from repo root with Cargo.toml)
+        let rel_path = "./Cargo.toml";
+        if Path::new(rel_path).exists() {
+            let p = env.read().search(rel_path);
+            assert_eq!(Some(rel_path.to_string()), p);
+        }
+
+        // Test non-existent path
+        let non_existent = "./non_existent_file_12345";
+        let p = env.read().search(non_existent);
+        assert_eq!(None, p);
+
+        // Test command in PATH
+        let p = env.read().search("ls");
+        // Should find ls in one of the paths, usually /usr/bin/ls or /bin/ls
+        // Note: search() via search_file() returns just the filename for PATH lookups
+        assert!(p.is_some());
+        assert_eq!(p.unwrap(), "ls");
     }
 }

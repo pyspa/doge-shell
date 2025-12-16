@@ -15,11 +15,12 @@ pub struct ItemStats {
     num_accesses: i32,
     pub match_score: i64,
     pub match_index: Vec<usize>,
+    pub context: Option<String>,
 }
 
 impl ItemStats {
     /// Create a new item
-    pub fn new(item: &str, ref_time: f64, half_life: f32) -> ItemStats {
+    pub fn new(item: &str, ref_time: f64, half_life: f32, context: Option<String>) -> ItemStats {
         ItemStats {
             half_life,
             reference_time: ref_time,
@@ -29,6 +30,7 @@ impl ItemStats {
             num_accesses: 0,
             match_score: 0,
             match_index: Vec::new(),
+            context,
         }
     }
 
@@ -41,10 +43,59 @@ impl ItemStats {
         }
     }
 
+    pub fn cmp_score_with_context(
+        &self,
+        other: &ItemStats,
+        method: &SortMethod,
+        current_context: Option<&str>,
+    ) -> Ordering {
+        match method {
+            SortMethod::Frequent => self.cmp_frequent(other),
+            SortMethod::Recent => self.cmp_recent(other),
+            SortMethod::Frecent => self.cmp_frecent_with_context(other, current_context),
+        }
+    }
+
+    pub fn cmp_frecent_with_context(
+        &self,
+        other: &ItemStats,
+        current_context: Option<&str>,
+    ) -> Ordering {
+        let my_score = self.get_effective_frecency(current_context);
+        let other_score = other.get_effective_frecency(current_context);
+
+        my_score.partial_cmp(&other_score).unwrap_or(Ordering::Less)
+    }
+
+    fn get_effective_frecency(&self, current_context: Option<&str>) -> f32 {
+        let base = self.get_frecency();
+        if let Some(cur) = current_context
+            && let Some(ref my_ctx) = self.context
+            && my_ctx == cur
+        {
+            // Boost score if context matches
+            return base * 2.0;
+        }
+        base
+    }
+
     pub fn cmp_match_score(&self, other: &ItemStats) -> Ordering {
         let order = self.match_score.cmp(&other.match_score);
         if order.is_eq() {
             self.cmp_recent(other)
+        } else {
+            order
+        }
+    }
+
+    pub fn cmp_match_score_with_context(
+        &self,
+        other: &ItemStats,
+        current_context: Option<&str>,
+    ) -> Ordering {
+        let order = self.match_score.cmp(&other.match_score);
+        if order.is_eq() {
+            self.cmp_frecent_with_context(other, current_context)
         } else {
             order
         }
@@ -164,6 +215,8 @@ pub struct ItemStatsSerializer {
     pub frecency: f32,
     pub last_accessed: f32,
     pub num_accesses: i32,
+    #[serde(default)]
+    pub context: Option<String>,
 }
 
 impl From<&ItemStats> for ItemStatsSerializer {
@@ -173,6 +226,7 @@ impl From<&ItemStats> for ItemStatsSerializer {
             frecency: stats.frecency,
             last_accessed: stats.last_accessed,
             num_accesses: stats.num_accesses,
+            context: stats.context.clone(),
         }
     }
 }
@@ -188,6 +242,7 @@ impl ItemStatsSerializer {
             num_accesses: self.num_accesses,
             match_score: 0,
             match_index: Vec::new(),
+            context: self.context.clone(),
         }
     }
 }

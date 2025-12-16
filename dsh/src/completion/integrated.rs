@@ -732,8 +732,8 @@ mod tests {
 
         let mut history = crate::history::FrecencyHistory::new();
         let mut store = FrecencyStore::default();
-        store.add("bar.txt");
-        store.add("bar");
+        store.add("bar.txt", None);
+        store.add("bar", None);
         history.store = Some(store);
         let history_arc = std::sync::Arc::new(parking_lot::Mutex::new(history));
 
@@ -768,8 +768,8 @@ mod tests {
         let mut history = crate::history::FrecencyHistory::new();
         let mut store = FrecencyStore::default();
         // Add history items: "git checkout" is frequent, "docker checkout" also exists
-        store.add("git checkout");
-        store.add("docker checkout");
+        store.add("git checkout", None);
+        store.add("docker checkout", None);
         history.store = Some(store);
         let history_arc = std::sync::Arc::new(parking_lot::Mutex::new(history));
 
@@ -813,7 +813,7 @@ mod tests {
         // Setup history
         let mut history = crate::history::FrecencyHistory::new();
         let mut store = FrecencyStore::default();
-        store.add("git checkout");
+        store.add("git checkout", None);
         history.store = Some(store);
         let history_arc = std::sync::Arc::new(parking_lot::Mutex::new(history));
 

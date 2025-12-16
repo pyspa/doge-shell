@@ -58,8 +58,8 @@ impl FrecencyStore {
     }
 
     /// Log a visit to a item
-    pub fn add(&mut self, item: &str) {
-        let item_stats = self.get(item);
+    pub fn add(&mut self, item: &str, context: Option<String>) {
+        let item_stats = self.get(item, context);
 
         item_stats.update_frecency(1.0);
         item_stats.update_num_accesses(1);
@@ -79,7 +79,7 @@ impl FrecencyStore {
 
     /// Adjust the score of a item by a given weight
     pub fn adjust(&mut self, item: &str, weight: f32) {
-        let item_stats = self.get(item);
+        let item_stats = self.get(item, None);
 
         item_stats.update_frecency(weight);
         item_stats.update_num_accesses(weight as i32);
@@ -101,18 +101,44 @@ impl FrecencyStore {
         new_vec
     }
 
+    /// Return a sorted vector of all items in the store, sorted by `sort_method`
+    /// If `current_context` is provided, items with matching context will be boosted (for Frecent sort method)
+    pub fn sorted_with_context(
+        &self,
+        sort_method: &SortMethod,
+        current_context: Option<&str>,
+    ) -> Vec<ItemStats> {
+        let mut new_vec = self.items.clone();
+        new_vec.sort_by(|item1, item2| {
+            item1
+                .cmp_score_with_context(item2, sort_method, current_context)
+                .reverse()
+        });
+
+        new_vec
+    }
+
     /// Retrieve a mutable reference to a item in the store.
     /// If the item does not exist, create it and return a reference to the created item
-    fn get(&mut self, item: &str) -> &mut ItemStats {
+    /// Retrieve a mutable reference to a item in the store.
+    /// If the item does not exist, create it and return a reference to the created item
+    fn get(&mut self, item: &str, context: Option<String>) -> &mut ItemStats {
         match self
             .items
             .binary_search_by_key(&item, |item_stats| &item_stats.item)
         {
-            Ok(idx) => &mut self.items[idx],
+            Ok(idx) => {
+                let stats = &mut self.items[idx];
+                // Update context if provided
+                if context.is_some() {
+                    stats.context = context;
+                }
+                stats
+            }
             Err(idx) => {
                 self.items.insert(
                     idx,
-                    ItemStats::new(item, self.reference_time, self.half_life),
+                    ItemStats::new(item, self.reference_time, self.half_life, context),
                 );
                 &mut self.items[idx]
             }

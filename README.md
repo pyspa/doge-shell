@@ -22,6 +22,7 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 
 - **Command Palette**: Unified interface for accessing shell commands and features with `Alt+x`
 - **Frecency-based History**: Intelligent command history using frecency scoring (frequency + recency)
+- **Context-Aware History**: Prioritizes commands based on the current directory or Git repository context
 - **Directory Navigation**: Smart directory history and jump with `z` command
 - **Path Management**: Dynamic PATH management with `add_path` command
 - **Job Control**: Background job management with `jobs`, `bg`, `fg` commands

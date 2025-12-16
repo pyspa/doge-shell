@@ -87,8 +87,8 @@ mod tests {
         let dir = tempdir()?;
         let path = dir.path().join("frecency.bin");
         let mut store = FrecencyStore::default();
-        store.add("foo");
-        store.add("bar");
+        store.add("foo", None);
+        store.add("bar", None);
 
         write_store(&store, &path)?;
 

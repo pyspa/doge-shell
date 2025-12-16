@@ -10,6 +10,26 @@ use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use std::process::Command;
+
+fn get_current_context() -> Option<String> {
+    // Try to get git root
+    if let Ok(output) = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        && output.status.success()
+    {
+        let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !root.is_empty() {
+            return Some(root);
+        }
+    }
+
+    // Fallback to current directory
+    std::env::current_dir()
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned())
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Entry {
@@ -317,7 +337,14 @@ impl FrecencyHistory {
                     self.histories = Some(self.sort_by_match(word));
                 }
                 None => {
-                    self.histories = Some(self.sorted(&SortMethod::Recent));
+                    let ctx = get_current_context();
+                    // Use Frecent sort with context boost for better relevance
+                    self.histories = Some(
+                        self.store
+                            .as_ref()
+                            .unwrap()
+                            .sorted_with_context(&SortMethod::Frecent, ctx.as_deref()),
+                    );
                 }
             }
         }
@@ -342,7 +369,13 @@ impl FrecencyHistory {
                     self.histories = Some(self.sort_by_match(word));
                 }
                 None => {
-                    self.histories = Some(self.sorted(&SortMethod::Recent));
+                    let ctx = get_current_context();
+                    self.histories = Some(
+                        self.store
+                            .as_ref()
+                            .unwrap()
+                            .sorted_with_context(&SortMethod::Frecent, ctx.as_deref()),
+                    );
                 }
             }
         }
@@ -404,7 +437,8 @@ impl FrecencyHistory {
 
     pub fn add(&mut self, history: &str) {
         if let Some(ref mut store) = self.store {
-            store.add(history);
+            let ctx = get_current_context();
+            store.add(history, ctx);
         }
     }
 
@@ -425,12 +459,21 @@ impl FrecencyHistory {
     }
 
     pub fn search_prefix(&self, pattern: &str) -> Option<String> {
+        let ctx = get_current_context();
+        self.search_prefix_with_context(pattern, ctx.as_deref())
+    }
+
+    pub fn search_prefix_with_context(
+        &self,
+        pattern: &str,
+        context: Option<&str>,
+    ) -> Option<String> {
         if let Some(ref store) = self.store {
             store
                 .items
                 .iter()
                 .filter(|item| item.item.starts_with(pattern))
-                .max_by(|a, b| a.cmp_frecent(b))
+                .max_by(|a, b| a.cmp_frecent_with_context(b, context))
                 .map(|item| item.item.clone())
         } else {
             None
@@ -469,7 +512,36 @@ impl FrecencyHistory {
                 results.push(item);
             }
         }
-        results.sort_by(|a, b| a.cmp_match_score(b).reverse());
+
+        let ctx = get_current_context();
+        self.sort_by_match_with_context(pattern, ctx.as_deref())
+    }
+
+    pub fn sort_by_match_with_context(
+        &self,
+        pattern: &str,
+        context: Option<&str>,
+    ) -> Vec<ItemStats> {
+        let Some(ref store) = self.store else {
+            return Vec::new();
+        };
+
+        // Pre-allocate with estimated capacity (assume ~25% match rate)
+        let estimated_matches = store.items.len() / 4;
+        let mut results = Vec::with_capacity(estimated_matches.max(16));
+
+        for item in store.items.iter() {
+            if let Some((score, index)) = self.matcher.fuzzy_indices(&item.item, pattern)
+                && score > 25
+            {
+                let mut item = item.clone();
+                item.match_score = score;
+                item.match_index = index;
+                results.push(item);
+            }
+        }
+
+        results.sort_by(|a, b| a.cmp_match_score_with_context(b, context).reverse());
         results
     }
 
@@ -656,6 +728,46 @@ mod tests {
 
         // Should not panic
         history.save()?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_context_aware_boosting() -> Result<()> {
+        init();
+        let temp_dir = tempfile::tempdir()?;
+        let dir_a = temp_dir.path().join("a");
+        let dir_b = temp_dir.path().join("b");
+        // We don't need to create real directories since we pass strings
+        // std::fs::create_dir(&dir_a)?;
+        // std::fs::create_dir(&dir_b)?;
+        let dir_a_str = dir_a.to_string_lossy().to_string();
+        let dir_b_str = dir_b.to_string_lossy().to_string();
+
+        let history_file = temp_dir.path().join("history_context");
+        let mut history = FrecencyHistory::new();
+        history.path = Some(history_file);
+        history.store = Some(dsh_frecency::FrecencyStore::default());
+
+        // Simulate usage in Dir A
+        if let Some(ref mut store) = history.store {
+            store.add("cmd_common", Some(dir_a_str.clone()));
+            store.add("cmd_unique_a", Some(dir_a_str.clone()));
+
+            // Simulate usage in Dir B
+            store.add("cmd_common", Some(dir_b_str.clone())); // common cmd used in both
+            store.add("cmd_unique_b", Some(dir_b_str.clone()));
+        }
+
+        // Back to Dir A context
+        // Try searching in context A
+        // "cmd_unique_a" (score 1.0 * 2.0 = 2.0) vs "cmd_unique_b" (score 1.0 * 1.0 = 1.0)
+        let result = history.search_prefix_with_context("cmd_unique", Some(&dir_a_str));
+        assert_eq!(result, Some("cmd_unique_a".to_string()));
+
+        // Now context B
+        let result_b = history.search_prefix_with_context("cmd_unique", Some(&dir_b_str));
+        assert_eq!(result_b, Some("cmd_unique_b".to_string()));
 
         Ok(())
     }

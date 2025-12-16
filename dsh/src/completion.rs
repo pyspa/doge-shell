@@ -103,7 +103,7 @@ impl Completion {
     }
 
     pub fn set_completions(&mut self, input: &str, comps: Vec<ItemStats>) {
-        let item = ItemStats::new(input, 0.0, 1.0);
+        let item = ItemStats::new(input, 0.0, 1.0, None);
 
         self.input = if input.is_empty() {
             None

@@ -455,9 +455,10 @@ pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String>
         Ok(output) => {
             if let Ok(out) = String::from_utf8(output.stdout) {
                 let items: Vec<Candidate> = out
-                    .split('\n')
-                    // TODO filter
-                    .map(|x| Candidate::Basic(x.trim().to_string()))
+                    .lines()
+                    .map(|x| x.trim())
+                    .filter(|x| !x.is_empty())
+                    .map(|x| Candidate::Basic(x.to_string()))
                     .collect();
 
                 return select_completion_items_simple(items, query);
@@ -511,7 +512,7 @@ fn completion_from_lisp_with_prompt(
     prompt_text: &str,
     input_text: &str,
 ) -> Option<String> {
-    // TODO convert input
+    // Pass current input as argument to lisp function
     let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
     let environment = Arc::clone(&lisp_engine.borrow().shell_env);
 
@@ -521,8 +522,9 @@ fn completion_from_lisp_with_prompt(
         // debug!("match cmd:'{}' in:'{}'", cmd_str, replace_space(input));
         if replace_space(input.as_str()).starts_with(cmd_str.as_str()) {
             if let Some(func) = &compl.func {
-                // run lisp func
-                match lisp_engine.borrow().apply_func(func.to_owned(), vec![]) {
+                // run lisp func with input as argument
+                let args = vec![Value::String(replace_space(input.as_str()))];
+                match lisp_engine.borrow().apply_func(func.to_owned(), args) {
                     Ok(Value::List(list)) => {
                         let mut items: Vec<Candidate> = Vec::new();
                         for val in list.into_iter() {

@@ -94,6 +94,17 @@ impl<T: CacheableCandidate> CompletionCache<T> {
         }
     }
 
+    pub fn get_entry(&self, key: &str) -> Option<Arc<Vec<T>>> {
+        let now = Instant::now();
+        let guard = self.entries.read();
+
+        if let Some(entry) = guard.get(key)
+            && !entry.is_expired(now) {
+                return Some(entry.candidates.clone());
+            }
+        None
+    }
+
     pub fn lookup(&self, input: &str) -> Option<CacheLookup<T>> {
         let now = Instant::now();
         let mut expired = Vec::new();

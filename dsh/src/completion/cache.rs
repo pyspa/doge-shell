@@ -99,9 +99,10 @@ impl<T: CacheableCandidate> CompletionCache<T> {
         let guard = self.entries.read();
 
         if let Some(entry) = guard.get(key)
-            && !entry.is_expired(now) {
-                return Some(entry.candidates.clone());
-            }
+            && !entry.is_expired(now)
+        {
+            return Some(entry.candidates.clone());
+        }
         None
     }
 

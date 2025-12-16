@@ -37,22 +37,23 @@ impl ProcessGenerator {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if path.is_dir()
-                        && let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-                            // Check if it's a PID (all digits)
-                            if let Ok(pid) = file_name.parse::<u32>() {
-                                let pid_str = pid.to_string();
+                        && let Some(file_name) = path.file_name().and_then(|n| n.to_str())
+                    {
+                        // Check if it's a PID (all digits)
+                        if let Ok(pid) = file_name.parse::<u32>() {
+                            let pid_str = pid.to_string();
 
-                                // Read process name from /proc/<pid>/comm
-                                let comm_path = path.join("comm");
-                                let description = if let Ok(comm) = fs::read_to_string(comm_path) {
-                                    Some(comm.trim().to_string())
-                                } else {
-                                    None
-                                };
+                            // Read process name from /proc/<pid>/comm
+                            let comm_path = path.join("comm");
+                            let description = if let Ok(comm) = fs::read_to_string(comm_path) {
+                                Some(comm.trim().to_string())
+                            } else {
+                                None
+                            };
 
-                                candidates.push(CompletionCandidate::process(pid_str, description));
-                            }
+                            candidates.push(CompletionCandidate::process(pid_str, description));
                         }
+                    }
                 }
             }
 
@@ -84,9 +85,10 @@ impl ProcessGenerator {
                 }
                 // Name subsequence/substring match
                 if let Some(desc) = &c.description
-                    && desc.to_lowercase().contains(&token_lower) {
-                        return true;
-                    }
+                    && desc.to_lowercase().contains(&token_lower)
+                {
+                    return true;
+                }
                 false
             })
             .cloned() // Clone only the matches

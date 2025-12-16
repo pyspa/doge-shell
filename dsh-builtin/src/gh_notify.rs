@@ -1,5 +1,6 @@
 use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
+use getopts::Options;
 use reqwest::blocking::Client;
 use reqwest::header::AUTHORIZATION;
 use serde::Deserialize;
@@ -27,7 +28,7 @@ struct Notification {
 }
 
 fn default_unread() -> bool {
-    true
+    false
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -62,7 +63,26 @@ impl SkimItem for NotificationItem {
     }
 }
 
-pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    // Parse arguments
+    let mut opts = Options::new();
+    opts.optmulti(
+        "r",
+        "repo",
+        "Filter by repository (partial match, e.g. owner/repo)",
+        "REPO",
+    );
+
+    let matches = match opts.parse(&argv) {
+        Ok(m) => m,
+        Err(f) => {
+            ctx.write_stderr(&format!("gh-notify: {}", f)).ok();
+            return ExitStatus::ExitedWith(1);
+        }
+    };
+
+    let filter_repos = matches.opt_strs("repo");
+
     // Check if running in a terminal
     if !std::io::stdout().is_terminal() {
         ctx.write_stderr("gh-notify: Standard output is not a terminal")
@@ -92,11 +112,7 @@ pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) ->
     let pat_clone = pat.clone();
     let handle = std::thread::spawn(move || {
         let client = client_builder.build().map_err(|e| e.to_string())?;
-        fetch_notifications(
-            &client,
-            &pat_clone,
-            "https://api.github.com/notifications?all=false",
-        )
+        fetch_notifications(&client, &pat_clone, "https://api.github.com/notifications")
     });
 
     let notifications = match handle.join() {
@@ -112,8 +128,16 @@ pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) ->
         }
     };
 
+    // Filter by repository if requested
+    let notifications = filter_notifications(notifications, &filter_repos);
+
     if notifications.is_empty() {
-        ctx.write_stdout("No unread notifications.").ok();
+        if !filter_repos.is_empty() {
+            ctx.write_stdout("No unread notifications matching the filter.")
+                .ok();
+        } else {
+            ctx.write_stdout("No unread notifications.").ok();
+        }
         return ExitStatus::ExitedWith(0);
     }
 
@@ -207,6 +231,7 @@ fn fetch_notifications(client: &Client, pat: &str, url: &str) -> Result<Vec<Noti
     let response = client
         .get(url)
         .header(AUTHORIZATION, format!("Bearer {}", pat))
+        .query(&[("all", "false")])
         .send()
         .map_err(|e| format!("HTTP request failed: {}", e))?;
 
@@ -220,6 +245,27 @@ fn fetch_notifications(client: &Client, pat: &str, url: &str) -> Result<Vec<Noti
 
     // Client-side filtering to strictly ensure only unread notifications are returned
     Ok(notifications.into_iter().filter(|n| n.unread).collect())
+}
+
+fn filter_notifications(
+    notifications: Vec<Notification>,
+    patterns: &[String],
+) -> Vec<Notification> {
+    if patterns.is_empty() {
+        return notifications;
+    }
+
+    notifications
+        .into_iter()
+        .filter(|n| {
+            patterns.iter().any(|repo_pattern| {
+                n.repository
+                    .full_name
+                    .to_lowercase()
+                    .contains(&repo_pattern.to_lowercase())
+            })
+        })
+        .collect()
 }
 
 fn resolve_url(client: &Client, pat: &str, api_url_opt: Option<String>) -> Option<String> {
@@ -333,5 +379,62 @@ mod tests {
     fn test_resolve_url_none() {
         let client = Client::new();
         assert_eq!(resolve_url(&client, "token", None), None);
+    }
+
+    #[test]
+    fn test_filter_notifications() {
+        let n1 = Notification {
+            id: "1".to_string(),
+            subject: Subject {
+                title: "T1".to_string(),
+                subject_type: "Issue".to_string(),
+                url: None,
+            },
+            repository: Repository {
+                full_name: "owner/repo1".to_string(),
+                html_url: "".to_string(),
+            },
+            reason: "m".to_string(),
+            updated_at: "".to_string(),
+            unread: true,
+        };
+        // actually let's make n2 different
+        let mut n2 = n1.clone();
+        n2.id = "2".to_string();
+        n2.repository.full_name = "owner/repo2".to_string();
+
+        let mut n3 = n1.clone();
+        n3.id = "3".to_string();
+        n3.repository.full_name = "other/foo".to_string();
+
+        let notifications = vec![n1.clone(), n2.clone(), n3.clone()];
+
+        // No filter
+        let res = filter_notifications(notifications.clone(), &[]);
+        assert_eq!(res.len(), 3);
+
+        // Exact match
+        let res = filter_notifications(notifications.clone(), &["owner/repo1".to_string()]);
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].repository.full_name, "owner/repo1");
+
+        // Partial match
+        let res = filter_notifications(notifications.clone(), &["repo".to_string()]);
+        assert_eq!(res.len(), 2); // repo1, repo2
+
+        // Case insensitive
+        let res = filter_notifications(notifications.clone(), &["OWNER".to_string()]);
+        assert_eq!(res.len(), 2);
+
+        // Multiple filters (OR)
+        let res = filter_notifications(
+            notifications.clone(),
+            &["repo1".to_string(), "foo".to_string()],
+        );
+        assert_eq!(res.len(), 2); // repo1, foo
+
+        // No match
+        let res = filter_notifications(notifications.clone(), &["bar".to_string()]);
+        assert_eq!(res.len(), 0);
     }
 }

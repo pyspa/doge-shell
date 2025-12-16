@@ -1,12 +1,14 @@
 sp = _{ " " | "\t" | "\r" }
 word_char = _{
-    !("|" | "&" | ";" | " " | "\t" | "\r" | "\n" | "`" | "{" | "}" | "<" | ">" | "(" | ")" | "$" | "\"" | "'" | "*" | "?")
+    !("|" | "&" | ";" | " " | "\t" | "\r" | "\n" | "`" | "{" | "}" | "<" | ">" | "(" | ")" | "$" | "\"" | "'" | "*" | "?" | "[" | "]")
     ~ ANY
 }
 
 word = { word_char+ }
 variable = { "$" ~ word }
-glob_word = { word* ~ (word_char | "*" )+ }
+glob_char = _{ "*" | "?" | "[" }
+glob_remaining_char = _{ word_char | glob_char | "]" }
+glob_word = { word_char* ~ glob_char ~ glob_remaining_char* }
 
 s_quoted = { "\'" ~ s_quoted_inner* ~ "\'" }
 s_quoted_inner = _{

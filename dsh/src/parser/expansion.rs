@@ -1,6 +1,6 @@
 use super::{Rule, ShellParser, ast::get_string};
 use crate::environment::Environment;
-use anyhow::{Result, anyhow, bail, ensure};
+use anyhow::{Result, anyhow};
 use parking_lot::RwLock;
 use pest::Parser;
 use pest::iterators::Pair;
@@ -19,7 +19,7 @@ fn find_glob_root(path: &str) -> (String, String) {
     }
     for p in path.iter() {
         let file = p.to_string_lossy();
-        if !find_glob && file.contains("*") {
+        if !find_glob && (file.contains("*") || file.contains("?") || file.contains("[")) {
             find_glob = true;
         }
         if find_glob {
@@ -60,19 +60,19 @@ pub fn expand_alias_tilde(
             match globmatch::Builder::new(&pattern).build(root) {
                 Ok(builder) => {
                     let paths: Vec<_> = builder.into_iter().flatten().collect();
-                    ensure!(
-                        !paths.is_empty(),
-                        "dsh: no matches for wildcard '{}'",
-                        &pattern
-                    );
-
-                    for path in paths {
-                        debug!("glob match {}", path.display());
-                        argv.push(format!("\"{}\"", path.display()));
+                    if paths.is_empty() {
+                        debug!("dsh: no matches for wildcard '{}'", &pattern);
+                        argv.push(pattern);
+                    } else {
+                        for path in paths {
+                            debug!("glob match {}", path.display());
+                            argv.push(format!("\"{}\"", path.display()));
+                        }
                     }
                 }
                 Err(err) => {
-                    bail!("dsh: failed resolve paths. {}", err);
+                    debug!("dsh: failed resolve paths. {}. treating as literal.", err);
+                    argv.push(pattern);
                 }
             }
         }
@@ -271,7 +271,11 @@ fn check_expansion_needed(pair: Pair<Rule>, alias: &HashMap<String, String>) -> 
     match pair.as_rule() {
         Rule::glob_word => {
             let s = pair.as_str();
-            s.contains('*') || s.contains('~') || s.contains('$')
+            s.contains('*')
+                || s.contains('?')
+                || s.contains('[')
+                || s.contains('~')
+                || s.contains('$')
         }
         Rule::word | Rule::variable | Rule::s_quoted | Rule::d_quoted => {
             let s = pair.as_str();

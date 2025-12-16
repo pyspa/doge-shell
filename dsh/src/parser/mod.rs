@@ -9,6 +9,9 @@ pub mod expansion;
 pub mod highlight;
 
 #[cfg(test)]
+mod edge_case_tests;
+
+#[cfg(test)]
 mod tests;
 
 // Re-exports

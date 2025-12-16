@@ -388,6 +388,7 @@ impl IntegratedCompletionEngine {
                 super::command::CompletionType::Argument => CandidateType::Argument,
                 super::command::CompletionType::File => CandidateType::File,
                 super::command::CompletionType::Directory => CandidateType::Directory,
+                super::command::CompletionType::Process => CandidateType::Process,
             },
             priority: candidate.priority,
         }
@@ -560,6 +561,10 @@ impl EnhancedCandidate {
                     Candidate::Basic(self.text.clone())
                 }
             }
+            CandidateType::Process => Candidate::Process {
+                pid: self.text.clone(),
+                command: self.description.clone().unwrap_or_default(),
+            },
         }
     }
 }
@@ -579,6 +584,8 @@ pub enum CandidateType {
     File,
     /// Directory
     Directory,
+    /// Process
+    Process,
     /// Generic
     #[allow(dead_code)]
     Generic,
@@ -593,8 +600,10 @@ impl CandidateType {
             CandidateType::ShortOption => 3,
             CandidateType::Argument => 4,
             CandidateType::Directory => 5,
+            CandidateType::Directory => 5,
             CandidateType::File => 6,
-            CandidateType::Generic => 7,
+            CandidateType::Process => 7,
+            CandidateType::Generic => 8,
         }
     }
 
@@ -608,6 +617,7 @@ impl CandidateType {
             CandidateType::Argument => "📝",
             CandidateType::File => "📄",
             CandidateType::Directory => "📁",
+            CandidateType::Process => "🔧",
             CandidateType::Generic => "💡",
         }
     }

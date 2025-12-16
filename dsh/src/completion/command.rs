@@ -84,9 +84,12 @@ pub enum ArgumentType {
     /// URL
     Url,
     /// Regular expression pattern
+    /// Regular expression pattern
     Regex,
     /// Script to execute for dynamic completion
     Script(String),
+    /// System process (PID)
+    Process,
 }
 
 /// Command completion database
@@ -146,6 +149,8 @@ pub enum CompletionType {
     File,
     /// Directory
     Directory,
+    /// Process
+    Process,
 }
 
 /// Completion candidate
@@ -205,6 +210,11 @@ impl CompletionCandidate {
     /// Create directory candidate
     pub fn directory(path: String) -> Self {
         Self::new(path, None, CompletionType::Directory, 50)
+    }
+
+    /// Create process candidate
+    pub fn process(pid: String, description: Option<String>) -> Self {
+        Self::new(pid, description, CompletionType::Process, 70)
     }
 }
 

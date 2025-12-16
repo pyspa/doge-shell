@@ -299,6 +299,7 @@ impl SkimItem for Candidate {
             Candidate::File { path, .. } => Cow::Borrowed(path),
             Candidate::GitBranch { name, .. } => Cow::Borrowed(name),
             Candidate::History { command, .. } => Cow::Borrowed(command),
+            Candidate::Process { pid, .. } => Cow::Borrowed(pid),
         }
     }
 
@@ -338,6 +339,11 @@ impl SkimItem for Candidate {
                 command, frequency, ..
             } => {
                 let desc = format!("{command:<30} used {frequency} times");
+                Cow::Owned(desc)
+            }
+            Candidate::Process { pid, command } => {
+                let icon = "🔧";
+                let desc = format!("{icon} {pid:<8} {command}");
                 Cow::Owned(desc)
             }
         }
@@ -815,6 +821,7 @@ fn deduplicate_candidates(items: Vec<Candidate>) -> Vec<Candidate> {
                 if *is_dir { "(directory)" } else { "(file)" }.to_string(),
             ),
             Candidate::History { command, .. } => (command.clone(), "(history)".to_string()),
+            Candidate::Process { pid, command } => (pid.clone(), command.clone()),
         };
 
         // Extract just the filename for comparison (remove path prefixes)

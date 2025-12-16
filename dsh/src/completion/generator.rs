@@ -4,6 +4,7 @@ use super::context::ContextCorrector;
 use super::fuzzy_match_score;
 use super::generators::filesystem::FileSystemGenerator;
 use super::generators::option::OptionGenerator;
+use super::generators::process::ProcessGenerator;
 use super::generators::script::ScriptGenerator;
 use super::generators::subcommand::SubCommandGenerator;
 use super::parser::{CompletionContext, ParsedCommandLine};
@@ -234,6 +235,9 @@ impl<'a> CompletionGenerator<'a> {
             }
             ArgumentType::Script(command) => {
                 ScriptGenerator::default().generate_script_candidates(command, parsed)
+            }
+            ArgumentType::Process => {
+                ProcessGenerator::new().generate_candidates(&parsed.current_token)
             }
             _ => Ok(Vec::new()),
         }

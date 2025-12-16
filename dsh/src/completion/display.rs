@@ -709,6 +709,10 @@ pub enum Candidate {
         frequency: u32,
         last_used: i64,
     },
+    Process {
+        pid: String,
+        command: String,
+    },
 }
 
 impl Candidate {
@@ -745,6 +749,7 @@ impl Candidate {
             }
             Candidate::GitBranch { .. } => '🌿', // Git branch - herb/branch
             Candidate::History { .. } => '🕒',   // History - clock
+            Candidate::Process { .. } => '🔧',   // Process - tool/gear
         }
     }
 
@@ -755,6 +760,7 @@ impl Candidate {
             Candidate::Command { description, .. } if !description.is_empty() => Some(description),
             Candidate::Option { description, .. } if !description.is_empty() => Some(description),
             Candidate::History { frequency: _, .. } => None, // Could format frequency here if desired
+            Candidate::Process { command, .. } => Some(command),
             _ => None,
         }
     }
@@ -770,6 +776,7 @@ impl Candidate {
             Candidate::File { path, .. } => path,
             Candidate::GitBranch { name, .. } => name,
             Candidate::History { command, .. } => command,
+            Candidate::Process { pid, .. } => pid,
         }
     }
 

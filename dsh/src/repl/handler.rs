@@ -329,7 +329,10 @@ async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
             Ok(tmode) => tmode,
             Err(e) => {
                 warn!("Cannot get terminal mode: {}", e);
-                eprintln!("dsh: terminal initialization error: {}", e);
+                display_user_error(
+                    &anyhow::anyhow!("terminal initialization error: {}", e),
+                    false,
+                );
                 // Show new prompt and skip command execution
                 let mut renderer = TerminalRenderer::new();
                 repl.print_prompt(&mut renderer);
@@ -410,7 +413,10 @@ async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()> {
             Ok(tmode) => tmode,
             Err(e) => {
                 warn!("Cannot get terminal mode for background execution: {}", e);
-                eprintln!("dsh: terminal initialization error: {}", e);
+                display_user_error(
+                    &anyhow::anyhow!("terminal initialization error: {}", e),
+                    false,
+                );
                 let mut renderer = TerminalRenderer::new();
                 repl.print_prompt(&mut renderer);
                 renderer.flush().ok();

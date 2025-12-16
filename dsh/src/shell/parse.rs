@@ -516,7 +516,7 @@ fn read_fd(fd: RawFd) -> Result<String> {
     let output = std::str::from_utf8(&raw_stdout)
         .inspect_err(|_err| {
             // TODO
-            eprintln!("binary in variable/expansion is not supported");
+            warn!("binary in variable/expansion is not supported");
         })?
         .trim_end_matches('\n')
         .to_owned();

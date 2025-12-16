@@ -534,7 +534,7 @@ fn completion_from_lisp_with_prompt(
                         return Some(str);
                     }
                     Err(err) => {
-                        eprintln!("{err:?}");
+                        warn!("Lisp completion error: {err:?}");
                     }
                     _ => {}
                 }

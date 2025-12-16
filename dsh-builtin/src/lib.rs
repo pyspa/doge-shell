@@ -18,6 +18,7 @@ pub use chatgpt::execute_chat_message;
 pub mod command_timing;
 mod dmv;
 mod fg;
+pub mod ga;
 mod gco;
 pub mod gh_notify;
 mod glog;
@@ -266,6 +267,11 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
         builtin.insert(
             "gco",
             Box::new(BuiltinCommandFn::new(gco::command, gco::description()))
+                as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "ga",
+            Box::new(BuiltinCommandFn::new(ga::command, ga::description()))
                 as Box<dyn BuiltinCommandTrait>,
         );
         builtin.insert(

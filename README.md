@@ -55,7 +55,7 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 
 ### Other Features
 
-- **Git Integration**: Commands for Git operations (`gco`, `glog`, etc.)
+- **Git Integration**: Commands for Git operations (`ga`, `gco`, `glog`, etc.)
 - **Auto-Correction Suggestion**: Suggests similar commands when a typo is detected (e.g., "Did you mean: git ?" when typing `gti`)
 - **Command Output History**: Capture command output with `|>` operator and reference it with `$OUT` variable
 - **Command Timing Statistics**: Track execution time and frequency with `timing` command
@@ -111,6 +111,7 @@ The shell includes many built-in commands:
 | `gh-notify` | View GitHub notifications interactively |
 | `glog` | Git log with interactive selection |
 | `gco` | Git checkout with interactive branch selection |
+| `ga` | Git add with interactive file selection |
 | `add_path` | Add path to PATH environment variable |
 | `serve` | Start a static file server |
 | `uuid` | Generate UUIDs |

@@ -45,6 +45,63 @@ fn find_glob_root(path: &str) -> (String, String) {
     }
 }
 
+fn expand_braces(pattern: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut stack = Vec::new();
+    let mut starts = Vec::new();
+    let mut i = 0;
+    let chars: Vec<char> = pattern.chars().collect();
+
+    while i < chars.len() {
+        if chars[i] == '{' && (i == 0 || chars[i - 1] != '\\') {
+            stack.push(i);
+            starts.push(i);
+        } else if chars[i] == '}' && (i == 0 || chars[i - 1] != '\\')
+            && let Some(start) = stack.pop()
+                && stack.is_empty() {
+                    // Found outermost brace pair
+                    let prefix: String = chars[0..start].iter().collect();
+                    let suffix: String = chars[i + 1..].iter().collect();
+                    let content: String = chars[start + 1..i].iter().collect(); // content inside {}
+
+                    // Split content by comma, respecting nested braces
+                    let mut parts = Vec::new();
+                    let mut current_part = String::new();
+                    let mut depth = 0;
+                    let content_chars: Vec<char> = content.chars().collect();
+                    let mut j = 0;
+                    while j < content_chars.len() {
+                        let c = content_chars[j];
+                        if c == '{' && (j == 0 || content_chars[j - 1] != '\\') {
+                            depth += 1;
+                            current_part.push(c);
+                        } else if c == '}' && (j == 0 || content_chars[j - 1] != '\\') {
+                            depth -= 1;
+                            current_part.push(c);
+                        } else if c == ',' && depth == 0 && (j == 0 || content_chars[j - 1] != '\\')
+                        {
+                            parts.push(current_part.clone());
+                            current_part.clear();
+                        } else {
+                            current_part.push(c);
+                        }
+                        j += 1;
+                    }
+                    parts.push(current_part);
+
+                    for part in parts {
+                        let new_pattern = format!("{}{}{}", prefix, part, suffix);
+                        result.extend(expand_braces(&new_pattern));
+                    }
+                    return result;
+                }
+        i += 1;
+    }
+
+    // No top-level braces found to expand
+    vec![pattern.to_string()]
+}
+
 pub fn expand_alias_tilde(
     pair: Pair<Rule>,
     alias: &HashMap<String, String>,
@@ -53,26 +110,38 @@ pub fn expand_alias_tilde(
     let mut argv: Vec<String> = vec![];
 
     match pair.as_rule() {
-        Rule::glob_word => {
+        Rule::glob_word | Rule::brace_word => {
             let pattern = shellexpand::tilde(pair.as_str()).to_string();
-            let (root, pattern) = find_glob_root(pattern.as_str());
-            debug!("glob pattern: root:{} {:?} ", root, pattern);
-            match globmatch::Builder::new(&pattern).build(root) {
-                Ok(builder) => {
-                    let paths: Vec<_> = builder.into_iter().flatten().collect();
-                    if paths.is_empty() {
-                        debug!("dsh: no matches for wildcard '{}'", &pattern);
-                        argv.push(pattern);
-                    } else {
-                        for path in paths {
-                            debug!("glob match {}", path.display());
-                            argv.push(format!("\"{}\"", path.display()));
+            // First expand braces
+            let expanded_patterns = expand_braces(&pattern);
+
+            for pat in expanded_patterns {
+                // Check if the expanded pattern actually contains glob characters
+                // Note: expand_braces handles brace expansion, so we check for glob chars in the result
+                if pat.contains('*') || pat.contains('?') || pat.contains('[') {
+                    let (root, pattern) = find_glob_root(&pat);
+                    debug!("glob pattern: root:{} {:?} ", root, pattern);
+                    match globmatch::Builder::new(&pattern).build(root) {
+                        Ok(builder) => {
+                            let paths: Vec<_> = builder.into_iter().flatten().collect();
+                            if paths.is_empty() {
+                                debug!("dsh: no matches for wildcard '{}'", &pattern);
+                                argv.push(pat);
+                            } else {
+                                for path in paths {
+                                    debug!("glob match {}", path.display());
+                                    argv.push(format!("\"{}\"", path.display()));
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            debug!("dsh: failed resolve paths. {}. treating as literal.", err);
+                            argv.push(pat);
                         }
                     }
-                }
-                Err(err) => {
-                    debug!("dsh: failed resolve paths. {}. treating as literal.", err);
-                    argv.push(pattern);
+                } else {
+                    // No glob chars, just push the brace-expanded string
+                    argv.push(pat);
                 }
             }
         }
@@ -196,6 +265,7 @@ pub fn expand_alias_tilde(
                     }
                     Rule::word
                     | Rule::glob_word
+                    | Rule::brace_word
                     | Rule::variable
                     | Rule::s_quoted
                     | Rule::d_quoted
@@ -269,13 +339,14 @@ pub fn parse_with_expansion<'a>(
 
 fn check_expansion_needed(pair: Pair<Rule>, alias: &HashMap<String, String>) -> bool {
     match pair.as_rule() {
-        Rule::glob_word => {
+        Rule::glob_word | Rule::brace_word => {
             let s = pair.as_str();
             s.contains('*')
                 || s.contains('?')
                 || s.contains('[')
                 || s.contains('~')
                 || s.contains('$')
+                || s.contains('{')
         }
         Rule::word | Rule::variable | Rule::s_quoted | Rule::d_quoted => {
             let s = pair.as_str();

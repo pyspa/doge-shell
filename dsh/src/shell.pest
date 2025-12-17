@@ -8,8 +8,10 @@ escape_sequence = { "\\" ~ ANY }
 word = { (escape_sequence | word_char)+ }
 variable = { "$" ~ word }
 glob_char = _{ "*" | "?" | "[" }
-glob_remaining_char = _{ word_char | glob_char | "]" | escape_sequence }
+glob_remaining_char = _{ word_char | glob_char | "]" | "{" | "}" | escape_sequence }
 glob_word = { (word_char | escape_sequence)* ~ glob_char ~ glob_remaining_char* }
+
+brace_word = { (word_char | escape_sequence | glob_char)* ~ "{" ~ glob_remaining_char* }
 
 s_quoted = { "\'" ~ s_quoted_inner* ~ "\'" }
 s_quoted_inner = _{
@@ -52,7 +54,7 @@ stderr_redirect_direction = { ( stderr_redirect_direction_append | stderr_redire
 stdout_redirect_direction = { ( stdout_redirect_direction_append | stdout_redirect_direction_out ) }
 stdin_redirect_direction = { stdin_redirect_direction_in }
 redirect = { (stdouterr_redirect_direction | stderr_redirect_direction | stdout_redirect_direction | stdin_redirect_direction) ~ sp* ~ span }
-span = { quoted | glob_word | word | variable | proc_subst | subshell | command_subst }
+span = { quoted | glob_word | brace_word | word | variable | proc_subst | subshell | command_subst }
 argv0 = { span }
 args = { (sp* ~ (redirect|span))+ }
 

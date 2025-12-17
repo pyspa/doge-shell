@@ -914,3 +914,35 @@ fn test_get_string_safety() {
     let pair = pairs.next().unwrap();
     assert_eq!(get_string(pair), Some("test".to_string()));
 }
+
+#[test]
+fn test_brace_expansion_unit() -> Result<()> {
+    init();
+    let env = crate::environment::Environment::new();
+
+    let input = "echo {a,b,c}".to_string();
+    let replaced = expand_alias(input, Arc::clone(&env))?;
+    assert_eq!(replaced, "echo a b c".to_string());
+
+    let input = "echo pre{X,Y}post".to_string();
+    let replaced = expand_alias(input, Arc::clone(&env))?;
+    assert_eq!(replaced, "echo preXpost preYpost".to_string());
+
+    let input = "echo a{b,c{d,e}}".to_string();
+    let replaced = expand_alias(input, Arc::clone(&env))?;
+    assert_eq!(replaced, "echo ab acd ace".to_string());
+
+    let input = "echo {a,b}{1,2}".to_string();
+    let replaced = expand_alias(input, Arc::clone(&env))?;
+    assert_eq!(replaced, "echo a1 a2 b1 b2".to_string());
+
+    // Check globbing interaction
+    // Since files don't exist, glob pattern remains literal
+    let input = "echo {*.test_dummy_1,*.test_dummy_2}".to_string();
+    let replaced = expand_alias(input, Arc::clone(&env))?;
+    // result should be "*.test_dummy_1 *.test_dummy_2" because glob expansion fails and returns pattern
+    // The order depends on implementation but implementation preserves order of brace expansion
+    assert_eq!(replaced, "echo *.test_dummy_1 *.test_dummy_2".to_string());
+
+    Ok(())
+}

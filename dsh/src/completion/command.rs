@@ -90,6 +90,8 @@ pub enum ArgumentType {
     Script(String),
     /// System process (PID)
     Process,
+    /// Command with arguments (delegates completion to the command)
+    CommandWithArgs,
 }
 
 /// Command completion database

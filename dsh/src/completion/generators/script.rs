@@ -126,6 +126,7 @@ mod tests {
         let parsed = ParsedCommandLine {
             command: "git".to_string(),
             subcommand_path: vec![],
+            raw_args: vec![],
             args: vec![],
             options: vec![],
             current_token: "br".to_string(),
@@ -157,6 +158,7 @@ mod tests {
         let parsed = ParsedCommandLine {
             command: "test".to_string(),
             subcommand_path: vec![],
+            raw_args: vec![],
             args: vec![],
             options: vec![],
             current_token: "val".to_string(),
@@ -190,6 +192,7 @@ mod tests {
         let parsed = ParsedCommandLine {
             command: "test".to_string(),
             subcommand_path: vec![],
+            raw_args: vec![],
             args: vec![],
             options: vec![],
             current_token: "".to_string(),

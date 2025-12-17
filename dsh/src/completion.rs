@@ -36,7 +36,10 @@ pub mod parser;
 mod ui;
 
 #[cfg(test)]
+#[cfg(test)]
 mod extra_tests;
+#[cfg(test)]
+mod wrapped_tests;
 
 // Re-export from completion module
 pub use crate::completion::command::CompletionType;

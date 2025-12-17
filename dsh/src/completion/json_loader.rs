@@ -864,6 +864,7 @@ mod tests {
                     completion_context: CompletionContext::Command,
                     specified_options: vec![],
                     specified_arguments: vec![],
+                    raw_args: vec![],
                     cursor_index: 0,
                 };
 
@@ -910,6 +911,7 @@ mod tests {
                             completion_context: CompletionContext::SubCommand,
                             specified_options: vec![],
                             specified_arguments: vec![],
+                            raw_args: vec![],
                             cursor_index: 0,
                         };
 
@@ -963,6 +965,7 @@ mod tests {
                     completion_context: CompletionContext::SubCommand,
                     specified_options: vec![],
                     specified_arguments: vec![],
+                    raw_args: vec![],
                     cursor_index: 0,
                 };
 

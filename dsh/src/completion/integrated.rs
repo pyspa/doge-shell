@@ -30,6 +30,7 @@ struct CompletionRequest<'a> {
     #[allow(dead_code)]
     current_dir: &'a Path,
     max_results: usize,
+    #[allow(dead_code)]
     cursor_pos: usize,
 }
 
@@ -367,6 +368,73 @@ impl IntegratedCompletionEngine {
                     ),
                 }
             }
+            // Add retry logic for lazy loading of inner commands
+            Err(crate::completion::generator::GeneratorError::MissingCommand(cmd)) => {
+                // Drop lock to load
+                drop(db_lock);
+                debug!("Generator requested lazy load for command: {}", cmd);
+
+                if let Some(loader) = &self.loader {
+                    match loader.load_command_completion(&cmd) {
+                        Ok(Some(completion)) => {
+                            self.command_completion.lock().add_command(completion);
+
+                            // Retry generation with loaded command
+                            let db_lock = self.command_completion.lock();
+                            let completion_generator = CompletionGenerator::new(&db_lock);
+                            match completion_generator.generate_candidates(parsed_command_line) {
+                                Ok(candidates) => {
+                                    let enhanced_candidates = candidates
+                                        .into_iter()
+                                        .map(|c| self.convert_to_enhanced_candidate(c))
+                                        .collect::<Vec<_>>();
+
+                                    return CommandCollection {
+                                        batch: CandidateBatch::inclusive_with_framework(
+                                            enhanced_candidates,
+                                            CompletionFrameworkKind::Skim,
+                                        ),
+                                    };
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "Failed to generate JSON completion after lazy load: {}",
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            debug!("No completion definition found for {}", cmd);
+                        }
+                        Err(e) => {
+                            warn!("Failed to load completion for {}: {}", cmd, e);
+                        }
+                    }
+                }
+
+                // Fallback if loading failed or returned nothing
+                let db_lock = self.command_completion.lock();
+                let completion_generator = CompletionGenerator::new(&db_lock);
+                if let Ok(candidates) = completion_generator
+                    .generate_fallback_candidates(&parsed_command_line.current_token)
+                {
+                    let enhanced_candidates = candidates
+                        .into_iter()
+                        .map(|c| self.convert_to_enhanced_candidate(c))
+                        .collect();
+                    CommandCollection {
+                        batch: CandidateBatch::inclusive_with_framework(
+                            enhanced_candidates,
+                            CompletionFrameworkKind::Skim,
+                        ),
+                    }
+                } else {
+                    CommandCollection {
+                        batch: CandidateBatch::empty(),
+                    }
+                }
+            }
             Err(e) => {
                 warn!("Failed to generate JSON completion candidates: {}", e);
                 CommandCollection {
@@ -599,7 +667,6 @@ impl CandidateType {
             CandidateType::LongOption => 2,
             CandidateType::ShortOption => 3,
             CandidateType::Argument => 4,
-            CandidateType::Directory => 5,
             CandidateType::Directory => 5,
             CandidateType::File => 6,
             CandidateType::Process => 7,

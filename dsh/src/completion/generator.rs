@@ -7,7 +7,7 @@ use super::generators::option::OptionGenerator;
 use super::generators::process::ProcessGenerator;
 use super::generators::script::ScriptGenerator;
 use super::generators::subcommand::SubCommandGenerator;
-use super::parser::{CompletionContext, ParsedCommandLine};
+use super::parser::{CommandLineParser, CompletionContext, ParsedCommandLine};
 use crate::dirs::is_executable;
 use anyhow::Result;
 use std::collections::HashSet;
@@ -20,7 +20,29 @@ const SYSTEM_COMMAND_CACHE_TTL_MS: u64 = 2000;
 static SYSTEM_COMMAND_CACHE: LazyLock<CompletionCache<CompletionCandidate>> =
     LazyLock::new(|| CompletionCache::new(Duration::from_millis(SYSTEM_COMMAND_CACHE_TTL_MS)));
 
-/// Completion candidate generator
+#[derive(Debug)]
+pub enum GeneratorError {
+    MissingCommand(String),
+    Other(anyhow::Error),
+}
+
+impl std::fmt::Display for GeneratorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GeneratorError::MissingCommand(cmd) => write!(f, "Missing command definition: {}", cmd),
+            GeneratorError::Other(e) => write!(f, "Generator error: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for GeneratorError {}
+
+impl From<anyhow::Error> for GeneratorError {
+    fn from(error: anyhow::Error) -> Self {
+        GeneratorError::Other(error)
+    }
+}
+
 /// Completion candidate generator
 pub struct CompletionGenerator<'a> {
     /// Command completion database
@@ -48,6 +70,22 @@ impl<'a> CompletionGenerator<'a> {
         self.database.get_command(command).is_some()
     }
 
+    /// Public fallback generator (Files + System)
+    pub fn generate_fallback_candidates(
+        &self,
+        current_token: &str,
+    ) -> Result<Vec<CompletionCandidate>, GeneratorError> {
+        let mut candidates = FileSystemGenerator::generate_file_candidates(current_token)
+            .map_err(GeneratorError::Other)?;
+
+        candidates.extend(
+            self.generate_system_command_candidates(current_token)
+                .map_err(GeneratorError::Other)?,
+        );
+
+        Ok(candidates)
+    }
+
     /// Generate completion candidates from parsed command line
     ///
     /// This method also corrects the parsed command line if the parser
@@ -60,7 +98,14 @@ impl<'a> CompletionGenerator<'a> {
     pub fn generate_candidates(
         &self,
         parsed: &ParsedCommandLine,
-    ) -> Result<Vec<CompletionCandidate>> {
+    ) -> Result<Vec<CompletionCandidate>, GeneratorError> {
+        self.generate_candidates_impl(parsed)
+    }
+
+    fn generate_candidates_impl(
+        &self,
+        parsed: &ParsedCommandLine,
+    ) -> Result<Vec<CompletionCandidate>, GeneratorError> {
         let corrected = self.correct_parsed_command_line(parsed);
         match &corrected.completion_context {
             CompletionContext::Command => {
@@ -82,7 +127,10 @@ impl<'a> CompletionGenerator<'a> {
     }
 
     /// Generate command name completion candidates
-    fn generate_command_candidates(&self, current_token: &str) -> Result<Vec<CompletionCandidate>> {
+    fn generate_command_candidates(
+        &self,
+        current_token: &str,
+    ) -> Result<Vec<CompletionCandidate>, GeneratorError> {
         let mut candidates = Vec::with_capacity(32);
 
         // Commands registered in database
@@ -107,14 +155,15 @@ impl<'a> CompletionGenerator<'a> {
     fn generate_subcommand_candidates(
         &self,
         parsed: &ParsedCommandLine,
-    ) -> Result<Vec<CompletionCandidate>> {
+    ) -> Result<Vec<CompletionCandidate>, GeneratorError> {
         if let Some(command_completion) = self.database.get_command(&parsed.command) {
             SubCommandGenerator::generate_candidates(command_completion, parsed, |arg_type, p| {
                 self.generate_candidates_for_type(arg_type, p)
             })
+            .map_err(GeneratorError::Other)
         } else {
-            // Fallback for unknown commands: suggest files by default
-            FileSystemGenerator::generate_file_candidates(&parsed.current_token)
+            // Signal missing command so the engine can try to load it
+            Err(GeneratorError::MissingCommand(parsed.command.clone()))
         }
     }
 
@@ -122,11 +171,26 @@ impl<'a> CompletionGenerator<'a> {
     fn generate_short_option_candidates(
         &self,
         parsed: &ParsedCommandLine,
-    ) -> Result<Vec<CompletionCandidate>> {
+    ) -> Result<Vec<CompletionCandidate>, GeneratorError> {
+        if let Some((cmd_index, cmd_name)) = self.find_command_with_args_arg(parsed) {
+            let inner_parsed = self.reparse_inner_command(parsed, cmd_index, cmd_name);
+            let mut candidates =
+                if let Some(command_completion) = self.database.get_command(&parsed.command) {
+                    OptionGenerator::generate_short_option_candidates(command_completion, parsed)
+                        .map_err(GeneratorError::Other)?
+                } else {
+                    Vec::new()
+                };
+
+            candidates.extend(self.generate_candidates(&inner_parsed)?);
+            return Ok(candidates);
+        }
+
         if let Some(command_completion) = self.database.get_command(&parsed.command) {
             OptionGenerator::generate_short_option_candidates(command_completion, parsed)
+                .map_err(GeneratorError::Other)
         } else {
-            Ok(Vec::new())
+            Err(GeneratorError::MissingCommand(parsed.command.clone()))
         }
     }
 
@@ -134,11 +198,26 @@ impl<'a> CompletionGenerator<'a> {
     fn generate_long_option_candidates(
         &self,
         parsed: &ParsedCommandLine,
-    ) -> Result<Vec<CompletionCandidate>> {
+    ) -> Result<Vec<CompletionCandidate>, GeneratorError> {
+        if let Some((cmd_index, cmd_name)) = self.find_command_with_args_arg(parsed) {
+            let inner_parsed = self.reparse_inner_command(parsed, cmd_index, cmd_name);
+            let mut candidates =
+                if let Some(command_completion) = self.database.get_command(&parsed.command) {
+                    OptionGenerator::generate_long_option_candidates(command_completion, parsed)
+                        .map_err(GeneratorError::Other)?
+                } else {
+                    Vec::new()
+                };
+
+            candidates.extend(self.generate_candidates(&inner_parsed)?);
+            return Ok(candidates);
+        }
+
         if let Some(command_completion) = self.database.get_command(&parsed.command) {
             OptionGenerator::generate_long_option_candidates(command_completion, parsed)
+                .map_err(GeneratorError::Other)
         } else {
-            Ok(Vec::new())
+            Err(GeneratorError::MissingCommand(parsed.command.clone()))
         }
     }
 
@@ -147,7 +226,7 @@ impl<'a> CompletionGenerator<'a> {
         &self,
         parsed: &ParsedCommandLine,
         value_type: Option<&ArgumentType>,
-    ) -> Result<Vec<CompletionCandidate>> {
+    ) -> Result<Vec<CompletionCandidate>, GeneratorError> {
         let mut candidates = Vec::new();
 
         // Get actual value type
@@ -165,7 +244,7 @@ impl<'a> CompletionGenerator<'a> {
         &self,
         parsed: &ParsedCommandLine,
         arg_type: Option<&ArgumentType>,
-    ) -> Result<Vec<CompletionCandidate>> {
+    ) -> Result<Vec<CompletionCandidate>, GeneratorError> {
         let mut candidates = Vec::new();
 
         // Get actual argument type
@@ -195,14 +274,29 @@ impl<'a> CompletionGenerator<'a> {
                 {
                     candidates.extend(self.generate_candidates_for_type(arg_type, parsed)?);
                 }
+            } else if !parsed.command.is_empty() {
+                // Trying to complete Argument for a command that we don't have DB entry for?
+                // Wait, if we are in Argument context, checking command existence is tricky.
+                // But strictly speaking, if we don't know the command, we fallback to Files.
+                // HOWEVER, recursive check below needs to run.
             }
 
             // Default to file completion if no candidates generated yet
             if candidates.is_empty() {
-                candidates.extend(FileSystemGenerator::generate_file_candidates(
-                    &parsed.current_token,
-                )?);
+                candidates.extend(
+                    FileSystemGenerator::generate_file_candidates(&parsed.current_token)
+                        .map_err(GeneratorError::Other)?,
+                );
             }
+        }
+
+        if let Some((cmd_arg_index, cmd_name)) = self.find_command_with_args_arg(parsed)
+            && let CompletionContext::Argument { arg_index, .. } = parsed.completion_context
+            && arg_index > cmd_arg_index
+        {
+            // Recursive completion for the inner command
+            let inner_parsed = self.reparse_inner_command(parsed, cmd_arg_index, cmd_name);
+            return self.generate_candidates(&inner_parsed);
         }
 
         Ok(candidates)
@@ -238,6 +332,9 @@ impl<'a> CompletionGenerator<'a> {
             }
             ArgumentType::Process => {
                 ProcessGenerator::new().generate_candidates(&parsed.current_token)
+            }
+            ArgumentType::CommandWithArgs => {
+                self.generate_system_command_candidates(&parsed.current_token)
             }
             _ => Ok(Vec::new()),
         }
@@ -339,6 +436,106 @@ impl<'a> CompletionGenerator<'a> {
 
         Ok(candidates)
     }
+
+    /// Helper to find if one of the arguments is a CommandWithArgs
+    fn find_command_with_args_arg(&self, parsed: &ParsedCommandLine) -> Option<(usize, String)> {
+        if let Some(command_completion) = self.database.get_command(&parsed.command) {
+            let args_def = &command_completion.arguments;
+            for (i, arg_val) in parsed.specified_arguments.iter().enumerate() {
+                if let Some(arg_def) = args_def.get(i)
+                    && let Some(ArgumentType::CommandWithArgs) = arg_def.arg_type
+                {
+                    return Some((i, arg_val.clone()));
+                }
+            }
+        }
+        None
+    }
+
+    /// Helper to re-parse the inner command string for context awareness
+    fn reparse_inner_command(
+        &self,
+        parsed: &ParsedCommandLine,
+        cmd_index: usize,
+        cmd_name: String,
+    ) -> ParsedCommandLine {
+        // Reconstruct input string: cmd_name + space + args joined by space
+        let mut input_parts = Vec::new();
+        input_parts.push(cmd_name);
+
+        //    But we don't know for sure if it takes a value without schema.
+        //    BUT, we have the exact string value of the command 'cmd_name'.
+        //    Let's find the FIRST occurrence of 'cmd_name' in raw_args?
+        //    Risk: 'sudo -u git git status'. First 'git' is value of -u.
+
+        // Improved Strategy:
+        // Use specified_arguments to find the exact target token string, then assume order is preserved.
+        // We are looking for the (cmd_index)-th argument.
+        // Iterate raw_args. Keep track of how many "arguments" vs "options" we've seen?
+        // Hard because we don't know if an option took a value.
+
+        // Simpler Strategy for now:
+        // Just find the first token in raw_args that matches `parsed.specified_arguments[cmd_index]`.
+        // AND hope it's the right one.
+        // For `sudo`, the command is usually the first non-option argument.
+
+        // We iterate raw_args and try to find the match.
+
+        let mut found_start = false;
+
+        let target_arg = &parsed.specified_arguments[cmd_index];
+        let mut tokens_to_skip = 0;
+
+        for (i, token) in parsed.raw_args.iter().enumerate() {
+            if token == target_arg {
+                // Determine if this is likely the one.
+                // If we have previous matches, we might be confused.
+                // But for `sudo git`, `git` is likely unique or at least the first one is valid.
+                tokens_to_skip = i + 1;
+                found_start = true;
+                break;
+            }
+        }
+
+        if found_start {
+            for arg in parsed.raw_args.iter().skip(tokens_to_skip) {
+                // Simple quoting if needed
+                if arg.contains(' ') || arg.contains('\t') {
+                    input_parts.push(format!("{:?}", arg));
+                } else {
+                    input_parts.push(arg.to_string());
+                }
+            }
+        }
+
+        // Check if current_token needs to be appended
+        // raw_args usually includes the current token if it was partially parsed?
+        // Parser logic:
+        // tokenize -> tokens.
+        // find cursor token index.
+        // analyze_tokens(tokens).
+        // tokens_queue in analyze_tokens includes the current token.
+        // raw_args = tokens_queue (after subcommands).
+        // So raw_args SHOULD include the current token, unless cursor is in a gap?
+        // If cursor is in a gap (adding new token), raw_args might not have it or have empty string?
+
+        let current = &parsed.current_token;
+        if !current.is_empty() {
+            // If cursor is in a gap (e.g. "git commit "), raw_args might not have the "next" empty token.
+        } else {
+            // Cursor in gap (trailing space).
+            // We need to ensure trailing space in reconstructed string.
+            input_parts.push("".to_string());
+        }
+
+        // Edge case: if current token IS the command itself (e.g. `sudo gi<TAB>`).
+        // Then we shouldn't be here?
+        // recursive logic is triggered only if arg_index > cmd_arg_index.
+        // So we are past the command.
+
+        let input = input_parts.join(" ");
+        CommandLineParser::new().parse(&input, input.len())
+    }
 }
 
 #[cfg(test)]
@@ -404,6 +601,7 @@ mod tests {
         let parsed = ParsedCommandLine {
             command: "git".to_string(),
             subcommand_path: vec![],
+            raw_args: vec![],
             args: vec![],
             options: vec![],
             current_token: "a".to_string(),
@@ -722,6 +920,7 @@ mod tests {
             completion_context: CompletionContext::SubCommand, // Parser might think it's subcommand context at top level
             specified_options: vec![],
             specified_arguments: vec![],
+            raw_args: vec![],
             cursor_index: 0,
         };
 
@@ -792,6 +991,7 @@ mod tests {
             completion_context: CompletionContext::SubCommand,
             specified_options: vec![],
             specified_arguments: vec![],
+            raw_args: vec![],
             cursor_index: 0,
         };
 
@@ -862,6 +1062,7 @@ mod tests {
             completion_context: CompletionContext::SubCommand,
             specified_options: vec![],
             specified_arguments: vec![],
+            raw_args: vec![],
             cursor_index: 0,
         };
 
@@ -907,6 +1108,7 @@ mod tests {
             }, // Provide context
             specified_options: vec![],
             specified_arguments: vec![],
+            raw_args: vec![],
             cursor_index: 0,
         };
 
@@ -952,6 +1154,7 @@ mod tests {
             },
             specified_options: vec![],
             specified_arguments: vec![],
+            raw_args: vec![],
             cursor_index: 0,
         };
 
@@ -1023,6 +1226,7 @@ mod tests {
             completion_context: CompletionContext::SubCommand,
             specified_options: vec![],
             specified_arguments: vec![],
+            raw_args: vec![],
             cursor_index: 0,
         };
         let candidates = generator.generate_candidates(&parsed_empty).unwrap();
@@ -1047,6 +1251,7 @@ mod tests {
             completion_context: CompletionContext::LongOption,
             specified_options: vec![],
             specified_arguments: vec![],
+            raw_args: vec![],
             cursor_index: 0,
         };
         let candidates_dash = generator.generate_candidates(&parsed_dash).unwrap();
@@ -1265,6 +1470,7 @@ mod tests {
                 completion_context: context.clone(),
                 specified_options: vec![],
                 specified_arguments: vec![],
+                raw_args: vec![],
                 cursor_index: 0,
             };
             let corrected = generator.correct_parsed_command_line(&parsed);
@@ -1307,10 +1513,18 @@ mod tests {
             completion_context: CompletionContext::SubCommand,
             specified_options: vec![],
             specified_arguments: vec![],
+            raw_args: vec![],
             cursor_index: 0,
         };
 
-        let candidates = generator.generate_candidates(&parsed).unwrap();
+        // generate_candidates should return MissingCommand for unknown commands
+        match generator.generate_candidates(&parsed) {
+            Err(GeneratorError::MissingCommand(cmd)) => assert_eq!(cmd, "cat"),
+            _ => panic!("Expected MissingCommand error"),
+        }
+
+        // Verify fallback generation works
+        let candidates = generator.generate_fallback_candidates(&dir_str).unwrap();
         let text = Path::new(&dir_str)
             .join("test.txt")
             .to_string_lossy()

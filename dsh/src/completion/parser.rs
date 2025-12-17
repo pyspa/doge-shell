@@ -23,6 +23,8 @@ pub struct ParsedCommandLine {
     pub command: String,
     /// Subcommand path (e.g., ["remote", "add"])
     pub subcommand_path: Vec<String>,
+    /// Raw tokens after command/subcommand (preserving order)
+    pub raw_args: Vec<String>,
     /// Command arguments
     pub args: Vec<String>,
     /// Command  options
@@ -120,6 +122,7 @@ impl CommandLineParser {
     }
 
     /// Split input string into tokens
+    #[allow(dead_code)]
     fn tokenize(&self, input: &str) -> Vec<String> {
         self.tokenize_with_positions(input)
             .into_iter()
@@ -215,6 +218,7 @@ impl CommandLineParser {
             return ParsedCommandLine {
                 command: String::new(),
                 subcommand_path: Vec::new(),
+                raw_args: Vec::new(),
                 args: Vec::new(),
                 options: Vec::new(),
                 current_token: String::new(),
@@ -250,6 +254,9 @@ impl CommandLineParser {
                 break; // End subcommand parsing when arguments start
             }
         }
+
+        // Capture raw arguments (everything after subcommands)
+        let raw_args: Vec<String> = tokens_queue.iter().cloned().collect();
 
         // Parse options and arguments
         let mut skip_next_option_value = false;
@@ -325,6 +332,7 @@ impl CommandLineParser {
         ParsedCommandLine {
             command: command.clone(),
             subcommand_path: subcommand_path.clone(),
+            raw_args,
             args,
             options,
             current_token: current_token.clone(),
@@ -511,7 +519,18 @@ impl CommandLineParser {
         // Options that commonly take values
         matches!(
             option,
-            "--message" | "-m" | "--target" | "--features" | "--git" | "--path" | "--name"
+            "--message" | "-m" 
+            | "--target" 
+            | "--features" 
+            | "--git" 
+            | "--path" 
+            | "--name"
+            | "-u" | "--user"    // sudo, etc
+            | "-g" | "--group"   // sudo
+            | "-C" | "--chdir"   // git, others
+            | "-c"               // bash -c, etc
+            | "-o" | "--output"  // gcc, etc
+            | "-f" | "--file" // docker -f, etc
         )
     }
 

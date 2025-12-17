@@ -58,7 +58,7 @@
       "name": "command",
       "description": "Command to execute",
       "type": {
-        "type": "Command"
+        "type": "CommandWithArgs"
       }
     }
   ]

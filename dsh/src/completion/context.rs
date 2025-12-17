@@ -76,6 +76,13 @@ impl<'a> ContextCorrector<'a> {
             let mut new_args = invalid_tokens.to_vec();
             new_args.extend(new_parsed.specified_arguments);
             new_parsed.specified_arguments = new_args;
+
+            // Also update raw_args to include these tokens, as they are no longer subcommands
+            // and should be considered part of the raw arguments for wrapped command parsing.
+            let mut new_raw = invalid_tokens.to_vec();
+            new_raw.extend(new_parsed.raw_args);
+            new_parsed.raw_args = new_raw;
+
             new_parsed.subcommand_path = valid_subcommands;
 
             // Recalculate completion context

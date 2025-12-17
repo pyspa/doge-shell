@@ -24,3 +24,5 @@ pub use highlight::{
     HighlightKind, HighlightResult, HighlightToken, collect_highlight_tokens_from_pairs,
     highlight_error_token,
 };
+pub mod check;
+pub use check::is_incomplete_input;

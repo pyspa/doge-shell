@@ -256,6 +256,35 @@ async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
         "ENTER_KEY_HANDLER: Starting Enter key processing, input='{}'",
         repl.input.as_str()
     );
+
+    // Multiline Check
+    {
+        let current_input = repl.input.as_str().to_string();
+        let combined_input = if !repl.multiline_buffer.is_empty() {
+            format!("{}{}", repl.multiline_buffer, current_input)
+        } else {
+            current_input.clone()
+        };
+
+        if crate::parser::is_incomplete_input(&combined_input) {
+            repl.multiline_buffer.push_str(&current_input);
+            repl.multiline_buffer.push('\n');
+            repl.input.clear();
+            repl.completion.clear();
+            repl.suggestion_manager.clear();
+
+            print!("\r\n");
+            let mut renderer = TerminalRenderer::new();
+            repl.print_prompt(&mut renderer);
+            renderer.flush().ok();
+            return Ok(());
+        } else if !repl.multiline_buffer.is_empty() {
+            // Complete!
+            repl.input.reset(combined_input);
+            repl.multiline_buffer.clear();
+        }
+    }
+
     // AI Output Pipe (|!)
     if let Some((command, query)) = repl.detect_ai_pipe() {
         repl.input.clear();
@@ -560,6 +589,7 @@ fn handle_interrupt(repl: &mut Repl<'_>) -> Result<()> {
         repl.print_prompt(&mut renderer);
         renderer.flush().ok();
         repl.input.clear();
+        repl.multiline_buffer.clear();
         repl.suggestion_manager.clear();
         Ok(())
     }

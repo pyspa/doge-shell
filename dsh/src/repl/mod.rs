@@ -162,6 +162,7 @@ pub struct Repl<'a> {
     pub(crate) command_timing: SharedCommandTiming,
     pub(crate) last_command_string: String,
     pub(crate) stopped_jobs_warned: bool,
+    pub(crate) multiline_buffer: String,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -300,6 +301,7 @@ impl<'a> Repl<'a> {
             command_timing: command_timing::create_shared_timing(),
             last_command_string: String::new(),
             stopped_jobs_warned: false,
+            multiline_buffer: String::new(),
         }
     }
 
@@ -505,6 +507,14 @@ impl<'a> Repl<'a> {
     // }
 
     pub(crate) fn print_prompt(&mut self, out: &mut impl Write) {
+        if !self.multiline_buffer.is_empty() {
+            let continuation_prompt = "..> ";
+            out.write_all(continuation_prompt.as_bytes()).ok();
+            self.prompt_mark_cache = continuation_prompt.to_string();
+            self.prompt_mark_width = 4; // length of "..> "
+            return;
+        }
+
         // debug!("print_prompt called - full preprompt + mark redraw");
 
         // Execute pre-prompt hooks

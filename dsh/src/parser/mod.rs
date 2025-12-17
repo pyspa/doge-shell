@@ -14,6 +14,9 @@ mod edge_case_tests;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod tests_escape;
+
 // Re-exports
 pub use ast::{get_pos_word, get_string, get_words, get_words_from_pairs};
 pub use expansion::{expand_alias, parse_with_expansion};

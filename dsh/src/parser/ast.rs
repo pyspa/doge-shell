@@ -21,6 +21,36 @@ pub fn get_string(pair: Pair<Rule>) -> Option<String> {
                 Some("".to_string())
             }
         }
+        Rule::word | Rule::glob_word => {
+            let s = pair.as_str();
+            if !s.contains('\\') {
+                return Some(s.to_string());
+            }
+            let mut res = String::with_capacity(s.len());
+            let mut chars = s.chars();
+            while let Some(c) = chars.next() {
+                if c == '\\' {
+                    if let Some(next) = chars.next() {
+                        res.push(next);
+                    } else {
+                        // Trailing backslash? Treat as literal or ignore.
+                        // Shells usually treat trailing backslash as line continuation,
+                        // but here we are in a single string.
+                        // For now just push it (or ignore?)
+                        // If it parsed as escape_sequence, it MUST have a next char?
+                        // escape_sequence = { "\\" ~ ANY }
+                        // ANY matches any char including newline?
+                        // If EOL, ANY fails?
+                        // So a trailing backslash at VERY END of input might not parse as word?
+                        // Let's just push it if it happens.
+                        res.push('\\');
+                    }
+                } else {
+                    res.push(c);
+                }
+            }
+            Some(res)
+        }
         _ => Some(pair.as_str().to_string()),
     }
 }

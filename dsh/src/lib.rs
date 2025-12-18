@@ -25,6 +25,7 @@ pub mod history;
 pub mod history_import;
 pub mod input;
 pub mod lisp;
+pub mod notebook;
 pub mod output_history;
 pub mod parser;
 pub mod process;
@@ -65,6 +66,10 @@ pub struct Cli {
     /// Lisp script to execute
     #[arg(short, long)]
     pub lisp: Option<String>,
+
+    /// Open in Notebook mode with the specified file
+    #[arg(long)]
+    pub notebook: Option<String>,
 
     #[command(subcommand)]
     pub subcommand: Option<SubCommand>,
@@ -128,6 +133,17 @@ pub async fn run_shell() -> ExitCode {
         }
         Err(e) => {
             tracing::warn!("Failed to load directory history: {}", e);
+        }
+    }
+
+    // Initialize Notebook Mode if requested
+    if let Some(notebook_path) = cli.notebook {
+        if let Err(e) = shell.open_notebook(std::path::PathBuf::from(notebook_path)) {
+            tracing::error!("Failed to open notebook: {}", e);
+            eprintln!("Error opening notebook: {}", e);
+            // Decide whether to continue or exit. Continuing without notebook mode is safer but warning is needed.
+        } else {
+            println!("Notebook Mode Active.");
         }
     }
 

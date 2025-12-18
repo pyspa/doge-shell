@@ -7,6 +7,7 @@ pub mod terminal;
 use crate::environment::Environment;
 use crate::history::FrecencyHistory;
 use crate::lisp;
+use crate::notebook::NotebookSession;
 use crate::process::Job;
 use anyhow::Result;
 use dsh_types::{Context, ExitStatus};
@@ -33,6 +34,7 @@ pub struct Shell {
     pub(crate) wait_jobs: Vec<Job>,
     pub lisp_engine: Rc<RefCell<lisp::LispEngine>>,
     pub(crate) next_job_id: usize,
+    pub notebook_session: Option<NotebookSession>,
 }
 
 impl std::fmt::Debug for Shell {
@@ -68,6 +70,7 @@ impl Shell {
             wait_jobs: Vec::new(),
             lisp_engine,
             next_job_id: 1,
+            notebook_session: None,
         }
     }
 
@@ -125,6 +128,16 @@ impl Shell {
         input: String,
         force_background: bool,
     ) -> Result<i32> {
+        // Notebook Hook: Record input if session is active
+        if let Some(session) = &mut self.notebook_session
+            && session.state == crate::notebook::SessionState::Active
+        {
+            // Ignore empty input or failures in appending for now (warn only)
+            if !input.trim().is_empty() {
+                let _ = session.notebook.append_code(&input);
+            }
+        }
+
         eval::eval_str(self, ctx, input, force_background).await
     }
 
@@ -190,5 +203,14 @@ impl Shell {
 
     pub fn kill_wait_jobs(&mut self) -> Result<()> {
         job::kill_wait_jobs(self)
+    }
+
+    pub fn open_notebook(&mut self, path: std::path::PathBuf) -> Result<()> {
+        self.notebook_session = Some(crate::notebook::NotebookSession::new(path)?);
+        Ok(())
+    }
+
+    pub fn close_notebook(&mut self) {
+        self.notebook_session = None;
     }
 }

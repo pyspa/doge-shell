@@ -368,7 +368,7 @@ dependencies = [
  "anstyle",
  "heck",
  "proc-macro2",
- "pulldown-cmark",
+ "pulldown-cmark 0.13.0",
  "quote",
  "syn",
 ]
@@ -826,6 +826,7 @@ dependencies = [
  "parking_lot",
  "pest",
  "pest_derive",
+ "pulldown-cmark 0.9.6",
  "regex",
  "reqwest 0.11.27",
  "rust-embed",
@@ -864,7 +865,7 @@ dependencies = [
  "mime_guess",
  "nix 0.26.4",
  "once_cell",
- "pulldown-cmark",
+ "pulldown-cmark 0.13.0",
  "regex",
  "reqwest 0.11.27",
  "rmcp",
@@ -2390,6 +2391,18 @@ dependencies = [
  "tokio",
  "tracing",
  "windows",
+]
+
+[[package]]
+name = "pulldown-cmark"
+version = "0.9.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57206b407293d2bcd3af849ce869d52068623f19e1b5ff8e8778e3309439682b"
+dependencies = [
+ "bitflags 2.10.0",
+ "getopts",
+ "memchr",
+ "unicase",
 ]
 
 [[package]]

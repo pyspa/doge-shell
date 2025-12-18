@@ -55,6 +55,7 @@ arboard = "3.4"
 clap = { version="4", features = ["derive"] }
 globmatch = "0.3"
 regex = "1.11"
+pulldown-cmark = "0.9"
 
 chrono = "0.4"
 term_size = "0.3"

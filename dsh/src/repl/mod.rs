@@ -163,6 +163,7 @@ pub struct Repl<'a> {
     pub(crate) last_command_string: String,
     pub(crate) stopped_jobs_warned: bool,
     pub(crate) multiline_buffer: String,
+    pub(crate) last_cwd: std::path::PathBuf,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -197,7 +198,7 @@ impl<'a> Repl<'a> {
                     std::path::PathBuf::from("/")
                 })
         });
-        let prompt = Prompt::new(current, "🐕 < ".to_string());
+        let prompt = Prompt::new(current.clone(), "🐕 < ".to_string());
 
         let prompt = Arc::new(RwLock::new(prompt));
         shell
@@ -302,6 +303,7 @@ impl<'a> Repl<'a> {
             last_command_string: String::new(),
             stopped_jobs_warned: false,
             multiline_buffer: String::new(),
+            last_cwd: current.clone(),
         }
     }
 
@@ -568,21 +570,139 @@ impl<'a> Repl<'a> {
         let history_ref = self.shell.cmd_history.as_ref();
         let current_input = self.input.to_string();
         let cursor_pos = self.input.cursor();
+
+        // Check history first in predict() now handles this more strictly,
+        // but it still needs to return states.
         let mut candidates =
             self.suggestion_manager
                 .engine
                 .predict(current_input.as_str(), cursor_pos, history_ref);
 
+        // If no candidates from history/cache, try AI with full context
+        if candidates.is_empty() && self.input_preferences.ai_backfill {
+            let cwd = std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string());
+            let files = if let Some(path) = &cwd {
+                std::fs::read_dir(path)
+                    .map(|dir| {
+                        dir.flatten()
+                            .take(20)
+                            .map(|e| {
+                                let name = e.file_name().to_string_lossy().to_string();
+                                if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                                    format!("{}/", name)
+                                } else {
+                                    name
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+
+            if let Some(state) = self.suggestion_manager.engine.ai_suggestion_with_context(
+                &current_input,
+                cursor_pos,
+                history_ref,
+                cwd,
+                files,
+                Some(self.last_status),
+            ) {
+                candidates.push(state);
+            }
+        }
+
         if let Some(extra) = self.completion_suggestion(current_input.as_str()) {
             let duplicate = candidates
                 .iter()
-                .any(|item| item.full == extra.full && item.source == extra.source);
+                .any(|state| state.full == extra.full && state.source == extra.source);
             if !duplicate {
                 candidates.push(extra);
             }
         }
 
-        self.suggestion_manager.update_candidates(candidates)
+        self.suggestion_manager.update_candidates(candidates);
+        self.suggestion_manager.active.is_some()
+    }
+
+    pub(crate) fn force_ai_suggestion(&mut self) -> bool {
+        self.completion.clear();
+        self.suggestion_manager.clear();
+
+        self.sync_input_preferences();
+        let history_ref = self.shell.cmd_history.as_ref();
+        let current_input = self.input.to_string();
+        let cursor_pos = self.input.cursor();
+
+        let cwd = std::env::current_dir()
+            .ok()
+            .map(|p| p.to_string_lossy().to_string());
+
+        let files = if let Some(path) = &cwd {
+            let mut entries: Vec<_> = std::fs::read_dir(path)
+                .map(|dir| {
+                    dir.flatten()
+                        .map(|e| {
+                            let name = e.file_name().to_string_lossy().to_string();
+                            let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                            (name, is_dir)
+                        })
+                        .filter(|(name, _)| !name.starts_with('.')) // Filter hidden files
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            // Sort: directories first, then alphabetical
+            entries.sort_by(|a, b| match (a.1, b.1) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => a.0.cmp(&b.0),
+            });
+
+            entries
+                .into_iter()
+                .take(30)
+                .map(
+                    |(name, is_dir)| {
+                        if is_dir { format!("{}/", name) } else { name }
+                    },
+                )
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(15);
+
+        tracing::debug!("force_ai_suggestion: waiting for response...");
+        loop {
+            if let Some(state) = self.suggestion_manager.engine.ai_suggestion_with_context(
+                &current_input,
+                cursor_pos,
+                history_ref,
+                cwd.clone(),
+                files.clone(),
+                Some(self.last_status),
+            ) {
+                tracing::debug!("force_ai_suggestion: got state {:?}", state);
+                let candidates = vec![state];
+                self.suggestion_manager.update_candidates(candidates);
+                return true;
+            }
+
+            if start.elapsed() > timeout {
+                tracing::warn!("force_ai_suggestion: timeout");
+                break;
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        self.suggestion_manager.active.is_some()
     }
 
     fn completion_suggestion(&mut self, input: &str) -> Option<SuggestionState> {
@@ -1335,6 +1455,24 @@ impl<'a> Repl<'a> {
                                 self.shell.print_error(format!("Error: {err:?}\r"));
                                 break;
                             }
+
+                            // Check for CWD change and trigger AI prefetch
+                            let current_cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+                            if current_cwd != self.last_cwd {
+                                self.last_cwd = current_cwd.clone();
+
+                                if self.input_preferences.ai_backfill {
+                                    debug!("CWD changed to {:?}, triggering AI prefetch", self.last_cwd);
+                                    let files = self.get_directory_listing();
+                                    let files_vec: Vec<String> = files.lines().map(String::from).collect();
+                                    self.suggestion_manager.engine.prefetch(
+                                        Some(self.last_cwd.to_string_lossy().to_string()),
+                                        files_vec,
+                                        Some(self.last_status)
+                                    );
+                                }
+                            }
+
                             // Reset stopped jobs warning if a command was executed
                              if self.last_command_time != old_last_time {
                                 self.stopped_jobs_warned = false;

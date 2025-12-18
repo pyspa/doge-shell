@@ -819,6 +819,12 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
         KeyAction::AiDiagnose => {
             return handle_ai_diagnose(repl).await;
         }
+        KeyAction::ForceAiSuggestion => {
+            let mut renderer = TerminalRenderer::new();
+            queue!(renderer, Print(" 🤖 Generating...\r"), cursor::Hide).ok();
+            renderer.flush().ok();
+            repl.force_ai_suggestion();
+        }
         KeyAction::TriggerCompletion => {
             if handle_trigger_completion(repl).await? {
                 reset_completion = true;

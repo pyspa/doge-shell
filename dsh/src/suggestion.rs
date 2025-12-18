@@ -72,6 +72,9 @@ pub struct SuggestionRequest {
     pub cursor: usize,
     pub preferences: InputPreferences,
     pub history_context: Vec<String>,
+    pub cwd: Option<String>,
+    pub files: Vec<String>,
+    pub last_exit_code: Option<i32>,
 }
 
 impl SuggestionRequest {
@@ -80,18 +83,26 @@ impl SuggestionRequest {
         cursor: usize,
         preferences: InputPreferences,
         history_context: Vec<String>,
+        cwd: Option<String>,
+        files: Vec<String>,
+        last_exit_code: Option<i32>,
     ) -> Self {
         Self {
             input,
             cursor,
             preferences,
             history_context,
+            cwd,
+            files,
+            last_exit_code,
         }
     }
 }
 
 pub trait SuggestionBackend: Send + Sync {
     fn predict(&self, request: SuggestionRequest) -> Option<String>;
+
+    fn prefetch(&self, _request: SuggestionRequest) {}
 
     fn is_pending(&self) -> bool {
         false
@@ -150,6 +161,23 @@ impl SuggestionEngine {
         self.ai_backend = backend;
     }
 
+    pub fn prefetch(&self, cwd: Option<String>, files: Vec<String>, last_exit_code: Option<i32>) {
+        if let Some(backend) = &self.ai_backend
+            && self.config.preferences.ai_backfill
+        {
+            let request = SuggestionRequest::new(
+                String::new(), // Empty input for prefetch
+                0,
+                self.config.preferences,
+                Vec::new(), // No history needed for context prefetch
+                cwd,
+                files,
+                last_exit_code,
+            );
+            backend.prefetch(request);
+        }
+    }
+
     pub fn ai_pending(&self) -> bool {
         self.config.preferences.ai_backfill
             && self
@@ -195,6 +223,12 @@ impl SuggestionEngine {
             suggestions.push(state);
         } else {
             self.history_cache = None;
+        }
+
+        // If we have a history suggestion, we skip AI to prioritize it and minimize noise/latency
+        if !suggestions.is_empty() {
+            self.ai_cache = None;
+            return suggestions;
         }
 
         if self.config.preferences.ai_backfill {
@@ -245,6 +279,18 @@ impl SuggestionEngine {
         cursor: usize,
         history: Option<&Arc<ParkingMutex<FrecencyHistory>>>,
     ) -> Option<SuggestionState> {
+        self.ai_suggestion_with_context(input, cursor, history, None, Vec::new(), None)
+    }
+
+    pub fn ai_suggestion_with_context(
+        &self,
+        input: &str,
+        cursor: usize,
+        history: Option<&Arc<ParkingMutex<FrecencyHistory>>>,
+        cwd: Option<String>,
+        files: Vec<String>,
+        last_exit_code: Option<i32>,
+    ) -> Option<SuggestionState> {
         let backend = self.ai_backend.as_ref()?;
         let history_context = collect_history_context(history, input, HISTORY_CONTEXT_LIMIT);
         let request = SuggestionRequest::new(
@@ -252,9 +298,12 @@ impl SuggestionEngine {
             cursor,
             self.config.preferences,
             history_context,
+            cwd,
+            files,
+            last_exit_code,
         );
         let completion = backend.predict(request)?;
-        if completion.len() <= input.len() || !completion.starts_with(input) {
+        if !completion.starts_with(input) {
             return None;
         }
         Some(SuggestionState {
@@ -344,13 +393,20 @@ fn collect_history_context(
     snapshot
 }
 
-const AI_SUGGESTION_SYSTEM_PROMPT: &str = r#"You are an inline completion engine for the doge-shell terminal. Given a user's partially typed command you must propose the most accurate continuation possible, leaning on the provided command history when relevant. Output only a single line containing the completed command. The line must:
-- Start with the exact user input (do not change or reformat it).
-- Append only the minimal additional characters needed to form a plausible next command.
-- Contain no commentary, explanations, code fences, or markdown formatting.
-- Avoid trailing whitespace or surrounding quotes.
-If no meaningful continuation exists, return the user input unchanged.
-Return only the best single-line completion. The output must begin with the provided input and add characters at the end."#;
+const AI_SUGGESTION_SYSTEM_PROMPT: &str = r#"You are an inline completion engine for the doge-shell terminal.
+Given a user's partially typed command and context (history, current directory, files, OS), propose the most accurate continuation possible.
+Output ONLY a single line containing the completed command.
+- Start with the exact user input.
+- Append only the minimal additional characters to form a plausible command.
+- If history matches, prioritize it unless current context (files) suggests it is invalid.
+- If the last command failed (exit code != 0), consider suggesting a correction if the input seems related to fixing it.
+- No commentary, no explanations, no code fences, no markdown.
+- Output MUST begin with the provided input.
+- If no plausible completion exists, output the provided input exactly."#;
+
+const AI_CONTEXT_SUGGESTION_SYSTEM_PROMPT: &str = r#"You are a helpful shell assistant.
+Given the current directory and files, suggest up to 3 likely commands the user might want to run.
+Output ONLY the commands, one per line. No explanations."#;
 
 #[derive(Clone)]
 pub struct AiSuggestionBackend {
@@ -367,8 +423,16 @@ struct AiBackendInner {
 #[derive(Debug, Default)]
 struct AiBackendState {
     cached: Option<AiCachedSuggestion>,
+    context_cached: Option<AiCachedContextSuggestion>,
     inflight: bool,
     pending: Option<SuggestionRequest>,
+}
+
+#[derive(Debug, Clone)]
+struct AiCachedContextSuggestion {
+    suggestions: Vec<String>,
+    cwd: String,
+    received_at: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -473,8 +537,17 @@ impl AiSuggestionBackend {
             .flatten()
     }
 
+    pub fn prefetch(&self, request: SuggestionRequest) {
+        if !request.input.is_empty() {
+            return;
+        }
+        self.enqueue(request);
+    }
+
     fn try_cached(&self, request: &SuggestionRequest) -> Option<String> {
         let state = self.inner.state.lock();
+
+        // 1. Check exact match cache
         if let Some(cached) = &state.cached
             && cached.received_at.elapsed() <= self.inner.settings.cache_ttl
             && cached.completion.starts_with(&request.input)
@@ -482,18 +555,30 @@ impl AiSuggestionBackend {
         {
             return Some(cached.completion.clone());
         }
+
+        // 2. Check context cache (prefetch result)
+        if let Some(ctx_cached) = &state.context_cached
+            && let Some(req_cwd) = &request.cwd
+            && &ctx_cached.cwd == req_cwd
+            && ctx_cached.received_at.elapsed() <= self.inner.settings.cache_ttl
+        {
+            // Find a suggestion that matches the current input
+            for suggestion in &ctx_cached.suggestions {
+                if suggestion.starts_with(&request.input) && suggestion.len() > request.input.len()
+                {
+                    return Some(suggestion.clone());
+                }
+            }
+        }
+
         None
     }
 
     fn enqueue(&self, request: SuggestionRequest) {
         let mut state = self.inner.state.lock();
-        let replace = match &state.pending {
-            Some(existing) => existing.input != request.input,
-            None => true,
-        };
-        if replace {
-            state.pending = Some(request);
-        }
+        // Allow replacing pending request
+        state.pending = Some(request);
+
         if state.inflight {
             return;
         }
@@ -505,12 +590,28 @@ impl AiSuggestionBackend {
     fn handle_completion(&self, request: SuggestionRequest, completion: Option<String>) {
         debug!(input = %request.input, "ai suggestion backend completed request");
         let mut state = self.inner.state.lock();
-        if let Some(completion) = completion {
-            state.cached = Some(AiCachedSuggestion {
-                completion,
-                received_at: Instant::now(),
-            });
-            debug!("ai suggestion backend stored new completion");
+
+        if let Some(content) = completion {
+            if request.input.is_empty() {
+                // Determine CWD from request or default
+                let cwd = request.cwd.clone().unwrap_or_default();
+                let suggestions: Vec<String> =
+                    content.lines().map(|s| s.trim().to_string()).collect();
+                if !suggestions.is_empty() {
+                    state.context_cached = Some(AiCachedContextSuggestion {
+                        suggestions,
+                        cwd,
+                        received_at: Instant::now(),
+                    });
+                    debug!("ai suggestion backend stored new context completion");
+                }
+            } else {
+                state.cached = Some(AiCachedSuggestion {
+                    completion: content,
+                    received_at: Instant::now(),
+                });
+                debug!("ai suggestion backend stored new completion");
+            }
         }
 
         if state.pending.is_some() {
@@ -537,16 +638,23 @@ impl AiSuggestionBackend {
         };
 
         let content = extract_ai_message_content(&response)?;
+
+        if request.input.is_empty() {
+            // For prefetch, we just return the raw content (list of commands)
+            return Some(content);
+        }
+
         let normalized = sanitize_model_output(&content);
         if normalized.is_empty() {
             return None;
         }
 
         if normalized.starts_with(&request.input) {
-            if normalized.len() > request.input.len() {
-                return Some(normalized);
-            }
-            return None;
+            // Allow returning exact input if explicitly requested (by prompt) to stop polling
+            // but here we are in fetch_completion.
+            // If normalized == input, it means AI returned input.
+            // We return it so `predict` logic can decide what to do (currently it accepts it)
+            return Some(normalized);
         }
 
         debug!("ai suggestion backend discarded response that did not preserve prefix");
@@ -555,8 +663,14 @@ impl AiSuggestionBackend {
 
     fn build_messages(&self, request: &SuggestionRequest) -> Vec<Value> {
         let user_payload = build_user_payload(request);
+        let system_prompt = if request.input.is_empty() {
+            AI_CONTEXT_SUGGESTION_SYSTEM_PROMPT
+        } else {
+            AI_SUGGESTION_SYSTEM_PROMPT
+        };
+
         vec![
-            json!({"role": "system", "content": AI_SUGGESTION_SYSTEM_PROMPT}),
+            json!({"role": "system", "content": system_prompt}),
             json!({"role": "user", "content": user_payload}),
         ]
     }
@@ -564,15 +678,14 @@ impl AiSuggestionBackend {
 
 impl SuggestionBackend for AiSuggestionBackend {
     fn predict(&self, request: SuggestionRequest) -> Option<String> {
-        if request.input.trim().is_empty() {
-            return None;
-        }
-
+        // Normal prediction flow
         if let Some(result) = self.try_cached(&request) {
             return Some(result);
         }
 
-        self.enqueue(request);
+        if !request.input.trim().is_empty() {
+            self.enqueue(request);
+        }
         None
     }
 
@@ -603,12 +716,29 @@ fn build_user_payload(request: &SuggestionRequest) -> String {
         request.preferences.ai_backfill
     ));
 
-    // 3. UserInput (Dynamic)
+    // 3. Context (Semi-Dynamic)
+    if let Some(cwd) = &request.cwd {
+        payload.push_str(&format!("CWD: {}\n", cwd));
+    }
+    if !request.files.is_empty() {
+        payload.push_str("DirectoryListing (partial):\n");
+        for file in &request.files {
+            payload.push_str("- ");
+            payload.push_str(file);
+            payload.push('\n');
+        }
+    }
+    if let Some(code) = request.last_exit_code {
+        payload.push_str(&format!("LastExitCode: {}\n", code));
+    }
+    payload.push_str(&format!("OS: {}\n", std::env::consts::OS));
+
+    // 4. UserInput (Dynamic)
     payload.push_str("UserInput: ");
     payload.push_str(&request.input);
     payload.push('\n');
 
-    // 4. Cursor (Dynamic)
+    // 5. Cursor (Dynamic)
     payload.push_str(&format!("CursorIndex: {}\n", request.cursor));
 
     payload
@@ -734,6 +864,35 @@ mod tests {
     }
 
     #[test]
+    fn engine_skips_ai_when_history_matches() {
+        let recorder = Arc::new(RecordingBackend::with_response("git commit"));
+        let backend: Arc<dyn SuggestionBackend + Send + Sync> = recorder.clone();
+
+        let mut engine = SuggestionEngine::new();
+        engine.set_ai_backend(Some(backend));
+        engine.set_preferences(InputPreferences {
+            suggestion_mode: SuggestionMode::Ghost,
+            ai_backfill: true,
+            transient_prompt: true,
+            auto_diagnose: false,
+        });
+
+        let mut history = FrecencyHistory::new();
+        history.store = Some(dsh_frecency::FrecencyStore::default());
+        history.add("git status");
+        let history = Arc::new(ParkingMutex::new(history));
+
+        // "git s" should match "git status" in history
+        let result = engine.predict("git s", 5, Some(&history));
+
+        assert!(!result.is_empty());
+        assert_eq!(result[0].full, "git status");
+        assert_eq!(result[0].source, SuggestionSource::History);
+        // Backend should NOT have been called
+        assert_eq!(recorder.calls().len(), 0);
+    }
+
+    #[test]
     fn suggestion_request_contains_history_snapshot() {
         let recorder = Arc::new(RecordingBackend::with_response("deploy service"));
         let backend: Arc<dyn SuggestionBackend + Send + Sync> = recorder.clone();
@@ -777,6 +936,9 @@ mod tests {
             cursor: 5,
             preferences: InputPreferences::default(),
             history_context: vec!["git status".to_string(), "git checkout".to_string()],
+            cwd: Some("/home/user".to_string()),
+            files: vec!["file1".to_string()],
+            last_exit_code: Some(0),
         };
 
         let payload = build_user_payload(&request);
@@ -788,5 +950,41 @@ mod tests {
         assert!(input_idx.is_some());
         // History must come BEFORE Input
         assert!(history_idx.unwrap() < input_idx.unwrap());
+    }
+    #[test]
+    fn engine_passes_full_context_to_backend() {
+        let recorder = Arc::new(RecordingBackend::with_response("cat config.toml"));
+        let backend: Arc<dyn SuggestionBackend + Send + Sync> = recorder.clone();
+
+        let mut engine = SuggestionEngine::new();
+        engine.set_ai_backend(Some(backend));
+        engine.set_preferences(InputPreferences {
+            suggestion_mode: SuggestionMode::Ghost,
+            ai_backfill: true,
+            transient_prompt: true,
+            auto_diagnose: false,
+        });
+
+        let cwd = Some("/tmp/test".to_string());
+        let files = vec!["config.toml".to_string(), "main.rs".to_string()];
+        let exit_code = Some(1);
+
+        // historyなし、contextありで呼び出す
+        let _ = engine.ai_suggestion_with_context(
+            "cat c",
+            5,
+            None,
+            cwd.clone(),
+            files.clone(),
+            exit_code,
+        );
+
+        let calls = recorder.calls();
+        assert_eq!(calls.len(), 1);
+        let request = &calls[0];
+
+        assert_eq!(request.cwd, cwd);
+        assert_eq!(request.files, files);
+        assert_eq!(request.last_exit_code, exit_code);
     }
 }

@@ -31,6 +31,11 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
     );
 
     env.define(
+        Symbol::from("register-action"),
+        Value::NativeFunc(crate::lisp::command_palette::register_action),
+    );
+
+    env.define(
         Symbol::from("is_null"),
         Value::NativeFunc(|_env, args| {
             let val = require_arg("is_null", &args, 0)?;

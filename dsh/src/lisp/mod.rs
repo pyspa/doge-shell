@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::{cell::RefCell, rc::Rc};
 
 mod builtin;
+mod command_palette;
 mod default_environment;
 mod interpreter;
 mod macros;
@@ -283,5 +284,36 @@ mod tests {
         let res = engine.borrow().run_func_values("call", args);
         assert!(res.is_ok());
         println!("{res:?}");
+    }
+
+    #[test]
+    fn test_register_action() {
+        init();
+        let env = Environment::new();
+        let engine = LispEngine::new(env);
+
+        // 1. Defun a function
+        let _ = engine
+            .borrow()
+            .run("(defun my-test-func () (print \"success\"))");
+
+        // 2. Register it as an action
+        let res = engine
+            .borrow()
+            .run("(register-action \"My Test Action\" \"A test action\" \"my-test-func\")");
+        assert!(res.is_ok());
+
+        // 3. Verify it's in the registry
+        let registry = crate::command_palette::REGISTRY.read();
+        let actions = registry.get_all();
+        let action = actions
+            .iter()
+            .find(|a| a.name() == "My Test Action")
+            .expect("Action not found in registry");
+        assert_eq!(action.description(), "A test action");
+
+        // 4. (Optional) Check if it works without real Shell if possible,
+        // but since execute() needs &mut Shell, we'll stop here for unit test
+        // or just verify it doesn't panic when we look it up.
     }
 }

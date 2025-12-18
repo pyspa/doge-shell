@@ -89,7 +89,7 @@ impl CommandPalette {
 
         // Skim options
         let options = SkimOptionsBuilder::default()
-            .height("40%".to_string())
+            // .height("40%".to_string()) // Remove height to use full screen / alternate screen
             .multi(false)
             .prompt("Cmd> ".to_string())
             .bind(vec!["Enter:accept".to_string(), "Esc:abort".to_string()])

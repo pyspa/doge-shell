@@ -16,7 +16,7 @@ use crossterm::cursor;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::queue;
 use crossterm::style::Print;
-use crossterm::terminal::{Clear, ClearType};
+use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
 use dsh_types::Context;
 use nix::sys::termios::Termios;
 use std::io::Write;
@@ -833,7 +833,14 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             return Ok(());
         }
         KeyAction::OpenCommandPalette => {
+            // Disable raw mode so Skim can handle terminal state correctly
+            disable_raw_mode().ok();
+
             CommandPalette::run(repl.shell)?;
+
+            // Re-enable raw mode for the shell
+            enable_raw_mode().ok();
+
             let mut renderer = TerminalRenderer::new();
             repl.print_prompt(&mut renderer);
             renderer.flush().ok();

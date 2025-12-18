@@ -1,5 +1,8 @@
 pub mod clear_screen;
+pub mod lisp_action;
 pub mod reload_config;
+
+pub use lisp_action::*;
 
 use super::ActionRegistry;
 use std::sync::Arc;

@@ -21,7 +21,9 @@ mod fg;
 pub mod ga;
 mod gco;
 pub mod gh_notify;
+mod github_client;
 mod glog;
+mod gpr;
 mod gwt;
 mod help;
 mod history;
@@ -285,6 +287,11 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
                 gh_notify::command,
                 gh_notify::description(),
             )) as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "gpr",
+            Box::new(BuiltinCommandFn::new(gpr::command, gpr::description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
 
         // Utility commands

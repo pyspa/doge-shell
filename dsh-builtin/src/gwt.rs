@@ -51,7 +51,34 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
                     ctx.write_stdout(&format!("Created worktree at: {}", path.display()))
                         .ok();
 
-                    // Change directory if -c option is set
+                    // Change directory if -c option is set (default true)
+                    if opts.change_dir {
+                        if let Err(e) = proxy.changepwd(&path.to_string_lossy()) {
+                            ctx.write_stderr(&format!("gwt: failed to change directory: {}", e))
+                                .ok();
+                            return ExitStatus::ExitedWith(1);
+                        }
+                        ctx.write_stdout(&format!("Changed to: {}", path.display()))
+                            .ok();
+                    }
+
+                    // Open editor if requested
+                    if opts.open_editor {
+                        open_editor(ctx, &path)
+                    } else {
+                        ExitStatus::ExitedWith(0)
+                    }
+                }
+                Err(e) => {
+                    ctx.write_stderr(&format!("gwt: {}", e)).ok();
+                    ExitStatus::ExitedWith(1)
+                }
+            }
+        }
+        Action::AddFromPr => {
+            match add_worktree_from_pr(ctx) {
+                Ok(path) => {
+                    // Change directory if -c option is set (default true)
                     if opts.change_dir {
                         if let Err(e) = proxy.changepwd(&path.to_string_lossy()) {
                             ctx.write_stderr(&format!("gwt: failed to change directory: {}", e))
@@ -95,6 +122,7 @@ enum Action {
     Remove { force: bool },
     Prune,
     Add { branch: String, create_new: bool },
+    AddFromPr,
     ShowUsage,
 }
 
@@ -116,6 +144,7 @@ fn parse_options(args: &[&str]) -> Result<CommandOptions, String> {
     let mut remove = false;
     let mut prune = false;
     let mut force = false;
+    let mut from_pr = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -123,6 +152,8 @@ fn parse_options(args: &[&str]) -> Result<CommandOptions, String> {
 
         if arg == "-r" {
             remove = true;
+        } else if arg == "-P" || arg == "--pr" {
+            from_pr = true;
         } else if arg == "-p" {
             prune = true;
         } else if arg == "-f" || arg == "--force" {
@@ -181,6 +212,12 @@ fn parse_options(args: &[&str]) -> Result<CommandOptions, String> {
             change_dir: false,
             open_editor: false,
         })
+    } else if from_pr {
+        Ok(CommandOptions {
+            action: Action::AddFromPr,
+            change_dir,
+            open_editor,
+        })
     } else if let Some(branch) = branch {
         Ok(CommandOptions {
             action: Action::Add { branch, create_new },
@@ -217,6 +254,8 @@ fn show_usage(ctx: &Context) {
     ctx.write_stderr("  -f, --force    Force removal (used with -r)")
         .ok();
     ctx.write_stderr("  -p             Prune stale worktrees")
+        .ok();
+    ctx.write_stderr("  -P, --pr       Create worktree from GitHub PR")
         .ok();
     ctx.write_stderr("").ok();
     ctx.write_stderr("Options can be combined: -be, -bn, -ben, etc.")
@@ -558,6 +597,134 @@ fn open_editor(ctx: &Context, path: &Path) -> ExitStatus {
             ExitStatus::ExitedWith(1)
         }
     }
+}
+
+// PR Support
+
+use crate::github_client;
+
+fn add_worktree_from_pr(ctx: &Context) -> Result<PathBuf, String> {
+    // Check if gh is installed
+    if !github_client::is_gh_installed() {
+        return Err("gh command not found".to_string());
+    }
+
+    let mut prs = github_client::get_prs()?;
+    if prs.is_empty() {
+        return Err("no PR found".to_string());
+    }
+
+    // Sort PRs by number descending (usually newer first)
+    prs.sort_by(|a, b| b.number.cmp(&a.number));
+
+    // Skim options
+    let options = SkimOptionsBuilder::default()
+        .height("50%".to_string())
+        .multi(false)
+        .bind(vec!["Enter:accept".to_string()])
+        .build()
+        .unwrap();
+
+    let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
+    for pr in prs.clone() {
+        let _ = tx_item.send(Arc::new(pr));
+    }
+    drop(tx_item);
+
+    let selected = Skim::run_with(&options, Some(rx_item))
+        .map(|out| match out.final_key {
+            Key::Enter => out.selected_items,
+            _ => Vec::new(),
+        })
+        .unwrap_or_default();
+
+    if selected.is_empty() {
+        return Err("No PR selected".to_string());
+    }
+
+    let pr_number = selected[0].output().to_string();
+    let pr = prs
+        .iter()
+        .find(|p| p.number.to_string() == pr_number)
+        .ok_or("PR not found")?;
+
+    let git_root = get_git_root()?;
+    let project_name = git_root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "cannot determine project name".to_string())?;
+
+    // Create worktree directory name: <project>-pr-<number>
+    let dir_name = format!("{}-pr-{}", project_name, pr_number);
+    let parent = git_root.parent().ok_or("no parent dir")?;
+    let worktree_path = parent.join(&dir_name);
+
+    if worktree_path.exists() {
+        return Err(format!(
+            "worktree path already exists: {}",
+            worktree_path.display()
+        ));
+    }
+
+    ctx.write_stdout(&format!(
+        "Creating worktree for PR #{} at {}...",
+        pr_number,
+        worktree_path.display()
+    ))
+    .ok();
+
+    // 1. Create worktree detached
+    let output = Command::new("git")
+        .args([
+            "worktree",
+            "add",
+            "--detach",
+            &worktree_path.to_string_lossy(),
+        ])
+        .output()
+        .map_err(|e| format!("failed to create worktree: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git worktree add failed: {}", stderr));
+    }
+
+    // 2. Checkout PR in the new worktree
+    // We execute gh pr checkout inside the new worktree directory
+    let checkout_output = Command::new("gh")
+        .current_dir(&worktree_path)
+        .args(["pr", "checkout", &pr_number])
+        .output()
+        .map_err(|e| format!("failed to execute gh pr checkout: {}", e))?;
+
+    if !checkout_output.status.success() {
+        let stderr = String::from_utf8_lossy(&checkout_output.stderr);
+        ctx.write_stderr(&format!(
+            "Failed to checkout PR: {}. Cleaning up worktree...",
+            stderr
+        ))
+        .ok();
+
+        // Cleanup worktree if checkout fails
+        let _ = Command::new("git")
+            .args([
+                "worktree",
+                "remove",
+                "--force",
+                &worktree_path.to_string_lossy(),
+            ])
+            .output();
+
+        return Err(format!("gh pr checkout failed: {}", stderr));
+    }
+
+    ctx.write_stdout(&format!(
+        "Successfully checked out PR #{} ({})",
+        pr.number, pr.head_ref_name
+    ))
+    .ok();
+
+    Ok(worktree_path)
 }
 
 #[cfg(test)]

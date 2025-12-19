@@ -56,7 +56,9 @@ impl SafetyGuard {
                 SafetyResult::Confirm(format!("Command '{}' will be executed. Proceed?", cmd))
             }
             SafetyLevel::Normal => {
-                if self.dangerous_commands.contains(cmd) {
+                let cmd_path = std::path::Path::new(cmd);
+                let cmd_name = cmd_path.file_name().and_then(|n| n.to_str()).unwrap_or(cmd);
+                if self.dangerous_commands.contains(cmd_name) {
                     SafetyResult::Confirm(format!(
                         "Potentially dangerous command '{}' detected. Proceed?",
                         cmd
@@ -95,6 +97,11 @@ mod tests {
         ));
         assert!(matches!(
             guard.check_command(&level, "mv", &[]),
+            SafetyResult::Confirm(_)
+        ));
+        // Dangerous command with full path
+        assert!(matches!(
+            guard.check_command(&level, "/bin/rm", &[]),
             SafetyResult::Confirm(_)
         ));
     }

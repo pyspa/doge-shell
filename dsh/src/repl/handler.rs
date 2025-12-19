@@ -823,7 +823,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             let mut renderer = TerminalRenderer::new();
             queue!(renderer, Print(" 🤖 Generating...\r"), cursor::Hide).ok();
             renderer.flush().ok();
-            repl.force_ai_suggestion();
+            repl.force_ai_suggestion().await;
         }
         KeyAction::TriggerCompletion => {
             if handle_trigger_completion(repl).await? {

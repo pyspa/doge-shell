@@ -164,6 +164,7 @@ pub struct Repl<'a> {
     pub(crate) stopped_jobs_warned: bool,
     pub(crate) multiline_buffer: String,
     pub(crate) last_cwd: std::path::PathBuf,
+    pub(crate) git_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -275,6 +276,11 @@ impl<'a> Repl<'a> {
             ai_service = Some(Arc::new(LiveAiService::new(client)));
         }
         suggestion_manager.set_preferences(input_preferences);
+
+        // Setup Git event channel
+        let (git_tx, git_rx) = tokio::sync::mpsc::unbounded_channel();
+        prompt.write().set_git_sender(git_tx);
+
         Repl {
             shell,
             input: Input::new(input_config),
@@ -304,6 +310,7 @@ impl<'a> Repl<'a> {
             stopped_jobs_warned: false,
             multiline_buffer: String::new(),
             last_cwd: current.clone(),
+            git_rx,
         }
     }
 
@@ -1322,30 +1329,7 @@ impl<'a> Repl<'a> {
                     // Execute input-timeout hooks (called periodically when idle)
                     let _ = self.shell.exec_input_timeout_hooks();
 
-                    // Refresh git status
                     let prompt = Arc::clone(&self.prompt);
-
-                    // Check if we need to discover/update git root (async)
-                    let needs_root_check = prompt.read().needs_git_check;
-                    if needs_root_check {
-                        let cwd = prompt.read().current_dir.clone();
-                        let p_clone = Arc::clone(&prompt);
-                        tokio::spawn(async move {
-                            let root = crate::prompt::find_git_root_async(cwd).await;
-                            p_clone.write().update_git_root(root);
-                        });
-                    }
-
-                    let should = prompt.read().should_refresh();
-                    if should {
-                        let path = prompt.read().current_path().to_path_buf();
-                        let p_clone = Arc::clone(&prompt); // Clone for git task
-                        tokio::spawn(async move {
-                            if let Some(status) = crate::prompt::fetch_git_status_async(&path).await {
-                                p_clone.write().update_git_status(Some(status));
-                            }
-                        });
-                    }
 
                     // Check for Rust version
                     if prompt.read().needs_rust_check() {
@@ -1439,6 +1423,33 @@ impl<'a> Repl<'a> {
                         let mut renderer = TerminalRenderer::new();
                         self.print_input(&mut renderer, false, false);
                         renderer.flush().ok();
+                    }
+                }
+                Some(_) = self.git_rx.recv() => {
+                    let prompt = Arc::clone(&self.prompt);
+                    // Check if we need to discover/update git root (async)
+                    let needs_root_check = prompt.read().needs_git_check;
+                    if needs_root_check {
+                        let cwd = prompt.read().current_dir.clone();
+                        let p_clone = Arc::clone(&prompt);
+                        tokio::spawn(async move {
+                            let root = crate::prompt::find_git_root_async(cwd).await;
+                            p_clone.write().update_git_root(root);
+                             // Watcher handles subsequent updates, but we need initial fetch?
+                             // update_git_root updates cache/status to clean?
+                             // If root found, we might want initial status.
+                        });
+                    }
+                    // Fetch status if we have a git root (always fetch on event)
+                     let should = prompt.read().has_git_root();
+                     if should {
+                        let path = prompt.read().current_path().to_path_buf();
+                        let p_clone = Arc::clone(&prompt);
+                        tokio::spawn(async move {
+                            if let Some(status) = crate::prompt::fetch_git_status_async(&path).await {
+                                p_clone.write().update_git_status(Some(status));
+                            }
+                        });
                     }
                 }
                 maybe_event = reader.next() => {

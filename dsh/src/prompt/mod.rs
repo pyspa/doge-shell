@@ -4,6 +4,7 @@ use anyhow::Result;
 use crossterm::cursor;
 use crossterm::queue;
 use crossterm::style::Stylize;
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
@@ -11,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::mpsc::UnboundedSender;
 
 pub mod context;
 pub mod modules;
@@ -124,6 +126,8 @@ pub struct Prompt {
     pub needs_git_check: bool,
     git_root_cache: HashSet<String>,
     git_status_cache: Option<GitStatusCache>,
+    watcher: Option<RecommendedWatcher>,
+    git_sender: Option<UnboundedSender<()>>,
 
     // Language Support
     rust_version_cache: Option<String>,
@@ -154,6 +158,8 @@ impl Prompt {
             needs_git_check: true,
             git_root_cache: HashSet::new(),
             git_status_cache: None,
+            watcher: None,
+            git_sender: None,
             rust_version_cache: None,
             node_version_cache: None,
             python_version_cache: None,
@@ -186,6 +192,35 @@ impl Prompt {
         // Set Git root during initialization
         prompt.set_current(&current_dir);
         prompt
+    }
+
+    pub fn set_git_sender(&mut self, sender: UnboundedSender<()>) {
+        self.git_sender = Some(sender);
+    }
+
+    fn start_watcher(&mut self) {
+        if let Some(git_root) = &self.current_git_root
+            && let Some(sender) = &self.git_sender {
+                let sender = sender.clone();
+                let mut watcher = notify::recommended_watcher(
+                    move |res: notify::Result<notify::Event>| match res {
+                        Ok(_) => {
+                            let _ = sender.send(());
+                        }
+                        Err(e) => tracing::error!("watch error: {:?}", e),
+                    },
+                )
+                .ok();
+
+                if let Some(w) = &mut watcher {
+                    let git_dir = git_root.join(".git");
+                    if git_dir.exists() {
+                        // Watch HEAD, index, logic can be refined
+                        let _ = w.watch(&git_dir, RecursiveMode::Recursive);
+                    }
+                }
+                self.watcher = watcher;
+            }
     }
 
     pub fn print_preprompt<W: Write>(&mut self, out: &mut W) {
@@ -387,9 +422,14 @@ impl Prompt {
                 self.current_git_root = Some(PathBuf::from(&root));
                 self.git_status_cache = None;
                 self.needs_git_check = false;
+                self.start_watcher();
             } else {
                 self.current_git_root = None;
                 self.needs_git_check = true;
+                self.watcher = None;
+                if let Some(sender) = &self.git_sender {
+                    let _ = sender.send(());
+                }
             }
         }
     }
@@ -401,6 +441,10 @@ impl Prompt {
         }
         self.needs_git_check = false;
         self.git_status_cache = None;
+    }
+
+    pub fn has_git_root(&self) -> bool {
+        self.current_git_root.is_some()
     }
 
     pub fn get_git_status_cached(&self) -> Option<GitStatus> {

@@ -122,7 +122,14 @@ pub fn expand_alias_tilde(
                 if pat.contains('*') || pat.contains('?') || pat.contains('[') {
                     let (root, pattern) = find_glob_root(&pat);
                     debug!("glob pattern: root:{} {:?} ", root, pattern);
-                    match globmatch::Builder::new(&pattern).build(root) {
+
+                    let effective_root = if Path::new(&root).is_absolute() {
+                        PathBuf::from(&root)
+                    } else {
+                        _current_dir.join(&root)
+                    };
+
+                    match globmatch::Builder::new(&pattern).build(&effective_root) {
                         Ok(builder) => {
                             let paths: Vec<_> = builder.into_iter().flatten().collect();
                             if paths.is_empty() {
@@ -131,7 +138,16 @@ pub fn expand_alias_tilde(
                             } else {
                                 for path in paths {
                                     debug!("glob match {}", path.display());
-                                    argv.push(format!("\"{}\"", path.display()));
+                                    // Try to make path relative to current_dir for cleaner display
+                                    // if it was a relative pattern
+                                    let display_path = if Path::new(&root).is_relative() {
+                                        path.strip_prefix(_current_dir)
+                                            .unwrap_or(&path)
+                                            .to_path_buf()
+                                    } else {
+                                        path
+                                    };
+                                    argv.push(format!("\"{}\"", display_path.display()));
                                 }
                             }
                         }

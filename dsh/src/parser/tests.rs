@@ -946,3 +946,165 @@ fn test_brace_expansion_unit() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_glob_expansion() -> Result<()> {
+    init();
+    use std::fs::File;
+    let dir = tempfile::tempdir()?;
+    let path_a = dir.path().join("glob_test_a.txt");
+    File::create(&path_a)?;
+    let path_b = dir.path().join("glob_test_b.txt");
+    File::create(&path_b)?;
+
+    let env = crate::environment::Environment::new();
+    let alias = &env.read().alias;
+
+    // Test *.txt expansion
+    let pairs = ShellParser::parse(Rule::glob_word, "*.txt").unwrap_or_else(|e| panic!("{}", e));
+
+    for pair in pairs {
+        let expanded = expand_alias_tilde(pair, alias, &dir.path().to_path_buf())?;
+        // Should contain glob_test_a.txt and glob_test_b.txt (quoted or not?)
+        // expand_alias_tilde returns fully qualified paths if using absolute root?
+        // Or relative?
+        // find_glob_root handles it.
+        // Since we pass an absolute path as current_dir, and pattern is relative "*.txt".
+
+        let s = expanded.join(" ");
+        assert!(s.contains("glob_test_a.txt"));
+        assert!(s.contains("glob_test_b.txt"));
+        assert_eq!(expanded.len(), 2);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_glob_no_match() -> Result<()> {
+    init();
+    use std::fs::File;
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("file.txt");
+    File::create(&path)?;
+
+    let env = crate::environment::Environment::new();
+    let alias = &env.read().alias;
+
+    // Pattern matches nothing
+    let pairs = ShellParser::parse(Rule::glob_word, "*.rs").unwrap_or_else(|e| panic!("{}", e));
+
+    for pair in pairs {
+        let expanded = expand_alias_tilde(pair, alias, &dir.path().to_path_buf())?;
+        // Should return literal if no match
+        assert_eq!(expanded.len(), 1);
+        assert_eq!(expanded[0], "*.rs");
+    }
+    Ok(())
+}
+
+#[test]
+fn test_glob_question_mark() -> Result<()> {
+    init();
+    use std::fs::File;
+    let dir = tempfile::tempdir()?;
+    File::create(dir.path().join("file1.txt"))?;
+    File::create(dir.path().join("fileA.txt"))?;
+
+    let env = crate::environment::Environment::new();
+    let alias = &env.read().alias;
+
+    let pairs =
+        ShellParser::parse(Rule::glob_word, "file?.txt").unwrap_or_else(|e| panic!("{}", e));
+
+    for pair in pairs {
+        let expanded = expand_alias_tilde(pair, alias, &dir.path().to_path_buf())?;
+        assert_eq!(expanded.len(), 2);
+        let s = expanded.join(" ");
+        assert!(s.contains("file1.txt"));
+        assert!(s.contains("fileA.txt"));
+    }
+    Ok(())
+}
+
+#[test]
+fn test_glob_character_class() -> Result<()> {
+    init();
+    use std::fs::File;
+    let dir = tempfile::tempdir()?;
+    File::create(dir.path().join("file1.txt"))?;
+    File::create(dir.path().join("file2.txt"))?;
+    File::create(dir.path().join("fileA.txt"))?;
+
+    let env = crate::environment::Environment::new();
+    let alias = &env.read().alias;
+
+    let pairs =
+        ShellParser::parse(Rule::glob_word, "file[0-9].txt").unwrap_or_else(|e| panic!("{}", e));
+
+    for pair in pairs {
+        let expanded = expand_alias_tilde(pair, alias, &dir.path().to_path_buf())?;
+        assert_eq!(expanded.len(), 2);
+        let s = expanded.join(" ");
+        assert!(s.contains("file1.txt"));
+        assert!(s.contains("file2.txt"));
+        assert!(!s.contains("fileA.txt"));
+    }
+    Ok(())
+}
+
+#[test]
+fn test_glob_subdirectory() -> Result<()> {
+    init();
+    use std::fs::{self, File};
+    let dir = tempfile::tempdir()?;
+    let subdir = dir.path().join("sub");
+    fs::create_dir(&subdir)?;
+    File::create(subdir.join("test.rs"))?;
+
+    let env = crate::environment::Environment::new();
+    let alias = &env.read().alias;
+
+    let pairs = ShellParser::parse(Rule::glob_word, "sub/*.rs").unwrap_or_else(|e| panic!("{}", e));
+
+    for pair in pairs {
+        let expanded = expand_alias_tilde(pair, alias, &dir.path().to_path_buf())?;
+        assert_eq!(expanded.len(), 1);
+        let s = expanded[0].clone();
+        assert!(s.contains("sub"));
+        assert!(s.contains("test.rs"));
+    }
+    Ok(())
+}
+
+#[test]
+fn test_recursive_glob() -> Result<()> {
+    init();
+    use std::fs::{self, File};
+    let dir = tempfile::tempdir()?;
+    let subdir = dir.path().join("sub");
+    fs::create_dir(&subdir)?;
+    let nested = subdir.join("nested");
+    fs::create_dir(&nested)?;
+
+    File::create(dir.path().join("root.rs"))?;
+    File::create(subdir.join("sub.rs"))?;
+    File::create(nested.join("deep.rs"))?;
+
+    let env = crate::environment::Environment::new();
+    let alias = &env.read().alias;
+
+    // Test **/*.rs
+    let pairs = ShellParser::parse(Rule::glob_word, "**/*.rs").unwrap_or_else(|e| panic!("{}", e));
+
+    for pair in pairs {
+        let expanded = expand_alias_tilde(pair, alias, &dir.path().to_path_buf())?;
+        // Should find all 3 .rs files
+        assert_eq!(expanded.len(), 3);
+        let s = expanded.join(" ");
+        assert!(s.contains("root.rs"));
+        assert!(s.contains("sub.rs"));
+        assert!(s.contains("deep.rs"));
+    }
+    Ok(())
+}

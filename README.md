@@ -96,7 +96,7 @@ The shell includes many built-in commands:
 | `exit` | Exit the shell |
 | `cd` | Change directory |
 | `history` | Show command history |
-| `z` | Jump to frequently used directories |
+| `z` | Jump to frequently used directories (use `-i` or `--interactive` for selection) |
 | `jobs` | Show background jobs |
 | `fg` | Bring job to foreground |
 | `bg` | Send job to background |

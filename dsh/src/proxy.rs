@@ -140,6 +140,23 @@ fn format_reload_error(err: &anyhow::Error) -> String {
     format!("reload: {error_string}")
 }
 
+/// Parse arguments for z command
+/// Returns (interactive, query)
+fn parse_z_args(argv: &[String]) -> (bool, String) {
+    let mut interactive = false;
+    let mut query = String::new();
+
+    // Start from index 1, skip command name
+    for arg in argv.iter().skip(1) {
+        if arg == "-i" || arg == "--interactive" {
+            interactive = true;
+        } else if query.is_empty() {
+            query = arg.clone();
+        }
+    }
+    (interactive, query)
+}
+
 impl ShellProxy for Shell {
     fn exit_shell(&mut self) {
         self.exit();
@@ -188,24 +205,67 @@ impl ShellProxy for Shell {
                 }
             }
             "z" => {
-                let path = argv.get(1).map(|s| s.as_str()).unwrap_or("");
-                let path = if let Some(ref mut history) = self.path_history {
-                    let history = history.clone();
-                    let history = history.lock(); // For non-UI operations, we can use regular lock
-                    let results = history.sort_by_match(path);
-                    if !results.is_empty() {
-                        let path = results[0].item.to_string();
-                        Some(path)
+                let (interactive, query) = parse_z_args(&argv);
+
+                if interactive {
+                    if let Some(ref mut history) = self.path_history {
+                        let history = history.clone();
+                        let history = history.lock();
+                        // Get all history items or filter by query if provided
+                        let results = if query.is_empty() {
+                            history.sorted(&SortMethod::Recent)
+                        } else {
+                            history.sort_by_match(&query)
+                        };
+
+                        if !results.is_empty() {
+                            // Convert to Candidates for skim
+                            let candidates: Vec<crate::completion::Candidate> = results
+                                .iter()
+                                .map(|item| {
+                                    crate::completion::Candidate::Item(
+                                        item.item.clone(),
+                                        format!("({:.1})", item.match_score),
+                                    )
+                                })
+                                .collect();
+
+                            if let Some(selected) =
+                                crate::completion::select_item_with_skim(candidates, None)
+                            {
+                                self.changepwd(&selected)?;
+                            }
+                        } else {
+                            ctx.write_stderr("z: no matching history found")?;
+                        }
                     } else {
-                        None
+                        ctx.write_stderr("z: history not available")?;
                     }
                 } else {
-                    None
-                };
+                    // Original behavior
+                    let path = if query.is_empty() { None } else { Some(query) };
 
-                if let Some(ref path) = path {
-                    self.changepwd(path)?;
-                };
+                    let path = if let Some(path_str) = path {
+                        if let Some(ref mut history) = self.path_history {
+                            let history = history.clone();
+                            let history = history.lock();
+                            let results = history.sort_by_match(&path_str);
+                            if !results.is_empty() {
+                                Some(results[0].item.to_string())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some(ref path) = path {
+                        self.changepwd(path)?;
+                    };
+                }
             }
             "jobs" => {
                 if self.wait_jobs.is_empty() {
@@ -724,5 +784,44 @@ mod tests {
         let err = anyhow::anyhow!("some generic error");
         let formatted = format_reload_error(&err);
         assert_eq!(formatted, "reload: some generic error");
+    }
+
+    #[test]
+    fn test_parse_z_args() {
+        // z -i
+        let args = vec!["z".to_string(), "-i".to_string()];
+        let (interactive, query) = parse_z_args(&args);
+        assert!(interactive);
+        assert_eq!(query, "");
+
+        // z --interactive
+        let args = vec!["z".to_string(), "--interactive".to_string()];
+        let (interactive, query) = parse_z_args(&args);
+        assert!(interactive);
+        assert_eq!(query, "");
+
+        // z foo
+        let args = vec!["z".to_string(), "foo".to_string()];
+        let (interactive, query) = parse_z_args(&args);
+        assert!(!interactive);
+        assert_eq!(query, "foo");
+
+        // z -i foo
+        let args = vec!["z".to_string(), "-i".to_string(), "foo".to_string()];
+        let (interactive, query) = parse_z_args(&args);
+        assert!(interactive);
+        assert_eq!(query, "foo");
+
+        // z foo -i
+        let args = vec!["z".to_string(), "foo".to_string(), "-i".to_string()];
+        let (interactive, query) = parse_z_args(&args);
+        assert!(interactive);
+        assert_eq!(query, "foo");
+
+        // z foo bar (only first arg taken as query)
+        let args = vec!["z".to_string(), "foo".to_string(), "bar".to_string()];
+        let (interactive, query) = parse_z_args(&args);
+        assert!(!interactive);
+        assert_eq!(query, "foo");
     }
 }

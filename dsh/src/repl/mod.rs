@@ -635,7 +635,7 @@ impl<'a> Repl<'a> {
         self.suggestion_manager.active.is_some()
     }
 
-    pub(crate) fn force_ai_suggestion(&mut self) -> bool {
+    pub(crate) async fn force_ai_suggestion(&mut self) -> bool {
         self.completion.clear();
         self.suggestion_manager.clear();
 
@@ -706,7 +706,7 @@ impl<'a> Repl<'a> {
                 break;
             }
 
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
 
         self.suggestion_manager.active.is_some()

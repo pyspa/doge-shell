@@ -200,27 +200,27 @@ impl Prompt {
 
     fn start_watcher(&mut self) {
         if let Some(git_root) = &self.current_git_root
-            && let Some(sender) = &self.git_sender {
-                let sender = sender.clone();
-                let mut watcher = notify::recommended_watcher(
-                    move |res: notify::Result<notify::Event>| match res {
-                        Ok(_) => {
-                            let _ = sender.send(());
-                        }
-                        Err(e) => tracing::error!("watch error: {:?}", e),
-                    },
-                )
+            && let Some(sender) = &self.git_sender
+        {
+            let sender = sender.clone();
+            let mut watcher =
+                notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
+                    Ok(_) => {
+                        let _ = sender.send(());
+                    }
+                    Err(e) => tracing::error!("watch error: {:?}", e),
+                })
                 .ok();
 
-                if let Some(w) = &mut watcher {
-                    let git_dir = git_root.join(".git");
-                    if git_dir.exists() {
-                        // Watch HEAD, index, logic can be refined
-                        let _ = w.watch(&git_dir, RecursiveMode::Recursive);
-                    }
+            if let Some(w) = &mut watcher {
+                let git_dir = git_root.join(".git");
+                if git_dir.exists() {
+                    // Watch HEAD, index, logic can be refined
+                    let _ = w.watch(&git_dir, RecursiveMode::Recursive);
                 }
-                self.watcher = watcher;
             }
+            self.watcher = watcher;
+        }
     }
 
     pub fn print_preprompt<W: Write>(&mut self, out: &mut W) {

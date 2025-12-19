@@ -4,7 +4,7 @@ use tracing::debug;
 
 /// Built-in z command description
 pub fn description() -> &'static str {
-    "Jump to frequently used directories"
+    "Jump to frequently used directories (use -i for interactive)"
 }
 
 /// Built-in z command implementation

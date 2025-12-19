@@ -35,6 +35,7 @@ pub struct Shell {
     pub lisp_engine: Rc<RefCell<lisp::LispEngine>>,
     pub(crate) next_job_id: usize,
     pub notebook_session: Option<NotebookSession>,
+    pub safety_guard: crate::safety::SafetyGuard,
 }
 
 impl std::fmt::Debug for Shell {
@@ -56,6 +57,7 @@ impl Shell {
     pub fn new(environment: Arc<RwLock<Environment>>) -> Self {
         let pid = getpid();
         let pgid = pid;
+        let safety_guard = crate::safety::SafetyGuard::new();
 
         // Initialize Lisp engine
         let lisp_engine = lisp::LispEngine::new(Arc::clone(&environment));
@@ -71,6 +73,7 @@ impl Shell {
             lisp_engine,
             next_job_id: 1,
             notebook_session: None,
+            safety_guard,
         }
     }
 

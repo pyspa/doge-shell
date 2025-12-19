@@ -1,4 +1,5 @@
 use crate::ShellProxy;
+use anyhow::Result;
 use serde_json::{Value, json};
 use std::env;
 use std::fs;
@@ -31,7 +32,7 @@ pub(crate) fn definition() -> Value {
     })
 }
 
-pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String, String> {
+pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String, String> {
     let parsed: Value = serde_json::from_str(arguments)
         .map_err(|err| format!("chat: invalid JSON arguments for edit tool: {err}"))?;
 
@@ -86,6 +87,15 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
     {
         fs::create_dir_all(parent)
             .map_err(|err| format!("chat: failed to create parent directories: {err}"))?;
+    }
+
+    // Safety Guard: Request confirmation from user
+    let confirm_msg = format!("AI wants to write to file: `{}`. Proceed?", path_value);
+    if !proxy
+        .confirm_action(&confirm_msg)
+        .map_err(|e: anyhow::Error| e.to_string())?
+    {
+        return Ok("File modification cancelled by user.".to_string());
     }
 
     fs::write(&normalized_abs_path, contents)

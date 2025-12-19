@@ -39,6 +39,7 @@ pub struct Environment {
     pub execute_allowlist: Vec<String>,
     pub system_env_vars: HashMap<String, String>,
     pub input_preferences: InputPreferences,
+    pub safety_level: crate::safety::SafetyLevel,
     /// Cache for PATH command lookups to avoid repeated filesystem access
     command_cache: RwLock<HashMap<String, Option<String>>>,
     /// Output history for $OUT[N] and $ERR[N] variables
@@ -90,6 +91,7 @@ impl Environment {
             execute_allowlist: Vec::new(),
             system_env_vars: env::vars().collect(),
             input_preferences: default_input_preferences(),
+            safety_level: crate::safety::SafetyLevel::Normal,
             command_cache: RwLock::new(HashMap::new()),
             output_history: OutputHistory::new(),
         }))
@@ -107,6 +109,7 @@ impl Environment {
         let execute_allowlist = parent.read().execute_allowlist.clone();
         let input_preferences = parent.read().input_preferences;
         let system_env_vars = parent.read().system_env_vars.clone();
+        let safety_level = parent.read().safety_level.clone();
 
         #[allow(clippy::arc_with_non_send_sync)]
         Arc::new(RwLock::new(Environment {
@@ -122,6 +125,7 @@ impl Environment {
             execute_allowlist,
             system_env_vars,
             input_preferences,
+            safety_level,
             command_cache: RwLock::new(HashMap::new()),
             output_history: OutputHistory::new(),
         }))

@@ -133,6 +133,13 @@ impl Job {
 
         ctx.foreground = self.foreground;
 
+        // Safety Guard check
+        if let Some(process) = &self.process
+            && !process.check_safety(shell)?
+        {
+            return Ok(ProcessState::Completed(1, None));
+        }
+
         if let Some(process) = self.process.take().as_mut() {
             debug!(
                 "JOB_LAUNCH_PROCESS: Launching process for job {} (process_type: {})",

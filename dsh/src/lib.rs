@@ -32,6 +32,7 @@ pub mod process;
 pub mod prompt;
 pub mod proxy;
 pub mod repl;
+pub mod safety;
 pub mod shell;
 pub mod suggestion;
 pub mod terminal;

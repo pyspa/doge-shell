@@ -721,6 +721,26 @@ impl ShellProxy for Shell {
     fn get_current_dir(&self) -> Result<std::path::PathBuf> {
         std::env::current_dir().context("failed to get current directory")
     }
+
+    fn confirm_action(&mut self, message: &str) -> Result<bool> {
+        use std::io::{stdin, stdout};
+
+        debug!("Safety confirmation requested: {}", message);
+
+        // Ensure raw mode is enabled to capture a single key press if possible,
+        // but since we might be in TUI or plain CLI, we need to be careful.
+        // For simplicity and robustness, let's use a blocking read.
+
+        println!("\n{} [y/N]: ", message);
+        stdout().flush()?;
+
+        let mut input = String::new();
+        stdin().read_line(&mut input)?;
+
+        let confirmed = input.trim().to_lowercase() == "y";
+        debug!("Confirmation result: {}", confirmed);
+        Ok(confirmed)
+    }
 }
 
 #[cfg(test)]

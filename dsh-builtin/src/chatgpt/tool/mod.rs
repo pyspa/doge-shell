@@ -58,8 +58,9 @@ pub fn execute_tool_call(
 
 fn truncate_output(output: String) -> String {
     if output.len() > MAX_OUTPUT_LENGTH {
-        let truncated = &output[..MAX_OUTPUT_LENGTH];
-        let omitted = output.len() - MAX_OUTPUT_LENGTH;
+        let end = output.floor_char_boundary(MAX_OUTPUT_LENGTH);
+        let truncated = &output[..end];
+        let omitted = output.len() - end;
         format!("{truncated}\n... (truncated {omitted} characters)")
     } else {
         output
@@ -148,6 +149,16 @@ mod tests {
         let truncated = truncate_output(long);
         assert!(truncated.contains("... (truncated 10 characters)"));
         assert_eq!(truncated.len(), MAX_OUTPUT_LENGTH + 30); // 30 is length of "\n... (truncated 10 characters)" approx
+    }
+
+    #[test]
+    fn test_truncation_no_panic_multi_byte() {
+        let mut s = "a".repeat(MAX_OUTPUT_LENGTH - 1);
+        s.push('🦀'); // '🦀' is 4 bytes. 4095 + 4 = 4099 bytes.
+        // Index 4096 is inside '🦀', floor_char_boundary(4096) should return 4095.
+        let truncated = truncate_output(s);
+        assert_eq!(truncated.len(), (MAX_OUTPUT_LENGTH - 1) + 29); // 29 is length of "\n... (truncated 4 characters)"
+        assert!(truncated.contains("... (truncated 4 characters)"));
     }
 
     #[test]

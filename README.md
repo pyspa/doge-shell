@@ -40,6 +40,22 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 - **Right Prompt**: Displays command execution status and duration on the right side
 - **Transient Prompt**: Automatically collapses the prompt after command execution to keep the terminal clean
 
+### 🛡️ Safety Guard
+
+The Safety Guard protects against unintended execution of potentially destructive commands.
+
+- **Safety Levels**:
+  - `Loose`: No restrictions.
+  - `Normal` (Default): Requires confirmation for common dangerous commands (`rm`, `mv`, `cp`, `dd`, `mkfs`, `format`).
+  - `Strict`: Requires confirmation for **all** commands.
+- **AI Tool Integration**: Automatically intercepts AI-generated commands and file modifications, requiring explicit user approval.
+- **Lisp Configuration**: Dynamically change the safety level at any time.
+  ```lisp
+  (safety-level "strict") ; Enable confirmation for everything
+  (safety-level "normal") ; Default safety
+  (safety-level "loose")  ; Disable safety checks
+  ```
+
 ### Lisp Interpreter
 
 - **Embedded Lisp**: Built-in Lisp interpreter for shell scripting

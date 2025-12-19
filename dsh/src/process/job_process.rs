@@ -12,6 +12,7 @@ use super::redirect::Redirect;
 use super::signal::send_signal;
 use super::state::ProcessState;
 use crate::shell::Shell;
+use dsh_builtin::ShellProxy;
 use dsh_types::Context;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -224,6 +225,34 @@ impl JobProcess {
             JobProcess::Builtin(p) => &p.name,
             JobProcess::Command(p) => &p.cmd,
         }
+    }
+
+    pub fn check_safety(&self, shell: &mut Shell) -> Result<bool> {
+        let (cmd, argv) = match self {
+            JobProcess::Builtin(p) => (p.name.as_str(), &p.argv),
+            JobProcess::Command(p) => (p.cmd.as_str(), &p.argv),
+        };
+
+        let level = shell.environment.read().safety_level.clone();
+
+        match shell.safety_guard.check_command(&level, cmd, argv) {
+            crate::safety::SafetyResult::Allowed => {}
+            crate::safety::SafetyResult::Denied(reason) => {
+                shell.print_error(format!("Safety Guard: Execution denied: {}", reason));
+                return Ok(false);
+            }
+            crate::safety::SafetyResult::Confirm(message) => {
+                if !shell.confirm_action(&message)? {
+                    return Ok(false);
+                }
+            }
+        }
+
+        if let Some(next) = self.next() {
+            return next.check_safety(shell);
+        }
+
+        Ok(true)
     }
 
     #[allow(dead_code)]

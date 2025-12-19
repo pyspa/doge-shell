@@ -194,6 +194,10 @@ pub fn make_env(environment: Arc<RwLock<Environment>>) -> Rc<RefCell<Env>> {
     );
     env.borrow_mut()
         .define(Symbol::from("setenv"), Value::NativeFunc(builtin::set_env));
+    env.borrow_mut().define(
+        Symbol::from("safety-level"),
+        Value::NativeFunc(builtin::safety_level),
+    );
 
     env
 }

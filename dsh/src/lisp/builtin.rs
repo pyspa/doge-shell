@@ -199,6 +199,22 @@ pub async fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
     Ok(Value::String(output))
 }
 
+pub fn safety_level(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    if args.is_empty() {
+        return Err(RuntimeError::new("safety-level requires 1 argument"));
+    }
+
+    let level_str = args[0].to_string();
+    let level: crate::safety::SafetyLevel = level_str
+        .parse()
+        .map_err(|e| RuntimeError::new(&format!("Error parsing safety level: {}", e)))?;
+
+    debug!("setting safety level to {:?}", level);
+    env.borrow().shell_env.write().safety_level = level;
+
+    Ok(Value::NIL)
+}
+
 pub fn block_sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     tokio::runtime::Handle::current().block_on(sh_no_cap(env, args))
 }

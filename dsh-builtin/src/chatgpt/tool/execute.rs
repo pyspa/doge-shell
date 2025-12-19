@@ -9,6 +9,7 @@ use std::process::Command;
 use xdg::BaseDirectories;
 
 use crate::ShellProxy;
+use anyhow::Result;
 
 pub(crate) const NAME: &str = "execute";
 
@@ -52,15 +53,6 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
     }
 
     let allowlist = load_allowed_commands(proxy.list_execute_allowlist())?;
-    if allowlist.is_empty() {
-        return Err(format!(
-            "chat: execute tool has no allowed commands configured when requested `{}`. Add entries to ~/.config/dsh/{}, set {}, or call chat-execute-add in config.lisp.",
-            command.trim(),
-            EXECUTE_TOOL_CONFIG_FILE,
-            EXECUTE_TOOL_ENV_ALLOWLIST
-        ));
-    }
-
     let program = extract_program_name(command)?;
 
     if !allowlist.iter().any(|item| item == &program) {
@@ -70,6 +62,15 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
             command.trim(),
             allowlist.join(", ")
         ));
+    }
+
+    // Safety Guard: Request confirmation from user
+    let confirm_msg = format!("AI wants to execute command: `{}`. Proceed?", command);
+    if !proxy
+        .confirm_action(&confirm_msg)
+        .map_err(|e: anyhow::Error| e.to_string())?
+    {
+        return Ok("Execution cancelled by user.".to_string());
     }
 
     let output = Command::new("bash")
@@ -84,12 +85,16 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
 
     if !stdout_text.is_empty() {
         let mut stdout = io::stdout();
-        write_all(&mut stdout, stdout_text.as_bytes())?;
+        stdout
+            .write_all(stdout_text.as_bytes())
+            .map_err(|e| e.to_string())?;
     }
 
     if !stderr_text.is_empty() {
         let mut stderr = io::stderr();
-        write_all(&mut stderr, stderr_text.as_bytes())?;
+        stderr
+            .write_all(stderr_text.as_bytes())
+            .map_err(|e| e.to_string())?;
     }
 
     let result = json!({
@@ -99,13 +104,6 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
     });
 
     Ok(result.to_string())
-}
-
-fn write_all(target: &mut dyn Write, data: &[u8]) -> Result<(), String> {
-    target
-        .write_all(data)
-        .and_then(|_| target.flush())
-        .map_err(|err| format!("chat: failed to write command output: {err}"))
 }
 
 fn extract_program_name(command: &str) -> Result<String, String> {

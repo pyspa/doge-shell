@@ -103,6 +103,11 @@ pub trait ShellProxy {
 
     /// Retrieves a variable from the Lisp environment
     fn get_lisp_var(&self, key: &str) -> Option<String>;
+
+    /// Requests user confirmation for a potentially dangerous action
+    fn confirm_action(&mut self, _message: &str) -> Result<bool> {
+        Ok(true)
+    }
 }
 
 use std::any::Any;

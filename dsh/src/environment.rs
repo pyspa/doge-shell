@@ -78,7 +78,7 @@ impl Environment {
         debug!("default path {:?}", &paths);
 
         #[allow(clippy::arc_with_non_send_sync)]
-        Arc::new(RwLock::new(Environment {
+        let env_arc = Arc::new(RwLock::new(Environment {
             alias: HashMap::new(),
             abbreviations: HashMap::new(),
             autocompletion: Vec::new(),
@@ -94,7 +94,15 @@ impl Environment {
             safety_level: crate::safety::SafetyLevel::Normal,
             command_cache: RwLock::new(HashMap::new()),
             output_history: OutputHistory::new(),
-        }))
+        }));
+
+        {
+            let mut env = env_arc.write();
+            env.variables
+                .insert("SAFETY_LEVEL".to_string(), "normal".to_string());
+        }
+
+        env_arc
     }
 
     pub fn extend(parent: Arc<RwLock<Environment>>) -> Arc<RwLock<Self>> {
@@ -373,7 +381,7 @@ mod tests {
             *env2_clone.variables.get("test2").unwrap()
         );
 
-        assert_eq!(1, env1.read().variables.len());
+        assert_eq!(2, env1.read().variables.len());
     }
 
     #[test]

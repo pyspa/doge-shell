@@ -54,7 +54,9 @@ The Safety Guard protects against unintended execution of potentially destructiv
   (safety-level "strict") ; Enable confirmation for everything
   (safety-level "normal") ; Default safety
   (safety-level "loose")  ; Disable safety checks
+  (safety-level)          ; Get current safety level
   ```
+- **Environment Variable**: `SAFETY_LEVEL` reflects the current safety level (e.g., "normal", "strict").
 
 ### Lisp Interpreter
 

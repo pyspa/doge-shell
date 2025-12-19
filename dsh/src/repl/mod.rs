@@ -795,7 +795,7 @@ impl<'a> Repl<'a> {
         word: &str,
     ) -> Option<String> {
         let path = completion::path_completion_prefix(word).ok().flatten()?;
-        if path.len() <= word.len() {
+        if path.len() <= word.len() || !path.starts_with(word) {
             return None;
         }
         let suffix = &path[word.len()..];
@@ -1082,7 +1082,7 @@ impl<'a> Repl<'a> {
         {
             let entry = top.item.clone();
             self.input.completion = Some(entry.clone());
-            if entry.len() >= input.len() {
+            if entry.len() >= input.len() && entry.starts_with(input) {
                 return Some(entry[input.len()..].to_string());
             }
         }
@@ -1092,7 +1092,7 @@ impl<'a> Repl<'a> {
             && let Some(entry) = history.search_prefix(input)
         {
             self.input.completion = Some(entry.clone());
-            if entry.len() >= input.len() {
+            if entry.len() >= input.len() && entry.starts_with(input) {
                 return Some(entry[input.len()..].to_string());
             }
         }
@@ -1128,7 +1128,7 @@ impl<'a> Repl<'a> {
                             // Completion logic for command names
                             if current && completion.is_none() {
                                 if let Some(file) = self.shell.environment.read().search(word) {
-                                    if file.len() >= input.len() {
+                                    if file.len() >= input.len() && file.starts_with(input) {
                                         completion = Some(file[input.len()..].to_string());
                                     }
                                     completion_full = Some(file);
@@ -1137,7 +1137,7 @@ impl<'a> Repl<'a> {
                                     completion::path_completion_prefix(word)
                                     && dirs::is_dir(&dir)
                                 {
-                                    if dir.len() >= input.len() {
+                                    if dir.len() >= input.len() && dir.starts_with(input) {
                                         completion = Some(dir[input.len()..].to_string());
                                     }
                                     completion_full = Some(dir.to_string());
@@ -1151,6 +1151,7 @@ impl<'a> Repl<'a> {
                                 && completion.is_none()
                                 && let Ok(Some(path)) = completion::path_completion_prefix(word)
                                 && path.len() >= word.len()
+                                && path.starts_with(word)
                             {
                                 let part = path[word.len()..].to_string();
                                 completion = Some(part);

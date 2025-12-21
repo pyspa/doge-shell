@@ -1,7 +1,7 @@
 use crate::environment::Environment;
 use crate::lisp::default_environment::default_env;
 use crate::lisp::interpreter::eval;
-use crate::lisp::model::{Env, Value};
+use crate::lisp::model::{Env, List, Value};
 use crate::lisp::parser::parse;
 use dsh_types::mcp::McpTransport;
 use parking_lot::RwLock;
@@ -99,6 +99,38 @@ fn test_mcp_add_http() {
         assert_eq!(*allow_stateless, Some(true));
     } else {
         panic!("Expected HTTP transport");
+    }
+}
+
+#[test]
+fn test_mcp_list() {
+    let (env, _shell_env) = create_test_env();
+
+    // Initial check (empty)
+    let result = run_lisp(env.clone(), "(mcp-list)").unwrap();
+    assert_eq!(result, Value::List(List::NIL));
+
+    // Add servers
+    run_lisp(env.clone(), r#"(mcp-add-stdio "srv1" "echo")"#).unwrap();
+    run_lisp(env.clone(), r#"(mcp-add-sse "srv2" "http://localhost")"#).unwrap();
+
+    // Check list
+    let result = run_lisp(env.clone(), "(mcp-list)").unwrap();
+
+    if let Value::List(list) = result {
+        let labels: Vec<String> = list
+            .into_iter()
+            .map(|v| match v {
+                Value::String(s) => s,
+                _ => panic!("Expected string in mcp-list result"),
+            })
+            .collect();
+
+        assert_eq!(labels.len(), 2);
+        assert!(labels.contains(&"srv1".to_string()));
+        assert!(labels.contains(&"srv2".to_string()));
+    } else {
+        panic!("mcp-list should return a list");
     }
 }
 

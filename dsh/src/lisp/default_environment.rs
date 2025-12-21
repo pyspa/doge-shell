@@ -275,6 +275,38 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
     );
 
     env.define(
+        Symbol::from("mcp-list"),
+        Value::NativeFunc(|env, _args| {
+            let env_borrow = env.borrow();
+            let env_read = env_borrow.shell_env.read();
+            let servers = env_read.mcp_servers();
+
+            if servers.is_empty() {
+                println!("No MCP servers configured.");
+                return Ok(Value::List(List::NIL));
+            }
+
+            println!("{:<20} {:<10} DESCRIPTION", "LABEL", "TYPE");
+            println!("{:<20} {:<10} -----------", "-----", "----");
+
+            let mut labels = Vec::new();
+
+            for server in servers {
+                let transport_type = match server.transport {
+                    McpTransport::Stdio { .. } => "Stdio",
+                    McpTransport::Sse { .. } => "SSE",
+                    McpTransport::Http { .. } => "HTTP",
+                };
+                let desc = server.description.as_deref().unwrap_or("");
+                println!("{:<20} {:<10} {}", server.label, transport_type, desc);
+                labels.push(Value::String(server.label.clone()));
+            }
+
+            Ok(Value::List(labels.into_iter().collect()))
+        }),
+    );
+
+    env.define(
         Symbol::from("chat-execute-clear"),
         Value::NativeFunc(|env, _args| {
             env.borrow().shell_env.write().clear_execute_allowlist();

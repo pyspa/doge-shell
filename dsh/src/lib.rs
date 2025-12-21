@@ -157,6 +157,9 @@ pub async fn run_shell() -> ExitCode {
         }
     }
 
+    // Reload MCP configuration from environment after config.lisp execution
+    shell.reload_mcp_config();
+
     let mut ctx = create_context(&shell);
 
     if let Some(lisp_script) = cli.lisp.as_deref() {

@@ -273,7 +273,10 @@ impl<'a> Repl<'a> {
         let mut ai_service: Option<Arc<dyn AiService + Send + Sync>> = None;
         if let Some((ai_backend, client)) = Self::build_ai_backend(&envronment) {
             suggestion_manager.engine.set_ai_backend(Some(ai_backend));
-            ai_service = Some(Arc::new(LiveAiService::new(client)));
+            ai_service = Some(Arc::new(LiveAiService::new(
+                client,
+                shell.mcp_manager.clone(),
+            )));
         }
         suggestion_manager.set_preferences(input_preferences);
 

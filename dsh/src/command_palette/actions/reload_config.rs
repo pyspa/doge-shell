@@ -12,6 +12,7 @@ impl Action for ReloadConfigAction {
     }
     fn execute(&self, shell: &mut Shell) -> Result<()> {
         shell.lisp_engine.borrow().run_config_lisp()?;
+        shell.reload_mcp_config();
         Ok(())
     }
 }

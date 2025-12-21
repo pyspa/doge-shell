@@ -17,6 +17,8 @@ mod command_palette;
 mod default_environment;
 mod interpreter;
 mod macros;
+#[cfg(test)]
+mod mcp_tests;
 mod model;
 mod parser;
 mod utils;

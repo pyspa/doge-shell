@@ -574,6 +574,7 @@ impl ShellProxy for Shell {
                         // Get the config file path for the success message
                         match crate::environment::get_config_file(crate::lisp::CONFIG_FILE) {
                             Ok(config_path) => {
+                                self.reload_mcp_config();
                                 ctx.write_stdout(&format!(
                                     "Configuration reloaded successfully from {}",
                                     config_path.display()
@@ -581,6 +582,7 @@ impl ShellProxy for Shell {
                             }
                             Err(_) => {
                                 // Fallback to generic message if path resolution fails
+                                self.reload_mcp_config();
                                 ctx.write_stdout("Configuration reloaded successfully from ~/.config/dsh/config.lisp")?;
                             }
                         }

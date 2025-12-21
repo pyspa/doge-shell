@@ -743,6 +743,10 @@ impl ShellProxy for Shell {
         debug!("Confirmation result: {}", confirmed);
         Ok(confirmed)
     }
+
+    fn is_canceled(&self) -> bool {
+        crate::process::signal::check_and_clear_sigint()
+    }
 }
 
 #[cfg(test)]

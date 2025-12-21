@@ -109,6 +109,11 @@ pub trait ShellProxy {
     fn confirm_action(&mut self, _message: &str) -> Result<bool> {
         Ok(true)
     }
+
+    /// Checks if the current operation has been canceled (e.g. via Ctrl+C)
+    fn is_canceled(&self) -> bool {
+        false
+    }
 }
 
 use std::any::Any;

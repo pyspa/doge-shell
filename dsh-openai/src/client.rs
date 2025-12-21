@@ -73,8 +73,9 @@ impl ChatGptClient {
         input: &str,
         prompt: Option<String>,
         temperature: Option<f64>,
+        cancel_check: Option<&dyn Fn() -> bool>,
     ) -> Result<String> {
-        self.send_message_with_model(input, prompt, temperature, None)
+        self.send_message_with_model(input, prompt, temperature, None, cancel_check)
     }
 
     pub fn send_message_with_model(
@@ -83,6 +84,7 @@ impl ChatGptClient {
         prompt: Option<String>,
         temperature: Option<f64>,
         model: Option<String>,
+        cancel_check: Option<&dyn Fn() -> bool>,
     ) -> Result<String> {
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             let prompt_clone = prompt.clone();
@@ -93,11 +95,18 @@ impl ChatGptClient {
                     prompt_clone,
                     temperature,
                     model_clone,
+                    cancel_check,
                 ))
             })
         } else {
             let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(self.send_message_inner(input, prompt, temperature, model))
+            runtime.block_on(self.send_message_inner(
+                input,
+                prompt,
+                temperature,
+                model,
+                cancel_check,
+            ))
         }
     }
 
@@ -107,6 +116,7 @@ impl ChatGptClient {
         temperature: Option<f64>,
         model: Option<String>,
         tools: Option<&[Value]>,
+        cancel_check: Option<&dyn Fn() -> bool>,
     ) -> Result<Value> {
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             let messages_vec = messages.to_vec();
@@ -118,6 +128,7 @@ impl ChatGptClient {
                     temperature,
                     model_clone,
                     tools_vec,
+                    cancel_check,
                 ))
             })
         } else {
@@ -127,6 +138,7 @@ impl ChatGptClient {
                 temperature,
                 model,
                 tools.map(|items| items.to_vec()),
+                cancel_check,
             ))
         }
     }
@@ -137,10 +149,11 @@ impl ChatGptClient {
         prompt: Option<String>,
         temperature: Option<f64>,
         model: Option<String>,
+        cancel_check: Option<&dyn Fn() -> bool>,
     ) -> Result<String> {
         let builder_messages = Self::build_messages(content, prompt);
         let data = self
-            .send_chat_request_inner(builder_messages, temperature, model, None)
+            .send_chat_request_inner(builder_messages, temperature, model, None, cancel_check)
             .await?;
         let output = data["choices"][0]["message"]["content"]
             .as_str()
@@ -155,10 +168,11 @@ impl ChatGptClient {
         temperature: Option<f64>,
         model: Option<String>,
         tools: Option<Vec<Value>>,
+        cancel_check: Option<&dyn Fn() -> bool>,
     ) -> Result<Value> {
         let builder = self.request_builder_from_messages(messages, temperature, model, tools)?;
-        let response = Self::await_with_ctrl_c(builder.send()).await?;
-        let data: Value = Self::await_with_ctrl_c(response.json()).await?;
+        let response = Self::await_with_cancel(builder.send(), cancel_check).await?;
+        let data: Value = Self::await_with_cancel(response.json(), cancel_check).await?;
 
         match serde_json::to_string(&data) {
             Ok(serialized) => debug!(chat_direction = "response", json = %serialized),
@@ -171,7 +185,10 @@ impl ChatGptClient {
         Ok(data)
     }
 
-    async fn await_with_ctrl_c<F, T, E>(future: F) -> Result<T>
+    async fn await_with_cancel<F, T, E>(
+        future: F,
+        cancel_check: Option<&dyn Fn() -> bool>,
+    ) -> Result<T>
     where
         F: Future<Output = Result<T, E>>,
         anyhow::Error: From<E>,
@@ -181,12 +198,22 @@ impl ChatGptClient {
         let ctrl_c = tokio::signal::ctrl_c();
         tokio::pin!(ctrl_c);
 
-        tokio::select! {
-            res = &mut future => res.map_err(anyhow::Error::from),
-            ctrl = &mut ctrl_c => match ctrl {
-                Ok(()) => Err(RequestCancelled.into()),
-                Err(e) => Err(anyhow!("Failed to listen for Ctrl+C: {e}")),
-            },
+        let mut interval = tokio::time::interval(Duration::from_millis(100));
+
+        loop {
+            tokio::select! {
+                res = &mut future => return res.map_err(anyhow::Error::from),
+                ctrl = &mut ctrl_c => match ctrl {
+                    Ok(()) => return Err(RequestCancelled.into()),
+                    Err(e) => return Err(anyhow!("Failed to listen for Ctrl+C: {e}")),
+                },
+                _ = interval.tick() => {
+                    if let Some(check) = cancel_check
+                        && check() {
+                            return Err(RequestCancelled.into());
+                        }
+                }
+            }
         }
     }
 
@@ -249,5 +276,47 @@ impl ChatGptClient {
         }
         messages.push(json!({ "role": "user", "content": content }));
         messages
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::time::{Duration, sleep};
+
+    #[tokio::test]
+    async fn test_await_with_cancel_normal_completion() {
+        let future = async { Ok::<_, anyhow::Error>("success") };
+        let result = ChatGptClient::await_with_cancel(future, None).await;
+        assert_eq!(result.unwrap(), "success");
+    }
+
+    #[tokio::test]
+    async fn test_await_with_cancel_via_callback() {
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let flag_clone = cancel_flag.clone();
+
+        // Callback that returns the value of the flag
+        let check = move || flag_clone.load(Ordering::SeqCst);
+
+        // Future that waits long enough
+        let future = async {
+            sleep(Duration::from_secs(5)).await;
+            Ok::<_, anyhow::Error>("should not be reached")
+        };
+
+        // Spawn a task to set the flag after 200ms
+        let flag_clone2 = cancel_flag.clone();
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(200)).await;
+            flag_clone2.store(true, Ordering::SeqCst);
+        });
+
+        let result = ChatGptClient::await_with_cancel(future, Some(&check)).await;
+
+        assert!(result.is_err());
+        assert!(is_ctrl_c_cancelled(&result.unwrap_err()));
     }
 }

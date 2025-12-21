@@ -279,7 +279,7 @@ impl<'a> Repl<'a> {
 
             ai_service = Some(Arc::new(LiveAiService::new(
                 client,
-                shell.mcp_manager.clone(),
+                envronment.read().mcp_manager.clone(),
                 envronment.read().safety_level.clone(),
                 Some(confirmation::ReplConfirmationHandler::new()),
             )));

@@ -39,7 +39,7 @@ pub struct Environment {
     pub execute_allowlist: Vec<String>,
     pub system_env_vars: HashMap<String, String>,
     pub input_preferences: InputPreferences,
-    pub safety_level: crate::safety::SafetyLevel,
+    pub safety_level: Arc<RwLock<crate::safety::SafetyLevel>>,
     /// Cache for PATH command lookups to avoid repeated filesystem access
     command_cache: RwLock<HashMap<String, Option<String>>>,
     /// Output history for $OUT[N] and $ERR[N] variables
@@ -91,7 +91,7 @@ impl Environment {
             execute_allowlist: Vec::new(),
             system_env_vars: env::vars().collect(),
             input_preferences: default_input_preferences(),
-            safety_level: crate::safety::SafetyLevel::Normal,
+            safety_level: Arc::new(RwLock::new(crate::safety::SafetyLevel::Normal)),
             command_cache: RwLock::new(HashMap::new()),
             output_history: OutputHistory::new(),
         }));

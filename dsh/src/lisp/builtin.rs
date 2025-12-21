@@ -201,7 +201,7 @@ pub async fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
 
 pub fn safety_level(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     if args.is_empty() {
-        let level = env.borrow().shell_env.read().safety_level.clone();
+        let level = env.borrow().shell_env.read().safety_level.read().clone();
         return Ok(Value::String(format!("{:?}", level).to_lowercase()));
     }
 
@@ -214,7 +214,7 @@ pub fn safety_level(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
     {
         let env_ref = env.borrow();
         let mut shell_env = env_ref.shell_env.write();
-        shell_env.safety_level = level.clone();
+        *shell_env.safety_level.write() = level.clone();
         shell_env.variables.insert(
             "SAFETY_LEVEL".to_string(),
             format!("{:?}", level).to_lowercase(),

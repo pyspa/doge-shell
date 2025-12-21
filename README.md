@@ -168,6 +168,10 @@ The embedded Lisp interpreter includes many built-in functions:
 - `add_path` - Add paths to PATH
 - `allow-direnv` - Configure direnv roots
 
+### Interactive UI Functions
+
+- `selector` - Open an interactive fuzzy selection menu with custom prompt and items
+
 ### Hook System Functions
 
 - `add-hook` - Add a function to a hook list

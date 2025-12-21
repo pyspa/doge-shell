@@ -14,6 +14,23 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use std::{cell::RefCell, collections::HashMap, convert::TryInto, rc::Rc};
 
+use skim::prelude::*;
+use std::borrow::Cow;
+
+struct StringItem {
+    text: String,
+}
+
+impl SkimItem for StringItem {
+    fn text(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.text)
+    }
+
+    fn output(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.text)
+    }
+}
+
 /// Initialize an instance of `Env` with several core Lisp functions implemented
 /// in Rust. **Without this, you will only have access to the functions you
 /// implement yourself.**
@@ -349,6 +366,54 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
             }
 
             Ok(Value::List(names.into_iter().collect()))
+        }),
+    );
+
+    env.define(
+        Symbol::from("selector"),
+        Value::NativeFunc(|_env, args| {
+            let prompt = require_typed_arg::<&String>("selector", &args, 0)?.clone();
+            let list_val = require_typed_arg::<&List>("selector", &args, 1)?;
+
+            let mut items = Vec::new();
+            for val in list_val.into_iter() {
+                if let Value::String(s) = val {
+                    items.push(s.clone());
+                } else {
+                    return Err(RuntimeError {
+                        msg: format!("selector requires a list of strings; found {}", val),
+                    });
+                }
+            }
+
+            let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
+            for item in items {
+                tx_item
+                    .send(Arc::new(StringItem { text: item }))
+                    .map_err(|_| RuntimeError {
+                        msg: "Failed to send item to skim".to_string(),
+                    })?;
+            }
+            drop(tx_item);
+
+            let options = SkimOptionsBuilder::default()
+                .multi(false)
+                .prompt(prompt.to_string())
+                .bind(vec!["Enter:accept".to_string(), "Esc:abort".to_string()])
+                .build()
+                .map_err(|e| RuntimeError {
+                    msg: format!("Failed to build skim options: {}", e),
+                })?;
+
+            let selected_items = Skim::run_with(&options, Some(rx_item))
+                .map(|out| out.selected_items)
+                .unwrap_or_default();
+
+            if let Some(item) = selected_items.first() {
+                Ok(Value::String(item.output().to_string()))
+            } else {
+                Ok(Value::NIL)
+            }
         }),
     );
 
@@ -1079,5 +1144,34 @@ mod tests {
 
         // It should return NIL (empty list of tools)
         assert_eq!(result, Value::List(List::NIL));
+    }
+
+    #[test]
+    fn selector_validation_checks() {
+        let env = Environment::new();
+        let engine = LispEngine::new(env.clone());
+
+        // Case 1: Too few arguments (missing list)
+        // (selector "Prompt") -> expects arg at index 1
+        let result = engine.borrow().run("(selector \"Prompt\")");
+        assert!(result.is_err());
+
+        // Case 2: Invalid first argument (not a string)
+        let result = engine.borrow().run("(selector 123 '(\"a\"))");
+        assert!(result.is_err());
+
+        // Case 3: Invalid second argument (not a list)
+        let result = engine.borrow().run("(selector \"Prompt\" \"not-a-list\")");
+        assert!(result.is_err());
+
+        // Case 4: List contains non-string items
+        let result = engine.borrow().run("(selector \"Prompt\" '(\"a\" 123))");
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(
+                e.to_string()
+                    .contains("selector requires a list of strings")
+            );
+        }
     }
 }

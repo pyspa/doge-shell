@@ -138,6 +138,8 @@ The shell includes many built-in commands:
 | `reload` | Reload shell configuration |
 | `timing` | Show command execution statistics |
 | `out` | Display captured command output history |
+| `gpr` | GitHub Pull Request checkout with interactive selection |
+| `gwt` | Git Worktree management (add, list, remove) |
 | `help` | Show help information |
 
 ## 🧠 Lisp Functions
@@ -170,7 +172,16 @@ The embedded Lisp interpreter includes many built-in functions:
 
 ### Interactive UI Functions
 
-- `selector` - Open an interactive fuzzy selection menu with custom prompt and items
+### Interactive UI Functions
+
+- `selector` - Open an interactive fuzzy selection menu with custom prompt and items.
+  - Usage: `(selector "Prompt" '("Item1" "Item2") [multi])`
+  - If `multi` is true, returns a list of selected items. Default is false (single selection).
+
+### Command Palette Integration
+
+- `register-action` - Register a custom action in the Command Palette.
+  - Usage: `(register-action "Name" "Description" "function-name")`
 
 ### Hook System Functions
 

@@ -375,6 +375,14 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
             let prompt = require_typed_arg::<&String>("selector", &args, 0)?.clone();
             let list_val = require_typed_arg::<&List>("selector", &args, 1)?;
 
+            // Check for optional multi-select argument
+            let multi = if args.len() > 2 {
+                let val = &args[2];
+                !(*val == Value::NIL || *val == Value::False)
+            } else {
+                false
+            };
+
             let mut items = Vec::new();
             for val in list_val.into_iter() {
                 if let Value::String(s) = val {
@@ -397,7 +405,7 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
             drop(tx_item);
 
             let options = SkimOptionsBuilder::default()
-                .multi(false)
+                .multi(multi)
                 .prompt(prompt.to_string())
                 .bind(vec!["Enter:accept".to_string(), "Esc:abort".to_string()])
                 .build()
@@ -409,7 +417,13 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
                 .map(|out| out.selected_items)
                 .unwrap_or_default();
 
-            if let Some(item) = selected_items.first() {
+            if multi {
+                let strings: Vec<Value> = selected_items
+                    .iter()
+                    .map(|item| Value::String(item.output().to_string()))
+                    .collect();
+                Ok(Value::List(strings.into_iter().collect()))
+            } else if let Some(item) = selected_items.first() {
                 Ok(Value::String(item.output().to_string()))
             } else {
                 Ok(Value::NIL)

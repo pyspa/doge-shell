@@ -14,6 +14,7 @@ pub mod cd;
 mod chatgpt;
 mod export;
 mod markdown;
+pub use chatgpt::McpManager;
 pub use chatgpt::execute_chat_message;
 pub mod command_timing;
 mod dmv;

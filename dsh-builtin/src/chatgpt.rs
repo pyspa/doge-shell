@@ -44,9 +44,9 @@ You have access to the following tools:
 "#;
 
 mod mcp;
+pub use mcp::McpManager;
 mod tool;
 
-use mcp::McpManager;
 use tool::{build_tools, execute_tool_call};
 fn load_openai_config(proxy: &mut dyn ShellProxy) -> OpenAiConfig {
     OpenAiConfig::from_getter(|key| proxy.get_var(key).or_else(|| std::env::var(key).ok()))

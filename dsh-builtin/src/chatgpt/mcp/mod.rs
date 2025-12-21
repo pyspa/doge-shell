@@ -11,31 +11,15 @@ use rmcp::{
         },
     },
 };
-use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::{
     collections::{HashMap, HashSet},
-    fs,
     sync::Arc,
 };
 use tokio::{process::Command, runtime::Runtime, task};
 use tracing::{debug, warn};
-use xdg::BaseDirectories;
 
 const APP_NAME: &str = "dsh";
-const CONFIG_FILE_NAME: &str = "config.toml";
-
-#[derive(Debug, Default, Deserialize)]
-struct ConfigRoot {
-    #[serde(default)]
-    mcp: Option<McpSection>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct McpSection {
-    #[serde(default = "Vec::new")]
-    servers: Vec<McpServerConfig>,
-}
 
 #[derive(Debug, Clone)]
 struct McpServer {
@@ -61,7 +45,7 @@ pub struct McpManager {
 
 impl McpManager {
     pub fn load(runtime_servers: Vec<McpServerConfig>) -> Self {
-        match Self::load_internal(runtime_servers) {
+        match Self::build_from_servers(runtime_servers) {
             Ok(manager) => manager,
             Err(err) => {
                 warn!("failed to initialize MCP manager: {err:?}");
@@ -205,34 +189,12 @@ impl McpManager {
         Ok(Some(json.to_string()))
     }
 
-    fn load_internal(runtime_servers: Vec<McpServerConfig>) -> Result<Self> {
-        let config_text = match read_config_file()? {
-            Some(contents) => contents,
-            None => {
-                return Self::build_from_servers(runtime_servers, Vec::new());
-            }
-        };
-
-        let config: ConfigRoot =
-            toml::from_str(&config_text).context("failed to parse config.toml for MCP settings")?;
-
-        let config_servers = config
-            .mcp
-            .map(|section| section.servers)
-            .unwrap_or_default();
-        Self::build_from_servers(runtime_servers, config_servers)
-    }
-
-    fn build_from_servers(
-        runtime_servers: Vec<McpServerConfig>,
-        mut config_servers: Vec<McpServerConfig>,
-    ) -> Result<Self> {
+    fn build_from_servers(runtime_servers: Vec<McpServerConfig>) -> Result<Self> {
         let mut servers = Vec::new();
         let mut labels = HashSet::new();
         let mut warnings = Vec::new();
 
-        let mut combined = runtime_servers;
-        combined.append(&mut config_servers);
+        let combined = runtime_servers;
 
         for server in combined {
             if server.label.trim().is_empty() {
@@ -488,18 +450,5 @@ fn unique_name(base: &str, set: &mut HashSet<String>) -> String {
             return candidate;
         }
         counter += 1;
-    }
-}
-
-fn read_config_file() -> Result<Option<String>> {
-    let dirs = BaseDirectories::with_prefix(APP_NAME)
-        .context("failed to locate configuration directory for MCP")?;
-
-    if let Some(path) = dirs.find_config_file(CONFIG_FILE_NAME) {
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
-        Ok(Some(content))
-    } else {
-        Ok(None)
     }
 }

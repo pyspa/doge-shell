@@ -273,7 +273,13 @@ fn chat_with_tools(
 
             let _spinner = SpinnerGuard::start(&spinner_text);
             client
-                .send_chat_request(&messages, temperature, model_override.clone(), Some(&tools))
+                .send_chat_request(
+                    &messages,
+                    temperature,
+                    model_override.clone(),
+                    Some(&tools),
+                    Some(&|| proxy.is_canceled()),
+                )
                 .map_err(|err| {
                     if is_ctrl_c_cancelled(&err) {
                         err.to_string()

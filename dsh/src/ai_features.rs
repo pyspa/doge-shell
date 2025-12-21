@@ -37,7 +37,7 @@ impl ChatClient for ChatGptClient {
         model: Option<String>,
         tools: Option<&[Value]>,
     ) -> Result<Value> {
-        self.send_chat_request(messages, temperature, model, tools)
+        self.send_chat_request(messages, temperature, model, tools, None)
     }
 }
 

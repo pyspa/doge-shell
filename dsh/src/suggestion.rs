@@ -629,6 +629,7 @@ impl AiSuggestionBackend {
             Some(self.inner.settings.temperature),
             None,
             None,
+            None,
         ) {
             Ok(value) => value,
             Err(err) => {

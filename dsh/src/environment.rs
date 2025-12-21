@@ -6,6 +6,7 @@ use crate::shell::APP_NAME;
 use crate::suggestion::{InputPreferences, SuggestionMode};
 use anyhow::Context as _;
 use anyhow::Result;
+use dsh_builtin::McpManager;
 use dsh_types::mcp::McpServerConfig;
 use parking_lot::RwLock;
 use regex::Regex;
@@ -36,6 +37,7 @@ pub struct Environment {
     pub direnv_roots: Vec<DirEnvironment>,
     pub chpwd_hooks: Vec<Box<dyn ChangePwdHook + Send + Sync>>,
     pub mcp_servers: Vec<McpServerConfig>,
+    pub mcp_manager: Arc<RwLock<McpManager>>,
     pub execute_allowlist: Vec<String>,
     pub system_env_vars: HashMap<String, String>,
     pub input_preferences: InputPreferences,
@@ -88,6 +90,7 @@ impl Environment {
             direnv_roots: Vec::new(),
             chpwd_hooks: Vec::new(),
             mcp_servers: Vec::new(),
+            mcp_manager: Arc::new(RwLock::new(McpManager::default())),
             execute_allowlist: Vec::new(),
             system_env_vars: env::vars().collect(),
             input_preferences: default_input_preferences(),
@@ -114,6 +117,7 @@ impl Environment {
         let exported_vars = parent.read().exported_vars.clone();
         let direnv_roots = parent.read().direnv_roots.clone();
         let mcp_servers = parent.read().mcp_servers.clone();
+        let mcp_manager = parent.read().mcp_manager.clone();
         let execute_allowlist = parent.read().execute_allowlist.clone();
         let input_preferences = parent.read().input_preferences;
         let system_env_vars = parent.read().system_env_vars.clone();
@@ -130,6 +134,7 @@ impl Environment {
             direnv_roots,
             chpwd_hooks: Vec::new(),
             mcp_servers,
+            mcp_manager,
             execute_allowlist,
             system_env_vars,
             input_preferences,

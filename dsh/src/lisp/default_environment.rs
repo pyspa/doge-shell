@@ -307,6 +307,52 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
     );
 
     env.define(
+        Symbol::from("mcp-list-tools"),
+        Value::NativeFunc(|env, _args| {
+            let env_borrow = env.borrow();
+            let env_read = env_borrow.shell_env.read();
+            let manager = env_read.mcp_manager.read();
+            let tools = manager.tool_definitions();
+
+            if tools.is_empty() {
+                println!("No MCP tools available.");
+                return Ok(Value::List(List::NIL));
+            }
+
+            println!("{:<30} DESCRIPTION", "NAME");
+            println!("{:<30} -----------", "----");
+
+            let mut names = Vec::new();
+
+            for tool in tools {
+                let name = tool
+                    .get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("unknown");
+
+                let desc = tool
+                    .get("function")
+                    .and_then(|f| f.get("description"))
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("");
+
+                // Truncate description if too long
+                let desc = if desc.len() > 50 {
+                    format!("{}...", &desc[..47])
+                } else {
+                    desc.to_string()
+                };
+
+                println!("{:<30} {}", name, desc);
+                names.push(Value::String(name.to_string()));
+            }
+
+            Ok(Value::List(names.into_iter().collect()))
+        }),
+    );
+
+    env.define(
         Symbol::from("chat-execute-clear"),
         Value::NativeFunc(|env, _args| {
             env.borrow().shell_env.write().clear_execute_allowlist();
@@ -1021,5 +1067,17 @@ mod tests {
 
         drop(env_lock);
         run(&engine, "(chat-execute-clear)");
+    }
+
+    #[test]
+    fn mcp_list_tools_returns_nil_when_empty() {
+        let env = Environment::new();
+        let engine = LispEngine::new(env.clone());
+
+        // Call mcp-list-tools
+        let result = engine.borrow().run("(mcp-list-tools)").unwrap();
+
+        // It should return NIL (empty list of tools)
+        assert_eq!(result, Value::List(List::NIL));
     }
 }

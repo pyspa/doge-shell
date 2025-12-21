@@ -42,27 +42,28 @@ impl ConfirmationHandler for ReplConfirmationHandler {
             loop {
                 // Read event
                 if let Event::Key(key) = event::read()?
-                    && key.kind == KeyEventKind::Press {
-                        match key.code {
-                            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                                queue!(stdout, Print("Yes\r\n"))?;
-                                stdout.flush()?;
-                                return Ok(true);
-                            }
-                            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                                queue!(stdout, Print("No\r\n"))?;
-                                stdout.flush()?;
-                                return Ok(false);
-                            }
-                            KeyCode::Enter => {
-                                // Default is No
-                                queue!(stdout, Print("No\r\n"))?;
-                                stdout.flush()?;
-                                return Ok(false);
-                            }
-                            _ => {}
+                    && key.kind == KeyEventKind::Press
+                {
+                    match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') => {
+                            queue!(stdout, Print("Yes\r\n"))?;
+                            stdout.flush()?;
+                            return Ok(true);
                         }
+                        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                            queue!(stdout, Print("No\r\n"))?;
+                            stdout.flush()?;
+                            return Ok(false);
+                        }
+                        KeyCode::Enter => {
+                            // Default is No
+                            queue!(stdout, Print("No\r\n"))?;
+                            stdout.flush()?;
+                            return Ok(false);
+                        }
+                        _ => {}
                     }
+                }
             }
         })
         .await?

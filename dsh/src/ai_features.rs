@@ -130,18 +130,17 @@ impl AiService for LiveAiService {
                         SafetyLevel::Loose => false,
                     };
 
-                    if should_confirm
-                        && let Some(handler) = &self.confirmation_handler {
-                            let msg = format!("[MCP] Execute tool '{}'? Args: {}", name, args);
-                            if !handler.confirm(&msg).await? {
-                                messages.push(json!({
-                                    "role": "tool",
-                                    "tool_call_id": id,
-                                    "content": "User rejected tool execution"
-                                }));
-                                continue;
-                            }
+                    if should_confirm && let Some(handler) = &self.confirmation_handler {
+                        let msg = format!("[MCP] Execute tool '{}'? Args: {}", name, args);
+                        if !handler.confirm(&msg).await? {
+                            messages.push(json!({
+                                "role": "tool",
+                                "tool_call_id": id,
+                                "content": "User rejected tool execution"
+                            }));
+                            continue;
                         }
+                    }
 
                     // Execute tool
                     let result_str = match self.mcp_manager.read().execute_tool(name, args) {

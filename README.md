@@ -70,7 +70,7 @@ The Safety Guard protects against unintended execution of potentially destructiv
 - **MCP Client**: Connect to external Model Context Protocol servers
 - **Multiple Transport**: Support for stdio, HTTP, and SSE transports
 - **Dynamic Tools**: Automatic discovery of MCP server tools
-- **Configuration**: MCP servers can be configured in both config.lisp and config.toml
+- **Configuration**: MCP servers are configured in `config.lisp`
 
 ### Other Features
 
@@ -186,6 +186,8 @@ The embedded Lisp interpreter includes many built-in functions:
 - `mcp-add-stdio` - Add an MCP server with stdio transport
 - `mcp-add-http` - Add an MCP server with HTTP transport
 - `mcp-add-sse` - Add an MCP server with SSE transport
+- `mcp-list-tools` - List all available MCP tools
+- `mcp-clear` - Clear all MCP servers
 - `chat-execute-clear` - Clear execute tool allowlist
 - `chat-execute-add` - Add command(s) to execute tool allowlist (accepts multiple commands)
 
@@ -298,6 +300,10 @@ MCP (Model Context Protocol) allows the shell to connect to external services th
 
 Removes all currently configured MCP servers.
 
+#### `(mcp-list-tools)`
+
+Lists all available tools from registered MCP servers. Returns a list of tool names.
+
 #### `(mcp-add-stdio label command args env-vars cwd description)`
 
 Adds an MCP server that communicates via standard input/output streams.
@@ -362,19 +368,11 @@ Example:
 )
 ```
 
-### config.toml (MCP Configuration)
-
-For MCP server configuration, you can also create a `~/.config/dsh/config.toml` file:
-
-```toml
-[mcp]
-# Define MCP servers that connect via stdio
-servers = [
-  { label = "local-tools", description = "Local MCP tools", transport = { type = "stdio", command = "/path/to/server", args = [] } },
-  { label = "remote-service", description = "Remote HTTP MCP service", transport = { type = "http", url = "https://example.com/mcp" } },
-  { label = "streaming-service", description = "SSE MCP service", transport = { type = "sse", url = "https://example.com/sse" } }
-]
 ```
+
+### Security & Safety
+
+- **Execution Confirmation**: When `SafetyLevel` is set to `Normal` or `Strict`, the shell will ask for confirmation before executing any MCP tool that might have side affects.
 
 ## 🔧 Usage
 

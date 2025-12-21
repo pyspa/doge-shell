@@ -37,7 +37,6 @@ pub struct Shell {
     pub(crate) next_job_id: usize,
     pub notebook_session: Option<NotebookSession>,
     pub safety_guard: crate::safety::SafetyGuard,
-    pub mcp_manager: Arc<RwLock<McpManager>>,
 }
 
 impl std::fmt::Debug for Shell {
@@ -61,11 +60,6 @@ impl Shell {
         let pgid = pid;
         let safety_guard = crate::safety::SafetyGuard::new();
 
-        // Initialize McpManager
-        // Start with an default empty manager wrapped in RwLock.
-        // The actual configuration will be loaded later via `setup_mcp_config`.
-        let mcp_manager = Arc::new(RwLock::new(McpManager::default()));
-
         // Initialize Lisp engine
         let lisp_engine = lisp::LispEngine::new(Arc::clone(&environment));
 
@@ -81,7 +75,6 @@ impl Shell {
             next_job_id: 1,
             notebook_session: None,
             safety_guard,
-            mcp_manager,
         }
     }
 
@@ -230,6 +223,7 @@ impl Shell {
         tracing::debug!("Reloading MCP config with {} servers", mcp_servers.len());
         // McpManager::load calls build_from_servers (now modified to not use TOML)
         let new_manager = McpManager::load(mcp_servers);
-        *self.mcp_manager.write() = new_manager;
+        // Update the manager in the environment
+        *self.environment.read().mcp_manager.write() = new_manager;
     }
 }

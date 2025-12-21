@@ -233,7 +233,7 @@ impl JobProcess {
             JobProcess::Command(p) => (p.cmd.as_str(), &p.argv),
         };
 
-        let level = shell.environment.read().safety_level.clone();
+        let level = shell.environment.read().safety_level.read().clone();
 
         match shell.safety_guard.check_command(&level, cmd, argv) {
             crate::safety::SafetyResult::Allowed => {}

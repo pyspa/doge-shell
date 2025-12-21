@@ -12,16 +12,54 @@ pub trait AiService: Send + Sync {
 
 use parking_lot::RwLock;
 
+use crate::safety::SafetyLevel;
+
+#[async_trait]
+pub trait ConfirmationHandler: Send + Sync {
+    async fn confirm(&self, message: &str) -> Result<bool>;
+}
+
+pub trait ChatClient: Send + Sync {
+    fn send_chat_request(
+        &self,
+        messages: &[Value],
+        temperature: Option<f64>,
+        model: Option<String>,
+        tools: Option<&[Value]>,
+    ) -> Result<Value>;
+}
+
+impl ChatClient for ChatGptClient {
+    fn send_chat_request(
+        &self,
+        messages: &[Value],
+        temperature: Option<f64>,
+        model: Option<String>,
+        tools: Option<&[Value]>,
+    ) -> Result<Value> {
+        self.send_chat_request(messages, temperature, model, tools)
+    }
+}
+
 pub struct LiveAiService {
-    client: ChatGptClient,
+    client: Arc<dyn ChatClient>,
     mcp_manager: Arc<RwLock<McpManager>>,
+    safety_level: Arc<RwLock<SafetyLevel>>,
+    confirmation_handler: Option<Arc<dyn ConfirmationHandler>>,
 }
 
 impl LiveAiService {
-    pub fn new(client: ChatGptClient, mcp_manager: Arc<RwLock<McpManager>>) -> Self {
+    pub fn new(
+        client: impl ChatClient + 'static,
+        mcp_manager: Arc<RwLock<McpManager>>,
+        safety_level: Arc<RwLock<SafetyLevel>>,
+        confirmation_handler: Option<Arc<dyn ConfirmationHandler>>,
+    ) -> Self {
         Self {
-            client,
+            client: Arc::new(client),
             mcp_manager,
+            safety_level,
+            confirmation_handler,
         }
     }
 }
@@ -84,6 +122,26 @@ impl AiService for LiveAiService {
                         .and_then(|f| f.get("arguments"))
                         .and_then(|s| s.as_str())
                         .unwrap_or_default();
+
+                    // Check safety
+                    let safety_level = self.safety_level.read().clone();
+                    let should_confirm = match safety_level {
+                        SafetyLevel::Strict | SafetyLevel::Normal => true,
+                        SafetyLevel::Loose => false,
+                    };
+
+                    if should_confirm
+                        && let Some(handler) = &self.confirmation_handler {
+                            let msg = format!("[MCP] Execute tool '{}'? Args: {}", name, args);
+                            if !handler.confirm(&msg).await? {
+                                messages.push(json!({
+                                    "role": "tool",
+                                    "tool_call_id": id,
+                                    "content": "User rejected tool execution"
+                                }));
+                                continue;
+                            }
+                        }
 
                     // Execute tool
                     let result_str = match self.mcp_manager.read().execute_tool(name, args) {
@@ -512,5 +570,156 @@ mod tests {
                 .unwrap()
                 .contains("何が問題か教えて")
         );
+    }
+
+    // Mocks for LiveAiService tests
+    struct MockChatClient {
+        tool_call_response: Value,
+        final_response: Value,
+        call_count: Mutex<usize>,
+    }
+
+    impl MockChatClient {
+        fn new(tool_name: &str) -> Self {
+            let tool_call = json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": null,
+                        "tool_calls": [{
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {
+                                "name": tool_name,
+                                "arguments": "{}"
+                            }
+                        }]
+                    }
+                }]
+            });
+
+            let final_resp = json!({
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "Done"
+                    }
+                }]
+            });
+
+            Self {
+                tool_call_response: tool_call,
+                final_response: final_resp,
+                call_count: Mutex::new(0),
+            }
+        }
+    }
+
+    impl ChatClient for MockChatClient {
+        fn send_chat_request(
+            &self,
+            _messages: &[Value],
+            _temperature: Option<f64>,
+            _model: Option<String>,
+            _tools: Option<&[Value]>,
+        ) -> Result<Value> {
+            let mut count = self.call_count.lock().unwrap();
+            *count += 1;
+            if *count == 1 {
+                Ok(self.tool_call_response.clone())
+            } else {
+                Ok(self.final_response.clone())
+            }
+        }
+    }
+
+    struct MockConfirmation {
+        should_confirm: bool,
+        called: Arc<Mutex<bool>>,
+    }
+
+    #[async_trait]
+    impl ConfirmationHandler for MockConfirmation {
+        async fn confirm(&self, _message: &str) -> Result<bool> {
+            *self.called.lock().unwrap() = true;
+            Ok(self.should_confirm)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_confirmation_call_strict() {
+        let client = MockChatClient::new("test_tool");
+        let mcp_manager = Arc::new(RwLock::new(McpManager::load(vec![])));
+        let safety_level = Arc::new(RwLock::new(SafetyLevel::Strict));
+        let confirmed_called = Arc::new(Mutex::new(false));
+        let confirmation_handler = Arc::new(MockConfirmation {
+            should_confirm: true,
+            called: confirmed_called.clone(),
+        });
+
+        let service = LiveAiService::new(
+            client,
+            mcp_manager,
+            safety_level,
+            Some(confirmation_handler),
+        );
+
+        let _ = service
+            .send_request(vec![json!({"role": "user", "content": "hi"})], None)
+            .await;
+
+        assert!(*confirmed_called.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_confirmation_not_called_loose() {
+        let client = MockChatClient::new("test_tool");
+        let mcp_manager = Arc::new(RwLock::new(McpManager::load(vec![])));
+        let safety_level = Arc::new(RwLock::new(SafetyLevel::Loose));
+        let confirmed_called = Arc::new(Mutex::new(false));
+        let confirmation_handler = Arc::new(MockConfirmation {
+            should_confirm: true,
+            called: confirmed_called.clone(),
+        });
+
+        let service = LiveAiService::new(
+            client,
+            mcp_manager,
+            safety_level,
+            Some(confirmation_handler),
+        );
+
+        let _ = service
+            .send_request(vec![json!({"role": "user", "content": "hi"})], None)
+            .await;
+
+        assert!(!*confirmed_called.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_confirmation_rejection() {
+        let client = MockChatClient::new("test_tool");
+        let mcp_manager = Arc::new(RwLock::new(McpManager::load(vec![])));
+        let safety_level = Arc::new(RwLock::new(SafetyLevel::Strict));
+        let confirmed_called = Arc::new(Mutex::new(false));
+        let confirmation_handler = Arc::new(MockConfirmation {
+            should_confirm: false,
+            called: confirmed_called.clone(),
+        });
+
+        let service = LiveAiService::new(
+            client,
+            mcp_manager,
+            safety_level,
+            Some(confirmation_handler),
+        );
+
+        let res = service
+            .send_request(vec![json!({"role": "user", "content": "hi"})], None)
+            .await
+            .unwrap();
+
+        assert!(*confirmed_called.lock().unwrap());
+        assert_eq!(res, "Done");
     }
 }

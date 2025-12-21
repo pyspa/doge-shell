@@ -43,6 +43,7 @@ mod cache;
 use cache::*;
 mod suggestion_manager;
 use suggestion_manager::*;
+mod confirmation;
 mod handler;
 pub mod key_action;
 
@@ -273,9 +274,14 @@ impl<'a> Repl<'a> {
         let mut ai_service: Option<Arc<dyn AiService + Send + Sync>> = None;
         if let Some((ai_backend, client)) = Self::build_ai_backend(&envronment) {
             suggestion_manager.engine.set_ai_backend(Some(ai_backend));
+
+            // ... (in Repl::new)
+
             ai_service = Some(Arc::new(LiveAiService::new(
                 client,
                 shell.mcp_manager.clone(),
+                envronment.read().safety_level.clone(),
+                Some(confirmation::ReplConfirmationHandler::new()),
             )));
         }
         suggestion_manager.set_preferences(input_preferences);

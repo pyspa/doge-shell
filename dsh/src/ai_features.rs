@@ -65,40 +65,41 @@ impl AiService for LiveAiService {
 
             // Check for tool calls
             if let Some(tool_calls) = message.get("tool_calls").and_then(|v| v.as_array())
-                && !tool_calls.is_empty() {
-                    // Append assistant message with tool calls
-                    messages.push(message.clone());
+                && !tool_calls.is_empty()
+            {
+                // Append assistant message with tool calls
+                messages.push(message.clone());
 
-                    for tool_call in tool_calls {
-                        let id = tool_call
-                            .get("id")
-                            .and_then(|s| s.as_str())
-                            .unwrap_or_default();
-                        let function = tool_call.get("function").and_then(|v| v.as_object());
-                        let name = function
-                            .and_then(|f| f.get("name"))
-                            .and_then(|s| s.as_str())
-                            .unwrap_or_default();
-                        let args = function
-                            .and_then(|f| f.get("arguments"))
-                            .and_then(|s| s.as_str())
-                            .unwrap_or_default();
+                for tool_call in tool_calls {
+                    let id = tool_call
+                        .get("id")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or_default();
+                    let function = tool_call.get("function").and_then(|v| v.as_object());
+                    let name = function
+                        .and_then(|f| f.get("name"))
+                        .and_then(|s| s.as_str())
+                        .unwrap_or_default();
+                    let args = function
+                        .and_then(|f| f.get("arguments"))
+                        .and_then(|s| s.as_str())
+                        .unwrap_or_default();
 
-                        // Execute tool
-                        let result_str = match self.mcp_manager.read().execute_tool(name, args) {
-                            Ok(Some(res)) => res,
-                            Ok(None) => "Tool executed successfully (no output)".to_string(),
-                            Err(e) => format!("Error executing tool: {}", e),
-                        };
+                    // Execute tool
+                    let result_str = match self.mcp_manager.read().execute_tool(name, args) {
+                        Ok(Some(res)) => res,
+                        Ok(None) => "Tool executed successfully (no output)".to_string(),
+                        Err(e) => format!("Error executing tool: {}", e),
+                    };
 
-                        messages.push(json!({
-                            "role": "tool",
-                            "tool_call_id": id,
-                            "content": result_str
-                        }));
-                    }
-                    continue; // Loop again with tool results
+                    messages.push(json!({
+                        "role": "tool",
+                        "tool_call_id": id,
+                        "content": result_str
+                    }));
                 }
+                continue; // Loop again with tool results
+            }
 
             // If no tool calls, return content
             return message

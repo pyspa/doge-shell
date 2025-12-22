@@ -202,10 +202,23 @@ impl Process {
             }
         }
 
-        // Ensure TERM is set, falling back to xterm if missing
-        if !env_map.contains_key("TERM") {
-            debug!("TERM environment variable missing, defaulting to xterm");
+        // Ensure TERM is set, falling back to xterm if missing or empty
+        if let Some(term) = env_map.get("TERM") {
+            if term.is_empty() {
+                debug!("TERM is empty, defaulting to xterm-256color");
+                env_map.insert("TERM".to_string(), "xterm-256color".to_string());
+            } else {
+                debug!("TERM is set to: {}", term);
+            }
+        } else {
+            debug!("TERM environment variable missing, defaulting to xterm-256color");
             env_map.insert("TERM".to_string(), "xterm-256color".to_string());
+        }
+
+        if let Some(ls_colors) = env_map.get("LS_COLORS") {
+            debug!("LS_COLORS is set (len: {})", ls_colors.len());
+        } else {
+            debug!("LS_COLORS is NOT set");
         }
 
         let envp: Vec<CString> = env_map

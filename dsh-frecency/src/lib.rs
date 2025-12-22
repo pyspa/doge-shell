@@ -14,6 +14,9 @@ use tracing::error;
 mod stats;
 mod store;
 
+#[cfg(test)]
+mod extra_tests; // Verification tests
+
 #[derive(Debug, Clone)]
 pub enum SortMethod {
     Recent,

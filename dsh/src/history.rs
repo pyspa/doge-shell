@@ -479,10 +479,11 @@ impl FrecencyHistory {
         context: Option<&str>,
     ) -> Option<String> {
         if let Some(ref store) = self.store {
+            let range = store.search_prefix_range(pattern);
             store
                 .items
+                .get(range)?
                 .iter()
-                .filter(|item| item.item.starts_with(pattern))
                 .max_by(|a, b| a.cmp_frecent_with_context(b, context))
                 .map(|item| item.item.clone())
         } else {
@@ -492,10 +493,11 @@ impl FrecencyHistory {
 
     pub fn search_recent_prefix(&self, pattern: &str) -> Option<String> {
         if let Some(ref store) = self.store {
+            let range = store.search_prefix_range(pattern);
             store
                 .items
+                .get(range)?
                 .iter()
-                .filter(|item| item.item.starts_with(pattern))
                 .max_by(|a, b| a.cmp_recent(b))
                 .map(|item| item.item.clone())
         } else {

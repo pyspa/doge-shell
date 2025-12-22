@@ -105,23 +105,16 @@ impl McpManager {
             return None;
         }
 
-        let mut lines = Vec::new();
-        lines.push(
+        let mut lines = vec![
             "You can call external Model Context Protocol (MCP) servers when solving tasks."
                 .to_string(),
-        );
-        lines.push(
             "Always prefer the dedicated MCP function tools when they cover the action you need."
                 .to_string(),
-        );
-        lines.push(
             "Note: Tool execution may be rejected by the user for safety reasons. If rejected, propose an alternative approach."
                 .to_string(),
-        );
-        lines.push(
             "Be cautious when using tools that modify the filesystem or execute commands."
                 .to_string(),
-        );
+        ];
         if !self.warnings.is_empty() {
             lines.push("Warnings: ".to_string());
             for warning in &self.warnings {

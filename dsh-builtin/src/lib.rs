@@ -35,7 +35,7 @@ mod read;
 mod reload;
 pub mod serve;
 mod set;
-pub mod timemachine;
+pub mod tm;
 mod uuid;
 mod var;
 mod z;
@@ -117,7 +117,9 @@ pub trait ShellProxy {
     }
 
     /// Get the full output history
-    fn get_full_output_history(&self) -> Vec<OutputEntry>;
+    fn get_full_output_history(&self) -> Vec<OutputEntry> {
+        Vec::new()
+    }
 }
 
 use std::any::Any;
@@ -368,13 +370,10 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             )) as Box<dyn BuiltinCommandTrait>,
         );
 
-        // Time Machine command
         builtin.insert(
-            "timemachine",
-            Box::new(BuiltinCommandFn::new(
-                timemachine::command,
-                timemachine::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
+            "tm",
+            Box::new(BuiltinCommandFn::new(tm::command, tm::description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
 
         Mutex::new(builtin)

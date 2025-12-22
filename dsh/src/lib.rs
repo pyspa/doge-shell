@@ -214,7 +214,12 @@ pub fn handle_import_command(shell_name: &str, custom_path: Option<&str>) -> Exi
 }
 
 pub fn init_tracing() -> Result<()> {
-    let log_file = std::sync::Arc::new(std::fs::File::create("./debug.log")?);
+    let log_file = std::sync::Arc::new(
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("./debug.log")?,
+    );
     tracing_subscriber::fmt()
         .with_ansi(false)
         .with_max_level(tracing::Level::DEBUG)

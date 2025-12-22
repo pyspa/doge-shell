@@ -36,7 +36,6 @@ pub mod parser;
 mod ui;
 
 #[cfg(test)]
-#[cfg(test)]
 mod extra_tests;
 #[cfg(test)]
 mod wrapped_tests;

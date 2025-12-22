@@ -488,7 +488,10 @@ impl Job {
                 // Ensure we wait for the task to finish cleanup (restore STDIN flags)
                 // If we don't wait, the NonBlockingFdGuard destructor might run AFTER we return to the shell loop,
                 // causing the shell to read STDIN in non-blocking mode and potentially miss input or error out.
-                let _ = input_task.await;
+                if let Err(e) = input_task.await
+                    && !e.is_cancelled() {
+                        error!("PTY input task join error: {}", e);
+                    }
             }
         } else {
             // Standard monitors (Pipe) logic

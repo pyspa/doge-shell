@@ -133,94 +133,70 @@ pub async fn check_job_state(shell: &mut Shell) -> Result<Vec<Job>> {
         shell.wait_jobs.len()
     );
 
-    // Log current job states before checking
-    for (i, job) in shell.wait_jobs.iter().enumerate() {
-        debug!(
-            "CHECK_JOB_STATE_INITIAL: Job[{}] id={}, pid={:?}, state={:?}, foreground={}, cmd='{}'",
-            i, job.job_id, job.pid, job.state, job.foreground, job.cmd
-        );
-    }
+    // Indices of jobs that are completed and need to be removed (now we will collect completed jobs)
+    let mut completed_jobs: Vec<Job> = Vec::new();
 
-    let mut completed: Vec<Job> = Vec::new();
-    let mut i = 0;
-
-    while i < shell.wait_jobs.len() {
-        let job = &mut shell.wait_jobs[i];
-
+    // 1. First pass (Async): Update states for all jobs
+    for (i, job) in shell.wait_jobs.iter_mut().enumerate() {
         debug!(
             "CHECK_JOB_STATE_CHECKING: Checking job {} (index: {}, pid: {:?}, state: {:?}, foreground: {})",
             job.job_id, i, job.pid, job.state, job.foreground
         );
 
-        // Single status evaluation; only check background output if not completed after first check
         let is_completed_now = job.update_status();
+
         if !is_completed_now && !job.foreground {
             debug!(
                 "CHECK_JOB_STATE_BACKGROUND: Checking background output for job {}",
                 job.job_id
             );
+            // Check background output asynchronously
             if let Err(e) = job.check_background_all_output().await {
                 error!(
                     "CHECK_JOB_STATE_BG_ERROR: Failed to check background output for job {}: {}",
                     job.job_id, e
                 );
             }
-            // Re-evaluate status only if background output was checked
-            let is_completed_after_bg = job.update_status();
-            if is_completed_after_bg {
-                let removed_job = shell.wait_jobs.remove(i);
-                debug!(
-                    "CHECK_JOB_STATE_COMPLETED: Job {} completed and removed (final state: {:?}, exit_code: {})",
-                    removed_job.job_id,
-                    removed_job.state,
-                    match removed_job.state {
-                        ProcessState::Completed(code, _) => code.to_string(),
-                        _ => "unknown".to_string(),
-                    }
-                );
-                completed.push(removed_job);
-                continue;
-            }
+            // Re-evaluate status after checking output
+            job.update_status();
         }
+    }
 
-        if is_completed_now {
-            let removed_job = shell.wait_jobs.remove(i);
-            debug!(
-                "CHECK_JOB_STATE_COMPLETED: Job {} completed and removed (final state: {:?}, exit_code: {})",
-                removed_job.job_id,
-                removed_job.state,
-                match removed_job.state {
-                    ProcessState::Completed(code, _) => code.to_string(),
-                    _ => "unknown".to_string(),
-                }
-            );
-            completed.push(removed_job);
-        } else {
-            debug!(
-                "CHECK_JOB_STATE_ACTIVE: Job {} still active, continuing (state: {:?})",
-                job.job_id, job.state
-            );
-            i += 1;
-        }
+    // 2. Partition jobs into completed and active
+    // We move all jobs out, partition them, and put active jobs back.
+    // This avoids O(N^2) removal operations.
+    let all_jobs = std::mem::take(&mut shell.wait_jobs);
+    let (completed, active): (Vec<Job>, Vec<Job>) = all_jobs
+        .into_iter()
+        .partition(|job| matches!(job.state, ProcessState::Completed(_, _)));
+
+    shell.wait_jobs = active;
+    completed_jobs = completed;
+
+    // Logging for completed jobs
+    for job in &completed_jobs {
+        debug!(
+            "CHECK_JOB_STATE_COMPLETED: Job {} completed (final state: {:?})",
+            job.job_id, job.state
+        );
     }
 
     let elapsed = start_time.elapsed();
     debug!(
         "CHECK_JOB_STATE_COMPLETE: Completed check in {}ms, {} jobs completed, {} jobs remaining",
         elapsed.as_millis(),
-        completed.len(),
+        completed_jobs.len(),
         shell.wait_jobs.len()
     );
 
     if elapsed.as_millis() > 10 {
         debug!(
-            "CHECK_JOB_STATE_PERF: Job state check took {}ms for {} jobs (may indicate performance issue)",
-            elapsed.as_millis(),
-            shell.wait_jobs.len() + completed.len()
+            "CHECK_JOB_STATE_PERF: Job state check took {}ms (optimized)",
+            elapsed.as_millis()
         );
     }
 
-    Ok(completed)
+    Ok(completed_jobs)
 }
 
 pub fn kill_wait_jobs(shell: &mut Shell) -> Result<()> {

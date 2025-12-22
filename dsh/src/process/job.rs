@@ -145,7 +145,7 @@ impl Job {
 
         ctx.foreground = self.foreground;
 
-        if ctx.foreground {
+        if ctx.foreground && ctx.interactive {
             // "Time Machine" logic: Use PTY for foreground jobs to capture output with color preservation
             match Pty::new() {
                 Ok(pty) => {

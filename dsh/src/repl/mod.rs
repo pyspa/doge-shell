@@ -48,6 +48,13 @@ mod handler;
 pub mod key_action;
 
 /// AI Quick Actions available to the user
+struct InputAnalysis {
+    completion_full: Option<String>,
+    completion: Option<String>,
+    color_ranges: Option<Vec<(usize, usize, ColorType)>>,
+    can_execute: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiAction {
     /// Explain what a command does
@@ -1109,16 +1116,7 @@ impl<'a> Repl<'a> {
         None
     }
 
-    fn analyze_input(
-        &self,
-        input: &str,
-        mut completion: Option<String>,
-    ) -> (
-        Option<String>,
-        Option<String>,
-        Option<Vec<(usize, usize, ColorType)>>,
-        bool,
-    ) {
+    fn analyze_input(&self, input: &str, mut completion: Option<String>) -> InputAnalysis {
         use pest::Parser;
         match parser::ShellParser::parse(Rule::commands, input) {
             Ok(pairs) => {
@@ -1199,7 +1197,12 @@ impl<'a> Repl<'a> {
                     }
                 }
 
-                (completion_full, completion, Some(color_ranges), can_execute)
+                InputAnalysis {
+                    completion_full,
+                    completion,
+                    color_ranges: Some(color_ranges),
+                    can_execute,
+                }
             }
             Err(err) => {
                 // Parsing failed, highlight the error
@@ -1207,7 +1210,12 @@ impl<'a> Repl<'a> {
                 if let Some(token) = parser::highlight_error_token(input, err.location) {
                     ranges.push((token.start, token.end, ColorType::Error));
                 }
-                (None, None, Some(ranges), false)
+                InputAnalysis {
+                    completion_full: None,
+                    completion: None,
+                    color_ranges: Some(ranges),
+                    can_execute: false,
+                }
             }
         }
     }
@@ -1235,18 +1243,17 @@ impl<'a> Repl<'a> {
         } else {
             completion = self.get_completion_from_history(&input);
 
-            let (completion_full, completion_suffix, color_ranges, can_execute) =
-                self.analyze_input(&input, completion.clone());
+            let analysis = self.analyze_input(&input, completion.clone());
 
-            if let Some(c) = completion_full {
+            if let Some(c) = analysis.completion_full {
                 self.input.completion = Some(c);
             }
-            if let Some(suffix) = completion_suffix {
+            if let Some(suffix) = analysis.completion {
                 completion = Some(suffix);
             }
 
-            self.input.color_ranges = color_ranges;
-            self.input.can_execute = can_execute;
+            self.input.color_ranges = analysis.color_ranges;
+            self.input.can_execute = analysis.can_execute;
         }
 
         if completion.is_none() {
@@ -2297,7 +2304,9 @@ async fn test_analyze_input_suffix_calculation() {
     repl.input.reset(input_str.clone());
 
     // analyze_input usage: input, completion (start with None)
-    let (full, comp_suffix, _, _) = repl.analyze_input(&input_str, None);
+    let analysis = repl.analyze_input(&input_str, None);
+    let full = analysis.completion_full;
+    let comp_suffix = analysis.completion;
 
     // Expectation: completion found (hits valid path logic)
     // Note: completion::path_completion_prefix depends on CWD.
@@ -2332,7 +2341,9 @@ async fn test_analyze_input_suffix_calculation() {
     // Move to after "Cargo.tom" (3 + 9 = 12)
     repl.input.move_by(12);
 
-    let (full_mid, suffix_mid, _, _) = repl.analyze_input(input_mid, None);
+    let analysis_mid = repl.analyze_input(input_mid, None);
+    let full_mid = analysis_mid.completion_full;
+    let suffix_mid = analysis_mid.completion;
 
     if let Some(s) = suffix_mid {
         assert_eq!(s, "l", "Suffix should be 'l'");

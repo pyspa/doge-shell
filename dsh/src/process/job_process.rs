@@ -1,4 +1,5 @@
 use anyhow::{Context as _, Result};
+use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::sys::signal::Signal;
 use nix::unistd::{Pid, getpid, pipe};
 use std::os::unix::io::RawFd;
@@ -294,97 +295,36 @@ impl JobProcess {
         };
 
         if let Some(slave) = pty_slave {
-            // If PTY is provided, it overrides standard IO
-            // For pipelines, only the first process gets the PTY slave as stdin?
-            // And the last one gets PTY slave as stdout?
-            // No, all processes in a pipeline effectively share the TTY.
-            // But in `dsh`, pipelines are implemented via pipes.
-            // cmd1 | cmd2
-            // cmd1 stdout -> pipe.
-            // cmd2 stdin -> pipe.
-            // cmd1 stderr -> TTY (slave).
-            // cmd2 stderr -> TTY (slave).
-            // cmd2 stdout -> TTY (slave).
-            // cmd1 stdin -> TTY (slave).
-
-            // Setup defaults for PTY
-            ctx.infile = slave;
-            ctx.outfile = slave;
-            ctx.errfile = slave;
-
-            // If pipe_out was created (there is a next process), it overwrites ctx.outfile?
-            // Yes, create_pipe sets ctx.outfile to pipe_write.
-            // Lines 270-276 above: create_pipe updates ctx.
-            // "create_pipe(ctx)?" -> This modifies ctx.outfile.
-            // So if we set ctx.outfile = slave AFTER create_pipe, we break the pipeline.
-            // So we must set defaults BEFORE create_pipe?
-            // But create_pipe was called above.
-
-            // Correct logic:
             // PTY sets the "default" TTY fds.
-            // Pipeline/Redirection overrides them.
+            // Pipeline/Redirection/Capture overrides them.
+            // We should only set slave if the FD is still the default.
+            // In non-interactive mode with redirects, we MUST favor redirects
+            // to ensure captured output works correctly.
 
-            // However, `set_io` below (line 295) uses `ctx.infile`, `ctx.outfile`, `ctx.errfile`.
-
-            // If pipe exists:
-            // create_pipe sets `ctx.outfile` to pipe.
-            // So we should NOT overwrite `ctx.outfile` if it's already a pipe.
-            // But we SHOULD set `ctx.errfile` to slave (since usually only stdout is piped).
-            // And `ctx.infile` to slave (unless it's the right side of a pipe?).
-            // `Job::launch` calls `launch` on the FIRST process.
-            // So `ctx.infile` input is `ctx.infile` from Job (which is Shell's STDIN or Redirect).
-            // If PTY, Job sets `ctx.infile` to Slave? No, Job handles PTY creation.
-            // The passed `pty_slave` is intended to be the TTY.
-
-            // Let's assume `Job` sets `ctx.infile` appropriately before calling `launch`?
-            // No, `Job::launch` sets `ctx.infile = STDIN_FILENO` implicitly (job.stdin).
-
-            // Safety: Set PTY slave as default if not redirected.
-            // But we are inside `launch`.
-
-            // Wait, `create_pipe` modifies `ctx`. Use that result locally.
-            // Actually `create_pipe` implementation:
-            // let (reader, writer) = pipe()?;
-            // ctx.outfile = writer;
-            // return Ok((reader, writer)) ? No, usually just returns input for next?
-
-            // dsh/src/process/io.rs `create_pipe`:
-            // pub fn create_pipe(ctx: &mut Context) -> Result<Option<RawFd>>
-            // It sets ctx.outfile = writer. Returns reader.
-
-            // So if `next_process` exists, `pipe_out` is Some(reader). `ctx.outfile` is writer.
-
-            if next_process.is_some() {
-                // Pipeline case: stdout is the pipe.
-                // stderr should be PTY slave.
-                // stdin should be PTY slave (for first process).
-                ctx.errfile = slave;
+            let mut slave_applied = false;
+            if ctx.infile == STDIN_FILENO {
                 ctx.infile = slave;
-            } else {
-                // Last process or single process.
-                // stdout, stderr, stdin = PTY slave.
-                ctx.infile = slave;
+                slave_applied = true;
+            }
+            if ctx.outfile == STDOUT_FILENO {
                 ctx.outfile = slave;
-                ctx.errfile = slave;
+                slave_applied = true;
             }
-        }
-
-        // Restore pipeline overrides if they happened
-        if next_process.is_some() {
-            // We reset ctx.outfile to pipe (it was set by create_pipe).
-            // Wait, if I set ctx.outfile = slave above, I broke it.
-            // So I should only set slave if NOT piped.
-
-            // Re-verify logic:
-            if let Some(slave) = pty_slave {
-                ctx.infile = slave;
+            if ctx.errfile == STDERR_FILENO {
                 ctx.errfile = slave;
-                if next_process.is_none() {
-                    ctx.outfile = slave;
-                }
-                // If next_process.is_some(), create_pipe already set ctx.outfile to pipe_writer.
-                // We should NOT overwrite it.
+                slave_applied = true;
             }
+
+            debug!(
+                "PTY_IO_SETUP: Job {} ({}) - final i/o: infile={}, outfile={}, errfile={} (slave={}, slave_applied={})",
+                shell.get_job_id(),
+                self.get_cmd(),
+                ctx.infile,
+                ctx.outfile,
+                ctx.errfile,
+                slave,
+                slave_applied
+            );
         }
 
         self.set_io(ctx.infile, ctx.outfile, ctx.errfile);

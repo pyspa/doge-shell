@@ -1,6 +1,6 @@
 use anyhow::{Context as _, Result};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use nix::unistd::{close, dup2, pipe};
+use nix::unistd::pipe;
 use std::io::Write;
 use std::os::unix::io::{FromRawFd, RawFd};
 use std::time::Duration;
@@ -37,18 +37,6 @@ impl Drop for RawModeGuard {
             tracing::warn!("failed to restore raw mode: {}", e);
         }
     }
-}
-
-pub(crate) fn copy_fd(src: RawFd, dst: RawFd) -> Result<()> {
-    if src != dst && src >= 0 && dst >= 0 {
-        dup2(src, dst).map_err(|e| anyhow::anyhow!("dup2 failed: {}", e))?;
-
-        // Only close if it's not a standard file descriptor
-        if src > 2 {
-            close(src).map_err(|e| anyhow::anyhow!("close failed: {}", e))?;
-        }
-    }
-    Ok(())
 }
 
 const MONITOR_TIMEOUT: u64 = 200;
@@ -213,7 +201,6 @@ impl PtyMonitor {
                 }
             }
         }
-        Ok(())
     }
 }
 

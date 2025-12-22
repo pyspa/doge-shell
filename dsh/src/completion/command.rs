@@ -128,6 +128,11 @@ impl CommandCompletionDatabase {
     pub fn len(&self) -> usize {
         self.commands.len()
     }
+
+    /// Check if database is empty
+    pub fn is_empty(&self) -> bool {
+        self.commands.is_empty()
+    }
 }
 
 impl Default for CommandCompletionDatabase {

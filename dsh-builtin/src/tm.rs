@@ -11,7 +11,6 @@ pub fn description() -> &'static str {
 
 struct HistoryItem {
     entry: OutputEntry,
-    index: usize,
 }
 
 impl SkimItem for HistoryItem {
@@ -48,7 +47,7 @@ pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) ->
     let history = proxy.get_full_output_history();
 
     if history.is_empty() {
-        let _ = ctx.write_stderr("timemachine: no output history available");
+        let _ = ctx.write_stderr("tm: no output history available");
         return ExitStatus::ExitedWith(1);
     }
 
@@ -61,11 +60,8 @@ pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) ->
 
     let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
 
-    for (i, entry) in history.into_iter().enumerate() {
-        let item = HistoryItem {
-            index: i + 1,
-            entry,
-        };
+    for entry in history {
+        let item = HistoryItem { entry };
         let _ = tx_item.send(Arc::new(item));
     }
     drop(tx_item); // Close sender

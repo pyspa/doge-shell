@@ -51,8 +51,31 @@ pub async fn eval_str(
     let input = transform_input_for_smart_pipe(input);
 
     let jobs = get_jobs(shell, &input)?;
-    let mut last_exit_code = 0;
+    let mut last_exit_code = 0_i32;
+    // Operator that gates execution of the *current* job based on the previous job result.
+    // This is effectively "the separator between previous and current job".
+    let mut gate_op = ListOp::None;
     for mut job in jobs {
+        // `list_op` is stored on the *previous* job by the parser.
+        // We keep it here before moving `job` into wait_jobs.
+        let next_gate_op = job.list_op.clone();
+
+        // Decide whether to run this job based on previous operator and last exit code.
+        let should_run = match gate_op {
+            ListOp::None => true,
+            ListOp::And => last_exit_code == 0,
+            ListOp::Or => last_exit_code != 0,
+        };
+
+        if !should_run {
+            debug!(
+                "skip job '{}' due to gate_op:{:?} last_exit_code:{}",
+                job.cmd, gate_op, last_exit_code
+            );
+            gate_op = next_gate_op;
+            continue;
+        }
+
         // Execute pre-exec hooks
         if let Err(e) = shell.exec_pre_exec_hooks(&job.cmd) {
             debug!("Error executing pre-exec hooks: {}", e);
@@ -80,7 +103,7 @@ pub async fn eval_str(
         // Handle capture mode with |>
         if job.capture_output {
             let (exit, stdout, stderr) = execute_with_capture(shell, ctx, &job).await?;
-            last_exit_code = exit as u8;
+            last_exit_code = exit;
 
             // Save to output history
             {
@@ -107,31 +130,33 @@ pub async fn eval_str(
 
             // Re-enable raw mode after capture job
             enable_raw_mode().ok();
+            gate_op = next_gate_op;
             continue;
         }
 
         let launch_result = job.launch(ctx, shell).await;
-        let mut should_break = false;
+        let mut stop_processing = false;
         match launch_result {
             Ok(ProcessState::Running) => {
                 debug!("job '{}' still running", job.cmd);
                 shell.wait_jobs.push(job);
+                // Background jobs are considered successfully started.
+                last_exit_code = 0;
             }
             Ok(ProcessState::Stopped(pid, _signal)) => {
                 debug!("job '{}' stopped pid: {:?}", job.cmd, pid);
                 shell.wait_jobs.push(job);
+                // If a job is stopped, we return control to the user and do not continue
+                // evaluating the rest of the command list.
+                stop_processing = true;
             }
             Ok(ProcessState::Completed(exit, _signal)) => {
                 debug!("job '{}' completed exit_code: {:?}", job.cmd, exit);
-                last_exit_code = exit;
+                last_exit_code = i32::from(exit);
 
                 // Execute post-exec hooks
                 if let Err(e) = shell.exec_post_exec_hooks(&job.cmd, exit as i32) {
                     debug!("Error executing post-exec hooks: {}", e);
-                }
-
-                if job.list_op == ListOp::And && exit != 0 {
-                    should_break = true;
                 }
             }
             Err(err) => {
@@ -148,13 +173,15 @@ pub async fn eval_str(
         // Re-enable raw mode after each job completes
         enable_raw_mode().ok();
 
-        if should_break {
+        gate_op = next_gate_op;
+
+        if stop_processing {
             break;
         }
     }
 
     debug!("EVAL_STR: Job loop completed");
-    Ok(last_exit_code as i32)
+    Ok(last_exit_code)
 }
 
 /// Execute a job and capture its stdout and stderr

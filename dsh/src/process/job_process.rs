@@ -316,7 +316,7 @@ impl JobProcess {
             }
 
             debug!(
-                "PTY_IO_SETUP: Job {} ({}) - final i/o: infile={}, outfile={}, errfile={} (slave={}, slave_applied={})",
+                "JOB_IO_SETUP: Job {} ({}) - final i/o: infile={}, outfile={}, errfile={} (slave={}, slave_applied={})",
                 shell.get_job_id(),
                 self.get_cmd(),
                 ctx.infile,

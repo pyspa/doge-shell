@@ -10,15 +10,54 @@ use super::generators::subcommand::SubCommandGenerator;
 use super::parser::{CommandLineParser, CompletionContext, ParsedCommandLine};
 use crate::dirs::is_executable;
 use anyhow::Result;
+use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::fs::read_dir;
 use std::path::Path;
 use std::sync::LazyLock;
+use std::sync::{Arc, Once};
 use std::time::Duration;
 
 const SYSTEM_COMMAND_CACHE_TTL_MS: u64 = 2000;
 static SYSTEM_COMMAND_CACHE: LazyLock<CompletionCache<CompletionCandidate>> =
     LazyLock::new(|| CompletionCache::new(Duration::from_millis(SYSTEM_COMMAND_CACHE_TTL_MS)));
+
+static GLOBAL_SYSTEM_COMMANDS: LazyLock<Arc<RwLock<Option<HashSet<String>>>>> =
+    LazyLock::new(|| Arc::new(RwLock::new(None)));
+
+static GLOBAL_CACHE_INIT: Once = Once::new();
+
+fn ensure_global_cache_populated() {
+    GLOBAL_CACHE_INIT.call_once(|| {
+        std::thread::spawn(|| {
+            let paths: Vec<std::path::PathBuf> = std::env::var_os("PATH")
+                .map(|p| std::env::split_paths(&p).collect())
+                .unwrap_or_default();
+
+            let mut commands = HashSet::new();
+            for path in paths {
+                if let Ok(entries) = read_dir(&path) {
+                    for entry in entries.flatten() {
+                        if let Ok(ft) = entry.file_type()
+                            && !ft.is_file()
+                            && !ft.is_symlink()
+                        {
+                            continue;
+                        }
+                        if crate::dirs::is_executable(&entry)
+                            && let Some(name) = entry.file_name().to_str()
+                        {
+                            commands.insert(name.to_string());
+                        }
+                    }
+                }
+            }
+
+            let mut guard = GLOBAL_SYSTEM_COMMANDS.write();
+            *guard = Some(commands);
+        });
+    });
+}
 
 #[derive(Debug)]
 pub enum GeneratorError {
@@ -364,51 +403,84 @@ impl<'a> CompletionGenerator<'a> {
             seen_names.insert(current_token.to_string());
         }
 
-        let paths: Vec<std::path::PathBuf> = std::env::var_os("PATH")
-            .map(|p| std::env::split_paths(&p).collect())
-            .unwrap_or_default();
+        // Try global cache first
+        ensure_global_cache_populated();
 
-        for path in paths {
-            if candidates.len() >= super::MAX_RESULT {
-                break;
-            }
-
-            if let Ok(entries) = read_dir(&path) {
-                let mut local_candidates: Vec<String> = Vec::new();
-
-                for entry in entries.flatten() {
-                    let file_name_os = entry.file_name();
-                    let Some(file_name) = file_name_os.to_str() else {
-                        continue;
-                    };
-
-                    if fuzzy_match_score(file_name, current_token).is_none() {
-                        continue;
-                    }
-
-                    if seen_names.contains(file_name) {
-                        continue;
-                    }
-
-                    if let Ok(ft) = entry.file_type()
-                        && !ft.is_file()
-                        && !ft.is_symlink()
-                    {
-                        continue;
-                    }
-
-                    if is_executable(&entry) {
-                        local_candidates.push(file_name.to_string());
-                    }
-                }
+        let cache_hit = {
+            let guard = GLOBAL_SYSTEM_COMMANDS.read();
+            if let Some(commands) = &*guard {
+                // Filter from cache
+                // We want to sort them?
+                let mut local_candidates: Vec<&str> = commands
+                    .iter()
+                    .filter(|cmd| cmd.starts_with(current_token))
+                    .map(|s| s.as_str())
+                    .collect();
 
                 local_candidates.sort();
+
                 for cmd in local_candidates {
                     if candidates.len() >= super::MAX_RESULT {
                         break;
                     }
-                    if seen_names.insert(cmd.clone()) {
-                        candidates.push(CompletionCandidate::subcommand(cmd, None));
+                    if seen_names.insert(cmd.to_string()) {
+                        candidates.push(CompletionCandidate::subcommand(cmd.to_string(), None));
+                    }
+                }
+                true
+            } else {
+                false
+            }
+        };
+
+        if !cache_hit {
+            // Fallback to synchronous scan if cache not ready
+            let paths: Vec<std::path::PathBuf> = std::env::var_os("PATH")
+                .map(|p| std::env::split_paths(&p).collect())
+                .unwrap_or_default();
+
+            for path in paths {
+                if candidates.len() >= super::MAX_RESULT {
+                    break;
+                }
+
+                if let Ok(entries) = read_dir(&path) {
+                    let mut local_candidates: Vec<String> = Vec::new();
+
+                    for entry in entries.flatten() {
+                        let file_name_os = entry.file_name();
+                        let Some(file_name) = file_name_os.to_str() else {
+                            continue;
+                        };
+
+                        if fuzzy_match_score(file_name, current_token).is_none() {
+                            continue;
+                        }
+
+                        if seen_names.contains(file_name) {
+                            continue;
+                        }
+
+                        if let Ok(ft) = entry.file_type()
+                            && !ft.is_file()
+                            && !ft.is_symlink()
+                        {
+                            continue;
+                        }
+
+                        if is_executable(&entry) {
+                            local_candidates.push(file_name.to_string());
+                        }
+                    }
+
+                    local_candidates.sort();
+                    for cmd in local_candidates {
+                        if candidates.len() >= super::MAX_RESULT {
+                            break;
+                        }
+                        if seen_names.insert(cmd.clone()) {
+                            candidates.push(CompletionCandidate::subcommand(cmd, None));
+                        }
                     }
                 }
             }

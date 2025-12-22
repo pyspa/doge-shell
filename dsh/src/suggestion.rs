@@ -879,7 +879,7 @@ mod tests {
         });
 
         let mut history = FrecencyHistory::new();
-        history.store = Some(dsh_frecency::FrecencyStore::default());
+        history.store = Some(std::sync::Arc::new(dsh_frecency::FrecencyStore::default()));
         history.add("git status");
         let history = Arc::new(ParkingMutex::new(history));
 
@@ -908,7 +908,7 @@ mod tests {
         });
 
         let mut history = FrecencyHistory::new();
-        history.store = Some(dsh_frecency::FrecencyStore::default());
+        history.store = Some(std::sync::Arc::new(dsh_frecency::FrecencyStore::default()));
         history.add("npm run test");
         history.add("docker compose up");
         let history = Arc::new(ParkingMutex::new(history));

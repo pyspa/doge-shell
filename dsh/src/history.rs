@@ -11,6 +11,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 
 fn get_current_context() -> Option<String> {
     // Try to get git root
@@ -237,7 +238,7 @@ impl History {
 
 pub struct FrecencyHistory {
     pub path: Option<PathBuf>,
-    pub store: Option<FrecencyStore>,
+    pub store: Option<Arc<FrecencyStore>>,
     histories: Option<Vec<ItemStats>>,
     current_index: usize,
     pub search_word: Option<String>,
@@ -295,7 +296,7 @@ impl FrecencyHistory {
 
         let f = FrecencyHistory {
             path: Some(file_path),
-            store: Some(store),
+            store: Some(Arc::new(store)),
             histories: None,
             current_index: 0,
             search_word: None,
@@ -400,12 +401,13 @@ impl FrecencyHistory {
 
     pub fn save(&mut self) -> Result<()> {
         if let Some(ref file_path) = self.path
-            && let Some(ref store) = self.store
+            && let Some(ref mut store) = self.store
             && store.changed
         {
             let result = write_store(store, file_path);
             if result.is_ok() {
-                let store_mut = self.store.as_mut().unwrap();
+                // make_mut to update changed flag
+                let store_mut = Arc::make_mut(store);
                 store_mut.changed = false;
             }
             return result;
@@ -419,14 +421,22 @@ impl FrecencyHistory {
             && let Some(ref mut store) = self.store
             && store.changed
         {
-            // Clone the store to move into the background thread
-            let store_clone = (*store).clone();
+            // Clone the Arc to move into the background thread (cheap)
+            let store_clone = Arc::clone(store);
             let path_clone = file_path.clone();
 
-            // Reset dirty flag immediately since we are persisting the current state
-            store.changed = false;
+            // Reset dirty flag immediately in the main thread instance
+            // modifying it via make_mut (COW if shared, but here we just cloned for bg)
+            // Wait, if we modify *store now, we fork it from store_clone.
+            // store_clone points to PREVIOUS (dirty) state. CORRECT.
+            // self.store will point to NEW (clean) state.
+            // But wait, if we are just setting changed=false, we fundamentally want them to share data?
+            // No, FrecencyStore logic: we write the snapshot.
+            // Future additions should go to self.store.
+            let store_mut = Arc::make_mut(store);
+            store_mut.changed = false;
 
-            // Spawn blocking task for I/O
+            // Spawn blocking task for I/O using the snapshot
             tokio::task::spawn_blocking(move || {
                 if let Err(e) = write_store(&store_clone, &path_clone) {
                     tracing::warn!("Failed to save history in background: {}", e);
@@ -438,14 +448,14 @@ impl FrecencyHistory {
     pub fn add(&mut self, history: &str) {
         if let Some(ref mut store) = self.store {
             let ctx = get_current_context();
-            store.add(history, ctx);
+            Arc::make_mut(store).add(history, ctx);
         }
     }
 
     /// 強制的にchangedフラグをtrueに設定し、保存を強制する
     pub fn force_changed(&mut self) {
         if let Some(ref mut store) = self.store {
-            store.changed = true;
+            Arc::make_mut(store).changed = true;
             tracing::debug!(
                 "Forcing changed flag to true. Items count: {}",
                 store.items.len()
@@ -681,7 +691,7 @@ mod tests {
 
         let mut history = FrecencyHistory::new();
         history.path = Some(file_path.clone());
-        history.store = Some(dsh_frecency::FrecencyStore::default());
+        history.store = Some(Arc::new(dsh_frecency::FrecencyStore::default()));
 
         // Add "frequent_cmd" 5 times
         for _ in 0..5 {
@@ -747,16 +757,17 @@ mod tests {
         let history_file = temp_dir.path().join("history_context");
         let mut history = FrecencyHistory::new();
         history.path = Some(history_file);
-        history.store = Some(dsh_frecency::FrecencyStore::default());
+        history.store = Some(Arc::new(dsh_frecency::FrecencyStore::default()));
 
         // Simulate usage in Dir A
         if let Some(ref mut store) = history.store {
-            store.add("cmd_common", Some(dir_a_str.clone()));
-            store.add("cmd_unique_a", Some(dir_a_str.clone()));
+            let store_mut = Arc::make_mut(store);
+            store_mut.add("cmd_common", Some(dir_a_str.clone()));
+            store_mut.add("cmd_unique_a", Some(dir_a_str.clone()));
 
             // Simulate usage in Dir B
-            store.add("cmd_common", Some(dir_b_str.clone())); // common cmd used in both
-            store.add("cmd_unique_b", Some(dir_b_str.clone()));
+            store_mut.add("cmd_common", Some(dir_b_str.clone())); // common cmd used in both
+            store_mut.add("cmd_unique_b", Some(dir_b_str.clone()));
         }
 
         // Back to Dir A context
@@ -768,6 +779,65 @@ mod tests {
         // Now context B
         let result_b = history.search_prefix_with_context("cmd_unique", Some(&dir_b_str));
         assert_eq!(result_b, Some("cmd_unique_b".to_string()));
+
+        Ok(())
+    }
+    #[test]
+    fn test_arc_cow_behavior() -> Result<()> {
+        init();
+        let mut history = FrecencyHistory::new();
+        // Create initial store
+        let mut store = dsh_frecency::FrecencyStore::default();
+        store.add("initial_cmd", None);
+        store.changed = true; // Simulate dirty state
+        history.store = Some(Arc::new(store));
+
+        // Create a "snapshot" by cloning the Arc (simulating background save start)
+        let snapshot_arc = Arc::clone(history.store.as_ref().unwrap());
+
+        // Modify history (simulating user typing immediately after save starts)
+        history.add("new_cmd");
+
+        // Force reset change flag on the new state (as save_background does via make_mut)
+        if let Some(ref mut s) = history.store {
+            let s_mut = Arc::make_mut(s);
+            s_mut.changed = false;
+        }
+
+        // Verification:
+        // 1. Snapshot should NOT have "new_cmd"
+        // 2. Snapshot should still be marked as changed=true (from original state)
+        // 3. Current history SHOULD have "new_cmd"
+        // 4. Current history should be changed=false (we reset it)
+
+        let snapshot = snapshot_arc.as_ref();
+        let current = history.store.as_ref().unwrap().as_ref();
+
+        // 1. Snapshot items check
+        assert!(snapshot.items.iter().any(|i| i.item == "initial_cmd"));
+        assert!(!snapshot.items.iter().any(|i| i.item == "new_cmd"));
+
+        // 2. Snapshot dirty flag check
+        assert!(
+            snapshot.changed,
+            "Snapshot should retain original dirty flag"
+        );
+
+        // 3. Current items check
+        assert!(current.items.iter().any(|i| i.item == "initial_cmd"));
+        assert!(current.items.iter().any(|i| i.item == "new_cmd"));
+
+        // 4. Current dirty flag check
+        assert!(
+            !current.changed,
+            "Current store should have dirty flag reset"
+        );
+
+        // 5. Pointer inequality check (proving they are distinct allocations now)
+        assert!(
+            !std::ptr::eq(snapshot, current),
+            "Snapshot and current store should point to different memory locations"
+        );
 
         Ok(())
     }

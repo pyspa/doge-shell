@@ -146,7 +146,8 @@ impl Job {
         ctx.foreground = self.foreground;
 
         if ctx.foreground && ctx.interactive {
-            // "Time Machine" logic: Use PTY for foreground jobs to capture output with color preservation
+            // "Time Machine" logic: Use PTY for foreground jobs to capture output with color preservation.
+            // Only enabled in interactive mode to avoid interference with test captures.
             match Pty::new() {
                 Ok(pty) => {
                     debug!("PTY created: {:?}", pty);

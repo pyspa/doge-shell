@@ -747,6 +747,10 @@ impl ShellProxy for Shell {
     fn is_canceled(&self) -> bool {
         crate::process::signal::check_and_clear_sigint()
     }
+
+    fn get_full_output_history(&self) -> Vec<dsh_types::output_history::OutputEntry> {
+        self.environment.read().output_history.get_all_entries()
+    }
 }
 
 #[cfg(test)]

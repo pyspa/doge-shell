@@ -13,6 +13,7 @@ use thiserror::Error;
 pub mod terminal;
 pub use terminal::{ShellMode, TerminalState};
 pub mod mcp;
+pub mod output_history;
 
 /// Doge Shell specific error types
 #[derive(Error, Debug)]

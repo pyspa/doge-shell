@@ -20,7 +20,8 @@ members = [
 anyhow = "1.0.98"
 thiserror = "2"
 libc = "0.2"
-nix = { version = "0.26", features = ["signal"] }
+nix = { version = "0.26", features = ["signal", "fs", "term", "ioctl", "process"] }
+console = "0.15"
 xdg = "2"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

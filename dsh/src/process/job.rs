@@ -4,7 +4,7 @@ use nix::sys::signal::{Signal, killpg};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::{Pid, close, getpgrp, isatty, setpgid, tcsetpgrp};
 use std::fs::File;
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::io::{AsRawFd, IntoRawFd, RawFd};
 use std::time::Duration;
 use tokio::time;
 use tracing::{debug, error};
@@ -18,6 +18,9 @@ use super::state::{ListOp, ProcessState, SubshellType};
 use super::wait::{is_job_completed, is_job_stopped};
 use crate::shell::{SHELL_TERMINAL, Shell};
 use dsh_types::Context;
+
+use crate::process::pty::Pty;
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
 #[derive(Debug)]
 pub struct Job {
@@ -39,6 +42,9 @@ pub struct Job {
     shell_pgid: Pid,
     /// Whether to capture output for $OUT variable
     pub capture_output: bool,
+    pub pty: Option<Pty>,
+    pub pty_output_task: Option<tokio::task::JoinHandle<Result<String>>>,
+    pub pty_input_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 fn last_process_state(process: JobProcess) -> ProcessState {
@@ -79,6 +85,9 @@ impl Job {
             monitors: Vec::new(),
             shell_pgid,
             capture_output: false,
+            pty: None,
+            pty_output_task: None,
+            pty_input_task: None,
         }
     }
 
@@ -102,6 +111,9 @@ impl Job {
             monitors: Vec::new(),
             shell_pgid,
             capture_output: false,
+            pty: None,
+            pty_output_task: None,
+            pty_input_task: None,
         }
     }
 
@@ -133,12 +145,76 @@ impl Job {
 
         ctx.foreground = self.foreground;
 
-        // Safety Guard check
-        if let Some(process) = &self.process
-            && !process.check_safety(shell)?
-        {
-            return Ok(ProcessState::Completed(1, None));
+        if ctx.foreground {
+            // "Time Machine" logic: Use PTY for foreground jobs to capture output with color preservation
+            match Pty::new() {
+                Ok(pty) => {
+                    debug!("PTY created: {:?}", pty);
+
+                    // Setup Output Monitor (Master -> Stdout + Capture)
+                    // We need a clone of the master for reading
+                    match pty.try_clone() {
+                        Ok(pty_clone) => {
+                            // Transfer ownership of master fd to monitor
+                            let master_fd = pty_clone.master.into_raw_fd();
+                            let mut monitor = super::io::PtyMonitor::new(master_fd);
+
+                            let output_task = tokio::spawn(async move {
+                                monitor.process_output().await?;
+                                // Convert captured output to String (lossy) for history
+                                // Stripping ANSI is done later (or we can do it here if we want to save space)
+                                // For now save with ANSI.
+                                Ok(String::from_utf8_lossy(&monitor.captured_output).to_string())
+                            });
+                            self.pty_output_task = Some(output_task);
+
+                            // Setup Input Proxy (Stdin -> Master)
+                            // This is needed because the job is running in a PTY,
+                            // but we (Shell) are holding the Real Terminal.
+                            // We must forward Real Stdin to PTY Master.
+                            if ctx.interactive {
+                                // Only setup input proxy if we are NOT a builtin
+                                // Builtins usually run in-process and might not need PTY input,
+                                // and holding tokio::io::stdin here can block/mess up the REPL.
+                                let is_builtin = self
+                                    .process
+                                    .as_ref()
+                                    .map(|p| matches!(**p, JobProcess::Builtin(_)))
+                                    .unwrap_or(false);
+
+                                if !is_builtin {
+                                    match pty.try_clone() {
+                                        Ok(pty_in) => {
+                                            let mut master_write =
+                                                tokio::fs::File::from_std(pty_in.master);
+                                            let input_task = tokio::spawn(async move {
+                                                let mut stdin = tokio::io::stdin();
+                                                let _ =
+                                                    tokio::io::copy(&mut stdin, &mut master_write)
+                                                        .await;
+                                            });
+                                            self.pty_input_task = Some(input_task);
+                                        }
+                                        Err(e) => error!("Failed to clone PTY for input: {}", e),
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => error!("Failed to clone PTY for output: {}", e),
+                    }
+
+                    self.pty = Some(pty);
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to create PTY: {}, falling back to normal execution",
+                        e
+                    );
+                }
+            }
         }
+
+        let pty_slave_fd = self.pty.as_ref().map(|p| p.slave.as_raw_fd());
 
         if let Some(process) = self.process.take().as_mut() {
             debug!(
@@ -147,7 +223,7 @@ impl Job {
                 process.get_cmd()
             );
 
-            match self.launch_process(ctx, shell, process) {
+            match self.launch_process(ctx, shell, process, pty_slave_fd) {
                 Ok(_) => {
                     debug!(
                         "JOB_LAUNCH_PROCESS_SUCCESS: Process launched successfully for job {}",
@@ -180,6 +256,20 @@ impl Job {
                         "JOB_LAUNCH_PUT_FOREGROUND: Putting job {} in foreground",
                         self.job_id
                     );
+
+                    // If PTY, we must enable raw mode to proxy input/output correctly
+                    let raw_mode_enabled = if self.pty.is_some() {
+                        match enable_raw_mode() {
+                            Ok(_) => true,
+                            Err(e) => {
+                                error!("Failed to enable raw mode for PTY: {}", e);
+                                false
+                            }
+                        }
+                    } else {
+                        false
+                    };
+
                     match self.put_in_foreground(false, false).await {
                         Ok(_) => {
                             debug!(
@@ -193,6 +283,13 @@ impl Job {
                                 self.job_id, e
                             );
                         }
+                    }
+
+                    if raw_mode_enabled {
+                        // We should disable raw mode after put_in_foreground returns?
+                        // put_in_foreground calls wait_job.
+                        // So we want raw mode active DURING put_in_foreground.
+                        let _ = disable_raw_mode();
                     }
                 } else {
                     debug!(
@@ -229,37 +326,58 @@ impl Job {
         }
 
         // Save output history if we captured anything
-        // Consolidate captured output from monitors
-        // Assuming monitor[0] is stdout (based on launch_process order)
+        // Consolidate captured output from monitors OR PTY task
+
         let mut stdout_cap = String::new();
         let mut stderr_cap = String::new();
 
-        // We need to match monitors to streams.
-        // Logic in launch_process:
-        // 1. stdout (if matches)
-        // 2. stderr (if matches)
-        // This is fragile. But Process::launch_pipe sets cap_stdout and cap_stderr.
-        // And Job::launch_process calls get_cap_out (stdout, stderr).
-        // Then pushes monitors in that order.
+        // Check PTY task first
+        // process is completed, so we can drop the PTY structure.
+        // potentially closing the slave FD held by us.
+        // This is required so the master side sees EOF.
+        self.pty = None;
 
-        let mut monitors_iter = self.monitors.iter();
-        if let Some((Some(_), _)) = self.process.as_ref().map(|p| p.get_cap_out())
-            && let Some(m) = monitors_iter.next()
-        {
-            stdout_cap = m.captured_output.clone();
-        }
-        if let Some((_, Some(_))) = self.process.as_ref().map(|p| p.get_cap_out())
-            && let Some(m) = monitors_iter.next()
-        {
-            stderr_cap = m.captured_output.clone();
+        if let Some(output_task) = self.pty_output_task.take() {
+            // We await the output task. It should finish when PTY master gets EOF (all slaves closed).
+            // But if the process crashed without closing? Kernel handles it.
+            // If we are here, process has Finished (wait_job returned).
+            match output_task.await {
+                Ok(Ok(output)) => {
+                    // Stripping ANSI is handled here or by UI. User wanted preservation.
+                    // We save raw output.
+                    stdout_cap = output;
+                }
+                Ok(Err(e)) => error!("PTY output task failed: {}", e),
+                Err(e) => error!("PTY output task join error: {}", e),
+            }
+
+            // Should also abort input task now if it's still running
+            if let Some(input_task) = self.pty_input_task.take() {
+                input_task.abort();
+            }
+        } else {
+            // Standard monitors (Pipe) logic
+            // Assuming monitor[0] is stdout (based on launch_process order)
+            let mut monitors_iter = self.monitors.iter();
+            if let Some((Some(_), _)) = self.process.as_ref().map(|p| p.get_cap_out())
+                && let Some(m) = monitors_iter.next()
+            {
+                stdout_cap = m.captured_output.clone();
+            }
+            if let Some((_, Some(_))) = self.process.as_ref().map(|p| p.get_cap_out())
+                && let Some(m) = monitors_iter.next()
+            {
+                stderr_cap = m.captured_output.clone();
+            }
         }
 
         if !stdout_cap.is_empty() || !stderr_cap.is_empty() {
-            use crate::output_history::OutputEntry;
-            // We need exit code. final_state calculation comes later.
-            // We'll use 0 if running? No, we should use actual status if available.
-            // But launch returns before job finishes if background.
-            // If foreground, job finished.
+            use dsh_types::output_history::OutputEntry;
+
+            // Strip ANSI for history saving (User Rule: "color restoration is NOT needed for history")
+            // Using console::strip_ansi_codes (we added dependency)
+            let stdout_stripped = console::strip_ansi_codes(&stdout_cap).to_string();
+            let stderr_stripped = console::strip_ansi_codes(&stderr_cap).to_string();
 
             if ctx.foreground {
                 let exit_code = match self.state {
@@ -267,7 +385,13 @@ impl Job {
                     _ => 0,
                 };
 
-                let entry = OutputEntry::new(self.cmd.clone(), stdout_cap, stderr_cap, exit_code);
+                // Use stripped version for history
+                let entry = OutputEntry::new(
+                    self.cmd.clone(),
+                    stdout_stripped,
+                    stderr_stripped,
+                    exit_code,
+                );
                 shell.environment.write().output_history.push(entry);
             }
         }
@@ -292,6 +416,7 @@ impl Job {
         ctx: &mut Context,
         shell: &mut Shell,
         process: &mut JobProcess,
+        pty_slave: Option<RawFd>,
     ) -> Result<()> {
         let previous_infile = ctx.infile;
         let mut _input_file_guard: Option<File> = None;
@@ -307,7 +432,8 @@ impl Job {
         }
 
         // Use launch for automatic capture (modified internal logic)
-        let (pid, mut next_process) = process.launch(ctx, shell, &self.redirect, self.stdout)?;
+        let (pid, mut next_process) =
+            process.launch(ctx, shell, &self.redirect, self.stdout, pty_slave)?;
         if self.pid.is_none() {
             self.pid = Some(pid); // set process pid
         }
@@ -319,29 +445,41 @@ impl Job {
                 ctx.pgid = Some(pid);
                 debug!("set job id: {} pgid: {:?}", self.id, self.pgid);
             }
-            debug!("🔧 PGID: Setting process group for {}", process.get_cmd());
-            debug!(
-                "🔧 PGID: setpgid {} pid:{} pgid:{:?}",
-                process.get_cmd(),
-                pid,
-                self.pgid
-            );
 
-            let target_pgid = self.pgid.unwrap_or(pid);
-            debug!("🔧 PGID: Target pgid: {}", target_pgid);
+            // For PTY jobs, we skip setting the process group in the parent.
+            // The child will call setsid() to create a new session and become the leader.
+            // Calling setpgid() here would make the child a process group leader in the shell's session,
+            // which causes setsid() in the child to fail with EPERM.
+            if pty_slave.is_none() {
+                debug!("🔧 PGID: Setting process group for {}", process.get_cmd());
+                debug!(
+                    "🔧 PGID: setpgid {} pid:{} pgid:{:?}",
+                    process.get_cmd(),
+                    pid,
+                    self.pgid
+                );
 
-            match setpgid(pid, target_pgid) {
-                Ok(_) => debug!(
-                    "🔧 PGID: Successfully set pgid {} for pid {}",
-                    target_pgid, pid
-                ),
-                Err(e) => {
-                    error!(
-                        "🔧 PGID: Failed to set pgid {} for pid {}: {}",
-                        target_pgid, pid, e
-                    );
-                    return Err(e.into());
+                let target_pgid = self.pgid.unwrap_or(pid);
+                debug!("🔧 PGID: Target pgid: {}", target_pgid);
+
+                match setpgid(pid, target_pgid) {
+                    Ok(_) => debug!(
+                        "🔧 PGID: Successfully set pgid {} for pid {}",
+                        target_pgid, pid
+                    ),
+                    Err(e) => {
+                        error!(
+                            "🔧 PGID: Failed to set pgid {} for pid {}: {}",
+                            target_pgid, pid, e
+                        );
+                        return Err(e.into());
+                    }
                 }
+            } else {
+                debug!(
+                    "Skipping parent setpgid for PTY job (child {} will setsid)",
+                    pid
+                );
             }
         }
 
@@ -360,17 +498,25 @@ impl Job {
         if stdin != self.stdin {
             let should_close = match input_fd {
                 Some(fd) => stdin != fd,
-                None => true,
+                None => pty_slave != Some(stdin), // Don't close if it's pty_slave
             };
-            if should_close {
-                close(stdin).context("failed close")?;
+            if should_close && let Err(e) = close(stdin) {
+                debug!("failed close stdin: {}", e);
+                // Don't error out here, just log (avoid crash if EBADF)
             }
         }
-        if stdout != self.stdout {
-            close(stdout).context("failed close stdout")?;
+        if stdout != self.stdout
+            && pty_slave != Some(stdout)
+            && let Err(e) = close(stdout)
+        {
+            debug!("failed close stdout: {}", e);
         }
-        if stderr != self.stderr && stdout != stderr {
-            close(stderr).context("failed close stderr")?;
+        if stderr != self.stderr
+            && stdout != stderr
+            && pty_slave != Some(stderr)
+            && let Err(e) = close(stderr)
+        {
+            debug!("failed close stderr: {}", e);
         }
 
         self.set_process(process.to_owned());
@@ -390,7 +536,7 @@ impl Job {
         if let Some(Err(err)) = next_process
             .take()
             .as_mut()
-            .map(|process| self.launch_process(ctx, shell, process))
+            .map(|process| self.launch_process(ctx, shell, process, pty_slave))
         {
             debug!("err {:?}", err);
             return Err(err);
@@ -417,24 +563,31 @@ impl Job {
         debug!("Terminal environment detected, proceeding with process group control");
 
         // Put the job into the foreground
-        if let Some(pgid) = self.pgid {
-            debug!("Setting foreground process group to {}", pgid);
-            if let Err(err) = tcsetpgrp(SHELL_TERMINAL, pgid) {
-                debug!(
-                    "tcsetpgrp failed: {}, continuing without terminal control",
-                    err
-                );
-            } else {
-                debug!("Successfully set foreground process group to {}", pgid);
-            }
+        // For PTY jobs, we MUST NOT give the shell's terminal control to the job.
+        // The shell proxies input/output to the PTY. If we give up the terminal,
+        // the shell (backgrounded) cannot read from stdin to forward to the PTY.
+        if self.pty.is_none() {
+            if let Some(pgid) = self.pgid {
+                debug!("Setting foreground process group to {}", pgid);
+                if let Err(err) = tcsetpgrp(SHELL_TERMINAL, pgid) {
+                    debug!(
+                        "tcsetpgrp failed: {}, continuing without terminal control",
+                        err
+                    );
+                } else {
+                    debug!("Successfully set foreground process group to {}", pgid);
+                }
 
-            if cont {
-                debug!("Sending SIGCONT to process group {}", pgid);
-                send_signal(pgid, Signal::SIGCONT).context("failed send signal SIGCONT")?;
-                debug!("SIGCONT sent successfully");
+                if cont {
+                    debug!("Sending SIGCONT to process group {}", pgid);
+                    send_signal(pgid, Signal::SIGCONT).context("failed send signal SIGCONT")?;
+                    debug!("SIGCONT sent successfully");
+                }
+            } else {
+                debug!("No pgid available, skipping process group operations");
             }
         } else {
-            debug!("No pgid available, skipping process group operations");
+            debug!("PTY job active, skipping tcsetpgrp (shell remains foreground to proxy I/O)");
         }
 
         debug!("About to call wait_job with no_hang: {}", no_hang);
@@ -475,24 +628,31 @@ impl Job {
         debug!("Terminal environment detected, proceeding with process group control");
 
         // Put the job into the foreground
-        if let Some(pgid) = self.pgid {
-            debug!("Setting foreground process group to {}", pgid);
-            if let Err(err) = tcsetpgrp(SHELL_TERMINAL, pgid) {
-                debug!(
-                    "tcsetpgrp failed: {}, continuing without terminal control",
-                    err
-                );
-            } else {
-                debug!("Successfully set foreground process group to {}", pgid);
-            }
+        // For PTY jobs, we MUST NOT give the shell's terminal control to the job.
+        // The shell proxies input/output to the PTY. If we give up the terminal,
+        // the shell (backgrounded) cannot read from stdin to forward to the PTY.
+        if self.pty.is_none() {
+            if let Some(pgid) = self.pgid {
+                debug!("Setting foreground process group to {}", pgid);
+                if let Err(err) = tcsetpgrp(SHELL_TERMINAL, pgid) {
+                    debug!(
+                        "tcsetpgrp failed: {}, continuing without terminal control",
+                        err
+                    );
+                } else {
+                    debug!("Successfully set foreground process group to {}", pgid);
+                }
 
-            if cont {
-                debug!("Sending SIGCONT to process group {}", pgid);
-                send_signal(pgid, Signal::SIGCONT).context("failed send signal SIGCONT")?;
-                debug!("SIGCONT sent successfully");
+                if cont {
+                    debug!("Sending SIGCONT to process group {}", pgid);
+                    send_signal(pgid, Signal::SIGCONT).context("failed send signal SIGCONT")?;
+                    debug!("SIGCONT sent successfully");
+                }
+            } else {
+                debug!("No pgid available, skipping process group operations");
             }
         } else {
-            debug!("No pgid available, skipping process group operations");
+            debug!("PTY job active, skipping tcsetpgrp (shell remains foreground to proxy I/O)");
         }
 
         debug!("About to call wait_job_sync with no_hang: {}", no_hang);

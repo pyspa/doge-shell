@@ -35,6 +35,7 @@ tracing-subscriber.workspace = true
 cfg-if.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+console.workspace = true
 crossterm.workspace = true
 xdg.workspace = true
 shellexpand.workspace = true

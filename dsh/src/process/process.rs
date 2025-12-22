@@ -10,7 +10,6 @@ use std::os::unix::io::RawFd;
 use std::sync::Arc;
 use tracing::{debug, error};
 
-use super::io::copy_fd;
 use super::job_process::JobProcess;
 use super::state::ProcessState;
 use super::wait::wait_pid_job;
@@ -122,15 +121,24 @@ impl Process {
         interactive: bool,
         foreground: bool,
         environment: Arc<RwLock<Environment>>,
+        pty_slave: Option<RawFd>,
     ) -> Result<()> {
         if interactive {
-            debug!(
-                "setpgid child process {} pid:{} pgid:{} foreground:{}",
-                &self.cmd, pid, pgid, foreground
-            );
-            setpgid(pid, pgid).context("failed setpgid")?;
+            // If using PTY, setsid() will be called later which sets the process group/session.
+            // We must avoid setpgid() making us a leader before setsid() (which causes EPERM).
+            if pty_slave.is_none() {
+                debug!(
+                    "setpgid child process {} pid:{} pgid:{} foreground:{}",
+                    &self.cmd, pid, pgid, foreground
+                );
+                setpgid(pid, pgid).context("failed setpgid")?;
+            } else {
+                debug!("Skipping setpgid for PTY process (setsid will handle it)");
+            }
 
-            if foreground {
+            // If we are using PTY, we don't want to set this process as foreground of the SHELL's terminal
+            // because the Shell will proxy input/output.
+            if foreground && pty_slave.is_none() {
                 tcsetpgrp(SHELL_TERMINAL, pgid).context("failed tcsetpgrp")?;
             }
 
@@ -142,6 +150,35 @@ impl Process {
             let action = SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
             unsafe {
                 let _ = sigaction(Signal::SIGPIPE, &action);
+            }
+        }
+
+        if let Some(slave_fd) = pty_slave {
+            // Create a new session and set the controlling terminal to the PTY
+            // This is crucial for programs like 'ls' to detect they are in a terminal
+            let my_pid = nix::unistd::getpid();
+            let my_pgid = nix::unistd::getpgid(Some(my_pid)).unwrap_or(Pid::from_raw(-1));
+            let my_sid = nix::unistd::getsid(Some(my_pid)).unwrap_or(Pid::from_raw(-1));
+            debug!(
+                "setsid check: pid={} pgid={} sid={}",
+                my_pid, my_pgid, my_sid
+            );
+
+            match nix::unistd::setsid() {
+                Ok(new_sid) => {
+                    debug!("setsid success: new_sid={}", new_sid);
+                }
+                Err(e) => {
+                    error!("setsid failed raw error: {:?}", e);
+                    return Err(anyhow::anyhow!("setsid failed: {}", e));
+                }
+            }
+
+            unsafe {
+                if libc::ioctl(slave_fd, libc::TIOCSCTTY, 0) != 0 {
+                    // ignore error? sometimes it fails if already leader
+                    debug!("ioctl TIOCSCTTY failed (may be already leader)");
+                }
             }
         }
 
@@ -177,20 +214,61 @@ impl Process {
             .collect();
 
         debug!(
-            "launch: execve cmd:{:?} argv:{:?} foreground:{:?} infile:{:?} outfile:{:?} pid:{:?} pgid:{:?}",
-            cmd, argv, foreground, self.stdin, self.stdout, pid, pgid,
+            "launch: execve cmd:{:?} argv:{:?} foreground:{:?} infile:{:?} outfile:{:?} pid:{:?} pgid:{:?} pty:{:?}",
+            cmd, argv, foreground, self.stdin, self.stdout, pid, pgid, pty_slave
         );
 
-        copy_fd(self.stdin, STDIN_FILENO)?;
+        // Standard IO setup (PTY slave is handled via self.stdin/stdout/stderr being set to it by caller if needed)
+
+        // 1. Handle STDIN
+        if self.stdin != STDIN_FILENO {
+            dup2(self.stdin, STDIN_FILENO)
+                .map_err(|e| anyhow::anyhow!("dup2 stdin failed: {}", e))?;
+        }
+        // Don't close stdin yet if it matches stdout or stderr, as we need it for subsequent dup2 calls
+        let keep_stdin = self.stdin == self.stdout || self.stdin == self.stderr;
+        if self.stdin > 2 && !keep_stdin {
+            close(self.stdin).map_err(|e| anyhow::anyhow!("close stdin failed: {}", e))?;
+        }
+
+        // 2. Handle STDOUT & STDERR
         if self.stdout == self.stderr {
-            dup2(self.stdout, STDOUT_FILENO)
-                .map_err(|e| anyhow::anyhow!("dup2 stdout failed: {}", e))?;
-            dup2(self.stderr, STDERR_FILENO)
-                .map_err(|e| anyhow::anyhow!("dup2 stderr failed: {}", e))?;
-            close(self.stdout).map_err(|e| anyhow::anyhow!("close stdout failed: {}", e))?;
+            // Combined stdout/stderr (e.g. PTY or redirected to same file)
+            if self.stdout != STDOUT_FILENO {
+                dup2(self.stdout, STDOUT_FILENO)
+                    .map_err(|e| anyhow::anyhow!("dup2 stdout failed: {}", e))?;
+            }
+            if self.stderr != STDERR_FILENO {
+                dup2(self.stderr, STDERR_FILENO)
+                    .map_err(|e| anyhow::anyhow!("dup2 stderr failed: {}", e))?;
+            }
+
+            // Close the source if it is > 2.
+            // Even if it was kept open from stdin check above, we are now done with it.
+            if self.stdout > 2 {
+                close(self.stdout).map_err(|e| anyhow::anyhow!("close stdout failed: {}", e))?;
+            }
         } else {
-            copy_fd(self.stdout, STDOUT_FILENO)?;
-            copy_fd(self.stderr, STDERR_FILENO)?;
+            // Separate stdout/stderr
+            if self.stdout != STDOUT_FILENO {
+                dup2(self.stdout, STDOUT_FILENO)
+                    .map_err(|e| anyhow::anyhow!("dup2 stdout failed: {}", e))?;
+                // If stdout matched stdin, it was kept open. Now we can close it.
+                if self.stdout > 2 {
+                    close(self.stdout)
+                        .map_err(|e| anyhow::anyhow!("close stdout failed: {}", e))?;
+                }
+            }
+
+            if self.stderr != STDERR_FILENO {
+                dup2(self.stderr, STDERR_FILENO)
+                    .map_err(|e| anyhow::anyhow!("dup2 stderr failed: {}", e))?;
+                // If stderr matched stdin, it was kept open. Now close it.
+                if self.stderr > 2 {
+                    close(self.stderr)
+                        .map_err(|e| anyhow::anyhow!("close stderr failed: {}", e))?;
+                }
+            }
         }
         match execve(&cmd, &argv, &envp) {
             Ok(_) => Ok(()),

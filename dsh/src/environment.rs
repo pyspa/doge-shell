@@ -1,13 +1,13 @@
 use crate::completion::AutoComplete;
 use crate::direnv::DirEnvironment;
 use crate::dirs::search_file;
-use crate::output_history::{self, OutputHistory};
 use crate::shell::APP_NAME;
 use crate::suggestion::{InputPreferences, SuggestionMode};
 use anyhow::Context as _;
 use anyhow::Result;
 use dsh_builtin::McpManager;
 use dsh_types::mcp::McpServerConfig;
+use dsh_types::output_history::{self, OutputHistory};
 use parking_lot::RwLock;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};

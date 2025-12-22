@@ -1,5 +1,5 @@
 use anyhow::Result;
-use dsh_types::{Context, ExitStatus, mcp::McpServerConfig};
+use dsh_types::{Context, ExitStatus, mcp::McpServerConfig, output_history::OutputEntry};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -35,6 +35,7 @@ mod read;
 mod reload;
 pub mod serve;
 mod set;
+pub mod timemachine;
 mod uuid;
 mod var;
 mod z;
@@ -114,6 +115,9 @@ pub trait ShellProxy {
     fn is_canceled(&self) -> bool {
         false
     }
+
+    /// Get the full output history
+    fn get_full_output_history(&self) -> Vec<OutputEntry>;
 }
 
 use std::any::Any;
@@ -361,6 +365,15 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             Box::new(BuiltinCommandFn::new(
                 out::print_last_stdout,
                 out::print_last_stdout_description(),
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+
+        // Time Machine command
+        builtin.insert(
+            "timemachine",
+            Box::new(BuiltinCommandFn::new(
+                timemachine::command,
+                timemachine::description(),
             )) as Box<dyn BuiltinCommandTrait>,
         );
 

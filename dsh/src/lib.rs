@@ -116,25 +116,39 @@ pub async fn run_shell() -> ExitCode {
     let env = Environment::new();
     let mut shell = Shell::new(env);
 
-    // Initialize command history
-    match crate::history::FrecencyHistory::from_file("dsh_cmd_history") {
-        Ok(history) => {
-            shell.cmd_history = Some(std::sync::Arc::new(parking_lot::Mutex::new(history)));
-        }
-        Err(e) => {
-            tracing::warn!("Failed to load command history: {}", e);
-        }
-    }
+    // Initialize command history (Async)
+    let cmd_history = std::sync::Arc::new(parking_lot::Mutex::new(
+        crate::history::FrecencyHistory::new(),
+    ));
+    shell.cmd_history = Some(cmd_history.clone());
 
-    // Initialize directory history
-    match crate::history::FrecencyHistory::from_file("dsh_directory_history") {
-        Ok(history) => {
-            shell.path_history = Some(std::sync::Arc::new(parking_lot::Mutex::new(history)));
+    std::thread::spawn(move || {
+        match crate::history::FrecencyHistory::from_file("dsh_cmd_history") {
+            Ok(history) => {
+                *cmd_history.lock() = history;
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load command history: {}", e);
+            }
         }
-        Err(e) => {
-            tracing::warn!("Failed to load directory history: {}", e);
+    });
+
+    // Initialize directory history (Async)
+    let path_history = std::sync::Arc::new(parking_lot::Mutex::new(
+        crate::history::FrecencyHistory::new(),
+    ));
+    shell.path_history = Some(path_history.clone());
+
+    std::thread::spawn(move || {
+        match crate::history::FrecencyHistory::from_file("dsh_directory_history") {
+            Ok(history) => {
+                *path_history.lock() = history;
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load directory history: {}", e);
+            }
         }
-    }
+    });
 
     // Initialize Notebook Mode if requested
     if let Some(notebook_path) = cli.notebook {

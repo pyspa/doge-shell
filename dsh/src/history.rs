@@ -841,4 +841,52 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_async_history_update() {
+        use parking_lot::Mutex;
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        // Simulate the async loading pattern used in lib.rs
+        let history = Arc::new(Mutex::new(FrecencyHistory::new()));
+        let history_clone = history.clone();
+
+        // Barrier to synchronize start
+        let barrier = Arc::new(Barrier::new(2));
+        let barrier_clone = barrier.clone();
+
+        let handle = thread::spawn(move || {
+            barrier_clone.wait();
+            // Simulate heavy load
+            let mut store = FrecencyStore::default();
+            store.add("async_cmd", None);
+
+            // "Load" complete - swap data
+            let mut guard = history_clone.lock();
+            guard.store = Some(Arc::new(store));
+        });
+
+        // Initially empty
+        assert!(
+            history.lock().store.is_none()
+                || history.lock().store.as_ref().unwrap().items.is_empty()
+        );
+
+        barrier.wait();
+        handle.join().unwrap();
+
+        // Should now have data
+        let guard = history.lock();
+        assert!(guard.store.is_some());
+        assert!(
+            guard
+                .store
+                .as_ref()
+                .unwrap()
+                .items
+                .iter()
+                .any(|i| i.item == "async_cmd")
+        );
+    }
 }

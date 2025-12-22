@@ -16,6 +16,13 @@ use super::wait::wait_pid_job;
 use crate::shell::SHELL_TERMINAL;
 use dsh_types::ExitStatus;
 
+#[derive(Debug)]
+pub struct PreparedExecution {
+    pub cmd: CString,
+    pub argv: Vec<CString>,
+    pub envp: Vec<CString>,
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct Process {
     pub(crate) cmd: String,
@@ -114,6 +121,57 @@ impl Process {
         Ok(())
     }
 
+    pub fn prepare_execution(
+        &self,
+        environment: Arc<RwLock<Environment>>,
+    ) -> Result<PreparedExecution> {
+        let cmd = CString::new(self.cmd.clone()).context("failed new CString")?;
+        let argv: Result<Vec<CString>> = self
+            .argv
+            .clone()
+            .into_iter()
+            .map(|a| {
+                CString::new(a).map_err(|e| anyhow::anyhow!("failed to create CString: {}", e))
+            })
+            .collect();
+        let argv = argv?;
+
+        // Build environment for child process
+        let env_guard = environment.read();
+        let mut env_map: HashMap<String, String> = env_guard.system_env_vars.clone();
+        for key in &env_guard.exported_vars {
+            if let Some(value) = env_guard.variables.get(key) {
+                env_map.insert(key.clone(), value.clone());
+            }
+        }
+
+        // Ensure TERM is set, falling back to xterm if missing or empty
+        if let Some(term) = env_map.get("TERM") {
+            if term.is_empty() {
+                debug!("TERM is empty, defaulting to xterm-256color");
+                env_map.insert("TERM".to_string(), "xterm-256color".to_string());
+            } else {
+                debug!("TERM is set to: {}", term);
+            }
+        } else {
+            debug!("TERM environment variable missing, defaulting to xterm-256color");
+            env_map.insert("TERM".to_string(), "xterm-256color".to_string());
+        }
+
+        if let Some(ls_colors) = env_map.get("LS_COLORS") {
+            debug!("LS_COLORS is set (len: {})", ls_colors.len());
+        } else {
+            debug!("LS_COLORS is NOT set");
+        }
+
+        let envp: Vec<CString> = env_map
+            .into_iter()
+            .map(|(k, v)| CString::new(format!("{}={}", k, v)).unwrap())
+            .collect();
+
+        Ok(PreparedExecution { cmd, argv, envp })
+    }
+
     pub fn launch(
         &mut self,
         pid: Pid,
@@ -123,6 +181,20 @@ impl Process {
         environment: Arc<RwLock<Environment>>,
         pty_slave: Option<RawFd>,
     ) -> Result<()> {
+        let prepared = self.prepare_execution(environment)?;
+        self.launch_prepared(pid, pgid, interactive, foreground, prepared, pty_slave)
+    }
+
+    pub fn launch_prepared(
+        &mut self,
+        pid: Pid,
+        pgid: Pid,
+        interactive: bool,
+        foreground: bool,
+        prepared: PreparedExecution,
+        pty_slave: Option<RawFd>,
+    ) -> Result<()> {
+        let PreparedExecution { cmd, argv, envp } = prepared;
         if interactive {
             // If using PTY, setsid() will be called later which sets the process group/session.
             // We must avoid setpgid() making us a leader before setsid() (which causes EPERM).
@@ -182,49 +254,7 @@ impl Process {
             }
         }
 
-        let cmd = CString::new(self.cmd.clone()).context("failed new CString")?;
-        let argv: Result<Vec<CString>> = self
-            .argv
-            .clone()
-            .into_iter()
-            .map(|a| {
-                CString::new(a).map_err(|e| anyhow::anyhow!("failed to create CString: {}", e))
-            })
-            .collect();
-        let argv = argv?;
-
-        // Build environment for child process
-        let env_guard = environment.read();
-        let mut env_map: HashMap<String, String> = env_guard.system_env_vars.clone();
-        for key in &env_guard.exported_vars {
-            if let Some(value) = env_guard.variables.get(key) {
-                env_map.insert(key.clone(), value.clone());
-            }
-        }
-
-        // Ensure TERM is set, falling back to xterm if missing or empty
-        if let Some(term) = env_map.get("TERM") {
-            if term.is_empty() {
-                debug!("TERM is empty, defaulting to xterm-256color");
-                env_map.insert("TERM".to_string(), "xterm-256color".to_string());
-            } else {
-                debug!("TERM is set to: {}", term);
-            }
-        } else {
-            debug!("TERM environment variable missing, defaulting to xterm-256color");
-            env_map.insert("TERM".to_string(), "xterm-256color".to_string());
-        }
-
-        if let Some(ls_colors) = env_map.get("LS_COLORS") {
-            debug!("LS_COLORS is set (len: {})", ls_colors.len());
-        } else {
-            debug!("LS_COLORS is NOT set");
-        }
-
-        let envp: Vec<CString> = env_map
-            .into_iter()
-            .map(|(k, v)| CString::new(format!("{}={}", k, v)).unwrap())
-            .collect();
+        // cmd, argv, envp are already prepared in `prepared`
 
         debug!(
             "launch: execve cmd:{:?} argv:{:?} foreground:{:?} infile:{:?} outfile:{:?} pid:{:?} pgid:{:?} pty:{:?}",
@@ -342,5 +372,50 @@ mod tests {
             process.state,
             ProcessState::Stopped(_, Signal::SIGSTOP)
         ));
+    }
+    #[test]
+    fn test_prepare_execution() {
+        init();
+        let env_arc = Environment::new();
+        {
+            let mut env = env_arc.write();
+            env.variables
+                .insert("TEST_VAR".to_string(), "test_value".to_string());
+            env.exported_vars.insert("TEST_VAR".to_string());
+        }
+
+        let process = Process::new(
+            "echo".to_string(),
+            vec!["echo".to_string(), "hello".to_string()],
+        );
+
+        let prepared = process
+            .prepare_execution(env_arc)
+            .expect("Failed to prepare execution");
+
+        assert_eq!(prepared.cmd.to_string_lossy(), "echo");
+
+        assert_eq!(prepared.argv.len(), 2);
+        assert_eq!(prepared.argv[0].to_string_lossy(), "echo");
+        assert_eq!(prepared.argv[1].to_string_lossy(), "hello");
+
+        let env_vec: Vec<String> = prepared
+            .envp
+            .iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect();
+
+        // Check for our custom var
+        assert!(
+            env_vec.contains(&"TEST_VAR=test_value".to_string()),
+            "Environment should contain TEST_VAR"
+        );
+
+        // Check for TERM (should be defaulted to xterm-256color since we removed it from system_env_vars in the mock)
+        // Note: Environment::new() copies real env vars into system_env_vars.
+        assert!(
+            env_vec.iter().any(|s| s.starts_with("TERM=")),
+            "Environment should contain TERM"
+        );
     }
 }

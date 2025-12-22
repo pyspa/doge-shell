@@ -119,6 +119,10 @@ pub(crate) fn fork_process(
     );
 
     debug!("🍴 FORK: About to fork external process");
+
+    // Prepare execution data BEFORE forking to avoid allocation/locks in child
+    let prepared = process.prepare_execution(shell.environment.clone())?;
+
     let pid = unsafe { fork().context("failed fork")? };
 
     match pid {
@@ -137,12 +141,12 @@ pub(crate) fn fork_process(
             debug!("🍴 FORK: Child process - pid: {}, pgid: {}", pid, pgid);
             debug!("🍴 FORK: Child process about to launch");
 
-            if let Err(e) = process.launch(
+            if let Err(e) = process.launch_prepared(
                 pid,
                 pgid,
                 ctx.interactive,
                 ctx.foreground,
-                shell.environment.clone(),
+                prepared,
                 pty_slave,
             ) {
                 error!("🍴 FORK: Child process launch failed: {}", e);

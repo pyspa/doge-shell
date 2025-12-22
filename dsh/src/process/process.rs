@@ -4,7 +4,7 @@ use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 use nix::unistd::{Pid, close, dup2, execve, setpgid, tcsetpgrp};
 use parking_lot::RwLock;
-use std::collections::HashMap;
+
 use std::ffi::CString;
 use std::os::unix::io::RawFd;
 use std::sync::Arc;
@@ -136,38 +136,106 @@ impl Process {
             .collect();
         let argv = argv?;
 
-        // Build environment for child process
+        // Build environment for child process without intermediate HashMap cloning
         let env_guard = environment.read();
-        let mut env_map: HashMap<String, String> = env_guard.system_env_vars.clone();
+
+        // Calculate minimal capacity to avoid re-allocations
+        // (system vars + exported vars, though some might overlap)
+        let estimated_cap = env_guard.system_env_vars.len() + env_guard.exported_vars.len();
+        let mut envp: Vec<CString> = Vec::with_capacity(estimated_cap + 2); // +2 for TERM, LS_COLORS fallback
+
+        // 1. Add system vars that are NOT overridden by exported vars
+        for (key, val) in &env_guard.system_env_vars {
+            if !env_guard.exported_vars.contains(key) {
+                // Special handling for TERM: if empty, skip so we can default it later
+                if key == "TERM" && val.is_empty() {
+                    continue;
+                }
+                if let Ok(c_str) = CString::new(format!("{}={}", key, val)) {
+                    envp.push(c_str);
+                }
+            }
+        }
+
+        // Environment map for quick lookups for special vars like TERM
+        // We only populate this lightly or check directly if possible.
+        // Actually, we need to check if TERM/LS_COLORS are set in the FINAL environment.
+        // We can track this with booleans.
+        let mut term_set = false;
+        let mut ls_colors_set = false;
+
+        // 2. Add exported vars (overriding system vars)
         for key in &env_guard.exported_vars {
             if let Some(value) = env_guard.variables.get(key) {
-                env_map.insert(key.clone(), value.clone());
+                if key == "TERM" {
+                    if value.is_empty() {
+                        continue;
+                    }
+                    term_set = true;
+                }
+                if key == "LS_COLORS" {
+                    ls_colors_set = true;
+                }
+
+                if let Ok(c_str) = CString::new(format!("{}={}", key, value)) {
+                    envp.push(c_str);
+                }
             }
+        }
+
+        // Check if TERM was set in system vars (if not overridden)
+        if !term_set {
+            // It might be in system_env_vars and NOT in exported_vars
+            // in which case it was added in step 1.
+            // We need to check if we added it?
+            // Or simpler: check existence in the appropriate source.
+            if env_guard.exported_vars.contains("TERM") {
+                // It is in exported vars, so `term_set` logic handles it (it was true if var exists).
+                // If it's in exported_vars but NOT in variables, it's effectively unset?
+                // Logic in original code: `if let Some(value) = variables.get(key) { insert }`.
+                // So if it's exported but missing value, it's not added.
+            } else {
+                // Not exported. Check system.
+                if let Some(val) = env_guard.system_env_vars.get("TERM")
+                    && !val.is_empty()
+                {
+                    term_set = true;
+                }
+            }
+        }
+
+        if !ls_colors_set
+            && (env_guard.exported_vars.contains("LS_COLORS")
+                || env_guard.system_env_vars.contains_key("LS_COLORS"))
+        {
+            ls_colors_set = true;
         }
 
         // Ensure TERM is set, falling back to xterm if missing or empty
-        if let Some(term) = env_map.get("TERM") {
-            if term.is_empty() {
-                debug!("TERM is empty, defaulting to xterm-256color");
-                env_map.insert("TERM".to_string(), "xterm-256color".to_string());
-            } else {
-                debug!("TERM is set to: {}", term);
-            }
-        } else {
+        if !term_set {
             debug!("TERM environment variable missing, defaulting to xterm-256color");
-            env_map.insert("TERM".to_string(), "xterm-256color".to_string());
+            envp.push(CString::new("TERM=xterm-256color").unwrap());
+        } else {
+            // Debug logging for TERM if needed, but we don't have the value easily accessible here without iterating
+            // Retaining behavior of "defaulting if empty" is tricky without map.
+            // But usually env vars are not empty string if unset.
+            // If TERM is set to "", original code defaulted.
+            // We skip that check for perf? Or iter to check?
+            // "if term.is_empty()" check is valuable.
+            // To support this, we might need to check the value when adding.
+            // Let's refine the loop above.
         }
 
-        if let Some(ls_colors) = env_map.get("LS_COLORS") {
-            debug!("LS_COLORS is set (len: {})", ls_colors.len());
+        if ls_colors_set {
+            debug!("LS_COLORS is set");
         } else {
             debug!("LS_COLORS is NOT set");
         }
 
-        let envp: Vec<CString> = env_map
-            .into_iter()
-            .map(|(k, v)| CString::new(format!("{}={}", k, v)).unwrap())
-            .collect();
+        // Final sanity check for TERM empty value if we want strict parity?
+        // Original code: if env_map.get("TERM").unwrap().is_empty() -> set default.
+        // We can ignore this edge case for now or handle it if critical.
+        // Assuming TERM="" is rare/user error. Defaults usually handle missing key.
 
         Ok(PreparedExecution { cmd, argv, envp })
     }
@@ -417,5 +485,102 @@ mod tests {
             env_vec.iter().any(|s| s.starts_with("TERM=")),
             "Environment should contain TERM"
         );
+    }
+    #[test]
+    fn test_prepare_execution_env_optimization() {
+        init();
+        let env_arc = Environment::new();
+        {
+            let mut env = env_arc.write();
+            // Clear default system vars to have a predictable test state
+            env.system_env_vars.clear();
+
+            // 1. Set a system var
+            env.system_env_vars
+                .insert("SYSTEM_VAR".into(), "sys_val".into());
+            // 2. Set an exported var
+            env.exported_vars.insert("EXPORTED_VAR".into());
+            env.variables
+                .insert("EXPORTED_VAR".into(), "exp_val".into());
+            // 3. Set a var that is both (override)
+            env.system_env_vars
+                .insert("OVERRIDDEN".into(), "old_val".into());
+            env.exported_vars.insert("OVERRIDDEN".into());
+            env.variables.insert("OVERRIDDEN".into(), "new_val".into());
+        }
+
+        let process = Process::new("echo".into(), vec![]);
+        let prepared = process.prepare_execution(env_arc).expect("prepare failed");
+
+        let env_strs: Vec<String> = prepared
+            .envp
+            .iter()
+            .map(|c| c.to_str().unwrap().to_string())
+            .collect();
+
+        // Check content
+        assert!(env_strs.contains(&"SYSTEM_VAR=sys_val".to_string()));
+        assert!(env_strs.contains(&"EXPORTED_VAR=exp_val".to_string()));
+        assert!(env_strs.contains(&"OVERRIDDEN=new_val".to_string()));
+        assert!(!env_strs.contains(&"OVERRIDDEN=old_val".to_string()));
+
+        // Term default check (since cleared, should add default)
+        assert!(env_strs.contains(&"TERM=xterm-256color".to_string()));
+    }
+
+    #[test]
+    fn test_prepare_execution_term_handling_edge_cases() {
+        init();
+        // Case 1: TERM in system env, not exported -> Should be preserved
+        let env_arc = Environment::new();
+        {
+            let mut env = env_arc.write();
+            env.system_env_vars.clear();
+            env.system_env_vars.insert("TERM".into(), "dumb".into());
+        }
+        let process = Process::new("echo".into(), vec![]);
+        let prepared = process.prepare_execution(env_arc).unwrap();
+        let env_strs: Vec<String> = prepared
+            .envp
+            .iter()
+            .map(|c| c.to_str().unwrap().to_string())
+            .collect();
+        assert!(env_strs.contains(&"TERM=dumb".to_string()));
+        assert!(!env_strs.contains(&"TERM=xterm-256color".to_string()));
+
+        // Case 2: TERM exported, empty value -> Should fall back to default
+        let env_arc = Environment::new();
+        {
+            let mut env = env_arc.write();
+            env.system_env_vars.clear();
+            env.exported_vars.insert("TERM".into());
+            env.variables.insert("TERM".into(), "".into());
+        }
+
+        let process = Process::new("echo".into(), vec![]);
+        let prepared = process.prepare_execution(env_arc).unwrap();
+        let env_strs: Vec<String> = prepared
+            .envp
+            .iter()
+            .map(|c| c.to_str().unwrap().to_string())
+            .collect();
+        assert!(env_strs.contains(&"TERM=xterm-256color".to_string()));
+
+        // Case 3: TERM in system env is EMPTY -> Should fall back to default
+        let env_arc = Environment::new();
+        {
+            let mut env = env_arc.write();
+            env.system_env_vars.clear();
+            env.system_env_vars.insert("TERM".into(), "".into());
+        }
+
+        let process = Process::new("echo".into(), vec![]);
+        let prepared = process.prepare_execution(env_arc).unwrap();
+        let env_strs: Vec<String> = prepared
+            .envp
+            .iter()
+            .map(|c| c.to_str().unwrap().to_string())
+            .collect();
+        assert!(env_strs.contains(&"TERM=xterm-256color".to_string()));
     }
 }

@@ -25,9 +25,14 @@ impl Default for FrecencyStore {
 
 impl FrecencyStore {
     /// Remove all but the top N (sorted by `sort_method`) from the `UsageStore`
+    /// IMPORTANT: This method restores the name-sorted invariant after truncation.
     pub fn truncate(&mut self, keep_num: usize, sort_method: &SortMethod) {
         let mut sorted_vec = self.sorted(sort_method);
-        sorted_vec.truncate(keep_num);
+        if sorted_vec.len() > keep_num {
+            sorted_vec.truncate(keep_num);
+        }
+        // Restore name-sorted order for get() and search_prefix_range()
+        sorted_vec.sort_by(|a, b| a.item.cmp(&b.item));
         self.items = sorted_vec;
     }
 
@@ -122,6 +127,18 @@ impl FrecencyStore {
     /// If the item does not exist, create it and return a reference to the created item
     /// Retrieve a mutable reference to a item in the store.
     /// If the item does not exist, create it and return a reference to the created item
+    /// Get the range of items that start with the given prefix.
+    /// Since items are sorted by name, we can use binary search to find the start.
+    pub fn search_prefix_range(&self, prefix: &str) -> std::ops::Range<usize> {
+        let start = self
+            .items
+            .partition_point(|item| item.item.as_str() < prefix);
+
+        let end = start + self.items[start..].partition_point(|item| item.item.starts_with(prefix));
+
+        start..end
+    }
+
     fn get(&mut self, item: &str, context: Option<String>) -> &mut ItemStats {
         match self
             .items

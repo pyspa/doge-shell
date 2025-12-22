@@ -1,11 +1,16 @@
 use anyhow::{Context as _, Result};
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
+use nix::errno::Errno;
+use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::sys::signal::{Signal, killpg};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+use nix::unistd::read;
 use nix::unistd::{Pid, close, getpgrp, isatty, setpgid, tcsetpgrp};
 use std::fs::File;
 use std::os::unix::io::{AsRawFd, IntoRawFd, RawFd};
 use std::time::Duration;
+use tokio::io::AsyncWriteExt;
+use tokio::io::unix::AsyncFd;
 use tokio::time;
 use tracing::{debug, error};
 
@@ -21,6 +26,39 @@ use dsh_types::Context;
 
 use crate::process::pty::Pty;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+
+#[derive(Debug, Clone, Copy)]
+struct BorrowedFd(RawFd);
+
+impl AsRawFd for BorrowedFd {
+    fn as_raw_fd(&self) -> RawFd {
+        self.0
+    }
+}
+
+struct NonBlockingFdGuard {
+    fd: RawFd,
+    original_flags: OFlag,
+}
+
+impl NonBlockingFdGuard {
+    fn new(fd: RawFd) -> std::io::Result<Self> {
+        let raw_flags = fcntl(fd, FcntlArg::F_GETFL).map_err(std::io::Error::other)?;
+        let original_flags = OFlag::from_bits_truncate(raw_flags);
+        let new_flags = original_flags | OFlag::O_NONBLOCK;
+        if new_flags != original_flags {
+            fcntl(fd, FcntlArg::F_SETFL(new_flags)).map_err(std::io::Error::other)?;
+        }
+        Ok(Self { fd, original_flags })
+    }
+}
+
+impl Drop for NonBlockingFdGuard {
+    fn drop(&mut self) {
+        // Best-effort restore.
+        let _ = fcntl(self.fd, FcntlArg::F_SETFL(self.original_flags));
+    }
+}
 
 #[derive(Debug)]
 pub struct Job {
@@ -201,10 +239,82 @@ impl Job {
                                             let mut master_write =
                                                 tokio::fs::File::from_std(pty_in.master);
                                             let input_task = tokio::spawn(async move {
-                                                let mut stdin = tokio::io::stdin();
-                                                let _ =
-                                                    tokio::io::copy(&mut stdin, &mut master_write)
+                                                let _nonblock =
+                                                    NonBlockingFdGuard::new(STDIN_FILENO);
+                                                let stdin = match AsyncFd::new(BorrowedFd(
+                                                    STDIN_FILENO,
+                                                )) {
+                                                    Ok(fd) => fd,
+                                                    Err(e) => {
+                                                        error!(
+                                                            "Failed to setup async stdin proxy for PTY: {}",
+                                                            e
+                                                        );
+                                                        // Fallback to legacy stdin copy.
+                                                        let mut stdin = tokio::io::stdin();
+                                                        let _ = tokio::io::copy(
+                                                            &mut stdin,
+                                                            &mut master_write,
+                                                        )
                                                         .await;
+                                                        return;
+                                                    }
+                                                };
+
+                                                let mut buf = [0u8; 4096];
+                                                loop {
+                                                    let mut readable = match stdin.readable().await
+                                                    {
+                                                        Ok(r) => r,
+                                                        Err(e) => {
+                                                            debug!(
+                                                                "PTY stdin proxy: readable() failed: {}",
+                                                                e
+                                                            );
+                                                            break;
+                                                        }
+                                                    };
+
+                                                    let read_res =
+                                                        readable.try_io(|_| {
+                                                            match read(STDIN_FILENO, &mut buf) {
+                                                            Ok(n) => Ok(n),
+                                                            Err(Errno::EAGAIN) => Err(
+                                                                std::io::Error::new(
+                                                                    std::io::ErrorKind::WouldBlock,
+                                                                    "stdin would block",
+                                                                ),
+                                                            ),
+                                                            Err(e) => Err(std::io::Error::other(
+                                                                e,
+                                                            )),
+                                                        }
+                                                        });
+
+                                                    let n = match read_res {
+                                                        Ok(Ok(n)) => n,
+                                                        Ok(Err(e)) => {
+                                                            debug!(
+                                                                "PTY stdin proxy: read failed: {}",
+                                                                e
+                                                            );
+                                                            break;
+                                                        }
+                                                        Err(_would_block) => continue,
+                                                    };
+
+                                                    if n == 0 {
+                                                        break;
+                                                    }
+
+                                                    if master_write
+                                                        .write_all(&buf[..n])
+                                                        .await
+                                                        .is_err()
+                                                    {
+                                                        break;
+                                                    }
+                                                }
                                             });
                                             self.pty_input_task = Some(input_task);
                                         }
@@ -248,6 +358,14 @@ impl Job {
                         "JOB_LAUNCH_PROCESS_ERROR: Failed to launch process for job {}: {}",
                         self.job_id, e
                     );
+                    // Ensure cleanup of PTY tasks if launch fails
+                    if let Some(input_task) = self.pty_input_task.take() {
+                        input_task.abort();
+                        let _ = input_task.await;
+                    }
+                    if let Some(output_task) = self.pty_output_task.take() {
+                        output_task.abort();
+                    }
                     return Err(e);
                 }
             }
@@ -367,6 +485,10 @@ impl Job {
             // Should also abort input task now if it's still running
             if let Some(input_task) = self.pty_input_task.take() {
                 input_task.abort();
+                // Ensure we wait for the task to finish cleanup (restore STDIN flags)
+                // If we don't wait, the NonBlockingFdGuard destructor might run AFTER we return to the shell loop,
+                // causing the shell to read STDIN in non-blocking mode and potentially miss input or error out.
+                let _ = input_task.await;
             }
         } else {
             // Standard monitors (Pipe) logic

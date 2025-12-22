@@ -84,7 +84,7 @@ pub async fn eval_str(
 
             // Save to output history
             {
-                use crate::output_history::OutputEntry;
+                use dsh_types::output_history::OutputEntry;
                 let entry = OutputEntry::new(job.cmd.clone(), stdout.clone(), stderr.clone(), exit);
                 shell.environment.write().output_history.push(entry);
                 debug!(

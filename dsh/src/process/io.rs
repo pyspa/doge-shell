@@ -4,7 +4,7 @@ use nix::unistd::{close, dup2, pipe};
 use std::io::Write;
 use std::os::unix::io::{FromRawFd, RawFd};
 use std::time::Duration;
-use tokio::io::AsyncBufReadExt;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use tokio::{fs, io, time};
 
 use super::redirect::Redirect;
@@ -145,6 +145,73 @@ impl OutputMonitor {
         }
         if !buffer.is_empty() {
             self.flush_buffer(&buffer)?;
+        }
+        Ok(())
+    }
+}
+
+pub struct PtyMonitor {
+    pub(crate) reader: io::BufReader<fs::File>,
+    pub captured_output: Vec<u8>,
+}
+
+impl PtyMonitor {
+    pub fn new(fd: RawFd) -> Self {
+        let file = unsafe { fs::File::from_raw_fd(fd) };
+        let reader = io::BufReader::new(file);
+        PtyMonitor {
+            reader,
+            captured_output: Vec::new(),
+        }
+    }
+
+    pub async fn process_output(&mut self) -> Result<()> {
+        let mut buf = [0u8; 4096];
+        loop {
+            // Read from PTY master
+            let res = time::timeout(
+                Duration::from_millis(10), // Short timeout for polling nature
+                self.reader.read(&mut buf),
+            )
+            .await;
+
+            match res {
+                Ok(Ok(0)) => {
+                    tracing::debug!("PtyMonitor: EOF detected");
+                    return Ok(());
+                }
+                Ok(Ok(n)) => {
+                    tracing::debug!("PtyMonitor: Read {} bytes", n);
+                    let data = &buf[..n];
+
+                    // Print to real stdout (Passthrough)
+                    {
+                        let mut stdout = std::io::stdout();
+                        stdout.write_all(data)?;
+                        stdout.flush()?;
+                    }
+
+                    // Capture
+                    self.captured_output.extend_from_slice(data);
+                }
+                Ok(Err(e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    // unexpected but handle
+                }
+                Ok(Err(e)) => {
+                    // Check for EIO (OS error 5) which means EOF on Linux PTY
+                    if let Some(os_err) = e.raw_os_error()
+                        && os_err == 5
+                    {
+                        tracing::debug!("PtyMonitor: EIO detected (EOF)");
+                        return Ok(());
+                    }
+                    tracing::error!("PtyMonitor: Error reading: {}", e);
+                    return Err(e.into());
+                }
+                Err(_) => {
+                    // Timeout, yield
+                }
+            }
         }
         Ok(())
     }

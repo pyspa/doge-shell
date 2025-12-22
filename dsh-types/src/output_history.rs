@@ -4,16 +4,16 @@
 //! accessible via $OUT[N] and $ERR[N] variables.
 
 use std::collections::VecDeque;
-use std::time::Instant;
+use std::time::SystemTime;
 
 /// Default maximum number of output entries to keep
-const DEFAULT_MAX_ENTRIES: usize = 10;
+const DEFAULT_MAX_ENTRIES: usize = 100;
 
 /// Default maximum size per entry (1MB)
 const DEFAULT_MAX_SIZE_PER_ENTRY: usize = 1024 * 1024;
 
-/// Default maximum total size (10MB)
-const DEFAULT_MAX_TOTAL_SIZE: usize = 10 * 1024 * 1024;
+/// Default maximum total size (50MB)
+const DEFAULT_MAX_TOTAL_SIZE: usize = 50 * 1024 * 1024;
 
 /// A single output history entry
 #[derive(Debug, Clone)]
@@ -27,7 +27,7 @@ pub struct OutputEntry {
     /// Exit code of the command
     pub exit_code: i32,
     /// Timestamp when the command was executed
-    pub timestamp: Instant,
+    pub timestamp: SystemTime,
 }
 
 impl OutputEntry {
@@ -38,7 +38,7 @@ impl OutputEntry {
             stdout,
             stderr,
             exit_code,
-            timestamp: Instant::now(),
+            timestamp: SystemTime::now(),
         }
     }
 
@@ -204,6 +204,10 @@ impl OutputHistory {
     /// Get the current total size
     pub fn total_size(&self) -> usize {
         self.total_size
+    }
+    /// Get all entries as a vector (recent first)
+    pub fn get_all_entries(&self) -> Vec<OutputEntry> {
+        self.entries.iter().cloned().collect()
     }
 }
 

@@ -64,6 +64,7 @@ pub(crate) fn fork_process(
     job_pgid: Option<Pid>,
     process: &mut Process,
     shell: &mut Shell,
+    pty_slave: Option<std::os::unix::io::RawFd>,
 ) -> Result<Pid> {
     debug!("🍴 FORK: Starting fork_process");
     debug!(
@@ -80,7 +81,7 @@ pub(crate) fn fork_process(
     );
 
     // capture
-    if ctx.outfile == STDOUT_FILENO && !ctx.foreground {
+    if ctx.outfile == STDOUT_FILENO && !ctx.foreground && pty_slave.is_none() {
         debug!("🍴 FORK: Creating capture pipe for stdout (background process)");
         let (pout, pin) = pipe().context("failed pipe")?;
         process.stdout = pin;
@@ -96,7 +97,7 @@ pub(crate) fn fork_process(
         );
     }
 
-    if ctx.errfile == STDERR_FILENO && !ctx.foreground {
+    if ctx.errfile == STDERR_FILENO && !ctx.foreground && pty_slave.is_none() {
         debug!("🍴 FORK: Creating capture pipe for stderr (background process)");
         let (pout, pin) = pipe().context("failed pipe")?;
         process.stderr = pin;
@@ -142,6 +143,7 @@ pub(crate) fn fork_process(
                 ctx.interactive,
                 ctx.foreground,
                 shell.environment.clone(),
+                pty_slave,
             ) {
                 error!("🍴 FORK: Child process launch failed: {}", e);
                 std::process::exit(1);

@@ -26,7 +26,6 @@ pub mod history_import;
 pub mod input;
 pub mod lisp;
 pub mod notebook;
-pub mod output_history;
 pub mod parser;
 pub mod process;
 pub mod prompt;

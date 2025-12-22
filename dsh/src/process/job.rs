@@ -151,6 +151,18 @@ impl Job {
                 Ok(pty) => {
                     debug!("PTY created: {:?}", pty);
 
+                    // Resize PTY to match current terminal size
+                    match crossterm::terminal::size() {
+                        Ok((cols, rows)) => {
+                            if let Err(e) = pty.resize(rows, cols) {
+                                debug!("Failed to resize PTY: {}", e);
+                            } else {
+                                debug!("Resized PTY to {}x{}", cols, rows);
+                            }
+                        }
+                        Err(e) => debug!("Failed to get terminal size for PTY resize: {}", e),
+                    }
+
                     // Setup Output Monitor (Master -> Stdout + Capture)
                     // We need a clone of the master for reading
                     match pty.try_clone() {

@@ -16,6 +16,7 @@ pub mod command_palette;
 pub mod command_suggestion;
 pub mod command_timing;
 pub mod completion;
+pub mod db;
 pub mod direnv;
 pub mod dirs;
 pub mod environment;
@@ -117,14 +118,16 @@ pub async fn run_shell() -> ExitCode {
     let mut shell = Shell::new(env);
 
     // Initialize command history (Async)
-    let cmd_history = std::sync::Arc::new(parking_lot::Mutex::new(
-        crate::history::FrecencyHistory::new(),
-    ));
+    let cmd_history = std::sync::Arc::new(parking_lot::Mutex::new(crate::history::History::new()));
     shell.cmd_history = Some(cmd_history.clone());
 
     std::thread::spawn(move || {
-        match crate::history::FrecencyHistory::from_file("dsh_cmd_history") {
-            Ok(history) => {
+        match crate::history::History::from_file("dsh_cmd_history") {
+            Ok(mut history) => {
+                // Preload history
+                if let Err(e) = history.load() {
+                    tracing::warn!("Failed to load history items: {}", e);
+                }
                 *cmd_history.lock() = history;
             }
             Err(e) => {

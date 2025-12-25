@@ -30,7 +30,7 @@ pub struct Shell {
     pub exited: Option<ExitStatus>,
     pub pid: Pid,
     pub pgid: Pid,
-    pub cmd_history: Option<Arc<ParkingMutex<FrecencyHistory>>>,
+    pub cmd_history: Option<Arc<ParkingMutex<crate::history::History>>>,
     pub path_history: Option<Arc<ParkingMutex<FrecencyHistory>>>,
     pub(crate) wait_jobs: Vec<Job>,
     pub lisp_engine: Rc<RefCell<lisp::LispEngine>>,

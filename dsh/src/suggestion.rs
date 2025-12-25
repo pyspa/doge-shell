@@ -1,5 +1,4 @@
-use crate::history::FrecencyHistory;
-use dsh_frecency::SortMethod;
+use crate::history::History;
 use dsh_openai::ChatGptClient;
 use parking_lot::Mutex as ParkingMutex;
 use serde_json::{Value, json};
@@ -191,7 +190,7 @@ impl SuggestionEngine {
         &mut self,
         input: &str,
         cursor: usize,
-        history: Option<&Arc<ParkingMutex<FrecencyHistory>>>,
+        history: Option<&Arc<ParkingMutex<History>>>,
     ) -> Vec<SuggestionState> {
         if !self.config.preferences.suggestion_mode.is_enabled() {
             self.history_cache = None;
@@ -259,11 +258,11 @@ impl SuggestionEngine {
     fn history_suggestion(
         &self,
         input: &str,
-        history: Option<&Arc<ParkingMutex<FrecencyHistory>>>,
+        history: Option<&Arc<ParkingMutex<History>>>,
     ) -> Option<SuggestionState> {
         let history = history?;
         let history = history.try_lock()?;
-        let entry = history.search_prefix(input)?;
+        let entry = history.search_first(input)?.to_string();
         if entry.len() <= input.len() {
             return None;
         }
@@ -277,7 +276,7 @@ impl SuggestionEngine {
         &self,
         input: &str,
         cursor: usize,
-        history: Option<&Arc<ParkingMutex<FrecencyHistory>>>,
+        history: Option<&Arc<ParkingMutex<History>>>,
     ) -> Option<SuggestionState> {
         self.ai_suggestion_with_context(input, cursor, history, None, Vec::new(), None)
     }
@@ -286,7 +285,7 @@ impl SuggestionEngine {
         &self,
         input: &str,
         cursor: usize,
-        history: Option<&Arc<ParkingMutex<FrecencyHistory>>>,
+        history: Option<&Arc<ParkingMutex<History>>>,
         cwd: Option<String>,
         files: Vec<String>,
         last_exit_code: Option<i32>,
@@ -334,8 +333,8 @@ impl SuggestionEngine {
 }
 
 fn collect_history_context(
-    history: Option<&Arc<ParkingMutex<FrecencyHistory>>>,
-    input: &str,
+    history: Option<&Arc<ParkingMutex<History>>>,
+    _input: &str,
     limit: usize,
 ) -> Vec<String> {
     if limit == 0 {
@@ -352,45 +351,7 @@ fn collect_history_context(
         None => return Vec::new(),
     };
 
-    // Pre-allocate with expected capacity
-    let mut snapshot: Vec<String> = Vec::with_capacity(limit);
-
-    // 1. Add recent items (context of "what I am doing now")
-    // Take half of the limit for recent items
-    let recent_limit = (limit as f32 * 0.5).ceil() as usize;
-    snapshot.extend(
-        history
-            .sorted(&SortMethod::Recent)
-            .into_iter()
-            .take(recent_limit)
-            .map(|item| item.item),
-    );
-
-    // 2. Add frecent items (context of "what I usually do")
-    // Fill the rest with frecent items, avoiding duplicates
-    let frecent_items = history.sorted(&SortMethod::Frecent);
-    for item in frecent_items {
-        if snapshot.len() >= limit {
-            break;
-        }
-        if !snapshot.contains(&item.item) {
-            snapshot.push(item.item);
-        }
-    }
-
-    if snapshot.len() < limit && !input.is_empty() {
-        for item in history.sort_by_match(input) {
-            if snapshot.len() >= limit {
-                break;
-            }
-            if snapshot.iter().any(|existing| existing == &item.item) {
-                continue;
-            }
-            snapshot.push(item.item);
-        }
-    }
-
-    snapshot
+    history.get_recent_context(limit)
 }
 
 const AI_SUGGESTION_SYSTEM_PROMPT: &str = r#"You are an inline completion engine for the doge-shell terminal.
@@ -878,9 +839,8 @@ mod tests {
             auto_diagnose: false,
         });
 
-        let mut history = FrecencyHistory::new();
-        history.store = Some(std::sync::Arc::new(dsh_frecency::FrecencyStore::default()));
-        history.add("git status");
+        let mut history = History::new();
+        history.add_test_entry("git status");
         let history = Arc::new(ParkingMutex::new(history));
 
         // "git s" should match "git status" in history
@@ -907,10 +867,9 @@ mod tests {
             auto_diagnose: false,
         });
 
-        let mut history = FrecencyHistory::new();
-        history.store = Some(std::sync::Arc::new(dsh_frecency::FrecencyStore::default()));
-        history.add("npm run test");
-        history.add("docker compose up");
+        let mut history = History::new();
+        history.add_test_entry("npm run test");
+        history.add_test_entry("docker compose up");
         let history = Arc::new(ParkingMutex::new(history));
 
         let _ = engine.predict("deploy", "deploy".chars().count(), Some(&history));

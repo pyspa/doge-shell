@@ -5,6 +5,7 @@ use crate::completion::{self, Completion};
 use crate::dirs;
 use crate::environment::Environment;
 use crate::history::FrecencyHistory;
+
 use crate::input::{ColorType, Input, InputConfig, display_width};
 use crate::lisp::{Symbol, Value};
 use crate::parser::{self, HighlightKind, Rule};
@@ -19,6 +20,7 @@ use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, EventStream,
 use crossterm::queue;
 use crossterm::style::{Print, ResetColor};
 use crossterm::terminal::{self, Clear, ClearType, enable_raw_mode};
+use dsh_frecency::ItemStats;
 use dsh_openai::{ChatGptClient, OpenAiConfig};
 use futures::StreamExt;
 use nix::sys::termios::{Termios, tcgetattr};
@@ -431,7 +433,7 @@ impl<'a> Repl<'a> {
     }
 
     fn save_history(&mut self) {
-        Self::save_single_history_helper(&mut self.shell.cmd_history, "command", false);
+        // Command history is auto-saved by SQLite
         Self::save_single_history_helper(&mut self.shell.path_history, "path", false);
     }
 
@@ -464,8 +466,7 @@ impl<'a> Repl<'a> {
     }
 
     fn save_history_periodic(&mut self) {
-        // Save both command and path history if they have changes
-        Self::save_single_history_helper(&mut self.shell.cmd_history, "command", true);
+        // Command history is auto-saved by SQLite
         Self::save_single_history_helper(&mut self.shell.path_history, "path", true);
     }
 
@@ -999,8 +1000,9 @@ impl<'a> Repl<'a> {
     fn learn_suggestion(&self, suggestion: &str) {
         if let Some(history) = &self.shell.cmd_history
             && let Some(mut history) = history.try_lock()
+            && let Err(e) = history.write_history(suggestion)
         {
-            history.add(suggestion);
+            warn!("Failed to learn suggestion: {}", e);
         }
     }
 
@@ -1016,73 +1018,32 @@ impl<'a> Repl<'a> {
     }
 
     pub(crate) fn set_completions(&mut self) {
-        let now = Instant::now();
         let input_str = self.input.as_str().to_string();
         let is_empty = input_str.is_empty();
 
-        // Try using cache first when TTL is valid and prefix unchanged
-        if let Some(last_time) = self.cache.time
-            && now.duration_since(last_time) <= self.cache.ttl
-            && self.cache.prefix == input_str
-        {
-            if is_empty {
-                if let Some(ref comps) = self.cache.sorted_recent {
-                    self.completion
-                        .set_completions(self.input.as_str(), comps.clone());
-                    return;
-                }
-            } else if let Some(ref comps) = self.cache.match_sorted {
-                self.completion
-                    .set_completions(self.input.as_str(), comps.clone());
-                return;
-            }
-        }
-
-        // Fallback to computing with lock, and refresh cache if successful
+        // Fallback to computing with lock
         if let Some(ref mut history) = self.shell.cmd_history {
             if let Some(history) = history.try_lock() {
-                // If store changed, invalidate cache
-                let changed = history.store.as_ref().map(|s| s.changed).unwrap_or(false);
-                if changed {
-                    self.cache.sorted_recent = None;
-                    self.cache.match_sorted = None;
-                    self.cache.time = None;
-                }
-
-                let comps = if is_empty {
-                    let list = history.sorted(&dsh_frecency::SortMethod::Recent);
-                    self.cache.sorted_recent = Some(list.clone());
-                    list
+                let comps: Vec<ItemStats> = if is_empty {
+                    history
+                        .iter()
+                        .rev()
+                        .take(100)
+                        .map(|e| ItemStats::new(&e.entry, 0.0f64, 1.0f32, None))
+                        .collect()
                 } else {
-                    let list = history.sort_by_match(&input_str);
-                    self.cache.match_sorted = Some(list.clone());
-                    list
+                    history
+                        .iter()
+                        .rev()
+                        .filter(|e| e.entry.starts_with(&input_str))
+                        .take(100)
+                        .map(|e| ItemStats::new(&e.entry, 0.0f64, 1.0f32, None))
+                        .collect()
                 };
-
-                self.cache.prefix = input_str;
-                self.cache.time = Some(now);
 
                 self.completion.set_completions(self.input.as_str(), comps);
             } else {
-                // If we can't get the lock immediately, try using the cache if available, otherwise empty
-                if let Some(last_time) = self.cache.time
-                    && now.duration_since(last_time) <= self.cache.ttl
-                {
-                    if is_empty {
-                        if let Some(ref comps) = self.cache.sorted_recent {
-                            self.completion
-                                .set_completions(self.input.as_str(), comps.clone());
-                            return; // Exit early since we used the cache
-                        }
-                    } else if let Some(ref comps) = self.cache.match_sorted {
-                        self.completion
-                            .set_completions(self.input.as_str(), comps.clone());
-                        return; // Exit early since we used the cache
-                    }
-                }
-                // Set empty completions as fallback when lock is not available
                 self.completion.set_completions(self.input.as_str(), vec![]);
-                // No warning here since this is expected during high contention
             }
         }
     }
@@ -1105,8 +1066,9 @@ impl<'a> Repl<'a> {
 
         if let Some(ref mut history) = self.shell.cmd_history
             && let Some(history) = history.try_lock()
-            && let Some(entry) = history.search_prefix(input)
+            && let Some(entry) = history.search_first(input)
         {
+            let entry = entry.to_string();
             self.input.completion = Some(entry.clone());
             if entry.len() >= input.len() && entry.starts_with(input) {
                 return Some(entry[input.len()..].to_string());
@@ -1543,11 +1505,11 @@ impl<'a> Repl<'a> {
         let query = self.input.as_str();
         if let Some(ref mut history) = self.shell.cmd_history {
             if let Some(mut history) = history.try_lock() {
-                let histories = history.sorted(&dsh_frecency::SortMethod::Recent);
                 if let Some(val) = completion::select_item_with_skim(
-                    histories
-                        .into_iter()
-                        .map(|history| completion::Candidate::Basic(history.item))
+                    history
+                        .iter()
+                        .rev()
+                        .map(|h| completion::Candidate::Basic(h.entry.clone()))
                         .collect(),
                     Some(query),
                 ) {
@@ -1769,12 +1731,7 @@ impl<'a> Repl<'a> {
         if let Some(ref history) = self.shell.cmd_history
             && let Some(history) = history.try_lock()
         {
-            return history
-                .sorted(&dsh_frecency::SortMethod::Recent)
-                .into_iter()
-                .take(count)
-                .map(|item| item.item)
-                .collect();
+            return history.get_recent_context(count);
         }
         Vec::new()
     }

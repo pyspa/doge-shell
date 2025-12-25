@@ -154,7 +154,7 @@ impl<'a> CandidateAggregator<'a> {
 
     fn finalize(
         self,
-        history: Option<&Arc<parking_lot::Mutex<crate::history::FrecencyHistory>>>,
+        history: Option<&Arc<parking_lot::Mutex<crate::history::History>>>,
     ) -> CompletionResult {
         let candidates = self.engine.deduplicate_and_sort(
             self.collected,
@@ -235,7 +235,7 @@ impl IntegratedCompletionEngine {
         cursor_pos: usize,
         current_dir: &Path,
         max_results: usize,
-        history: Option<&Arc<parking_lot::Mutex<crate::history::FrecencyHistory>>>,
+        history: Option<&Arc<parking_lot::Mutex<crate::history::History>>>,
     ) -> CompletionResult {
         debug!(
             "Integrated completion for: '{}' at position {} in {:?}",
@@ -496,62 +496,40 @@ impl IntegratedCompletionEngine {
         &self,
         mut candidates: Vec<EnhancedCandidate>,
         max_results: usize,
-        history: Option<&Arc<parking_lot::Mutex<crate::history::FrecencyHistory>>>,
+        history: Option<&Arc<parking_lot::Mutex<crate::history::History>>>,
         command_context: Option<&str>,
     ) -> Vec<EnhancedCandidate> {
         // Boost priority based on history
         if let Some(history_arc) = history {
             let history = history_arc.lock();
-            if let Some(store) = &history.store {
-                for candidate in &mut candidates {
-                    // File/path candidates can be numerous and are rarely meaningful to
-                    // boost by history; skipping them keeps completion latency low.
-                    if matches!(
-                        candidate.candidate_type,
-                        CandidateType::File | CandidateType::Directory
-                    ) {
-                        continue;
-                    }
-                    // Simple heuristic: check if candidate text appears in history items
-                    // Ideally we should form the fuil command context, but for now
-                    // we boost if the candidate word itself appears frequently in history
-                    // OR if we can check "cmd candidate"
-                    // Since we don't have easy context here, we'll try a basic approach:
-                    // If candidate is a subcommand (or similar), its value is high if used often.
+            for candidate in &mut candidates {
+                if matches!(
+                    candidate.candidate_type,
+                    CandidateType::File | CandidateType::Directory
+                ) {
+                    continue;
+                }
 
-                    // NOTE: This is a simplification. A better approach requires passing the parsed command context.
-                    // For now, let's assume `candidate.text` is significant.
-
-                    // boost = frequency count log or similar
-                    // Check if candidate text appears in history items
-                    // We prioritize items that match the current command context
-                    for item in &store.items {
-                        // Skip if item doesn't contain the candidate text at all
-                        if !item.item.contains(&candidate.text) {
-                            continue;
-                        }
-
-                        let mut score = 0;
-
+                // Simplified boosting for linear history
+                let mut score = 0;
+                for item in history.iter().rev().take(2000) {
+                    // Check recent 2000 explicitly
+                    if item.entry.contains(&candidate.text) {
+                        let mut item_score = 10;
                         // Context-aware boosting
-                        if let Some(cmd) = command_context {
-                            // Check exact match or prefix with space boundary
-                            // This prevents false positives like "google-chrome" boosting "go" context
-                            if item.item == cmd || item.item.starts_with(&(cmd.to_string() + " ")) {
-                                // High boost if the history entry starts with the current command
-                                // and contains the candidate
-                                score += 500;
-                            }
+                        if let Some(cmd) = command_context
+                            && (item.entry == *cmd
+                                || item.entry.starts_with(&(cmd.to_string() + " ")))
+                        {
+                            item_score += 500;
                         }
-
-                        // Base frequency boosting
-                        // We take a log-like approach or cap it to avoid overwhelming typical priority
-                        // Only add if we haven't already added a huge boost or cumulative
-                        score += 10;
-
-                        candidate.priority = candidate.priority.saturating_add(score);
+                        score += item_score;
+                        if score > 5000 {
+                            break;
+                        }
                     }
                 }
+                candidate.priority = candidate.priority.saturating_add(score);
             }
         }
 
@@ -693,7 +671,6 @@ impl CandidateType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dsh_frecency::FrecencyStore;
 
     #[test]
     fn test_integrated_completion_engine_creation() {
@@ -797,11 +774,9 @@ mod tests {
         let environment = Environment::new();
         let engine = IntegratedCompletionEngine::new(environment);
 
-        let mut history = crate::history::FrecencyHistory::new();
-        let mut store = FrecencyStore::default();
-        store.add("bar.txt", None);
-        store.add("bar", None);
-        history.store = Some(std::sync::Arc::new(store));
+        let mut history = crate::history::History::new();
+        history.add_test_entry("bar.txt");
+        history.add_test_entry("bar");
         let history_arc = std::sync::Arc::new(parking_lot::Mutex::new(history));
 
         let candidates = vec![
@@ -832,12 +807,11 @@ mod tests {
         let environment = Environment::new();
         let engine = IntegratedCompletionEngine::new(environment);
 
-        let mut history = crate::history::FrecencyHistory::new();
-        let mut store = FrecencyStore::default();
+        let mut history = crate::history::History::new();
         // Add history items: "git checkout" is frequent, "docker checkout" also exists
-        store.add("git checkout", None);
-        store.add("docker checkout", None);
-        history.store = Some(std::sync::Arc::new(store));
+        history.add_test_entry("git checkout");
+        history.add_test_entry("docker checkout");
+
         let history_arc = std::sync::Arc::new(parking_lot::Mutex::new(history));
 
         let create_candidate = || EnhancedCandidate {
@@ -878,10 +852,9 @@ mod tests {
         let engine = IntegratedCompletionEngine::new(environment);
 
         // Setup history
-        let mut history = crate::history::FrecencyHistory::new();
-        let mut store = FrecencyStore::default();
-        store.add("git checkout", None);
-        history.store = Some(std::sync::Arc::new(store));
+        // Setup history
+        let mut history = crate::history::History::new();
+        history.add_test_entry("git checkout");
         let history_arc = std::sync::Arc::new(parking_lot::Mutex::new(history));
 
         let create_candidate = || EnhancedCandidate {

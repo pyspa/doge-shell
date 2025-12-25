@@ -130,16 +130,16 @@ impl HistoryImporter for FishHistoryImporter {
             return Err(err.context("Failed to save imported history"));
         }
 
-        // 保存後に履歴ファイルのサイズを確認
-        if let Some(ref path) = history.path
-            && let Ok(metadata) = std::fs::metadata(path)
-        {
-            tracing::debug!(
-                "History file saved: {} (size: {} bytes)",
-                path.display(),
-                metadata.len()
-            );
-        }
+        // 保存後に履歴ファイルのサイズを確認 - Skip for SQLite as path info is hidden
+        // if let Some(ref path) = history.path
+        //     && let Ok(metadata) = std::fs::metadata(path)
+        // {
+        //     tracing::debug!(
+        //         "History file saved: {} (size: {} bytes)",
+        //         path.display(),
+        //         metadata.len()
+        //     );
+        // }
 
         debug!("Imported {} commands from fish history", count);
         tracing::info!("Successfully imported {count} commands from fish history");
@@ -206,9 +206,9 @@ mod tests {
         file.flush()?;
 
         // Create a temporary history file for dsh
-        let dsh_history_path = temp_dir.path().join("dsh_history");
+        let _dsh_history_path = temp_dir.path().join("dsh_history");
         let mut history = FrecencyHistory::new();
-        history.path = Some(dsh_history_path);
+        // history.path = Some(dsh_history_path);
 
         // Import the fish history
         let importer = FishHistoryImporter::with_path(&history_path);
@@ -245,9 +245,9 @@ mod tests {
         file.flush()?;
 
         // Create a temporary history file for dsh
-        let dsh_history_path = temp_dir.path().join("dsh_history");
+        let _dsh_history_path = temp_dir.path().join("dsh_history");
         let mut history = FrecencyHistory::new();
-        history.path = Some(dsh_history_path);
+        // history.path = Some(dsh_history_path);
 
         // Import the fish history - 無効なUTF-8があっても成功するはず
         let importer = FishHistoryImporter::with_path(&history_path);

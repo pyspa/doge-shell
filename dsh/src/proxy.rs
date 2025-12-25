@@ -197,9 +197,8 @@ impl ShellProxy for Shell {
             "history" => {
                 if let Some(ref mut history) = self.cmd_history {
                     let mut history = history.lock(); // For non-UI operations, we can use regular lock
-                    let vec = history.sorted(&SortMethod::Recent);
-                    for item in vec {
-                        ctx.write_stdout(&item.item)?;
+                    for item in history.iter() {
+                        ctx.write_stdout(&item.entry)?;
                     }
                     history.reset_index();
                 }

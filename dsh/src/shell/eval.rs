@@ -25,8 +25,9 @@ pub async fn eval_str(
         && let Some(ref mut history) = shell.cmd_history
     {
         let mut history = history.lock();
-        history.add(&input);
-        history.reset_index();
+        if let Err(e) = history.write_history(&input) {
+            debug!("Failed to write history: {}", e);
+        }
     }
 
     if let Some(rest) = input.trim_start().strip_prefix('!') {

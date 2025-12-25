@@ -74,6 +74,11 @@ impl Db {
             "CREATE INDEX IF NOT EXISTS idx_command_history_timestamp ON command_history(timestamp DESC)",
             [],
         )?;
+        // Create unique index on command for UPSERT support
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_command_history_command ON command_history(command)",
+            [],
+        )?;
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_directory_visits_timestamp ON directory_visits(timestamp DESC)",
             [],

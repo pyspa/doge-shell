@@ -183,45 +183,46 @@ impl History {
             let mut conn = db.get_connection();
             let context = get_current_context();
 
-            use rusqlite::OptionalExtension;
-
             let tx = conn.transaction()?;
 
+            // Collect results with count values
+            let mut results: Vec<(String, i64, i64)> = Vec::with_capacity(entries.len());
+
             {
-                let mut select_stmt =
-                    tx.prepare("SELECT id, count FROM command_history WHERE command = ?1")?;
-                let mut update_stmt = tx.prepare("UPDATE command_history SET count = ?1, timestamp = ?2, context = ?3 WHERE id = ?4")?;
-                let mut insert_stmt = tx.prepare("INSERT INTO command_history (command, timestamp, context, count) VALUES (?1, ?2, ?3, 1)")?;
+                // Use UPSERT with RETURNING to get the updated count value
+                // This eliminates the need for separate SELECT queries
+                let mut upsert_stmt = tx.prepare(
+                    "INSERT INTO command_history (command, timestamp, context, count) 
+                     VALUES (?1, ?2, ?3, 1)
+                     ON CONFLICT(command) DO UPDATE SET 
+                         count = count + 1,
+                         timestamp = excluded.timestamp,
+                         context = excluded.context
+                     RETURNING count",
+                )?;
 
-                for (cmd, when) in entries {
-                    let existing: Option<(i64, i64)> = select_stmt
-                        .query_row(rusqlite::params![cmd], |row| Ok((row.get(0)?, row.get(1)?)))
-                        .optional()?;
-
-                    let count = if let Some((id, current_count)) = existing {
-                        let new_count = current_count + 1;
-                        update_stmt.execute(rusqlite::params![new_count, when, context, id])?;
-                        new_count
-                    } else {
-                        insert_stmt.execute(rusqlite::params![cmd, when, context])?;
-                        1
-                    };
-
-                    // Update in-memory history
-                    if let Some(pos) = self.histories.iter().position(|e| e.entry == cmd) {
-                        self.histories.remove(pos);
-                    }
-
-                    let entry = Entry {
-                        entry: cmd,
-                        when,
-                        count,
-                    };
-                    self.histories.push(entry);
+                for (cmd, when) in &entries {
+                    let count: i64 = upsert_stmt
+                        .query_row(rusqlite::params![cmd, when, context], |row| row.get(0))?;
+                    results.push((cmd.clone(), *when, count));
                 }
             }
 
             tx.commit()?;
+
+            // Update in-memory history with correct count values
+            for (cmd, when, count) in results {
+                if let Some(pos) = self.histories.iter().position(|e| e.entry == cmd) {
+                    self.histories.remove(pos);
+                }
+                let entry = Entry {
+                    entry: cmd,
+                    when,
+                    count,
+                };
+                self.histories.push(entry);
+            }
+
             self.reset_index();
         }
         Ok(())

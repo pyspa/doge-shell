@@ -1296,7 +1296,10 @@ mod tests {
 
         // Skip TTY-dependent operations in test environment
         if isatty(SHELL_TERMINAL).unwrap_or(false) {
-            let tmode = tcgetattr(SHELL_TERMINAL).expect("failed cgetattr");
+            let tmode = match tcgetattr(SHELL_TERMINAL) {
+                Ok(mode) => mode,
+                Err(_) => return Ok(()),
+            };
             let _ctx = Context::new(pid, pgid, tmode, true);
         } else {
             // Create a mock context for non-TTY environments

@@ -11,6 +11,9 @@ pub fn description() -> &'static str {
 /// Delegates to the shell's variable management system for listing and manipulation
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     // Delegate variable operations to the shell's variable management system
-    proxy.dispatch(ctx, "var", argv).unwrap();
+    if let Err(e) = proxy.dispatch(ctx, "var", argv) {
+        let _ = ctx.write_stderr(&format!("Error: {}\n", e));
+        return ExitStatus::ExitedWith(1);
+    }
     ExitStatus::ExitedWith(0)
 }

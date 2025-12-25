@@ -72,7 +72,7 @@ pub struct SuggestionRequest {
     pub preferences: InputPreferences,
     pub history_context: Vec<String>,
     pub cwd: Option<String>,
-    pub files: Vec<String>,
+    pub files: Arc<Vec<String>>,
     pub last_exit_code: Option<i32>,
 }
 
@@ -83,7 +83,7 @@ impl SuggestionRequest {
         preferences: InputPreferences,
         history_context: Vec<String>,
         cwd: Option<String>,
-        files: Vec<String>,
+        files: Arc<Vec<String>>,
         last_exit_code: Option<i32>,
     ) -> Self {
         Self {
@@ -160,7 +160,12 @@ impl SuggestionEngine {
         self.ai_backend = backend;
     }
 
-    pub fn prefetch(&self, cwd: Option<String>, files: Vec<String>, last_exit_code: Option<i32>) {
+    pub fn prefetch(
+        &self,
+        cwd: Option<String>,
+        files: Arc<Vec<String>>,
+        last_exit_code: Option<i32>,
+    ) {
         if let Some(backend) = &self.ai_backend
             && self.config.preferences.ai_backfill
         {
@@ -168,7 +173,7 @@ impl SuggestionEngine {
                 String::new(), // Empty input for prefetch
                 0,
                 self.config.preferences,
-                Vec::new(), // No history needed for context prefetch
+                Vec::new(),
                 cwd,
                 files,
                 last_exit_code,
@@ -278,7 +283,7 @@ impl SuggestionEngine {
         cursor: usize,
         history: Option<&Arc<ParkingMutex<History>>>,
     ) -> Option<SuggestionState> {
-        self.ai_suggestion_with_context(input, cursor, history, None, Vec::new(), None)
+        self.ai_suggestion_with_context(input, cursor, history, None, Arc::new(Vec::new()), None)
     }
 
     pub fn ai_suggestion_with_context(
@@ -287,7 +292,7 @@ impl SuggestionEngine {
         cursor: usize,
         history: Option<&Arc<ParkingMutex<History>>>,
         cwd: Option<String>,
-        files: Vec<String>,
+        files: Arc<Vec<String>>,
         last_exit_code: Option<i32>,
     ) -> Option<SuggestionState> {
         let backend = self.ai_backend.as_ref()?;
@@ -684,7 +689,7 @@ fn build_user_payload(request: &SuggestionRequest) -> String {
     }
     if !request.files.is_empty() {
         payload.push_str("DirectoryListing (partial):\n");
-        for file in &request.files {
+        for file in request.files.iter() {
             payload.push_str("- ");
             payload.push_str(file);
             payload.push('\n');
@@ -897,7 +902,7 @@ mod tests {
             preferences: InputPreferences::default(),
             history_context: vec!["git status".to_string(), "git checkout".to_string()],
             cwd: Some("/home/user".to_string()),
-            files: vec!["file1".to_string()],
+            files: Arc::new(vec!["file1".to_string()]),
             last_exit_code: Some(0),
         };
 
@@ -935,7 +940,7 @@ mod tests {
             5,
             None,
             cwd.clone(),
-            files.clone(),
+            Arc::new(files.clone()),
             exit_code,
         );
 
@@ -944,7 +949,7 @@ mod tests {
         let request = &calls[0];
 
         assert_eq!(request.cwd, cwd);
-        assert_eq!(request.files, files);
+        assert_eq!(*request.files, files);
         assert_eq!(request.last_exit_code, exit_code);
     }
 }

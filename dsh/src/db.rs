@@ -12,6 +12,13 @@ impl Db {
     pub fn new(path: PathBuf) -> Result<Self> {
         let conn = Connection::open(path).context("Failed to open SQLite database")?;
 
+        // Optimize SQLite settings for performance
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
+             PRAGMA foreign_keys = ON;",
+        )?;
+
         let db = Db {
             conn: Arc::new(Mutex::new(conn)),
         };

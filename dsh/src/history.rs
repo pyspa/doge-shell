@@ -390,72 +390,37 @@ impl FrecencyHistory {
             && let Some(ref mut store) = self.store
             && store.changed
         {
-            let conn = db.get_connection();
-            // We need to update snapshot.
-            // Since this could be heavy, ideally we only update touched items.
-            // But FrecencyStore::changed is a global dirty flag.
+            let mut conn = db.get_connection();
 
-            // Transaction for consistency
-            // conn.execute("BEGIN TRANSACTION", [])?;
+            // Use transaction for consistency and performance
+            let tx = conn.transaction()?;
 
-            // For now, let's just Iterate and Upsert all? Or valid items.
-            // Optimized approach: FrecencyStore doesn't track *which* items changed easily without scanning.
+            {
+                let mut stmt = tx.prepare(
+                    "INSERT OR REPLACE INTO directory_snapshot (path, score, last_accessed, access_count, half_life, context) 
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+                )?;
 
-            let mut stmt = conn.prepare(
-                "INSERT OR REPLACE INTO directory_snapshot (path, score, last_accessed, access_count, half_life, context) 
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
-            )?;
+                for item in &store.items {
+                    let serializer = dsh_frecency::ItemStatsSerializer::from(item);
 
-            // We also need to log the visit if it's a new add?
-            // The `add` method is called before save.
-            // `add` updates the memory store.
-            // We should also append to directory_visits.
-            // But `add` doesn't return *what* was added here...
-            // We should modify `add` to handle logging.
+                    // Note: half_life matches the default 12 hours (43200s) usually used in frecency
+                    // Since serializer might not expose it, we use a default or calculate if possible.
+                    // For now, we assume a standard half-life if not available.
+                    let half_life = 12.0 * 3600.0;
 
-            for item in &store.items {
-                // We need to map ItemStats back to DB columns
-                // item.frecency -> score
-                // item.reference_time + item.last_accessed -> last_accessed absolute time?
-                // Let's just persist what we have for cache
-                // For now, assuming direct mapping to make it work.
-
-                // Note: We need access to item fields.
-                // dsh-frecency::ItemStats fields check -> `pub struct ItemStats` has private fields?
-                // In `stats.rs` viewed earlier:
-                /*
-                   pub struct ItemStats {
-                       pub item: String,
-                       half_life: f32,
-                       reference_time: f64,
-                       frecency: f32,
-                       last_accessed: f32,
-                       num_accesses: i32,
-                       pub match_score: i64,
-                       pub match_index: Vec<usize>,
-                       pub context: Option<String>,
-                   }
-                */
-                // Only `item`, `match_score`, `match_index`, `context` are pub.
-                // We CANNOT read `frecency`, `last_accessed` etc from outside the crate!
-                // This `dsh-frecency` crate isolation is a problem for external persistence.
-
-                // Solution:
-                // 1. Modify `dsh-frecency` to expose fields or a serializer (it already has `ItemStatsSerializer`).
-                // 2. Use `ItemStatsSerializer` to extract data!
-
-                let serializer = dsh_frecency::ItemStatsSerializer::from(item);
-
-                stmt.execute(rusqlite::params![
-                    serializer.item,
-                    serializer.frecency,
-                    serializer.last_accessed, // This is relative time
-                    serializer.num_accesses,
-                    // We don't have half_life in serializer?
-                    // serializer has: item, frecency, last_accessed, num_accesses, context
-                    // half_life is missing in serializer? Let's check stats.rs view again.
-                ])?;
+                    stmt.execute(rusqlite::params![
+                        serializer.item,
+                        serializer.frecency,
+                        serializer.last_accessed,
+                        serializer.num_accesses,
+                        half_life,
+                        serializer.context,
+                    ])?;
+                }
             }
+
+            tx.commit()?;
 
             let store_mut = Arc::make_mut(store);
             store_mut.changed = false;

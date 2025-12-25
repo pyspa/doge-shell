@@ -51,7 +51,6 @@ pub struct History {
 
 enum HistoryMsg {
     WriteBatch(Vec<(String, i64)>, Option<String>), // entries, context
-    Stop,
 }
 
 #[allow(dead_code)]
@@ -188,7 +187,6 @@ impl History {
                         HistoryMsg::WriteBatch(entries, context) => {
                             let _ = Self::write_batch_sync(&mut db, entries, context);
                         }
-                        HistoryMsg::Stop => break,
                     }
                 }
             });
@@ -317,7 +315,6 @@ pub struct FrecencyHistory {
 enum FrecencyMsg {
     Save(Arc<FrecencyStore>),
     LogVisit(String, i64, Option<String>), // path, timestamp, context
-    Stop,
 }
 
 impl fmt::Debug for FrecencyHistory {
@@ -420,7 +417,6 @@ impl FrecencyHistory {
                                  rusqlite::params![path, timestamp, context],
                              );
                         }
-                        FrecencyMsg::Stop => break,
                     }
                 }
             });

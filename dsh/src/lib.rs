@@ -435,7 +435,7 @@ pub fn create_context_for_command(shell: &Shell) -> Context {
     Context {
         shell_pid: shell.pid,
         shell_pgid: shell.pgid,
-        shell_tmode,
+        shell_tmode: Some(shell_tmode),
         terminal_state: terminal_state.clone(),
         shell_mode,
         foreground: false, // For command execution, not foreground

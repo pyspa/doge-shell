@@ -369,7 +369,7 @@ async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
                 return Ok(());
             }
         };
-        let mut ctx = Context::new(repl.shell.pid, repl.shell.pgid, shell_tmode, true);
+        let mut ctx = Context::new(repl.shell.pid, repl.shell.pgid, Some(shell_tmode), true);
         let exit_code = match repl
             .shell
             .eval_str(&mut ctx, input_str.clone(), false)
@@ -452,7 +452,7 @@ async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()> {
                 return Ok(());
             }
         };
-        let mut ctx = Context::new(repl.shell.pid, repl.shell.pgid, shell_tmode, true);
+        let mut ctx = Context::new(repl.shell.pid, repl.shell.pgid, Some(shell_tmode), true);
         match repl.shell.eval_str(&mut ctx, input, true).await {
             Ok(code) => {
                 repl.last_status = code;

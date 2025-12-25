@@ -301,7 +301,7 @@ pub fn parse_command(
             }
             debug!("run subshell: {}", cmd_str);
             let tmode = match tcgetattr(0) {
-                Ok(mode) => mode,
+                Ok(mode) => Some(mode),
                 Err(err) => {
                     debug!("tcgetattr fallback for command substitution: {}", err);
                     Context::new_safe(shell.pid, shell.pgid, false).shell_tmode
@@ -310,7 +310,7 @@ pub fn parse_command(
 
             match subshell_type {
                 SubshellType::Subshell => {
-                    let mut ctx = Context::new(shell.pid, shell.pgid, tmode, false);
+                    let mut ctx = Context::new(shell.pid, shell.pgid, tmode.clone(), false);
                     ctx.foreground = true;
                     // make pipe
                     let (pout, pin) = pipe().context("failed pipe")?;
@@ -321,7 +321,7 @@ pub fn parse_command(
                     output.lines().for_each(|x| argv.push(x.to_owned()));
                 }
                 SubshellType::CommandSubstitution => {
-                    let mut ctx = Context::new(shell.pid, shell.pgid, tmode, false);
+                    let mut ctx = Context::new(shell.pid, shell.pgid, tmode.clone(), false);
                     ctx.foreground = true;
                     let (pout, pin) = pipe().context("failed pipe")?;
                     ctx.outfile = pin;
@@ -335,7 +335,7 @@ pub fn parse_command(
                     }
                 }
                 SubshellType::ProcessSubstitution => {
-                    let mut ctx = Context::new(shell.pid, shell.pgid, tmode, false);
+                    let mut ctx = Context::new(shell.pid, shell.pgid, tmode.clone(), false);
                     ctx.foreground = true;
                     // make pipe
                     let (pout, pin) = pipe().context("failed pipe")?;

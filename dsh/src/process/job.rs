@@ -1300,7 +1300,7 @@ mod tests {
                 Ok(mode) => mode,
                 Err(_) => return Ok(()),
             };
-            let _ctx = Context::new(pid, pgid, tmode, true);
+            let _ctx = Context::new(pid, pgid, Some(tmode), true);
         } else {
             // Create a mock context for non-TTY environments
             println!("Skipping TTY-dependent test operations");

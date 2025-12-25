@@ -206,7 +206,14 @@ pub fn handle_import_command(shell_name: &str, custom_path: Option<&str>) -> Exi
     };
 
     // Create or load the dsh command history
-    let mut history = History::new();
+    let mut history = match History::from_file("dsh_cmd_history") {
+        Ok(h) => h,
+        Err(err) => {
+            error!("Failed to open dsh command history database: {err}");
+            eprintln!("Error opening dsh history database: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
     if let Err(err) = history.load() {
         error!("Failed to load dsh command history: {err}");
         eprintln!("Error loading dsh history: {err}");

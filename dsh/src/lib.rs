@@ -188,7 +188,7 @@ pub async fn run_shell() -> ExitCode {
 }
 
 pub fn handle_import_command(shell_name: &str, custom_path: Option<&str>) -> ExitCode {
-    use crate::history::FrecencyHistory;
+    use crate::history::History;
     use crate::history_import::create_importer;
     use tracing::{debug, error, info};
 
@@ -206,14 +206,12 @@ pub fn handle_import_command(shell_name: &str, custom_path: Option<&str>) -> Exi
     };
 
     // Create or load the dsh command history
-    let mut history = match FrecencyHistory::from_file("dsh_cmd_history") {
-        Ok(history) => history,
-        Err(err) => {
-            error!("Failed to load dsh command history: {err}");
-            eprintln!("Error loading dsh history: {err}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let mut history = History::new();
+    if let Err(err) = history.load() {
+        error!("Failed to load dsh command history: {err}");
+        eprintln!("Error loading dsh history: {err}");
+        return ExitCode::FAILURE;
+    }
 
     // Import the history
     match importer.import(&mut history) {

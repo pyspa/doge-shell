@@ -134,7 +134,6 @@ pub async fn check_job_state(shell: &mut Shell) -> Result<Vec<Job>> {
     );
 
     // Indices of jobs that are completed and need to be removed (now we will collect completed jobs)
-    let mut completed_jobs: Vec<Job> = Vec::new();
 
     // 1. First pass (Async): Update states for all jobs
     for (i, job) in shell.wait_jobs.iter_mut().enumerate() {
@@ -171,7 +170,7 @@ pub async fn check_job_state(shell: &mut Shell) -> Result<Vec<Job>> {
         .partition(|job| matches!(job.state, ProcessState::Completed(_, _)));
 
     shell.wait_jobs = active;
-    completed_jobs = completed;
+    let completed_jobs = completed;
 
     // Logging for completed jobs
     for job in &completed_jobs {

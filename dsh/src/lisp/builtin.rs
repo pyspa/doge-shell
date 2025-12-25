@@ -140,7 +140,7 @@ pub fn command(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
 }
 
 pub fn block_sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    tokio::runtime::Handle::current().block_on(sh(env, args))
+    tokio::task::block_in_place(move || tokio::runtime::Handle::current().block_on(sh(env, args)))
 }
 
 pub async fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -225,7 +225,9 @@ pub fn safety_level(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
 }
 
 pub fn block_sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    tokio::runtime::Handle::current().block_on(sh_no_cap(env, args))
+    tokio::task::block_in_place(move || {
+        tokio::runtime::Handle::current().block_on(sh_no_cap(env, args))
+    })
 }
 
 pub async fn sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {

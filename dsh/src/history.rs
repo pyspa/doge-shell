@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::process::Command;
 use std::sync::Arc;
+use std::sync::mpsc::{self, Sender};
+use std::thread;
 
 fn get_current_context() -> Option<String> {
     // Try to get git root
@@ -44,6 +46,12 @@ pub struct History {
     size: usize,
     current_index: usize,
     pub search_word: Option<String>,
+    sender: Option<Sender<HistoryMsg>>,
+}
+
+enum HistoryMsg {
+    WriteBatch(Vec<(String, i64)>, Option<String>), // entries, context
+    Stop,
 }
 
 #[allow(dead_code)]
@@ -60,7 +68,9 @@ impl History {
             histories: Vec::new(),
             size: 10000,
             current_index: 0,
+
             search_word: None,
+            sender: None,
         }
     }
 
@@ -74,7 +84,9 @@ impl History {
             histories: Vec::new(),
             size: 10000,
             current_index: 0,
+
             search_word: None,
+            sender: None,
         })
     }
 
@@ -163,6 +175,56 @@ impl History {
         Ok(self.histories.len())
     }
 
+    pub fn start_background_writer(&mut self) {
+        if let Some(db) = self.db.take() {
+            let (tx, rx) = mpsc::channel();
+            self.sender = Some(tx);
+
+            thread::spawn(move || {
+                let mut db = db;
+                // Keep connection open in this thread
+                while let Ok(msg) = rx.recv() {
+                    match msg {
+                        HistoryMsg::WriteBatch(entries, context) => {
+                            let _ = Self::write_batch_sync(&mut db, entries, context);
+                        }
+                        HistoryMsg::Stop => break,
+                    }
+                }
+            });
+        }
+    }
+
+    // Helper method for synchronous writing (moved from write_batch)
+    fn write_batch_sync(
+        db: &mut Db,
+        entries: Vec<(String, i64)>,
+        context: Option<String>,
+    ) -> Result<()> {
+        let mut conn = db.get_connection();
+        let tx = conn.transaction()?;
+
+        {
+            let mut upsert_stmt = tx.prepare(
+                "INSERT INTO command_history (command, timestamp, context, count) 
+                  VALUES (?1, ?2, ?3, 1)
+                  ON CONFLICT(command) DO UPDATE SET 
+                      count = count + 1,
+                      timestamp = excluded.timestamp,
+                      context = excluded.context
+                  RETURNING count",
+            )?;
+
+            for (cmd, when) in &entries {
+                let _count: i64 = upsert_stmt
+                    .query_row(rusqlite::params![cmd, when, context], |row| row.get(0))
+                    .unwrap_or(1);
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     // Helper methods open/close removed as they are no longer needed
     #[allow(dead_code)]
     fn open(&mut self) -> Result<&mut History> {
@@ -178,52 +240,30 @@ impl History {
     }
 
     pub fn write_batch(&mut self, entries: Vec<(String, i64)>) -> Result<()> {
-        if let Some(db) = &self.db {
-            let db = db.clone();
-            let mut conn = db.get_connection();
-            let context = get_current_context();
+        let context = get_current_context();
 
-            let tx = conn.transaction()?;
-
-            // Collect results with count values
-            let mut results: Vec<(String, i64, i64)> = Vec::with_capacity(entries.len());
-
-            {
-                // Use UPSERT with RETURNING to get the updated count value
-                // This eliminates the need for separate SELECT queries
-                let mut upsert_stmt = tx.prepare(
-                    "INSERT INTO command_history (command, timestamp, context, count) 
-                     VALUES (?1, ?2, ?3, 1)
-                     ON CONFLICT(command) DO UPDATE SET 
-                         count = count + 1,
-                         timestamp = excluded.timestamp,
-                         context = excluded.context
-                     RETURNING count",
-                )?;
-
-                for (cmd, when) in &entries {
-                    let count: i64 = upsert_stmt
-                        .query_row(rusqlite::params![cmd, when, context], |row| row.get(0))?;
-                    results.push((cmd.clone(), *when, count));
-                }
+        // 1. Update in-memory history immediately
+        for (cmd, when) in &entries {
+            // Check if exists and update/move to end
+            let mut count = 1;
+            if let Some(pos) = self.histories.iter().position(|e| e.entry == *cmd) {
+                count = self.histories[pos].count + 1;
+                self.histories.remove(pos);
             }
+            self.histories.push(Entry {
+                entry: cmd.clone(),
+                when: *when,
+                count,
+            });
+        }
+        self.reset_index();
 
-            tx.commit()?;
-
-            // Update in-memory history with correct count values
-            for (cmd, when, count) in results {
-                if let Some(pos) = self.histories.iter().position(|e| e.entry == cmd) {
-                    self.histories.remove(pos);
-                }
-                let entry = Entry {
-                    entry: cmd,
-                    when,
-                    count,
-                };
-                self.histories.push(entry);
-            }
-
-            self.reset_index();
+        // 2. Persist
+        if let Some(sender) = &self.sender {
+            let _ = sender.send(HistoryMsg::WriteBatch(entries, context));
+        } else if let Some(db) = &mut self.db {
+            // Fallback sync
+            let _ = Self::write_batch_sync(db, entries, context);
         }
         Ok(())
     }
@@ -271,6 +311,13 @@ pub struct FrecencyHistory {
     pub search_word: Option<String>,
     prev_search_word: String,
     matcher: SkimMatcherV2,
+    sender: Option<Sender<FrecencyMsg>>,
+}
+
+enum FrecencyMsg {
+    Save(Arc<FrecencyStore>),
+    LogVisit(String, i64, Option<String>), // path, timestamp, context
+    Stop,
 }
 
 impl fmt::Debug for FrecencyHistory {
@@ -302,6 +349,7 @@ impl FrecencyHistory {
             search_word: None,
             prev_search_word: "".to_string(),
             matcher,
+            sender: None,
         }
     }
 
@@ -349,7 +397,60 @@ impl FrecencyHistory {
             search_word: None,
             prev_search_word: "".to_string(),
             matcher,
+            sender: None,
         })
+    }
+
+    pub fn start_background_writer(&mut self) {
+        if let Some(db) = self.db.take() {
+            let (tx, rx) = mpsc::channel();
+            self.sender = Some(tx);
+
+            thread::spawn(move || {
+                let mut db = db;
+                while let Ok(msg) = rx.recv() {
+                    match msg {
+                        FrecencyMsg::Save(store) => {
+                            let _ = Self::save_sync(&mut db, &store);
+                        }
+                        FrecencyMsg::LogVisit(path, timestamp, context) => {
+                            let conn = db.get_connection();
+                            let _ = conn.execute(
+                                 "INSERT INTO directory_visits (path, timestamp, context) VALUES (?1, ?2, ?3)",
+                                 rusqlite::params![path, timestamp, context],
+                             );
+                        }
+                        FrecencyMsg::Stop => break,
+                    }
+                }
+            });
+        }
+    }
+
+    fn save_sync(db: &mut Db, store: &FrecencyStore) -> Result<()> {
+        let mut conn = db.get_connection();
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                 "INSERT OR REPLACE INTO directory_snapshot (path, score, last_accessed, access_count, half_life, context) 
+                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+             )?;
+
+            for item in &store.items {
+                let serializer = dsh_frecency::ItemStatsSerializer::from(item);
+                let half_life = 12.0 * 3600.0;
+                stmt.execute(rusqlite::params![
+                    serializer.item,
+                    serializer.frecency,
+                    serializer.last_accessed,
+                    serializer.num_accesses,
+                    half_life,
+                    serializer.context,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn set_search_word(&mut self, word: String) {
@@ -430,20 +531,16 @@ impl FrecencyHistory {
 
     /// Save command but now using SQLite
     pub fn save_background(&mut self) {
-        // Background save for SQLite might be tricky with Arc<Mutex<Connection>> sharing safe?
-        // Rusqlite Connection is Send but not Sync. Mutex makes it Sync.
-        // But we can't easily clone the connection to another thread unless we open a new one.
-        // SQLite supports concurrent readers, but one writer.
-        // For now, let's verify if we can just do it synchronously since it's fast,
-        // OR spawn a thread that opens its own connection implementation-wise.
-
-        if let Some(_db) = &self.db
-            && let Some(ref mut store) = self.store
+        if let Some(ref mut store) = self.store
             && store.changed
         {
-            // For now, synchronous save to ensure correctness first.
-            // Optimizing to async can be done in caching/optimization phase.
-            let _ = self.save();
+            if let Some(sender) = &self.sender {
+                let _ = sender.send(FrecencyMsg::Save(Arc::clone(store)));
+                Arc::make_mut(store).changed = false;
+            } else {
+                // Fallback
+                let _ = self.save();
+            }
         }
     }
 
@@ -473,7 +570,10 @@ impl FrecencyHistory {
             Arc::make_mut(store).add(history, ctx.clone());
 
             // Log to directory_visits (Append Only)
-            if let Some(db) = &self.db {
+            if let Some(sender) = &self.sender {
+                let now = Local::now().timestamp();
+                let _ = sender.send(FrecencyMsg::LogVisit(history.to_string(), now, ctx));
+            } else if let Some(db) = &self.db {
                 let conn = db.get_connection();
                 let now = Local::now().timestamp();
                 let _ = conn.execute(
@@ -931,5 +1031,48 @@ mod tests {
                 .iter()
                 .any(|i| i.item == "async_cmd")
         );
+    }
+
+    #[test]
+    fn test_background_writer() -> Result<()> {
+        init();
+        let db_file = "dsh_test_background_writer.db";
+        let db_path = environment::get_data_file(db_file)?;
+        let _ = std::fs::remove_file(&db_path); // Cleanup
+
+        // Create history and start background writer
+        let mut history = History::from_file("dsh_test_background_writer")?;
+        history.start_background_writer();
+
+        // Write batch
+        let entries = vec![
+            ("cmd_async_1".to_string(), 1000),
+            ("cmd_async_2".to_string(), 1001),
+        ];
+        history.write_batch(entries)?;
+
+        // Wait a bit for background thread to process
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        // Verify with new connection
+        let db = Db::new(db_path)?;
+        let conn = db.get_connection();
+        let mut stmt = conn
+            .prepare("SELECT command, timestamp, count FROM command_history WHERE command = ?1")?;
+
+        // Check cmd_async_1
+        let row: (String, i64, i64) =
+            stmt.query_row(["cmd_async_1"], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        assert_eq!(row.0, "cmd_async_1");
+        assert_eq!(row.1, 1000);
+        assert_eq!(row.2, 1);
+
+        // Check cmd_async_2
+        let row2: (String, i64, i64) =
+            stmt.query_row(["cmd_async_2"], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        assert_eq!(row2.0, "cmd_async_2");
+        assert_eq!(row2.1, 1001);
+
+        Ok(())
     }
 }

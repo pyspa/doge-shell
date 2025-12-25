@@ -175,6 +175,7 @@ pub struct Repl<'a> {
     pub(crate) multiline_buffer: String,
     pub(crate) last_cwd: std::path::PathBuf,
     pub(crate) git_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
+    pub(crate) file_context_cache: Arc<RwLock<FileContextCache>>,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -329,7 +330,56 @@ impl<'a> Repl<'a> {
             multiline_buffer: String::new(),
             last_cwd: current.clone(),
             git_rx,
+            file_context_cache: Arc::new(RwLock::new(FileContextCache::new())),
         }
+    }
+
+    pub(crate) fn trigger_file_context_update(&self) {
+        let cache = self.file_context_cache.clone();
+        tokio::task::spawn_blocking(move || {
+            let cwd = match std::env::current_dir() {
+                Ok(p) => p,
+                Err(_) => return,
+            };
+
+            // Fast check
+            if let Some(guard) = cache.try_read()
+                && guard.is_valid(&cwd)
+            {
+                return;
+            }
+
+            let mut files = Vec::new();
+            if let Ok(dir) = std::fs::read_dir(&cwd) {
+                let mut entries: Vec<_> = dir
+                    .flatten()
+                    .map(|e| {
+                        let name = e.file_name().to_string_lossy().to_string();
+                        let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                        (name, is_dir)
+                    })
+                    .filter(|(name, _)| !name.starts_with('.'))
+                    .collect();
+
+                // Sort roughly
+                entries.sort_by(|a, b| match (a.1, b.1) {
+                    (true, false) => std::cmp::Ordering::Less,
+                    (false, true) => std::cmp::Ordering::Greater,
+                    _ => a.0.cmp(&b.0),
+                });
+
+                files = entries
+                    .into_iter()
+                    .take(30)
+                    .map(|(name, is_dir)| if is_dir { format!("{}/", name) } else { name })
+                    .collect();
+            }
+
+            let mut write = cache.write();
+            write.path = cwd;
+            write.files = Arc::new(files);
+            write.updated_at = Some(Instant::now());
+        });
     }
 
     pub(crate) async fn perform_auto_fix(&mut self) {
@@ -604,27 +654,14 @@ impl<'a> Repl<'a> {
 
         // If no candidates from history/cache, try AI with full context
         if candidates.is_empty() && self.input_preferences.ai_backfill {
-            let cwd = std::env::current_dir()
-                .ok()
-                .map(|p| p.to_string_lossy().to_string());
-            let files = if let Some(path) = &cwd {
-                std::fs::read_dir(path)
-                    .map(|dir| {
-                        dir.flatten()
-                            .take(20)
-                            .map(|e| {
-                                let name = e.file_name().to_string_lossy().to_string();
-                                if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                                    format!("{}/", name)
-                                } else {
-                                    name
-                                }
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
+            let (cwd, files) = {
+                // Try to use cache or empty
+                self.trigger_file_context_update();
+                let cache = self.file_context_cache.read();
+                (
+                    Some(cache.path.to_string_lossy().to_string()),
+                    cache.files.clone(),
+                )
             };
 
             if let Some(state) = self.suggestion_manager.engine.ai_suggestion_with_context(
@@ -661,42 +698,52 @@ impl<'a> Repl<'a> {
         let current_input = self.input.to_string();
         let cursor_pos = self.input.cursor();
 
-        let cwd = std::env::current_dir()
-            .ok()
-            .map(|p| p.to_string_lossy().to_string());
+        // For forced suggestion, we can trigger update and wait a bit or just use cache
+        // But since we are allowed to await here, we can actually wait for the result
+        // or just use spawn_blocking locally if we want fresh results.
+        // For consistency, let's update cache synchronously-ish (blocking local thread is fine as it's async task)
+        // actually `force_ai_suggestion` loop waits for AI.
 
-        let files = if let Some(path) = &cwd {
-            let mut entries: Vec<_> = std::fs::read_dir(path)
-                .map(|dir| {
-                    dir.flatten()
+        let (cwd, files) = {
+            let cache = self.file_context_cache.clone();
+            let (cwd, files) = tokio::task::spawn_blocking(move || {
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                // Reuse the logic? Or just force update cache?
+                let mut files = Vec::new();
+                if let Ok(dir) = std::fs::read_dir(&cwd) {
+                    let mut entries: Vec<_> = dir
+                        .flatten()
                         .map(|e| {
                             let name = e.file_name().to_string_lossy().to_string();
                             let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
                             (name, is_dir)
                         })
-                        .filter(|(name, _)| !name.starts_with('.')) // Filter hidden files
-                        .collect()
-                })
-                .unwrap_or_default();
+                        .filter(|(name, _)| !name.starts_with('.'))
+                        .collect();
+                    entries.sort_by(|a, b| match (a.1, b.1) {
+                        (true, false) => std::cmp::Ordering::Less,
+                        (false, true) => std::cmp::Ordering::Greater,
+                        _ => a.0.cmp(&b.0),
+                    });
+                    files = entries
+                        .into_iter()
+                        .take(30)
+                        .map(|(name, is_dir)| if is_dir { format!("{}/", name) } else { name })
+                        .collect();
+                }
 
-            // Sort: directories first, then alphabetical
-            entries.sort_by(|a, b| match (a.1, b.1) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                _ => a.0.cmp(&b.0),
-            });
-
-            entries
-                .into_iter()
-                .take(30)
-                .map(
-                    |(name, is_dir)| {
-                        if is_dir { format!("{}/", name) } else { name }
-                    },
-                )
-                .collect()
-        } else {
-            Vec::new()
+                // Update cache while we are at it
+                {
+                    let mut w = cache.write();
+                    w.path = cwd.clone();
+                    w.files = Arc::new(files.clone());
+                    w.updated_at = Some(Instant::now());
+                }
+                (Some(cwd.to_string_lossy().to_string()), Arc::new(files))
+            })
+            .await
+            .unwrap_or_default();
+            (cwd, files)
         };
 
         let start = std::time::Instant::now();
@@ -1457,7 +1504,7 @@ impl<'a> Repl<'a> {
                                     let files_vec: Vec<String> = files.lines().map(String::from).collect();
                                     self.suggestion_manager.engine.prefetch(
                                         Some(self.last_cwd.to_string_lossy().to_string()),
-                                        files_vec,
+                                        Arc::new(files_vec),
                                         Some(self.last_status)
                                     );
                                 }

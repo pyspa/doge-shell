@@ -128,6 +128,7 @@ pub async fn run_shell() -> ExitCode {
                 if let Err(e) = history.load() {
                     tracing::warn!("Failed to load history items: {}", e);
                 }
+                history.start_background_writer();
                 *cmd_history.lock() = history;
             }
             Err(e) => {
@@ -144,7 +145,8 @@ pub async fn run_shell() -> ExitCode {
 
     std::thread::spawn(move || {
         match crate::history::FrecencyHistory::from_file("dsh_directory_history") {
-            Ok(history) => {
+            Ok(mut history) => {
+                history.start_background_writer();
                 *path_history.lock() = history;
             }
             Err(e) => {

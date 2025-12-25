@@ -4,6 +4,7 @@ use crate::shell::Shell;
 use dsh_types::Context;
 use nix::sys::termios::tcgetattr;
 use nix::unistd::pipe;
+use std::borrow::Cow;
 use std::fs::File;
 use std::io::prelude::*;
 use std::os::unix::io::FromRawFd;
@@ -11,6 +12,28 @@ use std::process::Command;
 use std::sync::Arc;
 use std::{cell::RefCell, rc::Rc};
 use tracing::debug;
+
+fn is_sensitive_key(key: &str) -> bool {
+    let key = key.to_ascii_uppercase();
+    key.contains("API_KEY")
+        || key.ends_with("_KEY")
+        || key.contains("TOKEN")
+        || key.contains("SECRET")
+        || key.contains("PASSWORD")
+        || key.contains("PASSWD")
+        || key.contains("PASSPHRASE")
+        || key.contains("AUTH")
+        || key.contains("COOKIE")
+        || key.contains("SESSION")
+}
+
+fn redact_value_for_log<'a>(key: &str, value: &'a str) -> Cow<'a, str> {
+    if is_sensitive_key(key) {
+        Cow::Borrowed("<redacted>")
+    } else {
+        Cow::Borrowed(value)
+    }
+}
 
 pub fn set_env(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let key = &args[0];
@@ -25,25 +48,25 @@ pub fn set_env(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtime
         }
         let env_path = path_vec.join(":");
         unsafe { std::env::set_var("PATH", &env_path) };
-        debug!("set env {} {}", &key, &env_path);
+        let display_val = redact_value_for_log(&key, &env_path);
+        debug!("set env {} {}", &key, display_val);
         env.borrow().shell_env.write().paths = path_vec;
     } else {
         let val = &args[1];
-        unsafe { std::env::set_var(&key, val.to_string()) };
-        debug!("set env {} {}", &key, &val);
+        let val_string = val.to_string();
+        unsafe { std::env::set_var(&key, &val_string) };
+        let display_val = redact_value_for_log(&key, &val_string);
+        debug!("set env {} {}", &key, display_val);
     }
     Ok(Value::NIL)
 }
 
 pub fn set_variable(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let key = &args[0];
-    let val = &args[1];
-    debug!("set variable {} {}", &key, &val);
-    env.borrow()
-        .shell_env
-        .write()
-        .variables
-        .insert(key.to_string(), val.to_string());
+    let key = args[0].to_string();
+    let val = args[1].to_string();
+    let display_val = redact_value_for_log(&key, &val);
+    debug!("set variable {} {}", &key, display_val);
+    env.borrow().shell_env.write().variables.insert(key, val);
     Ok(Value::NIL)
 }
 
@@ -164,7 +187,7 @@ pub async fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
         }
     };
 
-    let mut ctx = Context::new(shell.pid, shell.pgid, shell_tmode, true);
+    let mut ctx = Context::new(shell.pid, shell.pgid, Some(shell_tmode), true);
     let (pout, pin) = match pipe() {
         Ok(p) => p,
         Err(err) => {
@@ -251,7 +274,7 @@ pub async fn sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value,
         }
     };
 
-    let mut ctx = Context::new(shell.pid, shell.pgid, shell_tmode, true);
+    let mut ctx = Context::new(shell.pid, shell.pgid, Some(shell_tmode), true);
     // ctx.captured_out = Some(pin);
     if let Err(err) = shell.eval_str(&mut ctx, input, false).await {
         eprintln!("error: {err}");

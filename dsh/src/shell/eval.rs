@@ -34,8 +34,9 @@ pub async fn eval_str(
         disable_raw_mode().ok();
         let message = rest.trim_start();
         debug!(
-            "AI_CHAT_EXEC: input='{}', extracted message='{}'",
-            input, message
+            "AI_CHAT_EXEC: input_len={}, message_len={}",
+            input.len(),
+            message.len()
         );
         let status = execute_chat_message(ctx, shell, message, None);
         let code = match status {

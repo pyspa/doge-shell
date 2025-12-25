@@ -174,13 +174,17 @@ impl ChatGptClient {
         let response = Self::await_with_cancel(builder.send(), cancel_check).await?;
         let data: Value = Self::await_with_cancel(response.json(), cancel_check).await?;
 
-        match serde_json::to_string(&data) {
-            Ok(serialized) => debug!(chat_direction = "response", json = %serialized),
-            Err(err) => debug!(
-                chat_direction = "response",
-                "chat_response_serialization_failed: {err}"
-            ),
-        }
+        let choices_len = data
+            .get("choices")
+            .and_then(|choices| choices.as_array())
+            .map(|choices| choices.len())
+            .unwrap_or(0);
+        let has_error = data.get("error").is_some();
+        debug!(
+            chat_direction = "response",
+            choices = choices_len,
+            has_error = has_error
+        );
 
         Ok(data)
     }
@@ -237,6 +241,8 @@ impl ChatGptClient {
             "messages": messages,
         });
 
+        let tool_count = tools.as_ref().map(|items| items.len()).unwrap_or(0);
+
         if let Some(v) = temperature
             && let Some(map) = body.as_object_mut()
         {
@@ -249,13 +255,13 @@ impl ChatGptClient {
             map.insert("tools".into(), json!(tools));
         }
 
-        match serde_json::to_string(&body) {
-            Ok(serialized) => debug!(chat_direction = "request", json = %serialized),
-            Err(err) => debug!(
-                chat_direction = "request",
-                "chat_request_serialization_failed: {err}"
-            ),
-        }
+        debug!(
+            chat_direction = "request",
+            model = %selected_model,
+            message_count = messages.len(),
+            tool_count = tool_count,
+            temperature = ?temperature
+        );
 
         let header_value = format!("Bearer {}", &self.api_key);
         let builder = self

@@ -174,54 +174,54 @@ impl History {
     }
 
     pub fn write_history(&mut self, history: &str) -> Result<()> {
+        self.write_batch(vec![(history.to_string(), Local::now().timestamp())])
+    }
+
+    pub fn write_batch(&mut self, entries: Vec<(String, i64)>) -> Result<()> {
         if let Some(db) = &self.db {
             let db = db.clone();
-            let conn = db.get_connection();
-            let now = Local::now().timestamp();
+            let mut conn = db.get_connection();
             let context = get_current_context();
 
             use rusqlite::OptionalExtension;
 
-            // Check if entry exists (deduplication by command string)
-            let mut stmt =
-                conn.prepare("SELECT id, count FROM command_history WHERE command = ?1")?;
-            let existing: Option<(i64, i64)> = stmt
-                .query_row(rusqlite::params![history], |row| {
-                    Ok((row.get(0)?, row.get(1)?))
-                })
-                .optional()?;
+            let tx = conn.transaction()?;
 
-            let count = if let Some((id, current_count)) = existing {
-                let new_count = current_count + 1;
-                // Update existing entry: increment count, update timestamp and context
-                conn.execute(
-                    "UPDATE command_history SET count = ?1, timestamp = ?2, context = ?3 WHERE id = ?4",
-                    rusqlite::params![new_count, now, context, id],
-                )?;
-                new_count
-            } else {
-                // Insert new entry
-                conn.execute(
-                    "INSERT INTO command_history (command, timestamp, context, count) VALUES (?1, ?2, ?3, 1)",
-                    rusqlite::params![history, now, context],
-                )?;
-                1
-            };
+            {
+                let mut select_stmt =
+                    tx.prepare("SELECT id, count FROM command_history WHERE command = ?1")?;
+                let mut update_stmt = tx.prepare("UPDATE command_history SET count = ?1, timestamp = ?2, context = ?3 WHERE id = ?4")?;
+                let mut insert_stmt = tx.prepare("INSERT INTO command_history (command, timestamp, context, count) VALUES (?1, ?2, ?3, 1)")?;
 
-            drop(stmt);
-            drop(conn);
+                for (cmd, when) in entries {
+                    let existing: Option<(i64, i64)> = select_stmt
+                        .query_row(rusqlite::params![cmd], |row| Ok((row.get(0)?, row.get(1)?)))
+                        .optional()?;
 
-            // Update in-memory history
-            if let Some(pos) = self.histories.iter().position(|e| e.entry == history) {
-                self.histories.remove(pos);
+                    let count = if let Some((id, current_count)) = existing {
+                        let new_count = current_count + 1;
+                        update_stmt.execute(rusqlite::params![new_count, when, context, id])?;
+                        new_count
+                    } else {
+                        insert_stmt.execute(rusqlite::params![cmd, when, context])?;
+                        1
+                    };
+
+                    // Update in-memory history
+                    if let Some(pos) = self.histories.iter().position(|e| e.entry == cmd) {
+                        self.histories.remove(pos);
+                    }
+
+                    let entry = Entry {
+                        entry: cmd,
+                        when,
+                        count,
+                    };
+                    self.histories.push(entry);
+                }
             }
 
-            let entry = Entry {
-                entry: history.to_string(),
-                when: now,
-                count,
-            };
-            self.histories.push(entry);
+            tx.commit()?;
             self.reset_index();
         }
         Ok(())
@@ -362,6 +362,7 @@ impl FrecencyHistory {
         }
     }
 
+    #[allow(dead_code)]
     fn get(&self, index: usize) -> Option<ItemStats> {
         if let Some(ref histories) = self.histories {
             if index < histories.len() {
@@ -639,6 +640,38 @@ mod tests {
         let mut history = History::from_file("dsh_cmd_history")?;
         let history = history.open()?;
         history.close()
+    }
+
+    #[test]
+    fn test_write_batch() -> Result<()> {
+        init();
+        // Clear test file if exists
+        let test_name = "dsh_test_batch";
+        if let Ok(path) = environment::get_data_file(format!("{}.db", test_name).as_str()) {
+            let _ = std::fs::remove_file(path);
+        }
+
+        let mut history = History::from_file(test_name)?;
+
+        let now = Local::now().timestamp();
+        let entries = vec![
+            ("ls".to_string(), now - 10),
+            ("cd".to_string(), now - 5),
+            ("ls".to_string(), now),
+        ];
+
+        history.write_batch(entries)?;
+
+        assert_eq!(history.histories.len(), 2); // "ls" should be deduplicated
+
+        let ls_entry = history.histories.iter().find(|e| e.entry == "ls").unwrap();
+        assert_eq!(ls_entry.count, 2);
+        assert_eq!(ls_entry.when, now); // Should have the latest timestamp
+
+        let cd_entry = history.histories.iter().find(|e| e.entry == "cd").unwrap();
+        assert_eq!(cd_entry.count, 1);
+
+        Ok(())
     }
 
     #[test]

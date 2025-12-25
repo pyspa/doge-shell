@@ -1,4 +1,4 @@
-use crate::history::FrecencyHistory;
+use crate::history::History;
 use anyhow::{Context as _, Result, bail};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -8,7 +8,7 @@ use tracing::debug;
 /// Trait for shell history importers
 pub trait HistoryImporter {
     /// Import history from the shell's history file
-    fn import(&self, history: &mut FrecencyHistory) -> Result<usize>;
+    fn import(&self, history: &mut History) -> Result<usize>;
 }
 
 /// Fish shell history importer
@@ -42,7 +42,7 @@ impl FishHistoryImporter {
 }
 
 impl HistoryImporter for FishHistoryImporter {
-    fn import(&self, history: &mut FrecencyHistory) -> Result<usize> {
+    fn import(&self, history: &mut History) -> Result<usize> {
         debug!(
             "Importing fish history from {}",
             self.history_path.display()
@@ -57,89 +57,66 @@ impl HistoryImporter for FishHistoryImporter {
             error_msg
         })?;
 
-        // 変更: バイト単位で読み込み、UTF-8エラーを処理
         let mut reader = BufReader::new(file);
         let mut count = 0;
         let mut in_cmd_block = false;
         let mut current_cmd = String::new();
         let mut line_buffer = Vec::new();
         let mut line_number = 0;
+        let mut entries = Vec::new();
 
-        // Fish history format is:
-        // - cmd: <command>
-        //   when: <timestamp>
-        // - cmd: <another command>
-        //   when: <timestamp>
         while let Ok(bytes_read) = reader.read_until(b'\n', &mut line_buffer) {
             if bytes_read == 0 {
-                break; // ファイルの終端に達した
+                break;
             }
 
             line_number += 1;
-
-            // 無効なUTF-8シーケンスを置換文字に変換
             let line = String::from_utf8_lossy(&line_buffer).into_owned();
 
-            // 元のバイト列に無効なUTF-8シーケンスが含まれていた場合、警告ログを出力
-            if line.contains('�') {
+            if line.contains('\u{FFFD}') {
                 tracing::warn!(
-                    "Line {line_number} contains invalid UTF-8 characters, replaced with '�'"
+                    "Line {line_number} contains invalid UTF-8 characters, replaced with '\\u{{FFFD}}'"
                 );
             }
 
             let trimmed = line.trim();
 
             if trimmed.starts_with("- cmd:") {
-                // Start of a new command entry
                 if in_cmd_block && !current_cmd.is_empty() {
-                    // Add the previous command if we were in a command block
-                    history.add(&current_cmd);
+                    // If we see a new - cmd: but didn't see when: yet
+                    entries.push((current_cmd.clone(), chrono::Local::now().timestamp()));
                     count += 1;
                 }
 
-                // Extract the command part
                 let cmd_part = trimmed.strip_prefix("- cmd:").unwrap_or("").trim();
                 current_cmd = cmd_part.to_string();
                 in_cmd_block = true;
             } else if trimmed.starts_with("when:") && in_cmd_block {
-                // End of command block, add the command to history
+                let when_part = trimmed.strip_prefix("when:").unwrap_or("").trim();
+                let when = when_part
+                    .parse::<i64>()
+                    .unwrap_or_else(|_| chrono::Local::now().timestamp());
+
                 if !current_cmd.is_empty() {
-                    history.add(&current_cmd);
+                    entries.push((current_cmd.clone(), when));
                     count += 1;
                     current_cmd.clear();
                 }
                 in_cmd_block = false;
             }
 
-            // バッファをクリアして次の行の読み込み準備
             line_buffer.clear();
         }
 
-        // Add the last command if we were still in a command block
         if in_cmd_block && !current_cmd.is_empty() {
-            history.add(&current_cmd);
+            entries.push((current_cmd, chrono::Local::now().timestamp()));
             count += 1;
         }
 
-        // 明示的にchangedフラグを設定して保存を強制
-        history.force_changed();
-
-        // Save the imported history
-        if let Err(err) = history.save() {
-            tracing::error!("Failed to save imported history: {err}");
-            return Err(err.context("Failed to save imported history"));
+        if !entries.is_empty() {
+            debug!("Writing {} entries to history...", entries.len());
+            history.write_batch(entries)?;
         }
-
-        // 保存後に履歴ファイルのサイズを確認 - Skip for SQLite as path info is hidden
-        // if let Some(ref path) = history.path
-        //     && let Ok(metadata) = std::fs::metadata(path)
-        // {
-        //     tracing::debug!(
-        //         "History file saved: {} (size: {} bytes)",
-        //         path.display(),
-        //         metadata.len()
-        //     );
-        // }
 
         debug!("Imported {} commands from fish history", count);
         tracing::info!("Successfully imported {count} commands from fish history");
@@ -206,9 +183,7 @@ mod tests {
         file.flush()?;
 
         // Create a temporary history file for dsh
-        let _dsh_history_path = temp_dir.path().join("dsh_history");
-        let mut history = FrecencyHistory::new();
-        // history.path = Some(dsh_history_path);
+        let mut history = History::from_file("dsh_test_import")?;
 
         // Import the fish history
         let importer = FishHistoryImporter::with_path(&history_path);
@@ -246,8 +221,7 @@ mod tests {
 
         // Create a temporary history file for dsh
         let _dsh_history_path = temp_dir.path().join("dsh_history");
-        let mut history = FrecencyHistory::new();
-        // history.path = Some(dsh_history_path);
+        let mut history = History::from_file("dsh_test_import")?;
 
         // Import the fish history - 無効なUTF-8があっても成功するはず
         let importer = FishHistoryImporter::with_path(&history_path);

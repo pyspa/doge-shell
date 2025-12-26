@@ -9,7 +9,6 @@ use nix::unistd::{Pid, close, getpgrp, isatty, setpgid, tcsetpgrp};
 use std::fs::File;
 use std::os::unix::io::{AsRawFd, IntoRawFd, RawFd};
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
 use tokio::io::unix::AsyncFd;
 use tokio::time;
 use tracing::{debug, error};
@@ -26,6 +25,9 @@ use dsh_types::Context;
 
 use crate::process::pty::Pty;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use std::pin::Pin;
+use std::task::{Context as TaskContext, Poll};
+use tokio::io::{AsyncRead, ReadBuf};
 
 #[derive(Debug, Clone, Copy)]
 struct BorrowedFd(RawFd);
@@ -33,6 +35,40 @@ struct BorrowedFd(RawFd);
 impl AsRawFd for BorrowedFd {
     fn as_raw_fd(&self) -> RawFd {
         self.0
+    }
+}
+
+struct AsyncStdin {
+    inner: AsyncFd<BorrowedFd>,
+}
+
+impl AsyncRead for AsyncStdin {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        loop {
+            let mut guard = std::task::ready!(self.inner.poll_read_ready(cx))?;
+            match guard.try_io(|inner| {
+                let fd = inner.get_ref().as_raw_fd();
+                let b = buf.initialize_unfilled();
+                match read(fd, b) {
+                    Ok(n) => {
+                        buf.advance(n);
+                        Ok(n)
+                    }
+                    Err(Errno::EAGAIN) => Err(std::io::Error::new(
+                        std::io::ErrorKind::WouldBlock,
+                        "stdin would block",
+                    )),
+                    Err(e) => Err(std::io::Error::other(e)),
+                }
+            }) {
+                Ok(_) => return Poll::Ready(Ok(())),
+                Err(_would_block) => continue,
+            }
+        }
     }
 }
 
@@ -241,10 +277,23 @@ impl Job {
                                             let input_task = tokio::spawn(async move {
                                                 let _nonblock =
                                                     NonBlockingFdGuard::new(STDIN_FILENO);
-                                                let stdin = match AsyncFd::new(BorrowedFd(
-                                                    STDIN_FILENO,
-                                                )) {
-                                                    Ok(fd) => fd,
+
+                                                match AsyncFd::new(BorrowedFd(STDIN_FILENO)) {
+                                                    Ok(fd) => {
+                                                        let mut stdin = AsyncStdin { inner: fd };
+                                                        debug!("PTY input proxy: starting copy");
+                                                        if let Err(e) = tokio::io::copy(
+                                                            &mut stdin,
+                                                            &mut master_write,
+                                                        )
+                                                        .await
+                                                        {
+                                                            debug!(
+                                                                "PTY stdin proxy: copy ended/failed: {}",
+                                                                e
+                                                            );
+                                                        }
+                                                    }
                                                     Err(e) => {
                                                         error!(
                                                             "Failed to setup async stdin proxy for PTY: {}",
@@ -257,62 +306,6 @@ impl Job {
                                                             &mut master_write,
                                                         )
                                                         .await;
-                                                        return;
-                                                    }
-                                                };
-
-                                                let mut buf = [0u8; 4096];
-                                                loop {
-                                                    let mut readable = match stdin.readable().await
-                                                    {
-                                                        Ok(r) => r,
-                                                        Err(e) => {
-                                                            debug!(
-                                                                "PTY stdin proxy: readable() failed: {}",
-                                                                e
-                                                            );
-                                                            break;
-                                                        }
-                                                    };
-
-                                                    let read_res =
-                                                        readable.try_io(|_| {
-                                                            match read(STDIN_FILENO, &mut buf) {
-                                                            Ok(n) => Ok(n),
-                                                            Err(Errno::EAGAIN) => Err(
-                                                                std::io::Error::new(
-                                                                    std::io::ErrorKind::WouldBlock,
-                                                                    "stdin would block",
-                                                                ),
-                                                            ),
-                                                            Err(e) => Err(std::io::Error::other(
-                                                                e,
-                                                            )),
-                                                        }
-                                                        });
-
-                                                    let n = match read_res {
-                                                        Ok(Ok(n)) => n,
-                                                        Ok(Err(e)) => {
-                                                            debug!(
-                                                                "PTY stdin proxy: read failed: {}",
-                                                                e
-                                                            );
-                                                            break;
-                                                        }
-                                                        Err(_would_block) => continue,
-                                                    };
-
-                                                    if n == 0 {
-                                                        break;
-                                                    }
-
-                                                    if master_write
-                                                        .write_all(&buf[..n])
-                                                        .await
-                                                        .is_err()
-                                                    {
-                                                        break;
                                                     }
                                                 }
                                             });

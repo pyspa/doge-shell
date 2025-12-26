@@ -199,18 +199,29 @@ impl ChatGptClient {
     {
         tokio::pin!(future);
 
-        let ctrl_c = tokio::signal::ctrl_c();
-        tokio::pin!(ctrl_c);
+        // Attempt to listen for Ctrl+C, but don't fail if we can't (e.g. if a handler is already set)
+        // If handler registration fails, this future will just be ignored in the select! loop
+        let ctrl_c_future = async {
+            match tokio::signal::ctrl_c().await {
+                Ok(()) => true,
+                Err(e) => {
+                    debug!("dsh-openai: Failed to listen for Ctrl+C via tokio: {}", e);
+                    std::future::pending::<bool>().await
+                }
+            }
+        };
+        tokio::pin!(ctrl_c_future);
 
-        let mut interval = tokio::time::interval(Duration::from_millis(100));
+        // Check for cancellation more frequently for better responsiveness
+        let mut interval = tokio::time::interval(Duration::from_millis(50));
+        // Ensure the first tick completes immediately so we don't wait 50ms unnecessarily
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {
                 res = &mut future => return res.map_err(anyhow::Error::from),
-                ctrl = &mut ctrl_c => match ctrl {
-                    Ok(()) => return Err(RequestCancelled.into()),
-                    Err(e) => return Err(anyhow!("Failed to listen for Ctrl+C: {e}")),
-                },
+                // If tokio's ctrl_c fires, treat it as a cancellation
+                true = &mut ctrl_c_future => return Err(RequestCancelled.into()),
                 _ = interval.tick() => {
                     if let Some(check) = cancel_check
                         && check() {

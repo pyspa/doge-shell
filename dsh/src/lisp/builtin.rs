@@ -9,7 +9,6 @@ use nix::unistd::pipe;
 use std::borrow::Cow;
 use std::fs::File;
 use std::io::Read;
-use std::io::prelude::*;
 use std::os::unix::io::FromRawFd;
 use std::process::Command;
 use std::sync::Arc;

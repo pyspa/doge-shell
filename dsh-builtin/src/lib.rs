@@ -12,7 +12,10 @@ mod alias;
 mod bg;
 pub mod cd;
 mod chatgpt;
+mod eproject;
+mod eview;
 mod export;
+mod magit;
 mod markdown;
 mod safe_run;
 pub use chatgpt::McpManager;
@@ -122,11 +125,14 @@ pub trait ShellProxy {
         Vec::new()
     }
 
-    /// Captures the output of a command for inspection
-    /// Returns (exit_code, stdout, stderr)
     fn capture_command(&mut self, _ctx: &Context, _cmd: &str) -> Result<(i32, String, String)> {
         // Default implementation returns error as this requires direct shell access
         Err(anyhow::anyhow!("capture_command not implemented"))
+    }
+
+    /// Opens the external editor with the given content
+    fn open_editor(&mut self, _content: &str, _extension: &str) -> Result<String> {
+        Err(anyhow::anyhow!("open_editor not implemented"))
     }
 }
 
@@ -362,6 +368,25 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             "help",
             Box::new(BuiltinCommandFn::new(help::command, help::description()))
                 as Box<dyn BuiltinCommandTrait>,
+        );
+
+        // Emacs integration commands
+        builtin.insert(
+            "eview",
+            Box::new(BuiltinCommandFn::new(eview::command, eview::description()))
+                as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "magit",
+            Box::new(BuiltinCommandFn::new(magit::command, magit::description()))
+                as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "eproject",
+            Box::new(BuiltinCommandFn::new(
+                eproject::command,
+                eproject::description(),
+            )) as Box<dyn BuiltinCommandTrait>,
         );
 
         // Performance and statistics commands

@@ -797,7 +797,6 @@ impl ShellProxy for Shell {
         // We implement this synchronously to avoid 'Cannot start a runtime from within a runtime' panic.
         // We replicate the logic of execute_with_capture but for the whole command string
         // passed from safe-run.
-
         debug!("Capturing command: '{}'", cmd);
 
         // Use sh -c to execute the command
@@ -815,6 +814,10 @@ impl ShellProxy for Shell {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
         Ok((exit_code, stdout, stderr))
+    }
+
+    fn open_editor(&mut self, content: &str, extension: &str) -> Result<String> {
+        crate::utils::editor::open_editor(content, extension)
     }
 }
 

@@ -6,6 +6,7 @@ use dsh_frecency::{FrecencyStore, ItemStats, SortMethod};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 use std::process::Command;
 use std::sync::Arc;
@@ -161,13 +162,18 @@ impl History {
             })?;
 
             self.histories.clear();
+            let mut seen: HashMap<String, usize> = HashMap::new();
+            let mut temp_histories: Vec<Option<Entry>> = Vec::new();
+
             for r in rows.flatten() {
-                // In-memory deduplication: remove existing entry to ensure uniqueness and correct order
-                if let Some(pos) = self.histories.iter().position(|e| e.entry == r.entry) {
-                    self.histories.remove(pos);
+                if let Some(&old_idx) = seen.get(&r.entry) {
+                    temp_histories[old_idx] = None;
                 }
-                self.histories.push(r);
+                seen.insert(r.entry.clone(), temp_histories.len());
+                temp_histories.push(Some(r));
             }
+
+            self.histories = temp_histories.into_iter().flatten().collect();
 
             self.current_index = self.histories.len();
         }

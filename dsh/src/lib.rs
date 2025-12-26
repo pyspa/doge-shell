@@ -245,14 +245,17 @@ pub fn init_tracing() -> Result<()> {
             .append(true)
             .open("./debug.log")?,
     );
+
+    let env_filter = tracing_subscriber::EnvFilter::try_from_env("DSH_LOG")
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+
     tracing_subscriber::fmt()
         .with_ansi(false)
-        .with_max_level(tracing::Level::DEBUG)
+        .with_env_filter(env_filter)
         .with_file(true)
         .with_line_number(true)
         .with_writer(log_file)
         .init();
-    // tracing_subscriber::fmt::init();
     Ok(())
 }
 

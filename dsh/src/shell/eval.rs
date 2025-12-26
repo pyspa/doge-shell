@@ -257,6 +257,18 @@ pub fn launch_subshell(shell: &mut Shell, ctx: &mut Context, jobs: Vec<Job>) -> 
     Ok(())
 }
 
+// SAFETY WARNING:
+// This function calls `fork()` in a potentially multi-threaded environment (Tokio runtime).
+// In the child process (ForkResult::Child), it proceeds to use `job.launch` which is async
+// and relies on the Tokio runtime.
+//
+// Using `fork` without `exec` in a multi-threaded program is generally unsafe because
+// only the thread calling fork is duplicated. If other threads held locks (like malloc locks
+// or Tokio internal locks), those locks are now held forever in the child, leading to deadlocks.
+//
+// Ideally, subshells should be implemented by re-executing the shell binary with specific flags,
+// or by using a dedicated process spawner that avoids this pattern.
+// Proceed with caution.
 async fn spawn_subshell(shell: &mut Shell, ctx: &mut Context, job: &mut Job) -> Result<Pid> {
     let pid = unsafe { fork().context("failed fork")? };
 

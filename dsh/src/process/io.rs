@@ -20,6 +20,9 @@ pub struct OutputMonitor {
     pub(crate) reader: io::BufReader<fs::File>,
     pub(crate) outputed: bool,
     pub captured_output: String,
+    // Cached renderer to avoid repeated allocations.
+    // Safe to hold as it no longer holds StdoutLock persistently.
+    pub(crate) renderer: TerminalRenderer,
 }
 
 impl OutputMonitor {
@@ -30,6 +33,7 @@ impl OutputMonitor {
             reader,
             outputed: false,
             captured_output: String::new(),
+            renderer: TerminalRenderer::new(),
         }
     }
 
@@ -49,9 +53,8 @@ impl OutputMonitor {
             return Ok(());
         }
 
-        let mut renderer = TerminalRenderer::new();
-        renderer.write_all(buffer.as_bytes())?;
-        renderer.flush()?;
+        self.renderer.write_all(buffer.as_bytes())?;
+        self.renderer.flush()?;
         Ok(())
     }
 

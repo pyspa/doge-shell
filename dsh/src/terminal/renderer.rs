@@ -1,10 +1,10 @@
-use std::io::{self, StdoutLock, Write};
-
 const DEFAULT_BUFFER_CAPACITY: usize = 4096;
+use std::io::{self, Write};
 
 /// Buffered terminal renderer that batches commands before flushing to stdout.
+/// Does not hold StdoutLock persistently to allow safe reuse and sharing.
+#[derive(Debug)]
 pub struct TerminalRenderer {
-    stdout: StdoutLock<'static>,
     buffer: Vec<u8>,
 }
 
@@ -22,9 +22,7 @@ impl TerminalRenderer {
 
     /// Create a renderer with a custom initial buffer capacity.
     pub fn with_capacity(capacity: usize) -> Self {
-        let stdout = std::io::stdout();
         TerminalRenderer {
-            stdout: stdout.lock(),
             buffer: Vec::with_capacity(capacity.max(1)),
         }
     }
@@ -35,8 +33,10 @@ impl TerminalRenderer {
             return Ok(());
         }
 
-        self.stdout.write_all(&self.buffer)?;
-        self.stdout.flush()?;
+        let stdout = std::io::stdout();
+        let mut handle = stdout.lock();
+        handle.write_all(&self.buffer)?;
+        handle.flush()?;
         self.buffer.clear();
         Ok(())
     }
@@ -49,7 +49,7 @@ impl Write for TerminalRenderer {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        // No-op: buffer is flushed explicitly via `flush` / `finish`.
-        Ok(())
+        // Delegate to inherent flush method to actually write to stdout
+        TerminalRenderer::flush(self)
     }
 }

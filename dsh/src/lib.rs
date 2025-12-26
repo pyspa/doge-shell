@@ -36,6 +36,7 @@ pub mod safety;
 pub mod shell;
 pub mod suggestion;
 pub mod terminal;
+pub mod utils;
 
 use crate::errors::display_user_error;
 

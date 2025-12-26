@@ -159,6 +159,7 @@ pub struct Repl<'a> {
     pub(crate) prompt_mark_width: usize,
     pub(crate) ctrl_c_state: DoublePressState,
     pub(crate) esc_state: DoublePressState,
+    pub(crate) ctrl_x_pressed: bool,
     pub(crate) should_exit: bool,
     pub(crate) last_command_time: Option<Instant>,
     pub(crate) last_duration: Option<Duration>,
@@ -315,6 +316,7 @@ impl<'a> Repl<'a> {
             prompt_mark_width,
             ctrl_c_state: DoublePressState::new(3000), // 3 seconds for Ctrl+C
             esc_state: DoublePressState::new(400),     // 400ms for Esc (sudo toggle)
+            ctrl_x_pressed: false,
             should_exit: false,
             last_command_time: None,
             last_duration: None,

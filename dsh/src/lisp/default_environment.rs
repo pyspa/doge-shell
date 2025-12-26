@@ -48,6 +48,11 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
     );
 
     env.define(
+        Symbol::from("edit"),
+        Value::NativeFunc(crate::lisp::builtin::edit),
+    );
+
+    env.define(
         Symbol::from("register-action"),
         Value::NativeFunc(crate::lisp::command_palette::register_action),
     );

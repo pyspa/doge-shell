@@ -10,6 +10,7 @@ use crate::repl::key_action::{KeyAction, KeyContext, determine_key_action};
 use crate::repl::render_transient_prompt_to;
 use crate::repl::state::{ShellEvent, SuggestionAcceptMode};
 use crate::terminal::renderer::TerminalRenderer;
+use crate::utils::editor::open_editor;
 use anyhow::Result;
 use arboard::Clipboard;
 use crossterm::cursor;
@@ -614,6 +615,43 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
         repl.ctrl_c_state.reset();
     }
 
+    // Handle Ctrl-x prefix
+    if matches!((ev.code, ev.modifiers), (KeyCode::Char('x'), CTRL)) {
+        repl.ctrl_x_pressed = true;
+        return Ok(());
+    }
+
+    // If Ctrl-x was pressed, check for secondary key
+    if repl.ctrl_x_pressed {
+        repl.ctrl_x_pressed = false; // Reset state
+        if matches!((ev.code, ev.modifiers), (KeyCode::Char('e'), CTRL)) {
+            // Ctrl-x Ctrl-e detected
+            match open_editor(repl.input.as_str(), "sh") {
+                Ok(content) => {
+                    repl.input.reset(content);
+                    let mut renderer = TerminalRenderer::new();
+                    // Clear screen or just reprint prompts?
+                    // Editor usually clears screen or uses alternate screen.
+                    // We just need to ensure we are in a clean state.
+                    // queue!(renderer, Clear(ClearType::All), cursor::MoveTo(0, 0)).ok();
+                    repl.print_prompt(&mut renderer);
+                    repl.print_input(&mut renderer, true, true);
+                    renderer.flush()?;
+                    return Ok(());
+                }
+                Err(e) => {
+                    warn!("Failed to open editor: {}", e);
+                    return Ok(());
+                }
+            }
+        }
+        // If not Ctrl-e, ignore Ctrl-x (or maybe treat as regular key if we supported nested)
+        // For now, other Ctrl-x sequences are not supported, so we just fall through
+        // but since we consumed Ctrl-x, we might want to handle it differently?
+        // Emacs usually complains "C-x <key> covers undefined key..."
+        // We'll just fall through to normal processing for the current key.
+    }
+
     // --- KeyAction-based dispatch for simple actions ---
     // Build KeyContext from current state
     let ctx = KeyContext {
@@ -877,6 +915,9 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
                 repl.input.insert_str(&content);
                 repl.completion.clear();
             }
+        }
+        KeyAction::OpenEditor => {
+            // Already handled via Ctrl-x state check, or unimplemented via key action dispatch
         }
         KeyAction::ToggleSudo => {
             if repl.esc_state.on_pressed() {

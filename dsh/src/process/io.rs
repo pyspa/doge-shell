@@ -1,43 +1,17 @@
 use anyhow::{Context as _, Result};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::unistd::pipe;
-use std::io::Write;
-use std::os::unix::io::{FromRawFd, RawFd};
+use std::io::{Read, Write};
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+use tokio::io::AsyncBufReadExt;
+use tokio::io::unix::AsyncFd;
 use tokio::{fs, io, time};
 
 use super::redirect::Redirect;
 use crate::terminal::renderer::TerminalRenderer;
 use dsh_types::Context;
 use libc::STDIN_FILENO;
-
-struct RawModeGuard {
-    disabled: bool,
-}
-
-impl RawModeGuard {
-    fn new() -> Self {
-        let disabled = match disable_raw_mode() {
-            Ok(_) => true,
-            Err(e) => {
-                tracing::warn!("failed to disable raw mode: {}", e);
-                false
-            }
-        };
-        Self { disabled }
-    }
-}
-
-impl Drop for RawModeGuard {
-    fn drop(&mut self) {
-        if self.disabled
-            && let Err(e) = enable_raw_mode()
-        {
-            tracing::warn!("failed to restore raw mode: {}", e);
-        }
-    }
-}
 
 const MONITOR_TIMEOUT: u64 = 200;
 
@@ -75,7 +49,6 @@ impl OutputMonitor {
             return Ok(());
         }
 
-        let _guard = RawModeGuard::new();
         let mut renderer = TerminalRenderer::new();
         renderer.write_all(buffer.as_bytes())?;
         renderer.flush()?;
@@ -139,29 +112,33 @@ impl OutputMonitor {
 }
 
 pub struct PtyMonitor {
-    pub(crate) reader: io::BufReader<fs::File>,
+    inner: AsyncFd<std::fs::File>,
     pub captured_output: Vec<u8>,
 }
 
 impl PtyMonitor {
-    pub fn new(fd: RawFd) -> Self {
-        let file = unsafe { fs::File::from_raw_fd(fd) };
-        let reader = io::BufReader::new(file);
-        PtyMonitor {
-            reader,
+    pub fn new(fd: RawFd) -> Result<Self> {
+        let file = unsafe { std::fs::File::from_raw_fd(fd) };
+
+        // Set non-blocking mode
+        let current_flags =
+            fcntl(file.as_raw_fd(), FcntlArg::F_GETFL).context("fcntl F_GETFL failed")?;
+        let flags = OFlag::from_bits_truncate(current_flags) | OFlag::O_NONBLOCK;
+        fcntl(file.as_raw_fd(), FcntlArg::F_SETFL(flags)).context("fcntl F_SETFL failed")?;
+
+        let inner = AsyncFd::new(file).context("AsyncFd creation failed")?;
+
+        Ok(PtyMonitor {
+            inner,
             captured_output: Vec::new(),
-        }
+        })
     }
 
     pub async fn process_output(&mut self) -> Result<()> {
-        let mut buf = [0u8; 4096];
+        let mut buf = [0u8; 8192];
         loop {
-            // Read from PTY master
-            let res = time::timeout(
-                Duration::from_millis(10), // Short timeout for polling nature
-                self.reader.read(&mut buf),
-            )
-            .await;
+            let mut guard = self.inner.readable().await?;
+            let res = guard.try_io(|inner| inner.get_ref().read(&mut buf));
 
             match res {
                 Ok(Ok(0)) => {
@@ -174,18 +151,19 @@ impl PtyMonitor {
 
                     // Print to real stdout (Passthrough)
                     {
-                        let mut stdout = std::io::stdout();
-                        stdout.write_all(data)?;
-                        stdout.flush()?;
+                        let stdout = std::io::stdout();
+                        let mut lock = stdout.lock();
+                        lock.write_all(data)?;
+                        lock.flush()?;
                     }
 
                     // Capture
                     self.captured_output.extend_from_slice(data);
                 }
-                Ok(Err(e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    // unexpected but handle
-                }
                 Ok(Err(e)) => {
+                    if e.kind() == std::io::ErrorKind::WouldBlock {
+                        continue;
+                    }
                     // Check for EIO (OS error 5) which means EOF on Linux PTY
                     if let Some(os_err) = e.raw_os_error()
                         && os_err == 5
@@ -196,9 +174,7 @@ impl PtyMonitor {
                     tracing::error!("PtyMonitor: Error reading: {}", e);
                     return Err(e.into());
                 }
-                Err(_) => {
-                    // Timeout, yield
-                }
+                Err(_would_block) => continue,
             }
         }
     }

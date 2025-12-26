@@ -244,7 +244,13 @@ impl Job {
                         Ok(pty_clone) => {
                             // Transfer ownership of master fd to monitor
                             let master_fd = pty_clone.master.into_raw_fd();
-                            let mut monitor = super::io::PtyMonitor::new(master_fd);
+                            let mut monitor = match super::io::PtyMonitor::new(master_fd) {
+                                Ok(m) => m,
+                                Err(e) => {
+                                    error!("Failed to create PtyMonitor: {}", e);
+                                    return Err(e);
+                                }
+                            };
 
                             let output_task = tokio::spawn(async move {
                                 monitor.process_output().await?;

@@ -553,6 +553,22 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     - Diagnose Error
     - Describe Directory
     - Suggest Commands
+    
+12. **Safe Run (`safe-run`)**:
+    Execute commands with AI-powered safety analysis. Useful for auditing potential risky commands or inspecting output before piping.
+
+    ```bash
+    # Analyze and execute a command
+    safe-run rm -rf tmp/
+
+    # Inspect content before piping (e.g., curl | sh)
+    safe-run curl https://example.com/install.sh | sh
+    ```
+
+    - **Analysis**: AI checks for destructive operations or malicious patterns.
+    - **Content Inspection**: For pipe operations, you can inspect the captured output (preview shown on stderr) before allowing it to pass to the next command.
+    - **Confirmation**: Required for execution.
+
 
 ## 📁 Project Structure
 

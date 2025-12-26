@@ -594,7 +594,44 @@ impl ShellProxy for Shell {
                     }
                 }
             }
-            _ => {}
+            _ => {
+                // For other commands, try to execute them as external commands
+                // We use std::process::Command because we are in a sync context and cannot call async eval_str
+                // Note: This bypasses shell aliases/functions for now, which is a limitation of sync proxy.
+                use std::process::Command;
+                debug!("Dispatching external command: {} {:?}", cmd, argv);
+
+                // If the command contains shell metacharacters or argv is empty (implies potentially complex cmd string passed as one arg), use sh -c
+                // Simple heuristic: if argv is empty AND cmd contains space or pipe, or if cmd contains pipe/redirects.
+                // Generally safe-run might pass "curl | sh" as cmd with empty argv.
+                let use_shell = argv.is_empty()
+                    && (cmd.contains(' ')
+                        || cmd.contains('|')
+                        || cmd.contains('>')
+                        || cmd.contains('&'));
+
+                let status = if use_shell {
+                    debug!("Detected complex command, using sh -c");
+                    Command::new("sh").arg("-c").arg(cmd).status()
+                } else {
+                    Command::new(cmd).args(argv).status()
+                };
+
+                match status {
+                    Ok(status) => {
+                        if !status.success() {
+                            // We return Err to signal failure to the caller (safe-run)
+                            // Since dispatch returns Result<()>, we use Err for non-zero exit status if we want safe-run to know.
+                            // However, safe-run might want to return the exact exit code.
+                            // But for now, returning Err is the only way to signal "something went wrong".
+                            return Err(anyhow::anyhow!("Command exited with status: {}", status));
+                        }
+                    }
+                    Err(e) => {
+                        return Err(anyhow::anyhow!("Failed to execute '{}': {}", cmd, e));
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -724,7 +761,7 @@ impl ShellProxy for Shell {
     }
 
     fn confirm_action(&mut self, message: &str) -> Result<bool> {
-        use std::io::{stdin, stdout};
+        use std::io::stdin;
 
         debug!("Safety confirmation requested: {}", message);
 
@@ -732,8 +769,11 @@ impl ShellProxy for Shell {
         // but since we might be in TUI or plain CLI, we need to be careful.
         // For simplicity and robustness, let's use a blocking read.
 
-        println!("{} [y/N]: ", message);
-        stdout().flush()?;
+        // Use eprint! instead of println! or print! to ensure the prompt goes to stderr.
+        // This is critical if the shell output is being piped.
+        eprint!("{} [y/N]: ", message);
+        use std::io::Write;
+        std::io::stderr().flush()?;
 
         let mut input = String::new();
         stdin().read_line(&mut input)?;
@@ -749,6 +789,32 @@ impl ShellProxy for Shell {
 
     fn get_full_output_history(&self) -> Vec<dsh_types::output_history::OutputEntry> {
         self.environment.read().output_history.get_all_entries()
+    }
+
+    fn capture_command(&mut self, _ctx: &Context, cmd: &str) -> Result<(i32, String, String)> {
+        use std::process::{Command, Stdio};
+
+        // We implement this synchronously to avoid 'Cannot start a runtime from within a runtime' panic.
+        // We replicate the logic of execute_with_capture but for the whole command string
+        // passed from safe-run.
+
+        debug!("Capturing command: '{}'", cmd);
+
+        // Use sh -c to execute the command
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .with_context(|| format!("Failed to capture command: {}", cmd))?;
+
+        let exit_code = output.status.code().unwrap_or(1);
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        Ok((exit_code, stdout, stderr))
     }
 }
 

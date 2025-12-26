@@ -188,7 +188,7 @@ pub async fn eval_str(
 
 /// Execute a job and capture its stdout and stderr
 /// Returns (exit_code, stdout, stderr)
-async fn execute_with_capture(
+pub async fn execute_with_capture(
     _shell: &mut Shell,
     _ctx: &mut Context,
     job: &Job,
@@ -225,7 +225,7 @@ async fn execute_with_capture(
     Ok((exit_code, stdout, stderr))
 }
 
-fn get_jobs(shell: &mut Shell, input: &str) -> Result<Vec<Job>> {
+pub fn get_jobs(shell: &mut Shell, input: &str) -> Result<Vec<Job>> {
     let (input_cow, pairs_opt) =
         parser::parse_with_expansion(input, Arc::clone(&shell.environment))?;
 

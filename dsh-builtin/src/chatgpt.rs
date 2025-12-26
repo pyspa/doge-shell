@@ -48,7 +48,7 @@ pub use mcp::McpManager;
 mod tool;
 
 use tool::{build_tools, execute_tool_call};
-fn load_openai_config(proxy: &mut dyn ShellProxy) -> OpenAiConfig {
+pub fn load_openai_config(proxy: &mut dyn ShellProxy) -> OpenAiConfig {
     OpenAiConfig::from_getter(|key| proxy.get_var(key).or_else(|| std::env::var(key).ok()))
 }
 

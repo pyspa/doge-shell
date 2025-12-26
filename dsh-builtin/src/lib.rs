@@ -14,6 +14,7 @@ pub mod cd;
 mod chatgpt;
 mod export;
 mod markdown;
+mod safe_run;
 pub use chatgpt::McpManager;
 pub use chatgpt::execute_chat_message;
 pub mod command_timing;
@@ -119,6 +120,13 @@ pub trait ShellProxy {
     /// Get the full output history
     fn get_full_output_history(&self) -> Vec<OutputEntry> {
         Vec::new()
+    }
+
+    /// Captures the output of a command for inspection
+    /// Returns (exit_code, stdout, stderr)
+    fn capture_command(&mut self, _ctx: &Context, _cmd: &str) -> Result<(i32, String, String)> {
+        // Default implementation returns error as this requires direct shell access
+        Err(anyhow::anyhow!("capture_command not implemented"))
     }
 }
 
@@ -274,6 +282,15 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             Box::new(BuiltinCommandFn::new(
                 chatgpt::chat_model,
                 chatgpt::chat_model_description(),
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+
+        // Safety commands
+        builtin.insert(
+            "safe-run",
+            Box::new(BuiltinCommandFn::new(
+                safe_run::command,
+                safe_run::description(),
             )) as Box<dyn BuiltinCommandTrait>,
         );
 

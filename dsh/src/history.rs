@@ -6,7 +6,6 @@ use dsh_frecency::{FrecencyStore, ItemStats, SortMethod};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fmt;
 use std::process::Command;
 use std::sync::Arc;
@@ -149,8 +148,17 @@ impl History {
     pub fn load(&mut self) -> Result<usize> {
         if let Some(db) = &self.db {
             let conn = db.get_connection();
+            // Use subquery to get recent 10000 items, then sort by timestamp ASC for correct history order
+            // Note: command is UNIQUE in command_history, so usage of LIMIT is safe without GROUP BY
             let mut stmt = conn.prepare(
-                "SELECT command, timestamp, count FROM command_history ORDER BY timestamp ASC",
+                "SELECT command, timestamp, count 
+                 FROM (
+                    SELECT command, timestamp, count 
+                    FROM command_history 
+                    ORDER BY timestamp DESC 
+                    LIMIT 10000
+                 ) 
+                 ORDER BY timestamp ASC",
             )?;
 
             let rows = stmt.query_map([], |row| {
@@ -162,18 +170,11 @@ impl History {
             })?;
 
             self.histories.clear();
-            let mut seen: HashMap<String, usize> = HashMap::new();
-            let mut temp_histories: Vec<Option<Entry>> = Vec::new();
 
+            // Direct collect as database guarantees uniqueness
             for r in rows.flatten() {
-                if let Some(&old_idx) = seen.get(&r.entry) {
-                    temp_histories[old_idx] = None;
-                }
-                seen.insert(r.entry.clone(), temp_histories.len());
-                temp_histories.push(Some(r));
+                self.histories.push(r);
             }
-
-            self.histories = temp_histories.into_iter().flatten().collect();
 
             self.current_index = self.histories.len();
         }
@@ -743,7 +744,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+    // #[ignore]
     fn test_load() -> Result<()> {
         init();
         let mut history = History::from_file("dsh_cmd_history")?;

@@ -732,7 +732,7 @@ impl ShellProxy for Shell {
         // but since we might be in TUI or plain CLI, we need to be careful.
         // For simplicity and robustness, let's use a blocking read.
 
-        println!("\n{} [y/N]: ", message);
+        println!("{} [y/N]: ", message);
         stdout().flush()?;
 
         let mut input = String::new();

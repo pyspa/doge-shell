@@ -90,7 +90,7 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
     }
 
     // Safety Guard: Request confirmation from user
-    let confirm_msg = format!("AI wants to write to file: `{}`. Proceed?", path_value);
+    let confirm_msg = format!("AI wants to write to file: `{}`. \r\nProceed?", path_value);
     if !proxy
         .confirm_action(&confirm_msg)
         .map_err(|e: anyhow::Error| e.to_string())?

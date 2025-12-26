@@ -21,6 +21,7 @@ mod safe_run;
 pub use chatgpt::McpManager;
 pub use chatgpt::execute_chat_message;
 pub mod command_timing;
+mod commit_ai;
 mod dmv;
 mod fg;
 pub mod ga;
@@ -301,6 +302,22 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
         );
 
         // Git integration commands
+        builtin.insert(
+            "ai-commit",
+            Box::new(BuiltinCommandFn::new(
+                commit_ai::command,
+                commit_ai::description(),
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+        // Alias for ai-commit
+        builtin.insert(
+            "aic",
+            Box::new(BuiltinCommandFn::new(
+                commit_ai::command,
+                commit_ai::description(),
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+
         builtin.insert(
             "glog",
             Box::new(BuiltinCommandFn::new(glog::command, glog::description()))

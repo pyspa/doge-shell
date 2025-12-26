@@ -58,6 +58,7 @@ pub enum KeyAction {
 
     // その他
     Paste,
+    OpenEditor, // Open editor for current input
     ClearScreen,
     Interrupt,
     ToggleSudo,

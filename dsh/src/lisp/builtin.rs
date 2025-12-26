@@ -1,11 +1,14 @@
 use crate::direnv::DirEnvironment;
 use crate::lisp::model::{Env, RuntimeError, Value};
 use crate::shell::Shell;
+use crate::utils::editor::launch_editor;
+use anyhow::Result;
 use dsh_types::Context;
 use nix::sys::termios::tcgetattr;
 use nix::unistd::pipe;
 use std::borrow::Cow;
 use std::fs::File;
+use std::io::Read;
 use std::io::prelude::*;
 use std::os::unix::io::FromRawFd;
 use std::process::Command;
@@ -284,6 +287,29 @@ pub async fn sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value,
     }
 
     Ok(Value::NIL)
+}
+
+pub fn edit(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError {
+            msg: "edit requires 1 argument".to_string(),
+        });
+    }
+
+    let path_str = match &args[0] {
+        Value::String(s) => s,
+        _ => {
+            return Err(RuntimeError {
+                msg: "edit argument must be a string".to_string(),
+            });
+        }
+    };
+
+    let path = std::path::Path::new(path_str);
+    launch_editor(path).map_err(|e| RuntimeError {
+        msg: format!("Failed to launch editor: {}", e),
+    })?;
+    Ok(Value::True)
 }
 
 #[cfg(test)]

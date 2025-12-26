@@ -169,6 +169,7 @@ The embedded Lisp interpreter includes many built-in functions:
 - `vset` - Set shell variables
 - `add_path` - Add paths to PATH
 - `allow-direnv` - Configure direnv roots
+- `edit` - Open a file in the external editor
 
 ### Interactive UI Functions
 
@@ -444,6 +445,7 @@ dsh import bash --path /path/to/bash_history
 - `Ctrl+W` - Delete word backward
 - `Alt+x` - Open Command Palette
 - `Esc` (double press) - Toggle `sudo` prefix for the current command
+- `Ctrl+x Ctrl+e` - Edit current input in external editor (`$VISUAL` or `$EDITOR`)
 
 ## 💻 Command Palette
 

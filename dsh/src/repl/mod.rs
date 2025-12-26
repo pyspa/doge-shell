@@ -593,6 +593,17 @@ impl<'a> Repl<'a> {
             return;
         }
 
+        // OSC 7 Directory Tracking (emit before hooks)
+        if let Ok(cwd) = std::env::current_dir()
+            && let Ok(hostname) = nix::unistd::gethostname() {
+                let hostname_str = hostname.to_string_lossy();
+                let cwd_str = cwd.to_string_lossy();
+                // Format: \x1b]7;file://<hostname><pwd>\x1b\
+                // Note: We skip full URL encoding for simplicity, assumes standard paths.
+                let osc7 = format!("\x1b]7;file://{}{}\x1b\\", hostname_str, cwd_str);
+                out.write_all(osc7.as_bytes()).ok();
+            }
+
         // debug!("print_prompt called - full preprompt + mark redraw");
 
         // Execute pre-prompt hooks

@@ -357,6 +357,17 @@ pub fn parse_command(
         return Ok(());
     }
 
+    // Handle 'nopty' prefix
+    if argv[0] == "nopty" {
+        if argv.len() > 1 {
+            argv.remove(0);
+            current_job.disable_pty = true;
+            debug!("'nopty' detected, disabling PTY for this job");
+        } else {
+            // "nopty" with no command? Just ignore it or treat as command "nopty" which likely fails
+        }
+    }
+
     let cmd = argv[0].as_str();
     if let Some(cmd_fn) = dsh_builtin::get_command(cmd) {
         let builtin = process::BuiltinProcess::new(cmd.to_string(), cmd_fn, argv);

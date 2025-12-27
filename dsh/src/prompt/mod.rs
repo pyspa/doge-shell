@@ -41,8 +41,6 @@ pub use crate::prompt::context::PromptContext as Context; // just in case
 const BRANCH_MARK: &str = "🐾";
 #[allow(dead_code)]
 const BRANCH_CONFLICT: &str = "🏴‍☠️";
-const UNTRACKED: &str = "?";
-const MODIFIED: &str = "!";
 #[allow(dead_code)]
 const NEW_FILE: &str = "+";
 
@@ -60,6 +58,12 @@ pub struct GitStatus {
     pub ahead: u32,
     pub behind: u32,
     pub oid: Option<String>,
+    pub staged: u32,
+    pub modified: u32,
+    pub untracked: u32,
+    pub conflicted: u32,
+    pub renamed: u32,
+    pub deleted: u32,
 }
 
 impl Default for GitStatus {
@@ -76,6 +80,12 @@ impl GitStatus {
             ahead: 0,
             behind: 0,
             oid: None,
+            staged: 0,
+            modified: 0,
+            untracked: 0,
+            conflicted: 0,
+            renamed: 0,
+            deleted: 0,
         }
     }
 }
@@ -443,6 +453,16 @@ impl Prompt {
         self.git_status_cache = None;
     }
 
+    pub fn invalidate_git_cache(&mut self) {
+        self.git_status_cache = None;
+    }
+
+    pub fn trigger_git_check(&self) {
+        if let Some(sender) = &self.git_sender {
+            let _ = sender.send(());
+        }
+    }
+
     pub fn has_git_root(&self) -> bool {
         self.current_git_root.is_some()
     }
@@ -618,70 +638,105 @@ pub async fn fetch_git_status_async(path: &Path) -> Option<GitStatus> {
     parse_git_status_output(&output.stdout)
 }
 
-fn parse_git_status_output(stdout: &[u8]) -> Option<GitStatus> {
+pub(crate) fn parse_git_status_output(stdout: &[u8]) -> Option<GitStatus> {
     let mut status = GitStatus::new();
     let mut reader = BufReader::new(stdout);
     let mut buf = String::new();
-
-    let mut modified = false;
-    let mut untrack_file = false;
 
     while let Ok(size) = reader.read_line(&mut buf) {
         if size == 0 {
             break;
         }
 
-        let splited: Vec<&str> = buf.split_whitespace().collect();
-
-        if buf.starts_with('#') {
-            if buf.starts_with("# branch.oid") {
-                if let Some(oid) = splited.get(2) {
-                    status.oid = Some(oid.to_string());
-                }
-            } else if buf.starts_with("# branch.head") {
-                if let Some(branch) = splited.get(2) {
-                    status.branch = branch.to_string();
-                }
-            } else if buf.starts_with("# branch.ab") {
-                if let Some(val) = splited.get(2)
-                    && let Ok(count) = val.replace('+', "").parse::<u32>()
-                {
-                    status.ahead = count;
-                }
-                if let Some(val) = splited.get(3)
-                    && let Ok(count) = val.replace('-', "").parse::<u32>()
-                {
-                    status.behind = count;
-                }
-            }
-        } else if buf.starts_with('1') {
-            modified = true;
-        } else if buf.starts_with('?') {
-            untrack_file = true;
+        let line = buf.trim();
+        if list_stats(line, &mut status) {
+            // Continued
         }
+
         buf.clear();
     }
 
-    let mut git_status = String::new();
-
-    if modified {
-        git_status += MODIFIED;
-    }
-    if untrack_file {
-        git_status += UNTRACKED;
-    }
-
-    if !git_status.is_empty() {
-        status.branch_status = Some(git_status);
-    }
-
-    if status.branch == "(detached)"
-        && let Some(oid) = &status.oid
-    {
-        status.branch = oid.chars().take(8).collect();
-    }
-
     Some(status)
+}
+
+fn list_stats(line: &str, status: &mut GitStatus) -> bool {
+    if line.starts_with('#') {
+        let splited: Vec<&str> = line.split_whitespace().collect();
+        if line.starts_with("# branch.oid") {
+            if let Some(oid) = splited.get(2) {
+                status.oid = Some(oid.to_string());
+            }
+        } else if line.starts_with("# branch.head") {
+            if let Some(branch) = splited.get(2) {
+                status.branch = branch.to_string();
+            }
+        } else if line.starts_with("# branch.ab") {
+            if let Some(val) = splited.get(2)
+                && let Ok(count) = val.replace('+', "").parse::<u32>()
+            {
+                status.ahead = count;
+            }
+            if let Some(val) = splited.get(3)
+                && let Ok(count) = val.replace('-', "").parse::<u32>()
+            {
+                status.behind = count;
+            }
+        }
+        return true;
+    }
+
+    // porcelain=2 format
+    // 1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>
+    // 2 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <X><score> <path> <origPath>
+    // u <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>
+    // ? <path>
+
+    if line.starts_with('?') {
+        status.untracked += 1;
+        return true;
+    }
+
+    if line.starts_with('u') {
+        status.conflicted += 1;
+        return true;
+    }
+
+    if line.starts_with('1') || line.starts_with('2') {
+        let mut chars = line.chars();
+        // Skip '1' or '2' and space
+        if let (Some(_), Some(_)) = (chars.next(), chars.next()) {
+            // XY
+            let x = chars.next().unwrap_or('.');
+            let y = chars.next().unwrap_or('.');
+
+            // X = Index (Staged)
+            // Y = Worktree (Modified)
+
+            if x == 'R' {
+                status.renamed += 1;
+            }
+
+            if x == 'D' || y == 'D' {
+                status.deleted += 1;
+            }
+
+            // Staged: X is not '.' and not '?' (untracked handled elsewhere)
+            // If X is 'D', it's staged deletion, we count it as deleted, maybe also staged?
+            // Starship counts staged separately.
+            // Let's count any index change as staged, except '?'
+            if x != '.' && x != '?' {
+                status.staged += 1;
+            }
+
+            // Modified: Y is 'M'
+            if y == 'M' {
+                status.modified += 1;
+            }
+        }
+        return true;
+    }
+
+    false
 }
 
 pub async fn find_git_root_async(cwd: PathBuf) -> Option<PathBuf> {

@@ -23,31 +23,48 @@ impl PromptModule for GitModule {
             return None;
         };
 
-        // Ensure padding if we have prompt content
-        // Write branch mark and branch name
+        // Branch status
+        let mut status_content = String::new();
+
+        if git_status.conflicted > 0 {
+            status_content.push_str(&format!("{}{}", "=".red(), git_status.conflicted));
+        }
+        if git_status.ahead > 0 && git_status.behind > 0 {
+            status_content.push_str(&format!(" {} ", "⇕".cyan()));
+        } else {
+            if git_status.ahead > 0 {
+                status_content.push_str(&format!(" {}{}", "⇡".cyan(), git_status.ahead));
+            }
+            if git_status.behind > 0 {
+                status_content.push_str(&format!(" {}{}", "⇣".cyan(), git_status.behind));
+            }
+        }
+
+        if git_status.staged > 0 {
+            status_content.push_str(&format!(" {}{}", "+".green(), git_status.staged));
+        }
+        if git_status.renamed > 0 {
+            status_content.push_str(&format!(" {}{}", "»".yellow(), git_status.renamed));
+        }
+        if git_status.deleted > 0 {
+            status_content.push_str(&format!(" {}{}", "✘".red(), git_status.deleted));
+        }
+        if git_status.modified > 0 {
+            status_content.push_str(&format!(" {}{}", "!".yellow(), git_status.modified));
+        }
+        if git_status.untracked > 0 {
+            status_content.push_str(&format!(" {}{}", "?".blue(), git_status.untracked));
+        }
+
+        // Branch mark and name
+        // <on > <BRANCH_MARK> <branch> <status>
         let branch_display = format!(
-            " {} {} {}{}{}",
+            " {} {} {}{}",
             "on".reset(),
             self.mark.as_str().magenta(),
             git_status.branch.as_str().magenta(),
-            // Ahead/Behind counts
-            if git_status.ahead > 0 || git_status.behind > 0 {
-                let mut s = String::from(" ");
-                if git_status.ahead > 0 {
-                    s.push_str(&format!("↑{}", git_status.ahead));
-                    if git_status.behind > 0 {
-                        s.push(' ');
-                    }
-                }
-                if git_status.behind > 0 {
-                    s.push_str(&format!("↓{}", git_status.behind));
-                }
-                s.cyan().to_string()
-            } else {
-                "".to_string()
-            },
-            if let Some(status) = &git_status.branch_status {
-                format!(" [{}]", status.to_string().bold().red())
+            if !status_content.is_empty() {
+                format!(" [{}]", status_content.trim())
             } else {
                 "".to_string()
             }

@@ -71,3 +71,30 @@ fn test_exit_status_module_failure() {
     assert!(output.contains("✘"));
     assert!(output.contains("127"));
 }
+
+#[test]
+fn test_parse_git_status_output() {
+    let output = r#"# branch.oid (hash)
+# branch.head master
+# branch.ab +1 -1
+1 .M N... 100644 100644 100644 (hash) (hash) modified_file
+1 M. N... 100644 100644 100644 (hash) (hash) staged_file
+? untracked_file
+u UU N... 100644 100644 100644 (hash) (hash) conflicted_file
+2 R. N... 100644 100644 100644 (hash) (hash) R100 renamed_file orig_file
+"#;
+
+    // Use the pub(crate) function from parent module
+    use super::parse_git_status_output;
+
+    let status = parse_git_status_output(output.as_bytes()).unwrap();
+
+    assert_eq!(status.branch, "master");
+    assert_eq!(status.ahead, 1);
+    assert_eq!(status.behind, 1);
+    assert_eq!(status.modified, 1); // modified_file
+    assert_eq!(status.staged, 2); // staged_file + renamed_file
+    assert_eq!(status.untracked, 1);
+    assert_eq!(status.conflicted, 1);
+    assert_eq!(status.renamed, 1);
+}

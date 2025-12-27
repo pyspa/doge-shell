@@ -36,10 +36,8 @@ pub async fn eval_str(
     if let Some(rest) = input.trim_start().strip_prefix('!') {
         if let Err(e) = disable_raw_mode() {
             tracing::error!("Failed to disable raw mode: {}", e);
-            eprintln!("dsh: ERROR: Failed to disable raw mode: {}", e);
         } else {
             tracing::info!("Raw mode disabled successfully");
-            // eprintln!("dsh: DEBUG: Raw mode disabled successfully");
         }
 
         // Force enable ISIG to ensure Ctrl+C generates SIGINT
@@ -48,18 +46,13 @@ pub async fn eval_str(
             if !termios.local_flags.contains(LocalFlags::ISIG) {
                 termios.local_flags.insert(LocalFlags::ISIG);
                 if let Err(e) = tcsetattr(std::io::stdin().as_raw_fd(), SetArg::TCSANOW, &termios) {
-                    eprintln!("dsh: ERROR: Failed to force enable ISIG: {}", e);
-                } else {
-                    // eprintln!("dsh: DEBUG: Force enabled ISIG (was disabled)");
+                    tracing::error!("Failed to force enable ISIG: {}", e);
                 }
-            } else {
-                // eprintln!("dsh: DEBUG: ISIG already enabled");
             }
         }
 
         // Ensure signals are set correctly before AI execution
         shell.set_signals();
-        // eprintln!("dsh: DEBUG: Signals set");
 
         let message = rest.trim_start();
         debug!(

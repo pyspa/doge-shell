@@ -66,8 +66,19 @@ impl AsyncRead for AsyncStdin {
                     Err(e) => Err(std::io::Error::other(e)),
                 }
             }) {
-                Ok(_) => return Poll::Ready(Ok(())),
-                Err(_would_block) => continue,
+                Ok(Ok(_)) => return Poll::Ready(Ok(())),
+                Ok(Err(e)) => {
+                    // WouldBlock returned from within try_io
+                    if e.kind() == std::io::ErrorKind::WouldBlock {
+                        guard.clear_ready();
+                        continue;
+                    }
+                    return Poll::Ready(Err(e));
+                }
+                Err(_would_block) => {
+                    // try_io detected WouldBlock, guard is already cleared
+                    continue;
+                }
             }
         }
     }
@@ -79,6 +90,12 @@ struct AsyncPtyMasterWriter {
 
 impl AsyncPtyMasterWriter {
     fn new(inner: std::fs::File) -> std::io::Result<Self> {
+        // Set non-blocking mode for AsyncFd to work correctly
+        let fd = inner.as_raw_fd();
+        let current_flags = fcntl(fd, FcntlArg::F_GETFL).map_err(std::io::Error::other)?;
+        let flags = OFlag::from_bits_truncate(current_flags) | OFlag::O_NONBLOCK;
+        fcntl(fd, FcntlArg::F_SETFL(flags)).map_err(std::io::Error::other)?;
+
         Ok(Self {
             inner: AsyncFd::new(inner)?,
         })
@@ -94,8 +111,21 @@ impl AsyncWrite for AsyncPtyMasterWriter {
         loop {
             let mut guard = std::task::ready!(self.inner.poll_write_ready(cx))?;
             match guard.try_io(|inner| inner.get_ref().write(buf)) {
-                Ok(result) => return Poll::Ready(result),
-                Err(_would_block) => continue,
+                Ok(Ok(n)) => return Poll::Ready(Ok(n)),
+                Ok(Err(e)) => {
+                    // Check for WouldBlock or EAGAIN
+                    let is_would_block = e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.raw_os_error() == Some(libc::EAGAIN);
+                    if is_would_block {
+                        guard.clear_ready();
+                        continue;
+                    }
+                    return Poll::Ready(Err(e));
+                }
+                Err(_would_block) => {
+                    // try_io returned WouldBlock
+                    continue;
+                }
             }
         }
     }

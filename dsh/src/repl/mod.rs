@@ -1475,9 +1475,6 @@ impl<'a> Repl<'a> {
                         tokio::spawn(async move {
                             let root = crate::prompt::find_git_root_async(cwd).await;
                             p_clone.write().update_git_root(root);
-                             // Watcher handles subsequent updates, but we need initial fetch?
-                             // update_git_root updates cache/status to clean?
-                             // If root found, we might want initial status.
                         });
                     }
                     // Fetch status if we have a git root (always fetch on event)
@@ -1527,6 +1524,15 @@ impl<'a> Repl<'a> {
                             // Reset stopped jobs warning if a command was executed
                              if self.last_command_time != old_last_time {
                                 self.stopped_jobs_warned = false;
+
+                                // Invalidate git cache and trigger re-check
+                                self.prompt.write().invalidate_git_cache();
+
+                                // Trigger git check
+                                // We can send to git_rx (via git_tx which we assume we have somehow? No, we don't have git_tx here)
+                                // We DO have self.git_rx, but we can't send to it.
+                                // We have prompt.git_sender!
+                                self.prompt.read().trigger_git_check();
                             }
                         }
                         Some(Err(err)) => {

@@ -7,6 +7,7 @@ use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::read;
 use nix::unistd::{Pid, close, getpgrp, isatty, setpgid, tcsetpgrp};
 use std::fs::File;
+use std::io::Write;
 use std::os::unix::io::{AsRawFd, IntoRawFd, RawFd};
 use std::time::Duration;
 use tokio::io::unix::AsyncFd;
@@ -27,7 +28,7 @@ use crate::process::pty::Pty;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use std::pin::Pin;
 use std::task::{Context as TaskContext, Poll};
-use tokio::io::{AsyncRead, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 #[derive(Debug, Clone, Copy)]
 struct BorrowedFd(RawFd);
@@ -69,6 +70,42 @@ impl AsyncRead for AsyncStdin {
                 Err(_would_block) => continue,
             }
         }
+    }
+}
+
+struct AsyncPtyMasterWriter {
+    inner: AsyncFd<std::fs::File>,
+}
+
+impl AsyncPtyMasterWriter {
+    fn new(inner: std::fs::File) -> std::io::Result<Self> {
+        Ok(Self {
+            inner: AsyncFd::new(inner)?,
+        })
+    }
+}
+
+impl AsyncWrite for AsyncPtyMasterWriter {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        loop {
+            let mut guard = std::task::ready!(self.inner.poll_write_ready(cx))?;
+            match guard.try_io(|inner| inner.get_ref().write(buf)) {
+                Ok(result) => return Poll::Ready(result),
+                Err(_would_block) => continue,
+            }
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -119,6 +156,7 @@ pub struct Job {
     pub pty: Option<Pty>,
     pub pty_output_task: Option<tokio::task::JoinHandle<Result<String>>>,
     pub pty_input_task: Option<tokio::task::JoinHandle<()>>,
+    pub disable_pty: bool,
 }
 
 fn last_process_state(process: JobProcess) -> ProcessState {
@@ -162,6 +200,7 @@ impl Job {
             pty: None,
             pty_output_task: None,
             pty_input_task: None,
+            disable_pty: false,
         }
     }
 
@@ -188,6 +227,7 @@ impl Job {
             pty: None,
             pty_output_task: None,
             pty_input_task: None,
+            disable_pty: false,
         }
     }
 
@@ -219,7 +259,11 @@ impl Job {
 
         ctx.foreground = self.foreground;
 
-        if ctx.foreground && ctx.interactive {
+        if ctx.foreground
+            && ctx.interactive
+            && std::env::var("DSH_NO_PTY").is_err()
+            && !self.disable_pty
+        {
             // "Time Machine" logic: Use PTY for foreground jobs to capture output with color preservation.
             // Only enabled in interactive mode to avoid interference with test captures.
             match Pty::new() {
@@ -278,44 +322,56 @@ impl Job {
                                 if !is_builtin {
                                     match pty.try_clone() {
                                         Ok(pty_in) => {
-                                            let mut master_write =
-                                                tokio::fs::File::from_std(pty_in.master);
-                                            let input_task = tokio::spawn(async move {
-                                                let _nonblock =
-                                                    NonBlockingFdGuard::new(STDIN_FILENO);
+                                            match AsyncPtyMasterWriter::new(pty_in.master) {
+                                                Ok(mut master_write) => {
+                                                    let input_task = tokio::spawn(async move {
+                                                        let _nonblock =
+                                                            NonBlockingFdGuard::new(STDIN_FILENO);
 
-                                                match AsyncFd::new(BorrowedFd(STDIN_FILENO)) {
-                                                    Ok(fd) => {
-                                                        let mut stdin = AsyncStdin { inner: fd };
-                                                        debug!("PTY input proxy: starting copy");
-                                                        if let Err(e) = tokio::io::copy(
-                                                            &mut stdin,
-                                                            &mut master_write,
-                                                        )
-                                                        .await
+                                                        match AsyncFd::new(BorrowedFd(STDIN_FILENO))
                                                         {
-                                                            debug!(
-                                                                "PTY stdin proxy: copy ended/failed: {}",
-                                                                e
-                                                            );
+                                                            Ok(fd) => {
+                                                                let mut stdin =
+                                                                    AsyncStdin { inner: fd };
+                                                                debug!(
+                                                                    "PTY input proxy: starting copy"
+                                                                );
+                                                                if let Err(e) = tokio::io::copy(
+                                                                    &mut stdin,
+                                                                    &mut master_write,
+                                                                )
+                                                                .await
+                                                                {
+                                                                    debug!(
+                                                                        "PTY stdin proxy: copy ended/failed: {}",
+                                                                        e
+                                                                    );
+                                                                }
+                                                            }
+                                                            Err(e) => {
+                                                                error!(
+                                                                    "Failed to setup async stdin proxy for PTY: {}",
+                                                                    e
+                                                                );
+                                                                // Fallback to legacy stdin copy.
+                                                                let mut stdin = tokio::io::stdin();
+                                                                let _ = tokio::io::copy(
+                                                                    &mut stdin,
+                                                                    &mut master_write,
+                                                                )
+                                                                .await;
+                                                            }
                                                         }
-                                                    }
-                                                    Err(e) => {
-                                                        error!(
-                                                            "Failed to setup async stdin proxy for PTY: {}",
-                                                            e
-                                                        );
-                                                        // Fallback to legacy stdin copy.
-                                                        let mut stdin = tokio::io::stdin();
-                                                        let _ = tokio::io::copy(
-                                                            &mut stdin,
-                                                            &mut master_write,
-                                                        )
-                                                        .await;
-                                                    }
+                                                    });
+                                                    self.pty_input_task = Some(input_task);
                                                 }
-                                            });
-                                            self.pty_input_task = Some(input_task);
+                                                Err(e) => {
+                                                    error!(
+                                                        "Failed to create AsyncPtyMasterWriter: {}",
+                                                        e
+                                                    );
+                                                }
+                                            }
                                         }
                                         Err(e) => error!("Failed to clone PTY for input: {}", e),
                                     }

@@ -199,14 +199,18 @@ impl ChatGptClient {
     {
         tokio::pin!(future);
 
-        // Attempt to listen for Ctrl+C, but don't fail if we can't (e.g. if a handler is already set)
-        // If handler registration fails, this future will just be ignored in the select! loop
+        // Attempt to listen for Ctrl+C only if we don't have an external check
+        // If an external check is provided, we assume the caller handles signals and updates the check state.
         let ctrl_c_future = async {
-            match tokio::signal::ctrl_c().await {
-                Ok(()) => true,
-                Err(e) => {
-                    debug!("dsh-openai: Failed to listen for Ctrl+C via tokio: {}", e);
-                    std::future::pending::<bool>().await
+            if cancel_check.is_some() {
+                std::future::pending::<bool>().await
+            } else {
+                match tokio::signal::ctrl_c().await {
+                    Ok(()) => true,
+                    Err(e) => {
+                        debug!("dsh-openai: Failed to listen for Ctrl+C via tokio: {}", e);
+                        std::future::pending::<bool>().await
+                    }
                 }
             }
         };

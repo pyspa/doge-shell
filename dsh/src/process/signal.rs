@@ -23,7 +23,6 @@ pub(crate) fn install_sigint_handler() -> Result<()> {
     // Ensure SIGINT is not blocked
     unblock_sigint()?;
     tracing::info!("🔧 SIGNAL: SIGINT handler installed and unblocked");
-    // eprintln!("dsh: DEBUG: SIGINT handler installed");
     Ok(())
 }
 
@@ -36,12 +35,7 @@ fn unblock_sigint() -> Result<()> {
 
 #[allow(dead_code)]
 pub(crate) fn check_and_clear_sigint() -> bool {
-    // eprintln!("dsh: DEBUG: Checking SIGINT state");
-    let received = RECEIVED_SIGINT.swap(false, Ordering::SeqCst);
-    if received {
-        // eprintln!("dsh: DEBUG: SIGINT detected and cleared!");
-    }
-    received
+    RECEIVED_SIGINT.swap(false, Ordering::SeqCst)
 }
 
 pub(crate) fn send_signal(pid: Pid, signal: Signal) -> Result<()> {

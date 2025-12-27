@@ -42,12 +42,12 @@ pub async fn eval_str(
 
         // Force enable ISIG to ensure Ctrl+C generates SIGINT
         // This addresses issues where crossterm might not fully restore terminal flags
-        if let Ok(mut termios) = tcgetattr(std::io::stdin().as_raw_fd()) {
-            if !termios.local_flags.contains(LocalFlags::ISIG) {
-                termios.local_flags.insert(LocalFlags::ISIG);
-                if let Err(e) = tcsetattr(std::io::stdin().as_raw_fd(), SetArg::TCSANOW, &termios) {
-                    tracing::error!("Failed to force enable ISIG: {}", e);
-                }
+        if let Ok(mut termios) = tcgetattr(std::io::stdin().as_raw_fd())
+            && !termios.local_flags.contains(LocalFlags::ISIG)
+        {
+            termios.local_flags.insert(LocalFlags::ISIG);
+            if let Err(e) = tcsetattr(std::io::stdin().as_raw_fd(), SetArg::TCSANOW, &termios) {
+                tracing::error!("Failed to force enable ISIG: {}", e);
             }
         }
 

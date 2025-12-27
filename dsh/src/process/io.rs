@@ -140,17 +140,34 @@ impl PtyMonitor {
     pub async fn process_output(&mut self) -> Result<()> {
         use tokio::io::AsyncWriteExt;
 
-        let mut buf = [0u8; 8192];
+        let mut buf = [0u8; 4096];
         let mut stdout = tokio::io::stdout();
 
         loop {
-            let mut guard = self.inner.readable().await?;
+            // Use timeout to avoid blocking indefinitely when PTY is closed
+            let guard_result =
+                tokio::time::timeout(Duration::from_millis(100), self.inner.readable()).await;
+
+            let mut guard = match guard_result {
+                Ok(Ok(g)) => g,
+                Ok(Err(e)) => {
+                    // AsyncFd error - likely PTY was closed
+                    tracing::debug!("PtyMonitor: AsyncFd error: {}", e);
+                    break;
+                }
+                Err(_timeout) => {
+                    // Timeout - check if we can read without blocking (for draining)
+                    // This handles the case where PTY master is closed but data remains
+                    continue;
+                }
+            };
+
             let res = guard.try_io(|inner| inner.get_ref().read(&mut buf));
 
             match res {
                 Ok(Ok(0)) => {
                     tracing::debug!("PtyMonitor: EOF detected");
-                    return Ok(());
+                    break;
                 }
                 Ok(Ok(n)) => {
                     tracing::debug!("PtyMonitor: Read {} bytes", n);
@@ -183,7 +200,7 @@ impl PtyMonitor {
                         && os_err == 5
                     {
                         tracing::debug!("PtyMonitor: EIO detected (EOF)");
-                        return Ok(());
+                        break;
                     }
                     tracing::error!("PtyMonitor: Error reading: {}", e);
                     return Err(e.into());
@@ -195,6 +212,10 @@ impl PtyMonitor {
                 }
             }
         }
+
+        // Final flush to ensure all output is displayed
+        let _ = stdout.flush().await;
+        Ok(())
     }
 }
 

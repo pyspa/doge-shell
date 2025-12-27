@@ -138,7 +138,11 @@ impl PtyMonitor {
     }
 
     pub async fn process_output(&mut self) -> Result<()> {
+        use tokio::io::AsyncWriteExt;
+
         let mut buf = [0u8; 8192];
+        let mut stdout = tokio::io::stdout();
+
         loop {
             let mut guard = self.inner.readable().await?;
             let res = guard.try_io(|inner| inner.get_ref().read(&mut buf));
@@ -152,19 +156,26 @@ impl PtyMonitor {
                     tracing::debug!("PtyMonitor: Read {} bytes", n);
                     let data = &buf[..n];
 
-                    // Print to real stdout (Passthrough)
-                    {
-                        let stdout = std::io::stdout();
-                        let mut lock = stdout.lock();
-                        lock.write_all(data)?;
-                        lock.flush()?;
+                    // Print to real stdout (Passthrough) - use async write
+                    if let Err(e) = stdout.write_all(data).await {
+                        tracing::error!("PtyMonitor: Failed to write to stdout: {}", e);
+                    }
+                    if let Err(e) = stdout.flush().await {
+                        tracing::error!("PtyMonitor: Failed to flush stdout: {}", e);
                     }
 
                     // Capture
                     self.captured_output.extend_from_slice(data);
                 }
                 Ok(Err(e)) => {
-                    if e.kind() == std::io::ErrorKind::WouldBlock {
+                    // Check for WouldBlock or EAGAIN (os error 11)
+                    // On Linux, EAGAIN == EWOULDBLOCK, but explicit check is safer
+                    let is_would_block = e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.raw_os_error() == Some(libc::EAGAIN);
+
+                    if is_would_block {
+                        // Clear readiness state and retry
+                        guard.clear_ready();
                         continue;
                     }
                     // Check for EIO (OS error 5) which means EOF on Linux PTY
@@ -177,7 +188,11 @@ impl PtyMonitor {
                     tracing::error!("PtyMonitor: Error reading: {}", e);
                     return Err(e.into());
                 }
-                Err(_would_block) => continue,
+                Err(_would_block) => {
+                    // try_io returned WouldBlock, resource not ready
+                    // guard.clear_ready() is called automatically by try_io on WouldBlock
+                    continue;
+                }
             }
         }
     }

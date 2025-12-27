@@ -14,16 +14,34 @@ extern "C" fn handle_sigint(_: i32) {
 }
 
 pub(crate) fn install_sigint_handler() -> Result<()> {
+    tracing::info!("🔧 SIGNAL: Installing SIGINT handler");
     let handler = SigHandler::Handler(handle_sigint);
     let action = SigAction::new(handler, SaFlags::empty(), SigSet::empty());
     unsafe {
         sigaction(Signal::SIGINT, &action)?;
     }
+    // Ensure SIGINT is not blocked
+    unblock_sigint()?;
+    tracing::info!("🔧 SIGNAL: SIGINT handler installed and unblocked");
+    // eprintln!("dsh: DEBUG: SIGINT handler installed");
     Ok(())
 }
 
+fn unblock_sigint() -> Result<()> {
+    let mut set = SigSet::empty();
+    set.add(Signal::SIGINT);
+    nix::sys::signal::sigprocmask(nix::sys::signal::SigmaskHow::SIG_UNBLOCK, Some(&set), None)?;
+    Ok(())
+}
+
+#[allow(dead_code)]
 pub(crate) fn check_and_clear_sigint() -> bool {
-    RECEIVED_SIGINT.swap(false, Ordering::SeqCst)
+    // eprintln!("dsh: DEBUG: Checking SIGINT state");
+    let received = RECEIVED_SIGINT.swap(false, Ordering::SeqCst);
+    if received {
+        // eprintln!("dsh: DEBUG: SIGINT detected and cleared!");
+    }
+    received
 }
 
 pub(crate) fn send_signal(pid: Pid, signal: Signal) -> Result<()> {

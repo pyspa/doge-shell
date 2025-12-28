@@ -214,7 +214,8 @@ pub async fn execute_with_capture(
     _ctx: &mut Context,
     job: &Job,
 ) -> Result<(i32, String, String)> {
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
+    use tokio::process::Command;
 
     // Strip the |> suffix from the command
     let cmd_str = job.cmd.trim();
@@ -222,7 +223,7 @@ pub async fn execute_with_capture(
 
     debug!("Executing with capture: '{}'", cmd_str);
 
-    // Use sh -c to execute the command
+    // Use sh -c to execute the command via Tokio (async)
     let output = Command::new("sh")
         .arg("-c")
         .arg(cmd_str)
@@ -230,6 +231,7 @@ pub async fn execute_with_capture(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
+        .await
         .with_context(|| format!("Failed to execute command: {}", cmd_str))?;
 
     let exit_code = output.status.code().unwrap_or(1);
@@ -301,20 +303,21 @@ async fn spawn_subshell(shell: &mut Shell, ctx: &mut Context, job: &mut Job) -> 
             Ok(pid)
         }
         ForkResult::Child => {
+            // Child process
+            // SAFETY: Do NOT use tracing here. Unsafe after fork.
             let pid = getpid();
-            debug!("subshell child setpgid pid:{} pgid:{}", pid, pid);
-            setpgid(pid, pid).context("failed setpgid")?;
+            // setpgid is syscall
+            if setpgid(pid, pid).is_err() {
+                // ignore or raw write
+            }
 
             job.pgid = Some(pid);
             ctx.pgid = Some(pid);
-            debug!("subshell run context: {:?}", ctx);
+
+            // Execute
             let res = job.launch(ctx, shell).await;
-            debug!("subshell process '{}' exit:{:?}", job.cmd, res);
 
             if let Ok(ProcessState::Completed(exit, _)) = res {
-                if exit != 0 {
-                    debug!("job exit code {:?}", exit);
-                }
                 std::process::exit(i32::from(exit));
             } else {
                 std::process::exit(-1);

@@ -1,6 +1,6 @@
 use anyhow::{Context as _, Result};
 use nix::unistd::{ForkResult, Pid, fork, getpid, setpgid};
-use tracing::{debug, error};
+use tracing::debug;
 
 use super::builtin::BuiltinProcess;
 use super::process::Process;
@@ -32,24 +32,18 @@ pub(crate) fn fork_builtin_process(
         }
         ForkResult::Child => {
             // Child process: execute builtin command
+            // SAFETY: Avoid accessing any locks (like tracing/malloc) after fork in multi-threaded env
             let pid = getpid();
-            debug!(
-                "🍴 BUILTIN: Child process - executing builtin command {} with pid {}",
-                process.name, pid
-            );
-            debug!(
-                "🍴 BUILTIN: Child process I/O - stdin={}, stdout={}, stderr={}",
-                process.stdin, process.stdout, process.stderr
-            );
-
-            // Set process group for job control
-            if let Err(e) = setpgid(pid, pid) {
-                error!("Failed to setpgid for builtin: {}", e);
+            // setpgid is a syscall, safe enough
+            if let Err(_e) = setpgid(pid, pid) {
+                // Silently fail or use raw stderr write if absolutely needed.
+                // For now, minimizing risk by suppressing complex logging.
             }
 
             // Execute the builtin command
-            if let Err(e) = process.launch(ctx, shell) {
-                error!("Failed to launch builtin process: {}", e);
+            // Note: process.launch might still use tracing internally if not careful.
+            // Ideally builtins should be careful too, but at least we removed the immediate logging.
+            if let Err(_e) = process.launch(ctx, shell) {
                 std::process::exit(1);
             }
 
@@ -136,12 +130,11 @@ pub(crate) fn fork_process(
         }
         ForkResult::Child => {
             // This is the child process
+            // SAFETY: Avoid accessing any locks (like tracing/malloc) after fork in multi-threaded env
             let pid = getpid();
             let pgid = job_pgid.unwrap_or(pid);
-            debug!("🍴 FORK: Child process - pid: {}, pgid: {}", pid, pgid);
-            debug!("🍴 FORK: Child process about to launch");
 
-            if let Err(e) = process.launch_prepared(
+            if let Err(_e) = process.launch_prepared(
                 pid,
                 pgid,
                 ctx.interactive,
@@ -149,12 +142,11 @@ pub(crate) fn fork_process(
                 prepared,
                 pty_slave,
             ) {
-                error!("🍴 FORK: Child process launch failed: {}", e);
+                // Raw write to stderr or simple exit
                 std::process::exit(1);
             }
             // When execv succeeds, it replaces with new program; when it fails, it exits, so this point is never reached
             // Explicit exit as a safety measure just in case
-            debug!("🍴 FORK: Child process launch completed unexpectedly, exiting");
             std::process::exit(1);
         }
     }

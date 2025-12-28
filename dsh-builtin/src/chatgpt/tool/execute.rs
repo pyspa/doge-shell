@@ -65,6 +65,9 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
     }
 
     // Safety Guard: Request confirmation from user
+    // NOTE: This check has been removed to allow automatic execution for allowed commands.
+    // The allowlist check above serves as the authorization.
+    /*
     let confirm_msg = format!("AI wants to execute command: `{}`. \r\nProceed?", command);
     if !proxy
         .confirm_action(&confirm_msg)
@@ -72,6 +75,7 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
     {
         return Ok("Execution cancelled by user.".to_string());
     }
+    */
 
     let output = Command::new("bash")
         .arg("-lc")
@@ -360,5 +364,82 @@ mod tests {
                 }
             }
         }
+    }
+
+    struct PanicOnConfirmProxy {
+        allow: Vec<String>,
+    }
+
+    impl ShellProxy for PanicOnConfirmProxy {
+        fn get_current_dir(&self) -> anyhow::Result<std::path::PathBuf> {
+            Ok(std::env::current_dir()?)
+        }
+        fn exit_shell(&mut self) {}
+        fn dispatch(
+            &mut self,
+            _ctx: &Context,
+            _cmd: &str,
+            _argv: Vec<String>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn save_path_history(&mut self, _path: &str) {}
+        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn insert_path(&mut self, _index: usize, _path: &str) {}
+        fn get_var(&mut self, _key: &str) -> Option<String> {
+            None
+        }
+        fn set_var(&mut self, _key: String, _value: String) {}
+        fn set_env_var(&mut self, _key: String, _value: String) {}
+        fn get_alias(&mut self, _name: &str) -> Option<String> {
+            None
+        }
+        fn set_alias(&mut self, _name: String, _command: String) {}
+        fn list_aliases(&mut self) -> std::collections::HashMap<String, String> {
+            std::collections::HashMap::new()
+        }
+        fn add_abbr(&mut self, _name: String, _expansion: String) {}
+        fn remove_abbr(&mut self, _name: &str) -> bool {
+            false
+        }
+        fn list_abbrs(&self) -> Vec<(String, String)> {
+            Vec::new()
+        }
+        fn get_abbr(&self, _name: &str) -> Option<String> {
+            None
+        }
+        fn list_mcp_servers(&mut self) -> Vec<dsh_types::mcp::McpServerConfig> {
+            Vec::new()
+        }
+        fn list_execute_allowlist(&mut self) -> Vec<String> {
+            self.allow.clone()
+        }
+        fn list_exported_vars(&self) -> Vec<(String, String)> {
+            vec![]
+        }
+        fn export_var(&mut self, _key: &str) -> bool {
+            true
+        }
+        fn set_and_export_var(&mut self, _key: String, _value: String) {}
+        fn get_lisp_var(&self, _key: &str) -> Option<String> {
+            None
+        }
+        fn confirm_action(&mut self, _message: &str) -> anyhow::Result<bool> {
+            panic!("confirm_action should NOT be called");
+        }
+    }
+
+    #[test]
+    fn run_skips_confirmation_for_allowed_command() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls");
+        let mut proxy = PanicOnConfirmProxy {
+            allow: vec!["ls".to_string()],
+        };
+        // This should NOT panic
+        let result = run("{\"command\":\"ls -la\"}", &mut proxy);
+        assert!(result.is_ok());
     }
 }

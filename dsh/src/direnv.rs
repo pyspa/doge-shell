@@ -151,9 +151,10 @@ fn read_envrc_config_file(file: &str) -> Result<Vec<Entry>> {
                 // Strip quotes if present
                 if ((value.starts_with('"') && value.ends_with('"'))
                     || (value.starts_with('\'') && value.ends_with('\'')))
-                    && value.len() >= 2 {
-                        value = value[1..value.len() - 1].to_string();
-                    }
+                    && value.len() >= 2
+                {
+                    value = value[1..value.len() - 1].to_string();
+                }
 
                 ret.push(Entry::Env(EnvEntry { key, value }));
             }

@@ -9,18 +9,41 @@ pub trait ScriptRunner {
 
 pub struct DefaultScriptRunner;
 
+const SCRIPT_TIMEOUT_MS: u64 = 2000;
+
 impl ScriptRunner for DefaultScriptRunner {
     fn run(&self, command: &str) -> Result<String> {
-        let output = std::process::Command::new("sh")
+        use std::io::Read;
+        use std::time::Duration;
+        use wait_timeout::ChildExt;
+
+        let mut child = std::process::Command::new("sh")
             .arg("-c")
             .arg(command)
-            .output()?;
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
 
-        if !output.status.success() {
-            return Ok(String::new());
+        let timeout = Duration::from_millis(SCRIPT_TIMEOUT_MS);
+        match child.wait_timeout(timeout)? {
+            Some(status) => {
+                if status.success() {
+                    let mut stdout = String::new();
+                    if let Some(mut out) = child.stdout.take() {
+                        out.read_to_string(&mut stdout)?;
+                    }
+                    Ok(stdout)
+                } else {
+                    Ok(String::new())
+                }
+            }
+            None => {
+                // Timeout
+                let _ = child.kill();
+                let _ = child.wait();
+                Ok(String::new())
+            }
         }
-
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 }
 

@@ -146,7 +146,17 @@ fn read_envrc_config_file(file: &str) -> Result<Vec<Entry>> {
             "EXPORT" => {
                 let parts: Vec<&str> = value.splitn(2, '=').collect();
                 let key = parts[0].trim().to_uppercase().to_string();
-                let value = parts[1].trim().to_string();
+                let mut value = parts[1].trim().to_string();
+
+                // Strip quotes if present
+                if (value.starts_with('"') && value.ends_with('"'))
+                    || (value.starts_with('\'') && value.ends_with('\''))
+                {
+                    if value.len() >= 2 {
+                        value = value[1..value.len() - 1].to_string();
+                    }
+                }
+
                 ret.push(Entry::Env(EnvEntry { key, value }));
             }
             _ => {}
@@ -208,6 +218,34 @@ mod tests {
         assert_eq!(dir_env.path, "/tmp/test");
         assert!(dir_env.entries.is_empty());
 
+        Ok(())
+    }
+    #[test]
+    fn test_read_envrc_quotes() -> Result<()> {
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new()?;
+        writeln!(file, "export QUOTED=\"value with spaces\"")?;
+        writeln!(file, "export SINGLE='single quoted'")?;
+
+        let path = file.path().to_str().unwrap();
+        let entries = read_envrc_config_file(path)?;
+
+        let mut found_quoted = false;
+        let mut found_single = false;
+
+        for entry in entries {
+            if let Entry::Env(e) = entry {
+                if e.key == "QUOTED" {
+                    assert_eq!(e.value, "value with spaces"); // Expect quotes stripped
+                    found_quoted = true;
+                } else if e.key == "SINGLE" {
+                    assert_eq!(e.value, "single quoted"); // Expect quotes stripped
+                    found_single = true;
+                }
+            }
+        }
+        assert!(found_quoted);
+        assert!(found_single);
         Ok(())
     }
 }

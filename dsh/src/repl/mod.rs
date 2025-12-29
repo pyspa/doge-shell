@@ -177,6 +177,8 @@ pub struct Repl<'a> {
     pub(crate) last_cwd: std::path::PathBuf,
     pub(crate) git_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
     pub(crate) file_context_cache: Arc<RwLock<FileContextCache>>,
+    pub(crate) argument_explainer: crate::argument_explainer::ArgumentExplainer,
+    pub(crate) last_explanation: Option<String>,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -337,6 +339,8 @@ impl<'a> Repl<'a> {
             last_cwd: current.clone(),
             git_rx,
             file_context_cache: Arc::new(RwLock::new(FileContextCache::new())),
+            argument_explainer: crate::argument_explainer::ArgumentExplainer::new(),
+            last_explanation: None,
         }
     }
 
@@ -485,7 +489,99 @@ impl<'a> Repl<'a> {
     }
 
     pub(crate) async fn handle_key_event(&mut self, ev: &KeyEvent) -> Result<()> {
-        handler::handle_key_event(self, ev).await
+        let result = handler::handle_key_event(self, ev).await;
+        self.refresh_argument_explanation();
+        result
+    }
+
+    fn refresh_argument_explanation(&mut self) {
+        let input = self.input.to_string();
+        let cursor = self.input.cursor();
+        let explanation = self.argument_explainer.get_explanation(&input, cursor);
+
+        if explanation != self.last_explanation {
+            let mut stdout = std::io::stdout();
+
+            // Clear previous explanation logic via clearing the line or similar
+            // For MVP, we use a dedicated line below the prompt if possible.
+            // But to avoid scrolling issues or interfering with output, we need to be careful.
+            // Let's assume we can print at line+1.
+
+            // We use specialized logic: save cursor, move down 1 (scrolling if needed), print/clear, restore.
+            // Note: If we scroll, restoring absolute position might be off.
+            // But let's try standard sequence.
+
+            // Note: If explanation is None, we should clear the line.
+
+            use crossterm::{QueueableCommand, cursor, style::Print, terminal};
+
+            // Only attempt if we have columns known
+            if self.columns == 0 {
+                return;
+            }
+
+            // If we are at the bottom line, we might need to scroll up to make space for explanation?
+            // "Inline" usually means "under" the current line.
+            // If we are at the bottom, printing new line causes scroll of the prompt line too.
+            // This is tricky.
+
+            // Simplified approach: just print if we have space or don't care about scroll.
+            // But if we scroll, the prompt input line moves up.
+            // If we `RestorePosition`, we go back to absolute coordinates.
+            // If prompt moved up, we restore to the OLD execution line (now 1 line lower relative to content).
+            // So we'd draw over the wrong line?
+
+            // Solution: check cursor position.
+            if let Ok((col, row)) = cursor::position() {
+                let (_, rows) = terminal::size().unwrap_or((80, 24));
+
+                // Construct the explanation string formatted
+                // let text = match &explanation { ... } // Removed unused logic
+
+                // To be safe, we only draw if we are NOT at the very bottom, OR we accept scroll issues.
+                // Or we can try to use `MoveToNextLine` which implies scrolling if at bottom.
+                // But RestorePosition is absolute.
+                // Maybe `MoveToPreviousLine` to restore?
+
+                // Let's try: Save, MoveToNextLine, Print, MoveToPreviousLine, MoveToColumn(col).
+                // MoveToNextLine(1) -> if at bottom, scrolls. Correct.
+                // Print -> prints.
+                // MoveToPreviousLine(1) -> moves up. Correct.
+                // MoveToColumn(original_col) -> restores horizontal.
+
+                stdout.queue(cursor::SavePosition).ok();
+
+                if row >= rows - 1 {
+                    // At bottom. force scroll.
+                    stdout.queue(Print("\n")).ok();
+                    stdout.queue(cursor::MoveToColumn(0)).ok();
+                } else {
+                    stdout.queue(cursor::MoveToNextLine(1)).ok();
+                }
+
+                stdout
+                    .queue(terminal::Clear(terminal::ClearType::CurrentLine))
+                    .ok();
+                if let Some(s) = &explanation {
+                    let styled = format!(" \x1b[38;5;244m[ {} ]\x1b[0m", s);
+                    stdout.queue(Print(styled)).ok();
+                }
+
+                // Restore
+                if row >= rows - 1 {
+                    // We were at bottom. Screen scrolled. Prompt is now at rows-2 (visually).
+                    // We are currently at (after print, rows-1).
+                    stdout.queue(cursor::MoveUp(1)).ok();
+                    stdout.queue(cursor::MoveToColumn(col)).ok();
+                } else {
+                    stdout.queue(cursor::RestorePosition).ok();
+                }
+
+                stdout.flush().ok();
+            }
+
+            self.last_explanation = explanation;
+        }
     }
 
     fn save_history(&mut self) {

@@ -149,13 +149,11 @@ fn read_envrc_config_file(file: &str) -> Result<Vec<Entry>> {
                 let mut value = parts[1].trim().to_string();
 
                 // Strip quotes if present
-                if (value.starts_with('"') && value.ends_with('"'))
-                    || (value.starts_with('\'') && value.ends_with('\''))
-                {
-                    if value.len() >= 2 {
+                if ((value.starts_with('"') && value.ends_with('"'))
+                    || (value.starts_with('\'') && value.ends_with('\'')))
+                    && value.len() >= 2 {
                         value = value[1..value.len() - 1].to_string();
                     }
-                }
 
                 ret.push(Entry::Env(EnvEntry { key, value }));
             }

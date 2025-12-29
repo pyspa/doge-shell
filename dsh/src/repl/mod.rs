@@ -288,12 +288,16 @@ impl<'a> Repl<'a> {
 
             // ... (in Repl::new)
 
-            ai_service = Some(Arc::new(LiveAiService::new(
+            let service = Arc::new(LiveAiService::new(
                 client,
                 envronment.read().mcp_manager.clone(),
                 envronment.read().safety_level.clone(),
                 Some(confirmation::ReplConfirmationHandler::new()),
-            )));
+            ));
+
+            // Store in environment so ShellProxy can access it
+            envronment.write().ai_service = Some(service.clone());
+            ai_service = Some(service);
         }
         suggestion_manager.set_preferences(input_preferences);
 

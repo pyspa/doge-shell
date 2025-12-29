@@ -22,6 +22,7 @@ pub use chatgpt::McpManager;
 pub use chatgpt::execute_chat_message;
 pub mod command_timing;
 mod commit_ai;
+pub mod comp_gen;
 mod dmv;
 mod fg;
 pub mod ga;
@@ -134,6 +135,18 @@ pub trait ShellProxy {
     /// Opens the external editor with the given content
     fn open_editor(&mut self, _content: &str, _extension: &str) -> Result<String> {
         Err(anyhow::anyhow!("open_editor not implemented"))
+    }
+
+    /// Generates a command completion JSON definition using AI
+    /// Returns the JSON string on success
+    fn generate_command_completion(
+        &mut self,
+        _command_name: &str,
+        _help_text: &str,
+    ) -> Result<String> {
+        Err(anyhow::anyhow!(
+            "generate_command_completion not implemented"
+        ))
     }
 }
 
@@ -298,6 +311,14 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             Box::new(BuiltinCommandFn::new(
                 safe_run::command,
                 safe_run::description(),
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+
+        builtin.insert(
+            "comp-gen",
+            Box::new(BuiltinCommandFn::new(
+                comp_gen::command,
+                comp_gen::description(),
             )) as Box<dyn BuiltinCommandTrait>,
         );
 

@@ -459,6 +459,37 @@ pub async fn execute_command(shell: &mut Shell, _ctx: &mut Context, command: &st
     debug!("start shell");
     shell.set_signals();
 
+    // Initialize AI service for non-interactive commands
+    {
+        use dsh_openai::ChatGptClient;
+        use dsh_openai::OpenAiConfig;
+        use std::sync::Arc;
+
+        let env_handle = Arc::clone(&shell.environment);
+        let config = OpenAiConfig::from_getter(|key| {
+            let value = {
+                let guard = env_handle.read();
+                guard.get_var(key)
+            };
+            value.or_else(|| std::env::var(key).ok())
+        });
+
+        // Only initialize if API key is present
+        if config.api_key().is_some()
+            && let Ok(client) = ChatGptClient::try_from_config(&config)
+        {
+            let mcp_manager = env_handle.read().mcp_manager.clone();
+            let safety_level = env_handle.read().safety_level.clone();
+            let service = Arc::new(crate::ai_features::LiveAiService::new(
+                client,
+                mcp_manager,
+                safety_level,
+                None,
+            ));
+            shell.environment.write().ai_service = Some(service);
+        }
+    }
+
     // For command execution, we create a special context that doesn't require full TTY access
     // This avoids the /dev/tty access issue in test environments
     let mut ctx = create_context_for_command(shell);

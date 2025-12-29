@@ -67,6 +67,26 @@
   ],
   "subcommands": [
     {
+      "name": "commit",
+      "description": "Record changes to the repository",
+      "options": [
+        {
+          "short": "-a",
+          "long": "--all",
+          "description": "Stage all modified and deleted paths"
+        },
+        {
+          "short": "-m",
+          "long": "--message",
+          "description": "Use the given <msg> as the commit message"
+        },
+        {
+          "long": "--amend",
+          "description": "Amend the previous commit"
+        }
+      ]
+    },
+    {
       "name": "switch",
       "description": "Switch branches",
       "arguments": [

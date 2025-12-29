@@ -38,6 +38,7 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 - **Command Abbreviations**: Define and use abbreviations with `abbr` command
 - **AI-Powered Completion**: OpenAI integration for intelligent command completion suggestions
 - **Right Prompt**: Displays command execution status and duration on the right side
+- **Inline Argument Explainer**: Displays real-time descriptions of command arguments and options below the prompt as you type
 - **Transient Prompt**: Automatically collapses the prompt after command execution to keep the terminal clean
 
 ### 🛡️ Safety Guard

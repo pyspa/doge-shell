@@ -218,7 +218,11 @@
       "arguments": [
         {
           "name": "package",
-          "description": "Package name(s)"
+          "description": "Package name(s)",
+          "type": {
+            "type": "Script",
+            "data": "node -p \"const p = require('./package.json'); [...Object.keys(p.dependencies || {}), ...Object.keys(p.devDependencies || {})].join('\\n')\" 2>/dev/null"
+          }
         }
       ],
       "subcommands": []

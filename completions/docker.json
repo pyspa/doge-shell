@@ -447,9 +447,9 @@
       ]
     },
     {
-       "name": "logs",
-       "description": "Fetch the logs of a container",
-       "arguments": [
+      "name": "logs",
+      "description": "Fetch the logs of a container",
+      "arguments": [
         {
           "name": "container",
           "description": "Container name or ID",
@@ -487,6 +487,16 @@
               "short": "-d",
               "description": "Detached mode: Run containers in the background"
             }
+          ],
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "type": {
+                "type": "Script",
+                "data": "docker compose config --services 2>/dev/null"
+              }
+            }
           ]
         },
         {
@@ -508,32 +518,92 @@
               "short": "-f",
               "description": "Follow log output"
             }
+          ],
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "type": {
+                "type": "Script",
+                "data": "docker compose config --services 2>/dev/null"
+              }
+            }
           ]
         },
         {
           "name": "build",
           "description": "Build or rebuild services",
-          "options": []
+          "options": [],
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "type": {
+                "type": "Script",
+                "data": "docker compose config --services 2>/dev/null"
+              }
+            }
+          ]
         },
         {
           "name": "exec",
           "description": "Execute a command in a running container",
-          "options": []
+          "options": [],
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "type": {
+                "type": "Script",
+                "data": "docker compose config --services 2>/dev/null"
+              }
+            }
+          ]
         },
         {
           "name": "restart",
           "description": "Restart containers",
-          "options": []
+          "options": [],
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "type": {
+                "type": "Script",
+                "data": "docker compose config --services 2>/dev/null"
+              }
+            }
+          ]
         },
         {
           "name": "start",
           "description": "Start services",
-          "options": []
+          "options": [],
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "type": {
+                "type": "Script",
+                "data": "docker compose config --services 2>/dev/null"
+              }
+            }
+          ]
         },
         {
           "name": "stop",
           "description": "Stop services",
-          "options": []
+          "options": [],
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "type": {
+                "type": "Script",
+                "data": "docker compose config --services 2>/dev/null"
+              }
+            }
+          ]
         }
       ]
     },

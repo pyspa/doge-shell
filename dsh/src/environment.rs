@@ -1,3 +1,4 @@
+use crate::ai_features::AiService;
 use crate::completion::AutoComplete;
 use crate::direnv::DirEnvironment;
 use crate::dirs::search_file;
@@ -46,6 +47,7 @@ pub struct Environment {
     command_cache: RwLock<HashMap<String, Option<String>>>,
     /// Output history for $OUT[N] and $ERR[N] variables
     pub output_history: OutputHistory,
+    pub ai_service: Option<Arc<dyn AiService + Send + Sync>>,
 }
 
 fn default_input_preferences() -> InputPreferences {
@@ -95,8 +97,10 @@ impl Environment {
             system_env_vars: env::vars().collect(),
             input_preferences: default_input_preferences(),
             safety_level: Arc::new(RwLock::new(crate::safety::SafetyLevel::Normal)),
+
             command_cache: RwLock::new(HashMap::new()),
             output_history: OutputHistory::new(),
+            ai_service: None,
         }));
 
         {
@@ -141,6 +145,7 @@ impl Environment {
             safety_level,
             command_cache: RwLock::new(HashMap::new()),
             output_history: OutputHistory::new(),
+            ai_service: parent.read().ai_service.clone(),
         }))
     }
 

@@ -415,6 +415,62 @@ pub async fn analyze_output<S: AiService + ?Sized>(
     service.send_request(messages, Some(0.2)).await
 }
 
+pub async fn generate_completion_json<S: AiService + ?Sized>(
+    service: &S,
+    command_name: &str,
+    help_text: &str,
+) -> Result<String> {
+    let system_prompt = r#"You are a shell command completion definition generator for doge-shell.
+Your task is to analyze the provided help text of a command and generate a JSON completion definition.
+
+Output JSON format (strictly valid JSON):
+{
+  "command": "command_name",
+  "description": "Command description",
+  "global_options": [
+    {
+      "short": "-s",
+      "long": "--long",
+      "description": "Description",
+      "takes_value": boolean
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "subcommand",
+      "description": "Description",
+      "options": [],
+      "arguments": [],
+      "subcommands": []
+    }
+  ]
+}
+
+Argument types (use in "arguments" list):
+- "File": File completion
+- "Directory": Directory completion
+- "Choice": {"type": "Choice", "data": ["val1", "val2"]}
+- "String": Generic string input
+- "Command": System command completion
+
+CRITICAL RULES:
+1. Do NOT use "Script" type. It is unsafe and difficult to get right. Use "Choice" if values are known (e.g. log levels, formats), or "String" / "File" / "Directory" / "Command" as appropriate.
+2. Return ONLY the JSON string. Do not include markdown code blocks (```json ... ```).
+3. Ensure the JSON is valid. Escape double quotes in descriptions if necessary.
+"#;
+
+    let user_message = format!("Command: {}\n\nHelp Text:\n{}", command_name, help_text);
+
+    let messages = vec![
+        json!({"role": "system", "content": system_prompt}),
+        json!({"role": "user", "content": user_message}),
+    ];
+
+    let content = service.send_request(messages, Some(0.1)).await?;
+    // sanitize just in case the AI adds markdown despite instructions
+    Ok(sanitize_code_block(&content))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -571,7 +627,7 @@ mod tests {
         );
     }
 
-    // Mocks for LiveAiService tests
+    #[cfg(test)]
     struct MockChatClient {
         tool_call_response: Value,
         final_response: Value,

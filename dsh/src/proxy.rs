@@ -816,6 +816,43 @@ impl ShellProxy for Shell {
         Ok((exit_code, stdout, stderr))
     }
 
+    fn generate_command_completion(
+        &mut self,
+        command_name: &str,
+        help_text: &str,
+    ) -> Result<String> {
+        let command_name = command_name.to_string();
+        let help_text = help_text.to_string();
+
+        let ai_service = self.environment.read().ai_service.clone();
+        if let Some(service) = ai_service {
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                tokio::task::block_in_place(move || {
+                    handle.block_on(async move {
+                        crate::ai_features::generate_completion_json(
+                            service.as_ref(),
+                            &command_name,
+                            &help_text,
+                        )
+                        .await
+                    })
+                })
+            } else {
+                let runtime = tokio::runtime::Runtime::new()?;
+                runtime.block_on(async move {
+                    crate::ai_features::generate_completion_json(
+                        service.as_ref(),
+                        &command_name,
+                        &help_text,
+                    )
+                    .await
+                })
+            }
+        } else {
+            Err(anyhow::anyhow!("AI service not available"))
+        }
+    }
+
     fn open_editor(&mut self, content: &str, extension: &str) -> Result<String> {
         crate::utils::editor::open_editor(content, extension)
     }

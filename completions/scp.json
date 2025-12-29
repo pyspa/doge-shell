@@ -26,5 +26,15 @@
       "short": "-v",
       "description": "Verbose mode"
     }
+  ],
+  "arguments": [
+    {
+      "name": "source",
+      "description": "Source file or [user@]host:path",
+      "type": {
+        "type": "Script",
+        "data": "(cat ~/.ssh/known_hosts 2>/dev/null | cut -d' ' -f1 | cut -d',' -f1 | grep -v '^\\['; grep -E '^Host ' ~/.ssh/config 2>/dev/null | awk '{print $2}' | grep -v '*') | sort -u"
+      }
+    }
   ]
 }

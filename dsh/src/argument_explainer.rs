@@ -210,12 +210,11 @@ impl ArgumentExplainer {
         if in_word {
             words.push(current_word);
             let end = input.len();
-            if !found
-                && cursor >= current_word_start && cursor <= end {
-                    target_index = word_idx;
-                    target_offset = cursor - current_word_start;
-                    found = true;
-                }
+            if !found && cursor >= current_word_start && cursor <= end {
+                target_index = word_idx;
+                target_offset = cursor - current_word_start;
+                found = true;
+            }
         }
 
         if found {

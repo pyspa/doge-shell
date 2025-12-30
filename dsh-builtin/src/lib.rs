@@ -12,6 +12,7 @@ mod alias;
 mod bg;
 pub mod cd;
 mod chatgpt;
+mod dashboard;
 mod eproject;
 mod eview;
 mod export;
@@ -36,6 +37,7 @@ mod help;
 mod history;
 mod jobs;
 pub mod lisp;
+mod notebook_play;
 mod out;
 mod read;
 mod reload;
@@ -51,6 +53,15 @@ mod z;
 pub trait ShellProxy {
     /// Initiates shell exit process
     fn exit_shell(&mut self);
+
+    /// Get current GitHub status (review, mention, other)
+    fn get_github_status(&self) -> (usize, usize, usize);
+
+    /// Get current Git branch name if available
+    fn get_git_branch(&self) -> Option<String>;
+
+    /// Get number of active background jobs
+    fn get_job_count(&self) -> usize;
 
     /// Dispatches a command to the shell's command execution system
     /// Used for commands that need to be handled by the main shell logic
@@ -427,6 +438,15 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             )) as Box<dyn BuiltinCommandTrait>,
         );
 
+        // Notebook commands
+        builtin.insert(
+            "notebook-play",
+            Box::new(BuiltinCommandFn::new(
+                notebook_play::command,
+                notebook_play::description(),
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+
         // Performance and statistics commands
         builtin.insert(
             "timing",
@@ -454,6 +474,15 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             "tm",
             Box::new(BuiltinCommandFn::new(tm::command, tm::description()))
                 as Box<dyn BuiltinCommandTrait>,
+        );
+
+        // Dashboard command
+        builtin.insert(
+            "dashboard",
+            Box::new(BuiltinCommandFn::new(
+                dashboard::command,
+                dashboard::description(),
+            )) as Box<dyn BuiltinCommandTrait>,
         );
 
         Mutex::new(builtin)

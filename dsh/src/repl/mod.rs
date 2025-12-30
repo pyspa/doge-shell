@@ -275,8 +275,11 @@ impl<'a> Repl<'a> {
         tokio::spawn(crate::github::background_github_task(
             config_for_task,
             prompt_for_github,
-            status_for_github,
+            status_for_github.clone(),
         ));
+
+        // Set github_status in shell as well for proxy access
+        shell.github_status = Some(status_for_github);
 
         let prompt_mark_cache = prompt.read().mark.clone();
         let prompt_mark_width = display_width(&prompt_mark_cache);

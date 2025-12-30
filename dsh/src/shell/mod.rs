@@ -37,6 +37,7 @@ pub struct Shell {
     pub(crate) next_job_id: usize,
     pub notebook_session: Option<NotebookSession>,
     pub safety_guard: crate::safety::SafetyGuard,
+    pub github_status: Option<Arc<RwLock<crate::github::GitHubStatus>>>,
 }
 
 impl std::fmt::Debug for Shell {
@@ -75,6 +76,7 @@ impl Shell {
             next_job_id: 1,
             notebook_session: None,
             safety_guard,
+            github_status: None,
         }
     }
 

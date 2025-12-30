@@ -132,6 +132,18 @@ mod tests {
             false
         }
         fn set_and_export_var(&mut self, _key: String, _value: String) {}
+
+        fn get_github_status(&self) -> (usize, usize, usize) {
+            (0, 0, 0)
+        }
+
+        fn get_git_branch(&self) -> Option<String> {
+            None
+        }
+
+        fn get_job_count(&self) -> usize {
+            0
+        }
         fn get_current_dir(&self) -> Result<std::path::PathBuf> {
             Ok(std::path::PathBuf::from("/"))
         }

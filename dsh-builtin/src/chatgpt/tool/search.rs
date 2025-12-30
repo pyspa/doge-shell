@@ -270,6 +270,18 @@ mod tests {
         fn get_lisp_var(&self, _key: &str) -> Option<String> {
             None
         }
+
+        fn get_github_status(&self) -> (usize, usize, usize) {
+            (0, 0, 0)
+        }
+
+        fn get_git_branch(&self) -> Option<String> {
+            None
+        }
+
+        fn get_job_count(&self) -> usize {
+            0
+        }
     }
 
     #[test]

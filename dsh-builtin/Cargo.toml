@@ -24,6 +24,8 @@ serde_json.workspace = true
 xdg.workspace = true
 serde.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
+sysinfo.workspace = true
+crossterm.workspace = true
 
 getopts = "0.2.23"
 regex = "1.11"

@@ -17,6 +17,25 @@ pub struct Block {
     pub kind: BlockKind,
 }
 
+impl Block {
+    pub fn raw_content(&self) -> String {
+        match &self.kind {
+            BlockKind::Code(_) | BlockKind::Output => {
+                let lines: Vec<&str> = self.content.trim().lines().collect();
+                if lines.len() >= 2
+                    && lines[0].starts_with("```")
+                    && lines.last().unwrap().starts_with("```")
+                {
+                    lines[1..lines.len() - 1].join("\n")
+                } else {
+                    self.content.clone()
+                }
+            }
+            BlockKind::Markdown => self.content.clone(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Notebook {
     pub path: PathBuf,

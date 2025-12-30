@@ -162,6 +162,41 @@ impl ShellProxy for Shell {
         self.exit();
     }
 
+    fn get_github_status(&self) -> (usize, usize, usize) {
+        if let Some(ref status) = self.github_status {
+            let status = status.read();
+            (
+                status.review_count,
+                status.mention_count,
+                status.other_count,
+            )
+        } else {
+            (0, 0, 0)
+        }
+    }
+
+    fn get_git_branch(&self) -> Option<String> {
+        let output = std::process::Command::new("git")
+            .arg("branch")
+            .arg("--show-current")
+            .output()
+            .ok()?;
+        if output.status.success() {
+            let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if branch.is_empty() {
+                None
+            } else {
+                Some(branch)
+            }
+        } else {
+            None
+        }
+    }
+
+    fn get_job_count(&self) -> usize {
+        self.wait_jobs.len()
+    }
+
     fn save_path_history(&mut self, path: &str) {
         if let Some(ref mut history) = self.path_history {
             let mut history = history.lock(); // For non-UI operations, we can use regular lock

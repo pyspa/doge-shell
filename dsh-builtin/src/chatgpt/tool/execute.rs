@@ -261,6 +261,18 @@ mod tests {
             true
         }
         fn set_and_export_var(&mut self, _key: String, _value: String) {}
+
+        fn get_github_status(&self) -> (usize, usize, usize) {
+            (0, 0, 0)
+        }
+
+        fn get_git_branch(&self) -> Option<String> {
+            None
+        }
+
+        fn get_job_count(&self) -> usize {
+            0
+        }
         fn get_lisp_var(&self, _key: &str) -> Option<String> {
             None
         }
@@ -426,6 +438,18 @@ mod tests {
         fn get_lisp_var(&self, _key: &str) -> Option<String> {
             None
         }
+        fn get_github_status(&self) -> (usize, usize, usize) {
+            (0, 0, 0)
+        }
+
+        fn get_git_branch(&self) -> Option<String> {
+            None
+        }
+
+        fn get_job_count(&self) -> usize {
+            0
+        }
+
         fn confirm_action(&mut self, _message: &str) -> anyhow::Result<bool> {
             panic!("confirm_action should NOT be called");
         }

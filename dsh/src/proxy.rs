@@ -140,21 +140,24 @@ fn format_reload_error(err: &anyhow::Error) -> String {
     format!("reload: {error_string}")
 }
 
-/// Parse arguments for z command
-/// Returns (interactive, query)
-fn parse_z_args(argv: &[String]) -> (bool, String) {
+// Parse arguments for z command
+// Returns (interactive, list, query)
+fn parse_z_args(argv: &[String]) -> (bool, bool, String) {
     let mut interactive = false;
-    let mut query = String::new();
+    let mut list = false;
+    let mut query_parts = Vec::new();
 
     // Start from index 1, skip command name
     for arg in argv.iter().skip(1) {
         if arg == "-i" || arg == "--interactive" {
             interactive = true;
-        } else if query.is_empty() {
-            query = arg.clone();
+        } else if arg == "-l" || arg == "--list" {
+            list = true;
+        } else {
+            query_parts.push(arg.clone());
         }
     }
-    (interactive, query)
+    (interactive, list, query_parts.join(" "))
 }
 
 impl ShellProxy for Shell {
@@ -215,8 +218,16 @@ impl ShellProxy for Shell {
         }
 
         std::env::set_current_dir(path)?;
-        self.save_path_history(path);
-        self.exec_chpwd_hooks(path)?;
+
+        // Use the canonical path we actually landed in for history and hooks
+        let final_path = if let Ok(canon) = std::env::current_dir() {
+            canon.to_string_lossy().into_owned()
+        } else {
+            path.to_string()
+        };
+
+        self.save_path_history(&final_path);
+        self.exec_chpwd_hooks(&final_path)?;
         Ok(())
     }
 
@@ -239,19 +250,49 @@ impl ShellProxy for Shell {
                 }
             }
             "z" => {
-                let (interactive, query) = parse_z_args(&argv);
+                let (interactive, list, query) = parse_z_args(&argv);
 
-                if interactive {
-                    if let Some(ref mut history) = self.path_history {
-                        let history = history.clone();
+                // Handle "z -" for previous directory
+                if query == "-" {
+                    if let Some(old_pwd) = self.get_var("OLDPWD") {
+                        ctx.write_stdout(&format!("z: jumping to {}\n", old_pwd))?;
+                        self.changepwd(&old_pwd)?;
+                        return Ok(());
+                    } else {
+                        ctx.write_stderr("z: OLDPWD not set")?;
+                        return Err(anyhow::anyhow!("z: OLDPWD not set"));
+                    }
+                }
+
+                if let Some(ref mut history) = self.path_history {
+                    let history = history.clone();
+                    // We need to release the lock before calling select_item_with_skim because it might block
+                    // But here we need to read history to get candidates.
+                    // Ideally we should clone the data we need.
+                    let (results, _sort_method) = {
                         let history = history.lock();
-                        // Get all history items or filter by query if provided
-                        let results = if query.is_empty() {
-                            history.sorted(&SortMethod::Recent)
+                        if query.is_empty() {
+                            (history.sorted(&SortMethod::Recent), SortMethod::Recent)
                         } else {
-                            history.sort_by_match(&query)
-                        };
+                            (history.sort_by_match(&query), SortMethod::Frecent)
+                        }
+                    };
 
+                    if list {
+                        if results.is_empty() {
+                            ctx.write_stderr("z: no matching history found")?;
+                        } else {
+                            for item in results.iter().take(20) {
+                                let score = if query.is_empty() {
+                                    item.get_frecency()
+                                } else {
+                                    item.match_score as f32
+                                };
+                                ctx.write_stdout(&format!("{:<.1}   {}\n", score, item.item))?;
+                            }
+                        }
+                    } else if interactive || query.is_empty() {
+                        // Interactive mode or no query (default to interactive)
                         if !results.is_empty() {
                             // Convert to Candidates for skim
                             let candidates: Vec<crate::completion::Candidate> = results
@@ -259,7 +300,7 @@ impl ShellProxy for Shell {
                                 .map(|item| {
                                     crate::completion::Candidate::Item(
                                         item.item.clone(),
-                                        format!("({:.1})", item.match_score),
+                                        format!("({:.1})", item.get_frecency()),
                                     )
                                 })
                                 .collect();
@@ -273,32 +314,19 @@ impl ShellProxy for Shell {
                             ctx.write_stderr("z: no matching history found")?;
                         }
                     } else {
-                        ctx.write_stderr("z: history not available")?;
+                        // Direct jump (query present, not interactive, not list)
+                        if !results.is_empty() {
+                            let target = &results[0].item;
+                            // Echo the target directory
+                            ctx.write_stdout(&format!("z: jumping to {}\n", target))?;
+                            self.changepwd(target)?;
+                        } else {
+                            ctx.write_stderr("z: no matching history found")?;
+                            return Err(anyhow::anyhow!("z: no match found"));
+                        }
                     }
                 } else {
-                    // Original behavior
-                    let path = if query.is_empty() { None } else { Some(query) };
-
-                    let path = if let Some(path_str) = path {
-                        if let Some(ref mut history) = self.path_history {
-                            let history = history.clone();
-                            let history = history.lock();
-                            let results = history.sort_by_match(&path_str);
-                            if !results.is_empty() {
-                                Some(results[0].item.to_string())
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-
-                    if let Some(ref path) = path {
-                        self.changepwd(path)?;
-                    };
+                    ctx.write_stderr("z: history not available")?;
                 }
             }
             "jobs" => {
@@ -960,38 +988,51 @@ mod tests {
     fn test_parse_z_args() {
         // z -i
         let args = vec!["z".to_string(), "-i".to_string()];
-        let (interactive, query) = parse_z_args(&args);
+        let (interactive, list, query) = parse_z_args(&args);
         assert!(interactive);
+        assert!(!list);
         assert_eq!(query, "");
 
         // z --interactive
         let args = vec!["z".to_string(), "--interactive".to_string()];
-        let (interactive, query) = parse_z_args(&args);
+        let (interactive, list, query) = parse_z_args(&args);
         assert!(interactive);
+        assert!(!list);
+        assert_eq!(query, "");
+
+        // z -l
+        let args = vec!["z".to_string(), "-l".to_string()];
+        let (interactive, list, query) = parse_z_args(&args);
+        assert!(!interactive);
+        assert!(list);
         assert_eq!(query, "");
 
         // z foo
         let args = vec!["z".to_string(), "foo".to_string()];
-        let (interactive, query) = parse_z_args(&args);
+        let (interactive, list, query) = parse_z_args(&args);
         assert!(!interactive);
+        assert!(!list);
         assert_eq!(query, "foo");
 
         // z -i foo
         let args = vec!["z".to_string(), "-i".to_string(), "foo".to_string()];
-        let (interactive, query) = parse_z_args(&args);
+        let (interactive, list, query) = parse_z_args(&args);
         assert!(interactive);
+        assert!(!list);
         assert_eq!(query, "foo");
 
         // z foo -i
         let args = vec!["z".to_string(), "foo".to_string(), "-i".to_string()];
-        let (interactive, query) = parse_z_args(&args);
+        let (interactive, list, query) = parse_z_args(&args);
         assert!(interactive);
+        assert!(!list);
         assert_eq!(query, "foo");
 
-        // z foo bar (only first arg taken as query)
+        // z foo bar (arguments joined)
         let args = vec!["z".to_string(), "foo".to_string(), "bar".to_string()];
-        let (interactive, query) = parse_z_args(&args);
+        let (interactive, list, query) = parse_z_args(&args);
         assert!(!interactive);
-        assert_eq!(query, "foo");
+        assert!(!list);
+        assert_eq!(query, "foo bar");
     }
 }

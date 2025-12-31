@@ -115,7 +115,7 @@ The shell includes many built-in commands:
 | `exit` | Exit the shell |
 | `cd` | Change directory |
 | `history` | Show command history |
-| `z` | Jump to frequently used directories (use `-i` or `--interactive` for selection) |
+| `z` | Jump to frequently used directories (use `-i` or `--interactive` for selection, `-` for previous directory, `-l` for list) |
 | `jobs` | Show background jobs |
 | `fg` | Bring job to foreground |
 | `bg` | Send job to background |
@@ -125,6 +125,7 @@ The shell includes many built-in commands:
 | `read` | Read input into a variable |
 | `abbr` | Configure abbreviations |
 | `alias` | Configure command aliases |
+| `export` | Set export attribute for shell variables |
 | `chat` | Chat with AI assistant |
 | `chat_prompt` | Set AI assistant system prompt |
 | `chat_model` | Set AI model |
@@ -142,6 +143,14 @@ The shell includes many built-in commands:
 | `gpr` | GitHub Pull Request checkout with interactive selection |
 | `gwt` | Git Worktree management (add, list, remove) |
 | `help` | Show help information |
+| `comp-gen` | Generate command completion using AI |
+| `dashboard` | Show integrated dashboard (System, Git, GitHub) |
+| `ai-commit` / `aic` | Generate commit message using AI |
+| `tm` | Search and retrieve past command outputs |
+| `notebook-play` | Play a notebook file (execute code blocks interactively) |
+| `eproject` | Open current project in Emacs |
+| `eview` | Pipe content to external editor |
+| `magit` | Open Magit status for the current directory |
 
 ## 🧠 Lisp Functions
 
@@ -167,8 +176,11 @@ The embedded Lisp interpreter includes many built-in functions:
 - `sh` - Execute shell commands in the current shell context
 - `sh!` - Execute shell commands with output capture
 - `setenv` - Set environment variables
+- `getenv` - Get environment variables
 - `vset` - Set shell variables
 - `add_path` - Add paths to PATH
+- `number->string` - Convert number to string
+- `string-append` - Concatenate strings
 - `allow-direnv` - Configure direnv roots
 - `edit` - Open a file in the external editor
 
@@ -203,10 +215,25 @@ The embedded Lisp interpreter includes many built-in functions:
 - `mcp-add-stdio` - Add an MCP server with stdio transport
 - `mcp-add-http` - Add an MCP server with HTTP transport
 - `mcp-add-sse` - Add an MCP server with SSE transport
+- `mcp-list` - List registered MCP servers
 - `mcp-list-tools` - List all available MCP tools
-- `mcp-clear` - Clear all MCP servers
 - `chat-execute-clear` - Clear execute tool allowlist
 - `chat-execute-add` - Add command(s) to execute tool allowlist (accepts multiple commands)
+
+### Suggestion Settings Functions
+
+- `set-suggestion-mode` - Set suggestion mode (`ghost` or `off`)
+- `set-suggestion-ai-enabled` - Enable/disable AI-powered suggestions
+
+### PTY Control
+
+Some interactive commands may require disabling the built-in PTY. You have two options:
+
+- **`nopty` prefix**: Use `nopty <command>` to run a single command without PTY.
+  ```bash
+  nopty trizen -S google-chrome
+  ```
+- **`DSH_NO_PTY` environment variable**: Set `DSH_NO_PTY=1` to globally disable PTY.
 
 ## 📁 Configuration
 

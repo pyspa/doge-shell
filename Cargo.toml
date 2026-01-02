@@ -46,7 +46,7 @@ mime_guess = "2.0"
 chrono = { version = "0.4", features = ["serde"] }
 skim = "0.20"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
-sysinfo = "0.33"
+sysinfo = "0.37"
 
 [profile.dev]
 # https://jakedeichert.com/blog/reducing-rust-incremental-compilation-times-on-macos-by-70-percent/

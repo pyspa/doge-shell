@@ -7,10 +7,10 @@ pub mod terminal;
 use crate::environment::Environment;
 use crate::history::FrecencyHistory;
 use crate::lisp;
-use crate::notebook::NotebookSession;
 use crate::process::Job;
 use anyhow::Result;
 use dsh_builtin::McpManager;
+use dsh_types::notebook::NotebookSession;
 use dsh_types::{Context, ExitStatus};
 use libc::{STDIN_FILENO, c_int};
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
@@ -136,7 +136,7 @@ impl Shell {
     ) -> Result<i32> {
         // Notebook Hook: Record input if session is active
         if let Some(session) = &mut self.notebook_session
-            && session.state == crate::notebook::SessionState::Active
+            && session.state == dsh_types::notebook::SessionState::Active
         {
             // Ignore empty input or failures in appending for now (warn only)
             if !input.trim().is_empty() {
@@ -212,7 +212,7 @@ impl Shell {
     }
 
     pub fn open_notebook(&mut self, path: std::path::PathBuf) -> Result<()> {
-        self.notebook_session = Some(crate::notebook::NotebookSession::new(path)?);
+        self.notebook_session = Some(dsh_types::notebook::NotebookSession::new(path)?);
         Ok(())
     }
 

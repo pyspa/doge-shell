@@ -14,6 +14,7 @@ use tracing::warn;
 pub mod terminal;
 pub use terminal::{ShellMode, TerminalState};
 pub mod mcp;
+pub mod notebook;
 pub mod output_history;
 
 /// Doge Shell specific error types

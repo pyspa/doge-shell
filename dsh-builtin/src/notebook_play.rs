@@ -1,5 +1,6 @@
 use super::ShellProxy;
 use anyhow::Result;
+use dsh_types::notebook::{BlockKind, Notebook};
 use dsh_types::{Context, ExitStatus};
 use std::io::{self, Write};
 
@@ -24,69 +25,22 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 }
 
 fn run_play(ctx: &Context, path: &str, proxy: &mut dyn ShellProxy) -> Result<()> {
-    // We use Lisp engine's notebook functionality if possible, or just parse here.
-    // For simplicity and since we are in dsh-builtin which doesn't have direct access to dsh::notebook,
-    // we might need to expose notebook functionality via Lisp or Proxy.
-
-    // Check if notebook functionality is available via Lisp
-    let _lisp_cmd = format!("(notebook-play \"{}\")", path);
-    // Actually, it might be better to implement the logic here using a shared library if possible,
-    // but dsh/src/notebook.rs is in the main crate.
-
-    // Alternative: Use `proxy.dispatch` to run commands, but we need to parse the file first.
-    // Let's assume we want to do this in Rust. We should probably move Notebook to a shared crate or dsh-types.
-    // But since it's already in `dsh`, let's see if we can use it.
-
-    // Actually, I'll implement the parsing here again or use a simpler approach for now if I can't access `dsh::notebook`.
-    // Wait, `dsh-builtin` is a separate crate. `dsh` depends on `dsh-builtin`.
-    // So `dsh-builtin` CANNOT depend on `dsh`.
-
-    // I should move `Notebook` to `dsh-types` if it's meant to be used by builtins.
-    // Or I can use Lisp to bridge it.
-
     let path_buf = std::path::PathBuf::from(path);
     if !path_buf.exists() {
         anyhow::bail!("File not found: {}", path);
     }
 
-    let content = std::fs::read_to_string(&path_buf)?;
-    let mut blocks = Vec::new();
+    let notebook = Notebook::load_from_file(&path_buf)?;
 
-    // Simple parsing for now (copying logic from notebook.rs or similar)
-    // In a real scenario, we'd refactor the code to be shared.
-    use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag};
-
-    let parser = Parser::new(&content);
-    let mut in_code_block = false;
-    let mut current_lang = String::new();
-    let mut current_code = String::new();
-
-    for event in parser {
-        match event {
-            Event::Start(Tag::CodeBlock(kind)) => {
-                in_code_block = true;
-                current_lang = match kind {
-                    CodeBlockKind::Fenced(lang) => lang.to_string(),
-                    CodeBlockKind::Indented => String::new(),
-                };
-                current_code.clear();
-            }
-            Event::Text(text) => {
-                if in_code_block {
-                    current_code.push_str(&text);
-                }
-            }
-            Event::End(_) => {
-                if in_code_block
-                    && (current_lang == "bash" || current_lang == "sh" || current_lang.is_empty())
-                {
-                    blocks.push(current_code.clone());
-                }
-                in_code_block = false;
-            }
-            _ => {}
-        }
-    }
+    // Filter for executable code blocks (bash, sh, or no language specified)
+    let blocks: Vec<_> = notebook
+        .blocks
+        .iter()
+        .filter(|b| match &b.kind {
+            BlockKind::Code(lang) => lang == "bash" || lang == "sh" || lang.is_empty(),
+            _ => false,
+        })
+        .collect();
 
     if blocks.is_empty() {
         let _ = ctx.write_stdout("No executable blocks found in notebook.\n");
@@ -96,7 +50,8 @@ fn run_play(ctx: &Context, path: &str, proxy: &mut dyn ShellProxy) -> Result<()>
     let _ = io::stdin();
     let _ = io::stdout();
 
-    for (i, code) in blocks.iter().enumerate() {
+    for (i, block) in blocks.iter().enumerate() {
+        let code = block.raw_content();
         let _ = ctx.write_stdout(&format!("\n--- Block {} ---\n", i + 1));
         let _ = ctx.write_stdout(&format!("{}\n", code.trim()));
         let _ = ctx.write_stdout("Execute? [Y/n/q] ");
@@ -119,12 +74,14 @@ fn run_play(ctx: &Context, path: &str, proxy: &mut dyn ShellProxy) -> Result<()>
                 }
 
                 let _ = ctx.write_stdout(&format!("> {}\n", line));
-                // We use proxy.dispatch to execute the command in the shell context
-                // Note: dispatch expects tokens, but we have a raw string.
-                // Main shell's eval handles this. Builtin proxy might not have a full eval.
-                // Let's check how dispatch is used.
 
-                // For now, let's try to just run it as a shell command.
+                // Currently dsh-builtin's dispatch is limited (assumes command + args),
+                // but real execution needs full evaluation which is in dsh::shell::eval.
+                // Since we are in dsh-builtin, we can only call what's exposed in ShellProxy.
+                // Assuming proxy.dispatch simply hands off execution to the main shell logic
+                // (or executes builtins).
+                // Note: The previous implementation also just called dispatch with empty argv.
+                // We preserve that behavior here.
                 let _ = proxy.dispatch(ctx, line, vec![]);
             }
         }

@@ -654,10 +654,12 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
 
     // --- KeyAction-based dispatch for simple actions ---
     // Build KeyContext from current state
+    // Build KeyContext from current state
     let ctx = KeyContext {
         cursor_at_end: repl.input.cursor() == repl.input.len(),
         input_empty: repl.input.is_empty(),
-        has_suggestion: repl.suggestion_manager.active.is_some(),
+        has_suggestion: repl.suggestion_manager.active.is_some()
+            || (repl.input.is_empty() && repl.auto_fix_suggestion.is_some()),
         has_completion: repl.input.completion.is_some(),
         completion_mode: repl.completion.completion_mode(),
         cursor_at_start: repl.input.cursor() == 0,
@@ -713,7 +715,13 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             }
         }
         KeyAction::AcceptSuggestionFull => {
-            if repl.accept_active_suggestion() {
+            if repl.input.is_empty() && repl.auto_fix_suggestion.is_some() {
+                if let Some(fix) = repl.auto_fix_suggestion.take() {
+                    repl.input.reset(fix);
+                    repl.refresh_inline_suggestion(); // clear potential other suggestions
+                    reset_completion = true;
+                }
+            } else if repl.accept_active_suggestion() {
                 repl.completion.clear();
                 reset_completion = true;
             }
@@ -845,7 +853,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             repl.input.color_ranges = None;
         }
         KeyAction::AiAutoFix => {
-            repl.perform_auto_fix().await;
+            repl.trigger_auto_fix();
         }
         KeyAction::AiSmartCommit => {
             handle_ai_smart_commit(repl).await;

@@ -484,7 +484,6 @@ impl<'a> Repl<'a> {
             debug!("Integrated completion engine initialized successfully");
         }
         self.lines = screen_size.1 as usize;
-        self.lines = screen_size.1 as usize;
         enable_raw_mode().ok();
         let mut renderer = TerminalRenderer::new();
         queue!(renderer, EnableBracketedPaste).ok();

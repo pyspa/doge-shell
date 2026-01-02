@@ -620,25 +620,6 @@ impl FrecencyHistory {
     }
 
     pub fn sort_by_match(&self, pattern: &str) -> Vec<ItemStats> {
-        let Some(ref store) = self.store else {
-            return Vec::new();
-        };
-
-        // Pre-allocate with estimated capacity (assume ~25% match rate)
-        let estimated_matches = store.items.len() / 4;
-        let mut results = Vec::with_capacity(estimated_matches.max(16));
-
-        for item in store.items.iter() {
-            if let Some((score, index)) = self.matcher.fuzzy_indices(&item.item, pattern)
-                && score > 25
-            {
-                let mut item = item.clone();
-                item.match_score = score;
-                item.match_index = index;
-                results.push(item);
-            }
-        }
-
         let ctx = get_current_context();
         self.sort_by_match_with_context(pattern, ctx.as_deref())
     }

@@ -15,10 +15,10 @@ use crate::suggestion::{InputPreferences, SuggestionBackend, SuggestionSource, S
 use crate::terminal::renderer::TerminalRenderer;
 use anyhow::Context as _;
 use anyhow::Result;
-use crossterm::cursor;
+use crossterm::cursor::{self, MoveLeft};
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, EventStream, KeyEvent};
 use crossterm::queue;
-use crossterm::style::{Print, ResetColor};
+use crossterm::style::{Color, Print, ResetColor, Stylize};
 use crossterm::terminal::{self, Clear, ClearType, enable_raw_mode};
 use dsh_frecency::ItemStats;
 use dsh_openai::{ChatGptClient, OpenAiConfig};
@@ -143,6 +143,11 @@ pub fn format_directory_listing(entries: Vec<(String, bool)>) -> String {
     files.join("\n")
 }
 
+#[derive(Debug)]
+pub enum AiEvent {
+    AutoFix(String),
+}
+
 pub struct Repl<'a> {
     pub shell: &'a mut Shell,
     pub(crate) input: Input,
@@ -179,6 +184,9 @@ pub struct Repl<'a> {
     pub(crate) file_context_cache: Arc<RwLock<FileContextCache>>,
     pub(crate) argument_explainer: crate::argument_explainer::ArgumentExplainer,
     pub(crate) last_explanation: Option<String>,
+    pub(crate) auto_fix_suggestion: Option<String>,
+    pub(crate) ai_rx: tokio::sync::mpsc::UnboundedReceiver<AiEvent>,
+    pub(crate) ai_tx: tokio::sync::mpsc::UnboundedSender<AiEvent>,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -310,6 +318,9 @@ impl<'a> Repl<'a> {
         let (git_tx, git_rx) = tokio::sync::mpsc::unbounded_channel();
         prompt.write().set_git_sender(git_tx);
 
+        // Setup AI event channel
+        let (ai_tx, ai_rx) = tokio::sync::mpsc::unbounded_channel();
+
         Repl {
             shell,
             input: Input::new(input_config),
@@ -344,6 +355,9 @@ impl<'a> Repl<'a> {
             file_context_cache: Arc::new(RwLock::new(FileContextCache::new())),
             argument_explainer: crate::argument_explainer::ArgumentExplainer::new(),
             last_explanation: None,
+            auto_fix_suggestion: None,
+            ai_rx,
+            ai_tx,
         }
     }
 
@@ -395,25 +409,23 @@ impl<'a> Repl<'a> {
         });
     }
 
-    pub(crate) async fn perform_auto_fix(&mut self) {
+    pub(crate) fn trigger_auto_fix(&self) {
         if self.last_status != 0
             && !self.last_command_string.is_empty()
             && let Some(service) = &self.ai_service
         {
-            match crate::ai_features::fix_command(
-                service.as_ref(),
-                &self.last_command_string,
-                self.last_status,
-            )
-            .await
-            {
-                Ok(fixed) => {
-                    self.input.reset(fixed);
+            let service = service.clone();
+            let command = self.last_command_string.clone();
+            let status = self.last_status;
+            let tx = self.ai_tx.clone();
+
+            tokio::spawn(async move {
+                if let Ok(fixed) =
+                    crate::ai_features::fix_command(service.as_ref(), &command, status).await
+                {
+                    let _ = tx.send(AiEvent::AutoFix(fixed));
                 }
-                Err(e) => {
-                    warn!("Auto-Fix failed: {}", e);
-                }
-            }
+            });
         }
     }
 
@@ -1390,6 +1402,12 @@ impl<'a> Repl<'a> {
             self.suggestion_manager.clear();
         }
 
+        // Auto-fix ghost text logic
+        let mut ai_suggestion_text = None;
+        if self.input.as_str().is_empty() && self.auto_fix_suggestion.is_some() {
+            ai_suggestion_text = self.auto_fix_suggestion.as_deref();
+        }
+
         let ghost_suffix = if completion.is_none() {
             self.suggestion_manager.suffix(&input)
         } else {
@@ -1408,6 +1426,13 @@ impl<'a> Repl<'a> {
 
         // Print the input
         self.input.print(out, ghost_suffix.as_deref());
+
+        if let Some(ai_fix) = ai_suggestion_text {
+            // Render AI suggestion with a distinct color
+            queue!(out, Print(ai_fix.with(Color::DarkGrey))).ok();
+            let width = display_width(ai_fix);
+            queue!(out, MoveLeft(width as u16)).ok();
+        }
 
         if ai_pending_now {
             queue!(out, Print(" ⧗")).ok();
@@ -1592,6 +1617,19 @@ impl<'a> Repl<'a> {
                         });
                     }
                 }
+                Some(ai_event) = self.ai_rx.recv() => {
+                    match ai_event {
+                        AiEvent::AutoFix(fix) => {
+                            self.auto_fix_suggestion = Some(fix);
+                             // Force redraw if input is empty to show the suggestion
+                            if self.input.as_str().is_empty() {
+                                let mut renderer = TerminalRenderer::new();
+                                self.print_input(&mut renderer, false, false);
+                                renderer.flush().ok();
+                            }
+                        }
+                    }
+                }
                 maybe_event = reader.next() => {
                     let old_last_time = self.last_command_time;
                     match maybe_event {
@@ -1636,6 +1674,11 @@ impl<'a> Repl<'a> {
                                 // We DO have self.git_rx, but we can't send to it.
                                 // We have prompt.git_sender!
                                 self.prompt.read().trigger_git_check();
+
+                                // Trigger auto-fix if failed
+                                if self.last_status != 0 {
+                                    self.trigger_auto_fix();
+                                }
                             }
                         }
                         Some(Err(err)) => {
@@ -2249,7 +2292,7 @@ mod ai_tests {
 
     use crate::ai_features::AiService;
     use crate::environment::Environment;
-    use crate::repl::Repl;
+    use crate::repl::{AiEvent, Repl};
     use crate::shell::Shell;
     use anyhow::Result;
     use async_trait::async_trait;
@@ -2280,7 +2323,7 @@ mod ai_tests {
     }
 
     #[tokio::test]
-    async fn test_perform_auto_fix_success() {
+    async fn test_trigger_auto_fix_success() {
         use crate::environment::Environment;
 
         let environment = Environment::new();
@@ -2295,9 +2338,14 @@ mod ai_tests {
         repl.last_command_string = "lss -la".to_string();
         repl.last_status = 127;
 
-        repl.perform_auto_fix().await;
+        repl.trigger_auto_fix();
 
-        assert_eq!(repl.input.to_string(), "ls -la");
+        // Wait for the background task to complete and send the result
+        if let Some(AiEvent::AutoFix(fix)) = repl.ai_rx.recv().await {
+            repl.auto_fix_suggestion = Some(fix);
+        }
+
+        assert_eq!(repl.auto_fix_suggestion, Some("ls -la".to_string()));
     }
 
     #[tokio::test]

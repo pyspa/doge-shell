@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use rust_embed::RustEmbed;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::OnceLock;
 use tracing::{debug, warn};
 
@@ -19,7 +20,7 @@ pub struct JsonCompletionLoader {
 }
 
 /// Global cache for the loaded completion database
-static COMPLETION_DATABASE_CACHE: OnceLock<CommandCompletionDatabase> = OnceLock::new();
+static COMPLETION_DATABASE_CACHE: OnceLock<Arc<CommandCompletionDatabase>> = OnceLock::new();
 
 impl JsonCompletionLoader {
     pub fn new() -> Self {
@@ -57,13 +58,13 @@ impl JsonCompletionLoader {
         dirs
     }
 
-    pub fn load_database(&self) -> Result<CommandCompletionDatabase> {
+    pub fn load_database(&self) -> Result<Arc<CommandCompletionDatabase>> {
         // Use the static cache to avoid re-parsing JSON files on each call
         // Since get_or_try_init is unstable, we need to handle the Result manually
         match COMPLETION_DATABASE_CACHE.get() {
             Some(database) => {
                 debug!("Using cached completion database (already loaded)");
-                Ok(database.clone())
+                Ok(Arc::clone(database))
             }
             None => {
                 debug!(
@@ -103,9 +104,10 @@ impl JsonCompletionLoader {
 
                 // Store the result in the cache to avoid reloading on subsequent calls
                 // We only reach this point if loading was successful
-                COMPLETION_DATABASE_CACHE.get_or_init(|| database.clone());
+                let shared_db = Arc::new(database);
+                let _ = COMPLETION_DATABASE_CACHE.set(Arc::clone(&shared_db));
 
-                Ok(database)
+                Ok(shared_db)
             }
         }
     }

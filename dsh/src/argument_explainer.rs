@@ -2,8 +2,10 @@ use crate::completion::command::{CommandCompletion, CommandCompletionDatabase, S
 use crate::completion::json_loader::JsonCompletionLoader;
 use crate::completion::parser::{CommandLineParser, CompletionContext};
 
+use std::sync::Arc;
+
 pub struct ArgumentExplainer {
-    db: CommandCompletionDatabase,
+    db: Arc<CommandCompletionDatabase>,
     parser: CommandLineParser,
 }
 
@@ -23,7 +25,7 @@ impl ArgumentExplainer {
         }
     }
 
-    pub fn with_db(db: CommandCompletionDatabase) -> Self {
+    pub fn with_db(db: Arc<CommandCompletionDatabase>) -> Self {
         Self {
             db,
             parser: CommandLineParser::new(),
@@ -375,7 +377,7 @@ mod tests {
     #[test]
     fn test_explain_git_commit_short() {
         let db = make_git_db();
-        let explainer = ArgumentExplainer::with_db(db);
+        let explainer = ArgumentExplainer::with_db(db.into());
 
         let input = "git commit -a";
         let cursor = 12; // 'a'
@@ -386,7 +388,7 @@ mod tests {
     #[test]
     fn test_explain_git_commit_combined() {
         let db = make_git_db();
-        let explainer = ArgumentExplainer::with_db(db);
+        let explainer = ArgumentExplainer::with_db(db.into());
 
         let input = "git commit -am";
         // -:11, a:12, m:13
@@ -402,7 +404,7 @@ mod tests {
     #[test]
     fn test_explain_global_option() {
         let db = make_git_db();
-        let explainer = ArgumentExplainer::with_db(db);
+        let explainer = ArgumentExplainer::with_db(db.into());
 
         let input = "git -v";
         let cursor = 5; // on 'v'
@@ -413,7 +415,7 @@ mod tests {
     #[test]
     fn test_explain_with_quotes() {
         let db = make_git_db();
-        let explainer = ArgumentExplainer::with_db(db);
+        let explainer = ArgumentExplainer::with_db(db.into());
 
         // git commit -m "msg"
         // 0123456789012345678

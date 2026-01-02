@@ -19,5 +19,5 @@ pub trait PromptModule: Send + Sync + std::fmt::Debug {
 
     /// Render the module using currently cached data.
     /// Returns None if the module should not be displayed.
-    fn render(&self, context: &PromptContext) -> Option<String>;
+    fn render(&self, context: &PromptContext<'_>) -> Option<String>;
 }

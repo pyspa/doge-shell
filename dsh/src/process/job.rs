@@ -289,251 +289,28 @@ impl Job {
 
         ctx.foreground = self.foreground;
 
-        if ctx.foreground
-            && ctx.interactive
-            && std::env::var("DSH_NO_PTY").is_err()
-            && !self.disable_pty
-        {
-            // "Time Machine" logic: Use PTY for foreground jobs to capture output with color preservation.
-            // Only enabled in interactive mode to avoid interference with test captures.
-            match Pty::new() {
-                Ok(pty) => {
-                    debug!("PTY created: {:?}", pty);
+        // 1. Setup PTY if needed
+        let pty_slave_fd = self.setup_pty(ctx).await?;
 
-                    // Resize PTY to match current terminal size
-                    match crossterm::terminal::size() {
-                        Ok((cols, rows)) => {
-                            if let Err(e) = pty.resize(rows, cols) {
-                                debug!("Failed to resize PTY: {}", e);
-                            } else {
-                                debug!("Resized PTY to {}x{}", cols, rows);
-                            }
-                        }
-                        Err(e) => debug!("Failed to get terminal size for PTY resize: {}", e),
-                    }
-
-                    // Setup Output Monitor (Master -> Stdout + Capture)
-                    // We need a clone of the master for reading
-                    match pty.try_clone() {
-                        Ok(pty_clone) => {
-                            // Transfer ownership of master fd to monitor
-                            let master_fd = pty_clone.master.into_raw_fd();
-                            let mut monitor = match super::io::PtyMonitor::new(master_fd) {
-                                Ok(m) => m,
-                                Err(e) => {
-                                    error!("Failed to create PtyMonitor: {}", e);
-                                    return Err(e);
-                                }
-                            };
-
-                            let output_task = tokio::spawn(async move {
-                                monitor.process_output().await?;
-                                // Convert captured output to String (lossy) for history
-                                // Stripping ANSI is done later (or we can do it here if we want to save space)
-                                // For now save with ANSI.
-                                Ok(String::from_utf8_lossy(&monitor.captured_output).to_string())
-                            });
-                            self.pty_output_task = Some(output_task);
-
-                            // Setup Input Proxy (Stdin -> Master)
-                            // This is needed because the job is running in a PTY,
-                            // but we (Shell) are holding the Real Terminal.
-                            // We must forward Real Stdin to PTY Master.
-                            if ctx.interactive {
-                                // Only setup input proxy if we are NOT a builtin
-                                // Builtins usually run in-process and might not need PTY input,
-                                // and holding tokio::io::stdin here can block/mess up the REPL.
-                                let is_builtin = self
-                                    .process
-                                    .as_ref()
-                                    .map(|p| matches!(**p, JobProcess::Builtin(_)))
-                                    .unwrap_or(false);
-
-                                if !is_builtin {
-                                    match pty.try_clone() {
-                                        Ok(pty_in) => {
-                                            match AsyncPtyMasterWriter::new(pty_in.master) {
-                                                Ok(mut master_write) => {
-                                                    let input_task = tokio::spawn(async move {
-                                                        let _nonblock =
-                                                            NonBlockingFdGuard::new(STDIN_FILENO);
-
-                                                        match AsyncFd::new(BorrowedFd(STDIN_FILENO))
-                                                        {
-                                                            Ok(fd) => {
-                                                                let mut stdin =
-                                                                    AsyncStdin { inner: fd };
-                                                                debug!(
-                                                                    "PTY input proxy: starting copy"
-                                                                );
-                                                                if let Err(e) = tokio::io::copy(
-                                                                    &mut stdin,
-                                                                    &mut master_write,
-                                                                )
-                                                                .await
-                                                                {
-                                                                    debug!(
-                                                                        "PTY stdin proxy: copy ended/failed: {}",
-                                                                        e
-                                                                    );
-                                                                }
-                                                            }
-                                                            Err(e) => {
-                                                                error!(
-                                                                    "Failed to setup async stdin proxy for PTY: {}",
-                                                                    e
-                                                                );
-                                                                // Fallback to legacy stdin copy.
-                                                                let mut stdin = tokio::io::stdin();
-                                                                let _ = tokio::io::copy(
-                                                                    &mut stdin,
-                                                                    &mut master_write,
-                                                                )
-                                                                .await;
-                                                            }
-                                                        }
-                                                    });
-                                                    self.pty_input_task = Some(input_task);
-                                                }
-                                                Err(e) => {
-                                                    error!(
-                                                        "Failed to create AsyncPtyMasterWriter: {}",
-                                                        e
-                                                    );
-                                                }
-                                            }
-                                        }
-                                        Err(e) => error!("Failed to clone PTY for input: {}", e),
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => error!("Failed to clone PTY for output: {}", e),
-                    }
-
-                    self.pty = Some(pty);
-                }
-                Err(e) => {
-                    error!(
-                        "Failed to create PTY: {}, falling back to normal execution",
-                        e
-                    );
-                }
-            }
-        }
-
-        let pty_slave_fd = self.pty.as_ref().map(|p| p.slave.as_raw_fd());
-
-        if let Some(process) = self.process.take().as_mut() {
+        // 2. Launch processes
+        if let Some(mut process) = self.process.take() {
             debug!(
                 "JOB_LAUNCH_PROCESS: Launching process for job {} (process_type: {})",
                 self.job_id,
                 process.get_cmd()
             );
 
-            match self.launch_process(ctx, shell, process, pty_slave_fd) {
-                Ok(_) => {
-                    debug!(
-                        "JOB_LAUNCH_PROCESS_SUCCESS: Process launched successfully for job {}",
-                        self.job_id
-                    );
-                }
-                Err(e) => {
-                    error!(
-                        "JOB_LAUNCH_PROCESS_ERROR: Failed to launch process for job {}: {}",
-                        self.job_id, e
-                    );
-                    // Ensure cleanup of PTY tasks if launch fails
-                    if let Some(input_task) = self.pty_input_task.take() {
-                        input_task.abort();
-                        let _ = input_task.await;
-                    }
-                    if let Some(output_task) = self.pty_output_task.take() {
-                        output_task.abort();
-                    }
-                    return Err(e);
-                }
+            if let Err(e) = self.launch_process(ctx, shell, &mut process, pty_slave_fd) {
+                error!(
+                    "JOB_LAUNCH_PROCESS_ERROR: Failed to launch process for job {}: {}",
+                    self.job_id, e
+                );
+                self.cleanup_pty_tasks().await;
+                return Err(e);
             }
 
-            if !ctx.interactive {
-                debug!(
-                    "JOB_LAUNCH_NON_INTERACTIVE: Non-interactive mode, waiting for job {} completion",
-                    self.job_id
-                );
-                self.wait_job(false).await?;
-            } else if ctx.foreground {
-                debug!(
-                    "JOB_LAUNCH_FOREGROUND: Foreground job {}, process_count: {}",
-                    self.job_id, ctx.process_count
-                );
-                // foreground
-                if ctx.process_count > 0 {
-                    debug!(
-                        "JOB_LAUNCH_PUT_FOREGROUND: Putting job {} in foreground",
-                        self.job_id
-                    );
-
-                    // If PTY, we must enable raw mode to proxy input/output correctly
-                    let raw_mode_enabled = if self.pty.is_some() {
-                        match enable_raw_mode() {
-                            Ok(_) => true,
-                            Err(e) => {
-                                error!("Failed to enable raw mode for PTY: {}", e);
-                                false
-                            }
-                        }
-                    } else {
-                        false
-                    };
-
-                    match self.put_in_foreground(false, false).await {
-                        Ok(_) => {
-                            debug!(
-                                "JOB_LAUNCH_FOREGROUND_SUCCESS: Job {} put in foreground successfully",
-                                self.job_id
-                            );
-                        }
-                        Err(e) => {
-                            error!(
-                                "JOB_LAUNCH_FOREGROUND_ERROR: Failed to put job {} in foreground: {}",
-                                self.job_id, e
-                            );
-                        }
-                    }
-
-                    if raw_mode_enabled {
-                        // We should disable raw mode after put_in_foreground returns?
-                        // put_in_foreground calls wait_job.
-                        // So we want raw mode active DURING put_in_foreground.
-                        let _ = disable_raw_mode();
-                    }
-                } else {
-                    debug!(
-                        "JOB_LAUNCH_NO_PROCESSES: Job {} has no processes to put in foreground",
-                        self.job_id
-                    );
-                }
-            } else {
-                debug!(
-                    "JOB_LAUNCH_BACKGROUND: Background job {}, putting in background",
-                    self.job_id
-                );
-                // background
-                match self.put_in_background().await {
-                    Ok(_) => {
-                        debug!(
-                            "JOB_LAUNCH_BACKGROUND_SUCCESS: Job {} put in background successfully",
-                            self.job_id
-                        );
-                    }
-                    Err(e) => {
-                        error!(
-                            "JOB_LAUNCH_BACKGROUND_ERROR: Failed to put job {} in background: {}",
-                            self.job_id, e
-                        );
-                    }
-                }
-            }
+            // 3. Manage execution (Foreground/Background)
+            self.manage_execution(ctx).await?;
         } else {
             debug!(
                 "JOB_LAUNCH_NO_PROCESS: Job {} has no process to launch",
@@ -541,47 +318,156 @@ impl Job {
             );
         }
 
-        // Save output history if we captured anything
-        // Consolidate captured output from monitors OR PTY task
+        // 4. Capture output and save to history
+        self.capture_output_and_history(ctx, shell).await?;
 
+        let final_state = if ctx.foreground {
+            self.last_process_state()
+        } else {
+            ProcessState::Running
+        };
+
+        debug!(
+            "JOB_LAUNCH_RESULT: Job {} launch result - state: {:?}, foreground: {}",
+            self.job_id, final_state, ctx.foreground
+        );
+
+        Ok(final_state)
+    }
+
+    async fn setup_pty(&mut self, ctx: &mut Context) -> Result<Option<RawFd>> {
+        if !(ctx.foreground
+            && ctx.interactive
+            && std::env::var("DSH_NO_PTY").is_err()
+            && !self.disable_pty)
+        {
+            return Ok(None);
+        }
+
+        match Pty::new() {
+            Ok(pty) => {
+                debug!("PTY created: {:?}", pty);
+                if let Ok((cols, rows)) = crossterm::terminal::size() {
+                    let _ = pty.resize(rows, cols);
+                }
+
+                match pty.try_clone() {
+                    Ok(pty_clone) => {
+                        let master_fd = pty_clone.master.into_raw_fd();
+                        let mut monitor = super::io::PtyMonitor::new(master_fd)?;
+
+                        let output_task = tokio::spawn(async move {
+                            monitor.process_output().await?;
+                            Ok(String::from_utf8_lossy(&monitor.captured_output).to_string())
+                        });
+                        self.pty_output_task = Some(output_task);
+
+                        if ctx.interactive {
+                            let is_builtin = self
+                                .process
+                                .as_ref()
+                                .map(|p| matches!(**p, JobProcess::Builtin(_)))
+                                .unwrap_or(false);
+
+                            if !is_builtin {
+                                self.setup_pty_input_proxy(pty.try_clone()?).await;
+                            }
+                        }
+                    }
+                    Err(e) => error!("Failed to clone PTY for output: {}", e),
+                }
+
+                let slave_fd = pty.slave.as_raw_fd();
+                self.pty = Some(pty);
+                Ok(Some(slave_fd))
+            }
+            Err(e) => {
+                error!(
+                    "Failed to create PTY: {}, falling back to normal execution",
+                    e
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    async fn setup_pty_input_proxy(&mut self, pty_in: Pty) {
+        match AsyncPtyMasterWriter::new(pty_in.master) {
+            Ok(mut master_write) => {
+                let input_task = tokio::spawn(async move {
+                    let _nonblock = NonBlockingFdGuard::new(STDIN_FILENO);
+                    match AsyncFd::new(BorrowedFd(STDIN_FILENO)) {
+                        Ok(fd) => {
+                            let mut stdin = AsyncStdin { inner: fd };
+                            let _ = tokio::io::copy(&mut stdin, &mut master_write).await;
+                        }
+                        Err(_) => {
+                            let mut stdin = tokio::io::stdin();
+                            let _ = tokio::io::copy(&mut stdin, &mut master_write).await;
+                        }
+                    }
+                });
+                self.pty_input_task = Some(input_task);
+            }
+            Err(e) => error!("Failed to create AsyncPtyMasterWriter: {}", e),
+        }
+    }
+
+    async fn cleanup_pty_tasks(&mut self) {
+        if let Some(input_task) = self.pty_input_task.take() {
+            input_task.abort();
+            let _ = input_task.await;
+        }
+        if let Some(output_task) = self.pty_output_task.take() {
+            output_task.abort();
+        }
+    }
+
+    async fn manage_execution(&mut self, ctx: &mut Context) -> Result<()> {
+        if !ctx.interactive {
+            debug!(
+                "JOB_LAUNCH_NON_INTERACTIVE: Non-interactive mode, waiting for job {} completion",
+                self.job_id
+            );
+            self.wait_job(false).await?;
+        } else if ctx.foreground {
+            if ctx.process_count > 0 {
+                let raw_mode_enabled = if self.pty.is_some() {
+                    enable_raw_mode().is_ok()
+                } else {
+                    false
+                };
+
+                let res = self.put_in_foreground(false, false).await;
+                if raw_mode_enabled {
+                    let _ = disable_raw_mode();
+                }
+                res?;
+            }
+        } else {
+            self.put_in_background().await?;
+        }
+        Ok(())
+    }
+
+    async fn capture_output_and_history(&mut self, ctx: &Context, shell: &mut Shell) -> Result<()> {
         let mut stdout_cap = String::new();
         let mut stderr_cap = String::new();
 
-        // Check PTY task first
-        // process is completed, so we can drop the PTY structure.
-        // potentially closing the slave FD held by us.
-        // This is required so the master side sees EOF.
         self.pty = None;
 
         if let Some(output_task) = self.pty_output_task.take() {
-            // We await the output task. It should finish when PTY master gets EOF (all slaves closed).
-            // But if the process crashed without closing? Kernel handles it.
-            // If we are here, process has Finished (wait_job returned).
             match output_task.await {
-                Ok(Ok(output)) => {
-                    // Stripping ANSI is handled here or by UI. User wanted preservation.
-                    // We save raw output.
-                    stdout_cap = output;
-                }
+                Ok(Ok(output)) => stdout_cap = output,
                 Ok(Err(e)) => error!("PTY output task failed: {}", e),
                 Err(e) => error!("PTY output task join error: {}", e),
             }
 
-            // Should also abort input task now if it's still running
             if let Some(input_task) = self.pty_input_task.take() {
                 input_task.abort();
-                // Ensure we wait for the task to finish cleanup (restore STDIN flags)
-                // If we don't wait, the NonBlockingFdGuard destructor might run AFTER we return to the shell loop,
-                // causing the shell to read STDIN in non-blocking mode and potentially miss input or error out.
-                if let Err(e) = input_task.await
-                    && !e.is_cancelled()
-                {
-                    error!("PTY input task join error: {}", e);
-                }
+                let _ = input_task.await;
             }
         } else {
-            // Standard monitors (Pipe) logic
-            // Assuming monitor[0] is stdout (based on launch_process order)
             let mut monitors_iter = self.monitors.iter();
             if let Some((Some(_), _)) = self.process.as_ref().map(|p| p.get_cap_out())
                 && let Some(m) = monitors_iter.next()
@@ -595,44 +481,25 @@ impl Job {
             }
         }
 
-        if !stdout_cap.is_empty() || !stderr_cap.is_empty() {
+        if (!stdout_cap.is_empty() || !stderr_cap.is_empty()) && ctx.foreground {
             use dsh_types::output_history::OutputEntry;
-
-            // Strip ANSI for history saving (User Rule: "color restoration is NOT needed for history")
-            // Using console::strip_ansi_codes (we added dependency)
             let stdout_stripped = console::strip_ansi_codes(&stdout_cap).to_string();
             let stderr_stripped = console::strip_ansi_codes(&stderr_cap).to_string();
 
-            if ctx.foreground {
-                let exit_code = match self.state {
-                    ProcessState::Completed(c, _) => c as i32,
-                    _ => 0,
-                };
+            let exit_code = match self.state {
+                ProcessState::Completed(c, _) => c as i32,
+                _ => 0,
+            };
 
-                // Use stripped version for history
-                let entry = OutputEntry::new(
-                    self.cmd.clone(),
-                    stdout_stripped,
-                    stderr_stripped,
-                    exit_code,
-                );
-                shell.environment.write().output_history.push(entry);
-            }
+            let entry = OutputEntry::new(
+                self.cmd.clone(),
+                stdout_stripped,
+                stderr_stripped,
+                exit_code,
+            );
+            shell.environment.write().output_history.push(entry);
         }
-
-        let final_state = if ctx.foreground {
-            self.last_process_state()
-        } else {
-            // background
-            ProcessState::Running
-        };
-
-        debug!(
-            "JOB_LAUNCH_RESULT: Job {} launch result - state: {:?}, foreground: {}",
-            self.job_id, final_state, ctx.foreground
-        );
-
-        Ok(final_state)
+        Ok(())
     }
 
     fn launch_process(

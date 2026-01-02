@@ -22,16 +22,12 @@ impl PromptModule for NodeModule {
         "node"
     }
 
-    fn render(&self, context: &PromptContext) -> Option<String> {
+    fn render(&self, context: &PromptContext<'_>) -> Option<String> {
         let package_json = context.current_dir.join("package.json");
         let node_modules = context.current_dir.join("node_modules");
 
         if let Some(version) = &context.node_version {
-            Some(format!(
-                " {} {}",
-                "⬢".green().bold(),
-                version.as_str().dim()
-            ))
+            Some(format!(" {} {}", "⬢".green().bold(), version.dim()))
         } else if package_json.exists() || node_modules.exists() {
             // Still loading
             Some(format!(" {}", "⬢".green().bold()))

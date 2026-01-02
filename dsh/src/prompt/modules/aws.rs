@@ -21,7 +21,7 @@ impl PromptModule for AwsModule {
         "aws"
     }
 
-    fn render(&self, context: &PromptContext) -> Option<String> {
+    fn render(&self, context: &PromptContext<'_>) -> Option<String> {
         let profile = context.aws_profile.as_ref()?;
         Some(format!(" ☁️  {}", profile))
     }

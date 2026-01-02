@@ -22,7 +22,7 @@ impl PromptModule for ExitStatusModule {
         "exit_status"
     }
 
-    fn render(&self, context: &PromptContext) -> Option<String> {
+    fn render(&self, context: &PromptContext<'_>) -> Option<String> {
         if context.last_exit_status != 0 {
             Some(format!(
                 " {} {}",

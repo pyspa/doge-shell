@@ -22,7 +22,7 @@ impl PromptModule for PythonModule {
         "python"
     }
 
-    fn render(&self, context: &PromptContext) -> Option<String> {
+    fn render(&self, context: &PromptContext<'_>) -> Option<String> {
         let has_python = context.current_dir.join("requirements.txt").exists()
             || context.current_dir.join("pyproject.toml").exists()
             || context.current_dir.join("Pipfile").exists()
@@ -30,11 +30,7 @@ impl PromptModule for PythonModule {
             || context.current_dir.join("venv").exists();
 
         if let Some(version) = &context.python_version {
-            Some(format!(
-                " {} {}",
-                "🐍".yellow().bold(),
-                version.as_str().dim()
-            ))
+            Some(format!(" {} {}", "🐍".yellow().bold(), version.dim()))
         } else if has_python {
             Some(format!(" {}", "🐍".yellow().bold()))
         } else {

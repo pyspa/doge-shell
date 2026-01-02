@@ -22,7 +22,7 @@ impl PromptModule for ExecutionTimeModule {
         "execution_time"
     }
 
-    fn render(&self, context: &PromptContext) -> Option<String> {
+    fn render(&self, context: &PromptContext<'_>) -> Option<String> {
         let duration = context.last_duration?;
         if duration.as_secs() >= 2 {
             let secs = duration.as_secs();

@@ -269,17 +269,17 @@ impl Prompt {
         }
 
         let context = PromptContext {
-            current_dir: self.current_dir.clone(),
-            git_root: self.current_git_root.clone(),
-            git_status: status_to_display,
-            rust_version: self.rust_version_cache.clone(),
-            node_version: self.node_version_cache.clone(),
-            python_version: self.python_version_cache.clone(),
-            go_version: self.go_version_cache.clone(),
-            k8s_context: self.k8s_context_cache.clone(),
-            k8s_namespace: self.k8s_namespace_cache.clone(),
-            aws_profile: self.aws_profile_cache.clone(),
-            docker_context: self.docker_context_cache.clone(),
+            current_dir: &self.current_dir,
+            git_root: self.current_git_root.as_deref(),
+            git_status: status_to_display.as_ref(),
+            rust_version: self.rust_version_cache.as_deref(),
+            node_version: self.node_version_cache.as_deref(),
+            python_version: self.python_version_cache.as_deref(),
+            go_version: self.go_version_cache.as_deref(),
+            k8s_context: self.k8s_context_cache.as_deref(),
+            k8s_namespace: self.k8s_namespace_cache.as_deref(),
+            aws_profile: self.aws_profile_cache.as_deref(),
+            docker_context: self.docker_context_cache.as_deref(),
             last_exit_status: self.last_exit_status,
             last_duration: self.last_duration,
         };

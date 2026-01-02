@@ -22,15 +22,11 @@ impl PromptModule for GoModule {
         "go"
     }
 
-    fn render(&self, context: &PromptContext) -> Option<String> {
+    fn render(&self, context: &PromptContext<'_>) -> Option<String> {
         let go_mod = context.current_dir.join("go.mod");
 
         if let Some(version) = &context.go_version {
-            Some(format!(
-                " {} {}",
-                "🐹".cyan().bold(),
-                version.as_str().dim()
-            ))
+            Some(format!(" {} {}", "🐹".cyan().bold(), version.dim()))
         } else if go_mod.exists() {
             Some(format!(" {}", "🐹".cyan().bold()))
         } else {

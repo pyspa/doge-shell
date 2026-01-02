@@ -22,7 +22,7 @@ impl PromptModule for TimeModule {
         "time"
     }
 
-    fn render(&self, _context: &PromptContext) -> Option<String> {
+    fn render(&self, _context: &PromptContext<'_>) -> Option<String> {
         // Display current time
         let time_str = chrono::Local::now().format("%H:%M:%S").to_string();
         Some(format!(" {}", time_str.dim()))

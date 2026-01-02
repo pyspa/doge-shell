@@ -1,21 +1,19 @@
 use crate::prompt::GitStatus;
-use std::path::PathBuf;
-// use parking_lot::RwLock;
-// use std::sync::Arc; // We will need to re-export this or move it
+use std::path::Path;
 
-#[derive(Debug, Clone)]
-pub struct PromptContext {
-    pub current_dir: PathBuf,
-    pub git_root: Option<PathBuf>,
-    pub git_status: Option<GitStatus>,
-    pub rust_version: Option<String>,
-    pub node_version: Option<String>,
-    pub python_version: Option<String>,
-    pub go_version: Option<String>,
-    pub k8s_context: Option<String>,
-    pub k8s_namespace: Option<String>,
-    pub aws_profile: Option<String>,
-    pub docker_context: Option<String>,
+#[derive(Debug, Clone, Copy)]
+pub struct PromptContext<'a> {
+    pub current_dir: &'a Path,
+    pub git_root: Option<&'a Path>,
+    pub git_status: Option<&'a GitStatus>,
+    pub rust_version: Option<&'a str>,
+    pub node_version: Option<&'a str>,
+    pub python_version: Option<&'a str>,
+    pub go_version: Option<&'a str>,
+    pub k8s_context: Option<&'a str>,
+    pub k8s_namespace: Option<&'a str>,
+    pub aws_profile: Option<&'a str>,
+    pub docker_context: Option<&'a str>,
     pub last_exit_status: i32,
     pub last_duration: Option<std::time::Duration>,
 }

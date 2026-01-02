@@ -18,7 +18,7 @@ impl PromptModule for GitModule {
         "git"
     }
 
-    fn render(&self, context: &PromptContext) -> Option<String> {
+    fn render(&self, context: &PromptContext<'_>) -> Option<String> {
         let Some(git_status) = &context.git_status else {
             return None;
         };

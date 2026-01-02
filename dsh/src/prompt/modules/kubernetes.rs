@@ -22,9 +22,9 @@ impl PromptModule for KubernetesModule {
         "kubernetes"
     }
 
-    fn render(&self, context: &PromptContext) -> Option<String> {
+    fn render(&self, context: &PromptContext<'_>) -> Option<String> {
         let k8s_context = context.k8s_context.as_ref()?;
-        let namespace = context.k8s_namespace.as_deref();
+        let namespace = context.k8s_namespace;
 
         let mut output = String::from(" ☸️ ");
         output.push_str(k8s_context);

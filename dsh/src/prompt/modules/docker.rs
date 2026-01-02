@@ -21,10 +21,10 @@ impl PromptModule for DockerModule {
         "docker"
     }
 
-    fn render(&self, context: &PromptContext) -> Option<String> {
+    fn render(&self, context: &PromptContext<'_>) -> Option<String> {
         let context_name = context.docker_context.as_ref()?;
 
-        if context_name == "default" {
+        if *context_name == "default" {
             return None;
         }
 

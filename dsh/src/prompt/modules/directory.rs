@@ -23,10 +23,10 @@ impl PromptModule for DirectoryModule {
         "directory"
     }
 
-    fn render(&self, context: &PromptContext) -> Option<String> {
+    fn render(&self, context: &PromptContext<'_>) -> Option<String> {
         let (path_str, is_git_context) = format_prompt_path(
-            &context.current_dir,
-            context.git_root.as_deref(),
+            context.current_dir,
+            context.git_root,
             dirs::home_dir().as_deref(),
         );
 

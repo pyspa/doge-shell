@@ -40,8 +40,8 @@ parking_lot = "0.12.4"
 uuid = { version = "1", features = ["v4", "fast-rng", "macro-diagnostics"] }
 tabled = "0.20"
 axum = { version = "0.7", features = ["tokio"] }
-tower = "0.4"
-tower-http = { version = "0.5", features = ["cors", "fs"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "fs"] }
 mime_guess = "2.0"
 chrono = { version = "0.4", features = ["serde"] }
 skim = "0.20"

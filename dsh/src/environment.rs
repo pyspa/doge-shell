@@ -322,6 +322,10 @@ impl Environment {
         self.input_preferences.ai_backfill = enabled;
     }
 
+    pub fn set_auto_fix_enabled(&mut self, enabled: bool) {
+        self.input_preferences.auto_fix = enabled;
+    }
+
     pub fn input_preferences(&self) -> InputPreferences {
         self.input_preferences
     }

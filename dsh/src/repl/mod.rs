@@ -412,8 +412,19 @@ impl<'a> Repl<'a> {
     pub(crate) fn trigger_auto_fix(&self) {
         if self.last_status != 0
             && !self.last_command_string.is_empty()
+            && self.input_preferences.auto_fix
             && let Some(service) = &self.ai_service
         {
+            // Check blocklist for auto-fix
+            const AUTO_FIX_BLOCKLIST: &[&str] = &["gco"];
+            let cmd_name = self
+                .last_command_string
+                .split_whitespace()
+                .next()
+                .unwrap_or("");
+            if AUTO_FIX_BLOCKLIST.contains(&cmd_name) {
+                return;
+            }
             let service = service.clone();
             let command = self.last_command_string.clone();
             let status = self.last_status;
@@ -2336,6 +2347,9 @@ mod ai_tests {
         // Setup failed state
         repl.last_command_string = "lss -la".to_string();
         repl.last_status = 127;
+
+        // Enable auto_fix
+        repl.input_preferences.auto_fix = true;
 
         repl.trigger_auto_fix();
 

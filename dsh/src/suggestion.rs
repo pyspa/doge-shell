@@ -30,6 +30,8 @@ pub struct InputPreferences {
     pub transient_prompt: bool,
     /// When enabled, show a hint to diagnose errors after command failures
     pub auto_diagnose: bool,
+    /// When enabled, automatically trigger AI fix suggestion on command failure
+    pub auto_fix: bool,
 }
 
 impl Default for InputPreferences {
@@ -39,6 +41,7 @@ impl Default for InputPreferences {
             ai_backfill: false,
             transient_prompt: true,
             auto_diagnose: false,
+            auto_fix: false,
         }
     }
 }
@@ -235,6 +238,17 @@ impl SuggestionEngine {
             return suggestions;
         }
 
+        // Check if command is in blocklist for AI suggestions
+        if self.in_blocklist(input) {
+            self.ai_cache = None;
+            // Still allow history suggestions, but ensure AI is skipped
+            if !suggestions.is_empty() {
+                return suggestions;
+            }
+            // If we have no history suggestions and it's blocked, return empty
+            return suggestions;
+        }
+
         if self.config.preferences.ai_backfill {
             if let Some(state) = self.use_cache(self.ai_cache.as_ref(), input) {
                 suggestions.push(state.clone());
@@ -258,6 +272,14 @@ impl SuggestionEngine {
         }
 
         suggestions
+    }
+
+    fn in_blocklist(&self, input: &str) -> bool {
+        const AI_SUGGESTION_BLOCKLIST: &[&str] = &["gco"];
+
+        // Simple check: first word
+        let cmd = input.split_whitespace().next().unwrap_or("");
+        AI_SUGGESTION_BLOCKLIST.contains(&cmd)
     }
 
     fn history_suggestion(
@@ -821,6 +843,7 @@ mod tests {
             ai_backfill: true,
             transient_prompt: true,
             auto_diagnose: false,
+            auto_fix: false,
         });
 
         let result = engine.predict("git s", "git s".chars().count(), None);
@@ -842,6 +865,7 @@ mod tests {
             ai_backfill: true,
             transient_prompt: true,
             auto_diagnose: false,
+            auto_fix: false,
         });
 
         let mut history = History::new();
@@ -870,6 +894,7 @@ mod tests {
             ai_backfill: true,
             transient_prompt: true,
             auto_diagnose: false,
+            auto_fix: false,
         });
 
         let mut history = History::new();
@@ -928,6 +953,7 @@ mod tests {
             ai_backfill: true,
             transient_prompt: true,
             auto_diagnose: false,
+            auto_fix: false,
         });
 
         let cwd = Some("/tmp/test".to_string());
@@ -951,5 +977,72 @@ mod tests {
         assert_eq!(request.cwd, cwd);
         assert_eq!(*request.files, files);
         assert_eq!(request.last_exit_code, exit_code);
+    }
+
+    #[test]
+    fn test_ai_suggestion_blocklist() {
+        let recorder = Arc::new(RecordingBackend::with_response("gco main"));
+        let backend: Arc<dyn SuggestionBackend + Send + Sync> = recorder.clone();
+
+        let mut engine = SuggestionEngine::new();
+        engine.set_ai_backend(Some(backend));
+        engine.set_preferences(InputPreferences {
+            suggestion_mode: SuggestionMode::Ghost,
+            ai_backfill: true,
+            transient_prompt: true,
+            auto_diagnose: false,
+            auto_fix: false,
+        });
+
+        // 1. Check that "gco" is blocked
+        let result = engine.predict("gco", 3, None);
+        assert!(
+            result.is_empty(),
+            "gco should be blocked and return no suggestions"
+        );
+        assert_eq!(
+            recorder.calls().len(),
+            0,
+            "Backend should not be called for gco"
+        );
+
+        // 2. Check that "gco main" is blocked
+        let result = engine.predict("gco main", 8, None);
+        assert!(result.is_empty(), "gco with args should be blocked");
+        assert_eq!(
+            recorder.calls().len(),
+            0,
+            "Backend should not be called for gco args"
+        );
+
+        // 3. Check that " echo" (with leading space) is NOT blocked (unless we strip it)
+        // logic says trim_start().split_whitespace().next() so " gco" should also be blocked
+        let result = engine.predict(" gco", 4, None);
+        assert!(
+            result.is_empty(),
+            "gco with leading space should be blocked"
+        );
+        assert_eq!(
+            recorder.calls().len(),
+            0,
+            "Backend should not be called for gco with space"
+        );
+
+        // 4. Check that "echo" works
+        let _result = engine.predict("echo", 4, None);
+        // It might be empty if backend returns "gco main" (which doesn't match echo),
+        // but the point is verification of the CALL count.
+        // Wait, RecordingBackend::with_response("gco main") is fixed response.
+        // "echo" input vs "gco main" response -> predict checks prefix -> filtered out inside backend/predict logic?
+        // Actually RecordingBackend.predict returns the response unconditionally.
+        // Engine.predict -> ai_suggestion -> backend.predict returns "gco main".
+        // Engine then checks `if !completion.starts_with(input)`. "gco main" starts with "echo"? No.
+        // So result is empty, but CALL count should increase.
+
+        assert_eq!(
+            recorder.calls().len(),
+            1,
+            "Backend SHOULD be called for echo"
+        );
     }
 }

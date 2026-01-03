@@ -619,6 +619,16 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
         }),
     );
 
+    env.define(
+        Symbol::from("set-auto-fix-enabled"),
+        Value::NativeFunc(|env, args| {
+            let flag = require_arg("set-auto-fix-enabled", &args, 0)?;
+            let enabled = !(*flag == Value::NIL || *flag == Value::False);
+            env.borrow().shell_env.write().set_auto_fix_enabled(enabled);
+            Ok(Value::NIL)
+        }),
+    );
+
     // Define global hook variables
     env.define(Symbol::from("*pre-prompt-hooks*"), Value::List(List::NIL));
 

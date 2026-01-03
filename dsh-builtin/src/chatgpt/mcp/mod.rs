@@ -14,10 +14,46 @@ use rmcp::{
 use serde_json::{Map, Value, json};
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
+    sync::{Arc, RwLock},
+    time::{Duration, Instant},
 };
-use tokio::{process::Command, runtime::Runtime, task};
-use tracing::{debug, warn};
+use tokio::{process::Command, runtime::Runtime, task, time::timeout};
+use tracing::{debug, info, warn};
+
+/// Default timeout for MCP tool calls (30 seconds)
+const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Status of a MCP server connection
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpConnectionStatus {
+    /// Server is registered but not connected
+    Disconnected,
+    /// Server is connected and ready
+    Connected,
+    /// Server connection failed
+    Error(String),
+}
+
+impl std::fmt::Display for McpConnectionStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Disconnected => write!(f, "disconnected"),
+            Self::Connected => write!(f, "connected"),
+            Self::Error(msg) => write!(f, "error: {msg}"),
+        }
+    }
+}
+
+/// Information about a MCP server's status
+#[derive(Debug, Clone)]
+pub struct McpServerStatus {
+    pub label: String,
+    pub description: Option<String>,
+    pub transport_type: String,
+    pub status: McpConnectionStatus,
+    pub tool_count: usize,
+    pub connected_since: Option<Instant>,
+}
 
 #[derive(Debug, Clone)]
 struct McpServer {
@@ -34,11 +70,42 @@ struct ToolBinding {
     function_name: String,
 }
 
-#[derive(Debug, Default, Clone)]
+/// Cached session metadata (session ownership is managed separately)
+struct SessionMeta {
+    connected_at: Instant,
+}
+
+/// MCP Manager with session caching support
 pub struct McpManager {
     servers: Vec<McpServer>,
     bindings: HashMap<String, ToolBinding>,
     warnings: Vec<String>,
+    /// Metadata for connected sessions
+    session_meta: RwLock<HashMap<String, SessionMeta>>,
+    /// Connection errors for status reporting
+    connection_errors: RwLock<HashMap<String, String>>,
+}
+
+impl Default for McpManager {
+    fn default() -> Self {
+        Self {
+            servers: Vec::new(),
+            bindings: HashMap::new(),
+            warnings: Vec::new(),
+            session_meta: RwLock::new(HashMap::new()),
+            connection_errors: RwLock::new(HashMap::new()),
+        }
+    }
+}
+
+impl std::fmt::Debug for McpManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpManager")
+            .field("servers", &self.servers.len())
+            .field("bindings", &self.bindings.len())
+            .field("warnings", &self.warnings)
+            .finish()
+    }
 }
 
 impl McpManager {
@@ -54,6 +121,105 @@ impl McpManager {
 
     pub fn is_empty(&self) -> bool {
         self.bindings.is_empty()
+    }
+
+    /// Get the number of registered servers
+    pub fn server_count(&self) -> usize {
+        self.servers.len()
+    }
+
+    /// Get the number of connected servers (based on metadata)
+    pub fn connected_count(&self) -> usize {
+        self.session_meta.read().unwrap().len()
+    }
+
+    /// Get the total number of available tools
+    pub fn tool_count(&self) -> usize {
+        self.bindings.len()
+    }
+
+    /// Get status of all registered MCP servers
+    pub fn get_status(&self) -> Vec<McpServerStatus> {
+        let meta = self.session_meta.read().unwrap();
+        let errors = self.connection_errors.read().unwrap();
+
+        self.servers
+            .iter()
+            .map(|server| {
+                let (status, connected_since) = if let Some(m) = meta.get(&server.label) {
+                    (McpConnectionStatus::Connected, Some(m.connected_at))
+                } else if let Some(err) = errors.get(&server.label) {
+                    (McpConnectionStatus::Error(err.clone()), None)
+                } else {
+                    (McpConnectionStatus::Disconnected, None)
+                };
+
+                let transport_type = match &server.transport {
+                    McpTransport::Stdio { .. } => "stdio",
+                    McpTransport::Sse { .. } => "sse",
+                    McpTransport::Http { .. } => "http",
+                };
+
+                McpServerStatus {
+                    label: server.label.clone(),
+                    description: server.description.clone(),
+                    transport_type: transport_type.to_string(),
+                    status,
+                    tool_count: server.tools.len(),
+                    connected_since,
+                }
+            })
+            .collect()
+    }
+
+    /// Connect to a specific MCP server (validates connectivity)
+    pub fn connect(&self, label: &str) -> Result<(), String> {
+        let server = self
+            .servers
+            .iter()
+            .find(|s| s.label == label)
+            .ok_or_else(|| format!("MCP server '{}' not found", label))?;
+
+        // Test connection by listing tools
+        let transport = server.transport.clone();
+        let label_owned = label.to_string();
+
+        match Self::block_on(async move { test_connection(transport).await }) {
+            Ok(()) => {
+                info!(server = label, "validated MCP server connection");
+                self.session_meta.write().unwrap().insert(
+                    label_owned.clone(),
+                    SessionMeta {
+                        connected_at: Instant::now(),
+                    },
+                );
+                self.connection_errors.write().unwrap().remove(&label_owned);
+                Ok(())
+            }
+            Err(err) => {
+                let error_msg = format!("{err}");
+                self.connection_errors
+                    .write()
+                    .unwrap()
+                    .insert(label_owned, error_msg.clone());
+                Err(error_msg)
+            }
+        }
+    }
+
+    /// Disconnect from a specific MCP server (clears metadata)
+    pub fn disconnect(&self, label: &str) -> Result<(), String> {
+        self.session_meta.write().unwrap().remove(label);
+        info!(server = label, "disconnected from MCP server");
+        Ok(())
+    }
+
+    /// Disconnect from all MCP servers
+    pub fn disconnect_all(&self) {
+        let count = self.session_meta.write().unwrap().drain().count();
+        if count > 0 {
+            info!(count, "disconnected from all MCP servers");
+        }
     }
 
     pub fn tool_definitions(&self) -> Vec<Value> {
@@ -176,11 +342,16 @@ impl McpManager {
             .map(|srv| srv.transport.clone())
             .ok_or_else(|| "MCP server missing for tool invocation".to_string())?;
         let tool_name = binding.tool_name.clone();
-        let result =
-            Self::block_on(
-                async move { call_tool_via_transport(transport, &tool_name, map).await },
+
+        let result = Self::block_on(async move {
+            timeout(
+                DEFAULT_TOOL_TIMEOUT,
+                call_tool_via_transport(transport, &tool_name, map),
             )
-            .map_err(|err| format!("failed to call MCP tool: {err}"))?;
+            .await
+            .map_err(|_| anyhow::anyhow!("MCP tool call timed out after 30 seconds"))?
+        })
+        .map_err(|err| format!("failed to call MCP tool: {err}"))?;
 
         let json = serde_json::to_value(&result)
             .map_err(|err| format!("failed to serialize MCP tool result: {err}"))?;
@@ -262,6 +433,8 @@ impl McpManager {
             servers,
             bindings,
             warnings,
+            session_meta: RwLock::new(HashMap::new()),
+            connection_errors: RwLock::new(HashMap::new()),
         })
     }
 
@@ -278,6 +451,12 @@ impl McpManager {
                 .block_on(future)
         }
     }
+}
+
+/// Test connection to a transport by attempting to list tools
+async fn test_connection(transport: McpTransport) -> Result<()> {
+    let _ = list_tools_via_transport(transport).await?;
+    Ok(())
 }
 
 async fn list_tools_via_transport(transport: McpTransport) -> Result<Vec<Tool>> {

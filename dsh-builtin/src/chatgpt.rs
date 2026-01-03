@@ -44,7 +44,7 @@ You have access to the following tools:
 "#;
 
 mod mcp;
-pub use mcp::McpManager;
+pub use mcp::{McpConnectionStatus, McpManager, McpServerStatus};
 mod tool;
 
 use tool::{build_tools, execute_tool_call};

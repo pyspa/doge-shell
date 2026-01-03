@@ -374,6 +374,126 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
         }),
     );
 
+    // mcp-status: Show connection status of all MCP servers
+    env.define(
+        Symbol::from("mcp-status"),
+        Value::NativeFunc(|env, _args| {
+            let env_borrow = env.borrow();
+            let env_read = env_borrow.shell_env.read();
+            let manager = env_read.mcp_manager.read();
+            let statuses = manager.get_status();
+
+            if statuses.is_empty() {
+                println!("No MCP servers configured.");
+                return Ok(Value::List(List::NIL));
+            }
+
+            println!(
+                "{:<20} {:<12} {:<8} {:<6} UPTIME",
+                "LABEL", "STATUS", "TYPE", "TOOLS"
+            );
+            println!(
+                "{:<20} {:<12} {:<8} {:<6} ------",
+                "-----", "------", "----", "-----"
+            );
+
+            let mut labels = Vec::new();
+
+            for status in statuses {
+                let uptime = if let Some(since) = status.connected_since {
+                    let elapsed = since.elapsed();
+                    if elapsed.as_secs() < 60 {
+                        format!("{}s", elapsed.as_secs())
+                    } else if elapsed.as_secs() < 3600 {
+                        format!("{}m {}s", elapsed.as_secs() / 60, elapsed.as_secs() % 60)
+                    } else {
+                        format!(
+                            "{}h {}m",
+                            elapsed.as_secs() / 3600,
+                            (elapsed.as_secs() % 3600) / 60
+                        )
+                    }
+                } else {
+                    "-".to_string()
+                };
+
+                let status_str = match &status.status {
+                    dsh_builtin::McpConnectionStatus::Connected => "connected",
+                    dsh_builtin::McpConnectionStatus::Disconnected => "disconnected",
+                    dsh_builtin::McpConnectionStatus::Error(_) => "error",
+                };
+
+                println!(
+                    "{:<20} {:<12} {:<8} {:<6} {}",
+                    status.label, status_str, status.transport_type, status.tool_count, uptime
+                );
+                labels.push(Value::String(status.label));
+            }
+
+            Ok(Value::List(labels.into_iter().collect()))
+        }),
+    );
+
+    // mcp-connect: Connect to a specific MCP server
+    env.define(
+        Symbol::from("mcp-connect"),
+        Value::NativeFunc(|env, args| {
+            let label = require_typed_arg::<&String>("mcp-connect", &args, 0)?;
+
+            let env_borrow = env.borrow();
+            let env_read = env_borrow.shell_env.read();
+            let manager = env_read.mcp_manager.read();
+
+            match manager.connect(label) {
+                Ok(()) => {
+                    println!("Connected to MCP server: {}", label);
+                    Ok(Value::True)
+                }
+                Err(err) => {
+                    println!("Failed to connect to '{}': {}", label, err);
+                    Ok(Value::False)
+                }
+            }
+        }),
+    );
+
+    // mcp-disconnect: Disconnect from a specific MCP server
+    env.define(
+        Symbol::from("mcp-disconnect"),
+        Value::NativeFunc(|env, args| {
+            let label = require_typed_arg::<&String>("mcp-disconnect", &args, 0)?;
+
+            let env_borrow = env.borrow();
+            let env_read = env_borrow.shell_env.read();
+            let manager = env_read.mcp_manager.read();
+
+            match manager.disconnect(label) {
+                Ok(()) => {
+                    println!("Disconnected from MCP server: {}", label);
+                    Ok(Value::True)
+                }
+                Err(err) => {
+                    println!("Failed to disconnect from '{}': {}", label, err);
+                    Ok(Value::False)
+                }
+            }
+        }),
+    );
+
+    // mcp-disconnect-all: Disconnect from all MCP servers
+    env.define(
+        Symbol::from("mcp-disconnect-all"),
+        Value::NativeFunc(|env, _args| {
+            let env_borrow = env.borrow();
+            let env_read = env_borrow.shell_env.read();
+            let manager = env_read.mcp_manager.read();
+
+            manager.disconnect_all();
+            println!("Disconnected from all MCP servers");
+            Ok(Value::True)
+        }),
+    );
+
     env.define(
         Symbol::from("selector"),
         Value::NativeFunc(|_env, args| {

@@ -12,6 +12,7 @@ use rmcp::{
     },
 };
 use serde_json::{Map, Value, json};
+use std::path::Path;
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, RwLock},
@@ -438,6 +439,62 @@ impl McpManager {
         })
     }
 
+    pub fn add_server(&mut self, config: McpServerConfig) -> Result<()> {
+        // Since we are modifying self in place, checking for duplicates against self.servers is needed
+        if self.servers.iter().any(|s| s.label == config.label) {
+            return Err(anyhow::anyhow!(
+                "MCP server `{}` already exists",
+                config.label
+            ));
+        }
+
+        let McpServerConfig {
+            label,
+            description,
+            transport,
+        } = config;
+
+        let tools = Self::block_on(list_tools_via_transport(transport.clone()))
+            .map_err(|err| anyhow::anyhow!("failed to load MCP server `{}`: {}", label, err))?;
+
+        debug!(
+            server = label.as_str(),
+            tool_count = tools.len(),
+            "registered MCP server"
+        );
+
+        let server_struct = McpServer {
+            label: label.clone(),
+            description,
+            transport,
+            tools,
+        };
+
+        // Update bindings
+        let mut used_names: HashSet<String> = self.bindings.keys().cloned().collect();
+
+        for tool in &server_struct.tools {
+            let base_name = format!(
+                "mcp__{}__{}",
+                sanitize_identifier(&server_struct.label),
+                sanitize_identifier(tool.name.as_ref())
+            );
+            let function_name = unique_name(&base_name, &mut used_names);
+            self.bindings.insert(
+                function_name.clone(),
+                ToolBinding {
+                    server_label: server_struct.label.clone(),
+                    tool_name: tool.name.to_string(),
+                    function_name,
+                },
+            );
+        }
+
+        self.servers.push(server_struct);
+
+        Ok(())
+    }
+
     fn block_on<F, T>(future: F) -> Result<T>
     where
         F: std::future::Future<Output = Result<T>> + Send + 'static,
@@ -467,10 +524,22 @@ async fn list_tools_via_transport(transport: McpTransport) -> Result<Vec<Tool>> 
             env,
             cwd,
         } => {
-            let mut cmd = Command::new(&command);
+            let cmd_name = Path::new(&command)
+                .file_name()
+                .map(|s| s.to_string_lossy())
+                .unwrap_or_else(|| "unknown".into());
+            let log_filename = format!("mcp_server_{}.log", cmd_name);
+
+            // Use sh wrapper to force stderr redirection, bypassing rmcp's potential overrides
+            let mut cmd = Command::new("sh");
+            cmd.arg("-c");
+            cmd.arg(format!("exec \"$@\" 2>> \"{}\"", log_filename));
+            cmd.arg("--");
+            cmd.arg(&command);
             for arg in &args {
                 cmd.arg(arg);
             }
+
             if let Some(dir) = cwd {
                 cmd.current_dir(dir);
             }
@@ -524,10 +593,22 @@ async fn call_tool_via_transport(
             env,
             cwd,
         } => {
-            let mut cmd = Command::new(&command);
+            let cmd_name = Path::new(&command)
+                .file_name()
+                .map(|s| s.to_string_lossy())
+                .unwrap_or_else(|| "unknown".into());
+            let log_filename = format!("mcp_server_{}.log", cmd_name);
+
+            // Use sh wrapper to force stderr redirection, bypassing rmcp's potential overrides
+            let mut cmd = Command::new("sh");
+            cmd.arg("-c");
+            cmd.arg(format!("exec \"$@\" 2>> \"{}\"", log_filename));
+            cmd.arg("--");
+            cmd.arg(&command);
             for arg in &args {
                 cmd.arg(arg);
             }
+
             if let Some(dir) = cwd {
                 cmd.current_dir(dir);
             }

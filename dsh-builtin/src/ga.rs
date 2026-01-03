@@ -51,6 +51,10 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
         .multi(true)
         .prompt("Git Add> ".to_string())
         .bind(vec!["Enter:accept".to_string(), "Space:toggle".to_string()])
+        .preview(Some(
+            "git diff --color=always -- {2..} | head -n 100".to_string(),
+        ))
+        .preview_window("right:60%".to_string())
         .build()
         .unwrap();
 

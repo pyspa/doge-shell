@@ -68,6 +68,10 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
     let options = SkimOptionsBuilder::default()
         .select_1(true)
         .bind(vec!["Enter:accept".to_string()])
+        .preview(Some(
+            "git log --oneline --graph --color=always -n 20 {}".to_string(),
+        ))
+        .preview_window("right:60%".to_string())
         .build()
         .unwrap();
 

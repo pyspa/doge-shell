@@ -253,6 +253,20 @@ impl Environment {
             return self.output_history.get_stderr(index).map(|s| s.to_string());
         }
 
+        // Check MCP-related dynamic variables
+        match key {
+            "MCP_SERVERS" => {
+                return Some(self.mcp_manager.read().server_count().to_string());
+            }
+            "MCP_CONNECTED" => {
+                return Some(self.mcp_manager.read().connected_count().to_string());
+            }
+            "MCP_TOOLS" => {
+                return Some(self.mcp_manager.read().tool_count().to_string());
+            }
+            _ => {}
+        }
+
         let val = self.variables.get(key);
         if val.is_some() {
             return val.map(|x| x.to_string());

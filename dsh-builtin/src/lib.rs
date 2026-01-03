@@ -19,8 +19,8 @@ mod export;
 mod magit;
 mod markdown;
 mod safe_run;
-pub use chatgpt::McpManager;
 pub use chatgpt::execute_chat_message;
+pub use chatgpt::{McpConnectionStatus, McpManager, McpServerStatus};
 pub mod command_timing;
 mod commit_ai;
 pub mod comp_gen;
@@ -37,6 +37,7 @@ mod help;
 mod history;
 mod jobs;
 pub mod lisp;
+mod mcp;
 mod notebook_play;
 mod out;
 mod read;
@@ -483,6 +484,13 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
                 dashboard::command,
                 dashboard::description(),
             )) as Box<dyn BuiltinCommandTrait>,
+        );
+
+        // MCP management command
+        builtin.insert(
+            "mcp",
+            Box::new(BuiltinCommandFn::new(mcp::command, mcp::description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
 
         Mutex::new(builtin)

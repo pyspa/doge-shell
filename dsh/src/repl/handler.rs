@@ -501,10 +501,9 @@ fn handle_history_previous(repl: &mut Repl<'_>) {
 
             // If we are at the start of history navigation (bottom), initialize search
             // Use at_end() to check if we are at the "newest" position
-            if history.at_end() && history.search_word.is_none()
-                && !input_str.is_empty() {
-                    history.search_word = Some(input_str);
-                }
+            if history.at_end() && history.search_word.is_none() && !input_str.is_empty() {
+                history.search_word = Some(input_str);
+            }
 
             if let Some(cmd) = history.back() {
                 repl.input.reset(cmd);
@@ -523,47 +522,48 @@ fn handle_history_next(repl: &mut Repl<'_>) {
 
     // Magic Down Arrow
     if let Some(history_arc) = &repl.shell.cmd_history
-        && let Some(mut history) = history_arc.try_lock() {
-            // If already at end, we can't go forward
-            if history.at_end() {
-                return;
-            }
+        && let Some(mut history) = history_arc.try_lock()
+    {
+        // If already at end, we can't go forward
+        if history.at_end() {
+            return;
+        }
 
-            if let Some(cmd) = history.forward() {
-                repl.input.reset(cmd);
-            } else {
-                // If forward() returns None, we are back at the prompt line (future)
-                // Restore the original search prefix or clear input
+        if let Some(cmd) = history.forward() {
+            repl.input.reset(cmd);
+        } else {
+            // If forward() returns None, we are back at the prompt line (future)
+            // Restore the original search prefix or clear input
+            let saved_input = history.search_word.clone().unwrap_or_default();
+            repl.input.reset(saved_input);
+
+            // Ensure index is reset to end (forward should have done it implicitly by failing loop?)
+            // Actually history.forward() logic prevents incrementing past limit if logic is strict,
+            // but checking `at_end()` handles it.
+            // If forward returned None, it means we are now at `len()`.
+            // Verify history.rs forward implementation:
+            // if len-1 > current_index ...
+            // If current_index was len-1, it didn't increment.
+            // It returned None.
+            // So current_index STAYS at len-1?
+            // Wait.
+            // In history.rs:
+            // if self.histories.len() - 1 > self.current_index { ... } else { None }
+            // This prevents `current_index` from ever becoming `len` via `forward`.
+            // This is a BUG in my understanding or the history implementation?
+            // If `at_end()` is true (`current_index == len`), `back()` decrements to `len-1`.
+            // If I am at `len-1` (most recent), `forward()` fails.
+            // So I can never get back to `len` (empty prompt) using `forward()`?
+
+            // FIX: manually reset index if we are at the last item and trying to go forward.
+            // Check if we are at the last regular entry
+            if history.at_latest_entry() {
+                history.reset_index();
                 let saved_input = history.search_word.clone().unwrap_or_default();
                 repl.input.reset(saved_input);
-
-                // Ensure index is reset to end (forward should have done it implicitly by failing loop?)
-                // Actually history.forward() logic prevents incrementing past limit if logic is strict,
-                // but checking `at_end()` handles it.
-                // If forward returned None, it means we are now at `len()`.
-                // Verify history.rs forward implementation:
-                // if len-1 > current_index ...
-                // If current_index was len-1, it didn't increment.
-                // It returned None.
-                // So current_index STAYS at len-1?
-                // Wait.
-                // In history.rs:
-                // if self.histories.len() - 1 > self.current_index { ... } else { None }
-                // This prevents `current_index` from ever becoming `len` via `forward`.
-                // This is a BUG in my understanding or the history implementation?
-                // If `at_end()` is true (`current_index == len`), `back()` decrements to `len-1`.
-                // If I am at `len-1` (most recent), `forward()` fails.
-                // So I can never get back to `len` (empty prompt) using `forward()`?
-
-                // FIX: manually reset index if we are at the last item and trying to go forward.
-                // Check if we are at the last regular entry
-                if history.at_latest_entry() {
-                    history.reset_index();
-                    let saved_input = history.search_word.clone().unwrap_or_default();
-                    repl.input.reset(saved_input);
-                }
             }
         }
+    }
 }
 
 async fn handle_ai_smart_commit(repl: &mut Repl<'_>) {

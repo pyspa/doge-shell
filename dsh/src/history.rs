@@ -104,7 +104,7 @@ impl History {
             match &self.search_word {
                 Some(word) => {
                     while let Some(entry) = self.get(self.current_index) {
-                        if entry.contains(word) {
+                        if entry.starts_with(word) {
                             return Some(entry);
                         }
                         self.current_index -= 1;
@@ -122,12 +122,12 @@ impl History {
     }
 
     pub fn forward(&mut self) -> Option<String> {
-        if self.histories.len() - 1 > self.current_index {
+        if self.current_index + 1 < self.histories.len() {
             self.current_index += 1;
             match &self.search_word {
                 Some(word) => {
                     while let Some(entry) = self.get(self.current_index) {
-                        if entry.contains(word) {
+                        if entry.starts_with(word) {
                             return Some(entry);
                         }
                         self.current_index += 1;
@@ -143,6 +143,14 @@ impl History {
 
     pub fn reset_index(&mut self) {
         self.current_index = self.histories.len();
+    }
+
+    pub fn at_end(&self) -> bool {
+        self.current_index == self.histories.len()
+    }
+
+    pub fn at_latest_entry(&self) -> bool {
+        self.current_index == self.histories.len().saturating_sub(1)
     }
 
     pub fn load(&mut self) -> Result<usize> {

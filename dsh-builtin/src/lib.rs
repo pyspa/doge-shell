@@ -255,11 +255,12 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             Box::new(BuiltinCommandFn::new(bg::command, bg::description()))
                 as Box<dyn BuiltinCommandTrait>,
         );
-        builtin.insert(
-            "kill",
-            Box::new(BuiltinCommandFn::new(kill::command, kill::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
+
+        //builtin.insert(
+        //    "kill",
+        //    Box::new(BuiltinCommandFn::new(kill::command, kill::description()))
+        //        as Box<dyn BuiltinCommandTrait>,
+        //);
 
         // Scripting and configuration
         builtin.insert(

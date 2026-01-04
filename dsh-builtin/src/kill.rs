@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports)]
 use crate::ShellProxy;
 use anyhow::Result;
 use dsh_types::Context;

@@ -524,11 +524,7 @@ fn read_fd(fd: RawFd) -> Result<String> {
             .context("failed to read from fd")?;
     };
 
-    let output = std::str::from_utf8(&raw_stdout)
-        .inspect_err(|_err| {
-            // TODO
-            warn!("binary in variable/expansion is not supported");
-        })?
+    let output = String::from_utf8_lossy(&raw_stdout)
         .trim_end_matches('\n')
         .to_owned();
     Ok(output)

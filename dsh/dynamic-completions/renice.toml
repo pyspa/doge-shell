@@ -1,5 +1,0 @@
-[[dynamic_completions]]
-command = "renice"
-description = "Alter priority of running processes"
-match_condition = { type = "StartsWithCommand" }
-shell_command = "ps -xo pid,comm --no-headers"

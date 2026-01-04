@@ -20,7 +20,7 @@ use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, EventStream,
 use crossterm::queue;
 use crossterm::style::{Color, Print, ResetColor, Stylize};
 use crossterm::terminal::{self, Clear, ClearType, enable_raw_mode};
-use dsh_frecency::ItemStats;
+
 use dsh_openai::{ChatGptClient, OpenAiConfig};
 use futures::StreamExt;
 use nix::sys::termios::{Termios, tcgetattr};
@@ -1201,37 +1201,6 @@ impl<'a> Repl<'a> {
             history.reset_index();
         }
         // If we can't get the lock, we just won't be able to stop history mode - no warning needed
-    }
-
-    pub(crate) fn set_completions(&mut self) {
-        let input_str = self.input.as_str().to_string();
-        let is_empty = input_str.is_empty();
-
-        // Fallback to computing with lock
-        if let Some(ref mut history) = self.shell.cmd_history {
-            if let Some(history) = history.try_lock() {
-                let comps: Vec<ItemStats> = if is_empty {
-                    history
-                        .iter()
-                        .rev()
-                        .take(100)
-                        .map(|e| ItemStats::new(&e.entry, 0.0f64, 1.0f32, None))
-                        .collect()
-                } else {
-                    history
-                        .iter()
-                        .rev()
-                        .filter(|e| e.entry.starts_with(&input_str))
-                        .take(100)
-                        .map(|e| ItemStats::new(&e.entry, 0.0f64, 1.0f32, None))
-                        .collect()
-                };
-
-                self.completion.set_completions(self.input.as_str(), comps);
-            } else {
-                self.completion.set_completions(self.input.as_str(), vec![]);
-            }
-        }
     }
 
     fn get_completion_from_history(&mut self, input: &str) -> Option<String> {

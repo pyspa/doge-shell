@@ -355,7 +355,7 @@ impl FrecencyHistory {
         let matcher = SkimMatcherV2::default();
         FrecencyHistory {
             db: None,
-            store: None,
+            store: Some(Arc::new(FrecencyStore::default())),
             histories: None,
             current_index: 0,
             search_word: None,
@@ -537,6 +537,68 @@ impl FrecencyHistory {
             let store_mut = Arc::make_mut(store);
             store_mut.changed = false;
         }
+        Ok(())
+    }
+
+    pub fn reload(&mut self) -> Result<()> {
+        // Skip if no DB or no store initialization
+        if self.db.is_none() || self.store.is_none() {
+            return Ok(());
+        }
+
+        // This reload is synchronous because SQLite reads are generally fast enough
+        // and avoid async complexity in the main loop for now.
+        // Logic:
+        // 1. Read all rows from directory_snapshot
+        // 2. Iterate and update/insert into local store
+        //    - If exists: Merge stats (max access count, max timestamp)
+        //    - If missing: Insert
+
+        let db = self.db.as_ref().unwrap();
+        let conn = db.get_connection();
+        let mut stmt = conn.prepare("SELECT path, score, last_accessed, access_count, half_life, context FROM directory_snapshot")?;
+
+        let rows = stmt.query_map([], |row| {
+            let path: String = row.get(0)?;
+            let score: f64 = row.get(1)?;
+            let last_accessed: f64 = row.get(2)?;
+            let access_count: i64 = row.get(3)?;
+            let half_life: f64 = row.get(4)?;
+            let context: Option<String> = row.get(5)?;
+            Ok((path, score, last_accessed, access_count, half_life, context))
+        })?;
+
+        let store = self.store.as_mut().unwrap();
+        let store_mut = Arc::make_mut(store);
+
+        for row in rows {
+            match row {
+                Ok((path, score, _last_accessed, _access_count, half_life, context)) => {
+                    // Find existing item
+                    // store.items is sorted by path.
+                    match store_mut.items.binary_search_by(|i| i.item.cmp(&path)) {
+                        Ok(idx) => {
+                            // Exists. Merge.
+                            let _item = &mut store_mut.items[idx];
+                            // TODO: Merge strategy
+                            // For now, assume local stats are fine, or DB is better?
+                            // Without clear API, we skip merging for now.
+                        }
+                        Err(idx) => {
+                            // Missing. Insert.
+                            let mut new_item =
+                                ItemStats::new(&path, 0.0, half_life as f32, context);
+                            new_item.set_frecency(score as f32);
+                            store_mut.items.insert(idx, new_item);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Reload Row Error: {}", e);
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -1070,6 +1132,92 @@ mod tests {
             stmt.query_row(["cmd_async_2"], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         assert_eq!(row2.0, "cmd_async_2");
         assert_eq!(row2.1, 1001);
+
+        Ok(())
+    }
+    #[test]
+    fn test_frecency_reload() -> Result<()> {
+        init();
+        let db_name = "test_frecency_reload";
+        let db_file = "test_frecency_reload.db";
+        let db_path = environment::get_data_file(db_file)?;
+        let _ = std::fs::remove_file(&db_path); // Cleanup start
+
+        // Setup History A (Process A)
+        let mut history_a = FrecencyHistory::from_file(db_name)?;
+
+        // Setup History B (Process B)
+        let mut history_b = FrecencyHistory::from_file(db_name)?;
+
+        // 1. Add to A
+        history_a.add("/tmp/path_a");
+        history_a.force_changed(); // Ensure marked as changed
+        history_a.save()?;
+
+        // Check if DB has it explicitly
+        {
+            let db = Db::new(db_path.clone())?;
+            let conn = db.get_connection();
+            let mut stmt =
+                conn.prepare("SELECT count(*) FROM directory_snapshot WHERE path = '/tmp/path_a'")?;
+            let count: i64 = stmt.query_row([], |r| r.get(0))?;
+
+            assert_eq!(count, 1, "DB should have path_a");
+        }
+
+        // 2. Verify B doesn't have it yet
+        assert!(
+            history_b
+                .store
+                .as_ref()
+                .unwrap()
+                .items
+                .iter()
+                .all(|i| i.item != "/tmp/path_a")
+        );
+
+        // 3. Reload B
+        // 3. Reload B
+        history_b.reload()?;
+
+        // 4. Verify B has it
+        assert!(
+            history_b
+                .store
+                .as_ref()
+                .unwrap()
+                .items
+                .iter()
+                .any(|i| i.item == "/tmp/path_a")
+        );
+
+        // 5. Add to B
+        history_b.add("/tmp/path_b");
+        history_b.force_changed();
+        history_b.save()?;
+
+        // 6. Reload A
+        history_a.reload()?;
+
+        // 7. Verify A has "/tmp/path_b" AND still has "/tmp/path_a"
+        assert!(
+            history_a
+                .store
+                .as_ref()
+                .unwrap()
+                .items
+                .iter()
+                .any(|i| i.item == "/tmp/path_b")
+        );
+        assert!(
+            history_a
+                .store
+                .as_ref()
+                .unwrap()
+                .items
+                .iter()
+                .any(|i| i.item == "/tmp/path_a")
+        );
 
         Ok(())
     }

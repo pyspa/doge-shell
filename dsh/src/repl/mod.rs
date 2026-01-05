@@ -187,6 +187,7 @@ pub struct Repl<'a> {
     pub(crate) auto_fix_suggestion: Option<String>,
     pub(crate) ai_rx: tokio::sync::mpsc::UnboundedReceiver<AiEvent>,
     pub(crate) ai_tx: tokio::sync::mpsc::UnboundedSender<AiEvent>,
+    pub(crate) history_sync_last_check: Instant,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -358,6 +359,7 @@ impl<'a> Repl<'a> {
             auto_fix_suggestion: None,
             ai_rx,
             ai_tx,
+            history_sync_last_check: Instant::now(),
         }
     }
 
@@ -1472,6 +1474,15 @@ impl<'a> Repl<'a> {
                     // Save history every 30 seconds if there have been changes
                     self.save_history_periodic();
                     self.check_background_jobs(true).await?;
+
+                    // Reload path history every 30 seconds to sync with other processes
+                    if self.history_sync_last_check.elapsed() > Duration::from_secs(30) {
+                        if let Some(ref history) = self.shell.path_history
+                            && let Some(mut history) = history.try_lock() {
+                                 let _ = history.reload();
+                            }
+                        self.history_sync_last_check = Instant::now();
+                    }
 
                     // Execute input-timeout hooks (called periodically when idle)
                     let _ = self.shell.exec_input_timeout_hooks();

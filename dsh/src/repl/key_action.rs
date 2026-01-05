@@ -99,7 +99,7 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
     match (key.code, key.modifiers) {
         // 履歴ナビゲーション
         (KeyCode::Up, NONE) => KeyAction::HistoryPrevious,
-        (KeyCode::Down, NONE) if ctx.completion_mode => KeyAction::HistoryNext,
+        (KeyCode::Down, NONE) => KeyAction::HistoryNext,
 
         // サジェスト受け入れ（Ctrl+Right, Alt+f で単語単位）
         (KeyCode::Right, m)
@@ -725,13 +725,13 @@ mod tests {
     }
 
     #[test]
-    fn test_down_is_unsupported_outside_completion_mode() {
+    fn test_down_is_history_next_outside_completion_mode() {
         let k = key(KeyCode::Down, NONE);
         let ctx = KeyContext {
             completion_mode: false,
             ..ctx_default()
         };
-        assert_eq!(determine_key_action(&k, &ctx), KeyAction::Unsupported);
+        assert_eq!(determine_key_action(&k, &ctx), KeyAction::HistoryNext);
     }
 
     #[test]

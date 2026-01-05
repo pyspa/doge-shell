@@ -48,10 +48,14 @@ impl ActionRegistry {
 pub static REGISTRY: LazyLock<RwLock<ActionRegistry>> =
     LazyLock::new(|| RwLock::new(ActionRegistry::new()));
 
+static REGISTER_ONCE: std::sync::Once = std::sync::Once::new();
+
 /// Helper to register built-in actions
 pub fn register_builtin_actions() {
-    let mut registry = REGISTRY.write();
-    actions::register_all(&mut registry);
+    REGISTER_ONCE.call_once(|| {
+        let mut registry = REGISTRY.write();
+        actions::register_all(&mut registry);
+    });
 }
 
 // --- UI Wrapper Item ---

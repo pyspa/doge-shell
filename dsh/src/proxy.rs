@@ -3,6 +3,7 @@ use anyhow::{Context as _, Result};
 use dsh_builtin::ShellProxy;
 use dsh_frecency::SortMethod;
 use dsh_types::{Context, mcp::McpServerConfig};
+use globmatch;
 use std::fs::File;
 use std::io::prelude::*;
 use std::os::unix::io::FromRawFd;
@@ -142,9 +143,10 @@ fn format_reload_error(err: &anyhow::Error) -> String {
 
 // Parse arguments for z command
 // Returns (interactive, list, query)
-fn parse_z_args(argv: &[String]) -> (bool, bool, String) {
+fn parse_z_args(argv: &[String]) -> (bool, bool, bool, String) {
     let mut interactive = false;
     let mut list = false;
+    let mut clean = false;
     let mut query_parts = Vec::new();
 
     // Start from index 1, skip command name
@@ -153,11 +155,13 @@ fn parse_z_args(argv: &[String]) -> (bool, bool, String) {
             interactive = true;
         } else if arg == "-l" || arg == "--list" {
             list = true;
+        } else if arg == "-c" || arg == "--clean" {
+            clean = true;
         } else {
             query_parts.push(arg.clone());
         }
     }
-    (interactive, list, query_parts.join(" "))
+    (interactive, list, clean, query_parts.join(" "))
 }
 
 impl ShellProxy for Shell {
@@ -201,9 +205,23 @@ impl ShellProxy for Shell {
     }
 
     fn save_path_history(&mut self, path: &str) {
+        // Check exclusions
+        {
+            let env = self.environment.read();
+            for pattern in &env.z_exclude {
+                if let Ok(matcher) = globmatch::Builder::new(pattern).build("/")
+                    && matcher.is_match(path.into())
+                {
+                    debug!("dsh: path rejected by z_exclude: {}", path);
+                    return;
+                }
+            }
+        }
+
         if let Some(ref mut history) = self.path_history {
             let mut history = history.lock(); // For non-UI operations, we can use regular lock
             history.add(path);
+            history.save_background();
         }
     }
 
@@ -250,7 +268,18 @@ impl ShellProxy for Shell {
                 }
             }
             "z" => {
-                let (interactive, list, query) = parse_z_args(&argv);
+                let (interactive, list, clean, query) = parse_z_args(&argv);
+
+                if clean {
+                    if let Some(ref mut history) = self.path_history {
+                        let mut history = history.lock();
+                        history.prune();
+                        let _ = history.save();
+                    }
+                    if query.is_empty() && !interactive && !list {
+                        return Ok(());
+                    }
+                }
 
                 // Handle "z -" for previous directory
                 if query == "-" {
@@ -985,54 +1014,70 @@ mod tests {
     }
 
     #[test]
+
     fn test_parse_z_args() {
         // z -i
         let args = vec!["z".to_string(), "-i".to_string()];
-        let (interactive, list, query) = parse_z_args(&args);
+        let (interactive, list, clean, query) = parse_z_args(&args);
         assert!(interactive);
         assert!(!list);
+        assert!(!clean);
         assert_eq!(query, "");
 
         // z --interactive
         let args = vec!["z".to_string(), "--interactive".to_string()];
-        let (interactive, list, query) = parse_z_args(&args);
+        let (interactive, list, clean, query) = parse_z_args(&args);
         assert!(interactive);
         assert!(!list);
+        assert!(!clean);
         assert_eq!(query, "");
 
         // z -l
         let args = vec!["z".to_string(), "-l".to_string()];
-        let (interactive, list, query) = parse_z_args(&args);
+        let (interactive, list, clean, query) = parse_z_args(&args);
         assert!(!interactive);
         assert!(list);
+        assert!(!clean);
+        assert_eq!(query, "");
+
+        // z -c
+        let args = vec!["z".to_string(), "-c".to_string()];
+        let (interactive, list, clean, query) = parse_z_args(&args);
+        assert!(!interactive);
+        assert!(!list);
+        assert!(clean);
         assert_eq!(query, "");
 
         // z foo
         let args = vec!["z".to_string(), "foo".to_string()];
-        let (interactive, list, query) = parse_z_args(&args);
+        let (interactive, list, clean, query) = parse_z_args(&args);
         assert!(!interactive);
         assert!(!list);
+        assert!(!clean);
         assert_eq!(query, "foo");
 
         // z -i foo
         let args = vec!["z".to_string(), "-i".to_string(), "foo".to_string()];
-        let (interactive, list, query) = parse_z_args(&args);
+        let (interactive, list, clean, query) = parse_z_args(&args);
         assert!(interactive);
         assert!(!list);
+        assert!(!clean);
         assert_eq!(query, "foo");
 
         // z foo -i
         let args = vec!["z".to_string(), "foo".to_string(), "-i".to_string()];
-        let (interactive, list, query) = parse_z_args(&args);
+        let (interactive, list, clean, query) = parse_z_args(&args);
         assert!(interactive);
         assert!(!list);
+        assert!(!clean);
         assert_eq!(query, "foo");
 
         // z foo bar (arguments joined)
         let args = vec!["z".to_string(), "foo".to_string(), "bar".to_string()];
-        let (interactive, list, query) = parse_z_args(&args);
+        let (interactive, list, clean, query) = parse_z_args(&args);
         assert!(!interactive);
         assert!(!list);
+        assert!(!clean);
         assert_eq!(query, "foo bar");
     }
 }

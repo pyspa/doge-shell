@@ -1,5 +1,6 @@
 use super::*;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 /// A collection of statistics about the stored items
 #[derive(Clone)]
@@ -95,6 +96,11 @@ impl FrecencyStore {
         if let Some(idx) = self.items.iter().position(|i| i.item == item) {
             self.items.remove(idx);
         }
+        self.check_changed();
+    }
+
+    pub fn prune(&mut self) {
+        self.items.retain(|item| Path::new(&item.item).exists());
         self.check_changed();
     }
 

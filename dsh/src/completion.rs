@@ -5,7 +5,7 @@ use crate::input::Input;
 use crate::lisp::Value;
 use crate::repl::Repl;
 use anyhow::Result;
-use dsh_frecency::ItemStats;
+use dsh_frecency::{ItemStats, SortMethod};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use regex::Regex;
@@ -498,6 +498,11 @@ pub fn input_completion(
         return res;
     }
 
+    // Try z completion
+    if let Some(res) = completion_for_z(input, repl, query, prompt_text, input_text) {
+        return Some(res);
+    }
+
     // Try current context completion (files, directories, commands in PATH)
     let res = completion_from_current_with_prompt(input, repl, query, prompt_text, input_text);
     if res.is_some() {
@@ -566,6 +571,32 @@ fn completion_from_lisp_with_prompt(
             }
             return None;
         }
+    }
+    None
+}
+
+fn completion_for_z(
+    input: &Input,
+    repl: &Repl,
+    query: Option<&str>,
+    prompt_text: &str,
+    input_text: &str,
+) -> Option<String> {
+    let line = input.as_str();
+    if !line.trim_start().starts_with("z ") && line.trim() != "z" {
+        return None;
+    }
+
+    if let Some(ref history) = repl.shell.path_history {
+        let history = history.lock();
+        let items = history.sorted(&SortMethod::Frecent);
+
+        let candidates: Vec<Candidate> = items
+            .iter()
+            .map(|i| Candidate::Item(i.item.clone(), format!("({:.1})", i.get_frecency())))
+            .collect();
+
+        return select_completion_items(candidates, query, prompt_text, input_text);
     }
     None
 }

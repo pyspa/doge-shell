@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use dsh_types::mcp::{McpServerConfig, McpTransport};
 use rmcp::{
     ServiceExt,
@@ -18,7 +18,7 @@ use std::{
     sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
-use tokio::{process::Command, runtime::Runtime, task, time::timeout};
+use tokio::{process::Command, runtime::Runtime, time::timeout};
 use tracing::{debug, info, warn};
 
 /// Default timeout for MCP tool calls (30 seconds)
@@ -500,13 +500,28 @@ impl McpManager {
         F: std::future::Future<Output = Result<T>> + Send + 'static,
         T: Send + 'static,
     {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            task::block_in_place(|| handle.block_on(future))
-        } else {
-            Runtime::new()
-                .context("failed to create async runtime for MCP operations")?
-                .block_on(future)
-        }
+        // Use a dedicated thread to ensure we can block even if called from
+        // within a single-threaded runtime context (where block_in_place panics).
+        let handle = tokio::runtime::Handle::try_current().ok();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            let res = if let Some(rt) = handle {
+                rt.block_on(future)
+            } else {
+                match Runtime::new() {
+                    Ok(rt) => rt.block_on(future),
+                    Err(e) => Err(anyhow::anyhow!("failed to create async runtime: {}", e)),
+                }
+            };
+            let _ = tx.send(res);
+        })
+        .join()
+        .map_err(|_| anyhow::anyhow!("MCP worker thread panicked"))?;
+
+        rx.recv()
+            .map_err(|e| anyhow::anyhow!("failed to receive result from MCP worker: {}", e))?
     }
 }
 

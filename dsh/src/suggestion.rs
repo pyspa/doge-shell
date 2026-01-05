@@ -234,10 +234,10 @@ impl SuggestionEngine {
         }
 
         // Try completion suggestion (lookahead)
-        if suggestions.is_empty() {
-            if let Some(state) = self.completion_suggestion(input) {
-                suggestions.push(state);
-            }
+        if suggestions.is_empty()
+            && let Some(state) = self.completion_suggestion(input)
+        {
+            suggestions.push(state);
         }
 
         // If we have a history suggestion, we skip AI to prioritize it and minimize noise/latency

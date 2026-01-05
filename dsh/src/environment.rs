@@ -48,6 +48,8 @@ pub struct Environment {
     /// Output history for $OUT[N] and $ERR[N] variables
     pub output_history: OutputHistory,
     pub ai_service: Option<Arc<dyn AiService + Send + Sync>>,
+    // Z command exclusion patterns
+    pub z_exclude: Vec<String>,
 }
 
 fn default_input_preferences() -> InputPreferences {
@@ -66,6 +68,14 @@ fn ai_credentials_available() -> bool {
 
 fn env_has_nonempty(key: &str) -> bool {
     matches!(env::var(key), Ok(value) if !value.trim().is_empty())
+}
+
+fn parse_z_exclude() -> Vec<String> {
+    if let Ok(val) = env::var("Z_EXCLUDE") {
+        val.split(':').map(|s| s.to_string()).collect()
+    } else {
+        Vec::new()
+    }
 }
 
 impl Environment {
@@ -101,6 +111,7 @@ impl Environment {
             command_cache: RwLock::new(HashMap::new()),
             output_history: OutputHistory::new(),
             ai_service: None,
+            z_exclude: parse_z_exclude(),
         }));
 
         {
@@ -146,6 +157,7 @@ impl Environment {
             command_cache: RwLock::new(HashMap::new()),
             output_history: OutputHistory::new(),
             ai_service: parent.read().ai_service.clone(),
+            z_exclude: parent.read().z_exclude.clone(),
         }))
     }
 
@@ -237,6 +249,10 @@ impl Environment {
         self.paths = paths;
         // Clear command cache when PATH changes
         self.command_cache.write().clear();
+    }
+
+    pub fn reload_z_exclude(&mut self) {
+        self.z_exclude = parse_z_exclude();
     }
 
     /// Clear the command lookup cache

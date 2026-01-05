@@ -609,6 +609,12 @@ impl FrecencyHistory {
         }
     }
 
+    pub fn prune(&mut self) {
+        if let Some(ref mut store) = self.store {
+            Arc::make_mut(store).prune();
+        }
+    }
+
     pub fn search_prefix_with_context(
         &self,
         pattern: &str,

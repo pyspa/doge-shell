@@ -237,6 +237,7 @@ mod tests {
         }
         fn set_var(&mut self, _key: String, _value: String) {}
         fn set_env_var(&mut self, _key: String, _value: String) {}
+        fn unset_env_var(&mut self, _key: &str) {}
         fn get_alias(&mut self, _name: &str) -> Option<String> {
             None
         }

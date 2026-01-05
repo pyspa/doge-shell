@@ -762,6 +762,14 @@ impl ShellProxy for Shell {
         }
     }
 
+    fn unset_env_var(&mut self, key: &str) {
+        unsafe { std::env::remove_var(key) };
+        debug!("unset env {}", key);
+        if key == "PATH" {
+            self.environment.write().reload_path();
+        }
+    }
+
     fn get_alias(&mut self, name: &str) -> Option<String> {
         debug!("Getting alias for: {}", name);
         self.environment.read().alias.get(name).cloned()

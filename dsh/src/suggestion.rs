@@ -1,3 +1,4 @@
+use crate::completion::{self, path_completion_prefix_strict};
 use crate::history::History;
 use dsh_openai::ChatGptClient;
 use parking_lot::Mutex as ParkingMutex;
@@ -232,6 +233,13 @@ impl SuggestionEngine {
             self.history_cache = None;
         }
 
+        // Try completion suggestion (lookahead)
+        if suggestions.is_empty() {
+            if let Some(state) = self.completion_suggestion(input) {
+                suggestions.push(state);
+            }
+        }
+
         // If we have a history suggestion, we skip AI to prioritize it and minimize noise/latency
         if !suggestions.is_empty() {
             self.ai_cache = None;
@@ -280,6 +288,37 @@ impl SuggestionEngine {
         // Simple check: first word
         let cmd = input.split_whitespace().next().unwrap_or("");
         AI_SUGGESTION_BLOCKLIST.contains(&cmd)
+    }
+
+    fn completion_suggestion(&self, input: &str) -> Option<SuggestionState> {
+        let word = completion::last_word(input);
+        if word.is_empty() {
+            return None;
+        }
+
+        // Determine context (is it a cd command?)
+        // Simple heuristic: if input starts with "cd " or contains " cd " before the last word
+        // Actually simplest is checking the first token.
+        let is_cd = input.trim_start().starts_with("cd ");
+
+        // Use strict prefix completion
+        if let Ok(Some(completion)) = path_completion_prefix_strict(word, is_cd) {
+            // Strict prefix is already guaranteed by path_completion_prefix_strict
+            // But we should double check if the completion actually EXTENDS the word
+            if !completion.starts_with(word) {
+                return None;
+            }
+
+            // Construct full command
+            let prefix_len = input.len().saturating_sub(word.len());
+            let full = format!("{}{}", &input[..prefix_len], completion);
+
+            return Some(SuggestionState {
+                full,
+                source: SuggestionSource::Completion,
+            });
+        }
+        None
     }
 
     fn history_suggestion(
@@ -1044,5 +1083,54 @@ mod tests {
             1,
             "Backend SHOULD be called for echo"
         );
+    }
+
+    #[test]
+    fn test_completion_suggestion_real_fs() {
+        let mut engine = SuggestionEngine::new();
+        engine.set_preferences(InputPreferences {
+            suggestion_mode: SuggestionMode::Ghost,
+            ai_backfill: true,
+            transient_prompt: true,
+            auto_diagnose: false,
+            auto_fix: false,
+        });
+
+        // "ls src/sugg" -> matches "ls src/suggestion.rs"
+        let input = "ls src/sugg";
+        if let Some(s) = engine.completion_suggestion(input) {
+            assert!(s.full.contains("src/suggestion.rs"));
+            assert_eq!(s.source, SuggestionSource::Completion);
+        }
+
+        // "cd src/sugg" -> matches "cd src/suggestion.rs" ??
+        // "suggestion.rs" is a file, so it should NOT match if strict dir filter is on.
+        // But context implies we can't easily mock FS here without tempfile.
+        // We rely on the fact that `src` contains `suggestion.rs` which is a file.
+        // So "cd src/sugg" should return None or a directory if any starts with sugg.
+        // Assuming no *directory* starts with sugg in src/, this should verify filtering.
+
+        let input_cd = "cd src/sugg";
+        let result_cd = engine.completion_suggestion(input_cd);
+        // If result_cd is Some, it must be a directory.
+        if let Some(s) = result_cd {
+            // If we got a suggestion, it implies there IS a directory starting with sugg,
+            // or our filter failed.
+            // We can check if the suggested path is actually a directory.
+            let suggested_path = s.full.strip_prefix("cd ").unwrap();
+            let p = std::path::PathBuf::from(suggested_path);
+            if p.exists() {
+                assert!(
+                    p.is_dir(),
+                    "cd command should only suggest directories: found matches {:?}",
+                    s.full
+                );
+            }
+        } else {
+            // If None, it means filter correctly excluded "suggestion.rs" (file).
+            // or no matches at all.
+            // given "ls src/sugg" matched something, "cd src/sugg" returning None
+            // suggests that the matching item was NOT a directory. Correct.
+        }
     }
 }

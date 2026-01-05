@@ -140,6 +140,8 @@ The shell includes many built-in commands:
 | `reload` | Reload shell configuration |
 | `timing` | Show command execution statistics |
 | `out` | Display captured command output history |
+| `include` | Execute a bash script and import environment variables |
+| `mcp` | Manage MCP servers (status, connect, disconnect) |
 | `gpr` | GitHub Pull Request checkout with interactive selection |
 | `gwt` | Git Worktree management (add, list, remove) |
 | `help` | Show help information |
@@ -418,6 +420,16 @@ Example:
 
 - **Execution Confirmation**: When `SafetyLevel` is set to `Normal` or `Strict`, the shell will ask for confirmation before executing any MCP tool that might have side affects.
 
+### MCP CLI Management
+
+You can also manage MCP servers interactively using the `mcp` command:
+
+- `mcp status`, `mcp s`: Show connection status of all servers.
+- `mcp connect <label>`, `mcp c`: Connect to a specific server.
+- `mcp disconnect [label]`, `mcp d`: Disconnect from a server (or all).
+- `mcp list`, `mcp l`: List registered servers.
+- `mcp tools`, `mcp t`: List available tools.
+
 ## 🔧 Usage
 
 ### Basic Usage
@@ -458,7 +470,17 @@ Import command history from other shells:
 dsh import fish
 
 # Import from bash with custom path
+
 dsh import bash --path /path/to/bash_history
+```
+
+### `include` Command
+
+Source a bash script and import its environment variables into the current shell session.
+Useful for loading `.env` files or setup scripts.
+
+```bash
+include setup.sh
 ```
 
 ### Key Bindings
@@ -474,6 +496,9 @@ dsh import bash --path /path/to/bash_history
 - `Alt+x` - Open Command Palette
 - `Esc` (double press) - Toggle `sudo` prefix for the current command
 - `Ctrl+x Ctrl+e` - Edit current input in external editor (`$VISUAL` or `$EDITOR`)
+- `Alt+Enter` - Execute command in background
+- `Ctrl+Space` - Force AI suggestion
+- `Alt+[` / `Alt+]` - Rotate through suggestions
 
 ## 💻 Command Palette
 

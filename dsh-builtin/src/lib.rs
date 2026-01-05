@@ -16,6 +16,7 @@ mod dashboard;
 mod eproject;
 mod eview;
 mod export;
+mod include;
 mod magit;
 mod markdown;
 mod safe_run;
@@ -86,6 +87,9 @@ pub trait ShellProxy {
 
     /// Sets an environment variable (exported to child processes)
     fn set_env_var(&mut self, key: String, value: String);
+
+    /// Unsets an environment variable (removes it from child processes)
+    fn unset_env_var(&mut self, key: &str);
 
     /// Retrieves an alias command by name
     fn get_alias(&mut self, name: &str) -> Option<String>;
@@ -254,6 +258,15 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             "bg",
             Box::new(BuiltinCommandFn::new(bg::command, bg::description()))
                 as Box<dyn BuiltinCommandTrait>,
+        );
+
+        // Include command
+        builtin.insert(
+            "include",
+            Box::new(BuiltinCommandFn::new(
+                include::command,
+                include::description(),
+            )) as Box<dyn BuiltinCommandTrait>,
         );
 
         //builtin.insert(

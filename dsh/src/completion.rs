@@ -39,6 +39,8 @@ mod ui;
 mod extra_tests;
 #[cfg(test)]
 mod wrapped_tests;
+#[cfg(test)]
+mod z_tests;
 
 // Re-export from completion module
 pub use crate::completion::command::CompletionType;

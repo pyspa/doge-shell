@@ -189,13 +189,119 @@ impl History {
         Ok(self.histories.len())
     }
 
+    pub fn reload(&mut self) -> Result<()> {
+        let db = if let Some(db) = &self.db {
+            db.clone()
+        } else {
+            return Ok(());
+        };
+
+        // Only reload if we are not in the middle of navigation (at end of history)
+        if !self.at_end() {
+            return Ok(());
+        }
+
+        let conn = db.get_connection();
+        let mut stmt = conn.prepare(
+            "SELECT command, timestamp, count 
+                 FROM (
+                    SELECT command, timestamp, count 
+                    FROM command_history 
+                    ORDER BY timestamp DESC 
+                    LIMIT 10000
+                 ) 
+                 ORDER BY timestamp ASC",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(Entry {
+                entry: row.get(0)?,
+                when: row.get(1)?,
+                count: row.get(2).unwrap_or(1),
+            })
+        })?;
+
+        let mut new_histories: Vec<Entry> = Vec::new();
+        for r in rows.flatten() {
+            new_histories.push(r);
+        }
+
+        // Merge Logic:
+        // 1. We have `new_histories` (from DB).
+        // 2. We have `self.histories` (current memory).
+        // 3. We want `new_histories` + any entries in `self.histories` that are NOT in DB yet.
+        //    (i.e., typed in this session but pending write).
+
+        // Optimization: If DB history is suffix of local history? No, local is "ahead".
+        // Actually, simplified approach:
+        // Replace `self.histories` with `new_histories`.
+        // BUT, append any entries from `self.histories` that are newer than last DB entry?
+        // Command uniqueness makes this tricky. If user runs `ls`, and DB has `ls` (old), it's updated.
+        // If user runs `ls` now (pending), DB doesn't know new timestamp.
+
+        // Robust Approach:
+        // 1. Take all DB entries.
+        // 2. Identify "pending" entries in `self.histories`.
+        //    A pending entry is one that has a timestamp > last DB timestamp?
+        //    Or arguably, we can just accept DB state as "truth" for sync,
+        //    and rely on the fact that if we just typed something, it's on screen.
+        //    BUT if we typed 5 commands, they are in history buffer. If we replace buffer, we lose them
+        //    until background writer catches up AND we reload again.
+        //    This could cause "disappearing history" effect.
+
+        // To prevent disappearing history:
+        // We can collect local-only entries by comparing timestamps or content.
+        // Simplest heuristic:
+        // Keep entries from `self.histories` that are NOT present in `new_histories` (by command string check? No, uniqueness).
+        // Actually, `command_history` enforces uniqueness.
+        // So if `ls` is in DB, we typically use DB's version.
+        // Unless local version has strictly greater timestamp?
+
+        if let Some(last_db_entry) = new_histories.last() {
+            let last_db_ts = last_db_entry.when;
+
+            // Find entries in local history that have timestamp > last_db_ts
+            // OR are not in new_histories at all?
+            // Note: local history is also sorted by time (mostly).
+
+            for local_item in &self.histories {
+                if local_item.when >= last_db_ts {
+                    // This is likely a new local item not yet in DB snapshot
+                    // Check if it already exists in new_histories (maybe identical timestamp?)
+                    if !new_histories.iter().any(|h| h.entry == local_item.entry) {
+                        new_histories.push(Entry {
+                            entry: local_item.entry.clone(),
+                            when: local_item.when,
+                            count: local_item.count,
+                        });
+                    }
+                }
+            }
+        } else {
+            // DB empty. Keep all local?
+            for local_item in &self.histories {
+                new_histories.push(Entry {
+                    entry: local_item.entry.clone(),
+                    when: local_item.when,
+                    count: local_item.count,
+                });
+            }
+        }
+
+        self.histories = new_histories;
+        self.reset_index();
+
+        Ok(())
+    }
+
     pub fn start_background_writer(&mut self) {
-        if let Some(db) = self.db.take() {
+        if let Some(db) = &self.db {
+            let db_clone = db.clone();
             let (tx, rx) = mpsc::channel();
             self.sender = Some(tx);
 
             thread::spawn(move || {
-                let mut db = db;
+                let mut db = db_clone;
                 // Keep connection open in this thread
                 while let Ok(msg) = rx.recv() {
                     match msg {
@@ -414,12 +520,13 @@ impl FrecencyHistory {
     }
 
     pub fn start_background_writer(&mut self) {
-        if let Some(db) = self.db.take() {
+        if let Some(db) = &self.db {
+            let db_clone = db.clone();
             let (tx, rx) = mpsc::channel();
             self.sender = Some(tx);
 
             thread::spawn(move || {
-                let mut db = db;
+                let mut db = db_clone;
                 while let Ok(msg) = rx.recv() {
                     match msg {
                         FrecencyMsg::Save(store) => {
@@ -1131,6 +1238,7 @@ mod tests {
         let row2: (String, i64, i64) =
             stmt.query_row(["cmd_async_2"], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         assert_eq!(row2.0, "cmd_async_2");
+
         assert_eq!(row2.1, 1001);
 
         Ok(())

@@ -1481,6 +1481,10 @@ impl<'a> Repl<'a> {
                             && let Some(mut history) = history.try_lock() {
                                  let _ = history.reload();
                             }
+                        if let Some(ref history) = self.shell.cmd_history
+                            && let Some(mut history) = history.try_lock() {
+                                 let _ = history.reload();
+                            }
                         self.history_sync_last_check = Instant::now();
                     }
 

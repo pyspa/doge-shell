@@ -169,6 +169,8 @@ pub async fn run_shell() -> ExitCode {
     }
 
     // Load config.lisp to initialize aliases, variables, and other settings
+    // Enable startup mode to prevent blocking MCP server connections
+    shell.environment.write().startup_mode = true;
     if let Err(e) = shell.lisp_engine.borrow().run_config_lisp() {
         // Only warn if it's not a "file not found" error (config.lisp is optional)
         let err_str = e.to_string();
@@ -176,6 +178,8 @@ pub async fn run_shell() -> ExitCode {
             tracing::warn!("Failed to load config.lisp: {}", e);
         }
     }
+    // Disable startup mode
+    shell.environment.write().startup_mode = false;
 
     // Reload MCP configuration from environment after config.lisp execution
     shell.reload_mcp_config();

@@ -186,8 +186,20 @@ impl std::fmt::Debug for McpManager {
 }
 
 impl McpManager {
-    pub fn load(runtime_servers: Vec<McpServerConfig>) -> Self {
-        match Self::build_from_servers(runtime_servers) {
+    pub async fn load(runtime_servers: Vec<McpServerConfig>) -> Self {
+        match Self::build_from_servers(runtime_servers).await {
+            Ok(manager) => manager,
+            Err(err) => {
+                warn!("failed to initialize MCP manager: {err:?}");
+                Self::default()
+            }
+        }
+    }
+
+    pub fn load_blocking(runtime_servers: Vec<McpServerConfig>) -> Self {
+        match Self::execute_async_with_loader(move || async move {
+            Self::build_from_servers(runtime_servers).await
+        }) {
             Ok(manager) => manager,
             Err(err) => {
                 warn!("failed to initialize MCP manager: {err:?}");
@@ -261,7 +273,9 @@ impl McpManager {
         let transport = server.transport.clone();
         let label_owned = label.to_string();
 
-        match Self::block_on(async move { test_connection(transport).await }) {
+        match Self::execute_async_with_loader(
+            move || async move { test_connection(transport).await },
+        ) {
             Ok(()) => {
                 info!(server = label, "validated MCP server connection");
                 self.session_meta.write().unwrap().insert(
@@ -420,7 +434,7 @@ impl McpManager {
             .ok_or_else(|| "MCP server missing for tool invocation".to_string())?;
         let tool_name = binding.tool_name.clone();
 
-        let result = Self::block_on(async move {
+        let result = Self::execute_async_with_loader(move || async move {
             timeout(
                 DEFAULT_TOOL_TIMEOUT,
                 call_tool_via_transport(transport, &tool_name, map),
@@ -436,7 +450,7 @@ impl McpManager {
         Ok(Some(json.to_string()))
     }
 
-    fn build_from_servers(runtime_servers: Vec<McpServerConfig>) -> Result<Self> {
+    async fn build_from_servers(runtime_servers: Vec<McpServerConfig>) -> Result<Self> {
         let mut servers = Vec::new();
         let mut labels = HashSet::new();
         let mut warnings = Vec::new();
@@ -492,18 +506,15 @@ impl McpManager {
 
         // Execute sequentially logic is replaced by parallel logic below
         // Execute sequentially to prevent process storm
-        let results: Vec<Result<(McpServerConfig, Vec<Tool>, bool), (String, anyhow::Error)>> =
-            Self::block_on(async move {
-                let mut outputs = Vec::new();
-                for (i, future) in futures.into_iter().enumerate() {
-                    // Add a small delay between server loads to yield CPU/IO to the main thread
-                    if i > 0 {
-                        tokio::time::sleep(Duration::from_millis(200)).await;
-                    }
-                    outputs.push(future.await);
-                }
-                Ok(outputs)
-            })?;
+        // Execute sequentially to prevent process storm
+        let mut results = Vec::new();
+        for (i, future) in futures.into_iter().enumerate() {
+            // Add a small delay between server loads to yield CPU/IO to the main thread
+            if i > 0 {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            results.push(future.await);
+        }
 
         for res in results {
             match res {
@@ -575,22 +586,30 @@ impl McpManager {
         })
     }
 
-    pub fn add_server(&mut self, config: McpServerConfig) -> Result<()> {
-        // Since we are modifying self in place, checking for duplicates against self.servers is needed
-        if self.servers.iter().any(|s| s.label == config.label) {
-            return Err(anyhow::anyhow!(
-                "MCP server `{}` already exists",
-                config.label
-            ));
-        }
+    pub async fn add_server(&mut self, config: McpServerConfig) -> Result<()> {
+        let (server_struct, tools) = Self::load_server_tools(config).await?;
+        self.register_server(server_struct, tools)?;
+        Ok(())
+    }
 
+    pub fn add_server_blocking(&mut self, config: McpServerConfig) -> Result<()> {
+        let config_clone = config.clone();
+        let (server_struct, tools) = Self::execute_async_with_loader(move || async move {
+            Self::load_server_tools(config_clone).await
+        })?;
+        self.register_server(server_struct, tools)?;
+        Ok(())
+    }
+
+    async fn load_server_tools(config: McpServerConfig) -> Result<(McpServer, Vec<Tool>)> {
         let McpServerConfig {
             label,
             description,
             transport,
         } = config;
 
-        let tools = Self::block_on(list_tools_via_transport(transport.clone()))
+        let tools = list_tools_via_transport(transport.clone())
+            .await
             .map_err(|err| anyhow::anyhow!("failed to load MCP server `{}`: {}", label, err))?;
 
         debug!(
@@ -603,37 +622,48 @@ impl McpManager {
             label: label.clone(),
             description,
             transport,
-            tools,
+            tools: tools.clone(),
         };
+
+        Ok((server_struct, tools))
+    }
+
+    fn register_server(&mut self, server: McpServer, tools: Vec<Tool>) -> Result<()> {
+        if self.servers.iter().any(|s| s.label == server.label) {
+            return Err(anyhow::anyhow!(
+                "MCP server `{}` already exists",
+                server.label
+            ));
+        }
 
         // Update bindings
         let mut used_names: HashSet<String> = self.bindings.keys().cloned().collect();
 
-        for tool in &server_struct.tools {
+        for tool in &tools {
             let base_name = format!(
                 "mcp__{}__{}",
-                sanitize_identifier(&server_struct.label),
+                sanitize_identifier(&server.label),
                 sanitize_identifier(tool.name.as_ref())
             );
             let function_name = unique_name(&base_name, &mut used_names);
             self.bindings.insert(
                 function_name.clone(),
                 ToolBinding {
-                    server_label: server_struct.label.clone(),
+                    server_label: server.label.clone(),
                     tool_name: tool.name.to_string(),
                     function_name,
                 },
             );
         }
 
-        self.servers.push(server_struct);
-
+        self.servers.push(server);
         Ok(())
     }
 
-    fn block_on<F, T>(future: F) -> Result<T>
+    fn execute_async_with_loader<F, Fut, T>(f: F) -> Result<T>
     where
-        F: std::future::Future<Output = Result<T>> + Send + 'static,
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<T>> + Send + 'static,
         T: Send + 'static,
     {
         // Use a dedicated thread to ensure we can block even if called from
@@ -644,13 +674,13 @@ impl McpManager {
 
         std::thread::spawn(move || {
             let res = if let Some(rt) = handle {
-                rt.block_on(future)
+                rt.block_on(f())
             } else {
                 match tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
                 {
-                    Ok(rt) => rt.block_on(future),
+                    Ok(rt) => rt.block_on(f()),
                     Err(e) => Err(anyhow::anyhow!("failed to create async runtime: {}", e)),
                 }
             };

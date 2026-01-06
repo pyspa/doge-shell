@@ -177,7 +177,7 @@ mod tests {
     #[test]
     fn test_execute_tool_call_unknown_tool() {
         let mut proxy = NoopProxy;
-        let mcp = McpManager::load(vec![]);
+        let mcp = McpManager::load_blocking(vec![]);
         let tool_call = serde_json::json!({
             "function": {
                 "name": "unknown_tool",

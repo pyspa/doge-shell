@@ -704,7 +704,7 @@ mod tests {
     #[tokio::test]
     async fn test_confirmation_call_strict() {
         let client = MockChatClient::new("test_tool");
-        let mcp_manager = Arc::new(RwLock::new(McpManager::load(vec![])));
+        let mcp_manager = Arc::new(RwLock::new(McpManager::load_blocking(vec![])));
         let safety_level = Arc::new(RwLock::new(SafetyLevel::Strict));
         let confirmed_called = Arc::new(Mutex::new(false));
         let confirmation_handler = Arc::new(MockConfirmation {
@@ -729,7 +729,7 @@ mod tests {
     #[tokio::test]
     async fn test_confirmation_not_called_loose() {
         let client = MockChatClient::new("test_tool");
-        let mcp_manager = Arc::new(RwLock::new(McpManager::load(vec![])));
+        let mcp_manager = Arc::new(RwLock::new(McpManager::load_blocking(vec![])));
         let safety_level = Arc::new(RwLock::new(SafetyLevel::Loose));
         let confirmed_called = Arc::new(Mutex::new(false));
         let confirmation_handler = Arc::new(MockConfirmation {
@@ -754,7 +754,7 @@ mod tests {
     #[tokio::test]
     async fn test_confirmation_rejection() {
         let client = MockChatClient::new("test_tool");
-        let mcp_manager = Arc::new(RwLock::new(McpManager::load(vec![])));
+        let mcp_manager = Arc::new(RwLock::new(McpManager::load_blocking(vec![])));
         let safety_level = Arc::new(RwLock::new(SafetyLevel::Strict));
         let confirmed_called = Arc::new(Mutex::new(false));
         let confirmation_handler = Arc::new(MockConfirmation {

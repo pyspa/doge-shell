@@ -12,14 +12,17 @@ use rmcp::{
     },
 };
 use serde_json::{Map, Value, json};
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::{
-    collections::{HashMap, HashSet},
     sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
 use tokio::{process::Command, runtime::Runtime, time::timeout};
 use tracing::{debug, info, warn};
+use xdg::BaseDirectories;
 
 /// Default timeout for MCP tool calls (30 seconds)
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -62,6 +65,79 @@ struct McpServer {
     description: Option<String>,
     transport: McpTransport,
     tools: Vec<Tool>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ToolCacheEntry {
+    config_hash: u64,
+    timestamp: i64,
+    tools: Vec<Tool>,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct McpToolCache {
+    entries: HashMap<String, ToolCacheEntry>,
+}
+
+impl McpToolCache {
+    fn load() -> Self {
+        if let Ok(dirs) = BaseDirectories::with_prefix("dsh")
+            && let Some(path) = dirs.find_cache_file("mcp_tools.json")
+            && let Ok(file) = std::fs::File::open(path)
+            && let Ok(cache) = serde_json::from_reader(file)
+        {
+            return cache;
+        }
+        Self::default()
+    }
+
+    fn save(&self) {
+        if let Ok(dirs) = BaseDirectories::with_prefix("dsh")
+            && let Ok(path) = dirs.place_cache_file("mcp_tools.json")
+            && let Ok(file) = std::fs::File::create(path)
+        {
+            let _ = serde_json::to_writer(file, self);
+        }
+    }
+}
+
+// Helper to hash McpServerConfig manually since it doesn't derive Hash
+fn hash_server_config(config: &McpServerConfig) -> u64 {
+    let mut s = DefaultHasher::new();
+    config.label.hash(&mut s);
+    config.description.hash(&mut s);
+    // Transport
+    match &config.transport {
+        McpTransport::Stdio {
+            command,
+            args,
+            env,
+            cwd,
+        } => {
+            0u8.hash(&mut s);
+            command.hash(&mut s);
+            args.hash(&mut s);
+            // Sort env for consistent hash
+            let sorted_env: BTreeMap<_, _> = env.iter().collect();
+            sorted_env.hash(&mut s);
+            cwd.hash(&mut s);
+        }
+        McpTransport::Sse { url } => {
+            1u8.hash(&mut s);
+            url.hash(&mut s);
+        }
+        McpTransport::Http {
+            url,
+            auth_header,
+            allow_stateless,
+        } => {
+            2u8.hash(&mut s);
+            url.hash(&mut s);
+            auth_header.hash(&mut s);
+            allow_stateless.hash(&mut s);
+        }
+    }
+    s.finish()
 }
 
 #[derive(Debug, Clone)]
@@ -365,9 +441,9 @@ impl McpManager {
         let mut labels = HashSet::new();
         let mut warnings = Vec::new();
 
-        let combined = runtime_servers;
-
-        for server in combined {
+        // Dedup and validate first
+        let mut valid_configs = Vec::new();
+        for server in runtime_servers {
             if server.label.trim().is_empty() {
                 warnings.push("skipped MCP server with empty label".to_string());
                 continue;
@@ -379,33 +455,99 @@ impl McpManager {
                 ));
                 continue;
             }
+            valid_configs.push(server);
+        }
 
-            let McpServerConfig {
-                label,
-                description,
-                transport,
-            } = server;
+        let mut cache = McpToolCache::load();
+        let mut cache_changed = false;
 
-            let tools = match Self::block_on(list_tools_via_transport(transport.clone())) {
-                Ok(tools) => tools,
-                Err(err) => {
-                    warnings.push(format!("failed to load MCP server `{}`: {err}", label));
-                    continue;
+        // Prepare futures for parallel execution
+        let mut futures = Vec::new();
+
+        for config in valid_configs {
+            let hash = hash_server_config(&config);
+            let cached_tools: Option<Vec<Tool>> =
+                if let Some(entry) = cache.entries.get(&config.label) {
+                    if entry.config_hash == hash {
+                        debug!("Loaded tools for {} from cache", config.label);
+                        Some(entry.tools.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+            futures.push(async move {
+                if let Some(tools) = cached_tools {
+                    Ok((config, tools, false)) // false = not new
+                } else {
+                    match list_tools_via_transport(config.transport.clone()).await {
+                        Ok(tools) => Ok((config, tools, true)), // true = new/refreshed
+                        Err(e) => Err((config.label, e)),
+                    }
                 }
-            };
-
-            debug!(
-                server = label.as_str(),
-                tool_count = tools.len(),
-                "registered MCP server"
-            );
-
-            servers.push(McpServer {
-                label,
-                description,
-                transport,
-                tools,
             });
+        }
+
+        // Execute sequentially logic is replaced by parallel logic below
+        let results: Vec<Result<(McpServerConfig, Vec<Tool>, bool), (String, anyhow::Error)>> =
+            Self::block_on(async move {
+                let mut handles = Vec::new();
+                for future in futures {
+                    handles.push(tokio::spawn(future));
+                }
+
+                let mut outputs = Vec::new();
+                for handle in handles {
+                    match handle.await {
+                        Ok(res) => outputs.push(res),
+                        Err(e) => outputs.push(Err((
+                            "unknown".to_string(),
+                            anyhow::anyhow!("Join error: {}", e),
+                        ))),
+                    }
+                }
+                Ok(outputs)
+            })?;
+
+        for res in results {
+            match res {
+                Ok((config, tools, updated)) => {
+                    if updated {
+                        let hash = hash_server_config(&config);
+                        cache.entries.insert(
+                            config.label.clone(),
+                            ToolCacheEntry {
+                                config_hash: hash,
+                                timestamp: chrono::Utc::now().timestamp(),
+                                tools: tools.clone(),
+                            },
+                        );
+                        cache_changed = true;
+                    }
+
+                    debug!(
+                        server = config.label.as_str(),
+                        tool_count = tools.len(),
+                        "registered MCP server"
+                    );
+
+                    servers.push(McpServer {
+                        label: config.label,
+                        description: config.description,
+                        transport: config.transport,
+                        tools,
+                    });
+                }
+                Err((label, err)) => {
+                    warnings.push(format!("failed to load MCP server `{}`: {}", label, err));
+                }
+            }
+        }
+
+        if cache_changed {
+            cache.save();
         }
 
         let mut bindings = HashMap::new();

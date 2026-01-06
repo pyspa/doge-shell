@@ -226,6 +226,7 @@ async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<bool> {
             &prompt_text,
             &input_text,
         )
+        .await
     };
 
     // Process the completion result

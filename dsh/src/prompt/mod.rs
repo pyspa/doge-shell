@@ -260,9 +260,14 @@ impl Prompt {
                     let mut new_status = GitStatus::new();
                     new_status.branch = real.clone();
                     status_to_display = Some(new_status);
+                } else if let Some(s) = status_to_display.as_mut() {
+                    // Update branch name in the existing stale status to avoid confusion
+                    s.branch = real.clone();
                 }
 
                 // Force invalidation of cache so async task picks it up
+                // We keep the local `status_to_display` for this frame, but clear global cache
+                // so next frames/background task know to fetch.
                 self.git_status_cache = None;
                 self.needs_git_check = true;
             }

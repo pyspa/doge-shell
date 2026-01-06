@@ -45,6 +45,8 @@ pub struct Environment {
     pub safety_level: Arc<RwLock<crate::safety::SafetyLevel>>,
     /// Cache for PATH command lookups to avoid repeated filesystem access
     command_cache: RwLock<HashMap<String, Option<String>>>,
+    /// Prewarmed list of executable names from PATH directories for fast prefix search
+    pub executable_names: Arc<RwLock<Vec<String>>>,
     /// Output history for $OUT[N] and $ERR[N] variables
     pub output_history: OutputHistory,
     pub ai_service: Option<Arc<dyn AiService + Send + Sync>>,
@@ -111,6 +113,7 @@ impl Environment {
             safety_level: Arc::new(RwLock::new(crate::safety::SafetyLevel::Normal)),
 
             command_cache: RwLock::new(HashMap::new()),
+            executable_names: Arc::new(RwLock::new(Vec::new())),
             output_history: OutputHistory::new(),
             ai_service: None,
             z_exclude: parse_z_exclude(),
@@ -158,6 +161,7 @@ impl Environment {
             input_preferences,
             safety_level,
             command_cache: RwLock::new(HashMap::new()),
+            executable_names: Arc::new(RwLock::new(Vec::new())),
             output_history: OutputHistory::new(),
             ai_service: parent.read().ai_service.clone(),
             z_exclude: parent.read().z_exclude.clone(),
@@ -253,6 +257,8 @@ impl Environment {
         self.paths = paths;
         // Clear command cache when PATH changes
         self.command_cache.write().clear();
+        // Also clear executable names cache
+        self.executable_names.write().clear();
     }
 
     pub fn reload_z_exclude(&mut self) {
@@ -262,6 +268,63 @@ impl Environment {
     /// Clear the command lookup cache
     pub fn clear_command_cache(&mut self) {
         self.command_cache.get_mut().clear();
+    }
+
+    /// Prewarm the executable names cache by scanning PATH directories.
+    /// This should be called in the background after shell startup.
+    pub fn prewarm_executables(&self) {
+        use std::fs::read_dir;
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut names = HashSet::new();
+        for path in &self.paths {
+            if let Ok(entries) = read_dir(path) {
+                for entry in entries.flatten() {
+                    if let Ok(ft) = entry.file_type() {
+                        if ft.is_file() || ft.is_symlink() {
+                            if let Ok(meta) = entry.metadata() {
+                                if meta.permissions().mode() & 0o111 != 0 {
+                                    if let Some(name) = entry.file_name().to_str() {
+                                        names.insert(name.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut sorted: Vec<String> = names.into_iter().collect();
+        sorted.sort();
+        *self.executable_names.write() = sorted;
+        debug!(
+            "Prewarmed {} executable names",
+            self.executable_names.read().len()
+        );
+    }
+
+    /// Set the prewarmed executable names (called after background collection).
+    pub fn set_executable_names(&mut self, names: Vec<String>) {
+        debug!("Setting {} prewarmed executable names", names.len());
+        *self.executable_names.write() = names;
+    }
+
+    /// Search for an executable name by prefix using the prewarmed cache.
+    /// Returns the first matching executable name, or None if not found.
+    pub fn search_prefix(&self, prefix: &str) -> Option<String> {
+        let names = self.executable_names.read();
+        if names.is_empty() {
+            // Cache not prewarmed yet, fall back to synchronous search
+            return self.search(prefix);
+        }
+
+        // Binary search for the first name >= prefix
+        let start = names.partition_point(|n| n.as_str() < prefix);
+        if start < names.len() && names[start].starts_with(prefix) {
+            return Some(names[start].clone());
+        }
+        None
     }
 
     pub fn get_var(&self, key: &str) -> Option<String> {
@@ -395,6 +458,36 @@ pub fn get_data_file(name: &str) -> Result<PathBuf> {
     let xdg_dir =
         xdg::BaseDirectories::with_prefix(APP_NAME).context("failed get xdg directory")?;
     xdg_dir.place_data_file(name).context("failed get path")
+}
+
+/// Collect executable names from the given PATH directories.
+/// This is a standalone function to allow calling from a background thread.
+pub fn collect_executables(paths: &[String]) -> Vec<String> {
+    use std::fs::read_dir;
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut names = HashSet::new();
+    for path in paths {
+        if let Ok(entries) = read_dir(path) {
+            for entry in entries.flatten() {
+                if let Ok(ft) = entry.file_type() {
+                    if ft.is_file() || ft.is_symlink() {
+                        if let Ok(meta) = entry.metadata() {
+                            if meta.permissions().mode() & 0o111 != 0 {
+                                if let Some(name) = entry.file_name().to_str() {
+                                    names.insert(name.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut sorted: Vec<String> = names.into_iter().collect();
+    sorted.sort();
+    sorted
 }
 
 #[cfg(test)]

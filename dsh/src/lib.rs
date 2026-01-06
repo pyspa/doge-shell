@@ -207,6 +207,22 @@ pub async fn run_shell() -> ExitCode {
     // Reload MCP configuration from environment after config.lisp execution
     shell.reload_mcp_config();
 
+    // Prewarm executable names cache in background for faster command prefix search
+    {
+        let paths = shell.environment.read().paths.clone();
+        let names_arc = std::sync::Arc::clone(&shell.environment.read().executable_names);
+        tokio::spawn(async move {
+            let sorted = tokio::task::spawn_blocking(move || {
+                crate::environment::collect_executables(&paths)
+            })
+            .await
+            .ok();
+            if let Some(names) = sorted {
+                *names_arc.write() = names;
+            }
+        });
+    }
+
     let mut ctx = create_context(&shell);
 
     if let Some(lisp_script) = cli.lisp.as_deref() {

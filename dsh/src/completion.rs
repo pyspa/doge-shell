@@ -596,6 +596,12 @@ pub fn select_completion_items_with_framework(
         return None;
     }
 
+    // Fast path: if only one candidate, return it immediately without UI
+    if items.len() == 1 {
+        debug!("Single candidate fast path: returning {:?}", items[0]);
+        return Some(items[0].output().to_string());
+    }
+
     let request = CompletionRequest::new(items, query, prompt_text, input_text, config);
     select_with_framework_kind(framework, request)
 }

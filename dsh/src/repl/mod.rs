@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 use tracing::{debug, warn};
 
-const AI_SUGGESTION_REFRESH_MS: u64 = 150;
+const AI_SUGGESTION_REFRESH_MS: u64 = 300;
 const MCP_FORM_SUGGESTIONS: &[&str] =
     &["mcp-add-stdio", "mcp-add-http", "mcp-add-sse", "mcp-clear"];
 

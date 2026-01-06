@@ -20,7 +20,7 @@ use std::{
     sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
-use tokio::{process::Command, runtime::Runtime, time::timeout};
+use tokio::{process::Command, time::timeout};
 use tracing::{debug, info, warn};
 use xdg::BaseDirectories;
 
@@ -491,22 +491,16 @@ impl McpManager {
         }
 
         // Execute sequentially logic is replaced by parallel logic below
+        // Execute sequentially to prevent process storm
         let results: Vec<Result<(McpServerConfig, Vec<Tool>, bool), (String, anyhow::Error)>> =
             Self::block_on(async move {
-                let mut handles = Vec::new();
-                for future in futures {
-                    handles.push(tokio::spawn(future));
-                }
-
                 let mut outputs = Vec::new();
-                for handle in handles {
-                    match handle.await {
-                        Ok(res) => outputs.push(res),
-                        Err(e) => outputs.push(Err((
-                            "unknown".to_string(),
-                            anyhow::anyhow!("Join error: {}", e),
-                        ))),
+                for (i, future) in futures.into_iter().enumerate() {
+                    // Add a small delay between server loads to yield CPU/IO to the main thread
+                    if i > 0 {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
                     }
+                    outputs.push(future.await);
                 }
                 Ok(outputs)
             })?;
@@ -652,7 +646,10 @@ impl McpManager {
             let res = if let Some(rt) = handle {
                 rt.block_on(future)
             } else {
-                match Runtime::new() {
+                match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
                     Ok(rt) => rt.block_on(future),
                     Err(e) => Err(anyhow::anyhow!("failed to create async runtime: {}", e)),
                 }

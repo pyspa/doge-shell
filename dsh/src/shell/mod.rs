@@ -225,6 +225,9 @@ impl Shell {
         let mcp_manager = self.environment.read().mcp_manager.clone();
 
         std::thread::spawn(move || {
+            // Wait for 1 second to let the shell startup settle
+            std::thread::sleep(std::time::Duration::from_secs(1));
+
             tracing::info!(
                 "Reloading MCP config (background) with {} servers",
                 mcp_servers.len()

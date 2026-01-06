@@ -188,6 +188,7 @@ pub struct Repl<'a> {
     pub(crate) ai_rx: tokio::sync::mpsc::UnboundedReceiver<AiEvent>,
     pub(crate) ai_tx: tokio::sync::mpsc::UnboundedSender<AiEvent>,
     pub(crate) history_sync_last_check: Instant,
+    pub(crate) completion_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -209,6 +210,10 @@ impl<'a> Repl<'a> {
     pub fn new(shell: &'a mut Shell) -> Self {
         // Initialize Command Palette actions
         crate::command_palette::register_builtin_actions();
+
+        // Initialize completion notifier channel
+        let (completion_tx, completion_rx) = tokio::sync::mpsc::unbounded_channel();
+        crate::completion::set_completion_notifier(completion_tx);
 
         let current = std::env::current_dir().unwrap_or_else(|e| {
             warn!(
@@ -360,6 +365,7 @@ impl<'a> Repl<'a> {
             ai_rx,
             ai_tx,
             history_sync_last_check: Instant::now(),
+            completion_rx,
         }
     }
 
@@ -1599,7 +1605,8 @@ impl<'a> Repl<'a> {
                             p_clone.write().update_git_root(root);
                         });
                     }
-                    // Fetch status if we have a git root (always fetch on event)
+
+                     // Fetch status if we have a git root (always fetch on event)
                      let should = prompt.read().has_git_root();
                      if should {
                         let path = prompt.read().current_path().to_path_buf();
@@ -1609,6 +1616,16 @@ impl<'a> Repl<'a> {
                                 p_clone.write().update_git_status(Some(status));
                             }
                         });
+                    }
+                }
+                Some(_) = self.completion_rx.recv() => {
+                    // Handle path completion update (background scan finished)
+                    if self.input.completion.is_none()
+                        && self.refresh_inline_suggestion()
+                    {
+                         let mut renderer = TerminalRenderer::new();
+                         self.print_input(&mut renderer, false, false);
+                         renderer.flush().ok();
                     }
                 }
                 Some(ai_event) = self.ai_rx.recv() => {

@@ -302,7 +302,7 @@ impl Environment {
 
     pub fn add_mcp_server(&mut self, server: McpServerConfig) {
         // Try to add to the active manager first
-        if let Err(e) = self.mcp_manager.write().add_server(server.clone()) {
+        if let Err(e) = self.mcp_manager.write().add_server_blocking(server.clone()) {
             eprintln!("Failed to register MCP server: {}", e);
         }
         self.mcp_servers.push(server);

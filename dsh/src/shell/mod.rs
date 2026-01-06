@@ -224,16 +224,16 @@ impl Shell {
         let mcp_servers = self.environment.read().mcp_servers().to_vec();
         let mcp_manager = self.environment.read().mcp_manager.clone();
 
-        std::thread::spawn(move || {
+        tokio::spawn(async move {
             // Wait for 1 second to let the shell startup settle
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
             tracing::info!(
                 "Reloading MCP config (background) with {} servers",
                 mcp_servers.len()
             );
-            // McpManager::load calls build_from_servers (now modified to not use TOML)
-            let new_manager = McpManager::load(mcp_servers);
+            // McpManager::load calls build_from_servers (async)
+            let new_manager = McpManager::load(mcp_servers).await;
             // Update the manager in the environment
             *mcp_manager.write() = new_manager;
             tracing::info!("MCP config reload complete");

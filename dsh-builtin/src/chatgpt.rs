@@ -106,7 +106,7 @@ pub fn execute_chat_message(
         Ok(client) => {
             let prompt = proxy.get_var(PROMPT_KEY);
             let model_override = model_override.map(|model| model.to_string());
-            let mcp_manager = McpManager::load(proxy.list_mcp_servers());
+            let mcp_manager = McpManager::load_blocking(proxy.list_mcp_servers());
 
             match chat_with_tools(
                 &client,

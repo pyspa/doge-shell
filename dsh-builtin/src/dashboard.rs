@@ -39,13 +39,14 @@ pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) ->
     writeln!(out, "╠{}╣", border).ok();
 
     // Project Info
-    writeln!(
-        out,
-        "║ {:<width$} ║",
-        "🚀 Project Context".cyan().bold(),
-        width = width
-    )
-    .ok();
+    let project_info = super::project::find_project_by_path(&cwd).ok().flatten();
+    let title = if let Some(ref p) = project_info {
+        format!("🚀 Project: {}", p.name)
+    } else {
+        "🚀 Project Context".to_string()
+    };
+
+    writeln!(out, "║ {:<width$} ║", title.cyan().bold(), width = width).ok();
     writeln!(
         out,
         "║   Dir:    {:<width$} ║",

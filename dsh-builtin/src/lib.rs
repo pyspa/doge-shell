@@ -42,7 +42,9 @@ pub mod lisp;
 mod mcp;
 mod notebook_play;
 mod out;
+pub mod project;
 mod read;
+
 mod reload;
 pub mod serve;
 mod set;
@@ -164,6 +166,16 @@ pub trait ShellProxy {
         Err(anyhow::anyhow!(
             "generate_command_completion not implemented"
         ))
+    }
+
+    /// Triggers a Lisp hook by name with arguments
+    fn run_hook(&mut self, _hook_name: &str, _args: Vec<String>) -> Result<()> {
+        Err(anyhow::anyhow!("run_hook not implemented"))
+    }
+
+    /// Interactive selection of an item from a list
+    fn select_item(&mut self, _items: Vec<String>) -> Result<Option<String>> {
+        Err(anyhow::anyhow!("select_item not implemented"))
     }
 }
 
@@ -503,6 +515,29 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             Box::new(BuiltinCommandFn::new(
                 dashboard::command,
                 dashboard::description(),
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+
+        // Project Management command
+        builtin.insert(
+            "project",
+            Box::new(BuiltinCommandFn::new(
+                project::command,
+                project::description(),
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "pm",
+            Box::new(BuiltinCommandFn::new(
+                project::command,
+                project::description(),
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "pj",
+            Box::new(BuiltinCommandFn::new(
+                project::command,
+                project::description(),
             )) as Box<dyn BuiltinCommandTrait>,
         );
 

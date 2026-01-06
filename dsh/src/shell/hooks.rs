@@ -29,6 +29,37 @@ pub fn exec_chpwd_hooks(shell: &mut Shell, pwd: &str) -> Result<()> {
         debug!("Failed to execute on-chdir hooks: {}", e);
     }
 
+    // Check for project context change
+    let project_opt = dsh_builtin::project::find_project_by_path(pwd)
+        .ok()
+        .flatten();
+    let current_project_name = project_opt.as_ref().map(|p| p.name.clone());
+
+    // We need to read the old variable first
+    let old_project_name = shell.environment.read().get_var("DSH_PROJECT");
+
+    if current_project_name != old_project_name {
+        if let Some(name) = &current_project_name {
+            shell
+                .environment
+                .write()
+                .variables
+                .insert("DSH_PROJECT".to_string(), name.clone());
+            debug!("Entered project: {}", name);
+
+            let lisp_code = format!(
+                "(when (bound? '*on-project-switch-hooks*) (map (lambda (hook) (hook \"{}\")) *on-project-switch-hooks*))",
+                name.replace("\"", "\\\"")
+            );
+            if let Err(e) = shell.lisp_engine.borrow().run(&lisp_code) {
+                debug!("Failed to execute on-project-switch-hooks: {}", e);
+            }
+        } else {
+            shell.environment.write().variables.remove("DSH_PROJECT");
+            debug!("Left project");
+        }
+    }
+
     Ok(())
 }
 

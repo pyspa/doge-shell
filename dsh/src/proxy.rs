@@ -818,11 +818,46 @@ impl ShellProxy for Shell {
     }
 
     fn list_mcp_servers(&mut self) -> Vec<McpServerConfig> {
-        self.environment.read().mcp_servers.clone()
+        self.environment.read().mcp_servers().to_vec()
     }
 
     fn list_execute_allowlist(&mut self) -> Vec<String> {
-        self.environment.read().execute_allowlist.clone()
+        self.environment.read().execute_allowlist().to_vec()
+    }
+
+    fn run_hook(&mut self, hook_name: &str, args: Vec<String>) -> Result<()> {
+        let args_str = args
+            .iter()
+            .map(|a| format!("\"{}\"", a.replace("\"", "\\\"")))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        // Ensure hook name is wrapped in asterisks for Lisp convention
+        let hook_var = if hook_name.starts_with('*') {
+            hook_name.to_string()
+        } else {
+            format!("*{}*", hook_name)
+        };
+
+        let lisp_code = format!(
+            "(when (bound? '{hook_var})
+                (map (lambda (hook) (hook {args_str})) {hook_var}))"
+        );
+
+        if let Err(e) = self.lisp_engine.borrow().run(&lisp_code) {
+            // We use warn! but return Ok because hook failure shouldn't crash the command
+            warn!("Failed to execute hook {}: {}", hook_name, e);
+        }
+        Ok(())
+    }
+
+    fn select_item(&mut self, items: Vec<String>) -> Result<Option<String>> {
+        let candidates: Vec<crate::completion::Candidate> = items
+            .into_iter()
+            .map(|item| crate::completion::Candidate::Item(item, "".to_string()))
+            .collect();
+
+        Ok(crate::completion::select_item_with_skim(candidates, None))
     }
 
     // New method implementations for export

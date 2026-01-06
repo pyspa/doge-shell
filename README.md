@@ -83,6 +83,18 @@ The Safety Guard protects against unintended execution of potentially destructiv
 - **URL Shortening**: URL shortening with `dmv` command
 - **Web Server**: Built-in static file server with `serve` command
 - **Configuration Reload**: Runtime configuration reloading with `reload` command
+### Project Manager
+
+Organize and switch between workspaces efficiently with the integrated Project Manager.
+
+- **`pm add [path] [name]`**: Register a project.
+- **`pm list`**: List registered projects (sorted by last access).
+- **`pm work <name>`**: Switch to a project and trigger hooks.
+- **`pm jump` / `pj`**: Interactively select and switch to a project.
+- **Hooks**: Define `*on-project-switch-hooks*` in Lisp to automate environment setup.
+  - Automatically triggered when entering a project directory (via `pm work`, `pj`, or `cd`).
+  - Sets `DSH_PROJECT` environment variable to the current project name.
+
 ### GitHub Integration
 
 Monitor your GitHub notifications directly from the prompt. Grouped by priority:
@@ -144,6 +156,8 @@ The shell includes many built-in commands:
 | `mcp` | Manage MCP servers (status, connect, disconnect) |
 | `gpr` | GitHub Pull Request checkout with interactive selection |
 | `gwt` | Git Worktree management (add, list, remove) |
+| `pm` | Project Manager (add, list, remove, work, jump) |
+| `pj` | Jump to a project (alias for `pm jump`) |
 | `help` | Show help information |
 | `comp-gen` | Generate command completion using AI |
 | `dashboard` | Show integrated dashboard (System, Git, GitHub) |

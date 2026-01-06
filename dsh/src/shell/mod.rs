@@ -222,10 +222,18 @@ impl Shell {
 
     pub fn reload_mcp_config(&self) {
         let mcp_servers = self.environment.read().mcp_servers().to_vec();
-        tracing::debug!("Reloading MCP config with {} servers", mcp_servers.len());
-        // McpManager::load calls build_from_servers (now modified to not use TOML)
-        let new_manager = McpManager::load(mcp_servers);
-        // Update the manager in the environment
-        *self.environment.read().mcp_manager.write() = new_manager;
+        let mcp_manager = self.environment.read().mcp_manager.clone();
+
+        std::thread::spawn(move || {
+            tracing::info!(
+                "Reloading MCP config (background) with {} servers",
+                mcp_servers.len()
+            );
+            // McpManager::load calls build_from_servers (now modified to not use TOML)
+            let new_manager = McpManager::load(mcp_servers);
+            // Update the manager in the environment
+            *mcp_manager.write() = new_manager;
+            tracing::info!("MCP config reload complete");
+        });
     }
 }

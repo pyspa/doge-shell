@@ -380,19 +380,24 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
 
         // We assume we are running in a tokio runtime (dsh is tokio::main)
         tokio::spawn(async move {
-            let result = scan_dir_candidates(path_buf);
+            // Use spawn_blocking for IO-heavy directory scanning
+            let result = tokio::task::spawn_blocking(move || scan_dir_candidates(path_buf)).await;
+
             match result {
-                Ok(candidates) => {
+                Ok(Ok(candidates)) => {
                     PATH_COMPLETION_CACHE.set(path_str_clone.clone(), candidates);
                     notify_completion_update();
                 }
-                Err(e) => {
-                    // Remove from pending so we can retry later
-                    // But honestly repeated errors are bad. Maybe cache empty result?
+                Ok(Err(e)) => {
+                    // Inner scan error
                     warn!(
                         "Background path completion failed for '{}': {}",
                         path_str_clone, e
                     );
+                }
+                Err(e) => {
+                    // JoinError
+                    warn!("Background task join error: {}", e);
                 }
             }
             PATH_COMPLETION_CACHE.clear_pending(&path_str_clone);
@@ -631,9 +636,9 @@ pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String>
     }
 }
 
-pub fn input_completion(
+pub async fn input_completion(
     input: &Input,
-    repl: &Repl,
+    repl: &Repl<'_>,
     query: Option<&str>,
     prompt_text: &str,
     input_text: &str,
@@ -646,6 +651,8 @@ pub fn input_completion(
     debug!("input_completion starting with query: {:?}", query);
 
     // Try lisp-based completion first (custom completions defined by user)
+    // Lisp logic is synchronous but fast (unless user func is slow).
+    // We keep it synchronous for now or wrap it if needed.
     let res = completion_from_lisp_with_prompt(input, repl, query, prompt_text, input_text);
     if res.is_some() {
         debug!("Lisp completion returned result: {:?}", res);
@@ -658,7 +665,8 @@ pub fn input_completion(
     }
 
     // Try current context completion (files, directories, commands in PATH)
-    let res = completion_from_current_with_prompt(input, repl, query, prompt_text, input_text);
+    let res =
+        completion_from_current_with_prompt(input, repl, query, prompt_text, input_text).await;
     if res.is_some() {
         debug!("Context completion returned result: {:?}", res);
         return res;
@@ -755,9 +763,9 @@ fn completion_for_z(
     None
 }
 
-fn completion_from_current_with_prompt(
+async fn completion_from_current_with_prompt(
     _input: &Input,
-    repl: &Repl,
+    repl: &Repl<'_>,
     query: Option<&str>,
     prompt_text: &str,
     input_text: &str,
@@ -785,7 +793,7 @@ fn completion_from_current_with_prompt(
         }
     }
 
-    let data = collect_current_context_candidates(repl, query_str)?;
+    let data = collect_current_context_candidates(repl, query_str).await?;
 
     if data.items.is_empty() {
         return None;
@@ -807,8 +815,8 @@ struct CurrentCompletionData {
     selection_query: Option<String>,
 }
 
-fn collect_current_context_candidates(
-    repl: &Repl,
+async fn collect_current_context_candidates(
+    repl: &Repl<'_>,
     query_str: &str,
 ) -> Option<CurrentCompletionData> {
     let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
@@ -855,20 +863,24 @@ fn collect_current_context_candidates(
         .canonicalize()
         .unwrap_or_else(|_| current_dir.clone());
     let canonical_str = canonical_path.display().to_string();
-    let search_path_str = search_path.to_str()?;
+    let search_path_str = search_path.to_str()?.to_string();
 
     let mut items = if path_query.is_empty() {
-        get_file_completions(canonical_str.as_str(), search_path_str)
+        get_file_completions(&canonical_str, &search_path_str).await
     } else {
-        get_file_completions_with_filter(
-            canonical_str.as_str(),
-            search_path_str,
-            Some(path_query.as_str()),
-        )
+        get_file_completions_with_filter(&canonical_str, &search_path_str, Some(&path_query)).await
     };
 
     if !only_path {
-        let mut command_items = get_commands(&environment.read().paths, query_str);
+        // Paths cloning for thread safety
+        let paths = environment.read().paths.clone();
+        let query_str = query_str.to_string();
+
+        let mut command_items =
+            tokio::task::spawn_blocking(move || get_commands(&paths, &query_str))
+                .await
+                .unwrap_or_default();
+
         items.append(&mut command_items);
         items = deduplicate_candidates(items);
     }
@@ -1080,12 +1092,32 @@ fn deduplicate_candidates(items: Vec<Candidate>) -> Vec<Candidate> {
     result
 }
 
-fn get_file_completions(dir: &str, prefix: &str) -> Vec<Candidate> {
+async fn get_file_completions(dir: &str, prefix: &str) -> Vec<Candidate> {
     debug!("get_file_completions: dir={}, prefix={}", dir, prefix);
-    get_file_completions_with_filter(dir, prefix, None)
+    get_file_completions_with_filter(dir, prefix, None).await
 }
 
-fn get_file_completions_with_filter(
+async fn get_file_completions_with_filter(
+    dir: &str,
+    prefix: &str,
+    filter_prefix: Option<&str>,
+) -> Vec<Candidate> {
+    let dir_owned = dir.to_string();
+    let prefix_owned = prefix.to_string();
+    let filter_prefix_owned = filter_prefix.map(|s| s.to_string());
+
+    tokio::task::spawn_blocking(move || {
+        get_file_completions_with_filter_sync(
+            &dir_owned,
+            &prefix_owned,
+            filter_prefix_owned.as_deref(),
+        )
+    })
+    .await
+    .unwrap_or_default()
+}
+
+fn get_file_completions_with_filter_sync(
     dir: &str,
     prefix: &str,
     filter_prefix: Option<&str>,
@@ -1294,7 +1326,7 @@ mod tests {
         File::create(dir.path().join("notes.txt")).unwrap();
 
         // Test fuzzy match "cmp" -> should find completion.rs
-        let results = super::get_file_completions_with_filter(dir_path, "", Some("cmp"));
+        let results = super::get_file_completions_with_filter_sync(dir_path, "", Some("cmp"));
         assert!(!results.is_empty());
         assert!(
             results
@@ -1303,7 +1335,7 @@ mod tests {
         );
 
         // Test fuzzy match "cc" -> should find cache.rs (and maybe command.rs / completion.rs depending on score, but definitely cache.rs)
-        let results_cc = super::get_file_completions_with_filter(dir_path, "", Some("cc"));
+        let results_cc = super::get_file_completions_with_filter_sync(dir_path, "", Some("cc"));
         assert!(!results_cc.is_empty());
         assert!(
             results_cc
@@ -1312,7 +1344,7 @@ mod tests {
         );
 
         // Test no match
-        let results_none = super::get_file_completions_with_filter(dir_path, "", Some("xyz"));
+        let results_none = super::get_file_completions_with_filter_sync(dir_path, "", Some("xyz"));
         assert!(results_none.is_empty());
     }
 

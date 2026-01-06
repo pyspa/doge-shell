@@ -50,6 +50,8 @@ pub struct Environment {
     pub ai_service: Option<Arc<dyn AiService + Send + Sync>>,
     // Z command exclusion patterns
     pub z_exclude: Vec<String>,
+    /// Flags if the shell is currently in startup mode (e.g. running config.lisp)
+    pub startup_mode: bool,
 }
 
 fn default_input_preferences() -> InputPreferences {
@@ -112,6 +114,7 @@ impl Environment {
             output_history: OutputHistory::new(),
             ai_service: None,
             z_exclude: parse_z_exclude(),
+            startup_mode: false,
         }));
 
         {
@@ -158,6 +161,7 @@ impl Environment {
             output_history: OutputHistory::new(),
             ai_service: parent.read().ai_service.clone(),
             z_exclude: parent.read().z_exclude.clone(),
+            startup_mode: false, // Extended environments (subshells) are not in startup mode
         }))
     }
 
@@ -301,9 +305,13 @@ impl Environment {
     }
 
     pub fn add_mcp_server(&mut self, server: McpServerConfig) {
-        // Try to add to the active manager first
-        if let Err(e) = self.mcp_manager.write().add_server_blocking(server.clone()) {
-            eprintln!("Failed to register MCP server: {}", e);
+        // In startup mode, we only register the server config but don't connect yet.
+        // The actual connection happens asynchronously via reload_mcp_config() later.
+        if !self.startup_mode {
+            // Try to add to the active manager first (synchronously blocking)
+            if let Err(e) = self.mcp_manager.write().add_server_blocking(server.clone()) {
+                eprintln!("Failed to register MCP server: {}", e);
+            }
         }
         self.mcp_servers.push(server);
     }

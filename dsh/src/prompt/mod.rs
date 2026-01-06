@@ -454,7 +454,9 @@ impl Prompt {
     }
 
     pub fn invalidate_git_cache(&mut self) {
-        self.git_status_cache = None;
+        // We do not clear the cache here to implement Stale-While-Revalidate.
+        // The Repl triggers a background check separately.
+        // Keeping the old status prevents flickering.
     }
 
     pub fn trigger_git_check(&self) {

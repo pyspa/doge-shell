@@ -4,8 +4,8 @@ use doge_shell::completion::command::{
 use doge_shell::completion::generator::CompletionGenerator;
 use doge_shell::completion::parser::CommandLineParser;
 
-#[test]
-fn test_context_switching_logic() {
+#[tokio::test]
+async fn test_context_switching_logic() {
     // Create a mock DB to have controlled environment
     let mut db = CommandCompletionDatabase::new();
     let mock_completion = CommandCompletion {

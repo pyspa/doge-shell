@@ -126,12 +126,35 @@ pub async fn run_shell() -> ExitCode {
     std::thread::spawn(move || {
         match crate::history::History::from_file("dsh_cmd_history") {
             Ok(mut history) => {
-                // Preload history
-                if let Err(e) = history.load() {
-                    tracing::warn!("Failed to load history items: {}", e);
-                }
+                // Preload recent history (fast, immediate)
+                let min_timestamp = match history.load_recent(1000) {
+                    Ok(ts) => ts,
+                    Err(e) => {
+                        tracing::warn!("Failed to load recent history items: {}", e);
+                        0
+                    }
+                };
                 history.start_background_writer();
-                *cmd_history.lock() = history;
+
+                // Swap shared history immediately so user has something
+                {
+                    *cmd_history.lock() = history.clone();
+                }
+
+                // Load the rest of history in background (slower)
+                if min_timestamp > 0 {
+                    match history.load_older_than(min_timestamp, 9000) {
+                        Ok(entries) => {
+                            if !entries.is_empty() {
+                                let mut locked = cmd_history.lock();
+                                locked.prepend(entries);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to load remaining history: {}", e);
+                        }
+                    }
+                }
             }
             Err(e) => {
                 tracing::warn!("Failed to load command history: {}", e);

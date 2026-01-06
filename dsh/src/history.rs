@@ -31,14 +31,14 @@ fn get_current_context() -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Entry {
     pub entry: String,
     pub when: i64,
     pub count: i64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct History {
     db: Option<Db>,
@@ -154,22 +154,25 @@ impl History {
     }
 
     pub fn load(&mut self) -> Result<usize> {
+        self.load_recent(10000).map(|_| self.histories.len())
+    }
+
+    pub fn load_recent(&mut self, limit: usize) -> Result<i64> {
+        let mut min_timestamp = 0;
         if let Some(db) = &self.db {
             let conn = db.get_connection();
-            // Use subquery to get recent 10000 items, then sort by timestamp ASC for correct history order
-            // Note: command is UNIQUE in command_history, so usage of LIMIT is safe without GROUP BY
             let mut stmt = conn.prepare(
                 "SELECT command, timestamp, count 
                  FROM (
                     SELECT command, timestamp, count 
                     FROM command_history 
                     ORDER BY timestamp DESC 
-                    LIMIT 10000
+                    LIMIT ?1
                  ) 
                  ORDER BY timestamp ASC",
             )?;
 
-            let rows = stmt.query_map([], |row| {
+            let rows = stmt.query_map([limit as i64], |row| {
                 Ok(Entry {
                     entry: row.get(0)?,
                     when: row.get(1)?,
@@ -179,14 +182,70 @@ impl History {
 
             self.histories.clear();
 
-            // Direct collect as database guarantees uniqueness
             for r in rows.flatten() {
                 self.histories.push(r);
             }
 
+            if let Some(first) = self.histories.first() {
+                min_timestamp = first.when;
+            }
+
             self.current_index = self.histories.len();
         }
-        Ok(self.histories.len())
+        Ok(min_timestamp)
+    }
+
+    pub fn load_older_than(&self, timestamp: i64, limit: usize) -> Result<Vec<Entry>> {
+        let mut entries = Vec::new();
+        if let Some(db) = &self.db {
+            let conn = db.get_connection();
+            let mut stmt = conn.prepare(
+                "SELECT command, timestamp, count 
+                 FROM (
+                    SELECT command, timestamp, count 
+                    FROM command_history 
+                    WHERE timestamp < ?1
+                    ORDER BY timestamp DESC 
+                    LIMIT ?2
+                 ) 
+                 ORDER BY timestamp ASC",
+            )?;
+
+            let rows = stmt.query_map(rusqlite::params![timestamp, limit as i64], |row| {
+                Ok(Entry {
+                    entry: row.get(0)?,
+                    when: row.get(1)?,
+                    count: row.get(2).unwrap_or(1),
+                })
+            })?;
+
+            for r in rows.flatten() {
+                entries.push(r);
+            }
+        }
+        Ok(entries)
+    }
+
+    pub fn prepend(&mut self, mut entries: Vec<Entry>) {
+        // entries are ASC. self.histories are ASC.
+        // entries are older than self.histories.
+        // So we just push self.histories ONTO entries, then swap?
+        // Or splice.
+        // histories: [Recent1, Recent2]
+        // entries:   [Older1,  Older2]
+        // Result:    [Older1,  Older2, Recent1, Recent2]
+
+        // Optimize: histories might have grown since we loaded 'recent'.
+        // But 'entries' are definitely older than what was 'first' when we called load_recent.
+        // So it is safe to prepend.
+        // HOWEVER, we must check for duplicates if we want to be 100% robust against racing writes.
+        // But for now, assuming simple load sequence.
+
+        // Using vector append is O(N).
+
+        entries.append(&mut self.histories);
+        self.histories = entries;
+        self.reset_index(); // Or try to preserve relative index? Usually we are at end.
     }
 
     pub fn reload(&mut self) -> Result<()> {

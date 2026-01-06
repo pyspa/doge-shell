@@ -65,6 +65,7 @@ pub struct CacheLookup<T: CacheableCandidate> {
 #[derive(Debug)]
 pub struct CompletionCache<T: CacheableCandidate> {
     entries: RwLock<HashMap<String, CacheEntry<T>>>,
+    pending: RwLock<std::collections::HashSet<String>>,
     default_ttl: Duration,
 }
 
@@ -72,6 +73,7 @@ impl<T: CacheableCandidate> CompletionCache<T> {
     pub fn new(default_ttl: Duration) -> Self {
         Self {
             entries: RwLock::new(HashMap::new()),
+            pending: RwLock::new(std::collections::HashSet::new()),
             default_ttl,
         }
     }
@@ -81,6 +83,18 @@ impl<T: CacheableCandidate> CompletionCache<T> {
         Self::purge_expired_locked(&mut guard);
         debug!("cache set for '{}'. len: {}", key, candidates.len());
         guard.insert(key, CacheEntry::new(candidates, self.default_ttl));
+    }
+
+    pub fn mark_pending(&self, key: String) -> bool {
+        self.pending.write().insert(key)
+    }
+
+    pub fn clear_pending(&self, key: &str) {
+        self.pending.write().remove(key);
+    }
+
+    pub fn is_pending(&self, key: &str) -> bool {
+        self.pending.read().contains(key)
     }
 
     pub fn extend_ttl(&self, key: &str) -> bool {

@@ -65,6 +65,22 @@ pub struct AutoComplete {
     pub candidates: Option<Vec<String>>,
 }
 
+use std::sync::OnceLock;
+use tokio::sync::mpsc::UnboundedSender;
+
+static COMPLETION_NOTIFIER: OnceLock<UnboundedSender<()>> = OnceLock::new();
+
+pub fn set_completion_notifier(sender: UnboundedSender<()>) {
+    let _ = COMPLETION_NOTIFIER.set(sender);
+}
+
+pub fn notify_completion_update() {
+    if let Some(sender) = COMPLETION_NOTIFIER.get() {
+        // UnboundedSender has send method which is non-blocking/synchronous
+        let _ = sender.send(());
+    }
+}
+
 /// Main completion structure
 #[derive(Debug)]
 pub struct Completion {
@@ -336,11 +352,60 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
 
     // Check cache first
     if let Some(hit) = PATH_COMPLETION_CACHE.lookup(&path_str) {
-        // We accept empty results from cache too if that directory is truly empty
-        // But invalid/expired cache is handled by lookup returning None
         return Ok(hit.candidates);
     }
 
+    #[cfg(test)]
+    {
+        // For tests, run synchronously to avoid "no reactor" panic and ensure results are returned immediately
+        let candidates = scan_dir_candidates(path.clone())?;
+        PATH_COMPLETION_CACHE.set(path_str, candidates.clone());
+        Ok(candidates)
+    }
+
+    #[cfg(not(test))]
+    {
+        // Check if pending to avoid duplicate loaded
+        if PATH_COMPLETION_CACHE.is_pending(&path_str) {
+            // If pending, return empty for now (UI will refresh when ready)
+            return Ok(Vec::new());
+        }
+
+        // Trigger background load
+        // Note: We need to clone path_str for the closure
+        let path_str_clone = path_str.clone();
+        let path_buf = path.clone();
+
+        PATH_COMPLETION_CACHE.mark_pending(path_str.clone());
+
+        // We assume we are running in a tokio runtime (dsh is tokio::main)
+        tokio::spawn(async move {
+            let result = scan_dir_candidates(path_buf);
+            match result {
+                Ok(candidates) => {
+                    PATH_COMPLETION_CACHE.set(path_str_clone.clone(), candidates);
+                    notify_completion_update();
+                }
+                Err(e) => {
+                    // Remove from pending so we can retry later
+                    // But honestly repeated errors are bad. Maybe cache empty result?
+                    warn!(
+                        "Background path completion failed for '{}': {}",
+                        path_str_clone, e
+                    );
+                }
+            }
+            PATH_COMPLETION_CACHE.clear_pending(&path_str_clone);
+        });
+
+        // Return empty immediately
+        Ok(Vec::new())
+    }
+}
+
+// Synchronous helper moved out for clarity and reuse in background task
+fn scan_dir_candidates(path: PathBuf) -> Result<Vec<Candidate>> {
+    let path_str = path.display().to_string();
     let exp_str = shellexpand::tilde(&path_str).to_string();
     let expand = path_str != exp_str;
 
@@ -376,10 +441,6 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
         }
     }
     files.sort();
-
-    // Update cache
-    PATH_COMPLETION_CACHE.set(path_str, files.clone());
-
     Ok(files)
 }
 

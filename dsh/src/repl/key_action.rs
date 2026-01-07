@@ -191,6 +191,7 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
 
         // AI機能
         (KeyCode::Char('f'), ALT) => KeyAction::AiAutoFix,
+        (KeyCode::Char('s'), ALT) => KeyAction::ForceAiSuggestion,
         (KeyCode::Char('c'), ALT) => KeyAction::AiSmartCommit,
         (KeyCode::Char('a'), ALT) => KeyAction::AiQuickActions,
         (KeyCode::Char('d'), ALT) => KeyAction::AiDiagnose,
@@ -749,5 +750,14 @@ mod tests {
             ..ctx_default()
         };
         assert_eq!(determine_key_action(&k, &ctx), KeyAction::AcceptCompletion);
+    }
+
+    #[test]
+    fn test_alt_s_is_force_ai_suggestion() {
+        let k = key(KeyCode::Char('s'), ALT);
+        assert_eq!(
+            determine_key_action(&k, &ctx_default()),
+            KeyAction::ForceAiSuggestion
+        );
     }
 }

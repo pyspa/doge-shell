@@ -10,6 +10,9 @@ impl Action for ClearScreenAction {
     fn description(&self) -> &str {
         "Clear the terminal screen"
     }
+    fn category(&self) -> &str {
+        "Shell"
+    }
     fn execute(&self, _shell: &mut Shell) -> Result<()> {
         print!("\x1B[2J\x1B[1;1H");
         std::io::Write::flush(&mut std::io::stdout())?;

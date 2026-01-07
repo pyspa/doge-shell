@@ -112,6 +112,27 @@ impl Db {
             [],
         )?;
 
+        // Bookmarks Table (for command bookmarking)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS bookmarks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                command TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                use_count INTEGER DEFAULT 0
+            )",
+            [],
+        )?;
+
+        // Directory Aliases Table (for z command enhancement)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS dir_aliases (
+                name TEXT PRIMARY KEY,
+                path TEXT NOT NULL
+            )",
+            [],
+        )?;
+
         Ok(())
     }
 

@@ -339,11 +339,12 @@ impl ShellProxy for Shell {
 
                 // Check for alias match first
                 if !query.is_empty()
-                    && let Some(alias_path) = self.get_dir_alias(&query) {
-                        ctx.write_stdout(&format!("z: jumping to {} (alias)", alias_path))?;
-                        self.changepwd(&alias_path)?;
-                        return Ok(());
-                    }
+                    && let Some(alias_path) = self.get_dir_alias(&query)
+                {
+                    ctx.write_stdout(&format!("z: jumping to {} (alias)", alias_path))?;
+                    self.changepwd(&alias_path)?;
+                    return Ok(());
+                }
 
                 // Handle "z -" for previous directory
                 if query == "-" {

@@ -280,17 +280,13 @@ impl Environment {
         for path in &self.paths {
             if let Ok(entries) = read_dir(path) {
                 for entry in entries.flatten() {
-                    if let Ok(ft) = entry.file_type() {
-                        if ft.is_file() || ft.is_symlink() {
-                            if let Ok(meta) = entry.metadata() {
-                                if meta.permissions().mode() & 0o111 != 0 {
-                                    if let Some(name) = entry.file_name().to_str() {
+                    if let Ok(ft) = entry.file_type()
+                        && (ft.is_file() || ft.is_symlink())
+                            && let Ok(meta) = entry.metadata()
+                                && meta.permissions().mode() & 0o111 != 0
+                                    && let Some(name) = entry.file_name().to_str() {
                                         names.insert(name.to_string());
                                     }
-                                }
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -470,17 +466,13 @@ pub fn collect_executables(paths: &[String]) -> Vec<String> {
     for path in paths {
         if let Ok(entries) = read_dir(path) {
             for entry in entries.flatten() {
-                if let Ok(ft) = entry.file_type() {
-                    if ft.is_file() || ft.is_symlink() {
-                        if let Ok(meta) = entry.metadata() {
-                            if meta.permissions().mode() & 0o111 != 0 {
-                                if let Some(name) = entry.file_name().to_str() {
+                if let Ok(ft) = entry.file_type()
+                    && (ft.is_file() || ft.is_symlink())
+                        && let Ok(meta) = entry.metadata()
+                            && meta.permissions().mode() & 0o111 != 0
+                                && let Some(name) = entry.file_name().to_str() {
                                     names.insert(name.to_string());
                                 }
-                            }
-                        }
-                    }
-                }
             }
         }
     }

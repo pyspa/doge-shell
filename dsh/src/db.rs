@@ -91,6 +91,27 @@ impl Db {
             [],
         )?;
 
+        // Snippets Table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS snippets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                command TEXT NOT NULL,
+                description TEXT,
+                tags TEXT,
+                created_at INTEGER NOT NULL,
+                last_used INTEGER,
+                use_count INTEGER DEFAULT 0
+            )",
+            [],
+        )?;
+
+        // Create index for snippet name lookups
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_snippets_name ON snippets(name)",
+            [],
+        )?;
+
         Ok(())
     }
 

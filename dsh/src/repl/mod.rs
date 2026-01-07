@@ -1316,7 +1316,7 @@ impl<'a> Repl<'a> {
                         // Clean up quotes if present for path check
                         let clean_word = word.trim_matches(|c| c == '\'' || c == '"');
                         let path = std::path::Path::new(clean_word);
-                        if path.exists() {
+                        if crate::completion::is_path_cached(path) {
                             *kind = crate::input::ColorType::ValidPath;
                         }
                     }

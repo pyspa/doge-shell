@@ -408,6 +408,31 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
     }
 }
 
+pub fn is_path_cached(path: &Path) -> bool {
+    let parent = match path.parent() {
+        Some(p) if p.as_os_str().is_empty() => PathBuf::from("."),
+        Some(p) => p.to_path_buf(),
+        None => return false,
+    };
+
+    // This calls path_completion_path which triggers background load if not cached
+    if let Ok(candidates) = path_completion_path(parent) {
+        let path_str = path.display().to_string();
+        let search = path_str.trim_end_matches(std::path::MAIN_SEPARATOR);
+
+        for cand in candidates {
+            if let Candidate::Path(p) = cand {
+                let p_clean = p.trim_end_matches(std::path::MAIN_SEPARATOR);
+                if p_clean == search {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
 // Synchronous helper moved out for clarity and reuse in background task
 fn scan_dir_candidates(path: PathBuf) -> Result<Vec<Candidate>> {
     let path_str = path.display().to_string();

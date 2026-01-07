@@ -17,6 +17,7 @@ pub mod mcp;
 pub mod notebook;
 pub mod output_history;
 pub mod project;
+pub mod snippet;
 pub use project::Project;
 
 /// Doge Shell specific error types

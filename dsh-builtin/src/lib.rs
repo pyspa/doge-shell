@@ -48,6 +48,7 @@ mod read;
 mod reload;
 pub mod serve;
 mod set;
+mod snippet;
 pub mod tm;
 mod uuid;
 mod var;
@@ -177,6 +178,40 @@ pub trait ShellProxy {
     fn select_item(&mut self, _items: Vec<String>) -> Result<Option<String>> {
         Err(anyhow::anyhow!("select_item not implemented"))
     }
+
+    // Snippet management methods
+    /// Adds a new snippet
+    fn add_snippet(
+        &mut self,
+        _name: String,
+        _command: String,
+        _description: Option<String>,
+    ) -> bool {
+        false
+    }
+
+    /// Removes a snippet by name, returns true if it existed
+    fn remove_snippet(&mut self, _name: &str) -> bool {
+        false
+    }
+
+    /// Lists all snippets
+    fn list_snippets(&self) -> Vec<dsh_types::snippet::Snippet> {
+        Vec::new()
+    }
+
+    /// Gets a snippet by name
+    fn get_snippet(&self, _name: &str) -> Option<dsh_types::snippet::Snippet> {
+        None
+    }
+
+    /// Updates a snippet's command and description
+    fn update_snippet(&mut self, _name: &str, _command: &str, _description: Option<&str>) -> bool {
+        false
+    }
+
+    /// Records usage of a snippet
+    fn record_snippet_use(&mut self, _name: &str) {}
 }
 
 use std::any::Any;
@@ -546,6 +581,15 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             "mcp",
             Box::new(BuiltinCommandFn::new(mcp::command, mcp::description()))
                 as Box<dyn BuiltinCommandTrait>,
+        );
+
+        // Snippet management command
+        builtin.insert(
+            "snippet",
+            Box::new(BuiltinCommandFn::new(
+                snippet::command,
+                snippet::description(),
+            )) as Box<dyn BuiltinCommandTrait>,
         );
 
         Mutex::new(builtin)

@@ -991,6 +991,136 @@ impl ShellProxy for Shell {
     fn open_editor(&mut self, content: &str, extension: &str) -> Result<String> {
         crate::utils::editor::open_editor(content, extension)
     }
+
+    fn add_snippet(&mut self, name: String, command: String, description: Option<String>) -> bool {
+        match crate::environment::get_data_file("dsh_snippets.db") {
+            Ok(db_path) => match crate::db::Db::new(db_path) {
+                Ok(db) => {
+                    let manager = crate::snippet::SnippetManager::with_db(db);
+                    manager.add(&name, &command, description.as_deref()).is_ok()
+                }
+                Err(e) => {
+                    warn!("Failed to open snippet database: {}", e);
+                    false
+                }
+            },
+            Err(e) => {
+                warn!("Failed to get snippet database path: {}", e);
+                false
+            }
+        }
+    }
+
+    fn remove_snippet(&mut self, name: &str) -> bool {
+        match crate::environment::get_data_file("dsh_snippets.db") {
+            Ok(db_path) => match crate::db::Db::new(db_path) {
+                Ok(db) => {
+                    let manager = crate::snippet::SnippetManager::with_db(db);
+                    manager.remove(name).unwrap_or(false)
+                }
+                Err(e) => {
+                    warn!("Failed to open snippet database: {}", e);
+                    false
+                }
+            },
+            Err(e) => {
+                warn!("Failed to get snippet database path: {}", e);
+                false
+            }
+        }
+    }
+
+    fn list_snippets(&self) -> Vec<dsh_types::snippet::Snippet> {
+        match crate::environment::get_data_file("dsh_snippets.db") {
+            Ok(db_path) => match crate::db::Db::new(db_path) {
+                Ok(db) => {
+                    let manager = crate::snippet::SnippetManager::with_db(db);
+                    manager
+                        .list()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|s| dsh_types::snippet::Snippet {
+                            id: s.id,
+                            name: s.name,
+                            command: s.command,
+                            description: s.description,
+                            tags: s.tags,
+                            created_at: s.created_at,
+                            last_used: s.last_used,
+                            use_count: s.use_count,
+                        })
+                        .collect()
+                }
+                Err(e) => {
+                    warn!("Failed to open snippet database: {}", e);
+                    Vec::new()
+                }
+            },
+            Err(e) => {
+                warn!("Failed to get snippet database path: {}", e);
+                Vec::new()
+            }
+        }
+    }
+
+    fn get_snippet(&self, name: &str) -> Option<dsh_types::snippet::Snippet> {
+        match crate::environment::get_data_file("dsh_snippets.db") {
+            Ok(db_path) => match crate::db::Db::new(db_path) {
+                Ok(db) => {
+                    let manager = crate::snippet::SnippetManager::with_db(db);
+                    manager
+                        .get(name)
+                        .ok()
+                        .flatten()
+                        .map(|s| dsh_types::snippet::Snippet {
+                            id: s.id,
+                            name: s.name,
+                            command: s.command,
+                            description: s.description,
+                            tags: s.tags,
+                            created_at: s.created_at,
+                            last_used: s.last_used,
+                            use_count: s.use_count,
+                        })
+                }
+                Err(e) => {
+                    warn!("Failed to open snippet database: {}", e);
+                    None
+                }
+            },
+            Err(e) => {
+                warn!("Failed to get snippet database path: {}", e);
+                None
+            }
+        }
+    }
+
+    fn update_snippet(&mut self, name: &str, command: &str, description: Option<&str>) -> bool {
+        match crate::environment::get_data_file("dsh_snippets.db") {
+            Ok(db_path) => match crate::db::Db::new(db_path) {
+                Ok(db) => {
+                    let manager = crate::snippet::SnippetManager::with_db(db);
+                    manager.update(name, command, description).unwrap_or(false)
+                }
+                Err(e) => {
+                    warn!("Failed to open snippet database: {}", e);
+                    false
+                }
+            },
+            Err(e) => {
+                warn!("Failed to get snippet database path: {}", e);
+                false
+            }
+        }
+    }
+
+    fn record_snippet_use(&mut self, name: &str) {
+        if let Ok(db_path) = crate::environment::get_data_file("dsh_snippets.db")
+            && let Ok(db) = crate::db::Db::new(db_path) {
+                let manager = crate::snippet::SnippetManager::with_db(db);
+                let _ = manager.record_use(name);
+            }
+    }
 }
 
 #[cfg(test)]

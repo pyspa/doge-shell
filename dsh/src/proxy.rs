@@ -268,6 +268,62 @@ impl ShellProxy for Shell {
                 }
             }
             "z" => {
+                // Handle subcommands first
+                if argv.len() >= 2 {
+                    match argv[1].as_str() {
+                        "add" => {
+                            // z add <alias> [path]
+                            if argv.len() < 3 {
+                                ctx.write_stderr("z add: usage: z add <alias> [path]")?;
+                                return Err(anyhow::anyhow!("z add: missing alias name"));
+                            }
+                            let alias = &argv[2];
+                            let path = if argv.len() >= 4 {
+                                argv[3].clone()
+                            } else {
+                                std::env::current_dir()
+                                    .map(|p| p.display().to_string())
+                                    .unwrap_or_default()
+                            };
+                            if self.add_dir_alias(alias.clone(), path.clone()) {
+                                ctx.write_stdout(&format!("✓ Added alias: {} → {}", alias, path))?;
+                            } else {
+                                ctx.write_stderr(&format!(
+                                    "z add: failed to add alias '{}'",
+                                    alias
+                                ))?;
+                            }
+                            return Ok(());
+                        }
+                        "remove" | "rm" => {
+                            if argv.len() < 3 {
+                                ctx.write_stderr("z remove: usage: z remove <alias>")?;
+                                return Err(anyhow::anyhow!("z remove: missing alias name"));
+                            }
+                            let alias = &argv[2];
+                            if self.remove_dir_alias(alias) {
+                                ctx.write_stdout(&format!("✓ Removed alias: {}", alias))?;
+                            } else {
+                                ctx.write_stderr(&format!("z remove: no alias named '{}'", alias))?;
+                            }
+                            return Ok(());
+                        }
+                        "aliases" | "alias" => {
+                            let aliases = self.list_dir_aliases();
+                            if aliases.is_empty() {
+                                ctx.write_stdout("No directory aliases defined. Use 'z add <alias> [path]' to create one.")?;
+                            } else {
+                                ctx.write_stdout("Directory aliases:")?;
+                                for (name, path) in aliases {
+                                    ctx.write_stdout(&format!("  {} → {}", name, path))?;
+                                }
+                            }
+                            return Ok(());
+                        }
+                        _ => {}
+                    }
+                }
+
                 let (interactive, list, clean, query) = parse_z_args(&argv);
 
                 if clean {
@@ -280,6 +336,14 @@ impl ShellProxy for Shell {
                         return Ok(());
                     }
                 }
+
+                // Check for alias match first
+                if !query.is_empty()
+                    && let Some(alias_path) = self.get_dir_alias(&query) {
+                        ctx.write_stdout(&format!("z: jumping to {} (alias)", alias_path))?;
+                        self.changepwd(&alias_path)?;
+                        return Ok(());
+                    }
 
                 // Handle "z -" for previous directory
                 if query == "-" {
@@ -1116,10 +1180,187 @@ impl ShellProxy for Shell {
 
     fn record_snippet_use(&mut self, name: &str) {
         if let Ok(db_path) = crate::environment::get_data_file("dsh_snippets.db")
-            && let Ok(db) = crate::db::Db::new(db_path) {
-                let manager = crate::snippet::SnippetManager::with_db(db);
-                let _ = manager.record_use(name);
-            }
+            && let Ok(db) = crate::db::Db::new(db_path)
+        {
+            let manager = crate::snippet::SnippetManager::with_db(db);
+            let _ = manager.record_use(name);
+        }
+    }
+
+    fn add_bookmark(&mut self, name: String, command: String) -> bool {
+        match crate::environment::get_data_file("dsh.db") {
+            Ok(db_path) => match crate::db::Db::new(db_path) {
+                Ok(db) => {
+                    let conn = db.get_connection();
+                    let now = chrono::Utc::now().timestamp();
+                    conn.execute(
+                        "INSERT INTO bookmarks (name, command, created_at, use_count) VALUES (?1, ?2, ?3, 0)",
+                        rusqlite::params![name, command, now],
+                    ).is_ok()
+                }
+                Err(_) => false,
+            },
+            Err(_) => false,
+        }
+    }
+
+    fn remove_bookmark(&mut self, name: &str) -> bool {
+        match crate::environment::get_data_file("dsh.db") {
+            Ok(db_path) => match crate::db::Db::new(db_path) {
+                Ok(db) => {
+                    let conn = db.get_connection();
+                    conn.execute(
+                        "DELETE FROM bookmarks WHERE name = ?1",
+                        rusqlite::params![name],
+                    )
+                    .map(|c| c > 0)
+                    .unwrap_or(false)
+                }
+                Err(_) => false,
+            },
+            Err(_) => false,
+        }
+    }
+
+    fn list_bookmarks(&self) -> Vec<(String, String, i64)> {
+        match crate::environment::get_data_file("dsh.db") {
+            Ok(db_path) => match crate::db::Db::new(db_path) {
+                Ok(db) => {
+                    let conn = db.get_connection();
+                    let mut stmt = match conn.prepare(
+                        "SELECT name, command, use_count FROM bookmarks ORDER BY use_count DESC, name ASC",
+                    ) {
+                        Ok(s) => s,
+                        Err(_) => return Vec::new(),
+                    };
+                    let rows = stmt.query_map([], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i64>(2)?,
+                        ))
+                    });
+                    rows.map(|r| r.filter_map(|r| r.ok()).collect())
+                        .unwrap_or_default()
+                }
+                Err(_) => Vec::new(),
+            },
+            Err(_) => Vec::new(),
+        }
+    }
+
+    fn get_bookmark(&self, name: &str) -> Option<(String, i64)> {
+        match crate::environment::get_data_file("dsh.db") {
+            Ok(db_path) => match crate::db::Db::new(db_path) {
+                Ok(db) => {
+                    let conn = db.get_connection();
+                    conn.query_row(
+                        "SELECT command, use_count FROM bookmarks WHERE name = ?1",
+                        rusqlite::params![name],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                    )
+                    .ok()
+                }
+                Err(_) => None,
+            },
+            Err(_) => None,
+        }
+    }
+
+    fn record_bookmark_use(&mut self, name: &str) {
+        if let Ok(db_path) = crate::environment::get_data_file("dsh.db")
+            && let Ok(db) = crate::db::Db::new(db_path)
+        {
+            let conn = db.get_connection();
+            let _ = conn.execute(
+                "UPDATE bookmarks SET use_count = use_count + 1 WHERE name = ?1",
+                rusqlite::params![name],
+            );
+        }
+    }
+
+    fn get_last_command(&self) -> Option<String> {
+        if let Some(ref history) = self.cmd_history {
+            let history = history.lock();
+            history.iter().next().map(|e| e.entry.clone())
+        } else {
+            None
+        }
+    }
+
+    fn add_dir_alias(&mut self, name: String, path: String) -> bool {
+        match crate::environment::get_data_file("dsh.db") {
+            Ok(db_path) => match crate::db::Db::new(db_path) {
+                Ok(db) => {
+                    let conn = db.get_connection();
+                    conn.execute(
+                        "INSERT OR REPLACE INTO dir_aliases (name, path) VALUES (?1, ?2)",
+                        rusqlite::params![name, path],
+                    )
+                    .is_ok()
+                }
+                Err(_) => false,
+            },
+            Err(_) => false,
+        }
+    }
+
+    fn remove_dir_alias(&mut self, name: &str) -> bool {
+        match crate::environment::get_data_file("dsh.db") {
+            Ok(db_path) => match crate::db::Db::new(db_path) {
+                Ok(db) => {
+                    let conn = db.get_connection();
+                    conn.execute(
+                        "DELETE FROM dir_aliases WHERE name = ?1",
+                        rusqlite::params![name],
+                    )
+                    .map(|c| c > 0)
+                    .unwrap_or(false)
+                }
+                Err(_) => false,
+            },
+            Err(_) => false,
+        }
+    }
+
+    fn list_dir_aliases(&self) -> Vec<(String, String)> {
+        match crate::environment::get_data_file("dsh.db") {
+            Ok(db_path) => match crate::db::Db::new(db_path) {
+                Ok(db) => {
+                    let conn = db.get_connection();
+                    let mut stmt =
+                        match conn.prepare("SELECT name, path FROM dir_aliases ORDER BY name") {
+                            Ok(s) => s,
+                            Err(_) => return Vec::new(),
+                        };
+                    let rows = stmt.query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    });
+                    rows.map(|r| r.filter_map(|r| r.ok()).collect())
+                        .unwrap_or_default()
+                }
+                Err(_) => Vec::new(),
+            },
+            Err(_) => Vec::new(),
+        }
+    }
+
+    fn get_dir_alias(&self, name: &str) -> Option<String> {
+        match crate::environment::get_data_file("dsh.db") {
+            Ok(db_path) => match crate::db::Db::new(db_path) {
+                Ok(db) => {
+                    let conn = db.get_connection();
+                    conn.query_row(
+                        "SELECT path FROM dir_aliases WHERE name = ?1",
+                        rusqlite::params![name],
+                        |row| row.get(0),
+                    )
+                    .ok()
+                }
+                Err(_) => None,
+            },
+            Err(_) => None,
+        }
     }
 }
 

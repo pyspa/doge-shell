@@ -22,6 +22,7 @@ mod markdown;
 mod safe_run;
 pub use chatgpt::execute_chat_message;
 pub use chatgpt::{McpConnectionStatus, McpManager, McpServerStatus};
+mod bookmark;
 pub mod command_timing;
 mod commit_ai;
 pub mod comp_gen;
@@ -212,6 +213,56 @@ pub trait ShellProxy {
 
     /// Records usage of a snippet
     fn record_snippet_use(&mut self, _name: &str) {}
+
+    // Bookmark management methods
+    /// Adds a new bookmark
+    fn add_bookmark(&mut self, _name: String, _command: String) -> bool {
+        false
+    }
+
+    /// Removes a bookmark by name
+    fn remove_bookmark(&mut self, _name: &str) -> bool {
+        false
+    }
+
+    /// Lists all bookmarks as (name, command, use_count);
+    fn list_bookmarks(&self) -> Vec<(String, String, i64)> {
+        Vec::new()
+    }
+
+    /// Gets a bookmark by name (command, use_count)
+    fn get_bookmark(&self, _name: &str) -> Option<(String, i64)> {
+        None
+    }
+
+    /// Records usage of a bookmark
+    fn record_bookmark_use(&mut self, _name: &str) {}
+
+    /// Gets the last executed command from history
+    fn get_last_command(&self) -> Option<String> {
+        None
+    }
+
+    // Directory alias methods for z enhancement
+    /// Adds a directory alias
+    fn add_dir_alias(&mut self, _name: String, _path: String) -> bool {
+        false
+    }
+
+    /// Removes a directory alias
+    fn remove_dir_alias(&mut self, _name: &str) -> bool {
+        false
+    }
+
+    /// Lists all directory aliases
+    fn list_dir_aliases(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
+
+    /// Gets a directory alias path by name
+    fn get_dir_alias(&self, _name: &str) -> Option<String> {
+        None
+    }
 }
 
 use std::any::Any;
@@ -589,6 +640,15 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             Box::new(BuiltinCommandFn::new(
                 snippet::command,
                 snippet::description(),
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+
+        // Bookmark management command
+        builtin.insert(
+            "bookmark",
+            Box::new(BuiltinCommandFn::new(
+                bookmark::command,
+                bookmark::description(),
             )) as Box<dyn BuiltinCommandTrait>,
         );
 

@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Represents a command snippet
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct Snippet {
     pub id: i64,
     pub name: String,
@@ -13,4 +12,3 @@ pub struct Snippet {
     pub last_used: Option<i64>,
     pub use_count: i64,
 }
-

@@ -153,9 +153,6 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
         // スペース入力（略語展開チェック）
         (KeyCode::Char(' '), NONE) => KeyAction::ExpandAbbreviationAndInsertSpace,
 
-        // AIサジェスト強制呼び出し (Ctrl+Space)
-        (KeyCode::Char(' '), CTRL) => KeyAction::ForceAiSuggestion,
-
         // Auto-pairing: 開き括弧
         (KeyCode::Char(ch), NONE) if matches!(ch, '(' | '{' | '[' | '\'' | '"') => {
             let close = match ch {

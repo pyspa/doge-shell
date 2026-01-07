@@ -282,11 +282,12 @@ impl Environment {
                 for entry in entries.flatten() {
                     if let Ok(ft) = entry.file_type()
                         && (ft.is_file() || ft.is_symlink())
-                            && let Ok(meta) = entry.metadata()
-                                && meta.permissions().mode() & 0o111 != 0
-                                    && let Some(name) = entry.file_name().to_str() {
-                                        names.insert(name.to_string());
-                                    }
+                        && let Ok(meta) = entry.metadata()
+                        && meta.permissions().mode() & 0o111 != 0
+                        && let Some(name) = entry.file_name().to_str()
+                    {
+                        names.insert(name.to_string());
+                    }
                 }
             }
         }
@@ -468,11 +469,12 @@ pub fn collect_executables(paths: &[String]) -> Vec<String> {
             for entry in entries.flatten() {
                 if let Ok(ft) = entry.file_type()
                     && (ft.is_file() || ft.is_symlink())
-                        && let Ok(meta) = entry.metadata()
-                            && meta.permissions().mode() & 0o111 != 0
-                                && let Some(name) = entry.file_name().to_str() {
-                                    names.insert(name.to_string());
-                                }
+                    && let Ok(meta) = entry.metadata()
+                    && meta.permissions().mode() & 0o111 != 0
+                    && let Some(name) = entry.file_name().to_str()
+                {
+                    names.insert(name.to_string());
+                }
             }
         }
     }

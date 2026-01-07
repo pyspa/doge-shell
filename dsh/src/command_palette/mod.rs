@@ -14,6 +14,10 @@ pub trait Action: Send + Sync {
     fn name(&self) -> &str;
     /// Description of the action
     fn description(&self) -> &str;
+    /// Category of the action (for grouping in UI)
+    fn category(&self) -> &str {
+        "General"
+    }
     /// Execute the action
     fn execute(&self, shell: &mut Shell) -> Result<()>;
 }
@@ -41,7 +45,17 @@ impl ActionRegistry {
     }
 
     pub fn get_all(&self) -> Vec<Arc<dyn Action>> {
-        self.actions.values().cloned().collect()
+        let mut actions: Vec<_> = self.actions.values().cloned().collect();
+        // Sort by category, then by name
+        actions.sort_by(|a, b| {
+            let cat_cmp = a.category().cmp(b.category());
+            if cat_cmp == std::cmp::Ordering::Equal {
+                a.name().cmp(b.name())
+            } else {
+                cat_cmp
+            }
+        });
+        actions
     }
 }
 
@@ -66,9 +80,10 @@ struct PaletteItem {
 
 impl SkimItem for PaletteItem {
     fn text(&self) -> Cow<'_, str> {
+        let cat = self.action.category();
         let name = self.action.name();
         let desc = self.action.description();
-        Cow::Owned(format!("{:<20} {}", name, desc))
+        Cow::Owned(format!("[{:<8}] {:<20} {}", cat, name, desc))
     }
 
     fn output(&self) -> Cow<'_, str> {

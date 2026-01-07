@@ -12,7 +12,7 @@ use std::process::Command;
 use std::sync::Arc;
 
 pub fn description() -> &'static str {
-    "View and open GitHub notifications interactively"
+    "View and open GitHub notifications interactively (--mark-read to mark as read)"
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -72,6 +72,12 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         "Filter by repository (partial match, e.g. owner/repo)",
         "REPO",
     );
+    opts.optflag(
+        "m",
+        "mark-read",
+        "Mark selected notification as read after opening",
+    );
+    opts.optflag("h", "help", "Show help message");
 
     let matches = match opts.parse(&argv) {
         Ok(m) => m,
@@ -80,6 +86,14 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
             return ExitStatus::ExitedWith(1);
         }
     };
+
+    if matches.opt_present("help") {
+        let brief = "Usage: gh-notify [OPTIONS]";
+        ctx.write_stdout(&opts.usage(brief)).ok();
+        return ExitStatus::ExitedWith(0);
+    }
+
+    let mark_read = matches.opt_present("mark-read");
 
     let filter_repos = matches.opt_strs("repo");
 
@@ -195,6 +209,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         let pat_clone = pat.clone();
         let api_url_opt = n.subject.url.clone();
         let fallback_url = n.repository.html_url.clone();
+        let notification_id = n.id.clone();
 
         // Resolve URL in a separate thread
         let handle = std::thread::spawn(move || {
@@ -221,6 +236,23 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
             ctx.write_stderr(&format!("gh-notify: Failed to open browser: {}", e))
                 .ok();
             return ExitStatus::ExitedWith(1);
+        }
+
+        // Mark notification as read if requested
+        if mark_read {
+            let pat_for_mark = pat.clone();
+            let id_for_mark = notification_id.clone();
+            std::thread::spawn(move || {
+                if let Ok(client) = Client::builder()
+                    .user_agent("doge-shell")
+                    .timeout(std::time::Duration::from_secs(10))
+                    .build()
+                {
+                    let _ = mark_notification_as_read(&client, &pat_for_mark, &id_for_mark);
+                }
+            });
+            ctx.write_stdout(&format!("Marked notification {} as read.", notification_id))
+                .ok();
         }
     }
 
@@ -286,6 +318,24 @@ fn resolve_url(client: &Client, pat: &str, api_url_opt: Option<String>) -> Optio
         }
     } else {
         None
+    }
+}
+
+/// Mark a notification as read using the GitHub API
+/// PATCH /notifications/threads/:thread_id
+fn mark_notification_as_read(client: &Client, pat: &str, thread_id: &str) -> Result<(), String> {
+    let url = format!("https://api.github.com/notifications/threads/{}", thread_id);
+    let response = client
+        .patch(&url)
+        .header(AUTHORIZATION, format!("Bearer {}", pat))
+        .send()
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+    // GitHub API returns 205 Reset Content on success
+    if response.status().is_success() || response.status().as_u16() == 205 {
+        Ok(())
+    } else {
+        Err(format!("API error: {}", response.status()))
     }
 }
 

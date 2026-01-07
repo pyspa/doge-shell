@@ -50,6 +50,7 @@ mod reload;
 pub mod serve;
 mod set;
 mod snippet;
+pub mod task;
 pub mod tm;
 mod uuid;
 mod var;
@@ -650,6 +651,13 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
                 bookmark::command,
                 bookmark::description(),
             )) as Box<dyn BuiltinCommandTrait>,
+        );
+
+        // Task runner command
+        builtin.insert(
+            "task",
+            Box::new(BuiltinCommandFn::new(task::command, task::description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
 
         Mutex::new(builtin)

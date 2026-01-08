@@ -26,6 +26,15 @@ impl SkimItem for GitFileItem {
         Cow::Borrowed(&self.path)
     }
 
+    fn preview(&self, _context: PreviewContext) -> ItemPreview {
+        let output = Command::new("git")
+            .args(["diff", "--color=always", "--", &self.path])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_else(|_| "".to_string());
+        ItemPreview::AnsiText(output)
+    }
+
     fn get_index(&self) -> usize {
         self.index
     }
@@ -68,9 +77,7 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
         .multi(true)
         .prompt("Git Add> ".to_string())
         .bind(vec!["Enter:accept".to_string(), "Space:toggle".to_string()])
-        .preview(Some(
-            "git diff --color=always -- {2..} | head -n 100".to_string(),
-        ))
+        .preview(Some("".to_string())) // Preview handled by ItemPreview
         .preview_window("right:60%".to_string())
         .build()
         .unwrap();

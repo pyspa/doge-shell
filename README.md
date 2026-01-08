@@ -83,6 +83,7 @@ The Safety Guard protects against unintended execution of potentially destructiv
 - **URL Shortening**: URL shortening with `dmv` command
 - **Web Server**: Built-in static file server with `serve` command
 - **Configuration Reload**: Runtime configuration reloading with `reload` command
+- **Trigger Command**: Monitor file changes matching a glob pattern and automatically execute commands. Results are captured in the [output history](#command-output-history).
 ### Project Manager
 
 Organize and switch between workspaces efficiently with the integrated Project Manager.
@@ -163,6 +164,7 @@ The shell includes many built-in commands:
 | `dashboard` | Show integrated dashboard (System, Git, GitHub) |
 | `ai-commit` / `aic` | Generate commit message using AI |
 | `tm` | Search and retrieve past command outputs |
+| `trigger` | Monitor file changes and execute commands (saves output to history) |
 | `notebook-play` | Play a notebook file (execute code blocks interactively) |
 | `eproject` | Open current project in Emacs |
 | `eview` | Pipe content to external editor |

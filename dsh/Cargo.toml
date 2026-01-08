@@ -75,6 +75,7 @@ rusqlite = { version = "0.38.0", features = ["bundled"] }
 tempfile = "3.0"
 which = "6.0"
 wait-timeout = "0.2"
+glob = "0.3.3"
 
 
 [dev-dependencies]

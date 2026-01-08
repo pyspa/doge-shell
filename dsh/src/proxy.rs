@@ -225,6 +225,10 @@ impl ShellProxy for Shell {
         }
     }
 
+    fn save_output_history(&mut self, entry: dsh_types::output_history::OutputEntry) {
+        self.environment.write().output_history.push(entry);
+    }
+
     fn changepwd(&mut self, path: &str) -> Result<()> {
         // Save current directory as OLDPWD before changing
         if let Ok(current) = std::env::current_dir() {

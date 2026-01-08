@@ -52,6 +52,7 @@ mod set;
 mod snippet;
 pub mod task;
 pub mod tm;
+mod trigger;
 mod uuid;
 mod var;
 mod z;
@@ -74,6 +75,9 @@ pub trait ShellProxy {
     /// Dispatches a command to the shell's command execution system
     /// Used for commands that need to be handled by the main shell logic
     fn dispatch(&mut self, ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()>;
+
+    /// Saves a command output entry to the shell's history
+    fn save_output_history(&mut self, _entry: OutputEntry) {}
 
     /// Records a path in the shell's path history for frecency-based navigation
     fn save_path_history(&mut self, path: &str);
@@ -658,6 +662,15 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             "task",
             Box::new(BuiltinCommandFn::new(task::command, task::description()))
                 as Box<dyn BuiltinCommandTrait>,
+        );
+
+        // Trigger command
+        builtin.insert(
+            "trigger",
+            Box::new(BuiltinCommandFn::new(
+                trigger::command,
+                trigger::description(),
+            )) as Box<dyn BuiltinCommandTrait>,
         );
 
         Mutex::new(builtin)

@@ -4,26 +4,34 @@ use skim::prelude::*;
 use skim::{Skim, SkimItemReceiver, SkimItemSender};
 use std::borrow::Cow;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 
 pub fn description() -> &'static str {
     "Interactive git add selection"
 }
 
 #[derive(Debug, Clone)]
-struct FileStatus {
+struct GitFileItem {
     path: String,
-    #[allow(dead_code)]
-    status: String,
     display: String,
+    index: usize,
 }
 
-impl SkimItem for FileStatus {
+impl SkimItem for GitFileItem {
     fn text(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.display)
     }
 
     fn output(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.path)
+    }
+
+    fn get_index(&self) -> usize {
+        self.index
+    }
+
+    fn set_index(&mut self, index: usize) {
+        self.index = index;
     }
 }
 
@@ -43,9 +51,18 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
     };
 
     if files.is_empty() {
-        ctx.write_stdout("No modified files.").ok();
         return ExitStatus::ExitedWith(0);
     }
+
+    // Prepare items with index
+    let skim_items: Vec<Arc<dyn SkimItem>> = files
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut f)| {
+            f.index = i;
+            Arc::new(f) as Arc<dyn SkimItem>
+        })
+        .collect();
 
     let options = SkimOptionsBuilder::default()
         .multi(true)
@@ -59,8 +76,8 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
         .unwrap();
 
     let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
-    for file in files {
-        let _ = tx_item.send(Arc::new(file));
+    for item in skim_items {
+        let _ = tx_item.send(item);
     }
     drop(tx_item);
 
@@ -117,7 +134,7 @@ fn is_git_repository() -> bool {
         .unwrap_or(false)
 }
 
-fn get_git_status() -> Result<Vec<FileStatus>, String> {
+fn get_git_status() -> Result<Vec<GitFileItem>, String> {
     let output = Command::new("git")
         .args(["status", "--porcelain"])
         .output()
@@ -134,13 +151,12 @@ fn get_git_status() -> Result<Vec<FileStatus>, String> {
         if line.len() < 4 {
             continue;
         }
-        let status = &line[0..2];
         let path = &line[3..];
 
-        entries.push(FileStatus {
+        entries.push(GitFileItem {
             path: path.to_string(),
-            status: status.to_string(),
             display: line.to_string(),
+            index: 0, // Will be set later
         });
     }
 

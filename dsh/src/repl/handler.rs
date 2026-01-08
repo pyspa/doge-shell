@@ -404,6 +404,48 @@ async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
             }
         }
 
+        // Auto-Notify logic
+        {
+            // Check threshold
+            let threshold = repl
+                .shell
+                .environment
+                .read()
+                .input_preferences
+                .auto_notify_threshold;
+            let enabled = repl
+                .shell
+                .environment
+                .read()
+                .input_preferences
+                .auto_notify_enabled;
+
+            if enabled && elapsed >= std::time::Duration::from_secs(threshold) {
+                use notify_rust::Notification;
+                let summary = if exit_code == 0 {
+                    "Command Completed"
+                } else {
+                    "Command Failed"
+                };
+                let cmd_preview = if input_str.len() > 50 {
+                    format!("{}...", &input_str[..47])
+                } else {
+                    input_str.clone()
+                };
+                let body = format!("'{}' took {:.1}s", cmd_preview, elapsed.as_secs_f64());
+
+                // Fire and forget notification
+                if let Err(e) = Notification::new()
+                    .summary(summary)
+                    .body(&body)
+                    .appname("doge-shell")
+                    .show()
+                {
+                    warn!("Failed to send desktop notification: {}", e);
+                }
+            }
+        }
+
         repl.input.clear();
         repl.suggestion_manager.clear();
         repl.last_command_time = Some(Instant::now());

@@ -33,6 +33,10 @@ pub struct InputPreferences {
     pub auto_diagnose: bool,
     /// When enabled, automatically trigger AI fix suggestion on command failure
     pub auto_fix: bool,
+    /// When enabled, send desktop notification for long running commands
+    pub auto_notify_enabled: bool,
+    /// Threshold in seconds for auto notification
+    pub auto_notify_threshold: u64,
 }
 
 impl Default for InputPreferences {
@@ -43,6 +47,8 @@ impl Default for InputPreferences {
             transient_prompt: true,
             auto_diagnose: false,
             auto_fix: false,
+            auto_notify_enabled: true,
+            auto_notify_threshold: 10,
         }
     }
 }
@@ -880,9 +886,7 @@ mod tests {
         engine.set_preferences(InputPreferences {
             suggestion_mode: SuggestionMode::Ghost,
             ai_backfill: true,
-            transient_prompt: true,
-            auto_diagnose: false,
-            auto_fix: false,
+            ..Default::default()
         });
 
         let result = engine.predict("git s", "git s".chars().count(), None);
@@ -902,9 +906,7 @@ mod tests {
         engine.set_preferences(InputPreferences {
             suggestion_mode: SuggestionMode::Ghost,
             ai_backfill: true,
-            transient_prompt: true,
-            auto_diagnose: false,
-            auto_fix: false,
+            ..Default::default()
         });
 
         let mut history = History::new();
@@ -931,9 +933,7 @@ mod tests {
         engine.set_preferences(InputPreferences {
             suggestion_mode: SuggestionMode::Ghost,
             ai_backfill: true,
-            transient_prompt: true,
-            auto_diagnose: false,
-            auto_fix: false,
+            ..Default::default()
         });
 
         let mut history = History::new();
@@ -990,9 +990,7 @@ mod tests {
         engine.set_preferences(InputPreferences {
             suggestion_mode: SuggestionMode::Ghost,
             ai_backfill: true,
-            transient_prompt: true,
-            auto_diagnose: false,
-            auto_fix: false,
+            ..Default::default()
         });
 
         let cwd = Some("/tmp/test".to_string());
@@ -1028,9 +1026,7 @@ mod tests {
         engine.set_preferences(InputPreferences {
             suggestion_mode: SuggestionMode::Ghost,
             ai_backfill: true,
-            transient_prompt: true,
-            auto_diagnose: false,
-            auto_fix: false,
+            ..Default::default()
         });
 
         // 1. Check that "gco" is blocked
@@ -1091,9 +1087,7 @@ mod tests {
         engine.set_preferences(InputPreferences {
             suggestion_mode: SuggestionMode::Ghost,
             ai_backfill: true,
-            transient_prompt: true,
-            auto_diagnose: false,
-            auto_fix: false,
+            ..Default::default()
         });
 
         // "ls src/sugg" -> matches "ls src/suggestion.rs"

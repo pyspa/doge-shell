@@ -61,6 +61,7 @@ chrono = "0.4"
 term_size = "0.3"
 termion = "4"
 termios = "0.3"
+notify-rust = "4"
 file-lock = "2"
 notify = { version = "8", features = ["serde"] }
 easy_reader = "0.5"

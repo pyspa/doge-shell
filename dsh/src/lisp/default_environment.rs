@@ -629,6 +629,29 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
         }),
     );
 
+    env.define(
+        Symbol::from("set-notify-config"),
+        Value::NativeFunc(|env, args| {
+            let flag = require_arg("set-notify-config", &args, 0)?;
+            let enabled = !(*flag == Value::NIL || *flag == Value::False);
+
+            let env_ref = env.borrow();
+            let mut env_write = env_ref.shell_env.write();
+            env_write.set_auto_notify_enabled(enabled);
+
+            if args.len() > 1 {
+                let threshold_val = require_typed_arg::<IntType>("set-notify-config", &args, 1)?;
+                use std::convert::TryInto;
+                let threshold: u64 = threshold_val.try_into().map_err(|_| RuntimeError {
+                    msg: "Threshold must be a non-negative integer".to_string(),
+                })?;
+                env_write.set_auto_notify_threshold(threshold);
+            }
+
+            Ok(Value::NIL)
+        }),
+    );
+
     // Define global hook variables
     env.define(Symbol::from("*pre-prompt-hooks*"), Value::List(List::NIL));
 

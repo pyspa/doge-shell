@@ -414,6 +414,14 @@ impl Environment {
         self.input_preferences.auto_fix = enabled;
     }
 
+    pub fn set_auto_notify_enabled(&mut self, enabled: bool) {
+        self.input_preferences.auto_notify_enabled = enabled;
+    }
+
+    pub fn set_auto_notify_threshold(&mut self, threshold: u64) {
+        self.input_preferences.auto_notify_threshold = threshold;
+    }
+
     pub fn input_preferences(&self) -> InputPreferences {
         self.input_preferences
     }

@@ -847,9 +847,10 @@ fn mcp_subcommand_candidates(current_token: &str) -> Vec<EnhancedCandidate> {
 
 fn mcp_description(server: &dsh_types::mcp::McpServerConfig) -> Option<String> {
     if let Some(description) = &server.description
-        && !description.trim().is_empty() {
-            return Some(description.clone());
-        }
+        && !description.trim().is_empty()
+    {
+        return Some(description.clone());
+    }
 
     match &server.transport {
         McpTransport::Stdio { command, .. } => Some(format!("stdio: {}", command)),

@@ -281,9 +281,10 @@ fn validate_options_array(value: &Value, path: &str) -> Result<()> {
             bail!("{option_path} must have at least one of 'short' or 'long'");
         }
         if let Some(takes_value) = obj.get("takes_value")
-            && !takes_value.is_boolean() {
-                bail!("{option_path}.takes_value must be boolean");
-            }
+            && !takes_value.is_boolean()
+        {
+            bail!("{option_path}.takes_value must be boolean");
+        }
         if let Some(value_type) = obj.get("value_type") {
             validate_argument_type(value_type, &format!("{option_path}.value_type"))?;
         }
@@ -308,13 +309,15 @@ fn validate_arguments_array(value: &Value, path: &str) -> Result<()> {
             validate_argument_type(arg_type, &format!("{arg_path}.type"))?;
         }
         if let Some(required) = obj.get("required")
-            && !required.is_boolean() {
-                bail!("{arg_path}.required must be boolean");
-            }
+            && !required.is_boolean()
+        {
+            bail!("{arg_path}.required must be boolean");
+        }
         if let Some(multiple) = obj.get("multiple")
-            && !multiple.is_boolean() {
-                bail!("{arg_path}.multiple must be boolean");
-            }
+            && !multiple.is_boolean()
+        {
+            bail!("{arg_path}.multiple must be boolean");
+        }
     }
     Ok(())
 }
@@ -372,21 +375,22 @@ fn validate_argument_type(value: &Value, path: &str) -> Result<()> {
     }
 
     if type_name == "File"
-        && let Some(data) = obj.get("data") {
-            let data_obj = data
-                .as_object()
-                .with_context(|| format!("{path}.data must be an object"))?;
-            if let Some(exts) = data_obj.get("extensions") {
-                let list = exts
-                    .as_array()
-                    .with_context(|| format!("{path}.data.extensions must be an array"))?;
-                for (idx, ext) in list.iter().enumerate() {
-                    if ext.as_str().is_none() {
-                        bail!("{path}.data.extensions[{idx}] must be a string");
-                    }
+        && let Some(data) = obj.get("data")
+    {
+        let data_obj = data
+            .as_object()
+            .with_context(|| format!("{path}.data must be an object"))?;
+        if let Some(exts) = data_obj.get("extensions") {
+            let list = exts
+                .as_array()
+                .with_context(|| format!("{path}.data.extensions must be an array"))?;
+            for (idx, ext) in list.iter().enumerate() {
+                if ext.as_str().is_none() {
+                    bail!("{path}.data.extensions[{idx}] must be a string");
                 }
             }
         }
+    }
 
     Ok(())
 }

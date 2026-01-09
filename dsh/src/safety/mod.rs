@@ -82,6 +82,97 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_safety_level_from_str() {
+        // Valid cases (case-insensitive)
+        assert!(matches!(
+            "strict".parse::<SafetyLevel>(),
+            Ok(SafetyLevel::Strict)
+        ));
+        assert!(matches!(
+            "STRICT".parse::<SafetyLevel>(),
+            Ok(SafetyLevel::Strict)
+        ));
+        assert!(matches!(
+            "Normal".parse::<SafetyLevel>(),
+            Ok(SafetyLevel::Normal)
+        ));
+        assert!(matches!(
+            "NORMAL".parse::<SafetyLevel>(),
+            Ok(SafetyLevel::Normal)
+        ));
+        assert!(matches!(
+            "loose".parse::<SafetyLevel>(),
+            Ok(SafetyLevel::Loose)
+        ));
+        assert!(matches!(
+            "LOOSE".parse::<SafetyLevel>(),
+            Ok(SafetyLevel::Loose)
+        ));
+
+        // Invalid cases
+        let err = "invalid".parse::<SafetyLevel>();
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("Invalid safety level"));
+
+        let err2 = "".parse::<SafetyLevel>();
+        assert!(err2.is_err());
+    }
+
+    #[test]
+    fn test_all_dangerous_commands() {
+        let guard = SafetyGuard::new();
+        let level = SafetyLevel::Normal;
+
+        // All dangerous commands should require confirmation
+        for cmd in &["rm", "mv", "cp", "dd", "mkfs", "format"] {
+            assert!(
+                matches!(
+                    guard.check_command(&level, cmd, &[]),
+                    SafetyResult::Confirm(_)
+                ),
+                "Expected Confirm for dangerous command: {}",
+                cmd
+            );
+        }
+
+        // Safe commands should be allowed
+        for cmd in &["ls", "cat", "echo", "grep", "find", "pwd", "cd"] {
+            assert!(
+                matches!(guard.check_command(&level, cmd, &[]), SafetyResult::Allowed),
+                "Expected Allowed for safe command: {}",
+                cmd
+            );
+        }
+    }
+
+    #[test]
+    fn test_confirm_message_content() {
+        let guard = SafetyGuard::new();
+
+        // Strict mode message should contain command name
+        if let SafetyResult::Confirm(msg) = guard.check_command(&SafetyLevel::Strict, "ls", &[]) {
+            assert!(msg.contains("ls"), "Message should contain command name");
+            assert!(
+                msg.contains("Proceed"),
+                "Message should ask for confirmation"
+            );
+        } else {
+            panic!("Expected Confirm for strict mode");
+        }
+
+        // Normal mode message for dangerous command should indicate danger
+        if let SafetyResult::Confirm(msg) = guard.check_command(&SafetyLevel::Normal, "rm", &[]) {
+            assert!(msg.contains("rm"), "Message should contain command name");
+            assert!(
+                msg.to_lowercase().contains("dangerous"),
+                "Message should indicate danger"
+            );
+        } else {
+            panic!("Expected Confirm for dangerous command");
+        }
+    }
+
+    #[test]
     fn test_safety_guard_normal() {
         let guard = SafetyGuard::new();
         let level = SafetyLevel::Normal;

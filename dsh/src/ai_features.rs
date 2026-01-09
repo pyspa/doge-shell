@@ -535,6 +535,52 @@ mod tests {
         assert_eq!(sanitize_code_block("```bash\nls -l\n```"), "ls -l\n");
     }
 
+    #[test]
+    fn test_sanitize_code_block_edge_cases() {
+        // Empty string
+        assert_eq!(sanitize_code_block(""), "");
+
+        // Only backticks
+        assert_eq!(sanitize_code_block("``"), "");
+        assert_eq!(sanitize_code_block("````"), "");
+
+        // Mixed backticks without bash prefix
+        assert_eq!(sanitize_code_block("```\necho test\n```"), "\necho test\n");
+
+        // Single backtick at start
+        assert_eq!(sanitize_code_block("`echo hello"), "echo hello");
+
+        // Command with special characters
+        assert_eq!(
+            sanitize_code_block("`find . -name '*.rs'`"),
+            "find . -name '*.rs'"
+        );
+
+        // Multiline command
+        assert_eq!(
+            sanitize_code_block("```bash\necho line1\necho line2\n```"),
+            "echo line1\necho line2\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_generative_command_complex() {
+        let service = MockAiService::new("find . -name '*.rs' -exec grep -l 'TODO' {} +");
+        let result = run_generative_command(&service, "find all rust files with TODO")
+            .await
+            .unwrap();
+        assert_eq!(result, "find . -name '*.rs' -exec grep -l 'TODO' {} +");
+    }
+
+    #[tokio::test]
+    async fn test_run_generative_command_japanese() {
+        let service = MockAiService::new("git reset --soft HEAD~1");
+        let result = run_generative_command(&service, "最後のコミットを取り消す")
+            .await
+            .unwrap();
+        assert_eq!(result, "git reset --soft HEAD~1");
+    }
+
     #[tokio::test]
     async fn test_fix_command() {
         let service = MockAiService::new("ls -la");

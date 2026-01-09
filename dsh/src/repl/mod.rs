@@ -2474,7 +2474,64 @@ mod ai_tests {
         assert_eq!(command, "kubectl get pods -n default");
         assert_eq!(query, "問題のあるPodを見つけて");
     }
+
+    #[tokio::test]
+    async fn test_detect_smart_pipe_valid() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input.reset("ls |? filter directories".to_string());
+        let result = repl.detect_smart_pipe();
+        assert_eq!(result, Some("filter directories".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_detect_smart_pipe_no_query() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input.reset("ls |?".to_string());
+        let result = repl.detect_smart_pipe();
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn test_detect_smart_pipe_empty_query() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input.reset("ls |?   ".to_string());
+        let result = repl.detect_smart_pipe();
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn test_detect_smart_pipe_no_pattern() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input.reset("ls | grep foo".to_string());
+        let result = repl.detect_smart_pipe();
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn test_detect_smart_pipe_multiple_pipes() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input
+            .reset("cat file.txt | head -10 |? find errors".to_string());
+        let result = repl.detect_smart_pipe();
+        assert_eq!(result, Some("find errors".to_string()));
+    }
 }
+
 
 #[tokio::test]
 async fn test_analyze_input_suffix_calculation() {

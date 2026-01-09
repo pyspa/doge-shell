@@ -241,8 +241,6 @@ pub async fn fix_command<S: AiService + ?Sized>(
     Ok(sanitize_code_block(&content))
 }
 
-
-
 /// Explain a shell command in natural language
 pub async fn explain_command<S: AiService + ?Sized>(service: &S, command: &str) -> Result<String> {
     let system_prompt = "You are a shell command expert. Explain the given command in a clear and concise way. \
@@ -583,8 +581,6 @@ mod tests {
         assert_eq!(messages[1]["role"], "user");
         assert!(messages[1]["content"].as_str().unwrap().contains("lss -la"));
     }
-
-
 
     #[tokio::test]
     async fn test_fix_command_with_code_block() {

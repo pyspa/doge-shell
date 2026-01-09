@@ -2,18 +2,21 @@ use anyhow::Result;
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use dsh_types::{Context, ExitStatus};
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
-    Frame, Terminal,
 };
-use std::{io, time::{Duration, Instant}};
-use sysinfo::{ProcessRefreshKind, RefreshKind, System, ProcessesToUpdate};
+use std::{
+    io,
+    time::{Duration, Instant},
+};
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 
 use crate::ShellProxy;
 
@@ -135,13 +138,11 @@ impl App {
     }
 
     fn kill_selected(&mut self, signal: sysinfo::Signal) {
-        if let Some(selected) = self.state.selected() {
-            if let Some((pid, _, _, _, _)) = self.processes.get(selected) {
-                 if let Some(process) = self.system.process(*pid) {
-                     process.kill_with(signal);
-                 }
-            }
-        }
+        if let Some(selected) = self.state.selected()
+            && let Some((pid, _, _, _, _)) = self.processes.get(selected)
+                && let Some(process) = self.system.process(*pid) {
+                    process.kill_with(signal);
+                }
     }
 }
 
@@ -158,11 +159,7 @@ pub fn command(_ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) 
 
     // Restore terminal
     disable_raw_mode().unwrap();
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen
-    )
-    .unwrap();
+    execute!(terminal.backend_mut(), LeaveAlternateScreen).unwrap();
     terminal.show_cursor().unwrap();
 
     if let Err(err) = res {
@@ -173,12 +170,15 @@ pub fn command(_ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) 
     ExitStatus::ExitedWith(0)
 }
 
-fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, app: &mut App) -> Result<()> {
+fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    app: &mut App,
+) -> Result<()> {
     loop {
         terminal.draw(|f| ui(f, app))?;
 
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
+        if event::poll(Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()? {
                 if app.input_mode {
                     match key.code {
                         KeyCode::Enter => app.input_mode = false,
@@ -203,19 +203,18 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, app: &mut
                         KeyCode::Char('j') | KeyCode::Down => app.next(),
                         KeyCode::Char('k') | KeyCode::Up => app.previous(),
                         KeyCode::Char('/') => {
-                             app.input_mode = true;
-                        },
+                            app.input_mode = true;
+                        }
                         KeyCode::Char('x') => {
-                             app.kill_selected(sysinfo::Signal::Term);
-                        },
+                            app.kill_selected(sysinfo::Signal::Term);
+                        }
                         KeyCode::Char('X') => {
-                             app.kill_selected(sysinfo::Signal::Kill);
-                        },
+                            app.kill_selected(sysinfo::Signal::Kill);
+                        }
                         _ => {}
                     }
                 }
             }
-        }
 
         app.on_tick();
 
@@ -247,7 +246,13 @@ fn ui(f: &mut Frame, app: &mut App) {
                 Cell::from(name.as_str()),
                 Cell::from(format!("{:.1}%", cpu)),
                 Cell::from(format!("{} KB", mem / 1024)),
-                Cell::from(status.replace("Run", "R").replace("Sleep", "S").replace("Idle", "I").to_string()),
+                Cell::from(
+                    status
+                        .replace("Run", "R")
+                        .replace("Sleep", "S")
+                        .replace("Idle", "I")
+                        .to_string(),
+                ),
             ])
             .style(Style::default().fg(Color::Gray))
         })
@@ -264,7 +269,11 @@ fn ui(f: &mut Frame, app: &mut App) {
     let table = Table::new(rows, widths)
         .header(
             Row::new(vec!["PID", "Name", "CPU", "Mem", "Status"])
-                .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+                .style(
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )
                 .bottom_margin(1),
         )
         .block(Block::default().borders(Borders::ALL).title("Processes"))
@@ -282,7 +291,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     } else {
         format!("Filter: {}", app.filter)
     };
-    
+
     let filter = Paragraph::new(filter_text)
         .style(if app.input_mode {
             Style::default().fg(Color::Yellow)
@@ -291,9 +300,8 @@ fn ui(f: &mut Frame, app: &mut App) {
         })
         .block(Block::default().borders(Borders::ALL));
     f.render_widget(filter, chunks[1]);
-    
+
     let help_text = "q:Quit | /:Filter | j/k: Nav | x: Kill(TERM) | X: Kill(KILL)";
-    let help = Paragraph::new(help_text)
-         .style(Style::default().fg(Color::Gray));
+    let help = Paragraph::new(help_text).style(Style::default().fg(Color::Gray));
     f.render_widget(help, chunks[2]);
 }

@@ -4,12 +4,15 @@ use super::command::{CommandCompletionDatabase, CompletionCandidate};
 use super::framework::CompletionFrameworkKind;
 
 use super::generator::CompletionGenerator;
+use crate::completion::generators::filesystem::FileSystemGenerator;
 
 use super::json_loader::JsonCompletionLoader;
 use super::parser::{self, CommandLineParser, ParsedCommandLine};
 use crate::completion::display::Candidate;
 use crate::environment::Environment;
 use anyhow::Result;
+use dsh_builtin::{project, task};
+use dsh_types::mcp::McpTransport;
 use parking_lot::{Mutex, RwLock};
 use regex::Regex;
 use std::collections::HashMap;
@@ -284,14 +287,22 @@ impl IntegratedCompletionEngine {
             return results;
         }
 
-        // 2. Context analysis placeholder (reserved for future providers)
+        // 2. Dynamic completion (project-aware, built-ins)
+        let dynamic_batch = self.collect_dynamic_candidates(&request, &parsed_command_line);
+        if !aggregator.extend(dynamic_batch) {
+            let results = aggregator.finalize(history);
+            self.store_in_cache(request.input, &results.candidates, results.framework);
+            return results;
+        }
+
+        // 3. Context analysis placeholder (reserved for future providers)
         let parts: Vec<&str> = WHITESPACE_SPLIT_REGEX.split(request.input).collect();
         if !parts.is_empty() {
             let _command = parts[0];
             let _args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
         }
 
-        // 3. History-based completion (skipped when command-specific data exists)
+        // 4. History-based completion (skipped when command-specific data exists)
         // History completion removed as per user request
         /*
         if !has_command_specific_data {
@@ -444,6 +455,204 @@ impl IntegratedCompletionEngine {
         }
     }
 
+    fn collect_dynamic_candidates(
+        &self,
+        request: &CompletionRequest,
+        parsed_command_line: &parser::ParsedCommandLine,
+    ) -> CandidateBatch {
+        use parser::CompletionContext;
+
+        match parsed_command_line.completion_context {
+            CompletionContext::Command
+            | CompletionContext::ShortOption
+            | CompletionContext::LongOption
+            | CompletionContext::OptionValue { .. } => return CandidateBatch::empty(),
+            CompletionContext::SubCommand
+            | CompletionContext::Argument { .. }
+            | CompletionContext::Unknown => {}
+        }
+
+        let candidates = match parsed_command_line.command.as_str() {
+            "task" => self.collect_task_candidates(parsed_command_line, request.current_dir),
+            "pm" => self.collect_pm_candidates(parsed_command_line),
+            "pj" => self.collect_pj_candidates(parsed_command_line),
+            "mcp" => self.collect_mcp_candidates(parsed_command_line),
+            _ => Vec::new(),
+        };
+
+        if candidates.is_empty() {
+            CandidateBatch::empty()
+        } else {
+            CandidateBatch::inclusive_with_framework(candidates, CompletionFrameworkKind::Skim)
+        }
+    }
+
+    fn collect_task_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        let current_token = parsed_command_line.current_token.as_str();
+        match task::list_tasks_in_dir(current_dir) {
+            Ok(tasks) => tasks
+                .into_iter()
+                .filter(|task| matches_prefix(current_token, &task.name))
+                .map(|task| EnhancedCandidate {
+                    text: task.name,
+                    description: Some(format_task_description(&task.source, &task.command)),
+                    candidate_type: CandidateType::Argument,
+                    priority: 90,
+                })
+                .collect(),
+            Err(e) => {
+                warn!("Failed to load task completions: {}", e);
+                Vec::new()
+            }
+        }
+    }
+
+    fn collect_pm_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+    ) -> Vec<EnhancedCandidate> {
+        use parser::CompletionContext;
+
+        let current_token = parsed_command_line.current_token.as_str();
+        match parsed_command_line.completion_context {
+            CompletionContext::SubCommand => pm_subcommand_candidates(current_token),
+            CompletionContext::Argument { arg_index, .. } => {
+                let Some(subcommand) = parsed_command_line.subcommand_path.first() else {
+                    return Vec::new();
+                };
+                match subcommand.as_str() {
+                    "add" => match arg_index {
+                        0 => self.collect_directory_candidates(current_token),
+                        1 => self.collect_project_name_candidates_from_path(
+                            parsed_command_line,
+                            current_token,
+                        ),
+                        _ => Vec::new(),
+                    },
+                    "work" | "remove" | "rm" | "jump" => {
+                        self.collect_project_candidates(current_token)
+                    }
+                    _ => Vec::new(),
+                }
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn collect_pj_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+    ) -> Vec<EnhancedCandidate> {
+        let current_token = parsed_command_line.current_token.as_str();
+        self.collect_project_candidates(current_token)
+    }
+
+    fn collect_project_candidates(&self, current_token: &str) -> Vec<EnhancedCandidate> {
+        let Ok(mut projects) = project::list_projects() else {
+            return Vec::new();
+        };
+
+        projects.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+        projects
+            .into_iter()
+            .filter(|project| matches_prefix(current_token, &project.name))
+            .map(|project| EnhancedCandidate {
+                text: project.name,
+                description: Some(project.path.display().to_string()),
+                candidate_type: CandidateType::Argument,
+                priority: 90,
+            })
+            .collect()
+    }
+
+    fn collect_project_name_candidates_from_path(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_token: &str,
+    ) -> Vec<EnhancedCandidate> {
+        let Some(path) = parsed_command_line.specified_arguments.first() else {
+            return Vec::new();
+        };
+
+        let trimmed = path.trim_end_matches(&['/', '\\'][..]);
+        let Some(name) = std::path::Path::new(trimmed)
+            .file_name()
+            .and_then(|s| s.to_str())
+        else {
+            return Vec::new();
+        };
+
+        if !matches_prefix(current_token, name) {
+            return Vec::new();
+        }
+
+        vec![EnhancedCandidate {
+            text: name.to_string(),
+            description: Some("from path".to_string()),
+            candidate_type: CandidateType::Argument,
+            priority: 95,
+        }]
+    }
+
+    fn collect_directory_candidates(&self, current_token: &str) -> Vec<EnhancedCandidate> {
+        match FileSystemGenerator::generate_directory_candidates(current_token) {
+            Ok(candidates) => candidates
+                .into_iter()
+                .map(|candidate| self.convert_to_enhanced_candidate(candidate))
+                .collect(),
+            Err(e) => {
+                warn!("Failed to load directory completions: {}", e);
+                Vec::new()
+            }
+        }
+    }
+
+    fn collect_mcp_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+    ) -> Vec<EnhancedCandidate> {
+        use parser::CompletionContext;
+
+        let current_token = parsed_command_line.current_token.as_str();
+        match parsed_command_line.completion_context {
+            CompletionContext::SubCommand => mcp_subcommand_candidates(current_token),
+            CompletionContext::Argument { .. } => {
+                let Some(subcommand) = parsed_command_line.subcommand_path.first() else {
+                    return Vec::new();
+                };
+                match subcommand.as_str() {
+                    "connect" | "c" | "disconnect" | "d" => {
+                        let env = self.environment.read();
+                        let mut seen = std::collections::HashSet::new();
+                        env.mcp_servers()
+                            .iter()
+                            .filter_map(|server| {
+                                if !matches_prefix(current_token, &server.label) {
+                                    return None;
+                                }
+                                if !seen.insert(server.label.clone()) {
+                                    return None;
+                                }
+                                Some(EnhancedCandidate {
+                                    text: server.label.clone(),
+                                    description: mcp_description(server),
+                                    candidate_type: CandidateType::Argument,
+                                    priority: 90,
+                                })
+                            })
+                            .collect()
+                    }
+                    _ => Vec::new(),
+                }
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// Convert CompletionCandidate to EnhancedCandidate
     fn convert_to_enhanced_candidate(&self, candidate: CompletionCandidate) -> EnhancedCandidate {
         EnhancedCandidate {
@@ -564,6 +773,88 @@ impl IntegratedCompletionEngine {
 
         candidates.truncate(max_results);
         candidates
+    }
+}
+
+fn matches_prefix(current_token: &str, value: &str) -> bool {
+    current_token.is_empty() || value.starts_with(current_token)
+}
+
+fn format_task_description(source: &str, command: &str) -> String {
+    let summary = format!("{source}: {command}");
+    truncate_string(&summary, 80)
+}
+
+fn truncate_string(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+
+    let mut out: String = value.chars().take(max_chars.saturating_sub(3)).collect();
+    out.push_str("...");
+    out
+}
+
+fn pm_subcommand_candidates(current_token: &str) -> Vec<EnhancedCandidate> {
+    let items = [
+        ("add", "Register a project"),
+        ("list", "List registered projects"),
+        ("ls", "Alias for list"),
+        ("remove", "Remove a project"),
+        ("rm", "Alias for remove"),
+        ("work", "Switch to a project"),
+        ("jump", "Select a project interactively"),
+    ];
+
+    items
+        .iter()
+        .filter(|(name, _)| matches_prefix(current_token, name))
+        .map(|(name, desc)| EnhancedCandidate {
+            text: (*name).to_string(),
+            description: Some((*desc).to_string()),
+            candidate_type: CandidateType::SubCommand,
+            priority: 110,
+        })
+        .collect()
+}
+
+fn mcp_subcommand_candidates(current_token: &str) -> Vec<EnhancedCandidate> {
+    let items = [
+        ("status", "Show connection status"),
+        ("s", "Alias for status"),
+        ("connect", "Connect to a MCP server"),
+        ("c", "Alias for connect"),
+        ("disconnect", "Disconnect a MCP server"),
+        ("d", "Alias for disconnect"),
+        ("list", "List registered MCP servers"),
+        ("l", "Alias for list"),
+        ("tools", "List MCP tools"),
+        ("t", "Alias for tools"),
+        ("help", "Show help"),
+    ];
+
+    items
+        .iter()
+        .filter(|(name, _)| matches_prefix(current_token, name))
+        .map(|(name, desc)| EnhancedCandidate {
+            text: (*name).to_string(),
+            description: Some((*desc).to_string()),
+            candidate_type: CandidateType::SubCommand,
+            priority: 110,
+        })
+        .collect()
+}
+
+fn mcp_description(server: &dsh_types::mcp::McpServerConfig) -> Option<String> {
+    if let Some(description) = &server.description
+        && !description.trim().is_empty() {
+            return Some(description.clone());
+        }
+
+    match &server.transport {
+        McpTransport::Stdio { command, .. } => Some(format!("stdio: {}", command)),
+        McpTransport::Sse { url } => Some(format!("sse: {}", url)),
+        McpTransport::Http { url, .. } => Some(format!("http: {}", url)),
     }
 }
 

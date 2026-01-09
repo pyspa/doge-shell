@@ -88,6 +88,10 @@ fn load_projects() -> Result<Vec<Project>> {
     Ok(projects)
 }
 
+pub fn list_projects() -> Result<Vec<Project>> {
+    load_projects()
+}
+
 pub fn find_project_by_path(path: &Path) -> Result<Option<Project>> {
     let projects = load_projects()?;
     let path = path.canonicalize().unwrap_or(path.to_path_buf());

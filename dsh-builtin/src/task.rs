@@ -23,6 +23,23 @@ struct Task {
     command: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct TaskInfo {
+    pub source: String,
+    pub name: String,
+    pub command: String,
+}
+
+impl From<TaskInfo> for Task {
+    fn from(info: TaskInfo) -> Self {
+        Task {
+            source: info.source,
+            name: info.name,
+            command: info.command,
+        }
+    }
+}
+
 impl SkimItem for Task {
     fn text(&self) -> std::borrow::Cow<'_, str> {
         std::borrow::Cow::Owned(format!(
@@ -147,10 +164,15 @@ fn execute_task(ctx: &Context, task: &Task, proxy: &mut dyn ShellProxy) -> ExitS
 
 fn detect_tasks(proxy: &dyn ShellProxy) -> Result<Vec<Task>> {
     let current_dir = proxy.get_current_dir()?;
-    detect_tasks_in_dir(&current_dir)
+    let tasks = list_tasks_in_dir(&current_dir)?;
+    Ok(tasks.into_iter().map(Task::from).collect())
 }
 
-fn detect_tasks_in_dir(current_dir: &Path) -> Result<Vec<Task>> {
+pub fn list_tasks_in_dir(current_dir: &Path) -> Result<Vec<TaskInfo>> {
+    detect_tasks_in_dir(current_dir)
+}
+
+fn detect_tasks_in_dir(current_dir: &Path) -> Result<Vec<TaskInfo>> {
     let mut tasks = Vec::new();
 
     // 1. package.json (npm, yarn, pnpm, bun)
@@ -161,7 +183,7 @@ fn detect_tasks_in_dir(current_dir: &Path) -> Result<Vec<Task>> {
         let manager = detect_js_manager(current_dir);
         for (name, cmd) in scripts {
             let _ = cmd; // unused
-            tasks.push(Task {
+            tasks.push(TaskInfo {
                 source: manager.clone(),
                 name: name.clone(),
                 // e.g. "npm run build"
@@ -174,7 +196,7 @@ fn detect_tasks_in_dir(current_dir: &Path) -> Result<Vec<Task>> {
     if current_dir.join("Cargo.toml").exists() {
         // Standard cargo commands
         for cmd in ["build", "run", "test", "check", "clippy", "fmt", "doc"] {
-            tasks.push(Task {
+            tasks.push(TaskInfo {
                 source: "cargo".to_string(),
                 name: cmd.to_string(),
                 command: format!("cargo {}", cmd),
@@ -198,7 +220,7 @@ fn detect_tasks_in_dir(current_dir: &Path) -> Result<Vec<Task>> {
                     && !target.contains('%')
                     && !target.contains(' ')
                 {
-                    tasks.push(Task {
+                    tasks.push(TaskInfo {
                         source: "make".to_string(),
                         name: target.to_string(),
                         command: format!("make {}", target),
@@ -227,7 +249,7 @@ fn detect_tasks_in_dir(current_dir: &Path) -> Result<Vec<Task>> {
             && let Some(task_obj) = json.get("tasks").and_then(|t| t.as_object())
         {
             for (name, _) in task_obj {
-                tasks.push(Task {
+                tasks.push(TaskInfo {
                     source: "deno".to_string(),
                     name: name.clone(),
                     command: format!("deno task {}", name),
@@ -249,7 +271,7 @@ fn detect_tasks_in_dir(current_dir: &Path) -> Result<Vec<Task>> {
         {
             let text = String::from_utf8_lossy(&output.stdout);
             for name in text.split_whitespace() {
-                tasks.push(Task {
+                tasks.push(TaskInfo {
                     source: "just".to_string(),
                     name: name.to_string(),
                     command: format!("just {}", name),

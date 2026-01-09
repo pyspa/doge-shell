@@ -446,12 +446,18 @@ Output JSON format (strictly valid JSON):
   ]
 }
 
-Argument types (use in "arguments" list):
-- "File": File completion
-- "Directory": Directory completion
-- "Choice": {"type": "Choice", "data": ["val1", "val2"]}
-- "String": Generic string input
-- "Command": System command completion
+Argument types (use in the "type" field of each argument; MUST be an object):
+- File: {"type": "File"} or {"type": "File", "data": {"extensions": [".rs", ".toml"]}}
+- Directory: {"type": "Directory"}
+- String: {"type": "String"}
+- Number: {"type": "Number"}
+- Choice: {"type": "Choice", "data": ["val1", "val2"]}
+- Command: {"type": "Command"}
+- Environment: {"type": "Environment"}
+- Url: {"type": "Url"}
+- Process: {"type": "Process"}
+- Regex: {"type": "Regex"}
+- CommandWithArgs: {"type": "CommandWithArgs"}
 
 CRITICAL RULES:
 1. Do NOT use "Script" type. It is unsafe and difficult to get right. Use "Choice" if values are known (e.g. log levels, formats), or "String" / "File" / "Directory" / "Command" as appropriate.

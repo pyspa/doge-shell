@@ -47,6 +47,7 @@ tokio.workspace = true
 tokio-util = "0.7"
 httpdate = "1.0"
 notify = "8.2.0"
+ratatui.workspace = true
 
 [dev-dependencies]
 tempfile = "3.8"

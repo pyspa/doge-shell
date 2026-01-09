@@ -609,27 +609,7 @@ fn handle_history_next(repl: &mut Repl<'_>) {
     }
 }
 
-async fn handle_ai_smart_commit(repl: &mut Repl<'_>) {
-    if repl.ai_service.is_some() {
-        let output = std::process::Command::new("git")
-            .args(["diff", "--cached"])
-            .output();
 
-        match output {
-            Ok(output) if output.status.success() => {
-                let diff = String::from_utf8_lossy(&output.stdout).to_string();
-                if !diff.trim().is_empty() {
-                    let mut renderer = TerminalRenderer::new();
-                    queue!(renderer, Print(" 🤖 Generating..."), cursor::Hide).ok();
-                    renderer.flush().ok();
-
-                    repl.perform_smart_commit_logic(&diff).await;
-                }
-            }
-            _ => {}
-        }
-    }
-}
 
 async fn handle_ai_diagnose(repl: &mut Repl<'_>) -> Result<()> {
     if repl.ai_service.is_some() && repl.last_status != 0 {
@@ -961,7 +941,10 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             repl.trigger_auto_fix();
         }
         KeyAction::AiSmartCommit => {
-            handle_ai_smart_commit(repl).await;
+            // Replace Smart Git Commit logic with "aic" command execution
+            repl.input.reset("aic".to_string());
+            handle_execute(repl).await?;
+            return Ok(());
         }
         KeyAction::AiQuickActions => {
             repl.show_ai_quick_actions().await?;

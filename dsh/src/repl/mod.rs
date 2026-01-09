@@ -455,19 +455,7 @@ impl<'a> Repl<'a> {
         }
     }
 
-    pub(crate) async fn perform_smart_commit_logic(&mut self, diff: &str) {
-        if let Some(service) = &self.ai_service {
-            match crate::ai_features::generate_commit_message(service.as_ref(), diff).await {
-                Ok(message) => {
-                    let commit_cmd = format!("git commit -m \"{}\"", message);
-                    self.input.reset(commit_cmd);
-                }
-                Err(e) => {
-                    warn!("Smart Git Commit failed: {}", e);
-                }
-            }
-        }
-    }
+
 
     fn build_ai_backend(
         environment: &Arc<RwLock<Environment>>,

@@ -13,6 +13,10 @@ impl Action for GitDiffAction {
     fn description(&self) -> &str {
         "Show diff for changed files"
     }
+    fn icon(&self) -> &str {
+        "📝"
+    }
+
     fn category(&self) -> &str {
         "Git"
     }

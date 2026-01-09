@@ -10,6 +10,10 @@ impl Action for ReloadConfigAction {
     fn description(&self) -> &str {
         "Reload config.lisp"
     }
+    fn icon(&self) -> &str {
+        "🔄"
+    }
+
     fn execute(&self, shell: &mut Shell) -> Result<()> {
         shell.lisp_engine.borrow().run_config_lisp()?;
         shell.reload_mcp_config();

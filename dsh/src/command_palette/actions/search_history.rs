@@ -12,6 +12,10 @@ impl Action for SearchHistoryAction {
     fn description(&self) -> &str {
         "Search command history"
     }
+    fn icon(&self) -> &str {
+        "📜"
+    }
+
     fn execute(&self, shell: &mut Shell) -> Result<()> {
         // Get command history
         let history_entries: Vec<String> = if let Some(ref history) = shell.cmd_history {

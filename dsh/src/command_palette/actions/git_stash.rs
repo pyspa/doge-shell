@@ -13,6 +13,10 @@ impl Action for GitStashAction {
     fn description(&self) -> &str {
         "Manage git stash entries"
     }
+    fn icon(&self) -> &str {
+        "📦"
+    }
+
     fn execute(&self, _shell: &mut Shell) -> Result<()> {
         // Get stash list
         let output = Command::new("git")

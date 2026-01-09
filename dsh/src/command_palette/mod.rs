@@ -14,6 +14,10 @@ pub trait Action: Send + Sync {
     fn name(&self) -> &str;
     /// Description of the action
     fn description(&self) -> &str;
+    /// Icon for the action (emoji)
+    fn icon(&self) -> &str {
+        "🔹"
+    }
     /// Category of the action (for grouping in UI)
     fn category(&self) -> &str {
         "General"
@@ -81,9 +85,10 @@ struct PaletteItem {
 impl SkimItem for PaletteItem {
     fn text(&self) -> Cow<'_, str> {
         let cat = self.action.category();
+        let icon = self.action.icon();
         let name = self.action.name();
         let desc = self.action.description();
-        Cow::Owned(format!("[{:<8}] {:<20} {}", cat, name, desc))
+        Cow::Owned(format!("[{:<8}] {} {:<20} {}", cat, icon, name, desc))
     }
 
     fn output(&self) -> Cow<'_, str> {

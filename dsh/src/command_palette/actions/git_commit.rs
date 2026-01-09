@@ -13,6 +13,10 @@ impl Action for GitCommitAction {
     fn description(&self) -> &str {
         "Commit staged changes"
     }
+    fn icon(&self) -> &str {
+        "💾"
+    }
+
     fn category(&self) -> &str {
         "Git"
     }

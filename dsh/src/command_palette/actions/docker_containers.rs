@@ -13,6 +13,10 @@ impl Action for DockerContainersAction {
     fn description(&self) -> &str {
         "Manage Docker containers"
     }
+    fn icon(&self) -> &str {
+        "🐳"
+    }
+
     fn execute(&self, _shell: &mut Shell) -> Result<()> {
         // Get container list (all, including stopped)
         let output = Command::new("docker")

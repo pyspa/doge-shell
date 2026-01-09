@@ -13,6 +13,10 @@ impl Action for GitPushPullAction {
     fn description(&self) -> &str {
         "Push or pull from remote"
     }
+    fn icon(&self) -> &str {
+        "⇅"
+    }
+
     fn category(&self) -> &str {
         "Git"
     }

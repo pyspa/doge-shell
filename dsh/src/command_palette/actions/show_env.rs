@@ -12,6 +12,10 @@ impl Action for ShowEnvAction {
     fn description(&self) -> &str {
         "Search and display environment variables"
     }
+    fn icon(&self) -> &str {
+        "🌿"
+    }
+
     fn execute(&self, shell: &mut Shell) -> Result<()> {
         // Collect environment variables
         let mut env_vars: Vec<String> = Vec::new();

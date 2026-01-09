@@ -2532,7 +2532,6 @@ mod ai_tests {
     }
 }
 
-
 #[tokio::test]
 async fn test_analyze_input_suffix_calculation() {
     use crate::environment::Environment;

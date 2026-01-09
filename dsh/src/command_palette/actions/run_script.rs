@@ -14,6 +14,9 @@ impl Action for RunScriptAction {
     fn description(&self) -> &'static str {
         "Run a project script (npm, make, cargo, etc.)"
     }
+    fn icon(&self) -> &'static str {
+        "🛠️"
+    }
 
     fn category(&self) -> &'static str {
         "Dev"

@@ -13,6 +13,10 @@ impl Action for KillProcessAction {
     fn description(&self) -> &str {
         "Kill a running process"
     }
+    fn icon(&self) -> &str {
+        "💀"
+    }
+
     fn execute(&self, _shell: &mut Shell) -> Result<()> {
         // Get process list
         let output = Command::new("ps")

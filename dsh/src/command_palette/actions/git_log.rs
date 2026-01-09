@@ -12,6 +12,10 @@ impl Action for GitLogAction {
     fn description(&self) -> &str {
         "Show git log (oneline)"
     }
+    fn icon(&self) -> &str {
+        "📜"
+    }
+
     fn execute(&self, _shell: &mut Shell) -> Result<()> {
         Command::new("git")
             .args(["log", "--oneline", "-20"])

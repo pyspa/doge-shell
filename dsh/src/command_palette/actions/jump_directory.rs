@@ -13,6 +13,10 @@ impl Action for JumpDirectoryAction {
     fn description(&self) -> &str {
         "Jump to frequently used directory"
     }
+    fn icon(&self) -> &str {
+        "🚀"
+    }
+
     fn execute(&self, shell: &mut Shell) -> Result<()> {
         // Get directory history (frecency-based)
         let directories: Vec<String> = if let Some(ref history) = shell.path_history {

@@ -10,6 +10,10 @@ impl Action for ClearScreenAction {
     fn description(&self) -> &str {
         "Clear the terminal screen"
     }
+    fn icon(&self) -> &str {
+        "🧹"
+    }
+
     fn category(&self) -> &str {
         "Shell"
     }

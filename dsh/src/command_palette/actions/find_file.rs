@@ -13,6 +13,10 @@ impl Action for FindFileAction {
     fn description(&self) -> &str {
         "Search and open file in $EDITOR"
     }
+    fn icon(&self) -> &str {
+        "🔍"
+    }
+
     fn execute(&self, _shell: &mut Shell) -> Result<()> {
         // Try fd first, fall back to find
         let output = Command::new("fd")

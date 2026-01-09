@@ -13,6 +13,10 @@ impl Action for PortCheckAction {
     fn description(&self) -> &str {
         "Check ports in use and kill process"
     }
+    fn icon(&self) -> &str {
+        "🔌"
+    }
+
     fn category(&self) -> &str {
         "System"
     }

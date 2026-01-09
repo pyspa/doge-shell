@@ -12,6 +12,10 @@ impl Action for GitAddAction {
     fn description(&self) -> &str {
         "Interactive git add"
     }
+    fn icon(&self) -> &str {
+        "➕"
+    }
+
     fn category(&self) -> &str {
         "Git"
     }

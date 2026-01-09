@@ -14,6 +14,10 @@ impl Action for DashboardAction {
     fn description(&self) -> &str {
         "Show project dashboard"
     }
+    fn icon(&self) -> &str {
+        "📊"
+    }
+
     fn execute(&self, _shell: &mut Shell) -> Result<()> {
         let cwd = std::env::current_dir()
             .map(|p| p.display().to_string())

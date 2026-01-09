@@ -631,7 +631,6 @@ mod tests {
         assert!(content.contains("...(truncated)"));
     }
 
-
     #[tokio::test]
     async fn test_explain_command() {
         let service = MockAiService::new("This command lists files");
@@ -738,16 +737,17 @@ mod tests {
         assert_eq!(result.unwrap(), "The command produced no output");
 
         let messages = service.last_messages.lock().unwrap();
-        assert!(messages[1]["content"]
-            .as_str()
-            .unwrap()
-            .contains("why is there no output?"));
+        assert!(
+            messages[1]["content"]
+                .as_str()
+                .unwrap()
+                .contains("why is there no output?")
+        );
     }
 
     #[tokio::test]
     async fn test_analyze_output_with_stderr() {
-        let service =
-            MockAiService::new("The error suggests a permission problem with /etc/hosts");
+        let service = MockAiService::new("The error suggests a permission problem with /etc/hosts");
         let result = analyze_output(
             &service,
             "cat /etc/shadow",
@@ -758,12 +758,13 @@ mod tests {
 
         assert!(result.is_ok());
         let messages = service.last_messages.lock().unwrap();
-        assert!(messages[1]["content"]
-            .as_str()
-            .unwrap()
-            .contains("Permission denied"));
+        assert!(
+            messages[1]["content"]
+                .as_str()
+                .unwrap()
+                .contains("Permission denied")
+        );
     }
-
 
     #[cfg(test)]
     struct MockChatClient {

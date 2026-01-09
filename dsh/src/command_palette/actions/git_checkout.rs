@@ -13,6 +13,10 @@ impl Action for GitCheckoutAction {
     fn description(&self) -> &str {
         "Interactive git checkout branch"
     }
+    fn icon(&self) -> &str {
+        "🌿"
+    }
+
     fn execute(&self, _shell: &mut Shell) -> Result<()> {
         // Get branches
         let output = Command::new("git")

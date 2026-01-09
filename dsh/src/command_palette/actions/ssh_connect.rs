@@ -15,6 +15,10 @@ impl Action for SshConnectAction {
     fn description(&self) -> &str {
         "Connect to SSH host from ~/.ssh/config"
     }
+    fn icon(&self) -> &str {
+        "🌐"
+    }
+
     fn execute(&self, _shell: &mut Shell) -> Result<()> {
         // Parse ~/.ssh/config for Host entries
         let config_path = dirs::home_dir()

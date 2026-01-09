@@ -160,7 +160,7 @@ The shell includes many built-in commands:
 | `pm` | Project Manager (add, list, remove, work, jump) |
 | `pj` | Jump to a project (alias for `pm jump`) |
 | `help` | Show help information |
-| `comp-gen` | Generate command completion using AI |
+| `comp-gen` | Generate command completion using AI (`--stdout`, `--check`) |
 | `dashboard` | Show integrated dashboard (System, Git, GitHub) |
 | `ai-commit` / `aic` | Generate commit message using AI |
 | `tm` | Search and retrieve past command outputs |

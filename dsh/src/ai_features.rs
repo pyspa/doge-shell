@@ -601,6 +601,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_generate_commit_message_with_code_block() {
+        // AI might return wrapped in code blocks
+        let service = MockAiService::new("`fix: resolve memory leak`");
+        let diff = "diff --git a/foo.rs b/foo.rs...";
+        let result = generate_commit_message(&service, diff).await.unwrap();
+        assert_eq!(result, "fix: resolve memory leak");
+    }
+
+    #[tokio::test]
+    async fn test_fix_command_with_code_block() {
+        // AI might return wrapped in backticks
+        let service = MockAiService::new("`git status`");
+        let result = fix_command(&service, "gti status", 127).await.unwrap();
+        assert_eq!(result, "git status");
+    }
+
+    #[tokio::test]
+    async fn test_diagnose_output_truncation() {
+        let service = MockAiService::new("Output was truncated due to length");
+        let long_output = "x".repeat(5000);
+        let result = diagnose_output(&service, "cat file", &long_output, 0).await;
+
+        assert!(result.is_ok());
+
+        let messages = service.last_messages.lock().unwrap();
+        let content = messages[1]["content"].as_str().unwrap();
+        // Output should be truncated at 4000 chars
+        assert!(content.contains("...(truncated)"));
+    }
+
+
+    #[tokio::test]
     async fn test_explain_command() {
         let service = MockAiService::new("This command lists files");
         let result = explain_command(&service, "ls -la").await.unwrap();

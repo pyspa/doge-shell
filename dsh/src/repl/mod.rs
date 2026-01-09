@@ -436,11 +436,18 @@ impl<'a> Repl<'a> {
             let service = service.clone();
             let command = self.last_command_string.clone();
             let status = self.last_status;
+            let output = self
+                .shell
+                .environment
+                .read()
+                .get_var("OUT")
+                .unwrap_or_default();
             let tx = self.ai_tx.clone();
 
             tokio::spawn(async move {
                 if let Ok(fixed) =
-                    crate::ai_features::fix_command(service.as_ref(), &command, status).await
+                    crate::ai_features::fix_command(service.as_ref(), &command, status, &output)
+                        .await
                 {
                     let _ = tx.send(AiEvent::AutoFix(fixed));
                 }

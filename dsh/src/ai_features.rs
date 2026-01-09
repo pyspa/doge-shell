@@ -679,6 +679,60 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_analyze_output_truncation() {
+        let service = MockAiService::new("Output was truncated due to length");
+
+        // Create a very long output > 8000 chars
+        let long_output = "x".repeat(10000);
+        let result = analyze_output(&service, "cat largefile", &long_output, "summarize").await;
+
+        assert!(result.is_ok());
+
+        // Verify that the output was truncated in the request
+        let messages = service.last_messages.lock().unwrap();
+        let content = messages[1]["content"].as_str().unwrap();
+        assert!(content.contains("...(truncated)"));
+        // Should be shorter than original
+        assert!(content.len() < 10000);
+    }
+
+    #[tokio::test]
+    async fn test_analyze_output_empty() {
+        let service = MockAiService::new("The command produced no output");
+        let result = analyze_output(&service, "true", "", "why is there no output?").await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "The command produced no output");
+
+        let messages = service.last_messages.lock().unwrap();
+        assert!(messages[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("why is there no output?"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_output_with_stderr() {
+        let service =
+            MockAiService::new("The error suggests a permission problem with /etc/hosts");
+        let result = analyze_output(
+            &service,
+            "cat /etc/shadow",
+            "cat: /etc/shadow: Permission denied",
+            "what went wrong?",
+        )
+        .await;
+
+        assert!(result.is_ok());
+        let messages = service.last_messages.lock().unwrap();
+        assert!(messages[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Permission denied"));
+    }
+
+
     #[cfg(test)]
     struct MockChatClient {
         tool_call_response: Value,

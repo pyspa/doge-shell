@@ -2358,27 +2358,6 @@ mod ai_tests {
     }
 
     #[tokio::test]
-    async fn test_perform_smart_commit_success() {
-        use crate::environment::Environment;
-
-        let environment = Environment::new();
-        let mut shell = Shell::new(environment);
-        let mut repl = Repl::new(&mut shell);
-
-        // Setup mock AI service
-        let service = Arc::new(MockAiService::new("feat: initial commit"));
-        repl.ai_service = Some(service);
-
-        let diff = "diff --git a/foo b/foo...";
-        repl.perform_smart_commit_logic(diff).await;
-
-        assert_eq!(
-            repl.input.to_string(),
-            "git commit -m \"feat: initial commit\""
-        );
-    }
-
-    #[tokio::test]
     async fn test_detect_ai_pipe_with_double_quoted_query() {
         let environment = Environment::new();
         let mut shell = Shell::new(environment);

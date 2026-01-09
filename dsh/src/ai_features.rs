@@ -241,30 +241,7 @@ pub async fn fix_command<S: AiService + ?Sized>(
     Ok(sanitize_code_block(&content))
 }
 
-pub async fn generate_commit_message<S: AiService + ?Sized>(
-    service: &S,
-    diff: &str,
-) -> Result<String> {
-    let system_prompt = "You are an expert developer. Generate a concise and descriptive git commit message based on the provided diff. \
-    Follow the Conventional Commits specification (e.g., 'feat: ...', 'fix: ...', 'refactor: ...'). \
-    Output ONLY the commit message in English. Do not include markdown code blocks. \
-    Prefer a single line summary under 72 characters.";
 
-    // Truncate diff if it's too long to avoid token limits (rudimentary handling)
-    let truncated_diff = if diff.len() > 8000 {
-        format!("{}\\n...(truncated)", &diff[..8000])
-    } else {
-        diff.to_string()
-    };
-
-    let messages = vec![
-        json!({"role": "system", "content": system_prompt}),
-        json!({"role": "user", "content": truncated_diff}),
-    ];
-
-    let content = service.send_request(messages, Some(0.3)).await?;
-    Ok(sanitize_code_block(&content))
-}
 
 /// Explain a shell command in natural language
 pub async fn explain_command<S: AiService + ?Sized>(service: &S, command: &str) -> Result<String> {
@@ -607,22 +584,7 @@ mod tests {
         assert!(messages[1]["content"].as_str().unwrap().contains("lss -la"));
     }
 
-    #[tokio::test]
-    async fn test_generate_commit_message() {
-        let service = MockAiService::new("feat: add new feature");
-        let diff = "diff --git a/file.txt b/file.txt...";
-        let result = generate_commit_message(&service, diff).await.unwrap();
-        assert_eq!(result, "feat: add new feature");
-    }
 
-    #[tokio::test]
-    async fn test_generate_commit_message_with_code_block() {
-        // AI might return wrapped in code blocks
-        let service = MockAiService::new("`fix: resolve memory leak`");
-        let diff = "diff --git a/foo.rs b/foo.rs...";
-        let result = generate_commit_message(&service, diff).await.unwrap();
-        assert_eq!(result, "fix: resolve memory leak");
-    }
 
     #[tokio::test]
     async fn test_fix_command_with_code_block() {

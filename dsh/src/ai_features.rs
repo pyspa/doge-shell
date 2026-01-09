@@ -196,6 +196,7 @@ pub async fn run_generative_command<S: AiService + ?Sized>(
     query: &str,
 ) -> Result<String> {
     let system_prompt = "You are a shell command expert. Convert the following natural language request into a single-line shell command. \
+    Target platform: Linux with bash/zsh. \
     Output ONLY the command code. Do not include markdown code blocks. Do not include explanations.";
 
     let messages = vec![
@@ -211,13 +212,25 @@ pub async fn fix_command<S: AiService + ?Sized>(
     service: &S,
     command: &str,
     exit_code: i32,
+    output: &str,
 ) -> Result<String> {
     let system_prompt = "You are a shell command expert. The user executed a command that failed. \
-    Given the failed command and its exit code, output ONLY the corrected command. \
+    Given the failed command, its exit code, and its output (including potential error messages), \
+    output ONLY the corrected command. \
     Do not output markdown code blocks. Output ONLY the command code. \
-    If you are unsure, output the original command.";
+    If you cannot determine a fix, output the original command unchanged.";
 
-    let query = format!("Command: `{}`\nExit Code: {}", command, exit_code);
+    // Truncate output to avoid token limits
+    let truncated_output = if output.len() > 2000 {
+        format!("{}...(truncated)", &output[output.len() - 2000..])
+    } else {
+        output.to_string()
+    };
+
+    let query = format!(
+        "Failed command: `{}`\nExit code: {}\nOutput:\n```\n{}\n```",
+        command, exit_code, truncated_output
+    );
 
     let messages = vec![
         json!({"role": "system", "content": system_prompt}),
@@ -233,10 +246,9 @@ pub async fn generate_commit_message<S: AiService + ?Sized>(
     diff: &str,
 ) -> Result<String> {
     let system_prompt = "You are an expert developer. Generate a concise and descriptive git commit message based on the provided diff. \
-    Follow the Conventional Commits specification if possible (e.g., 'feat: ...', 'fix: ...'). \
-    Output ONLY the commit message. Do not include markdown code blocks. \
-    The message should be a single line if it's short, or a summary line followed by a blank line and details if complex. \
-    However, for this interaction, prefer a single line summary.";
+    Follow the Conventional Commits specification (e.g., 'feat: ...', 'fix: ...', 'refactor: ...'). \
+    Output ONLY the commit message in English. Do not include markdown code blocks. \
+    Prefer a single line summary under 72 characters.";
 
     // Truncate diff if it's too long to avoid token limits (rudimentary handling)
     let truncated_diff = if diff.len() > 8000 {
@@ -258,7 +270,8 @@ pub async fn generate_commit_message<S: AiService + ?Sized>(
 pub async fn explain_command<S: AiService + ?Sized>(service: &S, command: &str) -> Result<String> {
     let system_prompt = "You are a shell command expert. Explain the given command in a clear and concise way. \
     Break down each part of the command (command name, options, arguments). \
-    Keep the explanation brief but informative. Use markdown formatting for clarity.";
+    Keep the explanation brief but informative. Use markdown formatting for clarity. \
+    Respond in the same language as the user's request (e.g., if they ask in Japanese, explain in Japanese).";
 
     let messages = vec![
         json!({"role": "system", "content": system_prompt}),
@@ -276,7 +289,8 @@ pub async fn suggest_improvement<S: AiService + ?Sized>(
     let system_prompt = "You are a shell command expert. Analyze the given command and suggest improvements. \
     Consider: efficiency, readability, safety, and best practices. \
     If the command is already optimal, say so. Provide the improved command if applicable. \
-    Keep your response concise and practical.";
+    Keep your response concise and practical. \
+    Respond in the same language as the user's request.";
 
     let messages = vec![
         json!({"role": "system", "content": system_prompt}),
@@ -289,8 +303,8 @@ pub async fn suggest_improvement<S: AiService + ?Sized>(
 /// Check if a command is potentially dangerous
 pub async fn check_safety<S: AiService + ?Sized>(service: &S, command: &str) -> Result<String> {
     let system_prompt = "You are a security-conscious shell expert. Analyze the given command for potential dangers. \
-    Check for: destructive operations (rm -rf), permission issues, data loss risks, security vulnerabilities. \
-    Rate the risk level (Safe/Caution/Dangerous) and explain why. Be concise but thorough.";
+    Check for: destructive operations (rm -rf), permission issues, data loss risks, security vulnerabilities, network exposure. \
+    Start your response with **Risk: [Safe/Caution/Dangerous]** followed by a brief explanation. Use markdown formatting.";
 
     let messages = vec![
         json!({"role": "system", "content": system_prompt}),
@@ -309,7 +323,7 @@ pub async fn diagnose_output<S: AiService + ?Sized>(
 ) -> Result<String> {
     let system_prompt = "You are a debugging expert. Analyze the command output and diagnose any issues. \
     Focus on error messages and their root causes. Provide clear, actionable solutions. \
-    If the output indicates success, confirm it briefly.";
+    Respond in the same language as the user's environment if possible, or match the language of their request.";
 
     // Truncate output if too long
     let truncated_output = if output.len() > 4000 {
@@ -393,7 +407,8 @@ pub async fn analyze_output<S: AiService + ?Sized>(
 ) -> Result<String> {
     let system_prompt = "You are a shell output analyst. \
     Analyze the following command output and respond to the user's query. \
-    Be concise and practical. Use markdown formatting for clarity.";
+    Be concise and practical. Use markdown formatting for clarity. \
+    Respond in the same language as the user's query.";
 
     // Truncate output if too long to avoid token limits
     let truncated_output = if output.len() > 8000 {
@@ -584,7 +599,7 @@ mod tests {
     #[tokio::test]
     async fn test_fix_command() {
         let service = MockAiService::new("ls -la");
-        let result = fix_command(&service, "lss -la", 127).await.unwrap();
+        let result = fix_command(&service, "lss -la", 127, "").await.unwrap();
         assert_eq!(result, "ls -la");
 
         let messages = service.last_messages.lock().unwrap();
@@ -613,7 +628,7 @@ mod tests {
     async fn test_fix_command_with_code_block() {
         // AI might return wrapped in backticks
         let service = MockAiService::new("`git status`");
-        let result = fix_command(&service, "gti status", 127).await.unwrap();
+        let result = fix_command(&service, "gti status", 127, "").await.unwrap();
         assert_eq!(result, "git status");
     }
 

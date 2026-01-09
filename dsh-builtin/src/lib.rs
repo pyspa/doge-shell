@@ -43,6 +43,7 @@ pub mod lisp;
 mod mcp;
 mod notebook_play;
 mod out;
+pub mod procs;
 pub mod project;
 mod read;
 
@@ -610,6 +611,14 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
         );
 
         // Project Management command
+        builtin.insert(
+            "procs",
+            Box::new(BuiltinCommandFn::new(
+                procs::command,
+                procs::description(),
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+
         builtin.insert(
             "project",
             Box::new(BuiltinCommandFn::new(

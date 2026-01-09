@@ -402,4 +402,44 @@ mod tests {
             "__dsh_print_last_stdout   | grep foo"
         );
     }
+
+    #[test]
+    fn test_transform_smart_pipe_edge_cases() {
+        // Capture mode should NOT trigger smart pipe
+        assert_eq!(
+            transform_input_for_smart_pipe("|> output.txt".to_string()),
+            "|> output.txt"
+        );
+
+        // Capture mode with command should not change
+        assert_eq!(
+            transform_input_for_smart_pipe("ls -la |>".to_string()),
+            "ls -la |>"
+        );
+
+        // OR operator should NOT trigger smart pipe
+        assert_eq!(
+            transform_input_for_smart_pipe("|| true".to_string()),
+            "|| true"
+        );
+
+        // Multiple pipes with leading pipe should transform
+        assert_eq!(
+            transform_input_for_smart_pipe("| head -10 | tail -5".to_string()),
+            "__dsh_print_last_stdout | head -10 | tail -5"
+        );
+
+        // Just pipe character alone should transform
+        assert_eq!(
+            transform_input_for_smart_pipe("| wc -l".to_string()),
+            "__dsh_print_last_stdout | wc -l"
+        );
+
+        // Pipe with various whitespace
+        assert_eq!(
+            transform_input_for_smart_pipe("\t| sed 's/a/b/g'".to_string()),
+            "__dsh_print_last_stdout \t| sed 's/a/b/g'"
+        );
+    }
 }
+

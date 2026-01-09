@@ -585,12 +585,13 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    ```
 
 8. **Smart Git Commit (`Alt+c`)**:
-   Stage your changes, then press `Alt+c` to generate a commit message based on the diff.
+   Stage your changes, then press `Alt+c` to invoke the `aic` command, which analyzes the diff and generates a conventional commit message.
 
    ```bash
    git add .
    # Press Alt+c, command input becomes:
-   git commit -m "feat: implement new features..."
+   aic
+   # Press Enter to generate message
    ```
 
 9. **AI Output Pipe (`|!`)**:

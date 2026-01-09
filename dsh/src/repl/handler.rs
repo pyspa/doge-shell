@@ -609,8 +609,6 @@ fn handle_history_next(repl: &mut Repl<'_>) {
     }
 }
 
-
-
 async fn handle_ai_diagnose(repl: &mut Repl<'_>) -> Result<()> {
     if repl.ai_service.is_some() && repl.last_status != 0 {
         let mut renderer = TerminalRenderer::new();

@@ -85,11 +85,10 @@ impl SafetyGuard {
                 }
 
                 // 2. Run specific checker if available
-                if let Some(checker) = self.checkers.get(cmd_name) {
-                    if let Some(msg) = checker(args) {
+                if let Some(checker) = self.checkers.get(cmd_name)
+                    && let Some(msg) = checker(args) {
                         return SafetyResult::Confirm(msg);
                     }
-                }
 
                 SafetyResult::Allowed
             }
@@ -120,7 +119,9 @@ impl SafetyGuard {
         }
 
         if recursive && force && root_path {
-            return Some("High Risk: 'rm -rf /' detected. This is extremely dangerous.".to_string());
+            return Some(
+                "High Risk: 'rm -rf /' detected. This is extremely dangerous.".to_string(),
+            );
         }
 
         if recursive && force {
@@ -128,37 +129,45 @@ impl SafetyGuard {
         }
 
         if recursive {
-             // For simple recursive delete, we might not always warn in Normal mode unless it looks dangerous?
-             // But existing behavior was strict. Let's warn for recursive delete.
-             return Some("Recursive deletion detected. Proceed?".to_string());
+            // For simple recursive delete, we might not always warn in Normal mode unless it looks dangerous?
+            // But existing behavior was strict. Let's warn for recursive delete.
+            return Some("Recursive deletion detected. Proceed?".to_string());
         }
-        
+
         // If args are empty, it's likely an error (rm without args), but shell handles execution.
         // We only warn if it does something.
         None
     }
 
     fn check_git(args: &[String]) -> Option<String> {
-        if let Some(subcmd) = args.get(0) {
+        if let Some(subcmd) = args.first() {
             match subcmd.as_str() {
                 "push" => {
                     for arg in args.iter().skip(1) {
-                         if arg == "--force" || arg == "-f" || arg == "--force-with-lease" {
-                             return Some("Git push force detected. This may rewrite history.".to_string());
-                         }
+                        if arg == "--force" || arg == "-f" || arg == "--force-with-lease" {
+                            return Some(
+                                "Git push force detected. This may rewrite history.".to_string(),
+                            );
+                        }
                     }
                 }
                 "clean" => {
                     for arg in args.iter().skip(1) {
-                        if arg.contains('x') { // -x or -X included in -fdx etc
-                            return Some("Git clean with ignored files option (-x) detected.".to_string());
+                        if arg.contains('x') {
+                            // -x or -X included in -fdx etc
+                            return Some(
+                                "Git clean with ignored files option (-x) detected.".to_string(),
+                            );
                         }
                     }
                 }
                 "reset" => {
-                     for arg in args.iter().skip(1) {
+                    for arg in args.iter().skip(1) {
                         if arg == "--hard" {
-                            return Some("Git reset --hard detected. Uncommitted changes will be lost.".to_string());
+                            return Some(
+                                "Git reset --hard detected. Uncommitted changes will be lost."
+                                    .to_string(),
+                            );
                         }
                     }
                 }
@@ -171,7 +180,7 @@ impl SafetyGuard {
     fn check_recursive(args: &[String]) -> Option<String> {
         for arg in args {
             if arg == "-R" || arg == "--recursive" {
-                 return Some("Recursive operation detected. Proceed?".to_string());
+                return Some("Recursive operation detected. Proceed?".to_string());
             }
         }
         None
@@ -215,18 +224,13 @@ mod tests {
 
         // rm -rf -> Warn
         assert!(matches!(
-            guard.check_command(&level, "rm", &[
-                "-rf".to_string(),
-                "dir".to_string()
-            ]),
+            guard.check_command(&level, "rm", &["-rf".to_string(), "dir".to_string()]),
             SafetyResult::Confirm(_)
         ));
 
         // rm file.txt -> Allowed (normal delete)
         assert!(matches!(
-            guard.check_command(&level, "rm", &[
-                "file.txt".to_string()
-            ]),
+            guard.check_command(&level, "rm", &["file.txt".to_string()]),
             SafetyResult::Allowed
         ));
     }
@@ -238,28 +242,27 @@ mod tests {
 
         // git status -> Allowed
         assert!(matches!(
-            guard.check_command(&level, "git", &[
-                "status".to_string()
-            ]),
+            guard.check_command(&level, "git", &["status".to_string()]),
             SafetyResult::Allowed
         ));
 
         // git push --force -> Warn
         assert!(matches!(
-            guard.check_command(&level, "git", &[
-                "push".to_string(),
-                "origin".to_string(),
-                "--force".to_string()
-            ]),
+            guard.check_command(
+                &level,
+                "git",
+                &[
+                    "push".to_string(),
+                    "origin".to_string(),
+                    "--force".to_string()
+                ]
+            ),
             SafetyResult::Confirm(_)
         ));
 
         // git clean -fdx -> Warn
         assert!(matches!(
-            guard.check_command(&level, "git", &[
-                "clean".to_string(),
-                "-fdx".to_string()
-            ]),
+            guard.check_command(&level, "git", &["clean".to_string(), "-fdx".to_string()]),
             SafetyResult::Confirm(_)
         ));
     }

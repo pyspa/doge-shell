@@ -613,10 +613,8 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
         // Project Management command
         builtin.insert(
             "procs",
-            Box::new(BuiltinCommandFn::new(
-                procs::command,
-                procs::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
+            Box::new(BuiltinCommandFn::new(procs::command, procs::description()))
+                as Box<dyn BuiltinCommandTrait>,
         );
 
         builtin.insert(

@@ -455,8 +455,6 @@ impl<'a> Repl<'a> {
         }
     }
 
-
-
     fn build_ai_backend(
         environment: &Arc<RwLock<Environment>>,
     ) -> Option<(Arc<dyn SuggestionBackend + Send + Sync>, ChatGptClient)> {

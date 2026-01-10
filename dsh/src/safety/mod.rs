@@ -54,7 +54,8 @@ impl SafetyGuard {
         guard.register_checker("git", Self::check_git);
         guard.register_checker("chmod", Self::check_recursive);
         guard.register_checker("chown", Self::check_recursive);
-        guard.register_checker("mv", Self::check_mv); // Basic mv check just in case
+        guard.register_checker("cp", Self::check_cp);
+        guard.register_checker("mv", Self::check_mv);
 
         guard
     }
@@ -86,9 +87,10 @@ impl SafetyGuard {
 
                 // 2. Run specific checker if available
                 if let Some(checker) = self.checkers.get(cmd_name)
-                    && let Some(msg) = checker(args) {
-                        return SafetyResult::Confirm(msg);
-                    }
+                    && let Some(msg) = checker(args)
+                {
+                    return SafetyResult::Confirm(msg);
+                }
 
                 SafetyResult::Allowed
             }
@@ -186,15 +188,59 @@ impl SafetyGuard {
         None
     }
 
-    fn check_mv(_args: &[String]) -> Option<String> {
-        // mv usually safe unless overwriting?
-        // simple heuristic: if many args, fine. if blindly moving critical things?
-        // Keeping it simple: normal mv is allowed.
-        // If user explicitly asks for check in Strict mode, caught by match level.
-        // In Normal mode, mv is now allowed unless we find a reason not to.
-        // Previous logic warned on ANY mv. User might find that annoying.
-        // Let's allow it for now, or maybe check for overwrite flags?
-        None
+    fn check_cp(args: &[String]) -> Option<String> {
+        let mut recursive = false;
+        let mut force = false;
+
+        for arg in args {
+            if arg == "-r" || arg == "-R" || arg == "--recursive" {
+                recursive = true;
+            }
+            if arg == "-f" || arg == "--force" {
+                force = true;
+            }
+            if arg.starts_with('-') {
+                if arg.contains('r') {
+                    recursive = true;
+                }
+                if arg.contains('f') {
+                    force = true;
+                }
+            }
+        }
+
+        if recursive && force {
+            return Some(
+                "Potentially dangerous copy (recursive + force) detected. Proceed?".to_string(),
+            );
+        }
+        if recursive {
+            return Some("Recursive copy detected. Proceed?".to_string());
+        }
+        if force {
+            return Some("Forced overwrite copy detected. Proceed?".to_string());
+        }
+
+        Some("Copy command detected. Proceed?".to_string())
+    }
+
+    fn check_mv(args: &[String]) -> Option<String> {
+        let mut force = false;
+
+        for arg in args {
+            if arg == "-f" || arg == "--force" {
+                force = true;
+            }
+            if arg.starts_with('-') && arg.contains('f') {
+                force = true;
+            }
+        }
+
+        if force {
+            return Some("Forced overwrite move detected. Proceed?".to_string());
+        }
+
+        Some("Move command detected. Proceed?".to_string())
     }
 }
 
@@ -290,6 +336,22 @@ mod tests {
         ));
         assert!(matches!(
             guard.check_command(&level, "reboot", &[]),
+            SafetyResult::Confirm(_)
+        ));
+    }
+
+    #[test]
+    fn test_safety_guard_cp_mv() {
+        let guard = SafetyGuard::new();
+        let level = SafetyLevel::Normal;
+
+        assert!(matches!(
+            guard.check_command(&level, "cp", &["a".to_string(), "b".to_string()]),
+            SafetyResult::Confirm(_)
+        ));
+
+        assert!(matches!(
+            guard.check_command(&level, "mv", &["a".to_string(), "b".to_string()]),
             SafetyResult::Confirm(_)
         ));
     }

@@ -31,11 +31,13 @@ use pest::Span as PestSpan;
 use pest::iterators::Pairs;
 use std::io::Write;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 use tracing::{debug, warn};
 
 const AI_SUGGESTION_REFRESH_MS: u64 = 300;
+const GIT_STATUS_THROTTLE_MS: u64 = 200;
 const MCP_FORM_SUGGESTIONS: &[&str] =
     &["mcp-add-stdio", "mcp-add-http", "mcp-add-sse", "mcp-clear"];
 
@@ -181,6 +183,8 @@ pub struct Repl<'a> {
     pub(crate) multiline_buffer: String,
     pub(crate) last_cwd: std::path::PathBuf,
     pub(crate) git_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
+    pub(crate) last_git_update: Option<Instant>,
+    pub(crate) git_task_inflight: Arc<AtomicBool>,
     pub(crate) file_context_cache: Arc<RwLock<FileContextCache>>,
     pub(crate) argument_explainer: crate::argument_explainer::ArgumentExplainer,
     pub(crate) last_explanation: Option<String>,
@@ -358,6 +362,8 @@ impl<'a> Repl<'a> {
             multiline_buffer: String::new(),
             last_cwd: current.clone(),
             git_rx,
+            last_git_update: None,
+            git_task_inflight: Arc::new(AtomicBool::new(false)),
             file_context_cache: Arc::new(RwLock::new(FileContextCache::new())),
             argument_explainer: crate::argument_explainer::ArgumentExplainer::new(),
             last_explanation: None,
@@ -1499,14 +1505,7 @@ impl<'a> Repl<'a> {
                             if let Some(version) = crate::prompt::fetch_rust_version_async().await {
                                 p_clone.write().update_rust_version(Some(version));
                             } else {
-                                // Mark as checked but failed/empty to prevent loop?
-                                // Ideally needs_rust_check should return false if we have a "None" cache that is fresh.
-                                // simpler: just update with None? No, that clears it.
-                                // For now, we update with Some so it stops checking, or we accept re-check loop if failed.
-                                // Actually better to cache the "None" result?
-                                // Current implementation uses Option<String>, so None means "not cached".
-                                // To fix properly, cache should be Option<Option<String>> or similar state.
-                                // For MVP, let's just attempt update.
+                                p_clone.write().mark_rust_check_failed();
                             }
                         });
                     }
@@ -1517,6 +1516,8 @@ impl<'a> Repl<'a> {
                          tokio::spawn(async move {
                             if let Some(version) = crate::prompt::fetch_node_version_async().await {
                                 p_clone.write().update_node_version(Some(version));
+                            } else {
+                                p_clone.write().mark_node_check_failed();
                             }
                         });
                     }
@@ -1527,6 +1528,8 @@ impl<'a> Repl<'a> {
                          tokio::spawn(async move {
                             if let Some(version) = crate::prompt::fetch_python_version_async().await {
                                 p_clone.write().update_python_version(Some(version));
+                            } else {
+                                p_clone.write().mark_python_check_failed();
                             }
                         });
                     }
@@ -1537,6 +1540,8 @@ impl<'a> Repl<'a> {
                          tokio::spawn(async move {
                             if let Some(version) = crate::prompt::fetch_go_version_async().await {
                                 p_clone.write().update_go_version(Some(version));
+                            } else {
+                                p_clone.write().mark_go_check_failed();
                             }
                         });
                     }
@@ -1547,6 +1552,8 @@ impl<'a> Repl<'a> {
                          tokio::spawn(async move {
                             if let Some((context, namespace)) = crate::prompt::fetch_k8s_info_async().await {
                                 p_clone.write().update_k8s_info(Some(context), namespace);
+                            } else {
+                                p_clone.write().mark_k8s_check_failed();
                             }
                         });
                     }
@@ -1562,6 +1569,8 @@ impl<'a> Repl<'a> {
                          tokio::spawn(async move {
                             if let Some(context) = crate::prompt::fetch_docker_context_async().await {
                                 p_clone.write().update_docker_context(Some(context));
+                            } else {
+                                p_clone.write().mark_docker_check_failed();
                             }
                         });
                     }
@@ -1587,27 +1596,37 @@ impl<'a> Repl<'a> {
                     }
                 }
                 Some(_) = self.git_rx.recv() => {
-                    let prompt = Arc::clone(&self.prompt);
-                    // Check if we need to discover/update git root (async)
-                    let needs_root_check = prompt.read().needs_git_check;
-                    if needs_root_check {
-                        let cwd = prompt.read().current_dir.clone();
-                        let p_clone = Arc::clone(&prompt);
-                        tokio::spawn(async move {
-                            let root = crate::prompt::find_git_root_async(cwd).await;
-                            p_clone.write().update_git_root(root);
-                        });
-                    }
+                    let now = Instant::now();
+                    let is_throttled = self
+                        .last_git_update
+                        .is_some_and(|last| now.duration_since(last) < Duration::from_millis(GIT_STATUS_THROTTLE_MS));
 
-                     // Fetch status if we have a git root (always fetch on event)
-                     let should = prompt.read().has_git_root();
-                     if should {
-                        let path = prompt.read().current_path().to_path_buf();
-                        let p_clone = Arc::clone(&prompt);
+                    if !is_throttled
+                        && self
+                            .git_task_inflight
+                            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                            .is_ok()
+                    {
+                        self.last_git_update = Some(now);
+                        let prompt = Arc::clone(&self.prompt);
+                        let inflight = Arc::clone(&self.git_task_inflight);
                         tokio::spawn(async move {
-                            if let Some(status) = crate::prompt::fetch_git_status_async(&path).await {
-                                p_clone.write().update_git_status(Some(status));
+                            // Check if we need to discover/update git root (async)
+                            let needs_root_check = prompt.read().needs_git_check;
+                            if needs_root_check {
+                                let cwd = prompt.read().current_dir.clone();
+                                let root = crate::prompt::find_git_root_async(cwd).await;
+                                prompt.write().update_git_root(root);
                             }
+
+                            // Fetch status if we have a git root (always fetch on event)
+                            if prompt.read().has_git_root() {
+                                let path = prompt.read().current_path().to_path_buf();
+                                if let Some(status) = crate::prompt::fetch_git_status_async(&path).await {
+                                    prompt.write().update_git_status(Some(status));
+                                }
+                            }
+                            inflight.store(false, Ordering::SeqCst);
                         });
                     }
                 }

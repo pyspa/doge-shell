@@ -65,9 +65,6 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
     }
 
     // Safety Guard: Request confirmation from user
-    // NOTE: This check has been removed to allow automatic execution for allowed commands.
-    // The allowlist check above serves as the authorization.
-    /*
     let confirm_msg = format!("AI wants to execute command: `{}`. \r\nProceed?", command);
     if !proxy
         .confirm_action(&confirm_msg)
@@ -75,7 +72,6 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
     {
         return Ok("Execution cancelled by user.".to_string());
     }
-    */
 
     let output = Command::new("bash")
         .arg("-lc")
@@ -379,11 +375,13 @@ mod tests {
         }
     }
 
-    struct PanicOnConfirmProxy {
+    struct ConfirmProxy {
         allow: Vec<String>,
+        confirm_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        confirm_result: bool,
     }
 
-    impl ShellProxy for PanicOnConfirmProxy {
+    impl ShellProxy for ConfirmProxy {
         fn get_current_dir(&self) -> anyhow::Result<std::path::PathBuf> {
             Ok(std::env::current_dir()?)
         }
@@ -453,19 +451,39 @@ mod tests {
         }
 
         fn confirm_action(&mut self, _message: &str) -> anyhow::Result<bool> {
-            panic!("confirm_action should NOT be called");
+            self.confirm_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(self.confirm_result)
         }
     }
 
     #[test]
-    fn run_skips_confirmation_for_allowed_command() {
+    fn run_requests_confirmation_for_allowed_command() {
         let _lock = ENV_LOCK.lock().unwrap();
         let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls");
-        let mut proxy = PanicOnConfirmProxy {
+        let confirm_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut proxy = ConfirmProxy {
             allow: vec!["ls".to_string()],
+            confirm_calls: confirm_calls.clone(),
+            confirm_result: true,
         };
-        // This should NOT panic
         let result = run("{\"command\":\"ls -la\"}", &mut proxy);
         assert!(result.is_ok());
+        assert_eq!(confirm_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn run_cancels_when_confirmation_denied() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls");
+        let confirm_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut proxy = ConfirmProxy {
+            allow: vec!["ls".to_string()],
+            confirm_calls: confirm_calls.clone(),
+            confirm_result: false,
+        };
+        let result = run("{\"command\":\"ls -la\"}", &mut proxy).unwrap();
+        assert_eq!(result, "Execution cancelled by user.");
+        assert_eq!(confirm_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }

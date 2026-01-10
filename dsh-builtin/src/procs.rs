@@ -140,9 +140,10 @@ impl App {
     fn kill_selected(&mut self, signal: sysinfo::Signal) {
         if let Some(selected) = self.state.selected()
             && let Some((pid, _, _, _, _)) = self.processes.get(selected)
-                && let Some(process) = self.system.process(*pid) {
-                    process.kill_with(signal);
-                }
+            && let Some(process) = self.system.process(*pid)
+        {
+            process.kill_with(signal);
+        }
     }
 }
 
@@ -178,43 +179,44 @@ fn run_app(
         terminal.draw(|f| ui(f, app))?;
 
         if event::poll(Duration::from_millis(100))?
-            && let Event::Key(key) = event::read()? {
-                if app.input_mode {
-                    match key.code {
-                        KeyCode::Enter => app.input_mode = false,
-                        KeyCode::Esc => {
-                            app.input_mode = false;
-                            app.filter.clear();
-                            app.refresh_processes();
-                        }
-                        KeyCode::Char(c) => {
-                            app.filter.push(c);
-                            app.refresh_processes();
-                        }
-                        KeyCode::Backspace => {
-                            app.filter.pop();
-                            app.refresh_processes();
-                        }
-                        _ => {}
+            && let Event::Key(key) = event::read()?
+        {
+            if app.input_mode {
+                match key.code {
+                    KeyCode::Enter => app.input_mode = false,
+                    KeyCode::Esc => {
+                        app.input_mode = false;
+                        app.filter.clear();
+                        app.refresh_processes();
                     }
-                } else {
-                    match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                        KeyCode::Char('j') | KeyCode::Down => app.next(),
-                        KeyCode::Char('k') | KeyCode::Up => app.previous(),
-                        KeyCode::Char('/') => {
-                            app.input_mode = true;
-                        }
-                        KeyCode::Char('x') => {
-                            app.kill_selected(sysinfo::Signal::Term);
-                        }
-                        KeyCode::Char('X') => {
-                            app.kill_selected(sysinfo::Signal::Kill);
-                        }
-                        _ => {}
+                    KeyCode::Char(c) => {
+                        app.filter.push(c);
+                        app.refresh_processes();
                     }
+                    KeyCode::Backspace => {
+                        app.filter.pop();
+                        app.refresh_processes();
+                    }
+                    _ => {}
+                }
+            } else {
+                match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                    KeyCode::Char('j') | KeyCode::Down => app.next(),
+                    KeyCode::Char('k') | KeyCode::Up => app.previous(),
+                    KeyCode::Char('/') => {
+                        app.input_mode = true;
+                    }
+                    KeyCode::Char('x') => {
+                        app.kill_selected(sysinfo::Signal::Term);
+                    }
+                    KeyCode::Char('X') => {
+                        app.kill_selected(sysinfo::Signal::Kill);
+                    }
+                    _ => {}
                 }
             }
+        }
 
         app.on_tick();
 

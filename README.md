@@ -15,7 +15,7 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 - **Background Processing**: Run commands in background with `&` and manage jobs
 - **Pipes and Redirections**: Support for pipes (`|`), input/output redirection (`>`, `>>`, `<`), and error redirection
 - **Signal Handling**: Proper handling of signals like SIGINT, SIGQUIT, SIGTSTP
-- **Subshells**: Support for command substitution and process substitution
+- **Subshells**: Support for command substitution and process substitution (`<(...)` only; `>(...)` not supported yet)
 - **Safe Paste**: Bracketed paste support ensures pasted multi-line text is not executed immediately
 
 ### Advanced Features
@@ -80,7 +80,7 @@ The Safety Guard protects against unintended execution of potentially destructiv
 - **Command Output History**: Capture command output with `|>` operator and reference it with `$OUT` variable
 - **Command Timing Statistics**: Track execution time and frequency with `timing` command
 - **UUID Generation**: Built-in UUID generation with `uuid` command
-- **URL Shortening**: URL shortening with `dmv` command
+- **Batch Rename**: Batch file renaming with `dmv` command
 - **Web Server**: Built-in static file server with `serve` command
 - **Configuration Reload**: Runtime configuration reloading with `reload` command
 - **Trigger Command**: Monitor file changes matching a glob pattern and automatically execute commands. Results are captured in the [output history](#command-output-history).
@@ -149,7 +149,7 @@ The shell includes many built-in commands:
 | `add_path` | Add path to PATH environment variable |
 | `serve` | Start a static file server |
 | `uuid` | Generate UUIDs |
-| `dmv` | URL shortener |
+| `dmv` | Batch file renaming |
 | `reload` | Reload shell configuration |
 | `timing` | Show command execution statistics |
 | `out` | Display captured command output history |

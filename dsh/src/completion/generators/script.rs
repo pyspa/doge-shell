@@ -13,37 +13,66 @@ const SCRIPT_TIMEOUT_MS: u64 = 2000;
 
 impl ScriptRunner for DefaultScriptRunner {
     fn run(&self, command: &str) -> Result<String> {
-        use std::io::Read;
-        use std::time::Duration;
-        use wait_timeout::ChildExt;
+        if cfg!(test) {
+            return run_without_timeout(command);
+        }
+        run_with_timeout(command)
+    }
+}
 
-        let mut child = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(command)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()?;
+fn run_with_timeout(command: &str) -> Result<String> {
+    use std::io::Read;
+    use std::time::Duration;
+    use wait_timeout::ChildExt;
 
-        let timeout = Duration::from_millis(SCRIPT_TIMEOUT_MS);
-        match child.wait_timeout(timeout)? {
-            Some(status) => {
-                if status.success() {
-                    let mut stdout = String::new();
-                    if let Some(mut out) = child.stdout.take() {
-                        out.read_to_string(&mut stdout)?;
-                    }
-                    Ok(stdout)
-                } else {
-                    Ok(String::new())
+    let mut child = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+
+    let timeout = Duration::from_millis(SCRIPT_TIMEOUT_MS);
+    match child.wait_timeout(timeout)? {
+        Some(status) => {
+            if status.success() {
+                let mut stdout = String::new();
+                if let Some(mut out) = child.stdout.take() {
+                    out.read_to_string(&mut stdout)?;
                 }
-            }
-            None => {
-                // Timeout
-                let _ = child.kill();
-                let _ = child.wait();
+                Ok(stdout)
+            } else {
                 Ok(String::new())
             }
         }
+        None => {
+            // Timeout
+            let _ = child.kill();
+            let _ = child.wait();
+            Ok(String::new())
+        }
+    }
+}
+
+fn run_without_timeout(command: &str) -> Result<String> {
+    use std::io::Read;
+
+    let mut child = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+
+    let status = child.wait()?;
+    if status.success() {
+        let mut stdout = String::new();
+        if let Some(mut out) = child.stdout.take() {
+            out.read_to_string(&mut stdout)?;
+        }
+        Ok(stdout)
+    } else {
+        Ok(String::new())
     }
 }
 

@@ -460,9 +460,31 @@ pub fn get_config_file(name: &str) -> Result<PathBuf> {
 }
 
 pub fn get_data_file(name: &str) -> Result<PathBuf> {
+    #[cfg(test)]
+    ensure_test_data_dir();
     let xdg_dir =
         xdg::BaseDirectories::with_prefix(APP_NAME).context("failed get xdg directory")?;
     xdg_dir.place_data_file(name).context("failed get path")
+}
+
+#[cfg(test)]
+fn ensure_test_data_dir() {
+    use std::sync::OnceLock;
+
+    if std::env::var_os("XDG_DATA_HOME").is_some() {
+        return;
+    }
+
+    static TEST_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+    let dir = TEST_DATA_DIR.get_or_init(|| {
+        let base = std::env::temp_dir().join(format!("dsh-test-data-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&base);
+        base
+    });
+
+    unsafe {
+        std::env::set_var("XDG_DATA_HOME", dir);
+    }
 }
 
 /// Collect executable names from the given PATH directories.

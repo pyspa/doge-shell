@@ -268,9 +268,40 @@ impl Prompt {
 
             if let Some(w) = &mut watcher {
                 let git_dir = git_root.join(".git");
+                let git_dir = if git_dir.is_file() {
+                    if let Ok(content) = std::fs::read_to_string(&git_dir) {
+                        if let Some(path) = content.trim().strip_prefix("gitdir: ") {
+                            git_root.join(path.trim())
+                        } else {
+                            self.watcher = watcher;
+                            return;
+                        }
+                    } else {
+                        self.watcher = watcher;
+                        return;
+                    }
+                } else {
+                    git_dir
+                };
+
                 if git_dir.exists() {
-                    // Watch HEAD, index, logic can be refined
-                    let _ = w.watch(&git_dir, RecursiveMode::Recursive);
+                    let head = git_dir.join("HEAD");
+                    let index = git_dir.join("index");
+                    let refs = git_dir.join("refs");
+                    let packed_refs = git_dir.join("packed-refs");
+
+                    if head.exists() {
+                        let _ = w.watch(&head, RecursiveMode::NonRecursive);
+                    }
+                    if index.exists() {
+                        let _ = w.watch(&index, RecursiveMode::NonRecursive);
+                    }
+                    if refs.exists() {
+                        let _ = w.watch(&refs, RecursiveMode::Recursive);
+                    }
+                    if packed_refs.exists() {
+                        let _ = w.watch(&packed_refs, RecursiveMode::NonRecursive);
+                    }
                 }
             }
             self.watcher = watcher;

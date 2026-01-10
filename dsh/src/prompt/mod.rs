@@ -43,6 +43,8 @@ const BRANCH_MARK: &str = "🐾";
 const BRANCH_CONFLICT: &str = "🏴‍☠️";
 #[allow(dead_code)]
 const NEW_FILE: &str = "+";
+const EXTERNAL_TOOL_BACKOFF_BASE: Duration = Duration::from_secs(5);
+const EXTERNAL_TOOL_BACKOFF_MAX: Duration = Duration::from_secs(300);
 
 impl ChangePwdHook for Arc<RwLock<Prompt>> {
     fn call(&self, pwd: &Path, _env: Arc<RwLock<Environment>>) -> Result<()> {
@@ -99,6 +101,36 @@ struct GitStatusCache {
     ttl: Duration,
 }
 
+#[derive(Debug, Clone)]
+struct BackoffGate {
+    next_allowed: Instant,
+    delay: Duration,
+}
+
+impl BackoffGate {
+    fn new() -> Self {
+        Self {
+            next_allowed: Instant::now(),
+            delay: EXTERNAL_TOOL_BACKOFF_BASE,
+        }
+    }
+
+    fn should_check(&self) -> bool {
+        Instant::now() >= self.next_allowed
+    }
+
+    fn record_failure(&mut self) {
+        let now = Instant::now();
+        self.next_allowed = now + self.delay;
+        self.delay = (self.delay * 2).min(EXTERNAL_TOOL_BACKOFF_MAX);
+    }
+
+    fn reset(&mut self) {
+        self.delay = EXTERNAL_TOOL_BACKOFF_BASE;
+        self.next_allowed = Instant::now();
+    }
+}
+
 impl GitStatusCache {
     fn new(status: GitStatus, git_root: PathBuf) -> Self {
         Self {
@@ -144,12 +176,18 @@ pub struct Prompt {
     node_version_cache: Option<String>,
     python_version_cache: Option<String>,
     go_version_cache: Option<String>,
+    rust_check_backoff: BackoffGate,
+    node_check_backoff: BackoffGate,
+    python_check_backoff: BackoffGate,
+    go_check_backoff: BackoffGate,
 
     // Cloud Context
     k8s_context_cache: Option<String>,
     k8s_namespace_cache: Option<String>,
     aws_profile_cache: Option<String>,
     docker_context_cache: Option<String>,
+    k8s_check_backoff: BackoffGate,
+    docker_check_backoff: BackoffGate,
     last_exit_status: i32,
     last_duration: Option<Duration>,
 
@@ -174,12 +212,18 @@ impl Prompt {
             node_version_cache: None,
             python_version_cache: None,
             go_version_cache: None,
+            rust_check_backoff: BackoffGate::new(),
+            node_check_backoff: BackoffGate::new(),
+            python_check_backoff: BackoffGate::new(),
+            go_check_backoff: BackoffGate::new(),
 
             // Cloud Context
             k8s_context_cache: None,
             k8s_namespace_cache: None,
             aws_profile_cache: None,
             docker_context_cache: None,
+            k8s_check_backoff: BackoffGate::new(),
+            docker_check_backoff: BackoffGate::new(),
             last_exit_status: 0,
             last_duration: None,
 
@@ -552,32 +596,40 @@ impl Prompt {
     }
     pub fn update_rust_version(&mut self, version: Option<String>) {
         self.rust_version_cache = version;
+        self.rust_check_backoff.reset();
     }
 
     pub fn update_node_version(&mut self, version: Option<String>) {
         self.node_version_cache = version;
+        self.node_check_backoff.reset();
     }
 
     pub fn needs_rust_check(&self) -> bool {
-        self.rust_version_cache.is_none() && self.current_dir.join("Cargo.toml").exists()
+        self.rust_version_cache.is_none()
+            && self.rust_check_backoff.should_check()
+            && self.current_dir.join("Cargo.toml").exists()
     }
 
     pub fn needs_node_check(&self) -> bool {
         self.node_version_cache.is_none()
+            && self.node_check_backoff.should_check()
             && (self.current_dir.join("package.json").exists()
                 || self.current_dir.join("node_modules").exists())
     }
 
     pub fn update_python_version(&mut self, version: Option<String>) {
         self.python_version_cache = version;
+        self.python_check_backoff.reset();
     }
 
     pub fn update_go_version(&mut self, version: Option<String>) {
         self.go_version_cache = version;
+        self.go_check_backoff.reset();
     }
 
     pub fn needs_python_check(&self) -> bool {
         self.python_version_cache.is_none()
+            && self.python_check_backoff.should_check()
             && (self.current_dir.join("requirements.txt").exists()
                 || self.current_dir.join("pyproject.toml").exists()
                 || self.current_dir.join("Pipfile").exists()
@@ -586,12 +638,15 @@ impl Prompt {
     }
 
     pub fn needs_go_check(&self) -> bool {
-        self.go_version_cache.is_none() && self.current_dir.join("go.mod").exists()
+        self.go_version_cache.is_none()
+            && self.go_check_backoff.should_check()
+            && self.current_dir.join("go.mod").exists()
     }
 
     pub fn update_k8s_info(&mut self, context: Option<String>, namespace: Option<String>) {
         self.k8s_context_cache = context;
         self.k8s_namespace_cache = namespace;
+        self.k8s_check_backoff.reset();
     }
 
     pub fn update_aws_profile(&mut self, profile: Option<String>) {
@@ -600,10 +655,11 @@ impl Prompt {
 
     pub fn update_docker_context(&mut self, context: Option<String>) {
         self.docker_context_cache = context;
+        self.docker_check_backoff.reset();
     }
 
     pub fn should_check_k8s(&self) -> bool {
-        self.k8s_context_cache.is_none()
+        self.k8s_context_cache.is_none() && self.k8s_check_backoff.should_check()
         // Improve condition: check for env var KUBECONFIG or ~/.kube/config existence?
         // For now, always check if not cached, async task handles file check efficiently.
     }
@@ -613,7 +669,31 @@ impl Prompt {
     }
 
     pub fn should_check_docker(&self) -> bool {
-        self.docker_context_cache.is_none()
+        self.docker_context_cache.is_none() && self.docker_check_backoff.should_check()
+    }
+
+    pub fn mark_rust_check_failed(&mut self) {
+        self.rust_check_backoff.record_failure();
+    }
+
+    pub fn mark_node_check_failed(&mut self) {
+        self.node_check_backoff.record_failure();
+    }
+
+    pub fn mark_python_check_failed(&mut self) {
+        self.python_check_backoff.record_failure();
+    }
+
+    pub fn mark_go_check_failed(&mut self) {
+        self.go_check_backoff.record_failure();
+    }
+
+    pub fn mark_k8s_check_failed(&mut self) {
+        self.k8s_check_backoff.record_failure();
+    }
+
+    pub fn mark_docker_check_failed(&mut self) {
+        self.docker_check_backoff.record_failure();
     }
 
     pub fn update_status(&mut self, exit_status: i32, duration: Option<Duration>) {

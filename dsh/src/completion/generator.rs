@@ -14,8 +14,9 @@ use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::fs::read_dir;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::LazyLock;
-use std::sync::{Arc, Once};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 const SYSTEM_COMMAND_CACHE_TTL_MS: u64 = 2000;
@@ -25,37 +26,58 @@ static SYSTEM_COMMAND_CACHE: LazyLock<CompletionCache<CompletionCandidate>> =
 static GLOBAL_SYSTEM_COMMANDS: LazyLock<Arc<RwLock<Option<HashSet<String>>>>> =
     LazyLock::new(|| Arc::new(RwLock::new(None)));
 
-static GLOBAL_CACHE_INIT: Once = Once::new();
+static GLOBAL_CACHE_INFLIGHT: LazyLock<AtomicBool> = LazyLock::new(|| AtomicBool::new(false));
+
+pub fn set_global_system_commands(commands: HashSet<String>) {
+    let mut guard = GLOBAL_SYSTEM_COMMANDS.write();
+    *guard = Some(commands);
+}
+
+pub fn clear_global_system_commands() {
+    let mut guard = GLOBAL_SYSTEM_COMMANDS.write();
+    *guard = None;
+    GLOBAL_CACHE_INFLIGHT.store(false, Ordering::SeqCst);
+}
 
 fn ensure_global_cache_populated() {
-    GLOBAL_CACHE_INIT.call_once(|| {
-        std::thread::spawn(|| {
-            let paths: Vec<std::path::PathBuf> = std::env::var_os("PATH")
-                .map(|p| std::env::split_paths(&p).collect())
-                .unwrap_or_default();
+    if GLOBAL_SYSTEM_COMMANDS.read().is_some() {
+        return;
+    }
 
-            let mut commands = HashSet::new();
-            for path in paths {
-                if let Ok(entries) = read_dir(&path) {
-                    for entry in entries.flatten() {
-                        if let Ok(ft) = entry.file_type()
-                            && !ft.is_file()
-                            && !ft.is_symlink()
-                        {
-                            continue;
-                        }
-                        if crate::dirs::is_executable(&entry)
-                            && let Some(name) = entry.file_name().to_str()
-                        {
-                            commands.insert(name.to_string());
-                        }
+    if GLOBAL_CACHE_INFLIGHT
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+
+    std::thread::spawn(|| {
+        let paths: Vec<std::path::PathBuf> = std::env::var_os("PATH")
+            .map(|p| std::env::split_paths(&p).collect())
+            .unwrap_or_default();
+
+        let mut commands = HashSet::new();
+        for path in paths {
+            if let Ok(entries) = read_dir(&path) {
+                for entry in entries.flatten() {
+                    if let Ok(ft) = entry.file_type()
+                        && !ft.is_file()
+                        && !ft.is_symlink()
+                    {
+                        continue;
+                    }
+                    if crate::dirs::is_executable(&entry)
+                        && let Some(name) = entry.file_name().to_str()
+                    {
+                        commands.insert(name.to_string());
                     }
                 }
             }
+        }
 
-            let mut guard = GLOBAL_SYSTEM_COMMANDS.write();
-            *guard = Some(commands);
-        });
+        let mut guard = GLOBAL_SYSTEM_COMMANDS.write();
+        *guard = Some(commands);
+        GLOBAL_CACHE_INFLIGHT.store(false, Ordering::SeqCst);
     });
 }
 

@@ -259,6 +259,7 @@ impl Environment {
         self.command_cache.write().clear();
         // Also clear executable names cache
         self.executable_names.write().clear();
+        crate::completion::generator::clear_global_system_commands();
     }
 
     pub fn reload_z_exclude(&mut self) {
@@ -292,9 +293,10 @@ impl Environment {
             }
         }
 
-        let mut sorted: Vec<String> = names.into_iter().collect();
+        let mut sorted: Vec<String> = names.iter().cloned().collect();
         sorted.sort();
         *self.executable_names.write() = sorted;
+        crate::completion::generator::set_global_system_commands(names);
         debug!(
             "Prewarmed {} executable names",
             self.executable_names.read().len()

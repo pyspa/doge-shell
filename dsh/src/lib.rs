@@ -220,6 +220,9 @@ pub async fn run_shell() -> ExitCode {
             .ok();
             if let Some(names) = sorted {
                 *names_arc.write() = names;
+                let set: std::collections::HashSet<String> =
+                    names_arc.read().iter().cloned().collect();
+                crate::completion::generator::set_global_system_commands(set);
             }
         });
     }

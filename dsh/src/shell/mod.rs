@@ -36,7 +36,7 @@ pub struct Shell {
     pub lisp_engine: Rc<RefCell<lisp::LispEngine>>,
     pub(crate) next_job_id: usize,
     pub notebook_session: Option<NotebookSession>,
-    pub safety_guard: crate::safety::SafetyGuard,
+    pub safety_guard: Arc<crate::safety::SafetyGuard>,
     pub github_status: Option<Arc<RwLock<crate::github::GitHubStatus>>>,
 }
 
@@ -59,7 +59,7 @@ impl Shell {
     pub fn new(environment: Arc<RwLock<Environment>>) -> Self {
         let pid = getpid();
         let pgid = pid;
-        let safety_guard = crate::safety::SafetyGuard::new();
+        let safety_guard = Arc::new(crate::safety::SafetyGuard::new());
 
         // Initialize Lisp engine
         let lisp_engine = lisp::LispEngine::new(Arc::clone(&environment));

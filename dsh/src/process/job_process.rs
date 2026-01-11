@@ -234,9 +234,18 @@ impl JobProcess {
             JobProcess::Command(p) => (p.cmd.as_str(), &p.argv),
         };
 
-        let level = shell.environment.read().safety_level.read().clone();
+        let (level, allowlist) = {
+            let env = shell.environment.read();
+            (
+                env.safety_level.read().clone(),
+                env.execute_allowlist.read().clone(),
+            )
+        };
 
-        match shell.safety_guard.check_command(&level, cmd, argv) {
+        match shell
+            .safety_guard
+            .check_command(&level, cmd, argv, &allowlist)
+        {
             crate::safety::SafetyResult::Allowed => {}
             crate::safety::SafetyResult::Denied(reason) => {
                 shell.print_error(format!("Safety Guard: Execution denied: {}", reason));

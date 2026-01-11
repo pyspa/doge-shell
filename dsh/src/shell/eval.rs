@@ -74,6 +74,72 @@ pub async fn eval_str(
     let input = transform_input_for_smart_pipe(input);
 
     let jobs = get_jobs(shell, &input)?;
+
+    // SAFETY CHECK
+    {
+        use crate::repl::confirmation::ConfirmationAction;
+        use crate::safety::SafetyResult;
+
+        let _allowlist_add_cmd: Option<String> = None;
+        let mut denied_reason: Option<String> = None;
+        let mut user_cancelled = false;
+
+        {
+            let environment = shell.environment.read();
+            let safety_level_guard = environment.safety_level.read();
+            let allowlist_guard = environment.execute_allowlist.read();
+
+            match shell
+                .safety_guard
+                .check_jobs(&jobs, &safety_level_guard, &allowlist_guard)
+            {
+                SafetyResult::Allowed => {
+                    // Proceed
+                }
+                SafetyResult::Denied(reason) => {
+                    denied_reason = Some(reason);
+                }
+                SafetyResult::Confirm(reason) => {
+                    // Release locks before confirmation to avoid holding them during user input
+                    drop(allowlist_guard);
+                    drop(safety_level_guard);
+                    drop(environment);
+
+                    match crate::repl::confirmation::confirm_action(&reason) {
+                        Ok(ConfirmationAction::Yes) => {
+                            // Proceed
+                        }
+                        Ok(ConfirmationAction::AlwaysAllow) => {
+                            // Proceed and mark for add
+                            // We allow the *exact matching command strings* of all jobs in this approved pipeline.
+
+                            shell
+                                .environment
+                                .read()
+                                .execute_allowlist
+                                .write()
+                                .extend(jobs.iter().map(|j| j.cmd.clone()));
+                        }
+                        Ok(ConfirmationAction::No) | Err(_) => {
+                            user_cancelled = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(reason) = denied_reason {
+            tracing::warn!("Command execution denied by SafetyGuard: {}", reason);
+            eprintln!("🚫 Access Denied: {}", reason);
+            return Ok(1);
+        }
+
+        if user_cancelled {
+            tracing::info!("Command execution cancelled by user");
+            return Ok(130);
+        }
+    }
+
     let mut last_exit_code = 0_i32;
     // Operator that gates execution of the *current* job based on the previous job result.
     // This is effectively "the separator between previous and current job".

@@ -568,7 +568,7 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
         Symbol::from("chat-execute-add"),
         Value::NativeFunc(|env, args| {
             let env_ref = env.borrow();
-            let mut shell_env = env_ref.shell_env.write();
+            let shell_env = env_ref.shell_env.write();
             for arg in args {
                 let command = match arg {
                     Value::String(s) => s.clone(),

@@ -2,6 +2,7 @@ use crate::ai_features::AiService;
 use crate::completion::AutoComplete;
 use crate::direnv::DirEnvironment;
 use crate::dirs::search_file;
+use crate::secrets::SecretManager;
 use crate::shell::APP_NAME;
 use crate::suggestion::{InputPreferences, SuggestionMode};
 use anyhow::Context as _;
@@ -54,6 +55,8 @@ pub struct Environment {
     pub z_exclude: Vec<String>,
     /// Flags if the shell is currently in startup mode (e.g. running config.lisp)
     pub startup_mode: bool,
+    /// Secret manager for handling sensitive information
+    pub secret_manager: SecretManager,
 }
 
 fn default_input_preferences() -> InputPreferences {
@@ -118,6 +121,7 @@ impl Environment {
             ai_service: None,
             z_exclude: parse_z_exclude(),
             startup_mode: false,
+            secret_manager: SecretManager::new(),
         }));
 
         {
@@ -166,6 +170,7 @@ impl Environment {
             ai_service: parent.read().ai_service.clone(),
             z_exclude: parent.read().z_exclude.clone(),
             startup_mode: false, // Extended environments (subshells) are not in startup mode
+            secret_manager: SecretManager::new(),
         }))
     }
 

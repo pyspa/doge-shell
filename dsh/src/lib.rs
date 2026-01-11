@@ -34,6 +34,7 @@ pub mod prompt;
 pub mod proxy;
 pub mod repl;
 pub mod safety;
+pub mod secrets;
 pub mod shell;
 pub mod snippet;
 pub mod suggestion;

@@ -26,9 +26,20 @@ pub async fn eval_str(
     if ctx.save_history
         && let Some(ref mut history) = shell.cmd_history
     {
-        let mut history = history.lock();
-        if let Err(e) = history.write_history(&input) {
-            debug!("Failed to write history: {}", e);
+        // Apply secret filtering before saving to history
+        let filtered_cmd = shell
+            .environment
+            .read()
+            .secret_manager
+            .process_for_history(&input);
+
+        if let Some(cmd_to_save) = filtered_cmd {
+            let mut history = history.lock();
+            if let Err(e) = history.write_history(&cmd_to_save) {
+                debug!("Failed to write history: {}", e);
+            }
+        } else {
+            debug!("Command skipped from history due to secret detection");
         }
     }
 

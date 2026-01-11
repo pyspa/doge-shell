@@ -49,7 +49,7 @@ impl Default for InputPreferences {
             transient_prompt: true,
             auto_diagnose: false,
             auto_fix: false,
-            auto_notify_enabled: true,
+            auto_notify_enabled: false,
             auto_notify_threshold: 10,
             auto_pair: false,
         }

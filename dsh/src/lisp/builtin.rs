@@ -249,6 +249,44 @@ pub fn safety_level(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
     Ok(Value::NIL)
 }
 
+pub fn pref_auto_pair(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    if args.is_empty() {
+        return Ok(Value::from(
+            env.borrow().shell_env.read().input_preferences.auto_pair,
+        ));
+    }
+
+    let enabled = bool::from(&args[0]);
+
+    debug!("setting auto-pair to {:?}", enabled);
+    env.borrow()
+        .shell_env
+        .write()
+        .set_auto_pair_enabled(enabled);
+    Ok(Value::NIL)
+}
+
+pub fn pref_auto_notify(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    if args.is_empty() {
+        return Ok(Value::from(
+            env.borrow()
+                .shell_env
+                .read()
+                .input_preferences
+                .auto_notify_enabled,
+        ));
+    }
+
+    let enabled = bool::from(&args[0]);
+
+    debug!("setting auto-notify to {:?}", enabled);
+    env.borrow()
+        .shell_env
+        .write()
+        .set_auto_notify_enabled(enabled);
+    Ok(Value::NIL)
+}
+
 pub fn block_sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     tokio::task::block_in_place(move || {
         tokio::runtime::Handle::current().block_on(sh_no_cap(env, args))

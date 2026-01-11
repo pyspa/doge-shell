@@ -193,6 +193,8 @@ pub struct Repl<'a> {
     pub(crate) ai_tx: tokio::sync::mpsc::UnboundedSender<AiEvent>,
     pub(crate) history_sync_last_check: Instant,
     pub(crate) completion_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
+    /// Flag to indicate argument explanation needs refresh (debounced)
+    pub(crate) explanation_dirty: bool,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -375,6 +377,7 @@ impl<'a> Repl<'a> {
             ai_tx,
             history_sync_last_check: Instant::now(),
             completion_rx,
+            explanation_dirty: false,
         }
     }
 
@@ -525,7 +528,8 @@ impl<'a> Repl<'a> {
 
     pub(crate) async fn handle_key_event(&mut self, ev: &KeyEvent) -> Result<()> {
         let result = handler::handle_key_event(self, ev).await;
-        self.refresh_argument_explanation();
+        // Mark explanation as dirty for debounced refresh
+        self.explanation_dirty = true;
         result
     }
 
@@ -1476,6 +1480,15 @@ impl<'a> Repl<'a> {
             Duration::from_millis(AI_SUGGESTION_REFRESH_MS),
         );
         ai_refresh_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        // Debounced interval for argument explanation refresh (200ms)
+        const EXPLANATION_REFRESH_MS: u64 = 200;
+        let mut explanation_refresh_interval = interval_at(
+            TokioInstant::now() + Duration::from_millis(EXPLANATION_REFRESH_MS),
+            Duration::from_millis(EXPLANATION_REFRESH_MS),
+        );
+        explanation_refresh_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
         loop {
             tokio::select! {
                 _ = background_interval.tick() => {
@@ -1596,6 +1609,13 @@ impl<'a> Repl<'a> {
                         let mut renderer = TerminalRenderer::new();
                         self.print_input(&mut renderer, false, false);
                         renderer.flush().ok();
+                    }
+                }
+                _ = explanation_refresh_interval.tick() => {
+                    // Debounced argument explanation refresh
+                    if self.explanation_dirty {
+                        self.explanation_dirty = false;
+                        self.refresh_argument_explanation();
                     }
                 }
                 Some(_) = self.git_rx.recv() => {

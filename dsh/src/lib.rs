@@ -528,11 +528,14 @@ pub async fn execute_command(shell: &mut Shell, _ctx: &mut Context, command: &st
         {
             let mcp_manager = env_handle.read().mcp_manager.clone();
             let safety_level = env_handle.read().safety_level.clone();
+            let allowlist = env_handle.read().execute_allowlist.clone();
             let service = Arc::new(crate::ai_features::LiveAiService::new(
                 client,
                 mcp_manager,
                 safety_level,
+                shell.safety_guard.clone(),
                 None,
+                allowlist,
             ));
             shell.environment.write().ai_service = Some(service);
         }

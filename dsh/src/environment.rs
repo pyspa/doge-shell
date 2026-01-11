@@ -39,7 +39,7 @@ pub struct Environment {
     pub chpwd_hooks: Vec<Box<dyn ChangePwdHook + Send + Sync>>,
     pub mcp_servers: Vec<McpServerConfig>,
     pub mcp_manager: Arc<RwLock<McpManager>>,
-    pub execute_allowlist: Vec<String>,
+    pub execute_allowlist: Arc<RwLock<Vec<String>>>,
     pub system_env_vars: HashMap<String, String>,
     pub input_preferences: InputPreferences,
     pub safety_level: Arc<RwLock<crate::safety::SafetyLevel>>,
@@ -107,7 +107,7 @@ impl Environment {
             chpwd_hooks: Vec::new(),
             mcp_servers: Vec::new(),
             mcp_manager: Arc::new(RwLock::new(McpManager::default())),
-            execute_allowlist: Vec::new(),
+            execute_allowlist: Arc::new(RwLock::new(Vec::new())),
             system_env_vars: env::vars().collect(),
             input_preferences: default_input_preferences(),
             safety_level: Arc::new(RwLock::new(crate::safety::SafetyLevel::Normal)),
@@ -382,18 +382,19 @@ impl Environment {
         &self.mcp_servers
     }
 
-    pub fn clear_execute_allowlist(&mut self) {
-        self.execute_allowlist.clear();
+    pub fn clear_execute_allowlist(&self) {
+        self.execute_allowlist.write().clear();
     }
 
-    pub fn add_execute_allowlist_entry(&mut self, entry: String) {
-        if !self.execute_allowlist.contains(&entry) {
-            self.execute_allowlist.push(entry);
+    pub fn add_execute_allowlist_entry(&self, entry: String) {
+        let mut allowlist = self.execute_allowlist.write();
+        if !allowlist.contains(&entry) {
+            allowlist.push(entry);
         }
     }
 
-    pub fn execute_allowlist(&self) -> &[String] {
-        &self.execute_allowlist
+    pub fn execute_allowlist(&self) -> Vec<String> {
+        self.execute_allowlist.read().clone()
     }
 
     pub fn suggestion_mode(&self) -> SuggestionMode {

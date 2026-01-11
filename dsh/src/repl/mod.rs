@@ -47,7 +47,7 @@ mod cache;
 use cache::*;
 mod suggestion_manager;
 use suggestion_manager::*;
-mod confirmation;
+pub mod confirmation;
 mod handler;
 pub mod key_action;
 
@@ -311,11 +311,14 @@ impl<'a> Repl<'a> {
 
             // ... (in Repl::new)
 
+            let allowlist = envronment.read().execute_allowlist.clone();
             let service = Arc::new(LiveAiService::new(
                 client,
                 envronment.read().mcp_manager.clone(),
                 envronment.read().safety_level.clone(),
+                shell.safety_guard.clone(),
                 Some(confirmation::ReplConfirmationHandler::new()),
+                allowlist,
             ));
 
             // Store in environment so ShellProxy can access it

@@ -158,12 +158,13 @@ fn test_chat_execute_allowlist() {
 
     {
         let env_read = shell_env.read();
-        assert_eq!(env_read.execute_allowlist.len(), 2);
-        assert!(env_read.execute_allowlist.contains(&"ls".to_string()));
-        assert!(env_read.execute_allowlist.contains(&"grep".to_string()));
+        let allowlist = env_read.execute_allowlist.read();
+        assert_eq!(allowlist.len(), 2);
+        assert!(allowlist.contains(&"ls".to_string()));
+        assert!(allowlist.contains(&"grep".to_string()));
     }
 
     run_lisp(env.clone(), "(chat-execute-clear)").unwrap();
 
-    assert_eq!(shell_env.read().execute_allowlist.len(), 0);
+    assert_eq!(shell_env.read().execute_allowlist.read().len(), 0);
 }

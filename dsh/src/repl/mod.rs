@@ -52,7 +52,8 @@ mod handler;
 pub mod key_action;
 
 /// AI Quick Actions available to the user
-struct InputAnalysis {
+#[derive(Clone)]
+pub(crate) struct InputAnalysis {
     completion_full: Option<String>,
     completion: Option<String>,
     color_ranges: Option<Vec<(usize, usize, ColorType)>>,
@@ -195,6 +196,9 @@ pub struct Repl<'a> {
     pub(crate) completion_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
     /// Flag to indicate argument explanation needs refresh (debounced)
     pub(crate) explanation_dirty: bool,
+    /// Cache for syntax highlighting to avoid re-parsing unchanged input
+    pub(crate) last_analyzed_input: String,
+    pub(crate) last_analysis_result: Option<InputAnalysis>,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -378,6 +382,8 @@ impl<'a> Repl<'a> {
             history_sync_last_check: Instant::now(),
             completion_rx,
             explanation_dirty: false,
+            last_analyzed_input: String::new(),
+            last_analysis_result: None,
         }
     }
 
@@ -1371,10 +1377,21 @@ impl<'a> Repl<'a> {
             self.input.completion = None;
             self.input.color_ranges = None;
             self.input.can_execute = false;
+            self.last_analyzed_input.clear();
+            self.last_analysis_result = None;
         } else {
             completion = self.get_completion_from_history(&input);
 
-            let analysis = self.analyze_input(&input, completion.clone());
+            // Use cached analysis if input hasn't changed (fast path)
+            let analysis =
+                if self.last_analyzed_input == input && self.last_analysis_result.is_some() {
+                    self.last_analysis_result.clone().unwrap()
+                } else {
+                    let result = self.analyze_input(&input, completion.clone());
+                    self.last_analyzed_input = input.clone();
+                    self.last_analysis_result = Some(result.clone());
+                    result
+                };
 
             if let Some(c) = analysis.completion_full {
                 self.input.completion = Some(c);

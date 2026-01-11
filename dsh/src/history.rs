@@ -47,6 +47,8 @@ pub struct History {
     current_index: usize,
     pub search_word: Option<String>,
     sender: Option<Sender<HistoryMsg>>,
+    /// Cache of recent entries for fast prefix search (max 100 entries)
+    recent_cache: Vec<String>,
 }
 
 enum HistoryMsg {
@@ -67,9 +69,9 @@ impl History {
             histories: Vec::new(),
             size: 10000,
             current_index: 0,
-
             search_word: None,
             sender: None,
+            recent_cache: Vec::with_capacity(100),
         }
     }
 
@@ -83,9 +85,9 @@ impl History {
             histories: Vec::new(),
             size: 10000,
             current_index: 0,
-
             search_word: None,
             sender: None,
+            recent_cache: Vec::with_capacity(100),
         })
     }
 
@@ -191,6 +193,12 @@ impl History {
             }
 
             self.current_index = self.histories.len();
+
+            // Initialize recent cache from loaded history (last 100 entries)
+            self.recent_cache.clear();
+            for entry in self.histories.iter().rev().take(100) {
+                self.recent_cache.insert(0, entry.entry.clone());
+            }
         }
         Ok(min_timestamp)
     }
@@ -350,6 +358,12 @@ impl History {
         self.histories = new_histories;
         self.reset_index();
 
+        // Update recent cache after reload
+        self.recent_cache.clear();
+        for entry in self.histories.iter().rev().take(100) {
+            self.recent_cache.insert(0, entry.entry.clone());
+        }
+
         Ok(())
     }
 
@@ -436,6 +450,17 @@ impl History {
         }
         self.reset_index();
 
+        // Update recent cache
+        for (cmd, _) in &entries {
+            // Remove if already exists to avoid duplicates
+            self.recent_cache.retain(|e| e != cmd);
+            self.recent_cache.push(cmd.clone());
+            // Keep only last 100 entries
+            if self.recent_cache.len() > 100 {
+                self.recent_cache.remove(0);
+            }
+        }
+
         // 2. Persist
         if let Some(sender) = &self.sender {
             let _ = sender.send(HistoryMsg::WriteBatch(entries, context));
@@ -447,6 +472,13 @@ impl History {
     }
 
     pub fn search_first(&self, word: &str) -> Option<&str> {
+        // First, check recent cache (fast path)
+        for entry in self.recent_cache.iter().rev() {
+            if entry.starts_with(word) {
+                return Some(entry);
+            }
+        }
+        // Fall back to full history search
         for hist in self.histories.iter().rev() {
             if hist.entry.starts_with(word) {
                 return Some(&hist.entry);

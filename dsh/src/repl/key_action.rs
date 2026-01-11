@@ -89,6 +89,8 @@ pub struct KeyContext {
     pub cursor_at_start: bool,
     /// 次の文字（OvertypeClosingBracket用）
     pub next_char: Option<char>,
+    /// オートペアが有効か
+    pub auto_pair: bool,
 }
 
 /// キー入力からアクションを決定（純粋関数）
@@ -154,7 +156,9 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
         (KeyCode::Char(' '), NONE) => KeyAction::ExpandAbbreviationAndInsertSpace,
 
         // Auto-pairing: 開き括弧
-        (KeyCode::Char(ch), NONE) if matches!(ch, '(' | '{' | '[' | '\'' | '"') => {
+        (KeyCode::Char(ch), NONE)
+            if ctx.auto_pair && matches!(ch, '(' | '{' | '[' | '\'' | '"') =>
+        {
             let close = match ch {
                 '(' => ')',
                 '{' => '}',
@@ -167,7 +171,7 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
         }
 
         // Overtype: 閉じ括弧
-        (KeyCode::Char(ch), NONE) if matches!(ch, ')' | '}' | ']') => {
+        (KeyCode::Char(ch), NONE) if ctx.auto_pair && matches!(ch, ')' | '}' | ']') => {
             if ctx.next_char == Some(ch) {
                 KeyAction::OvertypeClosingBracket(ch)
             } else {
@@ -176,9 +180,7 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
         }
 
         // クオートのオーバータイプ
-        (KeyCode::Char(ch), NONE) if matches!(ch, '\'' | '"') => {
-            // 既にペア挿入でマッチしているので、これは通常の挿入
-            // 上のmatchでペア挿入が優先されるため、ここには到達しない
+        (KeyCode::Char(ch), NONE) if ctx.auto_pair && matches!(ch, '\'' | '"') => {
             KeyAction::InsertChar(ch)
         }
 
@@ -267,6 +269,7 @@ mod tests {
             completion_mode: false,
             cursor_at_start: false,
             next_char: None,
+            auto_pair: false,
         }
     }
 
@@ -385,10 +388,14 @@ mod tests {
     }
 
     #[test]
-    fn test_open_paren_inserts_pair() {
+    fn test_open_paren_inserts_pair_when_enabled() {
         let k = key(KeyCode::Char('('), NONE);
+        let ctx = KeyContext {
+            auto_pair: true,
+            ..ctx_default()
+        };
         assert_eq!(
-            determine_key_action(&k, &ctx_default()),
+            determine_key_action(&k, &ctx),
             KeyAction::InsertPairedChar {
                 open: '(',
                 close: ')'
@@ -397,10 +404,24 @@ mod tests {
     }
 
     #[test]
-    fn test_open_brace_inserts_pair() {
+    fn test_open_paren_inserts_single_when_disabled() {
+        let k = key(KeyCode::Char('('), NONE);
+        let ctx = KeyContext {
+            auto_pair: false,
+            ..ctx_default()
+        };
+        assert_eq!(determine_key_action(&k, &ctx), KeyAction::InsertChar('('));
+    }
+
+    #[test]
+    fn test_open_brace_inserts_pair_when_enabled() {
         let k = key(KeyCode::Char('{'), NONE);
+        let ctx = KeyContext {
+            auto_pair: true,
+            ..ctx_default()
+        };
         assert_eq!(
-            determine_key_action(&k, &ctx_default()),
+            determine_key_action(&k, &ctx),
             KeyAction::InsertPairedChar {
                 open: '{',
                 close: '}'
@@ -409,10 +430,11 @@ mod tests {
     }
 
     #[test]
-    fn test_close_paren_overtypes_when_matching() {
+    fn test_close_paren_overtypes_when_enabled_and_matching() {
         let k = key(KeyCode::Char(')'), NONE);
         let ctx = KeyContext {
             next_char: Some(')'),
+            auto_pair: true,
             ..ctx_default()
         };
         assert_eq!(
@@ -422,10 +444,22 @@ mod tests {
     }
 
     #[test]
+    fn test_close_paren_inserts_when_disabled() {
+        let k = key(KeyCode::Char(')'), NONE);
+        let ctx = KeyContext {
+            next_char: Some(')'),
+            auto_pair: false,
+            ..ctx_default()
+        };
+        assert_eq!(determine_key_action(&k, &ctx), KeyAction::InsertChar(')'));
+    }
+
+    #[test]
     fn test_close_paren_inserts_when_not_matching() {
         let k = key(KeyCode::Char(')'), NONE);
         let ctx = KeyContext {
             next_char: Some('x'),
+            auto_pair: true,
             ..ctx_default()
         };
         assert_eq!(determine_key_action(&k, &ctx), KeyAction::InsertChar(')'));
@@ -651,10 +685,14 @@ mod tests {
     }
 
     #[test]
-    fn test_open_bracket_inserts_pair() {
+    fn test_open_bracket_inserts_pair_when_enabled() {
         let k = key(KeyCode::Char('['), NONE);
+        let ctx = KeyContext {
+            auto_pair: true,
+            ..ctx_default()
+        };
         assert_eq!(
-            determine_key_action(&k, &ctx_default()),
+            determine_key_action(&k, &ctx),
             KeyAction::InsertPairedChar {
                 open: '[',
                 close: ']'
@@ -663,10 +701,14 @@ mod tests {
     }
 
     #[test]
-    fn test_single_quote_inserts_pair() {
+    fn test_single_quote_inserts_pair_when_enabled() {
         let k = key(KeyCode::Char('\''), NONE);
+        let ctx = KeyContext {
+            auto_pair: true,
+            ..ctx_default()
+        };
         assert_eq!(
-            determine_key_action(&k, &ctx_default()),
+            determine_key_action(&k, &ctx),
             KeyAction::InsertPairedChar {
                 open: '\'',
                 close: '\''
@@ -675,10 +717,14 @@ mod tests {
     }
 
     #[test]
-    fn test_double_quote_inserts_pair() {
+    fn test_double_quote_inserts_pair_when_enabled() {
         let k = key(KeyCode::Char('"'), NONE);
+        let ctx = KeyContext {
+            auto_pair: true,
+            ..ctx_default()
+        };
         assert_eq!(
-            determine_key_action(&k, &ctx_default()),
+            determine_key_action(&k, &ctx),
             KeyAction::InsertPairedChar {
                 open: '"',
                 close: '"'
@@ -691,6 +737,7 @@ mod tests {
         let k = key(KeyCode::Char(']'), NONE);
         let ctx = KeyContext {
             next_char: Some(']'),
+            auto_pair: true,
             ..ctx_default()
         };
         assert_eq!(
@@ -704,6 +751,7 @@ mod tests {
         let k = key(KeyCode::Char('}'), NONE);
         let ctx = KeyContext {
             next_char: Some('}'),
+            auto_pair: true,
             ..ctx_default()
         };
         assert_eq!(

@@ -747,6 +747,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
         completion_mode: repl.completion.completion_mode(),
         cursor_at_start: repl.input.cursor() == 0,
         next_char: repl.input.char_at(repl.input.cursor()),
+        auto_pair: repl.input_preferences.auto_pair,
     };
 
     // Determine action using pure function
@@ -918,7 +919,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
         }
         KeyAction::Backspace => {
             let cursor = repl.input.cursor();
-            if cursor > 0 && cursor < repl.input.len() {
+            if repl.input_preferences.auto_pair && cursor > 0 && cursor < repl.input.len() {
                 let prev_char = repl.input.char_at(cursor - 1);
                 let next_char = repl.input.char_at(cursor);
 

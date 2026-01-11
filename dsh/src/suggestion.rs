@@ -37,6 +37,8 @@ pub struct InputPreferences {
     pub auto_notify_enabled: bool,
     /// Threshold in seconds for auto notification
     pub auto_notify_threshold: u64,
+    /// When enabled, automatically insert pairs for brackets and quotes
+    pub auto_pair: bool,
 }
 
 impl Default for InputPreferences {
@@ -49,6 +51,7 @@ impl Default for InputPreferences {
             auto_fix: false,
             auto_notify_enabled: true,
             auto_notify_threshold: 10,
+            auto_pair: false,
         }
     }
 }

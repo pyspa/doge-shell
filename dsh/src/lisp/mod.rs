@@ -200,6 +200,14 @@ pub fn make_env(environment: Arc<RwLock<Environment>>) -> Rc<RefCell<Env>> {
         Symbol::from("safety-level"),
         Value::NativeFunc(builtin::safety_level),
     );
+    env.borrow_mut().define(
+        Symbol::from("pref-auto-pair"),
+        Value::NativeFunc(builtin::pref_auto_pair),
+    );
+    env.borrow_mut().define(
+        Symbol::from("pref-auto-notify"),
+        Value::NativeFunc(builtin::pref_auto_notify),
+    );
 
     env
 }

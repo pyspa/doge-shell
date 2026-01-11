@@ -425,6 +425,10 @@ impl Environment {
         self.input_preferences.auto_notify_threshold = threshold;
     }
 
+    pub fn set_auto_pair_enabled(&mut self, enabled: bool) {
+        self.input_preferences.auto_pair = enabled;
+    }
+
     pub fn input_preferences(&self) -> InputPreferences {
         self.input_preferences
     }

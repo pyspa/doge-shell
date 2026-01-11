@@ -59,8 +59,13 @@ impl SafetyGuard {
         guard.register_checker("chown", Self::check_recursive);
         guard.register_checker("cp", Self::check_cp);
         guard.register_checker("mv", Self::check_mv);
-        guard.register_checker("curl", Self::check_network_tool);
-        guard.register_checker("wget", Self::check_network_tool);
+        guard.register_checker("curl", Self::check_data_exfiltration);
+        guard.register_checker("wget", Self::check_data_exfiltration);
+
+        // Sensitive file readers
+        for cmd in &["cat", "less", "more", "head", "tail", "grep", "awk", "sed"] {
+            guard.register_checker(cmd, Self::check_sensitive_file_access);
+        }
         guard.register_checker("npm", Self::check_package_manager);
         guard.register_checker("pip", Self::check_package_manager);
         guard.register_checker("pip3", Self::check_package_manager);
@@ -398,10 +403,69 @@ impl SafetyGuard {
     }
 
     fn check_network_tool(_args: &[String]) -> Option<String> {
-        // By default, using curl/wget is fine.
-        // The danger comes from piping to sh (handled in check_jobs)
-        // or writing to sensitive files (maybe too complex to check filenames here?)
-        // For now, we allow usage as long as it isn't piped to execution.
+        // This is replaced by check_data_exfiltration but kept for backward compatibility if needed logic
+        None
+    }
+
+    fn check_data_exfiltration(args: &[String]) -> Option<String> {
+        for arg in args {
+            // curl data exfiltration flags
+            if arg == "-d"
+                || arg == "--data"
+                || arg == "-F"
+                || arg == "--form"
+                || arg == "-T"
+                || arg == "--upload-file"
+            {
+                return Some(
+                    "Potential data exfiltration detected (data upload). Proceed?".to_string(),
+                );
+            }
+            // wget post flags
+            if arg == "--post-data" || arg == "--post-file" {
+                return Some(
+                    "Potential data exfiltration detected (POST data). Proceed?".to_string(),
+                );
+            }
+        }
+        None
+    }
+
+    fn check_sensitive_file_access(args: &[String]) -> Option<String> {
+        for arg in args {
+            // Simple heuristic to check for sensitive paths
+            // Full path resolution would be better but this catches obvious cases
+            if arg.contains(".ssh") || arg.contains("id_rsa") || arg.contains("id_ed25519") {
+                return Some(format!("Access to SSH key detected: '{}'. Proceed?", arg));
+            }
+            if arg.contains(".aws/credentials")
+                || arg.contains(".config/gcloud")
+                || arg.contains(".azure")
+            {
+                return Some(format!(
+                    "Access to cloud credentials detected: '{}'. Proceed?",
+                    arg
+                ));
+            }
+            if arg == "/etc/shadow" || arg == "/etc/passwd" {
+                return Some(format!(
+                    "Access to system file detected: '{}'. Proceed?",
+                    arg
+                ));
+            }
+            if arg.contains(".env") {
+                return Some(format!(
+                    "Access to environment file detected: '{}'. Proceed?",
+                    arg
+                ));
+            }
+            if arg.ends_with("_history") {
+                return Some(format!(
+                    "Access to shell history detected: '{}'. Proceed?",
+                    arg
+                ));
+            }
+        }
         None
     }
 
@@ -419,10 +483,40 @@ impl SafetyGuard {
         None
     }
 
-    fn check_system_modification(_args: &[String]) -> Option<String> {
+    pub fn check_system_modification(_args: &[String]) -> Option<String> {
         // systemctl/service are usually privileged.
         // Warn always.
         Some("System service modification detected. Proceed?".to_string())
+    }
+
+    /// Check if modifying an environment variable is safe
+    pub fn check_environment_modification(
+        &self,
+        key: &str,
+        _value: &str,
+        level: &SafetyLevel,
+    ) -> SafetyResult {
+        let dangerous_vars = [
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "DYLD_INSERT_LIBRARIES",
+            "PYTHONPATH",
+            "PERL5LIB",
+            "RUBYLIB",
+            "NODE_OPTIONS",
+        ];
+
+        if dangerous_vars.contains(&key) {
+            match level {
+                SafetyLevel::Loose => SafetyResult::Allowed,
+                SafetyLevel::Strict | SafetyLevel::Normal => SafetyResult::Confirm(format!(
+                    "Modification of dangerous environment variable '{}' detected. Proceed?",
+                    key
+                )),
+            }
+        } else {
+            SafetyResult::Allowed
+        }
     }
 }
 
@@ -527,5 +621,93 @@ mod tests {
                 e
             ),
         }
+    }
+
+    #[test]
+    fn test_data_exfiltration_check() {
+        let guard = SafetyGuard::new();
+        let level = SafetyLevel::Normal;
+
+        // curl upload
+        assert!(matches!(
+            guard.check_command(&level, "curl", &["-F".to_string(), "file=@/etc/passwd".to_string()], &[]),
+            SafetyResult::Confirm(msg) if msg.contains("data exfiltration")
+        ));
+
+        // wget post
+        assert!(matches!(
+            guard.check_command(&level, "wget", &["--post-file".to_string(), "secret.txt".to_string()], &[]),
+            SafetyResult::Confirm(msg) if msg.contains("data exfiltration")
+        ));
+
+        // Safe usage
+        assert!(matches!(
+            guard.check_command(&level, "curl", &["http://example.com".to_string()], &[]),
+            SafetyResult::Allowed
+        ));
+    }
+
+    #[test]
+    fn test_sensitive_file_access() {
+        let guard = SafetyGuard::new();
+        let level = SafetyLevel::Normal;
+
+        // SSH key access
+        assert!(matches!(
+            guard.check_command(&level, "cat", &["/home/user/.ssh/id_rsa".to_string()], &[]),
+            SafetyResult::Confirm(msg) if msg.contains("SSH key")
+        ));
+
+        // System file access
+        assert!(matches!(
+            guard.check_command(&level, "grep", &["root".to_string(), "/etc/shadow".to_string()], &[]),
+            SafetyResult::Confirm(msg) if msg.contains("system file")
+        ));
+
+        // Cloud credentials
+        assert!(matches!(
+            guard.check_command(&level, "less", &["~/.aws/credentials".to_string()], &[]),
+            SafetyResult::Confirm(msg) if msg.contains("cloud credentials")
+        ));
+
+        // Env file
+        assert!(matches!(
+            guard.check_command(&level, "open", &[".env.production".to_string()], &[]),
+            SafetyResult::Allowed
+        ));
+
+        // Env file with registered command
+        assert!(matches!(
+            guard.check_command(&level, "cat", &[".env".to_string()], &[]),
+            SafetyResult::Confirm(msg) if msg.contains("environment file")
+        ));
+    }
+
+    #[test]
+    fn test_environment_modification() {
+        let guard = SafetyGuard::new();
+        let level = SafetyLevel::Normal;
+
+        // Dangerous variable
+        assert!(matches!(
+            guard.check_environment_modification("LD_PRELOAD", "/tmp/malicious.so", &level),
+            SafetyResult::Confirm(msg) if msg.contains("Modification")
+        ));
+
+        // Safe variable
+        assert!(matches!(
+            guard.check_environment_modification("MY_APP_CONFIG", "value", &level),
+            SafetyResult::Allowed
+        ));
+
+        // Loose mode allows everything
+        assert!(matches!(
+            guard.check_environment_modification(
+                "LD_PRELOAD",
+                "/tmp/malicious.so",
+                &SafetyLevel::Loose
+            ),
+            SafetyResult::Allowed
+        ));
     }
 }

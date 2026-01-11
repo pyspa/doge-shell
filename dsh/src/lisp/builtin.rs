@@ -40,6 +40,29 @@ fn redact_value_for_log<'a>(key: &str, value: &'a str) -> Cow<'a, str> {
 pub fn set_env(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let key = &args[0];
     let key = key.to_string();
+
+    // SAFETY CHECK
+    {
+        use crate::safety::{SafetyGuard, SafetyResult};
+        let guard = SafetyGuard::new();
+        let env_ref = env.borrow();
+        let shell_env = env_ref.shell_env.read();
+        let safety_level = shell_env.safety_level.read();
+
+        if args.len() > 1 {
+            let val_str = &args[1].to_string(); // Approximate value check
+            match guard.check_environment_modification(&key, val_str, &safety_level) {
+                SafetyResult::Allowed => {}
+                SafetyResult::Confirm(msg) => {
+                    return Err(RuntimeError::new(&format!("SafetyGuard Blocked: {}", msg)));
+                }
+                SafetyResult::Denied(msg) => {
+                    return Err(RuntimeError::new(&format!("SafetyGuard Denied: {}", msg)));
+                }
+            }
+        }
+    }
+
     if key == "PATH" {
         let mut path_vec = vec![];
         for val in &args[1..] {
@@ -66,6 +89,26 @@ pub fn set_env(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtime
 pub fn set_variable(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let key = args[0].to_string();
     let val = args[1].to_string();
+
+    // SAFETY CHECK
+    {
+        use crate::safety::{SafetyGuard, SafetyResult};
+        let guard = SafetyGuard::new();
+        let env_ref = env.borrow();
+        let shell_env = env_ref.shell_env.read();
+        let safety_level = shell_env.safety_level.read();
+
+        match guard.check_environment_modification(&key, &val, &safety_level) {
+            SafetyResult::Allowed => {}
+            SafetyResult::Confirm(msg) => {
+                return Err(RuntimeError::new(&format!("SafetyGuard Blocked: {}", msg)));
+            }
+            SafetyResult::Denied(msg) => {
+                return Err(RuntimeError::new(&format!("SafetyGuard Denied: {}", msg)));
+            }
+        }
+    }
+
     let display_val = redact_value_for_log(&key, &val);
     debug!("set variable {} {}", &key, display_val);
     env.borrow().shell_env.write().variables.insert(key, val);
@@ -134,14 +177,48 @@ pub fn add_path(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
     Ok(Value::NIL)
 }
 
-pub fn command(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+pub fn command(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let mut cmd_args: Vec<String> = Vec::new();
     for arg in args {
         if let Value::String(val) = arg {
             cmd_args.push(val.to_string());
         }
     }
+    if cmd_args.is_empty() {
+        return Err(RuntimeError::new("command requires at least 1 argument"));
+    }
     let cmd = cmd_args.remove(0);
+
+    // SAFETY CHECK
+    {
+        use crate::safety::{SafetyGuard, SafetyResult};
+
+        // We instantiate a transient SafetyGuard here because accessing the one in Shell is difficult from Lisp Env.
+        // SafetyGuard::new() is lightweight.
+        let guard = SafetyGuard::new();
+
+        let env_ref = env.borrow();
+        let shell_env = env_ref.shell_env.read();
+        let safety_level = shell_env.safety_level.read();
+        let allowlist = shell_env.execute_allowlist.read();
+
+        match guard.check_command(&safety_level, &cmd, &cmd_args, &allowlist) {
+            SafetyResult::Allowed => {
+                // Check passed
+            }
+            SafetyResult::Confirm(msg) => {
+                // In Lisp execution context (non-interactive usually), we block Confirm actions.
+                return Err(RuntimeError::new(&format!(
+                    "SafetyGuard Blocked: {} (You can change safety-level to 'loose' to bypass)",
+                    msg
+                )));
+            }
+            SafetyResult::Denied(msg) => {
+                return Err(RuntimeError::new(&format!("SafetyGuard Denied: {}", msg)));
+            }
+        }
+    }
+
     match Command::new(cmd).args(cmd_args).output() {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout)

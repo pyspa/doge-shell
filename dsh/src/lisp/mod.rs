@@ -209,6 +209,36 @@ pub fn make_env(environment: Arc<RwLock<Environment>>) -> Rc<RefCell<Env>> {
         Value::NativeFunc(builtin::pref_auto_notify),
     );
 
+    // Secret management functions
+    env.borrow_mut().define(
+        Symbol::from("secret-add-pattern"),
+        Value::NativeFunc(builtin::secret_add_pattern),
+    );
+    env.borrow_mut().define(
+        Symbol::from("secret-add-keyword"),
+        Value::NativeFunc(builtin::secret_add_keyword),
+    );
+    env.borrow_mut().define(
+        Symbol::from("secret-list-patterns"),
+        Value::NativeFunc(builtin::secret_list_patterns),
+    );
+    env.borrow_mut().define(
+        Symbol::from("secret-history-mode"),
+        Value::NativeFunc(builtin::secret_history_mode),
+    );
+    env.borrow_mut().define(
+        Symbol::from("secret-set"),
+        Value::NativeFunc(builtin::secret_set),
+    );
+    env.borrow_mut().define(
+        Symbol::from("secret-get"),
+        Value::NativeFunc(builtin::secret_get),
+    );
+    env.borrow_mut().define(
+        Symbol::from("secret-clear"),
+        Value::NativeFunc(builtin::secret_clear),
+    );
+
     env
 }
 

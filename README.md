@@ -59,6 +59,26 @@ The Safety Guard protects against unintended execution of potentially destructiv
   ```
 - **Environment Variable**: `SAFETY_LEVEL` reflects the current safety level (e.g., "normal", "strict").
 
+### 🔒 Secret Management
+
+Protection of sensitive information from history and display.
+
+- **Automatic History Filtering**: Commands containing sensitive keywords (e.g., `API_KEY=xxx`) are automatically excluded from shell history by default.
+- **History Modes**:
+  - `skip` (Default): Secrets are never saved to history.
+  - `redact`: Secrets are replaced with `***` before saving to history.
+  - `none`: No filtering is applied.
+- **Session Secrets**: Store sensitive values that are only available during the current session and never persisted to disk.
+- **Lisp Configuration**:
+  ```lisp
+  (secret-add-pattern "MY_.*_KEY") ; Add custom regex pattern
+  (secret-add-keyword "PRIVATE")   ; Add custom keyword
+  (secret-history-mode "redact")   ; Change history filtering mode
+  (secret-set "DB_PASS" "xxx")     ; Set session-limited secret
+  (secret-get "DB_PASS")           ; Get session secret
+  (secret-clear)                   ; Clear all session secrets
+  ```
+
 ### Lisp Interpreter
 
 - **Embedded Lisp**: Built-in Lisp interpreter for shell scripting
@@ -242,6 +262,16 @@ The embedded Lisp interpreter includes many built-in functions:
 
 - `set-suggestion-mode` - Set suggestion mode (`ghost` or `off`)
 - `set-suggestion-ai-enabled` - Enable/disable AI-powered suggestions
+
+### Secret Management Functions
+
+- `secret-add-pattern` - Add a regex pattern for secret detection
+- `secret-add-keyword` - Add a keyword for secret detection
+- `secret-list-patterns` - List registered secret patterns
+- `secret-history-mode` - Set or get history filtering mode (`skip`, `redact`, `none`)
+- `secret-set` - Set a session-only secret
+- `secret-get` - Get a session-only secret
+- `secret-clear` - Clear all session secrets
 
 ### PTY Control
 

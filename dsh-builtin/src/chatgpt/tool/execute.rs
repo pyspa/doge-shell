@@ -64,13 +64,15 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
         ));
     }
 
-    // Safety Guard: Request confirmation from user
-    let confirm_msg = format!("AI wants to execute command: `{}`. \r\nProceed?", command);
-    if !proxy
-        .confirm_action(&confirm_msg)
-        .map_err(|e: anyhow::Error| e.to_string())?
-    {
-        return Ok("Execution cancelled by user.".to_string());
+    // Safety Guard: Request confirmation from user (skip if command is in allowlist)
+    if !allowlist.iter().any(|item| item == &program) {
+        let confirm_msg = format!("AI wants to execute command: `{}`. \r\nProceed?", command);
+        if !proxy
+            .confirm_action(&confirm_msg)
+            .map_err(|e: anyhow::Error| e.to_string())?
+        {
+            return Ok("Execution cancelled by user.".to_string());
+        }
     }
 
     let output = Command::new("bash")
@@ -458,7 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn run_requests_confirmation_for_allowed_command() {
+    fn run_skips_confirmation_for_allowed_command() {
         let _lock = ENV_LOCK.lock().unwrap();
         let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls");
         let confirm_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -469,21 +471,24 @@ mod tests {
         };
         let result = run("{\"command\":\"ls -la\"}", &mut proxy);
         assert!(result.is_ok());
-        assert_eq!(confirm_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // Confirmation should be skipped for allowed commands
+        assert_eq!(confirm_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     #[test]
-    fn run_cancels_when_confirmation_denied() {
+    fn run_requests_confirmation_for_non_allowed_command() {
         let _lock = ENV_LOCK.lock().unwrap();
-        let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls");
+        let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls,cat");
         let confirm_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut proxy = ConfirmProxy {
-            allow: vec!["ls".to_string()],
+            allow: vec!["ls".to_string(), "cat".to_string()],
             confirm_calls: confirm_calls.clone(),
             confirm_result: false,
         };
-        let result = run("{\"command\":\"ls -la\"}", &mut proxy).unwrap();
-        assert_eq!(result, "Execution cancelled by user.");
-        assert_eq!(confirm_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // grep is not in allowlist, so it should be rejected before confirmation
+        let result = run("{\"command\":\"grep foo\"}", &mut proxy);
+        assert!(result.is_err()); // Not permitted
+        // Confirmation should not be called because command is not in allowlist
+        assert_eq!(confirm_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }

@@ -199,10 +199,17 @@ pub struct Repl<'a> {
     /// Cache for syntax highlighting to avoid re-parsing unchanged input
     pub(crate) last_analyzed_input: String,
     pub(crate) last_analysis_result: Option<InputAnalysis>,
+    /// Handle to the background GitHub task, allowing cancellation on drop
+    pub(crate) github_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl<'a> Drop for Repl<'a> {
     fn drop(&mut self) {
+        // Cancel background task
+        if let Some(handle) = self.github_task.take() {
+            handle.abort();
+        }
+
         let mut renderer = TerminalRenderer::new();
         queue!(renderer, DisableBracketedPaste).ok();
         renderer.flush().ok();
@@ -296,7 +303,7 @@ impl<'a> Repl<'a> {
         let status_for_github = Arc::clone(&github_status);
 
         // Spawn background task
-        tokio::spawn(crate::github::background_github_task(
+        let github_task = tokio::spawn(crate::github::background_github_task(
             config_for_task,
             prompt_for_github,
             status_for_github.clone(),
@@ -340,7 +347,7 @@ impl<'a> Repl<'a> {
         // Setup AI event channel
         let (ai_tx, ai_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        Repl {
+        let repl = Repl {
             shell,
             input: Input::new(input_config),
             columns: 0,
@@ -384,7 +391,9 @@ impl<'a> Repl<'a> {
             explanation_dirty: false,
             last_analyzed_input: String::new(),
             last_analysis_result: None,
-        }
+            github_task: Some(github_task),
+        };
+        repl
     }
 
     pub(crate) fn trigger_file_context_update(&self) {
@@ -2394,7 +2403,7 @@ mod ai_tests {
         let mut repl = Repl::new(&mut shell);
 
         // Setup mock AI service
-        let service = Arc::new(MockAiService::new("ls -la"));
+        let service = Arc::new(MockAiService::new(r#"{"command": "ls", "args": ["-la"]}"#));
         repl.ai_service = Some(service);
 
         // Setup failed state

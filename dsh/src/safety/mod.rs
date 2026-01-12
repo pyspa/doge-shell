@@ -189,6 +189,11 @@ impl SafetyGuard {
             return SafetyResult::Allowed;
         }
 
+        // Also allow if the command name itself is in the allowlist
+        if allowlist.contains(&cmd.to_string()) {
+            return SafetyResult::Allowed;
+        }
+
         // Construct a dummy job for check_jobs logic reuse is hard due to type mismatch.
         // Reimplements simpler logic consistent with check_jobs.
         match level {

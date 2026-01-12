@@ -48,6 +48,7 @@ xid.workspace = true
 parking_lot.workspace = true
 skim.workspace = true
 reqwest.workspace = true
+uuid.workspace = true
 unicode-width = "0.2"
 async-trait = "0.1"
 arboard = "3.4"

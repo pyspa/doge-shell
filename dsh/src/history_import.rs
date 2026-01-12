@@ -183,7 +183,9 @@ mod tests {
         file.flush()?;
 
         // Create a temporary history file for dsh
-        let mut history = History::from_file("dsh_test_import")?;
+        // Create a temporary history file for dsh with a unique name to avoid conflicts during parallel testing
+        let db_name = format!("dsh_test_import_{}", uuid::Uuid::new_v4());
+        let mut history = History::from_file(&db_name)?;
 
         // Import the fish history
         let importer = FishHistoryImporter::with_path(&history_path);
@@ -221,7 +223,9 @@ mod tests {
 
         // Create a temporary history file for dsh
         let _dsh_history_path = temp_dir.path().join("dsh_history");
-        let mut history = History::from_file("dsh_test_import")?;
+        // Create a temporary history file for dsh with a unique name to avoid conflicts during parallel testing
+        let db_name = format!("dsh_test_import_{}", uuid::Uuid::new_v4());
+        let mut history = History::from_file(&db_name)?;
 
         // Import the fish history - 無効なUTF-8があっても成功するはず
         let importer = FishHistoryImporter::with_path(&history_path);

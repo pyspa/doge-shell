@@ -40,6 +40,9 @@ pub fn execute_tool_call(
         .and_then(|v| v.as_str())
         .unwrap_or_default();
 
+    // Log tool execution
+    eprintln!("\x1b[36m🔧 [Tool] {} ({})\x1b[0m", name, truncate_args(arguments));
+
     let result = if let Some(result) = mcp.execute_tool(name, arguments)? {
         result
     } else {
@@ -54,6 +57,16 @@ pub fn execute_tool_call(
     };
 
     Ok(truncate_output(result))
+}
+
+fn truncate_args(args: &str) -> String {
+    const MAX_ARGS_LEN: usize = 80;
+    if args.len() > MAX_ARGS_LEN {
+        let end = args.floor_char_boundary(MAX_ARGS_LEN);
+        format!("{}...", &args[..end])
+    } else {
+        args.to_string()
+    }
 }
 
 fn truncate_output(output: String) -> String {

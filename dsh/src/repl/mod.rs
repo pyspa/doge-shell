@@ -1263,6 +1263,16 @@ impl<'a> Repl<'a> {
     }
 
     fn analyze_input(&self, input: &str, mut completion: Option<String>) -> InputAnalysis {
+        // Skip syntax highlighting for AI commands (starting with !)
+        if input.starts_with('!') {
+            return InputAnalysis {
+                completion_full: None,
+                completion: None,
+                color_ranges: None,
+                can_execute: true,
+            };
+        }
+
         use pest::Parser;
         match parser::ShellParser::parse(Rule::commands, input) {
             Ok(pairs) => {

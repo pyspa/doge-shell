@@ -41,7 +41,11 @@ pub fn execute_tool_call(
         .unwrap_or_default();
 
     // Log tool execution
-    eprintln!("\x1b[36m🔧 [Tool] {} ({})\x1b[0m", name, truncate_args(arguments));
+    eprintln!(
+        "\x1b[36m🔧 [Tool] {} ({})\x1b[0m",
+        name,
+        truncate_args(arguments)
+    );
 
     let result = if let Some(result) = mcp.execute_tool(name, arguments)? {
         result

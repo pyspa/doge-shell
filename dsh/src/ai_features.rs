@@ -1,14 +1,31 @@
-use crate::safety::{SafetyGuard, SafetyLevel, SafetyResult};
+use crate::safety::{PromptInjectionResult, SafetyGuard, SafetyLevel, SafetyResult};
 use anyhow::Result;
 use async_trait::async_trait;
 use dsh_builtin::McpManager;
 use dsh_openai::ChatGptClient;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
+
+#[derive(Debug, Deserialize)]
+struct AiCommandResponse {
+    command: String,
+    args: Vec<String>,
+}
 
 #[async_trait]
 pub trait AiService: Send + Sync {
     async fn send_request(&self, messages: Vec<Value>, temperature: Option<f64>) -> Result<String>;
+
+    fn get_safety_guard(&self) -> Option<Arc<SafetyGuard>> {
+        None
+    }
+    fn get_safety_level(&self) -> Option<SafetyLevel> {
+        None
+    }
+    fn get_allowlist(&self) -> Option<Vec<String>> {
+        None
+    }
 }
 
 use parking_lot::RwLock;
@@ -73,6 +90,16 @@ impl LiveAiService {
 
 #[async_trait]
 impl AiService for LiveAiService {
+    fn get_safety_guard(&self) -> Option<Arc<SafetyGuard>> {
+        Some(self.safety_guard.clone())
+    }
+    fn get_safety_level(&self) -> Option<SafetyLevel> {
+        Some(self.safety_level.read().clone())
+    }
+    fn get_allowlist(&self) -> Option<Vec<String>> {
+        Some(self.execute_allowlist.read().clone())
+    }
+
     async fn send_request(
         &self,
         messages_in: Vec<Value>,
@@ -201,40 +228,145 @@ pub fn sanitize_code_block(content: &str) -> String {
     let content = content.trim_matches(|c| c == '`');
     if let Some(stripped) = content.strip_prefix("bash\n") {
         stripped.to_string()
+    } else if let Some(stripped) = content.strip_prefix("json\n") {
+        stripped.to_string()
     } else {
         content.to_string()
     }
 }
 
 pub async fn expand_smart_pipe<S: AiService + ?Sized>(service: &S, query: &str) -> Result<String> {
+    // Check for potential prompt injection
+    if let PromptInjectionResult::Suspicious(warnings) = SafetyGuard::check_prompt_injection(query)
+    {
+        tracing::warn!(
+            "Potential prompt injection detected in smart pipe: {:?}",
+            warnings
+        );
+    }
+
+    // Sanitize input
+    let sanitized_query = SafetyGuard::sanitize_ai_input(query, 2000);
+
     let system_prompt = "You are a shell command expert. The user wants to extend a shell pipeline. \
-    Given the user's natural language query, output ONLY the next command(s) in the pipeline starting with a command name (e.g. 'grep', 'awk', 'jq'). \
-    Do not output the pipe symbol '|' at the beginning. Do not output markdown code blocks. Output ONLY the command code.";
+    Given the user's natural language query, output the next command in the pipeline as a JSON object. \
+    Format: {\"command\": \"grep\", \"args\": [\"-r\", \"pattern\"]}. \
+    Do not output the pipe symbol '|'. Do not output markdown code blocks. Output ONLY the JSON object.";
 
     let messages = vec![
         json!({"role": "system", "content": system_prompt}),
-        json!({"role": "user", "content": query}),
+        json!({"role": "user", "content": sanitized_query}),
     ];
 
     let content = service.send_request(messages, Some(0.1)).await?;
-    Ok(sanitize_code_block(&content))
+    let content_clean = sanitize_code_block(&content);
+
+    // Parse JSON
+    let response: AiCommandResponse = serde_json::from_str(&content_clean).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to parse AI response as JSON: {}. Content: {}",
+            e,
+            content_clean
+        )
+    })?;
+
+    // Check safety
+    let safety_guard = service.get_safety_guard();
+    let safety_level = service.get_safety_level();
+    let allowlist = service.get_allowlist();
+
+    if let (Some(guard), Some(level), Some(allowlist)) = (safety_guard, safety_level, allowlist) {
+        match guard.check_command(&level, &response.command, &response.args, &allowlist) {
+            SafetyResult::Allowed => {
+                // Reconstruct command string
+                let mut parts = vec![response.command];
+                parts.extend(response.args);
+                Ok(parts.join(" "))
+            }
+            SafetyResult::Denied(msg) | SafetyResult::Confirm(msg) => {
+                tracing::warn!("Blocked dangerous AI suggestion: {}", msg);
+                Err(anyhow::anyhow!(
+                    "Security Warning: AI suggested a potentially dangerous command: {}. {}",
+                    response.command,
+                    msg
+                ))
+            }
+        }
+    } else {
+        // Fallback if safety components are not available (e.g. tests)
+        let mut parts = vec![response.command];
+        parts.extend(response.args);
+        Ok(parts.join(" "))
+    }
 }
 
 pub async fn run_generative_command<S: AiService + ?Sized>(
     service: &S,
     query: &str,
 ) -> Result<String> {
+    // Check for potential prompt injection
+    if let PromptInjectionResult::Suspicious(warnings) = SafetyGuard::check_prompt_injection(query)
+    {
+        tracing::warn!(
+            "Potential prompt injection detected in generative command: {:?}",
+            warnings
+        );
+    }
+
+    // Sanitize input
+    let sanitized_query = SafetyGuard::sanitize_ai_input(query, 5000);
+
     let system_prompt = "You are a shell command expert. Convert the following natural language request into a single-line shell command. \
     Target platform: Linux with bash/zsh. \
-    Output ONLY the command code. Do not include markdown code blocks. Do not include explanations.";
+    Output the result as a JSON object. \
+    Format: {\"command\": \"rm\", \"args\": [\"-rf\", \"/\"]}. \
+    Do not output markdown code blocks. Output ONLY the JSON object.";
 
     let messages = vec![
         json!({"role": "system", "content": system_prompt}),
-        json!({"role": "user", "content": query}),
+        json!({"role": "user", "content": sanitized_query}),
     ];
 
     let content = service.send_request(messages, Some(0.1)).await?;
-    Ok(sanitize_code_block(&content))
+    let content_clean = sanitize_code_block(&content);
+
+    // Parse JSON
+    let response: AiCommandResponse = serde_json::from_str(&content_clean).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to parse AI response as JSON: {}. Content: {}",
+            e,
+            content_clean
+        )
+    })?;
+
+    // Check safety
+    let safety_guard = service.get_safety_guard();
+    let safety_level = service.get_safety_level();
+    let allowlist = service.get_allowlist();
+
+    if let (Some(guard), Some(level), Some(allowlist)) = (safety_guard, safety_level, allowlist) {
+        match guard.check_command(&level, &response.command, &response.args, &allowlist) {
+            SafetyResult::Allowed => {
+                // Reconstruct command string
+                let mut parts = vec![response.command];
+                parts.extend(response.args);
+                Ok(parts.join(" "))
+            }
+            SafetyResult::Denied(msg) | SafetyResult::Confirm(msg) => {
+                tracing::warn!("Blocked dangerous AI generated command: {}", msg);
+                Err(anyhow::anyhow!(
+                    "Security Warning: AI generated a potentially dangerous command: {}. {}",
+                    response.command,
+                    msg
+                ))
+            }
+        }
+    } else {
+        // Fallback for tests
+        let mut parts = vec![response.command];
+        parts.extend(response.args);
+        Ok(parts.join(" "))
+    }
 }
 
 pub async fn fix_command<S: AiService + ?Sized>(
@@ -243,22 +375,31 @@ pub async fn fix_command<S: AiService + ?Sized>(
     exit_code: i32,
     output: &str,
 ) -> Result<String> {
+    // Check injection on command (unlikely but possible source)
+    if let PromptInjectionResult::Suspicious(warnings) =
+        SafetyGuard::check_prompt_injection(command)
+    {
+        tracing::warn!(
+            "Potential prompt injection in fix_command source: {:?}",
+            warnings
+        );
+    }
+
+    // Sanitize inputs
+    let sanitized_command = SafetyGuard::sanitize_ai_input(command, 1000);
+    // Output can be large and contain anything, sanitize it but allow standard chars
+    let sanitized_output = SafetyGuard::sanitize_ai_input(output, 2000);
+
     let system_prompt = "You are a shell command expert. The user executed a command that failed. \
     Given the failed command, its exit code, and its output (including potential error messages), \
-    output ONLY the corrected command. \
-    Do not output markdown code blocks. Output ONLY the command code. \
-    If you cannot determine a fix, output the original command unchanged.";
-
-    // Truncate output to avoid token limits
-    let truncated_output = if output.len() > 2000 {
-        format!("{}...(truncated)", &output[output.len() - 2000..])
-    } else {
-        output.to_string()
-    };
+    output the corrected command as a JSON object. \
+    Format: {\"command\": \"grep\", \"args\": [\"-r\", \"pattern\"]}. \
+    Do not output markdown code blocks. Output ONLY the JSON object. \
+    If you cannot determine a fix, output the original command inside the JSON.";
 
     let query = format!(
         "Failed command: `{}`\nExit code: {}\nOutput:\n```\n{}\n```",
-        command, exit_code, truncated_output
+        sanitized_command, exit_code, sanitized_output
     );
 
     let messages = vec![
@@ -267,11 +408,59 @@ pub async fn fix_command<S: AiService + ?Sized>(
     ];
 
     let content = service.send_request(messages, Some(0.1)).await?;
-    Ok(sanitize_code_block(&content))
+    let content_clean = sanitize_code_block(&content);
+
+    // Parse JSON
+    let response: AiCommandResponse = serde_json::from_str(&content_clean).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to parse AI response as JSON: {}. Content: {}",
+            e,
+            content_clean
+        )
+    })?;
+
+    // Check safety
+    let safety_guard = service.get_safety_guard();
+    let safety_level = service.get_safety_level();
+    let allowlist = service.get_allowlist();
+
+    if let (Some(guard), Some(level), Some(allowlist)) = (safety_guard, safety_level, allowlist) {
+        match guard.check_command(&level, &response.command, &response.args, &allowlist) {
+            SafetyResult::Allowed => {
+                // Reconstruct command string
+                let mut parts = vec![response.command];
+                parts.extend(response.args);
+                Ok(parts.join(" "))
+            }
+            SafetyResult::Denied(msg) | SafetyResult::Confirm(msg) => {
+                tracing::warn!("Blocked dangerous AI fix suggestion: {}", msg);
+                Err(anyhow::anyhow!(
+                    "Security Warning: AI suggested a potentially dangerous fix: {}. {}",
+                    response.command,
+                    msg
+                ))
+            }
+        }
+    } else {
+        // Fallback
+        let mut parts = vec![response.command];
+        parts.extend(response.args);
+        Ok(parts.join(" "))
+    }
 }
 
 /// Explain a shell command in natural language
 pub async fn explain_command<S: AiService + ?Sized>(service: &S, command: &str) -> Result<String> {
+    if let PromptInjectionResult::Suspicious(warnings) =
+        SafetyGuard::check_prompt_injection(command)
+    {
+        tracing::warn!(
+            "Potential prompt injection in explain_command: {:?}",
+            warnings
+        );
+    }
+    let sanitized_command = SafetyGuard::sanitize_ai_input(command, 2000);
+
     let system_prompt = "You are a shell command expert. Explain the given command in a clear and concise way. \
     Break down each part of the command (command name, options, arguments). \
     Keep the explanation brief but informative. Use markdown formatting for clarity. \
@@ -279,45 +468,61 @@ pub async fn explain_command<S: AiService + ?Sized>(service: &S, command: &str) 
 
     let messages = vec![
         json!({"role": "system", "content": system_prompt}),
-        json!({"role": "user", "content": format!("Explain this command:\n```\n{}\n```", command)}),
+        json!({"role": "user", "content": format!("Explain this command:\n```\n{}\n```", sanitized_command)}),
     ];
 
     service.send_request(messages, Some(0.2)).await
 }
 
 /// Suggest improvements for a shell command
+/// Suggest improvements for a shell command
 pub async fn suggest_improvement<S: AiService + ?Sized>(
     service: &S,
     command: &str,
 ) -> Result<String> {
-    let system_prompt = "You are a shell command expert. Analyze the given command and suggest improvements. \
-    Consider: efficiency, readability, safety, and best practices. \
-    If the command is already optimal, say so. Provide the improved command if applicable. \
-    Keep your response concise and practical. \
+    if let PromptInjectionResult::Suspicious(warnings) =
+        SafetyGuard::check_prompt_injection(command)
+    {
+        tracing::warn!(
+            "Potential prompt injection in suggest_improvement: {:?}",
+            warnings
+        );
+    }
+    let sanitized_command = SafetyGuard::sanitize_ai_input(command, 2000);
+
+    let system_prompt = "You are a shell command expert. Suggest improvements for the given command if any. \
+    Consider safety, performance, and best practices. \
+    If the command is already optimal, say so. \
     Respond in the same language as the user's request.";
 
     let messages = vec![
         json!({"role": "system", "content": system_prompt}),
-        json!({"role": "user", "content": format!("Suggest improvements for:\n```\n{}\n```", command)}),
+        json!({"role": "user", "content": format!("Suggest improvements for:\n```\n{}\n```", sanitized_command)}),
     ];
 
     service.send_request(messages, Some(0.3)).await
 }
 
 /// Check if a command is potentially dangerous
+/// Check if a command is potentially dangerous
 pub async fn check_safety<S: AiService + ?Sized>(service: &S, command: &str) -> Result<String> {
-    let system_prompt = "You are a security-conscious shell expert. Analyze the given command for potential dangers. \
-    Check for: destructive operations (rm -rf), permission issues, data loss risks, security vulnerabilities, network exposure. \
-    Start your response with **Risk: [Safe/Caution/Dangerous]** followed by a brief explanation. Use markdown formatting.";
+    // Does not need heavy sanitization as it is security check itself, but prevent injection
+    let sanitized_command = SafetyGuard::sanitize_ai_input(command, 2000);
+
+    let system_prompt = "You are a security-conscious shell expert. Analyze the given command for potential security risks. \
+    If the command is dangerous (e.g., deletes files, modifies system settings, sends data externally), explain the risk. \
+    Output 'SAFE' if the command appears safe. \
+    Output 'WARNING: <reason>' if there are risks.";
 
     let messages = vec![
         json!({"role": "system", "content": system_prompt}),
-        json!({"role": "user", "content": format!("Check safety of:\n```\n{}\n```", command)}),
+        json!({"role": "user", "content": format!("Check safety of:\n```\n{}\n```", sanitized_command)}),
     ];
 
     service.send_request(messages, Some(0.1)).await
 }
 
+/// Diagnose command output (especially errors)
 /// Diagnose command output (especially errors)
 pub async fn diagnose_output<S: AiService + ?Sized>(
     service: &S,
@@ -325,20 +530,24 @@ pub async fn diagnose_output<S: AiService + ?Sized>(
     output: &str,
     exit_code: i32,
 ) -> Result<String> {
+    let sanitized_command = SafetyGuard::sanitize_ai_input(command, 1000);
+    // Output can be huge, sanitize and truncate
+    let sanitized_output = SafetyGuard::sanitize_ai_input(output, 2000);
+
     let system_prompt = "You are a debugging expert. Analyze the command output and diagnose any issues. \
     Focus on error messages and their root causes. Provide clear, actionable solutions. \
     Respond in the same language as the user's environment if possible, or match the language of their request.";
 
     // Truncate output if too long
-    let truncated_output = if output.len() > 4000 {
-        format!("{}...(truncated)", &output[..4000])
+    let truncated_output = if sanitized_output.len() > 4000 {
+        format!("{}...(truncated)", &sanitized_output[..4000])
     } else {
-        output.to_string()
+        sanitized_output.to_string()
     };
 
     let query = format!(
         "Command: `{}`\nExit code: {}\nOutput:\n```\n{}\n```",
-        command, exit_code, truncated_output
+        sanitized_command, exit_code, truncated_output
     );
 
     let messages = vec![
@@ -350,18 +559,22 @@ pub async fn diagnose_output<S: AiService + ?Sized>(
 }
 
 /// Describe the current directory structure
+/// Describe the current directory structure
 pub async fn describe_directory<S: AiService + ?Sized>(
     service: &S,
     dir_listing: &str,
     cwd: &str,
 ) -> Result<String> {
+    let sanitized_cwd = SafetyGuard::sanitize_ai_input(cwd, 500);
+    let sanitized_listing = SafetyGuard::sanitize_ai_input(dir_listing, 3000);
+
     let system_prompt = "You are a project analyst. Based on the directory listing, describe what type of project this is. \
     Identify the technology stack, framework, and purpose if possible. \
     Suggest relevant commands the user might want to run. Be concise.";
 
     let query = format!(
         "Current directory: {}\n\nFiles:\n```\n{}\n```",
-        cwd, dir_listing
+        sanitized_cwd, sanitized_listing
     );
 
     let messages = vec![
@@ -373,25 +586,34 @@ pub async fn describe_directory<S: AiService + ?Sized>(
 }
 
 /// Suggest next commands based on context
+/// Suggest next commands based on context
 pub async fn suggest_next_commands<S: AiService + ?Sized>(
     service: &S,
     recent_commands: &[String],
     cwd: &str,
     dir_listing: &str,
 ) -> Result<String> {
+    let sanitized_cwd = SafetyGuard::sanitize_ai_input(cwd, 500);
+    let sanitized_listing = SafetyGuard::sanitize_ai_input(dir_listing, 2000);
+    // Sanitize recent commands
+    let sanitized_history: Vec<String> = recent_commands
+        .iter()
+        .map(|c| SafetyGuard::sanitize_ai_input(c, 200))
+        .collect();
+
     let system_prompt = "You are a helpful shell assistant. Based on the user's recent commands and current context, \
     suggest 3-5 useful commands they might want to run next. \
     Format as a numbered list. Be practical and context-aware.";
 
-    let recent = if recent_commands.is_empty() {
+    let recent = if sanitized_history.is_empty() {
         "None".to_string()
     } else {
-        recent_commands.join("\n")
+        sanitized_history.join("\n")
     };
 
     let query = format!(
         "Recent commands:\n{}\n\nCurrent directory: {}\n\nFiles:\n```\n{}\n```",
-        recent, cwd, dir_listing
+        recent, sanitized_cwd, sanitized_listing
     );
 
     let messages = vec![
@@ -403,27 +625,39 @@ pub async fn suggest_next_commands<S: AiService + ?Sized>(
 }
 
 /// Analyze command output with AI based on a user query
+/// Analyze command output with AI based on a user query
 pub async fn analyze_output<S: AiService + ?Sized>(
     service: &S,
     command: &str,
     output: &str,
     query: &str,
 ) -> Result<String> {
+    if let PromptInjectionResult::Suspicious(warnings) = SafetyGuard::check_prompt_injection(query)
+    {
+        tracing::warn!(
+            "Potential prompt injection in analyze_output: {:?}",
+            warnings
+        );
+    }
+    let sanitized_query = SafetyGuard::sanitize_ai_input(query, 1000);
+    let sanitized_command = SafetyGuard::sanitize_ai_input(command, 1000);
+    let sanitized_output = SafetyGuard::sanitize_ai_input(output, 2000);
+
     let system_prompt = "You are a shell output analyst. \
     Analyze the following command output and respond to the user's query. \
     Be concise and practical. Use markdown formatting for clarity. \
     Respond in the same language as the user's query.";
 
     // Truncate output if too long to avoid token limits
-    let truncated_output = if output.len() > 8000 {
-        format!("{}...(truncated)", &output[..8000])
+    let truncated_output = if sanitized_output.len() > 8000 {
+        format!("{}...(truncated)", &sanitized_output[..8000])
     } else {
-        output.to_string()
+        sanitized_output.to_string()
     };
 
     let user_message = format!(
         "Command: `{}`\n\nOutput:\n```\n{}\n```\n\nQuery: {}",
-        command, truncated_output, query
+        sanitized_command, truncated_output, sanitized_query
     );
 
     let messages = vec![
@@ -529,7 +763,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_expand_smart_pipe() {
-        let service = MockAiService::new("grep foo");
+        let response = r#"{"command": "grep", "args": ["foo"]}"#;
+        let service = MockAiService::new(response);
         let result = expand_smart_pipe(&service, "extract foo").await.unwrap();
         assert_eq!(result, "grep foo");
 
@@ -540,7 +775,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_generative_command() {
-        let service = MockAiService::new("git status");
+        let response = r#"{"command": "git", "args": ["status"]}"#;
+        let service = MockAiService::new(response);
         let result = run_generative_command(&service, "check status")
             .await
             .unwrap();
@@ -584,16 +820,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_generative_command_complex() {
-        let service = MockAiService::new("find . -name '*.rs' -exec grep -l 'TODO' {} +");
+        let response = r#"{"command": "find", "args": [".", "-name", "*.rs", "-exec", "grep", "-l", "TODO", "{}", "+"]}"#;
+        let service = MockAiService::new(response);
         let result = run_generative_command(&service, "find all rust files with TODO")
             .await
             .unwrap();
-        assert_eq!(result, "find . -name '*.rs' -exec grep -l 'TODO' {} +");
+        assert_eq!(result, "find . -name *.rs -exec grep -l TODO {} +");
     }
 
     #[tokio::test]
     async fn test_run_generative_command_japanese() {
-        let service = MockAiService::new("git reset --soft HEAD~1");
+        let response = r#"{"command": "git", "args": ["reset", "--soft", "HEAD~1"]}"#;
+        let service = MockAiService::new(response);
         let result = run_generative_command(&service, "最後のコミットを取り消す")
             .await
             .unwrap();
@@ -602,7 +840,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_fix_command() {
-        let service = MockAiService::new("ls -la");
+        let response = r#"{"command": "ls", "args": ["-la"]}"#;
+        let service = MockAiService::new(response);
         let result = fix_command(&service, "lss -la", 127, "").await.unwrap();
         assert_eq!(result, "ls -la");
 
@@ -614,7 +853,10 @@ mod tests {
     #[tokio::test]
     async fn test_fix_command_with_code_block() {
         // AI might return wrapped in backticks
-        let service = MockAiService::new("`git status`");
+        let response = r#"```json
+{"command": "git", "args": ["status"]}
+```"#;
+        let service = MockAiService::new(response);
         let result = fix_command(&service, "gti status", 127, "").await.unwrap();
         assert_eq!(result, "git status");
     }

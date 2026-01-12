@@ -1054,6 +1054,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-width",
+ "uuid",
  "wait-timeout",
  "which 6.0.3",
  "xdg",

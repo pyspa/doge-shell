@@ -347,7 +347,7 @@ impl<'a> Repl<'a> {
         // Setup AI event channel
         let (ai_tx, ai_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let repl = Repl {
+        Repl {
             shell,
             input: Input::new(input_config),
             columns: 0,
@@ -392,8 +392,7 @@ impl<'a> Repl<'a> {
             last_analyzed_input: String::new(),
             last_analysis_result: None,
             github_task: Some(github_task),
-        };
-        repl
+        }
     }
 
     pub(crate) fn trigger_file_context_update(&self) {

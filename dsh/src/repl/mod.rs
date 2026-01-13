@@ -1462,8 +1462,8 @@ impl<'a> Repl<'a> {
             queue!(out, MoveLeft(width as u16)).ok();
         }
 
-        // Hint for AI Smart Pipe
-        if self.detect_smart_pipe().is_some() {
+        // Hint for AI Smart Extensions
+        if self.detect_smart_pipe().is_some() || self.detect_generative_command().is_some() {
             let hint = " ↹ Tab to expand";
             let hint_width = display_width(hint);
             // Only show if we have enough space (avoid overlapping with input)
@@ -2065,10 +2065,21 @@ impl<'a> Repl<'a> {
         ai_features::run_generative_command(service.as_ref(), query).await
     }
 
-    fn detect_smart_pipe(&self) -> Option<String> {
+    pub(crate) fn detect_smart_pipe(&self) -> Option<String> {
         let input = self.input.as_str();
         if let Some(idx) = input.rfind("|?") {
             let query = input[idx + 2..].trim();
+            if !query.is_empty() {
+                return Some(query.to_string());
+            }
+        }
+        None
+    }
+
+    pub(crate) fn detect_generative_command(&self) -> Option<String> {
+        let input = self.input.as_str().trim_start();
+        if input.starts_with("??") {
+            let query = input[2..].trim();
             if !query.is_empty() {
                 return Some(query.to_string());
             }

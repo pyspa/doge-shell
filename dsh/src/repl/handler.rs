@@ -147,6 +147,20 @@ async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<bool> {
         }
     }
 
+    // Check for Generative Command Expansion (?? query)
+    if let Some(generative_query) = repl.detect_generative_command() {
+        match repl.run_generative_command(&generative_query).await {
+            Ok(expanded) => {
+                repl.input.reset(expanded);
+                repl.completion.clear();
+                return Ok(true);
+            }
+            Err(e) => {
+                warn!("Generative command expansion failed: {}", e);
+            }
+        }
+    }
+
     // Extract the current word at cursor position for completion query
     let completion_query_owned = match repl.input.get_cursor_word() {
         Ok(Some((_rule, span))) => Some(span.as_str().to_string()),
@@ -292,24 +306,6 @@ async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
         repl.input.clear();
         repl.run_ai_pipe(command, query).await?;
         return Ok(());
-    }
-
-    // Generative Command (??)
-    if repl.input.as_str().trim_start().starts_with("??") {
-        let query = repl.input.as_str().trim_start()[2..].trim().to_string();
-        if !query.is_empty() {
-            match repl.run_generative_command(&query).await {
-                Ok(generated) => {
-                    repl.input.reset(generated);
-                    // Don't execute immediately, let user review
-                    return Ok(());
-                }
-                Err(e) => {
-                    warn!("Generative command failed: {}", e);
-                    // Fall through to normal execution
-                }
-            }
-        }
     }
 
     // Handle abbreviation expansion on Enter if cursor is at end of a word

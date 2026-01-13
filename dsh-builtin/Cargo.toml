@@ -36,6 +36,7 @@ rmcp = { version = "0.10", features = ["client", "transport-child-process", "tra
 pulldown-cmark = "0.13"
 walkdir = "2.4"
 glob = "0.3"
+ignore = "0.4"
 
 # HTTP server dependencies for serve command
 axum.workspace = true

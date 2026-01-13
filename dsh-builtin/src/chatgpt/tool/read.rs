@@ -72,6 +72,13 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
         ));
     }
 
+    // Check if the file is ignored by .gitignore
+    if super::gitignore::is_gitignored(&normalized_abs_path, &normalized_current_dir) {
+        return Err(format!(
+            "chat: read_file tool path `{path_value}` is ignored by .gitignore"
+        ));
+    }
+
     let contents = fs::read_to_string(&normalized_abs_path)
         .map_err(|err| format!("chat: failed to read file `{path_value}`: {err}"))?;
 

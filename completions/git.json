@@ -160,7 +160,7 @@
           "description": "Branch to push",
           "type": {
             "type": "Script",
-            "data": "remote=\"$ARG_0\"; [ -z \"$remote\" ] && remote=\"*\"; git branch -r --format='%(refname:short)' --list \"$remote/*\" | cut -d/ -f2- | grep -v '^HEAD$'"
+            "data": "remote=\"$ARG_0\"; [ -z \"$remote\" ] && remote=\"*\"; (git branch --format='%(refname:short)'; git branch -r --format='%(refname:short)' --list \"$remote/*\" | cut -d/ -f2- | grep -v '^HEAD$') | sort -u"
           }
         }
       ]

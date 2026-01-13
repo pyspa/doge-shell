@@ -5,6 +5,7 @@ use crate::ShellProxy;
 
 mod edit;
 mod execute;
+mod gitignore;
 mod ls;
 mod read;
 mod search;

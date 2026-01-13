@@ -1,9 +1,9 @@
 use crate::ShellProxy;
+use ignore::WalkBuilder;
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Component, Path, PathBuf};
-use walkdir::WalkDir;
 
 pub(crate) const NAME: &str = "search";
 
@@ -99,15 +99,19 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
             let glob = glob::Pattern::new(&glob_pattern)
                 .map_err(|err| format!("chat: invalid glob pattern: {err}"))?;
 
-            for entry in WalkDir::new(&normalized_abs_path)
-                .into_iter()
+            // Use ignore::WalkBuilder to automatically respect .gitignore
+            for entry in WalkBuilder::new(&normalized_abs_path)
+                .git_ignore(true)
+                .git_global(true)
+                .git_exclude(true)
+                .build()
                 .filter_map(|e| e.ok())
             {
                 if results.len() >= max_results {
                     break;
                 }
 
-                if entry.file_type().is_dir() {
+                if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
                     continue;
                 }
 
@@ -117,7 +121,11 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
                     // For glob matching, we want to match against the filename or path
                     // Simple implementation: check if filename matches
                     if glob.matches_path(entry.path())
-                        || glob.matches(entry.file_name().to_str().unwrap_or(""))
+                        || entry
+                            .file_name()
+                            .to_str()
+                            .map(|s| glob.matches(s))
+                            .unwrap_or(false)
                     {
                         // Get path relative to CWD for output
                         if let Ok(cwd_rel) = entry.path().strip_prefix(&normalized_current_dir) {
@@ -128,15 +136,19 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
             }
         }
         "content" => {
-            for entry in WalkDir::new(&normalized_abs_path)
-                .into_iter()
+            // Use ignore::WalkBuilder to automatically respect .gitignore
+            for entry in WalkBuilder::new(&normalized_abs_path)
+                .git_ignore(true)
+                .git_global(true)
+                .git_exclude(true)
+                .build()
                 .filter_map(|e| e.ok())
             {
                 if results.len() >= max_results {
                     break;
                 }
 
-                if !entry.file_type().is_file() {
+                if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
                     continue;
                 }
 

@@ -1462,6 +1462,26 @@ impl<'a> Repl<'a> {
             queue!(out, MoveLeft(width as u16)).ok();
         }
 
+        // Hint for AI Smart Pipe
+        if self.detect_smart_pipe().is_some() {
+            let hint = " ↹ Tab to expand";
+            let hint_width = display_width(hint);
+            // Only show if we have enough space (avoid overlapping with input)
+            let input_visual_end = self.prompt_mark_width + display_width(self.input.as_str());
+
+            if self.columns > hint_width
+                && self.columns.saturating_sub(hint_width) > input_visual_end + 2
+            {
+                let col = self.columns - hint_width;
+                queue!(
+                    out,
+                    cursor::MoveToColumn(col as u16),
+                    Print(hint.with(Color::DarkGrey))
+                )
+                .ok();
+            }
+        }
+
         if ai_pending_now {
             queue!(out, Print(" ⧗")).ok();
         }

@@ -1,4 +1,4 @@
-use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use ignore::gitignore::GitignoreBuilder;
 use std::path::Path;
 
 /// Check if a path should be ignored according to .gitignore rules.

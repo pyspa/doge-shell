@@ -1,6 +1,7 @@
 use crate::environment::Environment;
 use crate::prompt::Prompt;
 use anyhow::Result;
+use futures::StreamExt;
 use parking_lot::RwLock;
 use reqwest::{Client, Method};
 use std::sync::Arc;
@@ -44,6 +45,61 @@ impl GitHubClient {
         Self { client, pat }
     }
 
+    async fn is_pr_closed_or_merged(&self, pr_url: &str) -> bool {
+        let request = self
+            .client
+            .request(Method::GET, pr_url)
+            .bearer_auth(&self.pat);
+        match request.send().await {
+            Ok(response) => {
+                if response.status().is_success() {
+                    if let Ok(json) = response.json::<serde_json::Value>().await {
+                        // Check "state" field for "closed" (covers both merged and closed/dismissed)
+                        // Or check "merged" boolean field just in case
+                        let state = json.get("state").and_then(|v| v.as_str()).unwrap_or("");
+                        let merged = json
+                            .get("merged")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+
+                        state == "closed" || merged
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+            Err(_) => false,
+        }
+    }
+
+    async fn mark_thread_as_read(&self, thread_id: &str) -> bool {
+        let url = format!("https://api.github.com/notifications/threads/{}", thread_id);
+        let request = self
+            .client
+            .request(Method::PATCH, &url)
+            .bearer_auth(&self.pat);
+        match request.send().await {
+            Ok(resp) => {
+                if !resp.status().is_success() {
+                    error!(
+                        "Failed to mark thread {} as read: Status {}",
+                        thread_id,
+                        resp.status()
+                    );
+                    false
+                } else {
+                    true
+                }
+            }
+            Err(e) => {
+                error!("Error marking thread {} as read: {}", thread_id, e);
+                false
+            }
+        }
+    }
+
     pub async fn fetch_notifications(&self, filter: Option<&str>) -> Result<GitHubStatus> {
         let url = "https://api.github.com/notifications?all=false";
         let request = self.client.request(Method::GET, url).bearer_auth(&self.pat);
@@ -56,8 +112,40 @@ impl GitHubClient {
 
         let notifications: Vec<serde_json::Value> = response.json().await?;
 
+        // Process notifications concurrently to filter out merged PRs
+        let mut valid_notifications = Vec::new();
+
+        let mut stream = futures::stream::iter(notifications.into_iter().map(|n| {
+            let client = self.clone();
+            async move {
+                let reason = n["reason"].as_str().unwrap_or("");
+                if reason == "review_requested"
+                    && let Some(subject) = n.get("subject")
+                    && let Some(url) = subject.get("url").and_then(|u| u.as_str())
+                    && client.is_pr_closed_or_merged(url).await
+                {
+                    // Mark as read and skip ONLY if successful
+                    // If marking as read fails (e.g. permission error), we must keep it
+                    // to avoid infinite loop of API calls.
+                    if let Some(id) = n.get("id").and_then(|id| id.as_str())
+                        && client.mark_thread_as_read(id).await
+                    {
+                        return None;
+                    }
+                }
+                Some(n)
+            }
+        }))
+        .buffer_unordered(5); // Concurrency limit
+
+        while let Some(n) = stream.next().await {
+            if let Some(n) = n {
+                valid_notifications.push(n);
+            }
+        }
+
         // Use the decoupled parsing function
-        let status = parse_notifications(&notifications, filter);
+        let status = parse_notifications(&valid_notifications, filter);
 
         debug!(
             "GitHub notifications: review={}, mention={}, other={}",

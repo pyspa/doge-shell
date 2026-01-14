@@ -17,7 +17,7 @@ impl Action for ClearScreenAction {
     fn category(&self) -> &str {
         "Shell"
     }
-    fn execute(&self, _shell: &mut Shell) -> Result<()> {
+    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         print!("\x1B[2J\x1B[1;1H");
         std::io::Write::flush(&mut std::io::stdout())?;
         Ok(())

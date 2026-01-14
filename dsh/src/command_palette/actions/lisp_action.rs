@@ -21,7 +21,7 @@ impl Action for LispAction {
         &self.description
     }
 
-    fn execute(&self, shell: &mut Shell) -> Result<()> {
+    fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
         let engine = shell.lisp_engine.borrow();
         engine.run_func_values(&self.function_name, vec![])?;
         Ok(())

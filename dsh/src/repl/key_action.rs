@@ -52,7 +52,6 @@ pub enum KeyAction {
     // AI機能
     AiAutoFix,
     AiSmartCommit,
-    AiQuickActions,
     AiDiagnose,
     ForceAiSuggestion,
 
@@ -195,7 +194,6 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
         (KeyCode::Char('f'), ALT) => KeyAction::AiAutoFix,
         (KeyCode::Char('s'), ALT) => KeyAction::ForceAiSuggestion,
         (KeyCode::Char('c'), ALT) => KeyAction::AiSmartCommit,
-        (KeyCode::Char('a'), ALT) => KeyAction::AiQuickActions,
         (KeyCode::Char('d'), ALT) => KeyAction::AiDiagnose,
 
         // Tab: 補完

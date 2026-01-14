@@ -17,7 +17,7 @@ impl Action for JumpDirectoryAction {
         "🚀"
     }
 
-    fn execute(&self, shell: &mut Shell) -> Result<()> {
+    fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
         // Get directory history (frecency-based)
         let directories: Vec<String> = if let Some(ref history) = shell.path_history {
             let locked = history.lock();

@@ -19,7 +19,7 @@ impl Action for GitAddAction {
     fn category(&self) -> &str {
         "Git"
     }
-    fn execute(&self, _shell: &mut Shell) -> Result<()> {
+    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         // Use git add -p for interactive staging
         Command::new("git")
             .args(["add", "-p"])

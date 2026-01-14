@@ -17,7 +17,7 @@ impl Action for GitCheckoutAction {
         "🌿"
     }
 
-    fn execute(&self, _shell: &mut Shell) -> Result<()> {
+    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         // Get branches
         let output = Command::new("git")
             .args(["branch", "-a", "--format=%(refname:short)"])

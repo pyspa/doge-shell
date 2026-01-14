@@ -1,21 +1,21 @@
-//! シークレット管理モジュール
+//! Secret management module
 //!
-//! 機密情報の検出、マスク処理、履歴スキップなどを管理します。
+//! Manages detection of sensitive information, redaction, and history skipping.
 
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 
-/// シークレット履歴除外モード
+/// Secret history exclusion mode
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum SecretHistoryMode {
-    /// シークレットを含むコマンドは履歴に保存しない (デフォルト)
+    /// Do not save commands containing secrets to history (default)
     #[default]
     Skip,
-    /// シークレット部分をマスクして保存
+    /// Save with secret parts redacted
     Redact,
-    /// フィルタリングなし (従来動作)
+    /// No filtering (traditional behavior)
     None,
 }
 
@@ -35,7 +35,7 @@ impl std::str::FromStr for SecretHistoryMode {
     }
 }
 
-/// デフォルトのシークレットキーワードパターン
+/// Default secret keyword patterns
 static DEFAULT_SENSITIVE_KEYWORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     [
         "API_KEY",
@@ -57,20 +57,20 @@ static DEFAULT_SENSITIVE_KEYWORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     .collect()
 });
 
-/// シークレット値を含むコマンドパターン (例: export API_KEY=xxx, VAR=value command)
+/// Command patterns containing secret values (e.g., export API_KEY=xxx, VAR=value command)
 static ASSIGNMENT_PATTERN: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)\b([A-Z_][A-Z0-9_]*)=(\S+)").unwrap());
 
-/// シークレット管理
+/// Secret management
 #[derive(Debug)]
 pub struct SecretManager {
-    /// カスタムシークレットパターン (正規表現)
+    /// Custom secret patterns (regex)
     custom_patterns: RwLock<Vec<Regex>>,
-    /// セッション限定シークレット
+    /// Session-specific secrets
     session_secrets: RwLock<HashMap<String, String>>,
-    /// 履歴除外モード
+    /// History exclusion mode
     history_mode: RwLock<SecretHistoryMode>,
-    /// 追加のシークレットキーワード
+    /// Additional secret keywords
     additional_keywords: RwLock<HashSet<String>>,
 }
 
@@ -90,18 +90,18 @@ impl SecretManager {
         }
     }
 
-    /// キー名がシークレットかどうかを判定
+    /// Check if the key name is sensitive
     pub fn is_sensitive_key(&self, key: &str) -> bool {
         let key_upper = key.to_ascii_uppercase();
 
-        // デフォルトキーワードをチェック
+        // Check default keywords
         for keyword in DEFAULT_SENSITIVE_KEYWORDS.iter() {
             if key_upper.contains(keyword) {
                 return true;
             }
         }
 
-        // 追加キーワードをチェック
+        // Check additional keywords
         let additional = self.additional_keywords.read();
         for keyword in additional.iter() {
             if key_upper.contains(&keyword.to_ascii_uppercase()) {
@@ -109,7 +109,7 @@ impl SecretManager {
             }
         }
 
-        // カスタムパターンをチェック
+        // Check custom patterns
         let patterns = self.custom_patterns.read();
         for pattern in patterns.iter() {
             if pattern.is_match(key) {
@@ -120,9 +120,9 @@ impl SecretManager {
         false
     }
 
-    /// コマンドがシークレットを含むかどうかを判定
+    /// Check if the command contains secrets
     pub fn is_sensitive_command(&self, cmd: &str) -> bool {
-        // 代入パターン (VAR=value) をチェック
+        // Check assignment patterns (VAR=value)
         for cap in ASSIGNMENT_PATTERN.captures_iter(cmd) {
             if let Some(var_name) = cap.get(1)
                 && self.is_sensitive_key(var_name.as_str())
@@ -131,7 +131,7 @@ impl SecretManager {
             }
         }
 
-        // カスタムパターンでコマンド全体をチェック
+        // Check entire command with custom patterns
         let patterns = self.custom_patterns.read();
         for pattern in patterns.iter() {
             if pattern.is_match(cmd) {
@@ -142,11 +142,11 @@ impl SecretManager {
         false
     }
 
-    /// シークレット部分をマスクして返す
+    /// Redact secret parts and return
     pub fn redact_command(&self, cmd: &str) -> String {
         let mut result = cmd.to_string();
 
-        // 代入パターンをマスク
+        // Redact assignment patterns
         for cap in ASSIGNMENT_PATTERN.captures_iter(cmd) {
             if let (Some(var_match), Some(val_match)) = (cap.get(1), cap.get(2))
                 && self.is_sensitive_key(var_match.as_str())
@@ -160,7 +160,7 @@ impl SecretManager {
         result
     }
 
-    /// 履歴に保存すべきかどうかを判定し、必要に応じてマスク処理を行う
+    /// Determine if it should be saved to history, and redact if necessary
     pub fn process_for_history(&self, cmd: &str) -> Option<String> {
         let mode = self.history_mode.read().clone();
 
@@ -183,19 +183,19 @@ impl SecretManager {
         }
     }
 
-    /// カスタムパターンを追加
+    /// Add custom pattern
     pub fn add_pattern(&self, pattern: &str) -> Result<(), String> {
         let regex = Regex::new(pattern).map_err(|e| format!("Invalid regex: {}", e))?;
         self.custom_patterns.write().push(regex);
         Ok(())
     }
 
-    /// 追加キーワードを登録
+    /// Register additional keyword
     pub fn add_keyword(&self, keyword: &str) {
         self.additional_keywords.write().insert(keyword.to_string());
     }
 
-    /// 登録されているパターン一覧を取得
+    /// Get list of registered patterns
     pub fn list_patterns(&self) -> Vec<String> {
         self.custom_patterns
             .read()
@@ -204,39 +204,39 @@ impl SecretManager {
             .collect()
     }
 
-    /// 履歴モードを設定
+    /// Set history mode
     pub fn set_history_mode(&self, mode: SecretHistoryMode) {
         *self.history_mode.write() = mode;
     }
 
-    /// 現在の履歴モードを取得
+    /// Get current history mode
     pub fn history_mode(&self) -> SecretHistoryMode {
         self.history_mode.read().clone()
     }
 
-    /// セッション限定シークレットを設定
+    /// Set session-specific secret
     pub fn set_session_secret(&self, key: &str, value: &str) {
         self.session_secrets
             .write()
             .insert(key.to_string(), value.to_string());
     }
 
-    /// セッション限定シークレットを取得
+    /// Get session-specific secret
     pub fn get_session_secret(&self, key: &str) -> Option<String> {
         self.session_secrets.read().get(key).cloned()
     }
 
-    /// セッション限定シークレットを削除
+    /// Remove session-specific secret
     pub fn remove_session_secret(&self, key: &str) -> Option<String> {
         self.session_secrets.write().remove(key)
     }
 
-    /// 全セッションシークレットをクリア
+    /// Clear all session secrets
     pub fn clear_session_secrets(&self) {
         self.session_secrets.write().clear();
     }
 
-    /// セッションシークレットのキー一覧を取得
+    /// Get list of session secret keys
     pub fn list_session_secret_keys(&self) -> Vec<String> {
         self.session_secrets.read().keys().cloned().collect()
     }
@@ -250,7 +250,7 @@ mod tests {
     fn test_is_sensitive_key_defaults() {
         let manager = SecretManager::new();
 
-        // 既定のパターンでマッチするべきキー
+        // Keys that should match default patterns
         assert!(manager.is_sensitive_key("API_KEY"));
         assert!(manager.is_sensitive_key("MY_API_KEY"));
         assert!(manager.is_sensitive_key("GITHUB_TOKEN"));
@@ -258,7 +258,7 @@ mod tests {
         assert!(manager.is_sensitive_key("AWS_SECRET_KEY"));
         assert!(manager.is_sensitive_key("AUTH_HEADER"));
 
-        // マッチすべきでないキー
+        // Keys that should not match
         assert!(!manager.is_sensitive_key("HOME"));
         assert!(!manager.is_sensitive_key("PATH"));
         assert!(!manager.is_sensitive_key("EDITOR"));
@@ -268,16 +268,16 @@ mod tests {
     fn test_is_sensitive_command() {
         let manager = SecretManager::new();
 
-        // シークレットを含むコマンド (代入パターン)
+        // Commands containing secrets (assignment pattern)
         assert!(manager.is_sensitive_command("export API_KEY=abc123"));
         assert!(manager.is_sensitive_command("DB_PASSWORD=secret ./run.sh"));
         assert!(manager.is_sensitive_command("GITHUB_TOKEN=ghp_xxx git push"));
 
-        // シークレットを含まないコマンド
+        // Commands NOT containing secrets
         assert!(!manager.is_sensitive_command("ls -la"));
         assert!(!manager.is_sensitive_command("echo hello"));
         assert!(!manager.is_sensitive_command("export HOME=/home/user"));
-        // curlヘッダーは代入パターンではないので検出されない (将来的にカスタムパターンで対応可能)
+        // curl headers are not assignment patterns, so not detected (future custom pattern support)
         assert!(!manager.is_sensitive_command("curl -H 'Authorization: Bearer xxx' URL"));
     }
 
@@ -298,14 +298,14 @@ mod tests {
         let manager = SecretManager::new();
         manager.set_history_mode(SecretHistoryMode::Skip);
 
-        // シークレットを含むコマンドはNoneを返す
+        // Commands containing secrets return None
         assert!(
             manager
                 .process_for_history("export API_KEY=secret")
                 .is_none()
         );
 
-        // シークレットを含まないコマンドはそのまま
+        // Commands NOT containing secrets remain as is
         let result = manager.process_for_history("ls -la");
         assert_eq!(result, Some("ls -la".to_string()));
     }
@@ -327,7 +327,7 @@ mod tests {
         let manager = SecretManager::new();
         manager.set_history_mode(SecretHistoryMode::None);
 
-        // フィルタリングなし
+        // No filtering
         let result = manager.process_for_history("export API_KEY=secret");
         assert_eq!(result, Some("export API_KEY=secret".to_string()));
     }
@@ -345,17 +345,17 @@ mod tests {
     fn test_session_secrets() {
         let manager = SecretManager::new();
 
-        // 設定と取得
+        // Set and get
         manager.set_session_secret("DB_PASS", "secret123");
         assert_eq!(
             manager.get_session_secret("DB_PASS"),
             Some("secret123".to_string())
         );
 
-        // 存在しないキー
+        // Non-existent key
         assert!(manager.get_session_secret("NONEXISTENT").is_none());
 
-        // 削除
+        // Remove
         manager.remove_session_secret("DB_PASS");
         assert!(manager.get_session_secret("DB_PASS").is_none());
     }

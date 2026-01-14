@@ -206,16 +206,16 @@ mod tests {
         // Create a mock fish history file with invalid UTF-8 sequence
         let mut file = File::create(&history_path)?;
 
-        // 通常の行
+        // Normal line
         writeln!(file, "- cmd: ls -la")?;
         writeln!(file, "  when: 1625097600")?;
 
-        // 無効なUTF-8シーケンスを含む行
-        // 0x80, 0x90は単独では無効なUTF-8シーケンス
+        // Line containing invalid UTF-8 sequence
+        // 0x80, 0x90 are invalid UTF-8 sequences in isolation
         file.write_all(b"- cmd: echo \x80\x90 invalid utf8\n")?;
         writeln!(file, "  when: 1625097601")?;
 
-        // 通常の行
+        // Normal line
         writeln!(file, "- cmd: echo hello")?;
         writeln!(file, "  when: 1625097602")?;
 
@@ -227,11 +227,11 @@ mod tests {
         let db_name = format!("dsh_test_import_{}", uuid::Uuid::new_v4());
         let mut history = History::from_file(&db_name)?;
 
-        // Import the fish history - 無効なUTF-8があっても成功するはず
+        // Import the fish history - should succeed even with invalid UTF-8
         let importer = FishHistoryImporter::with_path(&history_path);
         let count = importer.import(&mut history)?;
 
-        // 3つのコマンドがインポートされるはず
+        // 3 commands should be imported
         assert_eq!(count, 3);
 
         Ok(())

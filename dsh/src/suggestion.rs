@@ -1000,7 +1000,7 @@ mod tests {
         let files = vec!["config.toml".to_string(), "main.rs".to_string()];
         let exit_code = Some(1);
 
-        // historyなし、contextありで呼び出す
+        // Call without history, with context
         let _ = engine.ai_suggestion_with_context(
             "cat c",
             5,

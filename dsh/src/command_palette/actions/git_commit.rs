@@ -20,7 +20,7 @@ impl Action for GitCommitAction {
     fn category(&self) -> &str {
         "Git"
     }
-    fn execute(&self, _shell: &mut Shell) -> Result<()> {
+    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         // Check for staged changes
         let status = Command::new("git")
             .args(["diff", "--cached", "--name-only"])

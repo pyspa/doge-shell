@@ -22,7 +22,7 @@ impl Action for RunScriptAction {
         "Dev"
     }
 
-    fn execute(&self, shell: &mut Shell) -> Result<()> {
+    fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
         // Run the builtin task command interactively
         let ctx = Context::new_safe(shell.pid, shell.pgid, true);
         let argv = vec!["task".to_string()];

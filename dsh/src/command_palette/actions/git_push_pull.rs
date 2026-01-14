@@ -20,7 +20,7 @@ impl Action for GitPushPullAction {
     fn category(&self) -> &str {
         "Git"
     }
-    fn execute(&self, _shell: &mut Shell) -> Result<()> {
+    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         // Get current branch
         let branch_output = Command::new("git")
             .args(["branch", "--show-current"])

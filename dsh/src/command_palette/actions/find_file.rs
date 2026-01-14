@@ -17,7 +17,7 @@ impl Action for FindFileAction {
         "🔍"
     }
 
-    fn execute(&self, _shell: &mut Shell) -> Result<()> {
+    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         // Try fd first, fall back to find
         let output = Command::new("fd")
             .args(["--type", "f", "--hidden", "--exclude", ".git"])

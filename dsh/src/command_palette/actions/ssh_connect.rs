@@ -19,7 +19,7 @@ impl Action for SshConnectAction {
         "🌐"
     }
 
-    fn execute(&self, _shell: &mut Shell) -> Result<()> {
+    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         // Parse ~/.ssh/config for Host entries
         let config_path = dirs::home_dir()
             .map(|h| h.join(".ssh/config"))

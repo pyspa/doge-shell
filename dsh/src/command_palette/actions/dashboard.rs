@@ -18,7 +18,7 @@ impl Action for DashboardAction {
         "📊"
     }
 
-    fn execute(&self, _shell: &mut Shell) -> Result<()> {
+    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         let cwd = std::env::current_dir()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| ".".to_string());

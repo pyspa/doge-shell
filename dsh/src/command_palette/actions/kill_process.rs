@@ -17,7 +17,7 @@ impl Action for KillProcessAction {
         "💀"
     }
 
-    fn execute(&self, _shell: &mut Shell) -> Result<()> {
+    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         // Get process list
         let output = Command::new("ps")
             .args(["aux"])

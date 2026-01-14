@@ -20,7 +20,7 @@ impl Action for GitDiffAction {
     fn category(&self) -> &str {
         "Git"
     }
-    fn execute(&self, _shell: &mut Shell) -> Result<()> {
+    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         // Get list of changed files
         let output = Command::new("git")
             .args(["diff", "--name-only"])

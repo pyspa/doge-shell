@@ -16,7 +16,7 @@ impl Action for GitLogAction {
         "📜"
     }
 
-    fn execute(&self, _shell: &mut Shell) -> Result<()> {
+    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         Command::new("git")
             .args(["log", "--oneline", "-20"])
             .status()

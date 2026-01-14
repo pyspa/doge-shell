@@ -23,7 +23,7 @@ pub trait Action: Send + Sync {
         "General"
     }
     /// Execute the action
-    fn execute(&self, shell: &mut Shell) -> Result<()>;
+    fn execute(&self, shell: &mut Shell, input: &str) -> Result<()>;
 }
 
 /// Registry for managing available actions
@@ -100,7 +100,7 @@ impl SkimItem for PaletteItem {
 pub struct CommandPalette;
 
 impl CommandPalette {
-    pub fn run(shell: &mut Shell) -> Result<()> {
+    pub fn run(shell: &mut Shell, input: &str) -> Result<()> {
         let registry = REGISTRY.read();
         let actions = registry.get_all();
 
@@ -138,7 +138,7 @@ impl CommandPalette {
             if let Some(action) = registry.actions.get(action_name).cloned() {
                 drop(registry); // Release lock before execution to avoid deadlocks if action needs registry
 
-                action.execute(shell)?;
+                action.execute(shell, input)?;
             }
         };
         Ok(())
@@ -161,7 +161,7 @@ mod tests {
         fn description(&self) -> &str {
             self.desc
         }
-        fn execute(&self, _shell: &mut Shell) -> Result<()> {
+        fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
             Ok(())
         }
     }

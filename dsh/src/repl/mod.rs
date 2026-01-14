@@ -60,76 +60,6 @@ pub(crate) struct InputAnalysis {
     can_execute: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AiAction {
-    /// Explain what a command does
-    ExplainCommand,
-    /// Suggest improvements for a command
-    SuggestImprovement,
-    /// Check if a command is potentially dangerous
-    CheckSafety,
-    /// Diagnose error from last command output
-    DiagnoseError,
-    /// Describe the current directory structure
-    DescribeDirectory,
-    /// Suggest useful commands based on context
-    SuggestCommands,
-}
-
-/// Menu item for AI Quick Actions
-#[derive(Debug, Clone)]
-pub struct AiActionMenuItem {
-    pub action: AiAction,
-    pub label: String,
-    pub description: String,
-}
-
-/// Build AI action menu items based on input state
-/// This is a pure function for testability
-pub fn build_ai_action_menu(input: &str) -> Vec<AiActionMenuItem> {
-    let has_command = !input.trim().is_empty();
-
-    if has_command {
-        // Menu for when user has typed a command
-        vec![
-            AiActionMenuItem {
-                action: AiAction::ExplainCommand,
-                label: "📖 Explain Command".to_string(),
-                description: "Explain what this command does".to_string(),
-            },
-            AiActionMenuItem {
-                action: AiAction::SuggestImprovement,
-                label: "✨ Suggest Improvement".to_string(),
-                description: "Suggest a more efficient version".to_string(),
-            },
-            AiActionMenuItem {
-                action: AiAction::CheckSafety,
-                label: "🛡️ Check Safety".to_string(),
-                description: "Check for potential dangers".to_string(),
-            },
-        ]
-    } else {
-        // Menu for empty input
-        vec![
-            AiActionMenuItem {
-                action: AiAction::DiagnoseError,
-                label: "🔍 Diagnose Last Error".to_string(),
-                description: "Analyze the last command output".to_string(),
-            },
-            AiActionMenuItem {
-                action: AiAction::DescribeDirectory,
-                label: "📁 Describe Directory".to_string(),
-                description: "Describe the current directory".to_string(),
-            },
-            AiActionMenuItem {
-                action: AiAction::SuggestCommands,
-                label: "💡 Suggest Commands".to_string(),
-                description: "Suggest useful commands based on context".to_string(),
-            },
-        ]
-    }
-}
-
 /// Format directory entries for AI context
 /// This is a pure function for testability
 pub fn format_directory_listing(entries: Vec<(String, bool)>) -> String {
@@ -1480,6 +1410,23 @@ impl<'a> Repl<'a> {
                 )
                 .ok();
             }
+        } else if self.detect_ai_pipe().is_some() {
+            // Hint for AI Output Pipe
+            let hint = " ↵ Enter to analyze";
+            let hint_width = display_width(hint);
+            let input_visual_end = self.prompt_mark_width + display_width(self.input.as_str());
+
+            if self.columns > hint_width
+                && self.columns.saturating_sub(hint_width) > input_visual_end + 2
+            {
+                let col = self.columns - hint_width;
+                queue!(
+                    out,
+                    cursor::MoveToColumn(col as u16),
+                    Print(hint.with(Color::DarkGrey))
+                )
+                .ok();
+            }
         }
 
         if ai_pending_now {
@@ -1878,148 +1825,6 @@ impl<'a> Repl<'a> {
         Ok(())
     }
 
-    /// Show AI Quick Actions menu and execute selected action
-    pub(crate) async fn show_ai_quick_actions(&mut self) -> Result<()> {
-        // Check if AI service is available
-        let Some(service) = self.ai_service.clone() else {
-            let mut renderer = TerminalRenderer::new();
-            queue!(renderer, Print("\r\n")).ok();
-            queue!(
-                renderer,
-                Print("AI service not configured. Set OPENAI_API_KEY or AI_CHAT_API_KEY.\r\n")
-            )
-            .ok();
-            renderer.flush().ok();
-            return Ok(());
-        };
-
-        // Get menu items based on context
-        let menu_items = self.get_ai_action_menu();
-        if menu_items.is_empty() {
-            return Ok(());
-        }
-
-        // Convert to completion candidates for skim selection
-        let candidates: Vec<completion::Candidate> = menu_items
-            .iter()
-            .map(|item| completion::Candidate::Command {
-                name: item.label.clone(),
-                description: item.description.clone(),
-            })
-            .collect();
-
-        // Save current input for restoration if cancelled
-        let current_input = self.input.as_str().to_string();
-
-        // Show skim menu
-        let selected = completion::select_item_with_skim(candidates, None);
-
-        // Find selected action
-        if let Some(selected_label) = selected
-            && let Some(item) = menu_items.iter().find(|m| m.label == selected_label)
-        {
-            self.execute_ai_action(item.action, &service).await?;
-        }
-
-        // Restore input and redraw
-        self.input.reset(current_input);
-        let mut renderer = TerminalRenderer::new();
-        self.print_input(&mut renderer, true, true);
-        renderer.flush().ok();
-
-        Ok(())
-    }
-
-    /// Get AI action menu items based on current context
-    fn get_ai_action_menu(&self) -> Vec<AiActionMenuItem> {
-        let input = self.input.as_str();
-        build_ai_action_menu(input)
-    }
-
-    /// Execute the selected AI action
-    async fn execute_ai_action(
-        &mut self,
-        action: AiAction,
-        service: &Arc<dyn AiService + Send + Sync>,
-    ) -> Result<()> {
-        let mut renderer = TerminalRenderer::new();
-        queue!(renderer, Print("\r\n")).ok();
-        queue!(renderer, Print("🔄 Processing...\r\n")).ok();
-        renderer.flush().ok();
-
-        let result = match action {
-            AiAction::ExplainCommand => {
-                let command = self.input.as_str();
-                ai_features::explain_command(service.as_ref(), command).await
-            }
-            AiAction::SuggestImprovement => {
-                let command = self.input.as_str();
-                ai_features::suggest_improvement(service.as_ref(), command).await
-            }
-            AiAction::CheckSafety => {
-                let command = self.input.as_str();
-                ai_features::check_safety(service.as_ref(), command).await
-            }
-            AiAction::DiagnoseError => {
-                // Get last command output from environment
-                let output = self
-                    .shell
-                    .environment
-                    .read()
-                    .get_var("OUT")
-                    .unwrap_or_default();
-                let command = self.last_command_string.clone();
-                let exit_code = self.last_status;
-                ai_features::diagnose_output(service.as_ref(), &command, &output, exit_code).await
-            }
-            AiAction::DescribeDirectory => {
-                let cwd = std::env::current_dir()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_else(|_| ".".to_string());
-                let dir_listing = self.get_directory_listing();
-                ai_features::describe_directory(service.as_ref(), &dir_listing, &cwd).await
-            }
-            AiAction::SuggestCommands => {
-                let cwd = std::env::current_dir()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_else(|_| ".".to_string());
-                let dir_listing = self.get_directory_listing();
-                let recent_commands = self.get_recent_commands(5);
-                ai_features::suggest_next_commands(
-                    service.as_ref(),
-                    &recent_commands,
-                    &cwd,
-                    &dir_listing,
-                )
-                .await
-            }
-        };
-
-        // Display result
-        let mut renderer = TerminalRenderer::new();
-        match result {
-            Ok(response) => {
-                // Clear the "Processing..." line and display result
-                queue!(renderer, Print("\r")).ok();
-                queue!(renderer, Clear(ClearType::CurrentLine)).ok();
-                for line in response.lines() {
-                    queue!(renderer, Print(format!("{}\r\n", line))).ok();
-                }
-                queue!(renderer, Print("\r\n")).ok();
-            }
-            Err(e) => {
-                queue!(renderer, Print(format!("❌ Error: {}\r\n", e))).ok();
-            }
-        }
-        renderer.flush().ok();
-
-        // Redraw prompt
-        self.print_prompt(&mut renderer);
-        renderer.flush().ok();
-
-        Ok(())
-    }
-
     /// Get directory listing for AI context
     fn get_directory_listing(&self) -> String {
         match std::fs::read_dir(".") {
@@ -2040,15 +1845,6 @@ impl<'a> Repl<'a> {
         }
     }
 
-    /// Get recent commands from history
-    fn get_recent_commands(&self, count: usize) -> Vec<String> {
-        if let Some(ref history) = self.shell.cmd_history
-            && let Some(history) = history.try_lock()
-        {
-            return history.get_recent_context(count);
-        }
-        Vec::new()
-    }
     async fn expand_smart_pipe(&self, query: String) -> Result<String> {
         let service = self
             .ai_service
@@ -2078,8 +1874,8 @@ impl<'a> Repl<'a> {
 
     pub(crate) fn detect_generative_command(&self) -> Option<String> {
         let input = self.input.as_str().trim_start();
-        if input.starts_with("??") {
-            let query = input[2..].trim();
+        if let Some(query) = input.strip_prefix("??") {
+            let query = query.trim();
             if !query.is_empty() {
                 return Some(query.to_string());
             }
@@ -2301,34 +2097,6 @@ mod tests {
         );
 
         drop(repl);
-    }
-
-    #[test]
-    fn test_build_ai_action_menu_with_command() {
-        // When input has a command, show command-related actions
-        let menu = build_ai_action_menu("ls -la");
-        assert_eq!(menu.len(), 3);
-        assert_eq!(menu[0].action, AiAction::ExplainCommand);
-        assert_eq!(menu[1].action, AiAction::SuggestImprovement);
-        assert_eq!(menu[2].action, AiAction::CheckSafety);
-    }
-
-    #[test]
-    fn test_build_ai_action_menu_empty_input() {
-        // When input is empty, show context-related actions
-        let menu = build_ai_action_menu("");
-        assert_eq!(menu.len(), 3);
-        assert_eq!(menu[0].action, AiAction::DiagnoseError);
-        assert_eq!(menu[1].action, AiAction::DescribeDirectory);
-        assert_eq!(menu[2].action, AiAction::SuggestCommands);
-    }
-
-    #[test]
-    fn test_build_ai_action_menu_whitespace_only() {
-        // Whitespace-only input should be treated as empty
-        let menu = build_ai_action_menu("   ");
-        assert_eq!(menu.len(), 3);
-        assert_eq!(menu[0].action, AiAction::DiagnoseError);
     }
 
     #[test]

@@ -941,10 +941,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             handle_execute(repl).await?;
             return Ok(());
         }
-        KeyAction::AiQuickActions => {
-            repl.show_ai_quick_actions().await?;
-            return Ok(());
-        }
+
         KeyAction::AiDiagnose => {
             return handle_ai_diagnose(repl).await;
         }
@@ -971,7 +968,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             // Disable raw mode so Skim can handle terminal state correctly
             disable_raw_mode().ok();
 
-            CommandPalette::run(repl.shell)?;
+            CommandPalette::run(repl.shell, repl.input.as_str())?;
 
             // Re-enable raw mode for the shell
             enable_raw_mode().ok();

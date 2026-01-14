@@ -17,7 +17,7 @@ impl Action for DockerContainersAction {
         "🐳"
     }
 
-    fn execute(&self, _shell: &mut Shell) -> Result<()> {
+    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         // Get container list (all, including stopped)
         let output = Command::new("docker")
             .args([

@@ -16,7 +16,7 @@ impl Action for SearchHistoryAction {
         "📜"
     }
 
-    fn execute(&self, shell: &mut Shell) -> Result<()> {
+    fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
         // Get command history
         let history_entries: Vec<String> = if let Some(ref history) = shell.cmd_history {
             let locked = history.lock();

@@ -16,7 +16,7 @@ impl Action for ShowEnvAction {
         "🌿"
     }
 
-    fn execute(&self, shell: &mut Shell) -> Result<()> {
+    fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
         // Collect environment variables
         let mut env_vars: Vec<String> = Vec::new();
 

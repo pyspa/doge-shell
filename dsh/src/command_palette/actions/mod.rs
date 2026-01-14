@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod clear_screen;
 pub mod dashboard;
 pub mod docker_containers;
@@ -53,4 +54,12 @@ pub fn register_all(registry: &mut ActionRegistry) {
     registry.register(Arc::new(ssh_connect::SshConnectAction));
     // Environment
     registry.register(Arc::new(show_env::ShowEnvAction));
+
+    // AI
+    registry.register(Arc::new(ai::explain::ExplainCommandAction));
+    registry.register(Arc::new(ai::suggest::SuggestImprovementAction));
+    registry.register(Arc::new(ai::safety::CheckSafetyAction));
+    registry.register(Arc::new(ai::diagnose::DiagnoseErrorAction));
+    registry.register(Arc::new(ai::describe_dir::DescribeDirectoryAction));
+    registry.register(Arc::new(ai::suggest_commands::SuggestCommandsAction));
 }

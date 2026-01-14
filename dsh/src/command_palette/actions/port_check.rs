@@ -20,7 +20,7 @@ impl Action for PortCheckAction {
     fn category(&self) -> &str {
         "System"
     }
-    fn execute(&self, _shell: &mut Shell) -> Result<()> {
+    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         // Get listening ports using lsof or ss
         let output = Command::new("lsof")
             .args(["-i", "-P", "-n"])

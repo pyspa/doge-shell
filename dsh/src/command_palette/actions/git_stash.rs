@@ -17,7 +17,7 @@ impl Action for GitStashAction {
         "📦"
     }
 
-    fn execute(&self, _shell: &mut Shell) -> Result<()> {
+    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         // Get stash list
         let output = Command::new("git")
             .args(["stash", "list"])

@@ -1,7 +1,7 @@
-//! キー入力アクションの定義と純粋なマッピング関数
+//! Key input action definitions and pure mapping functions
 //!
-//! このモジュールはキー入力と操作のマッピングを純粋関数として分離し、
-//! 副作用なしでテスト可能にする。
+//! This module separates key input and operation mapping as pure functions,
+//! making them testable without side effects.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -10,10 +10,10 @@ const CTRL: KeyModifiers = KeyModifiers::CONTROL;
 const ALT: KeyModifiers = KeyModifiers::ALT;
 const SHIFT: KeyModifiers = KeyModifiers::SHIFT;
 
-/// キー入力に対応するアクション
+/// Action corresponding to key input
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeyAction {
-    // カーソル移動
+    // Cursor movement
     CursorLeft,
     CursorRight,
     CursorWordLeft,
@@ -21,12 +21,12 @@ pub enum KeyAction {
     CursorToBegin,
     CursorToEnd,
 
-    // 履歴ナビゲーション
+    // History navigation
     HistoryPrevious,
     HistoryNext,
     HistorySearch,
 
-    // 編集操作
+    // Editing operations
     InsertChar(char),
     InsertPairedChar { open: char, close: char },
     Backspace,
@@ -34,7 +34,7 @@ pub enum KeyAction {
     DeleteToEnd,
     DeleteToBeginning,
 
-    // 補完・サジェスト
+    // Completion / Suggestion
     TriggerCompletion,
     AcceptCompletion,
     AcceptSuggestionFull,
@@ -42,20 +42,20 @@ pub enum KeyAction {
     RotateSuggestionForward,
     RotateSuggestionBackward,
 
-    // コマンド実行
+    // Command execution
     Execute,
     ExecuteBackground,
 
     // Command Palette
     OpenCommandPalette,
 
-    // AI機能
+    // AI features
     AiAutoFix,
     AiSmartCommit,
     AiDiagnose,
     ForceAiSuggestion,
 
-    // その他
+    // Others
     Paste,
     OpenEditor, // Open editor for current input
     ClearScreen,
@@ -63,46 +63,46 @@ pub enum KeyAction {
     ToggleSudo,
     CancelCompletion,
 
-    // 特殊処理（context依存）
+    // Special handling (context dependent)
     OvertypeClosingBracket(char),
     ExpandAbbreviationAndInsertSpace,
 
-    // 無視
+    // Ignore
     Unsupported,
 }
 
-/// キー入力時のコンテキスト（純粋関数への入力）
+/// Context during key input (input to pure function)
 #[derive(Debug, Clone, Default)]
 pub struct KeyContext {
-    /// カーソルが入力の末尾にあるか
+    /// Is cursor at the end of input
     pub cursor_at_end: bool,
-    /// 入力が空か
+    /// Is input empty
     pub input_empty: bool,
-    /// サジェストがアクティブか
+    /// Is suggestion active
     pub has_suggestion: bool,
-    /// 補完がアクティブか（input.completion.is_some()）
+    /// Is completion active (input.completion.is_some())
     pub has_completion: bool,
-    /// 補完モードか（completion.completion_mode()）
+    /// Is in completion mode (completion.completion_mode())
     pub completion_mode: bool,
-    /// カーソル位置が0か
+    /// Is cursor position 0
     pub cursor_at_start: bool,
-    /// 次の文字（OvertypeClosingBracket用）
+    /// Next character (for OvertypeClosingBracket)
     pub next_char: Option<char>,
-    /// オートペアが有効か
+    /// Is auto-pair enabled
     pub auto_pair: bool,
 }
 
-/// キー入力からアクションを決定（純粋関数）
+/// Determine action from key input (pure function)
 ///
-/// この関数は副作用を持たず、キー入力とコンテキストからアクションを決定する。
-/// テスト容易性のため、状態変更は行わない。
+/// This function has no side effects and determines the action from key input and context.
+/// For testability, it does not perform state changes.
 pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
     match (key.code, key.modifiers) {
-        // 履歴ナビゲーション
+        // History navigation
         (KeyCode::Up, NONE) => KeyAction::HistoryPrevious,
         (KeyCode::Down, NONE) => KeyAction::HistoryNext,
 
-        // サジェスト受け入れ（Ctrl+Right, Alt+f で単語単位）
+        // Accept suggestion (Ctrl+Right, Alt+f by word)
         (KeyCode::Right, m)
             if m.contains(CTRL)
                 && ctx.has_suggestion
@@ -117,15 +117,15 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
             KeyAction::AcceptSuggestionWord
         }
 
-        // サジェストのローテーション
+        // Rotate suggestion
         (KeyCode::Char(']'), ALT) => KeyAction::RotateSuggestionForward,
         (KeyCode::Char('['), ALT) => KeyAction::RotateSuggestionBackward,
 
-        // カーソル移動（Left）
+        // Cursor move (Left)
         (KeyCode::Left, m) if !m.contains(CTRL) => KeyAction::CursorLeft,
         (KeyCode::Left, m) if m.contains(CTRL) => KeyAction::CursorWordLeft,
 
-        // サジェスト受け入れ（Right で全体）
+        // Accept suggestion (Right for full)
         (KeyCode::Right, m)
             if ctx.has_suggestion
                 && !ctx.has_completion
@@ -135,26 +135,26 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
             KeyAction::AcceptSuggestionFull
         }
 
-        // 補完（ゴーストテキスト）受け入れ（Right）
+        // Accept completion (ghost text) (Right)
         (KeyCode::Right, m) if ctx.has_completion && ctx.cursor_at_end && !m.contains(CTRL) => {
             KeyAction::AcceptCompletion
         }
 
-        // カーソル移動（Right）
+        // Cursor move (Right)
         (KeyCode::Right, m) if !m.contains(CTRL) => KeyAction::CursorRight,
         (KeyCode::Right, m) if m.contains(CTRL) => KeyAction::CursorWordRight,
 
-        // Ctrl+f でサジェスト受け入れ
+        // Ctrl+f to accept suggestion
         (KeyCode::Char('f'), CTRL)
             if ctx.has_suggestion && !ctx.has_completion && ctx.cursor_at_end =>
         {
             KeyAction::AcceptSuggestionFull
         }
 
-        // スペース入力（略語展開チェック）
+        // Space input (Abbreviation expansion check)
         (KeyCode::Char(' '), NONE) => KeyAction::ExpandAbbreviationAndInsertSpace,
 
-        // Auto-pairing: 開き括弧
+        // Auto-pairing: Open bracket
         (KeyCode::Char(ch), NONE)
             if ctx.auto_pair && matches!(ch, '(' | '{' | '[' | '\'' | '"') =>
         {
@@ -169,7 +169,7 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
             KeyAction::InsertPairedChar { open: ch, close }
         }
 
-        // Overtype: 閉じ括弧
+        // Overtype: Closing bracket
         (KeyCode::Char(ch), NONE) if ctx.auto_pair && matches!(ch, ')' | '}' | ']') => {
             if ctx.next_char == Some(ch) {
                 KeyAction::OvertypeClosingBracket(ch)
@@ -178,65 +178,65 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
             }
         }
 
-        // クオートのオーバータイプ
+        // Quote overtype
         (KeyCode::Char(ch), NONE) if ctx.auto_pair && matches!(ch, '\'' | '"') => {
             KeyAction::InsertChar(ch)
         }
 
-        // 通常の文字入力
+        // Normal character input
         (KeyCode::Char(ch), NONE) => KeyAction::InsertChar(ch),
         (KeyCode::Char(ch), SHIFT) => KeyAction::InsertChar(ch),
 
         // Backspace
         (KeyCode::Backspace, NONE) => KeyAction::Backspace,
 
-        // AI機能
+        // AI features
         (KeyCode::Char('f'), ALT) => KeyAction::AiAutoFix,
         (KeyCode::Char('s'), ALT) => KeyAction::ForceAiSuggestion,
         (KeyCode::Char('c'), ALT) => KeyAction::AiSmartCommit,
         (KeyCode::Char('d'), ALT) => KeyAction::AiDiagnose,
 
-        // Tab: 補完
+        // Tab: Completion
         (KeyCode::Tab, NONE) | (KeyCode::BackTab, NONE) => KeyAction::TriggerCompletion,
 
-        // Enter: 実行
+        // Enter: Execute
         (KeyCode::Enter, NONE) => KeyAction::Execute,
         (KeyCode::Enter, ALT) => KeyAction::ExecuteBackground,
 
         // Alt+x: Command Palette
         (KeyCode::Char('x'), ALT) => KeyAction::OpenCommandPalette,
 
-        // 行頭・行末移動
+        // Move to line start/end
         (KeyCode::Char('a'), CTRL) => KeyAction::CursorToBegin,
-        // Ctrl+E: 補完がある場合は受け入れ、ない場合は行末移動
+        // Ctrl+E: Accept completion if any, otherwise move to end of line
         (KeyCode::Char('e'), CTRL) if ctx.has_completion => KeyAction::AcceptCompletion,
         (KeyCode::Char('e'), CTRL) => KeyAction::CursorToEnd,
 
-        // Ctrl+C: 割り込み
+        // Ctrl+C: Interrupt
         (KeyCode::Char('c'), CTRL) => KeyAction::Interrupt,
 
-        // Ctrl+L: 画面クリア
+        // Ctrl+L: Clear screen
         (KeyCode::Char('l'), CTRL) => KeyAction::ClearScreen,
 
-        // Ctrl+D: 通常は何もしない（exitメッセージ表示）
+        // Ctrl+D: Usually does nothing (displays exit message)
         (KeyCode::Char('d'), CTRL) => KeyAction::Unsupported,
 
-        // Ctrl+R: 履歴検索
+        // Ctrl+R: History search
         (KeyCode::Char('r'), CTRL) => KeyAction::HistorySearch,
 
-        // Ctrl+V: ペースト
+        // Ctrl+V: Paste
         (KeyCode::Char('v'), CTRL) => KeyAction::Paste,
 
-        // Ctrl+W: 単語削除
+        // Ctrl+W: Delete word
         (KeyCode::Char('w'), CTRL) => KeyAction::DeleteWordBackward,
 
-        // Ctrl+K: 行末まで削除
+        // Ctrl+K: Delete to end of line
         (KeyCode::Char('k'), CTRL) => KeyAction::DeleteToEnd,
 
-        // Ctrl+U: 行頭まで削除
+        // Ctrl+U: Delete to beginning of line
         (KeyCode::Char('u'), CTRL) => KeyAction::DeleteToBeginning,
 
-        // Esc: 補完キャンセル or sudo切り替え
+        // Esc: Cancel completion or toggle sudo
         (KeyCode::Esc, NONE) => {
             if ctx.has_completion || ctx.has_suggestion {
                 KeyAction::CancelCompletion
@@ -245,7 +245,7 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
             }
         }
 
-        // その他
+        // Others
         _ => KeyAction::Unsupported,
     }
 }
@@ -271,7 +271,7 @@ mod tests {
         }
     }
 
-    // === カーソル移動テスト ===
+    // === Cursor movement tests ===
 
     #[test]
     fn test_ctrl_a_moves_to_begin() {
@@ -327,7 +327,7 @@ mod tests {
         );
     }
 
-    // === 編集操作テスト ===
+    // === Editing operations tests ===
 
     #[test]
     fn test_backspace() {
@@ -365,7 +365,7 @@ mod tests {
         );
     }
 
-    // === 文字入力テスト ===
+    // === Character input tests ===
 
     #[test]
     fn test_regular_char_inserts() {
@@ -463,7 +463,7 @@ mod tests {
         assert_eq!(determine_key_action(&k, &ctx), KeyAction::InsertChar(')'));
     }
 
-    // === コマンド実行テスト ===
+    // === Command execution tests ===
 
     #[test]
     fn test_enter_executes() {
@@ -480,7 +480,7 @@ mod tests {
         );
     }
 
-    // === 補完テスト ===
+    // === Completion tests ===
 
     #[test]
     fn test_tab_triggers_completion() {
@@ -491,7 +491,7 @@ mod tests {
         );
     }
 
-    // === 履歴テスト ===
+    // === History tests ===
 
     #[test]
     fn test_up_is_history_previous() {
@@ -511,7 +511,7 @@ mod tests {
         );
     }
 
-    // === サジェストテスト ===
+    // === Suggestion tests ===
 
     #[test]
     fn test_right_accepts_suggestion_when_active() {
@@ -557,7 +557,7 @@ mod tests {
         );
     }
 
-    // === その他テスト ===
+    // === Other tests ===
 
     #[test]
     fn test_ctrl_c_interrupt() {
@@ -611,7 +611,7 @@ mod tests {
         );
     }
 
-    // === コンテキスト依存テスト ===
+    // === Context dependent tests ===
 
     #[test]
     fn test_ctrl_e_accepts_completion_when_active() {
@@ -658,14 +658,14 @@ mod tests {
         );
     }
 
-    // === エッジケーステスト ===
+    // === Edge case tests ===
 
     #[test]
     fn test_right_moves_cursor_when_not_at_end() {
         let k = key(KeyCode::Right, NONE);
         let ctx = KeyContext {
             cursor_at_end: false,
-            has_suggestion: true, // サジェストがあってもカーソルが末尾でなければ移動
+            has_suggestion: true, // Move if cursor is not at end even if suggestion exists
             ..ctx_default()
         };
         assert_eq!(determine_key_action(&k, &ctx), KeyAction::CursorRight);

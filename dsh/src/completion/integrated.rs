@@ -165,9 +165,24 @@ impl<'a> CandidateAggregator<'a> {
             history,
             self.command_context.as_deref(),
         );
-        let framework = self
-            .framework
-            .unwrap_or_else(super::default_completion_framework);
+
+        // Determine framework based on candidate types:
+        // - If all candidates are File or Directory, use Inline
+        // - Otherwise, use the batch framework or default
+        let all_file_or_dir = !candidates.is_empty()
+            && candidates.iter().all(|c| {
+                matches!(
+                    c.candidate_type,
+                    CandidateType::File | CandidateType::Directory
+                )
+            });
+
+        let framework = if all_file_or_dir {
+            CompletionFrameworkKind::Inline
+        } else {
+            self.framework
+                .unwrap_or_else(super::default_completion_framework)
+        };
 
         CompletionResult {
             candidates,

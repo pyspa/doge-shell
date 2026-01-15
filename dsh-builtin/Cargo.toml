@@ -27,7 +27,7 @@ reqwest = { workspace = true, features = ["blocking"] }
 sysinfo.workspace = true
 crossterm.workspace = true
 
-getopts = "0.2.23"
+getopts = "0.2"
 regex = "1.11"
 shell-words = "1.1"
 indicatif = "0.18"

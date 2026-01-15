@@ -48,39 +48,12 @@ pub use mcp::{McpConnectionStatus, McpManager, McpServerStatus};
 mod tool;
 
 use tool::{build_tools, execute_tool_call};
+
+mod skills;
+use skills::SkillsManager;
+
 pub fn load_openai_config(proxy: &mut dyn ShellProxy) -> OpenAiConfig {
     OpenAiConfig::from_getter(|key| proxy.get_var(key).or_else(|| std::env::var(key).ok()))
-}
-
-/// Built-in chat command description
-pub fn chat_description() -> &'static str {
-    "Chat with AI assistant"
-}
-
-/// Built-in chat command implementation
-/// Integrates OpenAI API for AI-powered assistance within the shell
-///
-/// Usage:
-///   chat "message"                    - Use default model
-///   chat -m model "message"           - Use specific model
-///   chat --model model "message"      - Use specific model (long form)
-pub fn chat(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
-    if argv.len() < 2 {
-        ctx.write_stderr("Usage: chat [-m|--model <model>] <message>")
-            .ok();
-        return ExitStatus::ExitedWith(1);
-    }
-
-    // Parse arguments for model override and message content
-    let (message, model_override) = match parse_chat_args(&argv) {
-        Ok(result) => result,
-        Err(err) => {
-            ctx.write_stderr(&format!("chat: {err}")).ok();
-            return ExitStatus::ExitedWith(1);
-        }
-    };
-
-    execute_chat_message(ctx, proxy, &message, model_override.as_deref())
 }
 
 /// Execute a chat request using the configured OpenAI client
@@ -194,35 +167,6 @@ pub fn chat_model(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) 
             ExitStatus::ExitedWith(1)
         }
     }
-}
-
-/// Parse chat command arguments to extract message and optional model override
-/// Returns (message, model_override)
-fn parse_chat_args(argv: &[String]) -> Result<(String, Option<String>), String> {
-    let mut i = 1;
-    let mut model_override = None;
-
-    // Parse options
-    while i < argv.len() {
-        match argv[i].as_str() {
-            "-m" | "--model" => {
-                if i + 1 >= argv.len() {
-                    return Err("model option requires a value".to_string());
-                }
-                model_override = Some(argv[i + 1].clone());
-                i += 2;
-            }
-            _ => break, // First non-option argument is the message
-        }
-    }
-
-    // Get message content
-    if i >= argv.len() {
-        return Err("message content required".to_string());
-    }
-
-    let message = argv[i].clone();
-    Ok((message, model_override))
 }
 
 fn chat_with_tools(
@@ -374,6 +318,12 @@ impl Drop for SpinnerGuard {
 
 fn build_system_prompt(operator_prompt: Option<String>, mcp_manager: &McpManager) -> String {
     let mut base = TOOL_SYSTEM_PROMPT.to_string();
+
+    let skills_manager = SkillsManager::new();
+    let skills_fragment = skills_manager.get_system_prompt_fragment();
+    if !skills_fragment.is_empty() {
+        base.push_str(&skills_fragment);
+    }
 
     if let Some(fragment) = mcp_manager.system_prompt_fragment() {
         base.push_str("\n\nMCP access:");

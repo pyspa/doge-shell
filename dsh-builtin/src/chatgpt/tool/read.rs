@@ -1,7 +1,6 @@
 use crate::ShellProxy;
 use serde_json::{Value, json};
 use std::fs;
-use std::path::{Component, Path, PathBuf};
 
 pub(crate) const NAME: &str = "read_file";
 
@@ -16,7 +15,7 @@ pub(crate) fn definition() -> Value {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Relative path to the file to read (no absolute paths or ..)"
+                        "description": "Path to the file to read (relative to current directory or absolute for skills)"
                     }
                 },
                 "required": ["path"],
@@ -39,38 +38,13 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
         return Err("chat: read_file tool path must not be empty".to_string());
     }
 
-    let path = Path::new(path_value);
+    let normalized_abs_path = super::resolve_tool_path(path_value, _proxy)?;
 
-    if path.is_absolute() {
-        return Err("chat: read_file tool path must be relative".to_string());
-    }
-
-    if path
-        .components()
-        .any(|component| matches!(component, Component::ParentDir))
-    {
-        return Err("chat: read_file tool path must not contain `..`".to_string());
-    }
-
-    // Get current working directory
+    // Get CWD for gitignore check
     let current_dir = _proxy
         .get_current_dir()
         .map_err(|err| format!("chat: failed to get current working directory: {err}"))?;
-
-    // Convert the relative path to an absolute path by joining with current directory
-    let abs_path = current_dir.join(path);
-
-    // Normalize the absolute path to resolve any relative components like "." or ".."
-    let normalized_abs_path = normalize_path(&abs_path);
-    let normalized_current_dir = normalize_path(&current_dir);
-
-    // Check if the resolved path is within the current directory
-    if !normalized_abs_path.starts_with(&normalized_current_dir) {
-        return Err(format!(
-            "chat: read_file tool path `{path_value}` resolves outside current directory (resolved to: {})",
-            normalized_abs_path.display()
-        ));
-    }
+    let normalized_current_dir = super::normalize_path(&current_dir);
 
     // Check if the file is ignored by .gitignore
     if super::gitignore::is_gitignored(&normalized_abs_path, &normalized_current_dir) {
@@ -83,25 +57,6 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
         .map_err(|err| format!("chat: failed to read file `{path_value}`: {err}"))?;
 
     Ok(contents)
-}
-
-// Helper function to normalize a path by resolving all relative components
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::ParentDir => {
-                normalized.pop();
-            }
-            std::path::Component::CurDir => {
-                // Skip current directory components
-            }
-            _ => {
-                normalized.push(component);
-            }
-        }
-    }
-    normalized
 }
 
 #[cfg(test)]
@@ -211,21 +166,23 @@ mod tests {
 
     #[test]
     fn test_read_file_absolute_path() {
+        let dir = tempdir().unwrap();
         let mut proxy = NoopProxy {
-            cwd: std::path::PathBuf::from("."),
+            cwd: dir.path().to_path_buf(),
         };
         let result = run(r#"{"path": "/etc/passwd"}"#, &mut proxy);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("must be relative"));
+        assert!(result.unwrap_err().contains("absolute path"));
     }
 
     #[test]
     fn test_read_file_parent_traversal() {
+        let dir = tempdir().unwrap();
         let mut proxy = NoopProxy {
-            cwd: std::path::PathBuf::from("."),
+            cwd: dir.path().to_path_buf(),
         };
         let result = run(r#"{"path": "../secret.txt"}"#, &mut proxy);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("must not contain `..`"));
+        assert!(result.unwrap_err().contains("outside allowed directories"));
     }
 }

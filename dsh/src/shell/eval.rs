@@ -77,7 +77,10 @@ pub async fn eval_str(
             ExitStatus::Running(_) => 0,
             ExitStatus::Break | ExitStatus::Continue | ExitStatus::Return => 0,
         };
-        enable_raw_mode().ok();
+        // Only re-enable raw mode in interactive context
+        if ctx.interactive {
+            enable_raw_mode().ok();
+        }
         return Ok(code);
     }
 
@@ -228,8 +231,10 @@ pub async fn eval_str(
                 std::io::stderr().flush().ok();
             }
 
-            // Re-enable raw mode after capture job
-            enable_raw_mode().ok();
+            // Re-enable raw mode after capture job (only in interactive mode)
+            if ctx.interactive {
+                enable_raw_mode().ok();
+            }
             gate_op = next_gate_op;
             continue;
         }
@@ -262,7 +267,10 @@ pub async fn eval_str(
             Err(err) => {
                 ctx.pid = None;
                 ctx.pgid = None;
-                enable_raw_mode().ok(); // Restore raw mode before returning error
+                // Restore raw mode only in interactive mode
+                if ctx.interactive {
+                    enable_raw_mode().ok();
+                }
                 return Err(err);
             }
         }
@@ -270,8 +278,10 @@ pub async fn eval_str(
         ctx.pid = None;
         ctx.pgid = None;
 
-        // Re-enable raw mode after each job completes
-        enable_raw_mode().ok();
+        // Re-enable raw mode after each job completes (only in interactive mode)
+        if ctx.interactive {
+            enable_raw_mode().ok();
+        }
 
         gate_op = next_gate_op;
 

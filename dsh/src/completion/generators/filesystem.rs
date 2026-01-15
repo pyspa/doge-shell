@@ -1,5 +1,5 @@
 use crate::completion::command::CompletionCandidate;
-use crate::completion::{Candidate, fuzzy_match_score, path_completion_path};
+use crate::completion::{Candidate, fuzzy_match_score, path_completion_path_sync};
 use anyhow::Result;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 
@@ -21,7 +21,7 @@ impl FileSystemGenerator {
         let (dir_path, file_prefix) = Self::split_dir_and_prefix(current_token);
 
         // Reuse legacy path listing cache for better performance.
-        let listing = path_completion_path(PathBuf::from(&dir_path)).unwrap_or_default();
+        let listing = path_completion_path_sync(PathBuf::from(&dir_path)).unwrap_or_default();
 
         for cand in listing {
             let Candidate::Path(path_str) = cand else {
@@ -72,7 +72,7 @@ impl FileSystemGenerator {
 
         let (dir_path, dir_prefix) = Self::split_dir_and_prefix(current_token);
 
-        let listing = path_completion_path(PathBuf::from(&dir_path)).unwrap_or_default();
+        let listing = path_completion_path_sync(PathBuf::from(&dir_path)).unwrap_or_default();
 
         for cand in listing {
             let Candidate::Path(path_str) = cand else {

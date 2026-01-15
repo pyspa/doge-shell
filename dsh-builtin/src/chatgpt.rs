@@ -14,6 +14,11 @@ const PROMPT_KEY: &str = "CHAT_PROMPT";
 const MODEL_KEY: &str = "AI_CHAT_MODEL";
 /// Maximum number of iterations to satisfy tool calls before aborting
 const MAX_TOOL_ITERATIONS: usize = 100;
+/// Threshold of characters in the buffer to trigger summarization (~3k-12k tokens)
+const MAX_BUFFER_CHARS: usize = 96000;
+/// Environment variable key to override the model used for summarization
+const SUMMARY_MODEL_KEY: &str = "AI_SUMMARY_MODEL";
+
 /// System prompt that explains how to use the builtin tools
 const TOOL_SYSTEM_PROMPT: &str = r#"You are DogeShell Assistant, a highly capable, autonomous DevOps and Software Engineering agent running directly inside the user's terminal (doge-shell). Your goal is to help the user perform tasks, fix issues, and write code efficiently and accurately.
 
@@ -42,6 +47,175 @@ You have access to the following tools:
 - Use Markdown for all methodology and code blocks.
 - Be concise in your explanations but thorough in your verification.
 "#;
+
+struct ConversationManager {
+    summary: Option<String>,
+    buffer: Vec<Value>,
+    /// System prompt (fixed) - index 0
+    /// First user message (pinned) - index 1
+    pinned_messages: Vec<Value>,
+}
+
+impl ConversationManager {
+    fn new(system_prompt: Value, first_user_message: Value) -> Self {
+        Self {
+            summary: None,
+            buffer: Vec::new(),
+            pinned_messages: vec![system_prompt, first_user_message],
+        }
+    }
+
+    fn add_message(&mut self, message: Value) {
+        self.buffer.push(message);
+    }
+
+    fn buffer_size_chars(&self) -> usize {
+        self.buffer.iter().map(|msg| msg.to_string().len()).sum()
+    }
+
+    fn should_summarize(&self) -> bool {
+        self.buffer_size_chars() > MAX_BUFFER_CHARS
+    }
+
+    fn perform_summary(
+        &mut self,
+        client: &ChatGptClient,
+        proxy: &mut dyn ShellProxy,
+        model_override: Option<String>,
+    ) -> Result<(), String> {
+        let _spinner = SpinnerGuard::start("Summarizing conversation history...");
+
+        // Determine which model to use for summarization:
+        // 1. Check for AI_SUMMARY_MODEL environment variable
+        // 2. Fall back to the main chat model (model_override or default)
+        let summary_model = proxy
+            .get_var(SUMMARY_MODEL_KEY)
+            .or_else(|| std::env::var(SUMMARY_MODEL_KEY).ok())
+            .or(model_override);
+
+        let mut summary_messages = Vec::new();
+        summary_messages.push(json!({
+            "role": "system",
+            "content": "You are a conversation summarizer. Your task is to update the summary of a technical conversation between a user and an AI DevOps agent. 
+            
+            Inputs:
+            1. Current Summary (if any)
+            2. Recent Messages (to be summarized)
+
+            Output:
+            A single, concise paragraph summarizing the entire history including the new messages. 
+            - PRESERVE key technical details: file names, function names, error messages, and what actions were taken.
+            - OMIT trivial chatter.
+            - FOCUS on the state of the system and the progress of the task."
+        }));
+
+        let current_summary_text = self.summary.as_deref().unwrap_or("None");
+        let buffer_text = self
+            .buffer
+            .iter()
+            .map(|msg| {
+                let role = msg
+                    .get("role")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let content = extract_message_content(msg).unwrap_or_default();
+
+                // Include tool_calls information if present
+                let tool_calls_desc = msg
+                    .get("tool_calls")
+                    .and_then(|tc| tc.as_array())
+                    .map(|calls| {
+                        let tool_names: Vec<String> = calls
+                            .iter()
+                            .filter_map(|c| {
+                                let name = c
+                                    .get("function")
+                                    .and_then(|f| f.get("name"))
+                                    .and_then(|n| n.as_str())?;
+                                let args = c
+                                    .get("function")
+                                    .and_then(|f| f.get("arguments"))
+                                    .and_then(|a| a.as_str())
+                                    .unwrap_or("{}");
+                                Some(format!("{name}({args})"))
+                            })
+                            .collect();
+                        if tool_names.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" [Called: {}]", tool_names.join(", "))
+                        }
+                    })
+                    .unwrap_or_default();
+
+                format!("{role}: {content}{tool_calls_desc}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        summary_messages.push(json!({
+            "role": "user",
+            "content": format!("Current Summary:\n{current_summary_text}\n\nRecent Messages to Integrate:\n{buffer_text}")
+        }));
+
+        // Send request to summarization model
+        let response = client
+            .send_chat_request(
+                &summary_messages,
+                Some(0.3), // Lower temperature for consistent summarization
+                summary_model,
+                None, // No tools for summarizer
+                Some(&|| proxy.is_canceled()),
+            )
+            .map_err(|e| format!("Summarization failed: {e:?}"))?;
+
+        let choice = response
+            .get("choices")
+            .and_then(|choices| choices.get(0))
+            .ok_or_else(|| "Summarization response missing choices".to_string())?;
+
+        let message = choice
+            .get("message")
+            .cloned()
+            .ok_or_else(|| "Summarization response missing message".to_string())?;
+
+        let new_summary = extract_message_content(&message)
+            .ok_or_else(|| "Summarization returned empty content".to_string())?;
+
+        // Update state: keep most recent messages to maintain tool_call/result continuity
+        const RETAIN_AFTER_SUMMARY: usize = 6; // Keep last ~3 exchanges (assistant+tool pairs)
+        let retain_start = self.buffer.len().saturating_sub(RETAIN_AFTER_SUMMARY);
+        self.buffer = self.buffer.split_off(retain_start);
+        self.summary = Some(new_summary);
+
+        Ok(())
+    }
+
+    fn build_messages_for_chat(&self, dynamic_context: Value) -> Vec<Value> {
+        let mut messages = Vec::new();
+
+        // System prompt (index 0)
+        messages.push(self.pinned_messages[0].clone());
+
+        // Fresh dynamic context (regenerated each call)
+        messages.push(dynamic_context);
+
+        // First user message (index 1, pinned)
+        messages.push(self.pinned_messages[1].clone());
+
+        // Summary if present
+        if let Some(summary) = &self.summary {
+            messages.push(json!({
+                "role": "system",
+                "content": format!("## Previous Conversation Summary\nThe following is a summary of the earlier conversation. Use this to maintain context.\n\n{summary}")
+            }));
+        }
+
+        // Buffer (recent messages)
+        messages.extend(self.buffer.clone());
+        messages
+    }
+}
 
 mod mcp;
 pub use mcp::{McpConnectionStatus, McpManager, McpServerStatus};
@@ -178,21 +352,17 @@ fn chat_with_tools(
     mcp_manager: &McpManager,
     proxy: &mut dyn ShellProxy,
 ) -> Result<String, String> {
-    let mut messages = Vec::new();
-    // 1. Static System Prompt (Cacheable)
-    messages.push(json!({
+    // Build System Prompt (fixed for the session)
+    let system_prompt = json!({
         "role": "system",
         "content": build_system_prompt(operator_prompt, mcp_manager),
-    }));
+    });
 
-    // 2. Dynamic Context (Environment Snapshot)
-    messages.push(json!({
-        "role": "user",
-        "content": build_dynamic_context(proxy),
-    }));
+    // First User Input (Pinned - the original goal)
+    let first_user_message = json!({ "role": "user", "content": user_input });
 
-    // 3. User Input
-    messages.push(json!({ "role": "user", "content": user_input }));
+    // Initialize Manager with pinned messages only
+    let mut manager = ConversationManager::new(system_prompt, first_user_message);
 
     let mut tools = build_tools();
     if !mcp_manager.is_empty() {
@@ -206,19 +376,29 @@ fn chat_with_tools(
             return Err("chat: exceeded maximum number of tool interactions".to_string());
         }
 
+        // Check for Summarization (Fix #5: may need multiple rounds if buffer is huge)
+        while manager.should_summarize() {
+            // Fix #4: Graceful fallback on summary failure
+            if let Err(e) = manager.perform_summary(client, proxy, model_override.clone()) {
+                tracing::warn!("Context summarization failed: {e}, continuing without summary");
+                break; // Continue with current buffer, don't fail the whole conversation
+            }
+        }
+
+        // Build fresh dynamic context each iteration (Fix #3)
+        let dynamic_context = json!({
+            "role": "user",
+            "content": build_dynamic_context(proxy),
+        });
+        let current_messages = manager.build_messages_for_chat(dynamic_context);
+
         let response = {
-            let spinner_text = if iterations == 1 {
-                // "Waiting for LLM response...".to_string()
-                "".to_string()
-            } else {
-                //format!("Waiting for LLM response... (attempt {iterations})")
-                "".to_string()
-            };
+            let spinner_text = "".to_string();
 
             let _spinner = SpinnerGuard::start(&spinner_text);
             client
                 .send_chat_request(
-                    &messages,
+                    &current_messages,
                     temperature,
                     model_override.clone(),
                     Some(&tools),
@@ -243,7 +423,8 @@ fn chat_with_tools(
             .cloned()
             .ok_or_else(|| format!("chat: response missing assistant message {response}"))?;
 
-        messages.push(assistant_message.clone());
+        // Add assistant response to history buffer
+        manager.add_message(assistant_message.clone());
 
         if let Some(tool_calls) = assistant_message
             .get("tool_calls")
@@ -267,7 +448,8 @@ fn chat_with_tools(
                     ),
                 };
 
-                messages.push(json!({
+                // Add tool result to history buffer
+                manager.add_message(json!({
                     "role": "tool",
                     "tool_call_id": tool_call_id,
                     "content": tool_result,

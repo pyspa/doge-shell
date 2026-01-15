@@ -1,9 +1,7 @@
 use crate::ShellProxy;
 use anyhow::Result;
 use serde_json::{Value, json};
-use std::env;
 use std::fs;
-use std::path::{Component, Path, PathBuf};
 
 pub(crate) const NAME: &str = "edit";
 
@@ -18,7 +16,7 @@ pub(crate) fn definition() -> Value {
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Relative path to the file to edit (no absolute paths or ..)"
+                        "description": "Path to the file to edit (relative to current directory or absolute for skills)"
                     },
                     "contents": {
                         "type": "string",
@@ -50,37 +48,12 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
         .and_then(|v| v.as_str())
         .ok_or_else(|| "chat: edit tool requires `contents`".to_string())?;
 
-    let path = Path::new(path_value);
+    let normalized_abs_path = super::resolve_tool_path(path_value, proxy)?;
 
-    if path.is_absolute() {
-        return Err("chat: edit tool path must be relative".to_string());
-    }
-
-    if path
-        .components()
-        .any(|component| matches!(component, Component::ParentDir))
-    {
-        return Err("chat: edit tool path must not contain `..`".to_string());
-    }
-
-    // Get current working directory
-    let current_dir = env::current_dir()
+    // Get CWD for error reporting (if needed) or comparison
+    let _current_dir = proxy
+        .get_current_dir()
         .map_err(|err| format!("chat: failed to get current working directory: {err}"))?;
-
-    // Convert the relative path to an absolute path by joining with current directory
-    let abs_path = current_dir.join(path);
-
-    // Normalize the absolute path to resolve any relative components like "." or ".."
-    let normalized_abs_path = normalize_path(&abs_path);
-    let normalized_current_dir = normalize_path(&current_dir);
-
-    // Check if the resolved path is within the current directory
-    if !normalized_abs_path.starts_with(&normalized_current_dir) {
-        return Err(format!(
-            "chat: edit tool path `{path_value}` resolves outside current directory (resolved to: {})",
-            normalized_abs_path.display()
-        ));
-    }
 
     if let Some(parent) = normalized_abs_path.parent()
         && !parent.as_os_str().is_empty()
@@ -109,20 +82,3 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
 }
 
 // Helper function to normalize a path by resolving all relative components
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::ParentDir => {
-                normalized.pop();
-            }
-            std::path::Component::CurDir => {
-                // Skip current directory components
-            }
-            _ => {
-                normalized.push(component);
-            }
-        }
-    }
-    normalized
-}

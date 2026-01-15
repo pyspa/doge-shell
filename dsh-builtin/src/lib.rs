@@ -8,6 +8,7 @@ use tracing::debug;
 // Builtin command modules
 mod abbr;
 mod add_path;
+
 mod alias;
 mod bg;
 pub mod cd;
@@ -174,6 +175,11 @@ pub trait ShellProxy {
         Err(anyhow::anyhow!(
             "generate_command_completion not implemented"
         ))
+    }
+
+    /// Ask AI for a response given a list of messages
+    fn ask_ai(&mut self, _messages: Vec<serde_json::Value>) -> Result<String> {
+        Err(anyhow::anyhow!("ask_ai not implemented"))
     }
 
     /// Triggers a Lisp hook by name with arguments
@@ -419,13 +425,7 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
         );
 
         // AI integration commands
-        builtin.insert(
-            "chat",
-            Box::new(BuiltinCommandFn::new(
-                chatgpt::chat,
-                chatgpt::chat_description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
+
         builtin.insert(
             "chat_prompt",
             Box::new(BuiltinCommandFn::new(

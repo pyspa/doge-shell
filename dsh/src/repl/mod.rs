@@ -21,9 +21,12 @@ use crossterm::queue;
 use crossterm::style::{Color, Print, ResetColor, Stylize};
 use crossterm::terminal::{self, Clear, ClearType, enable_raw_mode};
 
+use dsh_builtin::execute_chat_message;
 use dsh_openai::{ChatGptClient, OpenAiConfig};
+use dsh_types::Context;
 use futures::StreamExt;
 use nix::sys::termios::{Termios, tcgetattr};
+use nix::unistd::getpid;
 use nix::unistd::tcsetpgrp;
 use parking_lot::Mutex as ParkingMutex;
 use parking_lot::RwLock;
@@ -1947,7 +1950,7 @@ impl<'a> Repl<'a> {
         };
 
         // Check if AI service is available
-        let Some(service) = self.ai_service.clone() else {
+        let Some(_service) = self.ai_service.clone() else {
             queue!(
                 renderer,
                 Print("❌ AI service not configured. Set OPENAI_API_KEY or AI_CHAT_API_KEY.\r\n")
@@ -1960,23 +1963,17 @@ impl<'a> Repl<'a> {
         queue!(renderer, Print("🤖 Analyzing output...\r\n")).ok();
         renderer.flush().ok();
 
-        // Call AI to analyze the output
-        match ai_features::analyze_output(service.as_ref(), &command, &combined_output, &query)
-            .await
-        {
-            Ok(response) => {
-                // Display the AI response with markdown rendering if possible
-                queue!(renderer, Print("\r")).ok();
-                queue!(renderer, Clear(ClearType::CurrentLine)).ok();
-                for line in response.lines() {
-                    queue!(renderer, Print(format!("{}\r\n", line))).ok();
-                }
-                queue!(renderer, Print("\r\n")).ok();
-            }
-            Err(e) => {
-                queue!(renderer, Print(format!("❌ AI analysis failed: {}\r\n", e))).ok();
-            }
-        }
+        // Call unified AI entry point
+        queue!(renderer, Print("\r")).ok();
+        queue!(renderer, Clear(ClearType::CurrentLine)).ok();
+
+        let message = format!(
+            "Shell command: `{}`\n\nOutput:\n```\n{}\n```\n\nQuery: {}",
+            command, combined_output, query
+        );
+
+        let ctx = Context::new_safe(getpid(), getpid(), true);
+        execute_chat_message(&ctx, &mut *self.shell, &message, None);
 
         self.last_status = exit_code;
         self.last_command_string = command;

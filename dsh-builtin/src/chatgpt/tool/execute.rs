@@ -55,9 +55,18 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
     let allowlist = load_allowed_commands(proxy.list_execute_allowlist())?;
     let program = extract_program_name(command)?;
 
-    if !allowlist.iter().any(|item| item == &program) {
+    let skills_dir = dirs::config_dir()
+        .map(|p| p.join("dsh/skills"))
+        .unwrap_or_else(|| PathBuf::from(".config/dsh/skills"));
+    let normalized_skills_dir = super::normalize_path(&skills_dir);
+    let program_path = PathBuf::from(&program);
+    let normalized_program_path = super::normalize_path(&program_path);
+
+    let is_skill_script = normalized_program_path.starts_with(&normalized_skills_dir);
+
+    if !allowlist.iter().any(|item| item == &program) && !is_skill_script {
         return Err(format!(
-            "chat: execute tool command `{}` from request `{}` is not permitted. Allowed commands: {}",
+            "chat: execute tool command `{}` from request `{}` is not permitted. Allowed commands: {} (or scripts in skills directory)",
             program,
             command.trim(),
             allowlist.join(", ")

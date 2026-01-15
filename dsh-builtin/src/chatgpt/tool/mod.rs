@@ -85,6 +85,76 @@ fn truncate_output(output: String) -> String {
     }
 }
 
+pub(crate) fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
+    let mut normalized = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::CurDir => {
+                // Skip current directory components
+            }
+            _ => {
+                normalized.push(component);
+            }
+        }
+    }
+    normalized
+}
+
+pub(crate) fn resolve_tool_path(
+    path_str: &str,
+    proxy: &mut dyn ShellProxy,
+) -> Result<std::path::PathBuf, String> {
+    use std::path::{Path, PathBuf};
+
+    // Use shellexpand to handle ~
+    let expanded = shellexpand::full(path_str)
+        .map_err(|e| format!("chat: failed to expand path `{path_str}`: {e}"))?;
+    let path = Path::new(expanded.as_ref());
+
+    let skills_dir = dirs::config_dir()
+        .map(|p| p.join("dsh/skills"))
+        .unwrap_or_else(|| PathBuf::from(".config/dsh/skills"));
+    let normalized_skills_dir = normalize_path(&skills_dir);
+
+    if path.is_absolute() {
+        let normalized_path = normalize_path(path);
+        if normalized_path.starts_with(&normalized_skills_dir) {
+            return Ok(normalized_path);
+        } else {
+            // Also check if it's within CWD (unlikely for absolute paths but possible if they refer to it)
+            let current_dir = proxy
+                .get_current_dir()
+                .map_err(|err| format!("chat: failed to get current working directory: {err}"))?;
+            let normalized_current_dir = normalize_path(&current_dir);
+            if normalized_path.starts_with(&normalized_current_dir) {
+                return Ok(normalized_path);
+            }
+            return Err(format!("chat: absolute path `{path_str}` is not allowed"));
+        }
+    }
+
+    // Relative path handling
+    let current_dir = proxy
+        .get_current_dir()
+        .map_err(|err| format!("chat: failed to get current working directory: {err}"))?;
+    let abs_path = current_dir.join(path);
+    let normalized_abs_path = normalize_path(&abs_path);
+    let normalized_current_dir = normalize_path(&current_dir);
+
+    if normalized_abs_path.starts_with(&normalized_current_dir)
+        || normalized_abs_path.starts_with(&normalized_skills_dir)
+    {
+        return Ok(normalized_abs_path);
+    }
+
+    Err(format!(
+        "chat: path `{path_str}` resolves outside allowed directories"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

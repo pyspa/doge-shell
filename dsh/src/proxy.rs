@@ -1057,6 +1057,22 @@ impl ShellProxy for Shell {
         }
     }
 
+    fn ask_ai(&mut self, messages: Vec<serde_json::Value>) -> Result<String> {
+        let ai_service = self.environment.read().ai_service.clone();
+        if let Some(service) = ai_service {
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                tokio::task::block_in_place(move || {
+                    handle.block_on(async move { service.send_request(messages, Some(0.7)).await })
+                })
+            } else {
+                let runtime = tokio::runtime::Runtime::new()?;
+                runtime.block_on(async move { service.send_request(messages, Some(0.7)).await })
+            }
+        } else {
+            Err(anyhow::anyhow!("AI service not available"))
+        }
+    }
+
     fn open_editor(&mut self, content: &str, extension: &str) -> Result<String> {
         crate::utils::editor::open_editor(content, extension)
     }

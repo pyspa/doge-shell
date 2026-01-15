@@ -216,34 +216,56 @@ async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<bool> {
     );
 
     // Attempt to get completion result
-    // First try with integrated completion engine, then fall back to legacy system
-    let completion_result = if !engine_candidates.is_empty() {
+    // First try with integrated engine
+    if !engine_candidates.is_empty() {
         // If integrated engine returned candidates, show them with skim selector
         let completion_candidates: Vec<completion::Candidate> =
             repl.integrated_completion.to_candidates(engine_candidates);
 
-        completion::select_completion_items_with_framework(
+        let res = completion::select_completion_items_with_framework(
             completion_candidates,
             completion_query,
             &prompt_text,
             &input_text,
             crate::completion::CompletionConfig::default(),
             completion_framework,
-        )
-    } else {
-        debug!("No candidates from IntegratedCompletionEngine, falling back to legacy completion");
-        // If no candidates from integrated engine, fall back to legacy completion system
-        completion::input_completion(
-            &repl.input,
-            repl,
-            completion_query,
-            &prompt_text,
-            &input_text,
-        )
-        .await
-    };
+        );
+
+        // If result is Some, update input.
+        if let Some(val) = res {
+            debug!("Completion selected: '{}'", val);
+            // For history candidates (indicated by clock emoji), replace entire input
+            let is_history_candidate = val.starts_with("🕒 ");
+            if is_history_candidate {
+                let command = val[3..].trim();
+                repl.input.reset(command.to_string());
+            } else {
+                if let Some(len) = removal_len {
+                    repl.input.backspacen(len);
+                }
+                repl.input.insert_str(val.as_str());
+            }
+        }
+
+        // If candidates existed, we consider completion handled (either UI showed or selection made).
+        // We do NOT fallback to suggestion here.
+        repl.start_completion = true;
+        return Ok(true);
+    }
+
+    // If no candidates from integrated engine, fall back to legacy completion system
+    debug!("No candidates from IntegratedCompletionEngine, falling back to legacy completion");
+    let completion_result = completion::input_completion(
+        &repl.input,
+        repl,
+        completion_query,
+        &prompt_text,
+        &input_text,
+    )
+    .await;
 
     // Process the completion result
+    let mut completion_handled = false;
     if let Some(val) = completion_result {
         debug!("Completion selected: '{}'", val);
         // For history candidates (indicated by clock emoji), replace entire input
@@ -258,13 +280,22 @@ async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<bool> {
             }
             repl.input.insert_str(val.as_str()); // Insert the completion
         }
+        completion_handled = true;
     } else {
-        debug!("No completion selected");
+        // No standard completion selected (Legacy also failed).
+
+        // Fallback: If we have an active suggestion, accept the next word of it.
+        if repl.accept_suggestion(SuggestionAcceptMode::Word) {
+            debug!("No standard completion, accepted suggestion word fallback");
+            completion_handled = true;
+        } else {
+            debug!("No completion selected and no suggestion to accept");
+        }
     }
 
     // Force a redraw after completion to update the display
     repl.start_completion = true;
-    Ok(true)
+    Ok(completion_handled)
 }
 
 async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {

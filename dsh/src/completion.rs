@@ -408,6 +408,22 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
     }
 }
 
+/// Synchronous variant of path_completion_path for explicit user actions (TAB completion).
+/// Always returns results immediately, either from cache or by scanning synchronously.
+pub fn path_completion_path_sync(path: PathBuf) -> Result<Vec<Candidate>> {
+    let path_str = path.display().to_string();
+
+    // Check cache first
+    if let Some(hit) = PATH_COMPLETION_CACHE.lookup(&path_str) {
+        return Ok(hit.candidates);
+    }
+
+    // Scan synchronously and cache
+    let candidates = scan_dir_candidates(path)?;
+    PATH_COMPLETION_CACHE.set(path_str, candidates.clone());
+    Ok(candidates)
+}
+
 pub fn is_path_cached(path: &Path) -> bool {
     let parent = match path.parent() {
         Some(p) if p.as_os_str().is_empty() => PathBuf::from("."),

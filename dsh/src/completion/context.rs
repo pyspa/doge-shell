@@ -128,12 +128,58 @@ impl<'a> ContextCorrector<'a> {
         if matches!(
             new_parsed.completion_context,
             CompletionContext::Argument { .. }
-        ) && !current_subcommands.is_empty()
-            && current_subcommands
-                .iter()
-                .any(|s| s.name.starts_with(&new_parsed.current_token))
-        {
-            new_parsed.completion_context = CompletionContext::SubCommand;
+        ) {
+            // Check for combined short options in the previous token
+            let check_index = if new_parsed.current_token.is_empty() {
+                new_parsed.raw_args.len().checked_sub(1)
+            } else {
+                new_parsed.raw_args.len().checked_sub(2)
+            };
+
+            if let Some(idx) = check_index
+                && let Some(prev_token) = new_parsed.raw_args.get(idx)
+                && prev_token.starts_with('-')
+                && !prev_token.starts_with("--")
+                && prev_token.len() > 2
+            {
+                // Collect available options for current scope
+                let mut available_options = command_completion.global_options.clone();
+                let mut curr_subs = &command_completion.subcommands;
+                for sub_name in &new_parsed.subcommand_path {
+                    if let Some(sub) = curr_subs.iter().find(|s| &s.name == sub_name) {
+                        available_options.extend(sub.options.clone());
+                        curr_subs = &sub.subcommands;
+                    } else {
+                        break;
+                    }
+                }
+
+                // Check the last character of the combined option
+                if let Some(last_char) = prev_token.chars().last() {
+                    let short_name = format!("-{}", last_char);
+                    if let Some(opt) = available_options
+                        .iter()
+                        .find(|o| o.short.as_ref() == Some(&short_name))
+                        && opt.argument.is_some()
+                    {
+                        // The last flag requires an argument, so the current token is its value
+                        new_parsed.completion_context = CompletionContext::OptionValue {
+                            option_name: short_name,
+                            value_type: None, // Will be resolved by generator
+                        };
+                        return new_parsed;
+                    }
+                }
+            }
+
+            // Subcommand fallback check (existing logic)
+            if !current_subcommands.is_empty()
+                && current_subcommands
+                    .iter()
+                    .any(|s| s.name.starts_with(&new_parsed.current_token))
+            {
+                new_parsed.completion_context = CompletionContext::SubCommand;
+            }
         }
 
         new_parsed

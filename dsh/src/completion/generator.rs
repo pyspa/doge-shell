@@ -196,7 +196,7 @@ impl<'a> CompletionGenerator<'a> {
 
         // Commands registered in database
         for command_name in self.database.get_command_names() {
-            if command_name.starts_with(current_token)
+            if fuzzy_match_score(command_name, current_token).is_some()
                 && let Some(completion) = self.database.get_command(command_name)
             {
                 candidates.push(CompletionCandidate::subcommand(
@@ -423,7 +423,7 @@ impl<'a> CompletionGenerator<'a> {
             }
             ArgumentType::Choice(choices) => Ok(choices
                 .iter()
-                .filter(|choice| choice.starts_with(&parsed.current_token))
+                .filter(|choice| fuzzy_match_score(choice, &parsed.current_token).is_some())
                 .map(|choice| CompletionCandidate::argument(choice.clone(), None))
                 .collect()),
             ArgumentType::Command => self.generate_system_command_candidates(&parsed.current_token),
@@ -477,7 +477,7 @@ impl<'a> CompletionGenerator<'a> {
                 // We want to sort them?
                 let mut local_candidates: Vec<&str> = commands
                     .iter()
-                    .filter(|cmd| cmd.starts_with(current_token))
+                    .filter(|cmd| fuzzy_match_score(cmd, current_token).is_some())
                     .map(|s| s.as_str())
                     .collect();
 
@@ -565,7 +565,7 @@ impl<'a> CompletionGenerator<'a> {
         let mut candidates = Vec::with_capacity(32);
 
         for (key, _) in std::env::vars() {
-            if key.starts_with(current_token) {
+            if fuzzy_match_score(&key, current_token).is_some() {
                 candidates.push(CompletionCandidate::argument(key, None));
             }
         }

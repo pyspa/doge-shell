@@ -121,10 +121,8 @@
         {
           "name": "file",
           "type": {
-            "type": "File",
-            "data": {
-              "extensions": null
-            }
+            "type": "Script",
+            "data": "git status --porcelain | awk '{print $2}'"
           }
         }
       ],

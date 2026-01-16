@@ -685,17 +685,27 @@ fn handle_interrupt(repl: &mut Repl<'_>) -> Result<()> {
     debug!("CTRL_C_HANDLER: Ctrl+C pressed, processing...");
     let mut renderer = TerminalRenderer::new();
 
-    if repl.ctrl_c_state.on_pressed() {
+    let should_exit = if cfg!(debug_assertions) {
+        repl.ctrl_c_state.on_pressed()
+    } else {
+        false
+    };
+
+    if should_exit {
         queue!(renderer, Print("\r\nExiting shell...\r\n")).ok();
         renderer.flush().ok();
         repl.should_exit = true;
         Ok(())
     } else {
-        queue!(
-            renderer,
-            Print("\r\n(Press Ctrl+C again within 3 seconds to exit)\r\n")
-        )
-        .ok();
+        if cfg!(debug_assertions) {
+            queue!(
+                renderer,
+                Print("\r\n(Press Ctrl+C again within 3 seconds to exit)\r\n")
+            )
+            .ok();
+        } else {
+            queue!(renderer, Print("\r\n")).ok();
+        }
         repl.print_prompt(&mut renderer);
         renderer.flush().ok();
         repl.input.clear();

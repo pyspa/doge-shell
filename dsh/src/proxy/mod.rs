@@ -107,19 +107,12 @@ impl ShellProxy for Shell {
     }
 
     fn dispatch(&mut self, ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()> {
-        match cmd {
-            "exit" => builtin::exit::execute(self, ctx, argv),
-            "history" => builtin::history::execute(self, ctx, argv),
-            "z" => builtin::z::execute(self, ctx, argv),
-            "jobs" => builtin::jobs::execute_jobs(self, ctx, argv),
-            "fg" => builtin::jobs::execute_fg(self, ctx, argv),
-            "bg" => builtin::jobs::execute_bg(self, ctx, argv),
-            "lisp" => builtin::lisp::execute_lisp(self, ctx, argv),
-            "lisp-run" => builtin::lisp::execute_lisp_run(self, ctx, argv),
-            "var" => builtin::var::execute_var(self, ctx, argv),
-            "read" => builtin::var::execute_read(self, ctx, argv),
-            "reload" => builtin::reload::execute(self, ctx, argv),
-            _ => external::execute(ctx, cmd, argv),
+        use builtin::registry::BUILTIN_REGISTRY;
+
+        if let Some(handler) = BUILTIN_REGISTRY.get(cmd) {
+            handler(self, ctx, argv)
+        } else {
+            external::execute(ctx, cmd, argv)
         }
     }
 

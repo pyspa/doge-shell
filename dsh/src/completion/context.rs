@@ -111,6 +111,18 @@ impl<'a> ContextCorrector<'a> {
             return new_parsed;
         }
 
+        // Special Case: Context is SubCommand (from parser heuristic), but the matched command
+        // has NO subcommands (e.g., `sudo`). In this case, we should treat it as Argument context.
+        if parsed.completion_context == CompletionContext::SubCommand
+            && current_subcommands.is_empty()
+        {
+            new_parsed.completion_context = CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: None,
+            };
+            return new_parsed;
+        }
+
         // 3. Fallback: consumed all subcommands successfully
         // If the context was Argument but we are actually at a point where subcommands are possible?
         if matches!(

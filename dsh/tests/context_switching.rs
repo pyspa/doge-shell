@@ -15,6 +15,7 @@ async fn test_context_switching_logic() {
             short: None,
             long: Some("--global".to_string()),
             description: None,
+            argument: None,
         }],
         subcommands: vec![SubCommand {
             name: "sub".to_string(),
@@ -23,6 +24,7 @@ async fn test_context_switching_logic() {
                 short: None,
                 long: Some("--local".to_string()),
                 description: None,
+                argument: None,
             }],
             arguments: vec![Argument {
                 name: "arg1".to_string(),

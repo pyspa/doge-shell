@@ -348,11 +348,13 @@ mod tests {
                     short: Some("-a".to_string()),
                     long: Some("--all".to_string()),
                     description: Some("Stage all modified files".to_string()),
+                    argument: None,
                 },
                 CommandOption {
                     short: Some("-m".to_string()),
                     long: Some("--message".to_string()),
                     description: Some("Commit message".to_string()),
+                    argument: None,
                 },
             ],
             arguments: vec![],
@@ -367,6 +369,7 @@ mod tests {
                 short: Some("-v".to_string()),
                 long: Some("--version".to_string()),
                 description: Some("Show version".to_string()),
+                argument: None,
             }],
             arguments: vec![],
         };

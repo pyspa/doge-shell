@@ -291,10 +291,52 @@ impl<'a> CompletionGenerator<'a> {
         let mut candidates = Vec::new();
 
         // Get actual value type
-        let actual_value_type = value_type;
+        let mut actual_value_type = value_type;
+
+        // If type is not provided by context, look it up in the database
+        if actual_value_type.is_none()
+            && let Some(command_completion) = self.database.get_command(&parsed.command)
+            && let CompletionContext::OptionValue {
+                ref option_name, ..
+            } = parsed.completion_context
+        {
+            let mut options = Vec::new();
+            options.extend(&command_completion.global_options);
+
+            // Find current subcommand to get its options
+            let mut current_subcommands = &command_completion.subcommands;
+            for subcommand_name in &parsed.subcommand_path {
+                if let Some(sc) = current_subcommands
+                    .iter()
+                    .find(|s| &s.name == subcommand_name)
+                {
+                    options.extend(&sc.options);
+                    current_subcommands = &sc.subcommands;
+                } else {
+                    break;
+                }
+            }
+
+            if let Some(opt) = options.iter().find(|o| {
+                o.short.as_ref() == Some(option_name) || o.long.as_ref() == Some(option_name)
+            }) && let Some(ref arg) = opt.argument
+            {
+                actual_value_type = arg.arg_type.as_ref();
+            }
+        }
 
         if let Some(arg_type) = actual_value_type {
             candidates.extend(self.generate_candidates_for_type(arg_type, parsed)?);
+        }
+
+        // Fallback: if we don't know the type or returned no candidates, try file completion
+        // This makes `git -C <tab>` work even if we didn't strictly define it as Directory (though we should),
+        // but more importantly avoids dead ends for generic options.
+        if candidates.is_empty() {
+            candidates.extend(
+                FileSystemGenerator::generate_file_candidates(&parsed.current_token)
+                    .map_err(GeneratorError::Other)?,
+            );
         }
 
         Ok(candidates)
@@ -826,11 +868,13 @@ mod tests {
                         short: Some("-m".to_string()),
                         long: Some("--message".to_string()),
                         description: None,
+                        argument: None,
                     },
                     CommandOption {
                         short: Some("-a".to_string()),
                         long: Some("--all".to_string()),
                         description: None,
+                        argument: None,
                     },
                 ],
                 arguments: vec![],
@@ -924,11 +968,13 @@ mod tests {
                         short: Some("-A".to_string()),
                         long: Some("--all".to_string()),
                         description: None,
+                        argument: None,
                     },
                     CommandOption {
                         short: Some("-u".to_string()),
                         long: Some("--update".to_string()),
                         description: None,
+                        argument: None,
                     },
                 ],
                 arguments: vec![],
@@ -1301,6 +1347,7 @@ mod tests {
                 short: Some("-o".to_string()),
                 long: Some("--option".to_string()),
                 description: None,
+                argument: None,
             }],
             subcommands: vec![],
             arguments: vec![],

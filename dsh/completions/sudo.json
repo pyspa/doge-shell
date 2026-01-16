@@ -1,0 +1,70 @@
+{
+  "command": "sudo",
+  "description": "Execute a command as another user",
+  "global_options": [
+    {
+      "short": "-u",
+      "long": "--user",
+      "description": "Run command (or edit file) as specified user name or ID",
+      "argument": {
+        "name": "user",
+        "description": "User name or ID",
+        "type": {
+          "type": "String"
+        }
+      }
+    },
+    {
+      "short": "-g",
+      "long": "--group",
+      "description": "Run command as the specified group name or ID",
+      "argument": {
+        "name": "group",
+        "description": "Group name or ID",
+        "type": {
+          "type": "String"
+        }
+      }
+    },
+    {
+      "short": "-i",
+      "long": "--login",
+      "description": "Run login shell as the target user; a command may also be specified"
+    },
+    {
+      "short": "-s",
+      "long": "--shell",
+      "description": "Run the shell specified by the SHELL environment variable if it is set or the shell as specified in password database"
+    },
+    {
+      "short": "-v",
+      "long": "--validate",
+      "description": "Update the user's cached credentials, authenticating the user if necessary"
+    },
+    {
+      "short": "-k",
+      "long": "--reset-timestamp",
+      "description": "Invalidate the user's cached credentials"
+    },
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Display help message and exit"
+    },
+    {
+      "short": "-V",
+      "long": "--version",
+      "description": "Display version information and exit"
+    }
+  ],
+  "subcommands": [],
+  "arguments": [
+    {
+      "name": "command",
+      "description": "Command to run",
+      "type": {
+        "type": "CommandWithArgs"
+      }
+    }
+  ]
+}

@@ -45,11 +45,13 @@ mod tests {
                             short: Some("-m".to_string()),
                             long: Some("--message".to_string()),
                             description: None,
+                            argument: None,
                         },
                         CommandOption {
                             short: Some("-a".to_string()),
                             long: Some("--all".to_string()),
                             description: None,
+                            argument: None,
                         },
                     ],
                     arguments: vec![],

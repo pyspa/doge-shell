@@ -46,6 +46,9 @@ pub struct CommandOption {
     pub long: Option<String>,
     /// Option description
     pub description: Option<String>,
+    /// Option argument definition (if any)
+    #[serde(default)]
+    pub argument: Option<Argument>,
 }
 
 /// Argument definition

@@ -12,7 +12,7 @@ use tracing::{debug, warn};
 /// Embedded completion assets using rust-embed
 /// This embeds all JSON files from the completions/ directory at compile time
 #[derive(RustEmbed)]
-#[folder = "../completions/"]
+#[folder = "completions/"]
 struct CompletionAssets;
 
 pub struct JsonCompletionLoader {
@@ -718,6 +718,7 @@ mod tests {
             short: Some("-f <FILE>".to_string()),
             long: None,
             description: None,
+            argument: None,
         };
         assert!(loader.validate_option(&option_with_short, "test").is_ok());
 
@@ -726,6 +727,7 @@ mod tests {
             short: None,
             long: Some("--type <TYPE>".to_string()),
             description: None,
+            argument: None,
         };
         assert!(loader.validate_option(&option_with_long, "test").is_ok());
 
@@ -734,6 +736,7 @@ mod tests {
             short: Some("-f <FILE>".to_string()),
             long: Some("--file <FILE>".to_string()),
             description: None,
+            argument: None,
         };
         assert!(loader.validate_option(&option_both, "test").is_ok());
 
@@ -742,6 +745,7 @@ mod tests {
             short: Some("--".to_string()), // Invalid: this is a long option prefix, not a short option
             long: None,
             description: None,
+            argument: None,
         };
         assert!(loader.validate_option(&invalid_short, "test").is_err());
 
@@ -750,6 +754,7 @@ mod tests {
             short: Some("-123".to_string()), // Should be valid now: starts with -
             long: None,
             description: None,
+            argument: None,
         };
         assert!(
             loader
@@ -762,6 +767,7 @@ mod tests {
             short: None,
             long: Some("--".to_string()), // Invalid: just -- without any content
             description: None,
+            argument: None,
         };
         assert!(loader.validate_option(&invalid_long, "test").is_err());
 
@@ -770,6 +776,7 @@ mod tests {
             short: None,
             long: Some("--123invalid".to_string()), // Should be valid now: starts with --
             description: None,
+            argument: None,
         };
         assert!(
             loader

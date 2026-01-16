@@ -181,6 +181,9 @@ pub struct Prompt {
     python_check_backoff: BackoffGate,
     go_check_backoff: BackoffGate,
 
+    // Project type detection cache (updated on chpwd only)
+    project_types: ProjectTypeCache,
+
     // Cloud Context
     k8s_context_cache: Option<String>,
     k8s_namespace_cache: Option<String>,
@@ -193,6 +196,16 @@ pub struct Prompt {
 
     // Module system
     modules: Vec<Box<dyn PromptModule>>,
+}
+
+/// Cache for project type detection to avoid repeated file existence checks
+#[derive(Debug, Default)]
+struct ProjectTypeCache {
+    has_cargo_toml: bool,
+    has_package_json: bool,
+    has_node_modules: bool,
+    has_python_project: bool,
+    has_go_mod: bool,
 }
 
 impl Prompt {
@@ -216,6 +229,9 @@ impl Prompt {
             node_check_backoff: BackoffGate::new(),
             python_check_backoff: BackoffGate::new(),
             go_check_backoff: BackoffGate::new(),
+
+            // Project type cache (will be populated in set_current)
+            project_types: ProjectTypeCache::default(),
 
             // Cloud Context
             k8s_context_cache: None,
@@ -496,7 +512,19 @@ impl Prompt {
     }
 
     pub fn set_current(&mut self, path: &Path) {
+        let dir_changed = self.current_dir != path;
         self.current_dir = path.to_path_buf();
+
+        // Update project type cache when directory changes
+        if dir_changed {
+            self.refresh_project_types();
+
+            // Clear version caches when changing directories
+            self.rust_version_cache = None;
+            self.node_version_cache = None;
+            self.python_version_cache = None;
+            self.go_version_cache = None;
+        }
 
         let mut root_changed = false;
         if let Some(git_root) = &self.current_git_root {
@@ -522,6 +550,21 @@ impl Prompt {
                 }
             }
         }
+    }
+
+    /// Refresh project type cache by checking file existence (called on chpwd only)
+    fn refresh_project_types(&mut self) {
+        self.project_types = ProjectTypeCache {
+            has_cargo_toml: self.current_dir.join("Cargo.toml").exists(),
+            has_package_json: self.current_dir.join("package.json").exists(),
+            has_node_modules: self.current_dir.join("node_modules").exists(),
+            has_python_project: self.current_dir.join("requirements.txt").exists()
+                || self.current_dir.join("pyproject.toml").exists()
+                || self.current_dir.join("Pipfile").exists()
+                || self.current_dir.join(".venv").exists()
+                || self.current_dir.join("venv").exists(),
+            has_go_mod: self.current_dir.join("go.mod").exists(),
+        };
     }
 
     pub fn update_git_root(&mut self, root: Option<PathBuf>) {
@@ -654,14 +697,13 @@ impl Prompt {
     pub fn needs_rust_check(&self) -> bool {
         self.rust_version_cache.is_none()
             && self.rust_check_backoff.should_check()
-            && self.current_dir.join("Cargo.toml").exists()
+            && self.project_types.has_cargo_toml
     }
 
     pub fn needs_node_check(&self) -> bool {
         self.node_version_cache.is_none()
             && self.node_check_backoff.should_check()
-            && (self.current_dir.join("package.json").exists()
-                || self.current_dir.join("node_modules").exists())
+            && (self.project_types.has_package_json || self.project_types.has_node_modules)
     }
 
     pub fn update_python_version(&mut self, version: Option<String>) {
@@ -677,17 +719,13 @@ impl Prompt {
     pub fn needs_python_check(&self) -> bool {
         self.python_version_cache.is_none()
             && self.python_check_backoff.should_check()
-            && (self.current_dir.join("requirements.txt").exists()
-                || self.current_dir.join("pyproject.toml").exists()
-                || self.current_dir.join("Pipfile").exists()
-                || self.current_dir.join(".venv").exists()
-                || self.current_dir.join("venv").exists())
+            && self.project_types.has_python_project
     }
 
     pub fn needs_go_check(&self) -> bool {
         self.go_version_cache.is_none()
             && self.go_check_backoff.should_check()
-            && self.current_dir.join("go.mod").exists()
+            && self.project_types.has_go_mod
     }
 
     pub fn update_k8s_info(&mut self, context: Option<String>, namespace: Option<String>) {

@@ -588,6 +588,22 @@ impl Prompt {
         }
     }
 
+    /// Synchronously refresh git status for accurate display after command execution.
+    /// This blocks but ensures the prompt shows the correct state immediately.
+    pub fn refresh_git_status_sync(&mut self) {
+        let Some(git_root) = &self.current_git_root else {
+            return;
+        };
+
+        if let Some(status) = fetch_git_status_sync(git_root) {
+            if let Some(ref mut cache) = self.git_status_cache {
+                cache.update(status, git_root.clone());
+            } else {
+                self.git_status_cache = Some(GitStatusCache::new(status, git_root.clone()));
+            }
+        }
+    }
+
     fn get_head_branch(&self) -> Option<String> {
         let git_root = self.current_git_root.as_ref()?;
         let git_dir = git_root.join(".git");
@@ -734,6 +750,26 @@ impl Prompt {
 }
 
 // Standalone functions (kept for async task compatibility)
+
+/// Synchronous git status fetch for accurate display after command execution.
+/// This blocks but ensures the prompt shows the correct state immediately.
+pub fn fetch_git_status_sync(path: &Path) -> Option<GitStatus> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .arg("--no-optional-locks")
+        .arg("status")
+        .arg("--porcelain=2")
+        .arg("--branch")
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    parse_git_status_output(&output.stdout)
+}
 
 pub async fn fetch_git_status_async(path: &Path) -> Option<GitStatus> {
     use tokio::process::Command;

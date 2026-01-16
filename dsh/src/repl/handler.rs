@@ -493,6 +493,13 @@ async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
             renderer.flush().ok();
         }
     }
+
+    // Synchronously refresh git status for accurate display after command execution
+    // This ensures the prompt always shows the correct git state immediately
+    if repl.prompt.read().has_git_root() {
+        repl.prompt.write().refresh_git_status_sync();
+    }
+
     // After command execution, show new prompt
     let mut renderer = TerminalRenderer::new();
     repl.print_prompt(&mut renderer);
@@ -538,6 +545,12 @@ async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()> {
         repl.suggestion_manager.clear();
         repl.last_duration = Some(start_time.elapsed());
     }
+
+    // Synchronously refresh git status for accurate display after command execution
+    if repl.prompt.read().has_git_root() {
+        repl.prompt.write().refresh_git_status_sync();
+    }
+
     // After command execution, show new prompt
     let mut renderer = TerminalRenderer::new();
     repl.print_prompt(&mut renderer);

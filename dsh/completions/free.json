@@ -1,0 +1,37 @@
+{
+  "command": "free",
+  "description": "Display amount of free and used memory in the system",
+  "global_options": [
+    {
+      "short": "-b",
+      "long": "--bytes",
+      "description": "Show output in bytes"
+    },
+    {
+      "short": "-k",
+      "long": "--kilo",
+      "description": "Show output in kilobytes"
+    },
+    {
+      "short": "-m",
+      "long": "--mega",
+      "description": "Show output in megabytes"
+    },
+    {
+      "short": "-g",
+      "long": "--giga",
+      "description": "Show output in gigabytes"
+    },
+    {
+      "short": "-h",
+      "long": "--human",
+      "description": "Show human-readable output"
+    },
+    {
+      "short": "-t",
+      "long": "--total",
+      "description": "Show a line with the total values"
+    }
+  ],
+  "subcommands": []
+}

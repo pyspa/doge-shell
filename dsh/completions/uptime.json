@@ -1,0 +1,17 @@
+{
+  "command": "uptime",
+  "description": "Tell how long the system has been running",
+  "global_options": [
+    {
+      "short": "-p",
+      "long": "--pretty",
+      "description": "Show uptime in pretty format"
+    },
+    {
+      "short": "-s",
+      "long": "--since",
+      "description": "System up since"
+    }
+  ],
+  "subcommands": []
+}

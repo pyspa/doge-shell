@@ -1,0 +1,27 @@
+{
+  "command": "genfstab",
+  "description": "Generate a fstab file",
+  "global_options": [
+    {
+      "short": "-L",
+      "long": "--label",
+      "description": "Use filesystem labels for identifying devices"
+    },
+    {
+      "short": "-U",
+      "long": "--uuid",
+      "description": "Use UUIDs for identifying devices (default)"
+    },
+    {
+      "short": "-P",
+      "long": "--pseudo",
+      "description": "Include pseudo-filesystems (proc, sys, etc.)"
+    },
+    {
+        "short": "-t",
+        "long": "--filesystems",
+        "description": "Specify a comma-separated list of filesystem types to include"
+    }
+  ],
+  "subcommands": []
+}

@@ -1,0 +1,43 @@
+{
+  "command": "history",
+  "description": "Display or manipulate the history list",
+  "subcommands": [],
+  "global_options": [
+    {
+      "long": "--help",
+      "description": "Display help for this builtin"
+    },
+    {
+      "short": "-c",
+      "description": "Clear the history list by deleting all of the entries"
+    },
+    {
+      "short": "-d",
+      "description": "Delete the history entry at position OFFSET"
+    },
+    {
+      "short": "-a",
+      "description": "Append the new history lines to the history file"
+    },
+    {
+      "short": "-n",
+      "description": "Read the history lines not already read from the history file"
+    },
+    {
+      "short": "-r",
+      "description": "Read the contents of the history file and use them as the current history"
+    },
+    {
+      "short": "-w",
+      "description": "Write the current history to the history file, overwriting the history file's contents"
+    },
+    {
+      "short": "-p",
+      "description": "Perform history substitution on the following ARGS and display the result on the standard output"
+    },
+    {
+      "short": "-s",
+      "description": "Store the ARGS in the history list as a single entry"
+    }
+  ]
+}

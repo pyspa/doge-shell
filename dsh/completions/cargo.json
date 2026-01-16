@@ -1,0 +1,293 @@
+{
+  "command": "cargo",
+  "description": "Rust package manager",
+  "global_options": [
+    {
+      "long": "--version",
+      "short": "-V",
+      "description": "Print version info and exit"
+    },
+    {
+      "long": "--help",
+      "short": "-h",
+      "description": "Print help information"
+    },
+    {
+      "long": "--verbose",
+      "short": "-v",
+      "description": "Use verbose output"
+    },
+    {
+      "long": "--quiet",
+      "short": "-q",
+      "description": "No output printed to stdout"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "build",
+      "description": "Compile the current package",
+      "options": [
+        {
+          "long": "--release",
+          "description": "Build artifacts in release mode, with optimizations"
+        },
+        {
+          "long": "--target",
+          "description": "Build for the target triple"
+        },
+        {
+          "long": "--features",
+          "description": "Space or comma separated list of features to activate"
+        },
+        {
+          "long": "--package",
+          "short": "-p",
+          "description": "Package to build",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
+          }
+        },
+        {
+          "long": "--workspace",
+          "description": "Build all packages in the workspace"
+        },
+        {
+          "long": "--all-targets",
+          "description": "Build all targets"
+        },
+        {
+          "long": "--jobs",
+          "short": "-j",
+          "description": "Number of parallel jobs, defaults to # of CPUs"
+        },
+        {
+          "long": "--target-dir",
+          "description": "Directory for all generated artifacts"
+        }
+      ],
+      "arguments": [],
+      "subcommands": []
+    },
+    {
+      "name": "run",
+      "description": "Run a binary or example of the local package",
+      "options": [
+        {
+          "long": "--release",
+          "description": "Build artifacts in release mode, with optimizations"
+        },
+        {
+          "long": "--bin",
+          "description": "Name of the bin target to run",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(t['name']) for p in json.load(sys.stdin)['packages'] for t in p['targets'] if 'bin' in t['kind']]\""
+          }
+        },
+        {
+          "long": "--example",
+          "description": "Name of the example target to run",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(t['name']) for p in json.load(sys.stdin)['packages'] for t in p['targets'] if 'example' in t['kind']]\""
+          }
+        },
+        {
+          "long": "--package",
+          "short": "-p",
+          "description": "Package to run",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
+          }
+        },
+        {
+          "long": "--jobs",
+          "short": "-j",
+          "description": "Number of parallel jobs, defaults to # of CPUs"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "args",
+          "description": "Arguments to pass to the program"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "test",
+      "description": "Run the tests",
+      "options": [
+        {
+          "long": "--release",
+          "description": "Build artifacts in release mode, with optimizations"
+        },
+        {
+          "long": "--lib",
+          "description": "Test only this package's library unit tests"
+        },
+        {
+          "long": "--doc",
+          "description": "Test only this library's documentation"
+        },
+        {
+          "long": "--package",
+          "short": "-p",
+          "description": "Package to test",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
+          }
+        },
+        {
+          "long": "--workspace",
+          "description": "Test all packages in the workspace"
+        },
+        {
+          "long": "--all-targets",
+          "description": "Test all targets"
+        },
+        {
+          "long": "--jobs",
+          "short": "-j",
+          "description": "Number of parallel jobs, defaults to # of CPUs"
+        },
+        {
+          "long": "--nocapture",
+          "description": "Show output from tests"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "testname",
+          "description": "Test name filter"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "new",
+      "description": "Create a new cargo package",
+      "options": [
+        {
+          "long": "--bin",
+          "description": "Use a binary (application) template"
+        },
+        {
+          "long": "--lib",
+          "description": "Use a library template"
+        },
+        {
+          "long": "--name",
+          "description": "Set the resulting package name"
+        },
+        {
+          "long": "--vcs",
+          "description": "Initialize a new repository for the given version control system (git, hg, pijul, or fossil) or do not initialize any version control at all (none)"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "path",
+          "description": "Directory path for the new package"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "add",
+      "description": "Add dependencies to a Cargo.toml manifest file",
+      "options": [
+        {
+          "long": "--dev",
+          "description": "Add as development dependency"
+        },
+        {
+          "long": "--build",
+          "description": "Add as build dependency"
+        },
+        {
+          "long": "--features",
+          "description": "Space or comma separated list of features to activate"
+        },
+        {
+          "long": "--path",
+          "description": "Filesystem path to local crate to add"
+        },
+        {
+          "long": "--git",
+          "description": "Git URL to add the specified crate from"
+        },
+        {
+          "long": "--branch",
+          "description": "Branch to use when adding from git"
+        },
+        {
+          "long": "--tag",
+          "description": "Tag to use when adding from git"
+        },
+        {
+          "long": "--rev",
+          "description": "Specific commit to use when adding from git"
+        },
+        {
+          "long": "--optional",
+          "description": "Add as an optional dependency"
+        },
+        {
+          "long": "--no-default-features",
+          "description": "Disable the default features of the dependency"
+        },
+        {
+          "long": "--rename",
+          "description": "Rename the dependency"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "crate",
+          "description": "Crate name to add"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "install",
+      "description": "Install a Rust binary",
+      "options": [
+        {
+          "long": "--git",
+          "description": "Git URL to install the specified crate from"
+        },
+        {
+          "long": "--path",
+          "description": "Filesystem path to local crate to install"
+        },
+        {
+          "long": "--force",
+          "short": "-f",
+          "description": "Force overwriting existing crates or binaries"
+        },
+        {
+          "long": "--list",
+          "description": "List all installed packages and their versions"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "crate",
+          "description": "Crate name to install"
+        }
+      ],
+      "subcommands": []
+    }
+  ]
+}

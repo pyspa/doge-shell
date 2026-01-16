@@ -1,0 +1,184 @@
+{
+  "command": "makepkg",
+  "description": "Create compatible packages for use with pacman.",
+  "global_options": [],
+  "subcommands": [],
+  "options": [
+    {
+      "long": "--ignorearch",
+      "short": "-A",
+      "description": "Ignore incomplete arch in PKGBUILD"
+    },
+    {
+      "long": "--clean",
+      "short": "-c",
+      "description": "Clean up work files after build"
+    },
+    {
+      "long": "--cleanbuild",
+      "short": "-C",
+      "description": "Remove $srcdir/ directory before building the package"
+    },
+    {
+      "long": "--nodeps",
+      "short": "-d",
+      "description": "Skip all dependency checks"
+    },
+    {
+      "long": "--dir",
+      "short": "-D",
+      "description": "Change to directory <dir> before processing PKGBUILD"
+    },
+    {
+      "long": "--noextract",
+      "short": "-e",
+      "description": "Do not extract source files (use $srcdir/ directory)"
+    },
+    {
+      "long": "--force",
+      "short": "-f",
+      "description": "Overwrite existing package"
+    },
+    {
+      "long": "--geninteg",
+      "short": "-g",
+      "description": "Generate integrity checks for source files"
+    },
+    {
+      "long": "--help",
+      "short": "-h",
+      "description": "Show this help message"
+    },
+    {
+      "long": "--install",
+      "short": "-i",
+      "description": "Install package after successful build"
+    },
+    {
+      "long": "--log",
+      "short": "-L",
+      "description": "Log the package build process"
+    },
+    {
+      "long": "--nocolor",
+      "short": "-m",
+      "description": "Do not use color in output messages"
+    },
+    {
+      "long": "--nobuild",
+      "short": "-o",
+      "description": "Download and extract files only"
+    },
+    {
+      "long": "--rmdeps",
+      "short": "-r",
+      "description": "Remove installed dependencies after a successful build"
+    },
+    {
+      "long": "--repackage",
+      "short": "-R",
+      "description": "Repackage contents of the package without rebuilding"
+    },
+    {
+      "long": "--syncdeps",
+      "short": "-s",
+      "description": "Install missing dependencies with pacman"
+    },
+    {
+      "long": "--source",
+      "short": "-S",
+      "description": "Generate a source-only tarball that does not contain the sources"
+    },
+    {
+      "long": "--version",
+      "short": "-V",
+      "description": "Show version information and exit"
+    },
+    {
+      "long": "--allsource",
+      "description": "Generate a source-only tarball that does include the sources"
+    },
+    {
+      "long": "--check",
+      "description": "Run the check() function in the PKGBUILD"
+    },
+    {
+      "long": "--config",
+      "description": "Use an alternate configuration file (default: '/etc/makepkg.conf')"
+    },
+    {
+      "long": "--holdver",
+      "description": "Do not update VCS sources"
+    },
+    {
+      "long": "--key",
+      "description": "Use a specified key to sign the package instead of the default"
+    },
+    {
+      "long": "--noarchive",
+      "description": "Do not create the package archive"
+    },
+    {
+      "long": "--nocheck",
+      "description": "Do not run the check() function in the PKGBUILD"
+    },
+    {
+      "long": "--noprepare",
+      "description": "Do not run the prepare() function in the PKGBUILD"
+    },
+    {
+      "long": "--nosign",
+      "description": "Do not create a signature for the package"
+    },
+    {
+      "long": "--packagelist",
+      "description": "List the file paths of packages that will be generated"
+    },
+    {
+      "long": "--printsrcinfo",
+      "description": "Generate and output the SRCINFO and exit"
+    },
+    {
+      "long": "--sign",
+      "description": "Sign the built package with gpg"
+    },
+    {
+      "long": "--skipchecksums",
+      "description": "Do not verify checksums of source files"
+    },
+    {
+      "long": "--skipinteg",
+      "description": "Do not perform any integrity checks on source files"
+    },
+    {
+      "long": "--skippgpcheck",
+      "description": "Do not verify PGP signatures of source files"
+    },
+    {
+      "long": "--verifysource",
+      "description": "Download source files (if needed) and perform integrity checks"
+    },
+    {
+      "long": "--asdeps",
+      "description": "Install packages as dependencies"
+    },
+    {
+      "long": "--needed",
+      "description": "Do not reinstall targets that are up to date"
+    },
+    {
+      "long": "--noconfirm",
+      "description": "Do not ask for confirmation when resolving dependencies"
+    },
+    {
+      "long": "--noprogressbar",
+      "description": "Do not display a progress bar when downloading files"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "buildscript",
+      "description": "Build script to use (default: 'PKGBUILD')"
+    }
+  ]
+}

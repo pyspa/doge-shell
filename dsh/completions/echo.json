@@ -1,0 +1,27 @@
+{
+  "command": "echo",
+  "description": "Display a line of text",
+  "global_options": [
+    {
+      "short": "-n",
+      "description": "Do not output the trailing newline"
+    },
+    {
+      "short": "-e",
+      "description": "Enable interpretation of backslash escapes"
+    },
+    {
+      "short": "-E",
+      "description": "Disable interpretation of backslash escapes (default)"
+    },
+    {
+      "long": "--help",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": []
+}

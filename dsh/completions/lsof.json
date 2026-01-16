@@ -1,0 +1,104 @@
+{
+  "command": "lsof",
+  "description": "List open files",
+  "global_options": [
+    {
+      "long": "--help",
+      "short": "-h",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "short": "-v",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": [],
+  "options": [
+    {
+      "long": "-i",
+      "short": "-i",
+      "description": "Select IPv4 and IPv6 files"
+    },
+    {
+      "long": "-i4",
+      "description": "Select IPv4 files"
+    },
+    {
+      "long": "-i6",
+      "description": "Select IPv6 files"
+    },
+    {
+      "long": "-p",
+      "short": "-p",
+      "description": "Select files with listed PIDs"
+    },
+    {
+      "long": "-u",
+      "short": "-u",
+      "description": "Select files for listed users"
+    },
+    {
+      "long": "-c",
+      "short": "-c",
+      "description": "Select files with command name"
+    },
+    {
+      "long": "-d",
+      "short": "-d",
+      "description": "Select files with descriptor numbers"
+    },
+    {
+      "long": "-a",
+      "short": "-a",
+      "description": "AND selections"
+    },
+    {
+      "long": "-o",
+      "description": "Do not list file offset"
+    },
+    {
+      "long": "-n",
+      "short": "-n",
+      "description": "No host name translation"
+    },
+    {
+      "long": "-l",
+      "description": "Inhibit conversion of user IDs to login names"
+    },
+    {
+      "long": "+D",
+      "description": "Search for all open instances of directory D and the files and directories it contains at its top level"
+    },
+    {
+      "long": "-N",
+      "description": "Select NFS files"
+    },
+    {
+      "long": "-P",
+      "description": "Inhibit conversion of port numbers to port names for network files"
+    },
+    {
+      "long": "-r",
+      "description": "Repeat listing every t seconds"
+    },
+    {
+      "long": "-t",
+      "description": "Produce terse output with process identifiers only"
+    },
+    {
+      "long": "-U",
+      "description": "Select UNIX domain socket files"
+    },
+    {
+      "long": "+c",
+      "description": "Set command width to W"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "selection",
+      "description": "Process, file, or user selection criteria"
+    }
+  ]
+}

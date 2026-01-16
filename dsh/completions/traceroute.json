@@ -1,0 +1,85 @@
+{
+  "command": "traceroute",
+  "description": "Print the route packets trace to network host",
+  "options": [
+    {
+      "long": "--help",
+      "description": "Read this help and exit"
+    },
+    {
+      "long": "--version",
+      "short": "-V",
+      "description": "Output version information and exit"
+    },
+    {
+      "short": "-4",
+      "long": "--ipv4",
+      "description": "Use IPv4"
+    },
+    {
+      "short": "-6",
+      "long": "--ipv6",
+      "description": "Use IPv6"
+    },
+    {
+      "short": "-I",
+      "long": "--icmp",
+      "description": "Use ICMP ECHO for probes"
+    },
+    {
+      "short": "-T",
+      "long": "--tcp",
+      "description": "Use TCP SYN for probes"
+    },
+    {
+      "short": "-d",
+      "long": "--debug",
+      "description": "Enable socket level debugging"
+    },
+    {
+      "short": "-F",
+      "long": "--dont-fragment",
+      "description": "Do not fragment packets"
+    },
+    {
+      "short": "-f",
+      "long": "--first",
+      "description": "Start from the first_ttl hop (instead from 1)"
+    },
+    {
+      "short": "-g",
+      "long": "--gateway",
+      "description": "Route packets through the specified gateway"
+    },
+    {
+      "short": "-i",
+      "long": "--interface",
+      "description": "Specify a network interface to operate with"
+    },
+    {
+      "short": "-m",
+      "long": "--max-hops",
+      "description": "Set the max number of hops (max TTL to be reached)"
+    },
+    {
+      "short": "-n",
+      "description": "Do not resolve IP addresses to their domain names"
+    },
+    {
+      "short": "-p",
+      "long": "--port",
+      "description": "Set the destination port to use"
+    },
+    {
+      "short": "-w",
+      "long": "--wait",
+      "description": "Set the number of seconds to wait for a response"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "host",
+      "description": "The host to trace the route to"
+    }
+  ]
+}

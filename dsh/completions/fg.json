@@ -1,0 +1,6 @@
+{
+  "command": "fg",
+  "description": "Bring jobs to foreground",
+  "global_options": [],
+  "subcommands": []
+}

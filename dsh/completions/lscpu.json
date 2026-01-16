@@ -1,0 +1,61 @@
+{
+  "command": "lscpu",
+  "description": "Display CPU architecture information",
+  "global_options": [
+    {
+      "short": "-a",
+      "long": "--all",
+      "description": "Include online and offline CPUs"
+    },
+    {
+      "short": "-b",
+      "long": "--online",
+      "description": "Show only online CPUs"
+    },
+    {
+      "short": "-c",
+      "long": "--offline",
+      "description": "Show only offline CPUs"
+    },
+    {
+      "short": "-e",
+      "long": "--extended",
+      "description": "Extended readable format"
+    },
+    {
+      "short": "-p",
+      "long": "--parse",
+      "description": "Parsable format"
+    },
+    {
+      "short": "-x",
+      "long": "--hex",
+      "description": "Hexadecimal masks"
+    },
+    {
+      "short": "-y",
+      "long": "--physical",
+      "description": "Physical IDs instead of logical"
+    },
+    {
+      "short": "-J",
+      "long": "--json",
+      "description": "JSON output"
+    },
+    {
+      "short": "-B",
+      "long": "--bytes",
+      "description": "Print sizes in bytes"
+    },
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show help"
+    },
+    {
+      "short": "-V",
+      "long": "--version",
+      "description": "Show version"
+    }
+  ]
+}

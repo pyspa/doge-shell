@@ -1,0 +1,44 @@
+{
+  "command": "stat",
+  "description": "Display file or file system status",
+  "options": [
+    {
+      "short": "-L",
+      "long": "--dereference",
+      "description": "Follow links"
+    },
+    {
+      "short": "-f",
+      "long": "--file-system",
+      "description": "Display file system status instead of file status"
+    },
+    {
+      "short": "-c",
+      "long": "--format",
+      "description": "Use the specified FORMAT instead of the default"
+    },
+    {
+      "long": "--printf",
+      "description": "Like --format, but interpret backslash escapes"
+    },
+    {
+      "short": "-t",
+      "long": "--terse",
+      "description": "Print the information in terse form"
+    },
+    {
+      "long": "--help",
+      "description": "Display this help and exit"
+    },
+    {
+      "long": "--version",
+      "description": "Output version information and exit"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "file",
+      "description": "File(s) to stat"
+    }
+  ]
+}

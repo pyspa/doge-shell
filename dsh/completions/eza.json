@@ -1,0 +1,112 @@
+{
+  "command": "eza",
+  "description": "A modern replacement for ls",
+  "global_options": [
+    {
+      "short": "-l",
+      "long": "--long",
+      "description": "Long format"
+    },
+    {
+      "short": "-a",
+      "long": "--all",
+      "description": "Show hidden files"
+    },
+    {
+      "short": "-h",
+      "long": "--header",
+      "description": "Add column headers"
+    },
+    {
+      "short": "-g",
+      "long": "--group",
+      "description": "Show group owner"
+    },
+    {
+      "short": "-i",
+      "long": "--inode",
+      "description": "Show inode"
+    },
+    {
+      "short": "-b",
+      "long": "--binary",
+      "description": "Binary file sizes"
+    },
+    {
+      "short": "-B",
+      "long": "--bytes",
+      "description": "Show bytes"
+    },
+    {
+      "short": "-G",
+      "long": "--git",
+      "description": "Show git status"
+    },
+    {
+      "long": "--git-ignore",
+      "description": "Ignore files in .gitignore"
+    },
+    {
+      "short": "-T",
+      "long": "--tree",
+      "description": "Tree view"
+    },
+    {
+      "short": "-L",
+      "long": "--level",
+      "description": "Tree level limit"
+    },
+    {
+      "short": "-d",
+      "long": "--list-dirs",
+      "description": "List directories only"
+    },
+    {
+      "short": "-D",
+      "long": "--only-dirs",
+      "description": "Show only directories"
+    },
+    {
+      "short": "-f",
+      "long": "--only-files",
+      "description": "Show only files"
+    },
+    {
+      "short": "-r",
+      "long": "--reverse",
+      "description": "Reverse sort"
+    },
+    {
+      "short": "-s",
+      "long": "--sort",
+      "description": "Sort field (name, size, date, type, ext)"
+    },
+    {
+      "long": "--icons",
+      "description": "Show icons"
+    },
+    {
+      "long": "--color",
+      "description": "Color mode (auto, always, never)"
+    },
+    {
+      "short": "-1",
+      "long": "--oneline",
+      "description": "One entry per line"
+    },
+    {
+      "short": "-R",
+      "long": "--recurse",
+      "description": "Recurse into directories"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "path",
+      "description": "Path to list",
+      "type": {
+        "type": "Directory"
+      }
+    }
+  ]
+}

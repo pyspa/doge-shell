@@ -1,0 +1,112 @@
+{
+  "command": "find",
+  "description": "Search for files in a directory hierarchy",
+  "global_options": [
+    {
+      "short": "-name",
+      "description": "Base of file name matches shell pattern",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-iname",
+      "description": "Like -name, but the match is case insensitive",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-type",
+      "description": "File is of type",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "f",
+          "d",
+          "l",
+          "b",
+          "c",
+          "p",
+          "s"
+        ]
+      }
+    },
+    {
+      "short": "-exec",
+      "description": "Execute command",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-maxdepth",
+      "description": "Descend at most levels",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-mindepth",
+      "description": "Do not apply any tests or actions at levels less than levels",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-mtime",
+      "description": "File's data was last modified n*24 hours ago",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-delete",
+      "description": "Delete files"
+    },
+    {
+      "short": "-print",
+      "description": "Print the full file name"
+    },
+    {
+      "short": "-size",
+      "description": "File uses n units of space",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-perm",
+      "description": "File's permission bits are exactly mode",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-user",
+      "description": "File is owned by user",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-group",
+      "description": "File is owned by group",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    }
+  ],
+  "subcommands": []
+}

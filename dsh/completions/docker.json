@@ -1,0 +1,783 @@
+{
+  "command": "docker",
+  "description": "Container management platform",
+  "global_options": [
+    {
+      "long": "--version",
+      "short": "-v",
+      "description": "Print version information"
+    },
+    {
+      "long": "--help",
+      "short": "-h",
+      "description": "Print usage"
+    },
+    {
+      "long": "--debug",
+      "description": "Enable debug mode"
+    },
+    {
+      "long": "--config",
+      "short": "-c",
+      "description": "Location of client config files"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "build",
+      "description": "Build an image from a Dockerfile",
+      "options": [
+        {
+          "long": "--tag",
+          "short": "-t",
+          "description": "Name and tag for the image"
+        },
+        {
+          "long": "--file",
+          "short": "-f",
+          "description": "Name of the Dockerfile"
+        },
+        {
+          "long": "--no-cache",
+          "description": "Do not use cache when building"
+        },
+        {
+          "long": "--pull",
+          "description": "Always attempt to pull base image"
+        },
+        {
+          "long": "--quiet",
+          "short": "-q",
+          "description": "Suppress output"
+        },
+        {
+          "long": "--build-arg",
+          "description": "Set build-time variables"
+        },
+        {
+          "long": "--cache-from",
+          "description": "Images to consider as cache sources"
+        },
+        {
+          "long": "--progress",
+          "description": "Set type of progress output (auto, plain, tty)"
+        },
+        {
+          "long": "--secret",
+          "description": "Secret file to expose to the build (only if BuildKit enabled)"
+        },
+        {
+          "long": "--ssh",
+          "description": "SSH agent socket or keys to expose to the build (only if BuildKit enabled)"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "context",
+          "description": "Build context path (default: current directory)"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "run",
+      "description": "Run a command in a new container",
+      "options": [
+        {
+          "long": "--name",
+          "description": "Assign a name to the container"
+        },
+        {
+          "long": "--detach",
+          "short": "-d",
+          "description": "Run in detached mode"
+        },
+        {
+          "long": "--publish",
+          "short": "-p",
+          "description": "Publish container ports to host"
+        },
+        {
+          "long": "--rm",
+          "description": "Automatically remove container when it exits"
+        },
+        {
+          "long": "--interactive",
+          "short": "-i",
+          "description": "Keep STDIN open"
+        },
+        {
+          "long": "--tty",
+          "short": "-t",
+          "description": "Allocate a pseudo-TTY"
+        },
+        {
+          "long": "--env",
+          "short": "-e",
+          "description": "Set environment variables"
+        },
+        {
+          "long": "--volume",
+          "short": "-v",
+          "description": "Bind mount a volume"
+        },
+        {
+          "long": "--add-host",
+          "description": "Add a custom host-to-IP mapping (host:ip)"
+        },
+        {
+          "long": "--device",
+          "description": "Add a host device to the container"
+        },
+        {
+          "long": "--dns",
+          "description": "Set custom DNS servers"
+        },
+        {
+          "long": "--entrypoint",
+          "description": "Overwrite the default ENTRYPOINT of the image"
+        },
+        {
+          "long": "--expose",
+          "description": "Expose a port or a range of ports"
+        },
+        {
+          "long": "--gpus",
+          "description": "GPU devices to add to the container ('all' to pass all GPUs)"
+        },
+        {
+          "long": "--hostname",
+          "short": "-h",
+          "description": "Container host name"
+        },
+        {
+          "long": "--mac-address",
+          "description": "Container MAC address (e.g., 92:d0:c6:0a:29:33)"
+        },
+        {
+          "long": "--network",
+          "description": "Connect a container to a network"
+        },
+        {
+          "long": "--platform",
+          "description": "Set platform if server is multi-platform capable"
+        },
+        {
+          "long": "--pull",
+          "description": "Pull image before running ('always', 'missing', 'never')"
+        },
+        {
+          "long": "--user",
+          "short": "-u",
+          "description": "Username or UID (format: <name|uid>[:<group|gid>])"
+        },
+        {
+          "long": "--workdir",
+          "short": "-w",
+          "description": "Working directory inside the container"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "image",
+          "description": "Image name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker images --format '{{.Repository}}:{{.Tag}}' | grep -v '<none>'"
+          }
+        },
+        {
+          "name": "command",
+          "description": "Command to run (optional)"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "ps",
+      "description": "List running containers",
+      "options": [
+        {
+          "long": "--all",
+          "short": "-a",
+          "description": "Show all containers"
+        },
+        {
+          "long": "--format",
+          "description": "Format output using Go template"
+        },
+        {
+          "long": "--latest",
+          "short": "-l",
+          "description": "Show only the latest container"
+        },
+        {
+          "long": "--no-trunc",
+          "description": "Do not truncate output"
+        },
+        {
+          "long": "--quiet",
+          "short": "-q",
+          "description": "Only display container IDs"
+        },
+        {
+          "long": "--size",
+          "short": "-s",
+          "description": "Display sizes"
+        },
+        {
+          "long": "--filter",
+          "short": "-f",
+          "description": "Filter output based on conditions"
+        }
+      ],
+      "arguments": [],
+      "subcommands": []
+    },
+    {
+      "name": "images",
+      "description": "List images",
+      "options": [
+        {
+          "long": "--all",
+          "short": "-a",
+          "description": "Show all images"
+        },
+        {
+          "long": "--digests",
+          "description": "Show digests"
+        },
+        {
+          "long": "--format",
+          "description": "Format output using Go template"
+        },
+        {
+          "long": "--no-trunc",
+          "description": "Do not truncate output"
+        },
+        {
+          "long": "--quiet",
+          "short": "-q",
+          "description": "Only display IDs"
+        },
+        {
+          "long": "--filter",
+          "short": "-f",
+          "description": "Filter output based on conditions"
+        }
+      ],
+      "arguments": [],
+      "subcommands": []
+    },
+    {
+      "name": "pull",
+      "description": "Pull an image from a registry",
+      "options": [
+        {
+          "long": "--all-tags",
+          "short": "-a",
+          "description": "Download all tagged images"
+        },
+        {
+          "long": "--disable-content-trust",
+          "description": "Skip image verification"
+        },
+        {
+          "long": "--platform",
+          "description": "Set platform for image"
+        },
+        {
+          "long": "--quiet",
+          "short": "-q",
+          "description": "Suppress progress output"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "image",
+          "description": "Image name or ID"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "stop",
+      "description": "Stop one or more running containers",
+      "options": [
+        {
+          "long": "--time",
+          "short": "-t",
+          "description": "Seconds to wait for stop before killing"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker ps --format '{{.Names}}'"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "rm",
+      "description": "Remove one or more containers",
+      "options": [
+        {
+          "long": "--force",
+          "short": "-f",
+          "description": "Force removal of running container"
+        },
+        {
+          "long": "--volumes",
+          "short": "-v",
+          "description": "Remove the volumes associated with the container"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker ps --format '{{.Names}}'"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "exec",
+      "description": "Run a command in a running container",
+      "options": [
+        {
+          "long": "--detach",
+          "short": "-d",
+          "description": "Run in detached mode"
+        },
+        {
+          "long": "--interactive",
+          "short": "-i",
+          "description": "Keep STDIN open"
+        },
+        {
+          "long": "--tty",
+          "short": "-t",
+          "description": "Allocate a pseudo-TTY"
+        },
+        {
+          "long": "--user",
+          "short": "-u",
+          "description": "Username or UID"
+        },
+        {
+          "long": "--privileged",
+          "description": "Give extended privileges to the command"
+        },
+        {
+          "long": "--workdir",
+          "short": "-w",
+          "description": "Working directory inside the container"
+        },
+        {
+          "long": "--env",
+          "short": "-e",
+          "description": "Set environment variables"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker ps --format '{{.Names}}'"
+          }
+        },
+        {
+          "name": "command",
+          "description": "Command to execute"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "start",
+      "description": "Start one or more stopped containers",
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker ps -a --format '{{.Names}}'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "restart",
+      "description": "Restart one or more containers",
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker ps -a --format '{{.Names}}'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "kill",
+      "description": "Kill one or more running containers",
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker ps --format '{{.Names}}'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "logs",
+      "description": "Fetch the logs of a container",
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker ps -a --format '{{.Names}}'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "rmi",
+      "description": "Remove one or more images",
+      "arguments": [
+        {
+          "name": "image",
+          "description": "Image name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker images --format '{{.Repository}}:{{.Tag}}' | grep -v '<none>'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "compose",
+      "description": "Docker Compose",
+      "subcommands": [
+        {
+          "name": "up",
+          "description": "Create and start containers",
+          "options": [
+            {
+              "long": "--detach",
+              "short": "-d",
+              "description": "Detached mode: Run containers in the background"
+            }
+          ],
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "type": {
+                "type": "Script",
+                "data": "docker compose config --services 2>/dev/null"
+              }
+            }
+          ]
+        },
+        {
+          "name": "down",
+          "description": "Stop and remove containers, networks",
+          "options": []
+        },
+        {
+          "name": "ps",
+          "description": "List containers",
+          "options": []
+        },
+        {
+          "name": "logs",
+          "description": "View output from containers",
+          "options": [
+            {
+              "long": "--follow",
+              "short": "-f",
+              "description": "Follow log output"
+            }
+          ],
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "type": {
+                "type": "Script",
+                "data": "docker compose config --services 2>/dev/null"
+              }
+            }
+          ]
+        },
+        {
+          "name": "build",
+          "description": "Build or rebuild services",
+          "options": [],
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "type": {
+                "type": "Script",
+                "data": "docker compose config --services 2>/dev/null"
+              }
+            }
+          ]
+        },
+        {
+          "name": "exec",
+          "description": "Execute a command in a running container",
+          "options": [],
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "type": {
+                "type": "Script",
+                "data": "docker compose config --services 2>/dev/null"
+              }
+            }
+          ]
+        },
+        {
+          "name": "restart",
+          "description": "Restart containers",
+          "options": [],
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "type": {
+                "type": "Script",
+                "data": "docker compose config --services 2>/dev/null"
+              }
+            }
+          ]
+        },
+        {
+          "name": "start",
+          "description": "Start services",
+          "options": [],
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "type": {
+                "type": "Script",
+                "data": "docker compose config --services 2>/dev/null"
+              }
+            }
+          ]
+        },
+        {
+          "name": "stop",
+          "description": "Stop services",
+          "options": [],
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "type": {
+                "type": "Script",
+                "data": "docker compose config --services 2>/dev/null"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "network",
+      "description": "Manage networks",
+      "subcommands": [
+        {
+          "name": "ls",
+          "description": "List networks",
+          "options": []
+        },
+        {
+          "name": "create",
+          "description": "Create a network",
+          "options": []
+        },
+        {
+          "name": "rm",
+          "description": "Remove one or more networks",
+          "options": []
+        },
+        {
+          "name": "inspect",
+          "description": "Display detailed information on one or more networks",
+          "options": []
+        },
+        {
+          "name": "connect",
+          "description": "Connect a container to a network",
+          "options": []
+        },
+        {
+          "name": "disconnect",
+          "description": "Disconnect a container from a network",
+          "options": []
+        }
+      ]
+    },
+    {
+      "name": "volume",
+      "description": "Manage volumes",
+      "subcommands": [
+        {
+          "name": "ls",
+          "description": "List volumes",
+          "options": []
+        },
+        {
+          "name": "create",
+          "description": "Create a volume",
+          "options": []
+        },
+        {
+          "name": "rm",
+          "description": "Remove one or more volumes",
+          "options": []
+        },
+        {
+          "name": "inspect",
+          "description": "Display detailed information on one or more volumes",
+          "options": []
+        },
+        {
+          "name": "prune",
+          "description": "Remove all unused local volumes",
+          "options": []
+        }
+      ]
+    },
+    {
+      "name": "system",
+      "description": "Manage Docker",
+      "subcommands": [
+        {
+          "name": "df",
+          "description": "Show docker disk usage",
+          "options": []
+        },
+        {
+          "name": "prune",
+          "description": "Remove unused data",
+          "options": []
+        },
+        {
+          "name": "info",
+          "description": "Display system-wide information",
+          "options": []
+        }
+      ]
+    },
+    {
+      "name": "inspect",
+      "description": "Return low-level information on Docker objects",
+      "arguments": [
+        {
+          "name": "object",
+          "description": "Name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker ps -a --format '{{.Names}}' && docker images --format '{{.Repository}}:{{.Tag}}'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "push",
+      "description": "Push an image or a repository to a registry",
+      "arguments": [
+        {
+          "name": "image",
+          "description": "Image name",
+          "type": {
+            "type": "Script",
+            "data": "docker images --format '{{.Repository}}:{{.Tag}}'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "tag",
+      "description": "Create a tag TARGET_IMAGE that refers to SOURCE_IMAGE",
+      "arguments": [
+        {
+          "name": "source",
+          "description": "Source image",
+          "type": {
+            "type": "Script",
+            "data": "docker images --format '{{.Repository}}:{{.Tag}}'"
+          }
+        },
+        {
+          "name": "target",
+          "description": "Target image"
+        }
+      ]
+    },
+    {
+      "name": "cp",
+      "description": "Copy files/folders between a container and the local filesystem",
+      "arguments": [
+        {
+          "name": "source",
+          "description": "Source path"
+        },
+        {
+          "name": "dest",
+          "description": "Destination path"
+        }
+      ]
+    },
+    {
+      "name": "login",
+      "description": "Log in to a Docker registry",
+      "options": [
+        {
+          "long": "--username",
+          "short": "-u",
+          "description": "Username"
+        },
+        {
+          "long": "--password",
+          "short": "-p",
+          "description": "Password"
+        },
+        {
+          "long": "--password-stdin",
+          "description": "Take the password from stdin"
+        }
+      ]
+    },
+    {
+      "name": "logout",
+      "description": "Log out from a Docker registry"
+    }
+  ]
+}

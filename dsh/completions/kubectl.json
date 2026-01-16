@@ -1,0 +1,411 @@
+{
+  "command": "kubectl",
+  "description": "Kubernetes command-line tool",
+  "global_options": [
+    {
+      "long": "--kubeconfig",
+      "short": "-k",
+      "description": "Path to kubeconfig file"
+    },
+    {
+      "long": "--context",
+      "short": "-c",
+      "description": "Context in kubeconfig"
+    },
+    {
+      "long": "--namespace",
+      "short": "-n",
+      "description": "Namespace for operations"
+    },
+    {
+      "long": "--dry-run",
+      "short": "-d",
+      "description": "Dry run, print commands instead of executing"
+    },
+    {
+      "long": "--help",
+      "short": "-h",
+      "description": "Help for kubectl"
+    },
+    {
+      "long": "--verbose",
+      "short": "-v",
+      "description": "Log level for verbosity"
+    },
+    {
+      "long": "--output",
+      "short": "-o",
+      "description": "Output format (yaml, json, wide, etc.)"
+    },
+    {
+      "long": "--all-namespaces",
+      "short": "-A",
+      "description": "All namespaces"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "get",
+      "description": "Display one or many resources",
+      "options": [
+        {
+          "long": "--selector",
+          "short": "-l",
+          "description": "Selector (label query) to filter"
+        },
+        {
+          "long": "--output",
+          "short": "-o",
+          "description": "Output format (yaml, json, wide, table, etc.)"
+        },
+        {
+          "long": "--show-labels",
+          "description": "Show labels in the last column"
+        },
+        {
+          "long": "--sort-by",
+          "description": "Sort output by field"
+        },
+        {
+          "long": "--field-selector",
+          "description": "Selector (field query) to filter on"
+        },
+        {
+          "long": "--watch",
+          "short": "-w",
+          "description": "After getting the resources, watch for changes."
+        }
+      ],
+      "arguments": [
+        {
+          "name": "resource",
+          "description": "Resource type (pod, service, deployment, etc.)",
+          "type": {
+            "type": "Script",
+            "data": "kubectl api-resources --namespaced=true -o name 2>/dev/null | cut -d/ -f1" 
+          }
+        },
+        {
+          "name": "name",
+          "description": "Resource name (optional)",
+          "type": {
+            "type": "Script",
+            "data": "kubectl get $ARG_0 -o custom-columns=\":metadata.name\" --no-headers"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "apply",
+      "description": "Apply a configuration to a resource",
+      "options": [
+        {
+          "long": "--filename",
+          "short": "-f",
+          "description": "Filename, directory, or URL for config"
+        },
+        {
+          "long": "--kustomize",
+          "short": "-k",
+          "description": "Process directory with Kustomize"
+        },
+        {
+          "long": "--recursive",
+          "short": "-R",
+          "description": "Process directory recursively"
+        },
+        {
+          "long": "--dry-run",
+          "description": "Dry run without applying"
+        },
+        {
+          "long": "--validate",
+          "description": "Validate config before apply"
+        },
+        {
+          "long": "--prune",
+          "description": "Delete resources not in config"
+        },
+        {
+          "long": "--output",
+          "short": "-o",
+          "description": "Output format"
+        },
+        {
+          "long": "--overwrite",
+          "description": "Overwrite immutable fields"
+        },
+        {
+          "long": "--server-side",
+          "description": "Apply server-side. Instead of sending a patch, the client will send the full object and the server will calculate the patch."
+        }
+      ],
+      "arguments": [
+        {
+          "name": "file_or_type",
+          "description": "Config file or resource type",
+           "type": {
+             "type": "Script",
+             "data": "kubectl api-resources --namespaced=true -o name 2>/dev/null | cut -d/ -f1" 
+           }
+        },
+        {
+          "name": "name",
+          "description": "Resource name (optional)",
+          "type": {
+            "type": "Script",
+            "data": "kubectl get $ARG_0 -o custom-columns=\":metadata.name\" --no-headers"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "describe",
+      "description": "Show details of a resource",
+      "options": [
+        {
+          "long": "--filename",
+          "short": "-f",
+          "description": "Filename for config"
+        },
+        {
+          "long": "--recursive",
+          "short": "-R",
+          "description": "Process recursively"
+        },
+        {
+          "long": "--show-events",
+          "description": "If true, display events related to the described object."
+        }
+      ],
+      "arguments": [
+        {
+          "name": "resource",
+          "description": "Resource type (pod, service, etc.)",
+          "type": {
+            "type": "Script",
+            "data": "kubectl api-resources --namespaced=true -o name 2>/dev/null | cut -d/ -f1"
+          }
+        },
+        {
+          "name": "name",
+          "description": "Resource name",
+          "type": {
+            "type": "Script",
+            "data": "kubectl get $ARG_0 -o custom-columns=\":metadata.name\" --no-headers"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "create",
+      "description": "Create a resource from file or stdin",
+      "options": [
+        {
+          "long": "--filename",
+          "short": "-f",
+          "description": "Filename or directory for config"
+        },
+        {
+          "long": "--dry-run",
+          "description": "Dry run without creating"
+        },
+        {
+          "long": "--validate",
+          "description": "Validate config"
+        },
+        {
+          "long": "--output",
+          "short": "-o",
+          "description": "Output format"
+        },
+        {
+          "long": "--save-config",
+          "description": "Store applied config in annotation"
+        },
+        {
+          "long": "--edit",
+          "description": "Edit the resource before creating it"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "type",
+          "description": "Resource type if not using file",
+          "type": {
+             "type": "Script",
+             "data": "kubectl api-resources --namespaced=true -o name 2>/dev/null | cut -d/ -f1"
+           }
+        },
+        {
+          "name": "name",
+          "description": "Resource name (optional)",
+           "type": {
+             "type": "Script",
+             "data": "kubectl get $ARG_0 -o custom-columns=\":metadata.name\" --no-headers"
+           }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "delete",
+      "description": "Delete resources by file, name, or label",
+      "options": [
+        {
+          "long": "--filename",
+          "short": "-f",
+          "description": "Filename or directory for resources to delete"
+        },
+        {
+          "long": "--selector",
+          "short": "-l",
+          "description": "Label selector to filter"
+        },
+        {
+          "long": "--all",
+          "description": "Delete all resources in the namespace of the specified resource types."
+        },
+        {
+          "long": "--force",
+          "description": "Force deletion"
+        },
+        {
+          "long": "--grace-period",
+          "description": "Period of time in seconds given to the resource to terminate gracefully. A negative value means use the default grace period."
+        },
+        {
+          "long": "--now",
+          "description": "Immediate deletion"
+        },
+        {
+          "long": "--ignore-not-found",
+          "description": "Ignore if resource not found"
+        },
+        {
+          "long": "--cascade",
+          "description": "If true, cascade the deletion of the resources managed by this resource (e.g. Pods created by a ReplicaSet). Default true."
+        }
+      ],
+      "arguments": [
+        {
+          "name": "resource",
+          "description": "Resource type (pod, service, etc.)",
+          "type": {
+            "type": "Script",
+            "data": "kubectl api-resources --namespaced=true -o name 2>/dev/null | cut -d/ -f1"
+          }
+        },
+        {
+          "name": "name",
+          "description": "Resource name(s)",
+          "type": {
+            "type": "Script",
+            "data": "kubectl get $ARG_0 -o custom-columns=\":metadata.name\" --no-headers"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "logs",
+      "description": "Print logs of a container in a pod",
+      "options": [
+        {
+          "long": "--follow",
+          "short": "-f",
+          "description": "Follow logs in real-time"
+        },
+        {
+          "long": "--tail",
+          "description": "Lines of recent log file to display. Defaults to -1 with no selector, showing all log lines otherwise 10, if details is provided"
+        },
+        {
+          "long": "--timestamps",
+          "description": "Include timestamps on each line in the log output"
+        },
+        {
+          "long": "--pod-running-timeout",
+          "description": "Timeout for pod startup"
+        },
+        {
+          "long": "--container",
+          "short": "-c",
+          "description": "Container name in pod"
+        },
+        {
+          "long": "--previous",
+          "short": "-p",
+          "description": "Logs from previous instance"
+        },
+        {
+          "long": "--limit-bytes",
+          "description": "Max bytes of logs to retrieve"
+        },
+        {
+          "long": "--since",
+          "description": "Only return logs newer than a relative duration like 5s, 2m, or 3h. Defaults to all logs."
+        },
+        {
+          "long": "--since-time",
+          "description": "Only return logs after a specific date (RFC3339). Defaults to all logs."
+        }
+      ],
+      "arguments": [
+        {
+          "name": "pod",
+          "description": "Pod name",
+          "type": {
+            "type": "Script",
+            "data": "kubectl get pods -o custom-columns=\":metadata.name\" --no-headers"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "exec",
+      "description": "Execute a command in a container",
+      "options": [
+        {
+          "long": "--stdin",
+          "short": "-i",
+          "description": "Pass stdin to the container"
+        },
+        {
+          "long": "--tty",
+          "short": "-t",
+          "description": "Allocate a TTY"
+        },
+        {
+          "long": "--container",
+          "short": "-c",
+          "description": "Container name"
+        },
+        {
+          "long": "--quiet",
+          "short": "-q",
+          "description": "Only output stdout and stderr from the command"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "pod",
+          "description": "Pod name",
+          "type": {
+            "type": "Script",
+            "data": "kubectl get pods -o custom-columns=\":metadata.name\" --no-headers"
+          }
+        },
+        {
+          "name": "command",
+          "description": "Command to execute"
+        }
+      ],
+      "subcommands": []
+    }
+  ]
+}

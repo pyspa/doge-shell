@@ -1,0 +1,115 @@
+{
+  "command": "screen",
+  "description": "Screen manager with VT100/ANSI terminal emulation",
+  "global_options": [
+    {
+      "short": "-a",
+      "description": "Force all capabilities into each window's termcap"
+    },
+    {
+      "short": "-A",
+      "description": "Adapt all windows to new display width & height"
+    },
+    {
+      "short": "-c",
+      "description": "Read configuration file instead of .screenrc"
+    },
+    {
+      "short": "-d",
+      "description": "Detach the elsewhere running screen (and reattach here)"
+    },
+    {
+      "short": "-D",
+      "description": "Detach and logout remote (and reattach here)"
+    },
+    {
+      "short": "-dmS",
+      "description": "Start as daemon: Screen session in detached mode"
+    },
+    {
+      "short": "-e",
+      "description": "Change command characters"
+    },
+    {
+      "short": "-h",
+      "description": "Set the history scrollback buffer size"
+    },
+    {
+      "short": "-i",
+      "description": "Interrupt output flow control on/off"
+    },
+    {
+      "short": "-l",
+      "description": "Login mode on/off (update /var/run/utmp)"
+    },
+    {
+      "short": "-ls",
+      "description": "List existing screen sessions"
+    },
+    {
+      "short": "-list",
+      "description": "List existing screen sessions"
+    },
+    {
+      "short": "-L",
+      "description": "Turn on output logging"
+    },
+    {
+      "short": "-m",
+      "description": "Ignore $STY variable, do create a new screen session"
+    },
+    {
+      "short": "-O",
+      "description": "Choose optimal output rather than exact vt100 emulation"
+    },
+    {
+      "short": "-p",
+      "description": "Preselect the named window if it exists"
+    },
+    {
+      "short": "-q",
+      "description": "Quiet startup. Exits with non-zero return code if unsuccessful"
+    },
+    {
+      "short": "-r",
+      "description": "Reattach to a detached screen process"
+    },
+    {
+      "short": "-R",
+      "description": "Reattach if possible, otherwise start a new session"
+    },
+    {
+      "short": "-s",
+      "description": "Shell to execute rather than $SHELL"
+    },
+    {
+      "short": "-S",
+      "description": "Name this session <pid>.sockname instead of <pid>.<tty>.<host>"
+    },
+    {
+      "short": "-t",
+      "description": "Set title (name) for the new window"
+    },
+    {
+      "short": "-U",
+      "description": "Tell screen to use UTF-8 encoding for text"
+    },
+    {
+      "short": "-v",
+      "description": "Print version number"
+    },
+    {
+      "short": "-wipe",
+      "description": "Do the same as -ls, but remove destroyed sessions"
+    },
+    {
+      "short": "-x",
+      "description": "Attach to a not detached screen (Multi display mode)"
+    },
+    {
+      "short": "-X",
+      "description": "Execute <cmd> as a screen command in the specified session"
+    }
+  ],
+  "subcommands": []
+}

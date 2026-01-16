@@ -1,0 +1,71 @@
+{
+  "command": "who",
+  "description": "Show who is logged on",
+  "global_options": [
+    {
+      "short": "-a",
+      "long": "--all",
+      "description": "Same as -b -d --login -p -r -t -T -u"
+    },
+    {
+      "short": "-b",
+      "long": "--boot",
+      "description": "Time of last system boot"
+    },
+    {
+      "short": "-d",
+      "long": "--dead",
+      "description": "Print dead processes"
+    },
+    {
+      "short": "-H",
+      "long": "--heading",
+      "description": "Print line of column headings"
+    },
+    {
+      "short": "-l",
+      "long": "--login",
+      "description": "Print system login processes"
+    },
+    {
+      "short": "-m",
+      "description": "Only hostname and user associated with stdin"
+    },
+    {
+      "short": "-p",
+      "long": "--process",
+      "description": "Print active processes spawned by init"
+    },
+    {
+      "short": "-q",
+      "long": "--count",
+      "description": "All login names and number of users logged on"
+    },
+    {
+      "short": "-r",
+      "long": "--runlevel",
+      "description": "Print current runlevel"
+    },
+    {
+      "short": "-s",
+      "long": "--short",
+      "description": "Print only name, line, and time (default)"
+    },
+    {
+      "short": "-t",
+      "long": "--time",
+      "description": "Print last system clock change"
+    },
+    {
+      "short": "-T",
+      "long": "--mesg",
+      "description": "Add user's message status as +, - or ?"
+    },
+    {
+      "short": "-u",
+      "long": "--users",
+      "description": "List users logged in"
+    }
+  ],
+  "subcommands": []
+}

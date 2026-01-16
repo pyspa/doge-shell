@@ -1,0 +1,55 @@
+{
+  "command": "kill",
+  "description": "Terminate process",
+  "arguments": [
+    {
+      "name": "pid",
+      "description": "Process ID to kill",
+      "type": {
+        "type": "Process"
+      }
+    },
+    {
+      "name": "pid2",
+      "description": "Process ID to kill",
+      "type": {
+        "type": "Process"
+      }
+    },
+    {
+      "name": "pid3",
+      "description": "Process ID to kill",
+      "type": {
+        "type": "Process"
+      }
+    }
+  ],
+  "global_options": [
+    {
+      "short": "-9",
+      "description": "SIGKILL (Force kill)"
+    },
+    {
+      "short": "-15",
+      "description": "SIGTERM (Terminate gracefully)"
+    },
+    {
+      "short": "-1",
+      "description": "SIGHUP (Reload)"
+    },
+    {
+        "short": "-2",
+        "description": "SIGINT (Interrupt)"
+    },
+    {
+        "long": "--signal",
+        "short": "-s",
+        "description": "Specify signal"
+    },
+    {
+        "long": "--list",
+        "short": "-l",
+        "description": "List signals"
+    }
+  ]
+}

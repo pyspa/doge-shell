@@ -1,0 +1,386 @@
+{
+  "command": "git",
+  "description": "Distributed version control system",
+  "global_options": [
+    {
+      "short": "-v",
+      "long": "--version",
+      "description": "Show version info"
+    },
+    {
+      "long": "--help",
+      "description": "Show help info"
+    },
+    {
+      "short": "-C",
+      "description": "Run as if git was started in <path>"
+    },
+    {
+      "short": "-c",
+      "description": "Pass a configuration parameter to command"
+    },
+    {
+      "long": "--exec-path",
+      "description": "Path to wherever your core git programs are installed"
+    },
+    {
+      "long": "--html-path",
+      "description": "Path to wherever your html documentation are installed"
+    },
+    {
+      "long": "--man-path",
+      "description": "Path to wherever your man pages are installed"
+    },
+    {
+      "long": "--info-path",
+      "description": "Path to wherever your info pages are installed"
+    },
+    {
+      "short": "-p",
+      "long": "--paginate",
+      "description": "Pipe all output into less"
+    },
+    {
+      "long": "--no-pager",
+      "description": "Do not pipe git output into a pager"
+    },
+    {
+      "long": "--no-replace-objects",
+      "description": "Do not use replacement refs to replace git objects"
+    },
+    {
+      "long": "--bare",
+      "description": "Treat the repository as a bare repository"
+    },
+    {
+      "long": "--git-dir",
+      "description": "Set the path to the repository"
+    },
+    {
+      "long": "--work-tree",
+      "description": "Set the path to the working tree"
+    },
+    {
+      "long": "--namespace",
+      "description": "Set the git namespace"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "commit",
+      "description": "Record changes to the repository",
+      "options": [
+        {
+          "short": "-a",
+          "long": "--all",
+          "description": "Stage all modified and deleted paths"
+        },
+        {
+          "short": "-m",
+          "long": "--message",
+          "description": "Use the given <msg> as the commit message"
+        },
+        {
+          "long": "--amend",
+          "description": "Amend the previous commit"
+        }
+      ]
+    },
+    {
+      "name": "switch",
+      "description": "Switch branches",
+      "arguments": [
+        {
+          "name": "branch",
+          "description": "Branch to switch to",
+          "type": {
+            "type": "Script",
+            "data": "git branch --format='%(refname:short)'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "checkout",
+      "description": "Switch branches or restore working tree files",
+      "arguments": [
+        {
+          "name": "branch_or_file",
+          "description": "Branch to checkout",
+          "type": {
+            "type": "Script",
+            "data": "(git branch --format='%(refname:short)'; git branch -r --format='%(refname:short)' | cut -d/ -f2- | grep -v '^HEAD$') | sort -u"
+          }
+        }
+      ]
+    },
+    {
+      "name": "add",
+      "description": "Add file contents to the index",
+      "arguments": [
+        {
+          "name": "file",
+          "type": {
+            "type": "File",
+            "data": {
+              "extensions": null
+            }
+          }
+        }
+      ],
+      "options": [
+        {
+          "short": "-A",
+          "long": "--all",
+          "description": "Add all changes"
+        },
+        {
+          "short": "-u",
+          "long": "--update",
+          "description": "Update staged files"
+        }
+      ]
+    },
+    {
+      "name": "status",
+      "description": "Show the working tree status"
+    },
+    {
+      "name": "push",
+      "description": "Update remote refs along with associated objects",
+      "arguments": [
+        {
+          "name": "remote",
+          "description": "Remote repository",
+          "type": {
+            "type": "Script",
+            "data": "git remote"
+          }
+        },
+        {
+          "name": "branch",
+          "description": "Branch to push",
+          "type": {
+            "type": "Script",
+            "data": "remote=\"$ARG_0\"; [ -z \"$remote\" ] && remote=\"*\"; (git branch --format='%(refname:short)'; git branch -r --format='%(refname:short)' --list \"$remote/*\" | cut -d/ -f2- | grep -v '^HEAD$') | sort -u"
+          }
+        }
+      ]
+    },
+    {
+      "name": "pull",
+      "description": "Fetch from and integrate with another repository or a local branch",
+      "arguments": [
+        {
+          "name": "remote",
+          "description": "Remote repository",
+          "type": {
+            "type": "Script",
+            "data": "git remote"
+          }
+        },
+        {
+          "name": "branch",
+          "description": "Branch to pull",
+          "type": {
+            "type": "Script",
+            "data": "remote=\"$ARG_0\"; [ -z \"$remote\" ] && remote=\"*\"; git branch -r --format='%(refname:short)' --list \"$remote/*\" | cut -d/ -f2- | grep -v '^HEAD$'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "fetch",
+      "description": "Download objects and refs from another repository",
+      "arguments": [
+        {
+          "name": "remote",
+          "description": "Remote repository",
+          "type": {
+            "type": "Script",
+            "data": "git remote"
+          }
+        },
+        {
+          "name": "branch",
+          "description": "Branch to fetch",
+          "type": {
+            "type": "Script",
+            "data": "remote=\"$ARG_0\"; [ -z \"$remote\" ] && remote=\"*\"; git branch -r --format='%(refname:short)' --list \"$remote/*\" | cut -d/ -f2- | grep -v '^HEAD$'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "merge",
+      "description": "Join two or more development histories together",
+      "arguments": [
+        {
+          "name": "branch",
+          "description": "Branch to merge",
+          "type": {
+            "type": "Script",
+            "data": "git branch --format='%(refname:short)'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "rebase",
+      "description": "Reapply commits on top of another base tip",
+      "arguments": [
+        {
+          "name": "branch",
+          "description": "Branch to rebase onto",
+          "type": {
+            "type": "Script",
+            "data": "git branch --format='%(refname:short)'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "log",
+      "description": "Show commit logs",
+      "arguments": [
+        {
+          "name": "revision",
+          "description": "Revision to show",
+          "required": false,
+          "type": {
+            "type": "Script",
+            "data": "git branch --format='%(refname:short)'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "diff",
+      "description": "Show changes between commits, commit and working tree, etc",
+      "arguments": [
+        {
+          "name": "revision",
+          "description": "Revision or file",
+          "required": false,
+          "type": {
+            "type": "Script",
+            "data": "git branch --format='%(refname:short)'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "show",
+      "description": "Show various types of objects",
+      "arguments": [
+        {
+          "name": "object",
+          "description": "Object to show",
+          "required": true,
+          "type": {
+            "type": "Script",
+            "data": "git branch --format='%(refname:short)'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reset",
+      "description": "Reset current HEAD to the specified state",
+      "arguments": [
+        {
+          "name": "commit",
+          "description": "Commit to reset to",
+          "required": false,
+          "type": {
+            "type": "Script",
+            "data": "git branch --format='%(refname:short)'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "branch",
+      "description": "List, create, or delete branches",
+      "arguments": [
+        {
+          "name": "branchname",
+          "description": "Branch name",
+          "required": false,
+          "type": {
+            "type": "Script",
+            "data": "git branch --format='%(refname:short)'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "tag",
+      "description": "Create, list, delete or verify a tag object signed with GPG",
+      "arguments": [
+        {
+          "name": "tagname",
+          "description": "Tag name",
+          "required": false,
+          "type": {
+            "type": "Script",
+            "data": "git tag"
+          }
+        }
+      ]
+    },
+    {
+      "name": "stash",
+      "description": "Stash the changes in a dirty working directory away",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List the stash entries",
+          "arguments": []
+        },
+        {
+          "name": "pop",
+          "description": "Remove a single stashed state from the stash list and apply it",
+          "arguments": [
+            {
+              "name": "stash",
+              "description": "Stash to pop",
+              "type": {
+                "type": "Script",
+                "data": "git stash list | awk -F: '{print $1}'"
+              }
+            }
+          ]
+        },
+        {
+          "name": "apply",
+          "description": "Like pop, but do not remove the state from the stash list",
+          "arguments": [
+            {
+              "name": "stash",
+              "description": "Stash to apply",
+              "type": {
+                "type": "Script",
+                "data": "git stash list | awk -F: '{print $1}'"
+              }
+            }
+          ]
+        },
+        {
+          "name": "drop",
+          "description": "Remove a single stashed state from the stash list",
+          "arguments": [
+            {
+              "name": "stash",
+              "description": "Stash to drop",
+              "type": {
+                "type": "Script",
+                "data": "git stash list | awk -F: '{print $1}'"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

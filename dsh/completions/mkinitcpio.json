@@ -1,0 +1,115 @@
+{
+  "command": "mkinitcpio",
+  "description": "Create an initial ramdisk environment",
+  "global_options": [
+    {
+      "long": "--help",
+      "short": "-h",
+      "description": "Show this help message and exit",
+      "takes_value": false
+    },
+    {
+      "long": "--version",
+      "short": "-V",
+      "description": "Show version information and exit",
+      "takes_value": false
+    }
+  ],
+  "subcommands": [],
+  "options": [
+    {
+      "short": "-p",
+      "long": "--preset",
+      "description": "Use preset file from /etc/mkinitcpio.d/",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-P",
+      "long": "--allpresets",
+      "description": "Process all presets in /etc/mkinitcpio.d/",
+      "takes_value": false
+    },
+    {
+      "short": "-g",
+      "long": "--generate",
+      "description": "Generate a new initramfs image",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-k",
+      "long": "--kernel",
+      "description": "Kernel version to use",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-c",
+      "long": "--config",
+      "description": "Configuration file to use",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-d",
+      "long": "--generatedir",
+      "description": "Directory to place generated image in",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-H",
+      "long": "--hookhelp",
+      "description": "Show help for a given HOOK",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-L",
+      "long": "--listhooks",
+      "description": "List all available hooks",
+      "takes_value": false
+    },
+    {
+      "short": "-S",
+      "long": "--skiphook",
+      "description": "Skip specified hook in build process",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-U",
+      "long": "--uki",
+      "description": "Generate a UEFI Unified Kernel Image",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Verbose output",
+      "takes_value": false
+    }
+  ],
+  "arguments": []
+}

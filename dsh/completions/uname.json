@@ -1,0 +1,62 @@
+{
+  "command": "uname",
+  "description": "Print certain system information",
+  "global_options": [],
+  "subcommands": [],
+  "options": [
+    {
+      "long": "--all",
+      "short": "-a",
+      "description": "Print all information, in the following order, except omit -p and -i if unknown"
+    },
+    {
+      "long": "--kernel-name",
+      "short": "-s",
+      "description": "Print the kernel name"
+    },
+    {
+      "long": "--nodename",
+      "short": "-n",
+      "description": "Print the network node hostname"
+    },
+    {
+      "long": "--kernel-release",
+      "short": "-r",
+      "description": "Print the kernel release"
+    },
+    {
+      "long": "--kernel-version",
+      "short": "-v",
+      "description": "Print the kernel version"
+    },
+    {
+      "long": "--machine",
+      "short": "-m",
+      "description": "Print the machine hardware name"
+    },
+    {
+      "long": "--processor",
+      "short": "-p",
+      "description": "Print the processor type (non-portable)"
+    },
+    {
+      "long": "--hardware-platform",
+      "short": "-i",
+      "description": "Print the hardware platform (non-portable)"
+    },
+    {
+      "long": "--operating-system",
+      "short": "-o",
+      "description": "Print the operating system"
+    },
+    {
+      "long": "--help",
+      "description": "Display this help and exit"
+    },
+    {
+      "long": "--version",
+      "description": "Output version information and exit"
+    }
+  ],
+  "arguments": []
+}

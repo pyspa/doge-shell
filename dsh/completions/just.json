@@ -1,0 +1,65 @@
+{
+  "command": "just",
+  "description": "Just command runner",
+  "global_options": [
+    {
+      "short": "-l",
+      "long": "--list",
+      "description": "List available recipes"
+    },
+    {
+      "short": "-n",
+      "long": "--dry-run",
+      "description": "Print what would be done"
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Verbose output"
+    },
+    {
+      "short": "-q",
+      "long": "--quiet",
+      "description": "Quiet output"
+    },
+    {
+      "short": "-f",
+      "long": "--justfile",
+      "description": "Use specified justfile"
+    },
+    {
+      "long": "--choose",
+      "description": "Select recipe with fuzzy finder"
+    },
+    {
+      "long": "--dump",
+      "description": "Print justfile"
+    },
+    {
+      "long": "--evaluate",
+      "description": "Evaluate and print variables"
+    },
+    {
+      "long": "--fmt",
+      "description": "Format justfile"
+    },
+    {
+      "long": "--summary",
+      "description": "List recipes in short form"
+    },
+    {
+      "long": "--variables",
+      "description": "List all variables"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "recipe",
+      "description": "Recipe to run",
+      "type": {
+        "type": "Script",
+        "data": "just --summary 2>/dev/null | tr ' ' '\\n'"
+      }
+    }
+  ]
+}

@@ -1,0 +1,258 @@
+{
+  "command": "npm",
+  "description": "Node Package Manager",
+  "global_options": [
+    {
+      "long": "--version",
+      "short": "-v",
+      "description": "Print version information"
+    },
+    {
+      "long": "--help",
+      "short": "-h",
+      "description": "Print help information"
+    },
+    {
+      "long": "--verbose",
+      "description": "Increase verbosity"
+    },
+    {
+      "long": "--silent",
+      "description": "Suppress output"
+    },
+    {
+      "long": "--loglevel",
+      "description": "Level of logging (silent, error, warn, info, verbose)"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "install",
+      "description": "Install package(s)",
+      "options": [
+        {
+          "long": "--save",
+          "short": "-S",
+          "description": "Package will appear in dependencies"
+        },
+        {
+          "long": "--save-dev",
+          "short": "-D",
+          "description": "Package will appear in devDependencies"
+        },
+        {
+          "long": "--save-optional",
+          "short": "-O",
+          "description": "Package will appear in optionalDependencies"
+        },
+        {
+          "long": "--global",
+          "short": "-g",
+          "description": "Install globally"
+        },
+        {
+          "long": "--save-exact",
+          "short": "-E",
+          "description": "Saved dependencies will be configured with exact version"
+        },
+        {
+          "long": "--production",
+          "description": "Skip devDependencies"
+        },
+        {
+          "long": "--only",
+          "description": "Only install type (prod, dev)"
+        },
+        {
+          "long": "--no-save",
+          "description": "Prevents saving to dependencies"
+        },
+        {
+          "long": "--package-lock-only",
+          "description": "Only update the package-lock.json"
+        },
+        {
+          "long": "--force",
+          "short": "-f",
+          "description": "Forces npm to fetch remote resources even if a local copy exists on disk"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "package",
+          "description": "Package name or path (optional)"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "run",
+      "description": "Run arbitrary package scripts",
+      "options": [
+        {
+          "long": "--silent",
+          "description": "Do not output JSON data to stdout"
+        },
+        {
+          "long": "--if-present",
+          "description": "Run if script present"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "script",
+          "description": "Script name from package.json",
+          "type": {
+            "type": "Script",
+            "data": "node -p \"const s = require('./package.json').scripts; s ? Object.keys(s).join('\\n') : ''\" 2>/dev/null"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "start",
+      "description": "Start script from package.json (alias for run start)",
+      "options": [
+        {
+          "long": "--silent",
+          "description": "Do not output JSON data to stdout"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "args",
+          "description": "Arguments to pass to start script"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "build",
+      "description": "Build script from package.json (alias for run build)",
+      "options": [
+        {
+          "long": "--silent",
+          "description": "Do not output JSON data to stdout"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "args",
+          "description": "Arguments to pass to build script"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "test",
+      "description": "Test script from package.json (alias for run test)",
+      "options": [
+        {
+          "long": "--silent",
+          "description": "Do not output JSON data to stdout"
+        },
+        {
+          "long": "--if-present",
+          "description": "Run if script present"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "args",
+          "description": "Arguments to pass to test script"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "init",
+      "description": "Create package.json",
+      "options": [
+        {
+          "long": "--yes",
+          "short": "-y",
+          "description": "Answer yes to all prompts"
+        },
+        {
+          "long": "--force",
+          "short": "-f",
+          "description": "Force overwrite package.json"
+        },
+        {
+          "long": "--scope",
+          "description": "Scope for the package"
+        },
+        {
+          "long": "--description",
+          "description": "Package description"
+        }
+      ],
+      "arguments": [],
+      "subcommands": []
+    },
+    {
+      "name": "uninstall",
+      "description": "Remove a package",
+      "options": [
+        {
+          "long": "--save",
+          "short": "-S",
+          "description": "Remove from dependencies"
+        },
+        {
+          "long": "--save-dev",
+          "short": "-D",
+          "description": "Remove from devDependencies"
+        },
+        {
+          "long": "--global",
+          "short": "-g",
+          "description": "Remove globally"
+        },
+        {
+          "long": "--no-save",
+          "description": "Prevents removing from dependencies"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "package",
+          "description": "Package name(s)",
+          "type": {
+            "type": "Script",
+            "data": "node -p \"const p = require('./package.json'); [...Object.keys(p.dependencies || {}), ...Object.keys(p.devDependencies || {})].join('\\n')\" 2>/dev/null"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "update",
+      "description": "Update outdated packages",
+      "options": [
+        {
+          "long": "--global",
+          "short": "-g",
+          "description": "Update globally"
+        },
+        {
+          "long": "--depth",
+          "description": "Max depth of dependency tree"
+        },
+        {
+          "long": "--save",
+          "short": "-S",
+          "description": "Update dependencies in package.json"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "package",
+          "description": "Specific package (optional)"
+        }
+      ],
+      "subcommands": []
+    }
+  ]
+}

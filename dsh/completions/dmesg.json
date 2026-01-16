@@ -1,0 +1,68 @@
+{
+  "command": "dmesg",
+  "description": "Print kernel ring buffer",
+  "global_options": [
+    {
+      "short": "-c",
+      "long": "--clear",
+      "description": "Clear ring buffer after printing"
+    },
+    {
+      "short": "-f",
+      "long": "--facility",
+      "description": "Filter by facility"
+    },
+    {
+      "short": "-H",
+      "long": "--human",
+      "description": "Human-readable output"
+    },
+    {
+      "short": "-k",
+      "long": "--kernel",
+      "description": "Print kernel messages"
+    },
+    {
+      "short": "-l",
+      "long": "--level",
+      "description": "Filter by level"
+    },
+    {
+      "short": "-n",
+      "long": "--console-level",
+      "description": "Set console logging level"
+    },
+    {
+      "short": "-T",
+      "long": "--ctime",
+      "description": "Human-readable timestamps"
+    },
+    {
+      "short": "-t",
+      "long": "--notime",
+      "description": "Don't print timestamps"
+    },
+    {
+      "short": "-w",
+      "long": "--follow",
+      "description": "Wait for new messages"
+    },
+    {
+      "short": "-x",
+      "long": "--decode",
+      "description": "Decode facility and level"
+    },
+    {
+      "long": "--since",
+      "description": "Show messages since time"
+    },
+    {
+      "long": "--until",
+      "description": "Show messages until time"
+    },
+    {
+      "long": "--color",
+      "description": "Color output (auto, always, never)"
+    }
+  ]
+}

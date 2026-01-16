@@ -1,0 +1,57 @@
+{
+  "command": "watch",
+  "description": "Execute a program periodically",
+  "global_options": [
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Display help"
+    },
+    {
+      "short": "-v",
+      "long": "--version",
+      "description": "Display version"
+    },
+    {
+      "short": "-n",
+      "long": "--interval",
+      "description": "Specify update interval"
+    },
+    {
+      "short": "-d",
+      "long": "--differences",
+      "description": "Highlight changes between updates"
+    },
+    {
+      "short": "-t",
+      "long": "--no-title",
+      "description": "Turn off the header"
+    },
+    {
+      "short": "-b",
+      "long": "--beep",
+      "description": "Beep if command has a non-zero exit"
+    },
+    {
+      "short": "-e",
+      "long": "--errexit",
+      "description": "Exit if command has a non-zero exit"
+    },
+    {
+      "short": "-g",
+      "long": "--chgexit",
+      "description": "Exit when output of command changes"
+    },
+    {
+      "short": "-c",
+      "long": "--color",
+      "description": "Interpret ANSI color and style sequences"
+    },
+    {
+      "short": "-x",
+      "long": "--exec",
+      "description": "Complete command to pass to sh -c"
+    }
+  ],
+  "subcommands": []
+}

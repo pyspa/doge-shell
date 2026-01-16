@@ -1,0 +1,68 @@
+{
+  "command": "pnpm",
+  "description": "Fast, disk space efficient package manager",
+  "subcommands": [
+    {
+      "name": "add",
+      "description": "Install a package",
+      "options": [
+        { "short": "-D", "long": "--save-dev", "description": "Save as dev dependency" },
+        { "short": "-O", "long": "--save-optional", "description": "Save as optional" },
+        { "short": "-E", "long": "--save-exact", "description": "Save exact version" },
+        { "short": "-g", "long": "--global", "description": "Install globally" }
+      ]
+    },
+    {
+      "name": "remove",
+      "description": "Remove a package",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "Package to remove",
+          "type": {
+            "type": "Script",
+            "data": "cat package.json 2>/dev/null | jq -r '.dependencies // {} | keys[]' 2>/dev/null; cat package.json 2>/dev/null | jq -r '.devDependencies // {} | keys[]' 2>/dev/null"
+          }
+        }
+      ]
+    },
+    { "name": "install", "description": "Install all dependencies" },
+    { "name": "update", "description": "Update packages" },
+    { "name": "init", "description": "Initialize a new package" },
+    {
+      "name": "run",
+      "description": "Run a script",
+      "arguments": [
+        {
+          "name": "script",
+          "description": "Script to run",
+          "type": {
+            "type": "Script",
+            "data": "cat package.json 2>/dev/null | jq -r '.scripts // {} | keys[]' 2>/dev/null"
+          }
+        }
+      ]
+    },
+    { "name": "test", "description": "Run tests" },
+    { "name": "build", "description": "Run build script" },
+    { "name": "start", "description": "Run start script" },
+    { "name": "publish", "description": "Publish package" },
+    { "name": "list", "description": "List installed packages" },
+    { "name": "outdated", "description": "List outdated packages" },
+    { "name": "why", "description": "Show why a package is installed" },
+    { "name": "store", "description": "Manage store",
+      "subcommands": [
+        { "name": "status", "description": "Show store status" },
+        { "name": "prune", "description": "Remove unreferenced packages" },
+        { "name": "path", "description": "Show store path" }
+      ]
+    },
+    { "name": "exec", "description": "Execute a command in scope of a project" },
+    { "name": "dlx", "description": "Download and execute a package" }
+  ],
+  "global_options": [
+    { "short": "-v", "long": "--version", "description": "Show version" },
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "short": "-r", "long": "--recursive", "description": "Run in all packages" }
+  ]
+}

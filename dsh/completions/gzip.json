@@ -1,0 +1,24 @@
+{
+  "command": "gzip",
+  "description": "Compress or expand files",
+  "global_options": [
+    { "short": "-c", "long": "--stdout", "description": "Write on standard output, keep original files unchanged" },
+    { "short": "-d", "long": "--decompress", "description": "Decompress" },
+    { "short": "-f", "long": "--force", "description": "Force overwrite of output file and compress links" },
+    { "short": "-h", "long": "--help", "description": "Give this help" },
+    { "short": "-k", "long": "--keep", "description": "Keep (don't delete) input files" },
+    { "short": "-l", "long": "--list", "description": "List compressed file contents" },
+    { "short": "-L", "long": "--license", "description": "Display software license" },
+    { "short": "-n", "long": "--no-name", "description": "Do not save or restore the original name and timestamp" },
+    { "short": "-N", "long": "--name", "description": "Save or restore the original name and timestamp" },
+    { "short": "-q", "long": "--quiet", "description": "Suppress all warnings" },
+    { "short": "-r", "long": "--recursive", "description": "Operate recursively on directories" },
+    { "short": "-S", "long": "--suffix <SUF>", "description": "Use suffix SUF on compressed files" },
+    { "short": "-t", "long": "--test", "description": "Test compressed file integrity" },
+    { "short": "-v", "long": "--verbose", "description": "Verbose mode" },
+    { "short": "-V", "long": "--version", "description": "Display version number" },
+    { "short": "-1", "long": "--fast", "description": "Compress faster" },
+    { "short": "-9", "long": "--best", "description": "Compress better" }
+  ],
+  "subcommands": []
+}

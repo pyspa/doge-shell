@@ -1,0 +1,99 @@
+{
+  "command": "rustup",
+  "description": "Rust toolchain manager",
+  "subcommands": [
+    {
+      "name": "show",
+      "description": "Show installed toolchains",
+      "subcommands": [
+        { "name": "active-toolchain", "description": "Show active toolchain" },
+        { "name": "home", "description": "Show rustup home" },
+        { "name": "profile", "description": "Show current profile" }
+      ]
+    },
+    {
+      "name": "update",
+      "description": "Update installed toolchains"
+    },
+    {
+      "name": "default",
+      "description": "Set default toolchain",
+      "arguments": [
+        {
+          "name": "toolchain",
+          "description": "Toolchain to set as default",
+          "type": {
+            "type": "Script",
+            "data": "rustup toolchain list 2>/dev/null | awk '{print $1}'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "toolchain",
+      "description": "Manage toolchains",
+      "subcommands": [
+        { "name": "list", "description": "List installed toolchains" },
+        { "name": "install", "description": "Install a toolchain" },
+        {
+          "name": "uninstall",
+          "description": "Uninstall a toolchain",
+          "arguments": [
+            {
+              "name": "toolchain",
+              "description": "Toolchain to uninstall",
+              "type": {
+                "type": "Script",
+                "data": "rustup toolchain list 2>/dev/null | awk '{print $1}'"
+              }
+            }
+          ]
+        },
+        { "name": "link", "description": "Create custom toolchain" }
+      ]
+    },
+    {
+      "name": "target",
+      "description": "Manage targets",
+      "subcommands": [
+        { "name": "list", "description": "List available targets" },
+        { "name": "add", "description": "Add a target" },
+        { "name": "remove", "description": "Remove a target" }
+      ]
+    },
+    {
+      "name": "component",
+      "description": "Manage components",
+      "subcommands": [
+        { "name": "list", "description": "List components" },
+        { "name": "add", "description": "Add a component" },
+        { "name": "remove", "description": "Remove a component" }
+      ]
+    },
+    {
+      "name": "override",
+      "description": "Manage directory overrides",
+      "subcommands": [
+        { "name": "list", "description": "List overrides" },
+        { "name": "set", "description": "Set override for current directory" },
+        { "name": "unset", "description": "Remove override" }
+      ]
+    },
+    { "name": "run", "description": "Run command with specific toolchain" },
+    { "name": "which", "description": "Show which binary runs for a command" },
+    { "name": "doc", "description": "Open documentation" },
+    { "name": "self", "description": "Modify rustup itself",
+      "subcommands": [
+        { "name": "update", "description": "Update rustup" },
+        { "name": "uninstall", "description": "Uninstall rustup" }
+      ]
+    },
+    { "name": "check", "description": "Check for updates" }
+  ],
+  "global_options": [
+    { "short": "-v", "long": "--verbose", "description": "Verbose output" },
+    { "short": "-q", "long": "--quiet", "description": "Quiet output" },
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "short": "-V", "long": "--version", "description": "Show version" }
+  ]
+}

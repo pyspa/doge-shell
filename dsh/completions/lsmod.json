@@ -1,0 +1,17 @@
+{
+  "command": "lsmod",
+  "description": "Show the status of modules in the Linux Kernel",
+  "global_options": [
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Display help"
+    },
+    {
+      "short": "-V",
+      "long": "--version",
+      "description": "Display version"
+    }
+  ],
+  "subcommands": []
+}

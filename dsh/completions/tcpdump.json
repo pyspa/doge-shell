@@ -1,0 +1,85 @@
+{
+  "command": "tcpdump",
+  "description": "Dump network traffic",
+  "global_options": [
+    {
+      "short": "-i",
+      "description": "Interface to capture on",
+      "takes_value": true,
+      "value_type": {
+        "type": "Script",
+        "data": "ip -o link show 2>/dev/null | awk -F': ' '{print $2}'"
+      }
+    },
+    {
+      "short": "-c",
+      "description": "Capture count"
+    },
+    {
+      "short": "-n",
+      "description": "Don't convert addresses to names"
+    },
+    {
+      "short": "-nn",
+      "description": "Don't convert addresses or ports"
+    },
+    {
+      "short": "-v",
+      "description": "Verbose output"
+    },
+    {
+      "short": "-vv",
+      "description": "More verbose"
+    },
+    {
+      "short": "-vvv",
+      "description": "Most verbose"
+    },
+    {
+      "short": "-w",
+      "description": "Write to file",
+      "takes_value": true
+    },
+    {
+      "short": "-r",
+      "description": "Read from file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-A",
+      "description": "Print packets in ASCII"
+    },
+    {
+      "short": "-X",
+      "description": "Print packets in hex and ASCII"
+    },
+    {
+      "short": "-q",
+      "description": "Quick output"
+    },
+    {
+      "short": "-s",
+      "description": "Snapshot length"
+    },
+    {
+      "short": "-S",
+      "description": "Print absolute TCP sequence numbers"
+    },
+    {
+      "short": "-t",
+      "description": "Don't print timestamp"
+    },
+    {
+      "short": "-e",
+      "description": "Print link-level header"
+    },
+    {
+      "short": "-D",
+      "description": "List interfaces"
+    }
+  ]
+}

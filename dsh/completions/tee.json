@@ -1,0 +1,38 @@
+{
+  "command": "tee",
+  "description": "Read from standard input and write to standard output and files",
+  "global_options": [
+    {
+      "short": "-a",
+      "long": "--append",
+      "description": "Append to the given FILEs, do not overwrite"
+    },
+    {
+      "short": "-i",
+      "long": "--ignore-interrupts",
+      "description": "Ignore interrupt signals"
+    },
+    {
+      "short": "-p",
+      "description": "Diagnose errors writing to non pipes"
+    },
+    {
+      "long": "--output-error",
+      "description": "Set behavior on write error",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": ["warn", "warn-nopipe", "exit", "exit-nopipe"]
+      }
+    },
+    {
+      "long": "--help",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": []
+}

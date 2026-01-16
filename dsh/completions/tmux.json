@@ -1,0 +1,126 @@
+{
+  "command": "tmux",
+  "description": "Terminal multiplexer",
+  "global_options": [
+    {
+      "short": "-2",
+      "description": "Force tmux to assume the terminal supports 256 colours"
+    },
+    {
+      "short": "-C",
+      "description": "Start in control mode"
+    },
+    {
+      "short": "-c",
+      "description": "Execute a shell command"
+    },
+    {
+      "short": "-f",
+      "description": "Specify an alternative configuration file"
+    },
+    {
+      "short": "-L",
+      "description": "Specify the socket name"
+    },
+    {
+      "short": "-l",
+      "description": "Behave as a login shell"
+    },
+    {
+      "short": "-S",
+      "description": "Specify the socket path"
+    },
+    {
+      "short": "-u",
+      "description": "Write UTF-8 output"
+    },
+    {
+      "short": "-v",
+      "description": "Request verbose logging"
+    },
+    {
+      "short": "-V",
+      "description": "Report the tmux version"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "attach-session",
+      "description": "Attach to an existing session",
+      "options": [
+        {
+          "short": "-t",
+          "description": "Target session"
+        },
+        {
+          "short": "-d",
+          "description": "Detach other clients"
+        }
+      ]
+    },
+    {
+      "name": "detach-client",
+      "description": "Detach the current client"
+    },
+    {
+      "name": "has-session",
+      "description": "Check if a session exists"
+    },
+    {
+      "name": "kill-server",
+      "description": "Kill the tmux server"
+    },
+    {
+      "name": "kill-session",
+      "description": "Kill a session",
+      "options": [
+        {
+          "short": "-t",
+          "description": "Target session"
+        }
+      ]
+    },
+    {
+      "name": "list-clients",
+      "description": "List all clients attached to the server"
+    },
+    {
+      "name": "list-commands",
+      "description": "List all tmux commands"
+    },
+    {
+      "name": "list-keys",
+      "description": "List all key bindings"
+    },
+    {
+      "name": "list-sessions",
+      "description": "List all sessions"
+    },
+    {
+      "name": "ls",
+      "description": "List all sessions (alias)"
+    },
+    {
+      "name": "new-session",
+      "description": "Create a new session",
+      "options": [
+        {
+          "short": "-s",
+          "description": "Session name"
+        }
+      ]
+    },
+    {
+      "name": "new",
+      "description": "Create a new session (alias)"
+    },
+    {
+      "name": "rename-session",
+      "description": "Rename a session"
+    },
+    {
+      "name": "source-file",
+      "description": "Execute commands from a file"
+    }
+  ]
+}

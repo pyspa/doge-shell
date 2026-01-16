@@ -1,0 +1,92 @@
+{
+    "command": "wget",
+    "description": "Network downloader",
+    "global_options": [
+        {
+            "short": "-V",
+            "long": "--version",
+            "description": "Display version information and exit."
+        },
+        {
+            "short": "-h",
+            "long": "--help",
+            "description": "Print this help."
+        },
+        {
+            "short": "-b",
+            "long": "--background",
+            "description": "Go to background after startup."
+        },
+        {
+            "short": "-e",
+            "long": "--execute",
+            "description": "Execute a `.wgetrc'-style command."
+        },
+        {
+            "short": "-o",
+            "long": "--output-file",
+            "description": "Log all messages to FILE."
+        },
+        {
+            "short": "-a",
+            "long": "--append-output",
+            "description": "Append all messages to FILE."
+        },
+        {
+            "short": "-q",
+            "long": "--quiet",
+            "description": "Quiet (no output)."
+        },
+        {
+            "short": "-v",
+            "long": "--verbose",
+            "description": "Be verbose (this is the default)."
+        },
+        {
+            "short": "-nv",
+            "long": "--no-verbose",
+            "description": "Turn off verboseness, without being quiet."
+        },
+        {
+            "short": "-i",
+            "long": "--input-file",
+            "description": "Download URLs found in local or external FILE."
+        },
+        {
+            "short": "-t",
+            "long": "--tries",
+            "description": "Set number of retries to NUMBER (0 unlimits)."
+        },
+        {
+            "short": "-O",
+            "long": "--output-document",
+            "description": "Write documents to FILE."
+        },
+        {
+            "short": "-c",
+            "long": "--continue",
+            "description": "Resume getting a partially-downloaded file."
+        },
+        {
+            "short": null,
+            "long": "--start-pos",
+            "description": "Start downloading from zero-based position OFFSET."
+        },
+        {
+            "short": null,
+            "long": "--progress",
+            "description": "Select progress gauge type."
+        },
+        {
+            "short": null,
+            "long": "--spider",
+            "description": "Don't download anything."
+        },
+        {
+            "short": "-T",
+            "long": "--timeout",
+            "description": "Set all timeout values to SECONDS."
+        }
+    ],
+    "subcommands": []
+}

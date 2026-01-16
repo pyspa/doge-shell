@@ -1,0 +1,182 @@
+{
+  "command": "useradd",
+  "description": "Create a new user or update default new user information",
+  "global_options": [
+    {
+      "long": "--help",
+      "short": "-h",
+      "description": "Display help message and exit"
+    }
+  ],
+  "options": [
+    {
+      "short": "-D",
+      "long": "--defaults",
+      "description": "Output or change default useradd configuration"
+    },
+    {
+      "short": "-b",
+      "long": "--base-dir",
+      "takes_value": true,
+      "description": "Base directory for the home directory",
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-c",
+      "long": "--comment",
+      "takes_value": true,
+      "description": "GECOS field of the new account",
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-d",
+      "long": "--home-dir",
+      "takes_value": true,
+      "description": "Home directory of the new account",
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-e",
+      "long": "--expiredate",
+      "takes_value": true,
+      "description": "Expiration date of the new account",
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-f",
+      "long": "--inactive",
+      "takes_value": true,
+      "description": "Password inactivity",
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-g",
+      "long": "--gid",
+      "takes_value": true,
+      "description": "Name or ID of the primary group",
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-G",
+      "long": "--groups",
+      "takes_value": true,
+      "description": "List of supplementary groups",
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-k",
+      "long": "--skel",
+      "takes_value": true,
+      "description": "Use this alternative skeleton directory",
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-K",
+      "long": "--key",
+      "takes_value": true,
+      "description": "Override /etc/login.defs defaults",
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-l",
+      "long": "--no-log-init",
+      "description": "Do not add the user to the lastlog and faillog databases"
+    },
+    {
+      "short": "-m",
+      "long": "--create-home",
+      "description": "Create the user's home directory"
+    },
+    {
+      "short": "-M",
+      "long": "--no-create-home",
+      "description": "Do not create the user's home directory"
+    },
+    {
+      "short": "-N",
+      "long": "--no-user-group",
+      "description": "Do not create a group with the same name as the user"
+    },
+    {
+      "short": "-o",
+      "long": "--non-unique",
+      "description": "Allow the creation of a user account with a duplicate UID"
+    },
+    {
+      "short": "-p",
+      "long": "--password",
+      "takes_value": true,
+      "description": "Encrypted password of the new account",
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-r",
+      "long": "--system",
+      "description": "Create a system account"
+    },
+    {
+      "short": "-R",
+      "long": "--root",
+      "takes_value": true,
+      "description": "Directory to chroot into",
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-s",
+      "long": "--shell",
+      "takes_value": true,
+      "description": "Login shell of the new account",
+      "value_type": {
+        "type": "File",
+        "data": {
+          "extensions": []
+        }
+      }
+    },
+    {
+      "short": "-u",
+      "long": "--uid",
+      "takes_value": true,
+      "description": "UID of the new account",
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-U",
+      "long": "--user-group",
+      "description": "Create a group with the same name as the user"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "LOGIN",
+      "description": "Login name",
+      "type": {
+        "type": "String"
+      }
+    }
+  ]
+}

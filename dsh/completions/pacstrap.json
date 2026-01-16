@@ -1,0 +1,43 @@
+{
+  "command": "pacstrap",
+  "description": "Install packages to the specified new root",
+  "global_options": [
+    {
+      "short": "-C",
+      "description": "Use an alternate pacman configuration file."
+    },
+    {
+      "short": "-c",
+      "description": "Use a cache directory for packages."
+    },
+    {
+      "short": "-G",
+      "description": "Avoid copying the host's pacman mirrorlist to the target."
+    },
+    {
+      "short": "-i",
+      "description": "Prompt for confirmation before package installation (interactive mode)."
+    },
+    {
+      "short": "-K",
+      "description": "Initialize an empty pacman keyring in the target."
+    },
+    {
+      "short": "-M",
+      "description": "Avoid copying the host's pacman machine-id to the target."
+    },
+    {
+        "short": "-N",
+        "description": "Run a minimal pacman configuration."
+    },
+    {
+        "short": "-U",
+        "description": "Copy the host's kernel and initramfs into the target."
+    },
+    {
+        "short": "-d",
+        "description": "Allow pacstrap to be run as a non-root user."
+    }
+  ],
+  "subcommands": []
+}

@@ -1,0 +1,6 @@
+{
+  "command": "bg",
+  "description": "Send jobs to background",
+  "global_options": [],
+  "subcommands": []
+}

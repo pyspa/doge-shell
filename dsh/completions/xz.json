@@ -1,0 +1,42 @@
+{
+  "command": "xz",
+  "description": "XZ Utils compression",
+  "global_options": [
+    {
+      "short": "-z",
+      "long": "--compress",
+      "description": "Force compression"
+    },
+    {
+      "short": "-d",
+      "long": "--decompress",
+      "description": "Force decompression"
+    },
+    {
+      "short": "-t",
+      "long": "--test",
+      "description": "Test compressed file integrity"
+    },
+    {
+      "short": "-l",
+      "long": "--list",
+      "description": "List information about .xz files"
+    },
+    {
+      "short": "-k",
+      "long": "--keep",
+      "description": "Keep (don't delete) input files"
+    },
+    {
+      "short": "-f",
+      "long": "--force",
+      "description": "Force overwrite"
+    },
+    {
+      "short": "-T",
+      "long": "--threads",
+      "description": "Use N threads"
+    }
+  ],
+  "subcommands": []
+}

@@ -1,0 +1,74 @@
+{
+  "command": "bat",
+  "description": "A cat clone with syntax highlighting",
+  "global_options": [
+    {
+      "short": "-A",
+      "long": "--show-all",
+      "description": "Show non-printable characters"
+    },
+    {
+      "short": "-l",
+      "long": "--language",
+      "description": "Set syntax language"
+    },
+    {
+      "short": "-n",
+      "long": "--number",
+      "description": "Show line numbers"
+    },
+    {
+      "short": "-p",
+      "long": "--plain",
+      "description": "Plain output (no decorations)"
+    },
+    {
+      "long": "--paging",
+      "description": "Control paging (auto, never, always)"
+    },
+    {
+      "long": "--theme",
+      "description": "Set color theme"
+    },
+    {
+      "long": "--list-themes",
+      "description": "List available themes"
+    },
+    {
+      "long": "--list-languages",
+      "description": "List supported languages"
+    },
+    {
+      "short": "-r",
+      "long": "--line-range",
+      "description": "Show specific line range"
+    },
+    {
+      "long": "--diff",
+      "description": "Show git diff"
+    },
+    {
+      "long": "--color",
+      "description": "Control color output (auto, always, never)"
+    },
+    {
+      "long": "--style",
+      "description": "Comma-separated style options"
+    },
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show help"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "file",
+      "description": "File to display",
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ]
+}

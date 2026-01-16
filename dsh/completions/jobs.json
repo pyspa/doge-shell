@@ -1,0 +1,17 @@
+{
+  "command": "jobs",
+  "description": "List active jobs",
+  "global_options": [
+    {
+      "short": "-l",
+      "long": "--list",
+      "description": "List process IDs in addition to the normal information"
+    },
+    {
+      "short": "-p",
+      "long": "--pgid",
+      "description": "List only process group IDs"
+    }
+  ],
+  "subcommands": []
+}

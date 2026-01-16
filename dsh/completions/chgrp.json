@@ -1,0 +1,84 @@
+{
+  "command": "chgrp",
+  "description": "Change group ownership",
+  "global_options": [
+    {
+      "long": "--help",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "description": "Display version information"
+    }
+  ],
+  "options": [
+    {
+      "long": "--recursive",
+      "short": "-R",
+      "description": "Operate on files and directories recursively"
+    },
+    {
+      "long": "--verbose",
+      "short": "-v",
+      "description": "Output a diagnostic for every file processed"
+    },
+    {
+      "long": "--changes",
+      "short": "-c",
+      "description": "Like verbose but report only when a change is made"
+    },
+    {
+      "long": "--reference",
+      "takes_value": true,
+      "description": "Use the group of given reference file",
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "long": "--dereference",
+      "description": "affect the referent of each symbolic link (this is the default), rather than the symbolic link itself"
+    },
+    {
+      "long": "--no-dereference",
+      "short": "-h",
+      "description": "affect symbolic links instead of any referenced file"
+    },
+    {
+      "long": "--no-preserve-root",
+      "description": "do not treat '/' specially (the default)"
+    },
+    {
+      "long": "--preserve-root",
+      "description": "fail to operate recursively on '/'"
+    },
+    {
+      "long": "--quiet",
+      "short": "-f",
+      "description": "suppress most error messages"
+    },
+    {
+      "long": "--silent",
+      "description": "suppress most error messages"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "group",
+      "description": "Group name or ID",
+      "type": {
+        "type": "String"
+      }
+    },
+    {
+      "name": "files",
+      "description": "Files to change",
+      "multiple": true,
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ]
+}

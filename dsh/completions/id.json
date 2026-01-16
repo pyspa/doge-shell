@@ -1,0 +1,59 @@
+{
+  "command": "id",
+  "description": "Print user and group information",
+  "options": [
+    {
+      "short": "-a",
+      "description": "Ignore, for compatibility with other versions"
+    },
+    {
+      "short": "-Z",
+      "long": "--context",
+      "description": "Print only the security context of the process"
+    },
+    {
+      "short": "-g",
+      "long": "--group",
+      "description": "Print only the effective group ID"
+    },
+    {
+      "short": "-G",
+      "long": "--groups",
+      "description": "Print all group IDs"
+    },
+    {
+      "short": "-n",
+      "long": "--name",
+      "description": "Print a name instead of a number, for -ugG"
+    },
+    {
+      "short": "-r",
+      "long": "--real",
+      "description": "Print the real ID instead of the effective ID, for -ugG"
+    },
+    {
+      "short": "-u",
+      "long": "--user",
+      "description": "Print only the effective user ID"
+    },
+    {
+      "short": "-z",
+      "long": "--zero",
+      "description": "Delimit entries with NUL characters, not whitespace"
+    },
+    {
+      "long": "--help",
+      "description": "Display this help and exit"
+    },
+    {
+      "long": "--version",
+      "description": "Output version information and exit"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "user",
+      "description": "User name (optional)"
+    }
+  ]
+}

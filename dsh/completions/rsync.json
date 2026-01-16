@@ -1,0 +1,43 @@
+{
+  "command": "rsync",
+  "description": "A fast, versatile, remote (and local) file-copying tool",
+  "global_options": [
+    {
+      "short": "-a",
+      "long": "--archive",
+      "description": "Archive mode (equivalent to -rlptgoD)"
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Increase verbosity"
+    },
+    {
+      "short": "-z",
+      "long": "--compress",
+      "description": "Compress file data during the transfer"
+    },
+    {
+      "short": "-r",
+      "long": "--recursive",
+      "description": "Recurse into directories"
+    },
+    {
+      "short": "-P",
+      "description": "Same as --partial --progress"
+    },
+    {
+      "long": "--delete",
+      "description": "Delete extraneous files from dest dirs"
+    },
+    {
+      "long": "--exclude",
+      "description": "Exclude files matching PATTERN"
+    },
+    {
+      "short": "-n",
+      "long": "--dry-run",
+      "description": "Perform a trial run with no changes made"
+    }
+  ]
+}

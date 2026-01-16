@@ -1,0 +1,93 @@
+{
+  "command": "du",
+  "description": "Estimate file space usage",
+  "global_options": [
+    {
+      "short": "-h",
+      "long": "--human-readable",
+      "description": "Print sizes in human readable format (e.g., 1K, 234M, 2G)"
+    },
+    {
+      "short": "-s",
+      "long": "--summarize",
+      "description": "Display only a total for each argument"
+    },
+    {
+      "short": "-a",
+      "long": "--all",
+      "description": "Write counts for all files, not just directories"
+    },
+    {
+      "short": "-c",
+      "long": "--total",
+      "description": "Produce a grand total"
+    },
+    {
+      "short": "-d",
+      "long": "--max-depth",
+      "description": "Print total for directory only if it is N or fewer levels below the command line argument",
+      "takes_value": true,
+      "value_type": { "type": "Number" }
+    },
+    {
+      "short": "-k",
+      "description": "Like --block-size=1K"
+    },
+    {
+      "short": "-m",
+      "description": "Like --block-size=1M"
+    },
+    {
+      "short": "-B",
+      "long": "--block-size",
+      "description": "Scale sizes by SIZE before printing",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": ["K", "M", "G", "T", "P", "1K", "1M", "1G"]
+      }
+    },
+    {
+      "short": "-L",
+      "long": "--dereference",
+      "description": "Dereference all symbolic links"
+    },
+    {
+      "short": "-S",
+      "long": "--separate-dirs",
+      "description": "For directories, don't include size of subdirectories"
+    },
+    {
+      "short": "-x",
+      "long": "--one-file-system",
+      "description": "Skip directories on different file systems"
+    },
+    {
+      "long": "--exclude",
+      "description": "Exclude files that match PATTERN",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "long": "--time",
+      "description": "Show time of the last modification"
+    },
+    {
+      "long": "--apparent-size",
+      "description": "Print apparent sizes, rather than disk usage"
+    },
+    {
+      "long": "--inodes",
+      "description": "List inode usage information instead of block usage"
+    },
+    {
+      "long": "--help",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": []
+}

@@ -1,0 +1,95 @@
+{
+  "command": "code",
+  "description": "Visual Studio Code",
+  "global_options": [
+    {
+      "short": "-n",
+      "long": "--new-window",
+      "description": "Open in new window"
+    },
+    {
+      "short": "-r",
+      "long": "--reuse-window",
+      "description": "Open in existing window"
+    },
+    {
+      "short": "-g",
+      "long": "--goto",
+      "description": "Open file at line:column"
+    },
+    {
+      "short": "-d",
+      "long": "--diff",
+      "description": "Compare two files"
+    },
+    {
+      "short": "-w",
+      "long": "--wait",
+      "description": "Wait for window to close"
+    },
+    {
+      "long": "--add",
+      "description": "Add folder to workspace"
+    },
+    {
+      "long": "--install-extension",
+      "description": "Install extension"
+    },
+    {
+      "long": "--uninstall-extension",
+      "description": "Uninstall extension"
+    },
+    {
+      "long": "--list-extensions",
+      "description": "List installed extensions"
+    },
+    {
+      "long": "--show-versions",
+      "description": "Show extension versions"
+    },
+    {
+      "long": "--enable-proposed-api",
+      "description": "Enable proposed API"
+    },
+    {
+      "short": "-v",
+      "long": "--version",
+      "description": "Show version"
+    },
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show help"
+    },
+    {
+      "long": "--user-data-dir",
+      "description": "User data directory"
+    },
+    {
+      "long": "--extensions-dir",
+      "description": "Extensions directory"
+    },
+    {
+      "long": "--locale",
+      "description": "Set locale"
+    },
+    {
+      "long": "--disable-extensions",
+      "description": "Disable all extensions"
+    },
+    {
+      "long": "--disable-gpu",
+      "description": "Disable GPU acceleration"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "file_or_folder",
+      "description": "File or folder to open",
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ]
+}

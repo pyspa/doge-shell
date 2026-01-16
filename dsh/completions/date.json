@@ -1,0 +1,16 @@
+{
+  "command": "date",
+  "description": "Print or set the system date and time",
+  "global_options": [
+    { "short": "-d", "long": "--date <STRING>", "description": "Display time described by STRING, not 'now'" },
+    { "short": "-f", "long": "--file <DATEFILE>", "description": "Like --date; once for each line of DATEFILE" },
+    { "short": "-I", "long": "--iso-8601[=FMT]", "description": "Output date/time in ISO 8601 format" },
+    { "short": "-r", "long": "--reference <FILE>", "description": "Display the last modification time of FILE" },
+    { "short": "-R", "long": "--rfc-2822", "description": "Output date and time in RFC 2822 format" },
+    { "short": "-s", "long": "--set <STRING>", "description": "Set time described by STRING" },
+    { "short": "-u", "long": "--utc", "description": "Print or set Coordinated Universal Time (UTC)" },
+    { "short": "-h", "long": "--help", "description": "Display this help and exit" },
+    { "short": "-v", "long": "--version", "description": "Output version information and exit" }
+  ],
+  "subcommands": []
+}

@@ -1,0 +1,26 @@
+{
+  "command": "whereis",
+  "description": "Locate the binary, source, and manual page files for a command",
+  "global_options": [
+    {
+      "short": "-b",
+      "description": "Search only for binaries"
+    },
+    {
+      "short": "-m",
+      "description": "Search only for manual sections"
+    },
+    {
+      "short": "-s",
+      "description": "Search only for sources"
+    },
+    {
+      "short": "-u",
+      "description": "Search for unusual entries"
+    },
+    {
+      "short": "-l",
+      "description": "Output effective lookup paths"
+    }
+  ]
+}

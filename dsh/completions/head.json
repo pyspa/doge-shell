@@ -1,0 +1,35 @@
+{
+  "command": "head",
+  "description": "Output the first part of files",
+  "global_options": [
+    {
+      "short": "-n",
+      "long": "--lines",
+      "description": "Print the first NUM lines instead of the first 10",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-c",
+      "long": "--bytes",
+      "description": "Print the first NUM bytes of each file",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-q",
+      "long": "--quiet",
+      "description": "Never print headers giving file names"
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Always print headers giving file names"
+    }
+  ],
+  "subcommands": []
+}

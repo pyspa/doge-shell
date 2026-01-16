@@ -157,6 +157,17 @@ impl LispEngine {
         }
     }
 
+    /// Check if a symbol is bound and contains a non-empty list.
+    /// This is an efficient check for hook lists without evaluating Lisp code.
+    pub fn is_bound_nonempty_list(&self, name: &str) -> bool {
+        let symbol = Symbol::from(name);
+        if let Some(value) = self.env.borrow().get(&symbol) {
+            matches!(&value, Value::List(list) if *list != List::NIL)
+        } else {
+            false
+        }
+    }
+
     pub fn is_export(&self, name: &str) -> bool {
         if let Ok(Value::Lambda(l)) = self.run(name) {
             l.export

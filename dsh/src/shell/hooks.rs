@@ -70,10 +70,19 @@ fn chpwd_update_env(pwd: &Path, _env: Arc<RwLock<Environment>>) {
 
 /// Execute pre-prompt hooks
 pub fn exec_pre_prompt_hooks(shell: &Shell) -> Result<()> {
+    // Fast path: skip Lisp evaluation if no hooks are registered
+    if !shell
+        .lisp_engine
+        .borrow()
+        .is_bound_nonempty_list("*pre-prompt-hooks*")
+    {
+        return Ok(());
+    }
+
     if let Err(e) = shell
         .lisp_engine
         .borrow()
-        .run("(when (bound? '*pre-prompt-hooks*) (map (lambda (hook) (hook)) *pre-prompt-hooks*))")
+        .run("(map (lambda (hook) (hook)) *pre-prompt-hooks*)")
     {
         debug!("Failed to execute pre-prompt hooks: {}", e);
     }
@@ -82,11 +91,18 @@ pub fn exec_pre_prompt_hooks(shell: &Shell) -> Result<()> {
 
 /// Execute pre-exec hooks
 pub fn exec_pre_exec_hooks(shell: &Shell, command: &str) -> Result<()> {
-    // Execute pre-exec hooks with the command as argument
+    // Fast path: skip Lisp evaluation if no hooks are registered
+    if !shell
+        .lisp_engine
+        .borrow()
+        .is_bound_nonempty_list("*pre-exec-hooks*")
+    {
+        return Ok(());
+    }
+
     let lisp_code = format!(
-        "(when (bound? '*pre-exec-hooks*)
-            (map (lambda (hook) (hook \"{}\")) *pre-exec-hooks*))",
-        command.replace("\"", "\\\"") // Escape quotes in command
+        "(map (lambda (hook) (hook \"{}\")) *pre-exec-hooks*)",
+        command.replace("\"", "\\\"")
     );
 
     if let Err(e) = shell.lisp_engine.borrow().run(&lisp_code) {
@@ -97,11 +113,18 @@ pub fn exec_pre_exec_hooks(shell: &Shell, command: &str) -> Result<()> {
 
 /// Execute post-exec hooks
 pub fn exec_post_exec_hooks(shell: &Shell, command: &str, exit_code: i32) -> Result<()> {
-    // Execute post-exec hooks with command and exit code as arguments
+    // Fast path: skip Lisp evaluation if no hooks are registered
+    if !shell
+        .lisp_engine
+        .borrow()
+        .is_bound_nonempty_list("*post-exec-hooks*")
+    {
+        return Ok(());
+    }
+
     let lisp_code = format!(
-        "(when (bound? '*post-exec-hooks*)
-            (map (lambda (hook) (hook \"{}\" {})) *post-exec-hooks*))",
-        command.replace("\"", "\\\""), // Escape quotes in command
+        "(map (lambda (hook) (hook \"{}\" {})) *post-exec-hooks*)",
+        command.replace("\"", "\\\""),
         exit_code
     );
 
@@ -115,10 +138,18 @@ pub fn exec_post_exec_hooks(shell: &Shell, command: &str, exit_code: i32) -> Res
 /// Called when an unknown command is entered
 /// Returns true if a hook handled the command (skipping default error), false otherwise
 pub fn exec_command_not_found_hooks(shell: &Shell, command: &str) -> bool {
+    // Fast path: skip Lisp evaluation if no hooks are registered
+    if !shell
+        .lisp_engine
+        .borrow()
+        .is_bound_nonempty_list("*command-not-found-hooks*")
+    {
+        return false;
+    }
+
     let lisp_code = format!(
-        "(when (bound? '*command-not-found-hooks*)
-            (let ((results (map (lambda (hook) (hook \"{}\")) *command-not-found-hooks*)))
-              (filter (lambda (r) r) results)))",
+        "(let ((results (map (lambda (hook) (hook \"{}\")) *command-not-found-hooks*)))
+          (filter (lambda (r) r) results))",
         command.replace("\"", "\\\"")
     );
 
@@ -139,9 +170,17 @@ pub fn exec_command_not_found_hooks(shell: &Shell, command: &str) -> bool {
 /// Execute completion hooks
 /// Called when a completion is triggered
 pub fn exec_completion_hooks(shell: &Shell, input: &str, cursor: usize) -> Result<()> {
+    // Fast path: skip Lisp evaluation if no hooks are registered
+    if !shell
+        .lisp_engine
+        .borrow()
+        .is_bound_nonempty_list("*completion-hooks*")
+    {
+        return Ok(());
+    }
+
     let lisp_code = format!(
-        "(when (bound? '*completion-hooks*)
-            (map (lambda (hook) (hook \"{}\" {})) *completion-hooks*))",
+        "(map (lambda (hook) (hook \"{}\" {})) *completion-hooks*)",
         input.replace("\"", "\\\""),
         cursor
     );
@@ -155,9 +194,20 @@ pub fn exec_completion_hooks(shell: &Shell, input: &str, cursor: usize) -> Resul
 /// Execute input-timeout hooks
 /// Called when the user has been idle for a certain period
 pub fn exec_input_timeout_hooks(shell: &Shell) -> Result<()> {
-    if let Err(e) = shell.lisp_engine.borrow().run(
-        "(when (bound? '*input-timeout-hooks*) (map (lambda (hook) (hook)) *input-timeout-hooks*))",
-    ) {
+    // Fast path: skip Lisp evaluation if no hooks are registered
+    if !shell
+        .lisp_engine
+        .borrow()
+        .is_bound_nonempty_list("*input-timeout-hooks*")
+    {
+        return Ok(());
+    }
+
+    if let Err(e) = shell
+        .lisp_engine
+        .borrow()
+        .run("(map (lambda (hook) (hook)) *input-timeout-hooks*)")
+    {
         debug!("Failed to execute input-timeout hooks: {}", e);
     }
     Ok(())

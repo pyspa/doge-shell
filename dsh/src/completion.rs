@@ -158,12 +158,14 @@ impl Completion {
     }
 }
 
+/// Singleton fuzzy matcher to avoid repeated allocation
+static FUZZY_MATCHER: LazyLock<SkimMatcherV2> = LazyLock::new(SkimMatcherV2::default);
+
 pub fn fuzzy_match_score(choice: &str, pattern: &str) -> Option<i64> {
     if pattern.is_empty() {
         return Some(0);
     }
-    let matcher = SkimMatcherV2::default();
-    matcher.fuzzy_match(choice, pattern)
+    FUZZY_MATCHER.fuzzy_match(choice, pattern)
 }
 
 pub fn path_completion_prefix(input: &str) -> Result<Option<String>> {
@@ -424,6 +426,8 @@ pub fn path_completion_path_sync(path: PathBuf) -> Result<Vec<Candidate>> {
     Ok(candidates)
 }
 
+/// Check if a path exists in the completion cache without triggering a background scan.
+/// This is used for syntax highlighting to avoid unnecessary I/O during input processing.
 pub fn is_path_cached(path: &Path) -> bool {
     let parent = match path.parent() {
         Some(p) if p.as_os_str().is_empty() => PathBuf::from("."),
@@ -431,12 +435,14 @@ pub fn is_path_cached(path: &Path) -> bool {
         None => return false,
     };
 
-    // This calls path_completion_path which triggers background load if not cached
-    if let Ok(candidates) = path_completion_path(parent) {
+    let parent_str = parent.display().to_string();
+
+    // Only check cache, don't trigger background load
+    if let Some(hit) = PATH_COMPLETION_CACHE.lookup(&parent_str) {
         let path_str = path.display().to_string();
         let search = path_str.trim_end_matches(std::path::MAIN_SEPARATOR);
 
-        for cand in candidates {
+        for cand in hit.candidates {
             if let Candidate::Path(p) = cand {
                 let p_clean = p.trim_end_matches(std::path::MAIN_SEPARATOR);
                 if p_clean == search {

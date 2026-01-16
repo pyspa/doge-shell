@@ -792,7 +792,7 @@ impl IntegratedCompletionEngine {
 }
 
 fn matches_prefix(current_token: &str, value: &str) -> bool {
-    current_token.is_empty() || value.starts_with(current_token)
+    current_token.is_empty() || super::fuzzy_match_score(value, current_token).is_some()
 }
 
 fn format_task_description(source: &str, command: &str) -> String {

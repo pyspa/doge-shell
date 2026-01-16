@@ -17,6 +17,8 @@ pub struct Input {
     cursor: usize,
     input: String,
     indices: Vec<usize>,
+    /// Cached display width of the full input string (updated on modification)
+    cached_display_width: usize,
 
     pub completion: Option<String>,
     pub color_ranges: Option<Vec<(usize, usize, ColorType)>>, // (start, end, color_type)
@@ -30,6 +32,7 @@ impl Input {
             cursor: 0,
             input: String::with_capacity(INITIAL_CAP),
             indices: Vec::with_capacity(INITIAL_CAP),
+            cached_display_width: 0,
             completion: None,
             color_ranges: None,
             can_execute: false,
@@ -39,6 +42,7 @@ impl Input {
     pub fn reset(&mut self, input: String) {
         self.input = input;
         self.update_indices();
+        self.recalculate_display_width();
         self.move_to_end();
         self.color_ranges = None;
     }
@@ -50,6 +54,7 @@ impl Input {
     ) {
         self.input = input;
         self.update_indices();
+        self.recalculate_display_width();
         self.move_to_end();
         self.color_ranges = Some(color_ranges);
     }
@@ -66,6 +71,7 @@ impl Input {
         self.cursor = 0;
         self.input.clear();
         self.indices.clear();
+        self.cached_display_width = 0;
         self.color_ranges = None;
     }
 
@@ -86,6 +92,9 @@ impl Input {
         self.indices.insert(insert_pos, byte_index);
         self.shift_indices_from(insert_pos + 1, char_len as isize);
         self.cursor += 1;
+
+        // Incrementally update display width
+        self.cached_display_width += ch.width().unwrap_or_default();
     }
 
     pub fn insert_str(&mut self, string: &str) {
@@ -107,6 +116,10 @@ impl Input {
         self.indices.splice(insert_pos..insert_pos, offsets);
         self.shift_indices_from(insert_pos + inserted_chars, advance as isize);
         self.cursor += inserted_chars;
+
+        // Incrementally update display width
+        let added_width: usize = string.chars().map(|c| c.width().unwrap_or_default()).sum();
+        self.cached_display_width += added_width;
     }
 
     pub fn backspace(&mut self) {
@@ -114,6 +127,14 @@ impl Input {
             let remove_index = self.cursor - 1;
             let byte_index = self.indices[remove_index];
             let char_len = self.char_len_at(remove_index);
+
+            // Get the character being removed for display width calculation
+            let removed_char = self.input[byte_index..].chars().next();
+            if let Some(ch) = removed_char {
+                self.cached_display_width = self
+                    .cached_display_width
+                    .saturating_sub(ch.width().unwrap_or_default());
+            }
 
             self.input.drain(byte_index..byte_index + char_len);
             self.indices.remove(remove_index);
@@ -172,6 +193,9 @@ impl Input {
         // Remove indices
         self.indices.truncate(self.cursor);
 
+        // Recalculate display width (simpler than tracking removed chars)
+        self.recalculate_display_width();
+
         // Cursor position remains effectively the same (now at end)
     }
 
@@ -203,6 +227,9 @@ impl Input {
         }
 
         self.cursor = 0;
+
+        // Recalculate display width
+        self.recalculate_display_width();
     }
 
     pub fn move_word_left(&mut self) {
@@ -311,6 +338,21 @@ impl Input {
             .chars()
             .map(|c| c.width().unwrap_or_default())
             .sum()
+    }
+
+    /// Get the cached display width of the full input string
+    pub fn display_width(&self) -> usize {
+        self.cached_display_width
+    }
+
+    /// Recalculate and cache the display width of the full input string
+    /// Call this after any modification to the input
+    pub fn recalculate_display_width(&mut self) {
+        self.cached_display_width = self
+            .input
+            .chars()
+            .map(|c| c.width().unwrap_or_default())
+            .sum();
     }
 
     pub fn is_empty(&self) -> bool {
@@ -445,6 +487,14 @@ impl Input {
 
         let byte_index = self.indices[self.cursor];
         let char_len = self.char_len_at(self.cursor);
+
+        // Get the character being removed for display width calculation
+        let removed_char = self.input[byte_index..].chars().next();
+        if let Some(ch) = removed_char {
+            self.cached_display_width = self
+                .cached_display_width
+                .saturating_sub(ch.width().unwrap_or_default());
+        }
 
         self.input.drain(byte_index..byte_index + char_len);
         self.indices.remove(self.cursor);

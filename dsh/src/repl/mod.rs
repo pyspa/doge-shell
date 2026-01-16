@@ -1400,7 +1400,7 @@ impl<'a> Repl<'a> {
             let hint = " ↹ Tab to expand";
             let hint_width = display_width(hint);
             // Only show if we have enough space (avoid overlapping with input)
-            let input_visual_end = self.prompt_mark_width + display_width(self.input.as_str());
+            let input_visual_end = self.prompt_mark_width + self.input.display_width();
 
             if self.columns > hint_width
                 && self.columns.saturating_sub(hint_width) > input_visual_end + 2
@@ -1417,7 +1417,7 @@ impl<'a> Repl<'a> {
             // Hint for AI Output Pipe
             let hint = " ↵ Enter to analyze";
             let hint_width = display_width(hint);
-            let input_visual_end = self.prompt_mark_width + display_width(self.input.as_str());
+            let input_visual_end = self.prompt_mark_width + self.input.display_width();
 
             if self.columns > hint_width
                 && self.columns.saturating_sub(hint_width) > input_visual_end + 2

@@ -1,0 +1,35 @@
+{
+  "command": "unzip",
+  "description": "List, test and extract compressed files in a ZIP archive",
+  "global_options": [
+    {
+      "short": "-l",
+      "description": "List archive files (short format)"
+    },
+    {
+      "short": "-t",
+      "description": "Test archive files"
+    },
+    {
+      "short": "-d",
+      "description": "An optional directory to which to extract files",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-o",
+      "description": "Overwrite existing files without prompting"
+    },
+    {
+      "short": "-n",
+      "description": "Never overwrite existing files"
+    },
+    {
+      "short": "-q",
+      "description": "Quiet mode"
+    }
+  ],
+  "subcommands": []
+}

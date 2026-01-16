@@ -1,0 +1,37 @@
+{
+  "command": "lsblk",
+  "description": "List block devices",
+  "global_options": [
+    {
+      "short": "-a",
+      "long": "--all",
+      "description": "Print all devices"
+    },
+    {
+      "short": "-d",
+      "long": "--nodeps",
+      "description": "Don't print slaves or holders"
+    },
+    {
+      "short": "-f",
+      "long": "--fs",
+      "description": "Output info about filesystems"
+    },
+    {
+      "short": "-l",
+      "long": "--list",
+      "description": "Use list format output"
+    },
+    {
+      "short": "-m",
+      "long": "--perms",
+      "description": "Output info about permissions"
+    },
+    {
+      "short": "-t",
+      "long": "--topology",
+      "description": "Output info about topology"
+    }
+  ],
+  "subcommands": []
+}

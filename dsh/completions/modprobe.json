@@ -1,0 +1,57 @@
+{
+  "command": "modprobe",
+  "description": "Add and remove modules from the Linux Kernel",
+  "global_options": [
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Print messages about what the program is doing"
+    },
+    {
+      "short": "-C",
+      "long": "--config",
+      "description": "Read configuration from FILE instead of default /etc/modprobe.d"
+    },
+    {
+      "short": "-c",
+      "long": "--showconfig",
+      "description": "Dump the configuration file and exit"
+    },
+    {
+      "short": "-n",
+      "long": "--dry-run",
+      "description": "Do not actually insert or delete the module"
+    },
+    {
+      "short": "-i",
+      "long": "--ignore-install",
+      "description": "Ignore install and remove commands in the configuration file"
+    },
+    {
+      "short": "-q",
+      "long": "--quiet",
+      "description": "Do not complain about missing modules"
+    },
+    {
+      "short": "-r",
+      "long": "--remove",
+      "description": "Remove module (stacks) or do autoclean"
+    },
+    {
+      "short": "-V",
+      "long": "--version",
+      "description": "Show version"
+    },
+    {
+      "short": "-f",
+      "long": "--force",
+      "description": "Force module insertion or removal"
+    },
+    {
+      "short": "-b",
+      "long": "--use-blacklist",
+      "description": "Apply blacklist to module names too"
+    }
+  ],
+  "subcommands": []
+}

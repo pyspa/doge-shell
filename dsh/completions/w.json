@@ -1,0 +1,30 @@
+{
+  "command": "w",
+  "description": "Show who is logged on and what they are doing",
+  "global_options": [
+    {
+      "short": "-h",
+      "long": "--no-header",
+      "description": "Don't print the header"
+    },
+    {
+      "short": "-u",
+      "long": "--no-current",
+      "description": "Ingore current process username"
+    },
+    {
+      "short": "-s",
+      "long": "--short",
+      "description": "Use the short format"
+    },
+    {
+      "short": "-f",
+      "long": "--from",
+      "description": "Toggle the FROM field"
+    },
+    {
+      "long": "--help",
+      "description": "Display this help and exit"
+    }
+  ]
+}

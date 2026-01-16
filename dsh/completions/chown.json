@@ -1,0 +1,78 @@
+{
+  "command": "chown",
+  "description": "Change file owner and group",
+  "global_options": [
+    {
+      "long": "--help",
+      "short": "-?",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "short": "-V",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": [],
+  "options": [
+    {
+      "long": "--recursive",
+      "short": "-R",
+      "description": "Change files and directories recursively"
+    },
+    {
+      "long": "--verbose",
+      "short": "-v",
+      "description": "Output a diagnostic for every file processed"
+    },
+    {
+      "long": "--changes",
+      "short": "-c",
+      "description": "Like verbose but report only when a change is made"
+    },
+    {
+      "long": "--reference",
+      "description": "Use the owner and group of given reference file"
+    },
+    {
+      "long": "--dereference",
+      "description": "affect the referent of each symbolic link (this is the default), rather than the symbolic link itself"
+    },
+    {
+      "long": "--no-dereference",
+      "short": "-h",
+      "description": "affect symbolic links instead of any referenced file"
+    },
+    {
+      "long": "--from",
+      "description": "change the owner and/or group of each file only if its current owner and/or group match those specified here."
+    },
+    {
+      "long": "--no-preserve-root",
+      "description": "do not treat '/' specially (the default)"
+    },
+    {
+      "long": "--preserve-root",
+      "description": "fail to operate recursively on '/'"
+    },
+    {
+      "long": "--quiet",
+      "short": "-f",
+      "description": "suppress most error messages"
+    },
+    {
+      "long": "--silent",
+      "description": "suppress most error messages"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "owner_group",
+      "description": "User:group to set (e.g., user, user:group)"
+    },
+    {
+      "name": "files",
+      "description": "Files to change"
+    }
+  ]
+}

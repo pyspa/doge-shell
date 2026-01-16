@@ -1,0 +1,19 @@
+{
+  "command": "unset",
+  "description": "Unset values and attributes of variables and functions",
+  "global_options": [
+    {
+      "short": "-f",
+      "description": "Treat each name as a function"
+    },
+    {
+      "short": "-v",
+      "description": "Treat each name as a variable"
+    },
+    {
+      "short": "-n",
+      "description": "Treat each name as a nameref variable"
+    }
+  ],
+  "subcommands": []
+}

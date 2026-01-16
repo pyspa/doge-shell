@@ -1,0 +1,27 @@
+{
+  "command": "file",
+  "description": "Determine file type",
+  "global_options": [
+    {
+      "short": "-b",
+      "long": "--brief",
+      "description": "Do not prepend filenames to output lines"
+    },
+    {
+      "short": "-i",
+      "long": "--mime",
+      "description": "Output MIME type strings"
+    },
+    {
+      "short": "-L",
+      "long": "--dereference",
+      "description": "Follow symlinks"
+    },
+    {
+      "short": "-z",
+      "long": "--uncompress",
+      "description": "Try to look inside compressed files"
+    }
+  ],
+  "subcommands": []
+}

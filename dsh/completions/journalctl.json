@@ -1,0 +1,63 @@
+{
+  "command": "journalctl",
+  "description": "Query the systemd journal",
+  "global_options": [
+    {
+      "short": "-f",
+      "long": "--follow",
+      "description": "Show only the most recent journal entries, and continuously print new entries as they are appended to the journal"
+    },
+    {
+      "short": "-e",
+      "long": "--pager-end",
+      "description": "Immediately jump to the end of the journal inside the implied pager tool"
+    },
+    {
+      "short": "-n",
+      "long": "--lines",
+      "description": "Show the most recent journal events, specified by the argument",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "long": "--no-pager",
+      "description": "Do not pipe output into a pager"
+    },
+    {
+      "short": "-u",
+      "long": "--unit",
+      "description": "Show messages for the specified systemd unit",
+      "takes_value": true,
+      "value_type": {
+        "type": "Script",
+        "data": "systemctl list-units --all --no-pager --no-legend | awk '{print $1}'"
+      }
+    },
+    {
+      "short": "-S",
+      "long": "--since",
+      "description": "Start showing entries on or newer than the specified date",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-U",
+      "long": "--until",
+      "description": "Start showing entries on or older than the specified date",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-k",
+      "long": "--dmesg",
+      "description": "Show only kernel messages"
+    }
+  ],
+  "subcommands": []
+}

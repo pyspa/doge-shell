@@ -1,0 +1,52 @@
+{
+  "command": "mount",
+  "description": "Mount a filesystem",
+  "global_options": [
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Display help"
+    },
+    {
+      "short": "-V",
+      "long": "--version",
+      "description": "Display version"
+    },
+    {
+      "short": "-a",
+      "long": "--all",
+      "description": "Mount all filesystems mentioned in fstab"
+    },
+    {
+      "short": "-f",
+      "long": "--fake",
+      "description": "Dry run; print what would be done"
+    },
+    {
+      "short": "-o",
+      "long": "--options",
+      "description": "Comma-separated list of mount options"
+    },
+    {
+      "short": "-r",
+      "long": "--read-only",
+      "description": "Mount the filesystem read-only"
+    },
+    {
+      "short": "-w",
+      "long": "--rw",
+      "description": "Mount the filesystem read-write (default)"
+    },
+    {
+      "short": "-t",
+      "long": "--types",
+      "description": "Limit the set of filesystem types"
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Verbose mode"
+    }
+  ],
+  "subcommands": []
+}

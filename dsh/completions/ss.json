@@ -1,0 +1,66 @@
+{
+  "command": "ss",
+  "description": "Socket statistics",
+  "global_options": [
+    {
+      "short": "-a",
+      "long": "--all",
+      "description": "Display all sockets"
+    },
+    {
+      "short": "-l",
+      "long": "--listening",
+      "description": "Display listening sockets"
+    },
+    {
+      "short": "-t",
+      "long": "--tcp",
+      "description": "Display TCP sockets"
+    },
+    {
+      "short": "-u",
+      "long": "--udp",
+      "description": "Display UDP sockets"
+    },
+    {
+      "short": "-x",
+      "long": "--unix",
+      "description": "Display Unix domain sockets"
+    },
+    {
+      "short": "-n",
+      "long": "--numeric",
+      "description": "Do not resolve service names"
+    },
+    {
+      "short": "-p",
+      "long": "--processes",
+      "description": "Show process using socket"
+    },
+    {
+      "short": "-e",
+      "long": "--extended",
+      "description": "Show detailed socket info"
+    },
+    {
+      "short": "-o",
+      "long": "--options",
+      "description": "Show timer info"
+    },
+    {
+      "short": "-s",
+      "long": "--summary",
+      "description": "Print summary statistics"
+    },
+    {
+      "short": "-4",
+      "long": "--ipv4",
+      "description": "Display only IPv4 sockets"
+    },
+    {
+      "short": "-6",
+      "long": "--ipv6",
+      "description": "Display only IPv6 sockets"
+    }
+  ]
+}

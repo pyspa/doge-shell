@@ -1,0 +1,91 @@
+{
+  "command": "nmcli",
+  "description": "NetworkManager Command Line Interface",
+  "subcommands": [
+    {
+      "name": "general",
+      "description": "General status and operations"
+    },
+    {
+      "name": "networking",
+      "description": "Enable or disable networking"
+    },
+    {
+      "name": "radio",
+      "description": "Get status of or enable/disable switches"
+    },
+    {
+      "name": "connection",
+      "description": "Manage connections"
+    },
+    {
+      "name": "device",
+      "description": "Show and manage network interfaces"
+    },
+    {
+      "name": "agent",
+      "description": "Run nmcli as a secret agent or polkit agent"
+    },
+    {
+      "name": "monitor",
+      "description": "Monitor NetworkManager changes"
+    }
+  ],
+  "global_options": [
+    {
+      "short": "-t",
+      "long": "--terse",
+      "description": "Terse output"
+    },
+    {
+      "short": "-p",
+      "long": "--pretty",
+      "description": "Pretty output"
+    },
+    {
+      "short": "-m",
+      "long": "--mode",
+      "description": "Output mode (tabular | multiline)"
+    },
+    {
+      "short": "-c",
+      "long": "--colors",
+      "description": "Control output colorization"
+    },
+    {
+      "short": "-f",
+      "long": "--fields",
+      "description": "Specify the output fields"
+    },
+    {
+      "short": "-e",
+      "long": "--escape",
+      "description": "Escape column separators"
+    },
+    {
+      "short": "-a",
+      "long": "--ask",
+      "description": "Ask for missing parameters"
+    },
+    {
+      "short": "-s",
+      "long": "--show-secrets",
+      "description": "Show passwords"
+    },
+    {
+      "short": "-w",
+      "long": "--wait",
+      "description": "Set timeout waiting for finishing operations"
+    },
+    {
+      "short": "-v",
+      "long": "--version",
+      "description": "Show program version"
+    },
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Print this help"
+    }
+  ]
+}

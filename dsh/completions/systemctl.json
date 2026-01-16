@@ -1,0 +1,478 @@
+{
+  "command": "systemctl",
+  "description": "Control systemd services and other units",
+  "global_options": [
+    {
+      "long": "--help",
+      "short": "-h",
+      "description": "Show help information",
+      "takes_value": false,
+      "required": false,
+      "multiple": false
+    },
+    {
+      "long": "--version",
+      "description": "Show package version",
+      "takes_value": false,
+      "required": false,
+      "multiple": false
+    },
+    {
+      "long": "--system",
+      "description": "Connect to system manager",
+      "takes_value": false,
+      "required": false,
+      "multiple": false
+    },
+    {
+      "long": "--user",
+      "description": "Connect to user service manager",
+      "takes_value": false,
+      "required": false,
+      "multiple": false
+    },
+    {
+      "long": "--global",
+      "description": "Enable/disable unit files globally",
+      "takes_value": false,
+      "required": false,
+      "multiple": false
+    },
+    {
+      "long": "--runtime",
+      "description": "Enable unit files only temporarily until next reboot",
+      "takes_value": false,
+      "required": false,
+      "multiple": false
+    },
+    {
+      "long": "--force",
+      "short": "-f",
+      "description": "When enabling unit files, override existing symlinks",
+      "takes_value": false,
+      "required": false,
+      "multiple": false
+    },
+    {
+      "long": "--quiet",
+      "short": "-q",
+      "description": "Suppress output",
+      "takes_value": false,
+      "required": false,
+      "multiple": false
+    },
+    {
+      "long": "--no-block",
+      "description": "Do not synchronously wait for operation to finish",
+      "takes_value": false,
+      "required": false,
+      "multiple": false
+    },
+    {
+      "long": "--no-pager",
+      "description": "Do not pipe output into a pager",
+      "takes_value": false,
+      "required": false,
+      "multiple": false
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "start",
+      "description": "Start (activate) one or more units",
+      "aliases": [],
+      "options": [
+        {
+          "long": "--no-ask-password",
+          "description": "Do not query the user for authentication for privileged operations.",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "unit",
+          "description": "Unit name to start",
+          "required": true,
+          "multiple": true,
+          "type": {
+            "type": "Script",
+            "data": "systemctl list-unit-files --no-pager --no-legend 2>/dev/null | awk '{print $1}'"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "stop",
+      "description": "Stop (deactivate) one or more units",
+      "aliases": [],
+      "options": [
+        {
+          "long": "--no-ask-password",
+          "description": "Do not query the user for authentication for privileged operations.",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "unit",
+          "description": "Unit name to stop",
+          "required": true,
+          "multiple": true,
+          "type": {
+            "type": "Script",
+            "data": "systemctl list-units --state=running --no-pager --no-legend | awk '{print $1}'"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "restart",
+      "description": "Restart one or more units",
+      "aliases": [],
+      "options": [
+        {
+          "long": "--no-ask-password",
+          "description": "Do not query the user for authentication for privileged operations.",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "unit",
+          "description": "Unit name to restart",
+          "required": true,
+          "multiple": true,
+          "type": {
+            "type": "Script",
+            "data": "systemctl list-units --state=running --no-pager --no-legend | awk '{print $1}'"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "reload",
+      "description": "Reload one or more units",
+      "aliases": [],
+      "options": [
+        {
+          "long": "--no-ask-password",
+          "description": "Do not query the user for authentication for privileged operations.",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "unit",
+          "description": "Unit name to reload",
+          "required": true,
+          "multiple": true,
+          "type": {
+            "type": "Script",
+            "data": "systemctl list-units --state=running --no-pager --no-legend | awk '{print $1}'"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "enable",
+      "description": "Enable one or more unit files",
+      "aliases": [],
+      "options": [
+        {
+          "long": "--now",
+          "description": "Start the unit in addition to enabling it",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "unit",
+          "description": "Unit name to enable",
+          "required": true,
+          "multiple": true,
+          "type": {
+            "type": "Script",
+            "data": "systemctl list-unit-files --state=disabled --no-pager --no-legend 2>/dev/null | awk '{print $1}'"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "disable",
+      "description": "Disable one or more unit files",
+      "aliases": [],
+      "options": [
+        {
+          "long": "--now",
+          "description": "Stop the unit in addition to disabling it",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "unit",
+          "description": "Unit name to disable",
+          "required": true,
+          "multiple": true,
+          "type": {
+            "type": "Script",
+            "data": "systemctl list-unit-files --state=enabled --no-pager --no-legend 2>/dev/null | awk '{print $1}'"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "status",
+      "description": "Show runtime status of one or more units",
+      "aliases": [],
+      "options": [
+        {
+          "long": "--lines",
+          "short": "-n",
+          "description": "Number of journal entries to show",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--full",
+          "short": "-l",
+          "description": "Do not ellipsize unit names and journal entries.",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--output",
+          "short": "-o",
+          "description": "Change output formatting",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "unit",
+          "description": "Unit name to show status for",
+          "required": false,
+          "multiple": true,
+          "type": {
+            "type": "Script",
+            "data": "systemctl list-units --all --no-pager --no-legend | awk '{print $1}'"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "is-active",
+      "description": "Check whether units are active",
+      "aliases": [],
+      "options": [],
+      "arguments": [
+        {
+          "name": "unit",
+          "description": "Unit name to check",
+          "required": true,
+          "multiple": true,
+          "type": {
+            "type": "String"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "is-enabled",
+      "description": "Check whether unit files are enabled",
+      "aliases": [],
+      "options": [],
+      "arguments": [
+        {
+          "name": "unit",
+          "description": "Unit name to check",
+          "required": true,
+          "multiple": true,
+          "type": {
+            "type": "String"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "list-units",
+      "description": "List loaded units",
+      "aliases": [],
+      "options": [
+        {
+          "long": "--all",
+          "short": "-a",
+          "description": "Show all loaded unit files",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--type",
+          "short": "-t",
+          "description": "List units of a particular type",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--state",
+          "description": "List units with particular LOAD or SUB or ACTIVE state",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--legend",
+          "description": "Do not print column headers.",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "pattern",
+          "description": "Pattern to match unit names",
+          "required": false,
+          "multiple": true,
+          "type": {
+            "type": "String"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "list-unit-files",
+      "description": "List installed unit files",
+      "aliases": [],
+      "options": [
+        {
+          "long": "--type",
+          "short": "-t",
+          "description": "List unit files of a particular type",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--state",
+          "description": "List unit files with particular state",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "pattern",
+          "description": "Pattern to match unit file names",
+          "required": false,
+          "multiple": true,
+          "type": {
+            "type": "String"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "daemon-reload",
+      "description": "Reload systemd manager configuration",
+      "aliases": [],
+      "options": [],
+      "arguments": [],
+      "subcommands": []
+    },
+    {
+      "name": "mask",
+      "description": "Mask one or more units",
+      "aliases": [],
+      "options": [
+        {
+          "long": "--now",
+          "description": "Stop the unit in addition to masking it",
+          "takes_value": false,
+          "required": false,
+          "multiple": false
+        }
+      ],
+      "arguments": [
+        {
+          "name": "unit",
+          "description": "Unit name to mask",
+          "required": true,
+          "multiple": true,
+          "type": {
+            "type": "Script",
+            "data": "systemctl list-units --all --no-pager --no-legend | awk '{print $1}'"
+          }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "unmask",
+      "description": "Unmask one or more units",
+      "aliases": [],
+      "options": [],
+      "arguments": [
+        {
+          "name": "unit",
+          "description": "Unit name to unmask",
+          "required": true,
+          "multiple": true,
+          "type": {
+            "type": "Script",
+            "data": "systemctl list-units --all --no-pager --no-legend | awk '{print $1}'"
+          }
+        }
+      ],
+      "subcommands": []
+    }
+  ]
+}

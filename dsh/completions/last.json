@@ -1,0 +1,31 @@
+{
+  "command": "last",
+  "description": "Show listing of last logged in users",
+  "global_options": [
+    {
+      "short": "-n",
+      "long": "--limit",
+      "description": "Tell last how many lines to show"
+    },
+    {
+      "short": "-f",
+      "long": "--file",
+      "description": "Tell last to use a specific file instead of /var/log/wtmp"
+    },
+    {
+      "short": "-R",
+      "long": "--nobhostname",
+      "description": "Suppresses the display of the hostname field"
+    },
+    {
+      "short": "-a",
+      "long": "--hostlast",
+      "description": "Display the hostname in the last column"
+    },
+    {
+      "short": "-d",
+      "long": "--dns",
+      "description": "Translate the IP number back into a hostname"
+    }
+  ]
+}

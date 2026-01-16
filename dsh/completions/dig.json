@@ -1,0 +1,84 @@
+{
+  "command": "dig",
+  "description": "DNS lookup utility",
+  "global_options": [],
+  "options": [
+    {
+      "short": "-6",
+      "description": "Use IPv6 only"
+    },
+    {
+      "short": "-4",
+      "description": "Use IPv4 only"
+    },
+    {
+      "short": "-x",
+      "takes_value": true,
+      "description": "Reverse lookup",
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-p",
+      "takes_value": true,
+      "description": "Port number",
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "long": "+short",
+      "description": "Short output"
+    },
+    {
+      "long": "+trace",
+      "description": "Trace delegation path"
+    },
+    {
+      "long": "+recurse",
+      "description": "Use recursive query (default)"
+    },
+    {
+      "long": "+norecurse",
+      "description": "Disable recursive query"
+    },
+    {
+      "long": "+stats",
+      "description": "Print query statistics"
+    },
+    {
+      "long": "+nostats",
+      "description": "Do not print query statistics"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "name",
+      "description": "Domain name to query",
+      "required": false,
+      "type": {
+        "type": "String"
+      }
+    },
+    {
+      "name": "type",
+      "description": "Query type (A, AAAA, MX, etc.)",
+      "required": false,
+      "type": {
+        "type": "Choice",
+        "data": [
+          "A",
+          "AAAA",
+          "CNAME",
+          "MX",
+          "NS",
+          "PTR",
+          "SOA",
+          "TXT",
+          "ANY"
+        ]
+      }
+    }
+  ]
+}

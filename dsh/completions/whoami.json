@@ -1,0 +1,9 @@
+{
+  "command": "whoami",
+  "description": "Print effective userid",
+  "global_options": [
+    { "long": "--help", "description": "Display this help and exit" },
+    { "long": "--version", "description": "Output version information and exit" }
+  ],
+  "subcommands": []
+}

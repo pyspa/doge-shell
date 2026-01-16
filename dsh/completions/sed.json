@@ -1,0 +1,84 @@
+{
+  "command": "sed",
+  "description": "Stream editor for filtering and transforming text",
+  "global_options": [
+    {
+      "short": "-n",
+      "long": "--quiet",
+      "description": "Suppress automatic printing of pattern space"
+    },
+    {
+      "short": "-e",
+      "long": "--expression",
+      "description": "Add the script to the commands to be executed",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-f",
+      "long": "--file",
+      "description": "Add the contents of script-file to the commands to be executed",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-i",
+      "long": "--in-place",
+      "description": "Edit files in place (makes backup if SUFFIX supplied)",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-E",
+      "long": "--regexp-extended",
+      "description": "Use extended regular expressions in the script"
+    },
+    {
+      "short": "-r",
+      "description": "Use extended regular expressions (alias for -E)"
+    },
+    {
+      "short": "-s",
+      "long": "--separate",
+      "description": "Consider files as separate rather than as a single continuous long stream"
+    },
+    {
+      "short": "-z",
+      "long": "--null-data",
+      "description": "Separate lines by NUL characters"
+    },
+    {
+      "long": "--follow-symlinks",
+      "description": "Follow symlinks when processing in place"
+    },
+    {
+      "long": "--posix",
+      "description": "Disable all GNU extensions"
+    },
+    {
+      "short": "-u",
+      "long": "--unbuffered",
+      "description": "Load minimal amounts of data from the input files and flush the output buffers more often"
+    },
+    {
+      "long": "--sandbox",
+      "description": "Operate in sandbox mode"
+    },
+    {
+      "long": "--help",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": []
+}

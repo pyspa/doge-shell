@@ -1,0 +1,70 @@
+{
+  "command": "node",
+  "description": "Node.js JavaScript runtime",
+  "global_options": [
+    {
+      "short": "-v",
+      "long": "--version",
+      "description": "Print version"
+    },
+    {
+      "short": "-e",
+      "long": "--eval",
+      "description": "Evaluate script"
+    },
+    {
+      "short": "-p",
+      "long": "--print",
+      "description": "Evaluate script and print result"
+    },
+    {
+      "short": "-c",
+      "long": "--check",
+      "description": "Syntax check script without executing"
+    },
+    {
+      "short": "-i",
+      "long": "--interactive",
+      "description": "Enter REPL"
+    },
+    {
+      "short": "-r",
+      "long": "--require",
+      "description": "Preload module"
+    },
+    {
+      "long": "--inspect",
+      "description": "Enable inspector"
+    },
+    {
+      "long": "--inspect-brk",
+      "description": "Enable inspector and break at start"
+    },
+    {
+      "long": "--experimental-modules",
+      "description": "Enable ES modules"
+    },
+    {
+      "long": "--no-warnings",
+      "description": "Silence warnings"
+    },
+    {
+      "long": "--trace-warnings",
+      "description": "Print stack trace for warnings"
+    },
+    {
+      "long": "--max-old-space-size",
+      "description": "Set max V8 old space size (MB)"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "script",
+      "description": "JavaScript file to execute",
+      "type": {
+        "type": "File",
+        "data": { "extensions": [".js", ".mjs", ".cjs"] }
+      }
+    }
+  ]
+}

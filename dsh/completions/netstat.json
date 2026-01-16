@@ -1,0 +1,41 @@
+{
+  "command": "netstat",
+  "description": "Print network connections, routing tables, interface statistics, masquerade connections, and multicast memberships",
+  "global_options": [
+    {
+      "short": "-a",
+      "long": "--all",
+      "description": "Show both listening and non-listening sockets"
+    },
+    {
+      "short": "-n",
+      "long": "--numeric",
+      "description": "Show numerical addresses instead of trying to determine symbolic host, port or user names"
+    },
+    {
+      "short": "-p",
+      "long": "--program",
+      "description": "Show the PID and name of the program to which each socket belongs"
+    },
+    {
+      "short": "-l",
+      "long": "--listening",
+      "description": "Show only listening sockets"
+    },
+    {
+      "short": "-t",
+      "long": "--tcp",
+      "description": "Show TCP connections"
+    },
+    {
+      "short": "-u",
+      "long": "--udp",
+      "description": "Show UDP connections"
+    },
+    {
+      "short": "-r",
+      "long": "--route",
+      "description": "Display the kernel routing tables"
+    }
+  ]
+}

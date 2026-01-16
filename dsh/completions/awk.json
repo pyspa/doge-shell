@@ -1,0 +1,185 @@
+{
+  "command": "awk",
+  "description": "Pattern scanning and text processing language",
+  "global_options": [
+    {
+      "short": "-F",
+      "long": "--field-separator",
+      "description": "Use fs for the input field separator",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-v",
+      "long": "--assign",
+      "description": "Assign the value val to the variable var before execution",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-f",
+      "long": "--file",
+      "description": "Read the AWK program source from the file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-W",
+      "description": "Specify implementation-specific options",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-b",
+      "long": "--characters-as-bytes",
+      "description": "Treat all input data as single-byte characters"
+    },
+    {
+      "short": "-c",
+      "long": "--traditional",
+      "description": "Run in compatibility mode"
+    },
+    {
+      "short": "-C",
+      "long": "--copyright",
+      "description": "Print the short version of the copyright information"
+    },
+    {
+      "short": "-d",
+      "long": "--dump-variables",
+      "description": "Print a sorted list of global variables to file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-e",
+      "long": "--source",
+      "description": "Use program-text as AWK program source code",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-E",
+      "long": "--exec",
+      "description": "Similar to -f, but preprocessor and command line variable assignment disabled",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-g",
+      "long": "--gen-pot",
+      "description": "Scan and parse the AWK program and generate a .pot file on stdout"
+    },
+    {
+      "short": "-i",
+      "long": "--include",
+      "description": "Load an awk source library",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-l",
+      "long": "--load",
+      "description": "Load a gawk extension from the shared library",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-M",
+      "long": "--bignum",
+      "description": "Force arbitrary precision arithmetic on numbers"
+    },
+    {
+      "short": "-n",
+      "long": "--non-decimal-data",
+      "description": "Recognize octal and hexadecimal values in input data"
+    },
+    {
+      "short": "-N",
+      "long": "--use-lc-numeric",
+      "description": "Use the locale's decimal point character when parsing input data"
+    },
+    {
+      "short": "-o",
+      "long": "--pretty-print",
+      "description": "Output a pretty-printed version of the program",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-O",
+      "long": "--optimize",
+      "description": "Enable optimizations on the internal representation of the program"
+    },
+    {
+      "short": "-p",
+      "long": "--profile",
+      "description": "Enable profiling of the AWK program",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-P",
+      "long": "--posix",
+      "description": "Run in POSIX mode"
+    },
+    {
+      "short": "-r",
+      "long": "--re-interval",
+      "description": "Enable interval expressions in regular expression matching"
+    },
+    {
+      "short": "-s",
+      "long": "--no-optimize",
+      "description": "Disable default optimizations"
+    },
+    {
+      "short": "-S",
+      "long": "--sandbox",
+      "description": "Run in sandbox mode"
+    },
+    {
+      "short": "-t",
+      "long": "--lint-old",
+      "description": "Warn about constructs that are not portable to the original Unix awk"
+    },
+    {
+      "long": "--help",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": []
+}

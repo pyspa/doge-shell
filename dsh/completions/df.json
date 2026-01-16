@@ -1,0 +1,87 @@
+{
+  "command": "df",
+  "description": "Report file system disk space usage",
+  "global_options": [
+    {
+      "short": "-h",
+      "long": "--human-readable",
+      "description": "Print sizes in powers of 1024 (e.g., 1023M)"
+    },
+    {
+      "short": "-H",
+      "long": "--si",
+      "description": "Print sizes in powers of 1000 (e.g., 1.1G)"
+    },
+    {
+      "short": "-T",
+      "long": "--print-type",
+      "description": "Print file system type"
+    },
+    {
+      "short": "-a",
+      "long": "--all",
+      "description": "Include pseudo, duplicate, inaccessible file systems"
+    },
+    {
+      "short": "-i",
+      "long": "--inodes",
+      "description": "List inode information instead of block usage"
+    },
+    {
+      "short": "-l",
+      "long": "--local",
+      "description": "Limit listing to local file systems"
+    },
+    {
+      "short": "-P",
+      "long": "--portability",
+      "description": "Use POSIX output format"
+    },
+    {
+      "short": "-t",
+      "long": "--type",
+      "description": "Limit listing to file systems of specified type",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": ["ext4", "ext3", "ext2", "xfs", "btrfs", "ntfs", "vfat", "tmpfs", "nfs", "cifs"]
+      }
+    },
+    {
+      "short": "-x",
+      "long": "--exclude-type",
+      "description": "Limit listing to file systems not of specified type",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "short": "-B",
+      "long": "--block-size",
+      "description": "Scale sizes by SIZE before printing",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": ["K", "M", "G", "T", "P", "1K", "1M", "1G"]
+      }
+    },
+    {
+      "long": "--total",
+      "description": "Produce a grand total"
+    },
+    {
+      "long": "--output",
+      "description": "Use the output format defined by FIELD_LIST",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "long": "--help",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": []
+}

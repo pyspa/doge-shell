@@ -1,0 +1,76 @@
+{
+  "command": "grep",
+  "description": "Print lines that match patterns",
+  "global_options": [
+    {
+      "short": "-i",
+      "long": "--ignore-case",
+      "description": "Ignore case distinctions"
+    },
+    {
+      "short": "-v",
+      "long": "--invert-match",
+      "description": "Select non-matching lines"
+    },
+    {
+      "short": "-n",
+      "long": "--line-number",
+      "description": "Print line number with output lines"
+    },
+    {
+      "short": "-c",
+      "long": "--count",
+      "description": "Print only a count of selected lines"
+    },
+    {
+      "short": "-l",
+      "long": "--files-with-matches",
+      "description": "Print only names of FILEs with selected lines"
+    },
+    {
+      "short": "-r",
+      "long": "--recursive",
+      "description": "Read all files under each directory, recursively"
+    },
+    {
+      "short": "-E",
+      "long": "--extended-regexp",
+      "description": "PATTERN is an extended regular expression"
+    },
+    {
+      "short": "-F",
+      "long": "--fixed-strings",
+      "description": "PATTERN is a set of newline-separated strings"
+    },
+    {
+      "short": "-e",
+      "long": "--regexp",
+      "description": "Use PATTERN for matching",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-f",
+      "long": "--file",
+      "description": "Obtain PATTERN from FILE",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-w",
+      "long": "--word-regexp",
+      "description": "Force PATTERN to match only whole words"
+    },
+    {
+      "short": "-x",
+      "long": "--line-regexp",
+      "description": "Force PATTERN to match only whole lines"
+    }
+  ],
+  "subcommands": []
+}

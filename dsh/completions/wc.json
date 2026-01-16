@@ -1,0 +1,63 @@
+{
+  "command": "wc",
+  "description": "Print newline, word, and byte counts for each file",
+  "global_options": [
+    {
+      "short": "-l",
+      "long": "--lines",
+      "description": "Print the newline counts"
+    },
+    {
+      "short": "-w",
+      "long": "--words",
+      "description": "Print the word counts"
+    },
+    {
+      "short": "-c",
+      "long": "--bytes",
+      "description": "Print the byte counts"
+    },
+    {
+      "short": "-m",
+      "long": "--chars",
+      "description": "Print the character counts"
+    },
+    {
+      "short": "-L",
+      "long": "--max-line-length",
+      "description": "Print the maximum display width"
+    },
+    {
+      "long": "--files0-from",
+      "description": "Read input from the files specified by NUL-terminated names in file F",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "long": "--total",
+      "description": "When to print a line with total counts",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "auto",
+          "always",
+          "only",
+          "never"
+        ]
+      }
+    },
+    {
+      "long": "--help",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": []
+}

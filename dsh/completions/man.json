@@ -1,0 +1,32 @@
+{
+  "command": "man",
+  "description": "Format and display the on-line manual pages",
+  "global_options": [
+    {
+      "short": "-k",
+      "long": "--apropos",
+      "description": "Search the short descriptions and manual page names for the keyword"
+    },
+    {
+      "short": "-f",
+      "long": "--whatis",
+      "description": "Equivalent to whatis"
+    },
+    {
+      "short": "-w",
+      "long": "--where",
+      "description": "Print the location of the manual page"
+    },
+    {
+      "short": "-a",
+      "long": "--all",
+      "description": "Find all matching manual pages"
+    },
+    {
+      "short": "-i",
+      "long": "--ignore-case",
+      "description": "Ignore case when searching"
+    }
+  ],
+  "subcommands": []
+}

@@ -1,0 +1,11 @@
+{
+  "command": "arch-chroot",
+  "description": "Run command in a chroot environment",
+  "global_options": [
+    {
+      "short": "-C",
+      "description": "Use an alternate pacman configuration file for the chroot."
+    }
+  ],
+  "subcommands": []
+}

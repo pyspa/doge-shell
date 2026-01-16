@@ -1,0 +1,73 @@
+{
+  "command": "groupadd",
+  "description": "Create a new group",
+  "global_options": [
+    {
+      "long": "--help",
+      "short": "-h",
+      "description": "Display help message and exit"
+    }
+  ],
+  "options": [
+    {
+      "short": "-f",
+      "long": "--force",
+      "description": "Exit successfully if the group already exists, and cancel -g if the GID is already used"
+    },
+    {
+      "short": "-g",
+      "long": "--gid",
+      "takes_value": true,
+      "description": "The numerical value of the group's ID",
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-K",
+      "long": "--key",
+      "takes_value": true,
+      "description": "Override /etc/login.defs defaults",
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-o",
+      "long": "--non-unique",
+      "description": "Allow the creation of a group with a duplicate GID"
+    },
+    {
+      "short": "-p",
+      "long": "--password",
+      "takes_value": true,
+      "description": "Encrypted password of the new group",
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-r",
+      "long": "--system",
+      "description": "Create a system group"
+    },
+    {
+      "short": "-R",
+      "long": "--root",
+      "takes_value": true,
+      "description": "Directory to chroot into",
+      "value_type": {
+        "type": "Directory"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "group",
+      "description": "Group name",
+      "type": {
+        "type": "String"
+      }
+    }
+  ]
+}

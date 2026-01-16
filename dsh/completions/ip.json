@@ -1,0 +1,98 @@
+{
+  "command": "ip",
+  "description": "Show / manipulate routing, devices, policy routing and tunnels",
+  "global_options": [
+    { "long": "--help", "short": "-h", "description": "Show help" },
+    { "long": "--version", "short": "-V", "description": "Show version information" }
+  ],
+  "subcommands": [
+    {
+      "name": "link",
+      "description": "Network device configuration",
+      "options": [],
+      "arguments": [],
+      "subcommands": [
+        { "name": "show", "description": "Display device attributes", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "set", "description": "Change device attributes", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "add", "description": "Add virtual link", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "delete", "description": "Delete virtual link", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "help", "description": "Show help for link command", "options": [], "arguments": [], "subcommands": [] }
+      ]
+    },
+    {
+      "name": "address",
+      "description": "Protocol address management",
+      "options": [],
+      "arguments": [],
+      "subcommands": [
+        { "name": "show", "description": "List addresses", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "add", "description": "Add an address", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "delete", "description": "Delete an address", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "flush", "description": "Flush all addresses", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "help", "description": "Show help for address command", "options": [], "arguments": [], "subcommands": [] }
+      ]
+    },
+    {
+      "name": "route",
+      "description": "Routing table management",
+      "options": [],
+      "arguments": [],
+      "subcommands": [
+        { "name": "show", "description": "List routes", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "add", "description": "Add a new route", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "delete", "description": "Delete a route", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "get", "description": "Get a single route", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "flush", "description": "Flush routing tables", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "help", "description": "Show help for route command", "options": [], "arguments": [], "subcommands": [] }
+      ]
+    },
+    {
+      "name": "neigh",
+      "description": "ARP or NDISC cache management",
+      "options": [],
+      "arguments": [],
+      "subcommands": [
+        { "name": "show", "description": "List neighbour entries", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "add", "description": "Add a new neighbour entry", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "delete", "description": "Delete a neighbour entry", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "flush", "description": "Flush all neighbour entries", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "help", "description": "Show help for neighbour command", "options": [], "arguments": [], "subcommands": [] }
+      ]
+    },
+    {
+      "name": "rule",
+      "description": "Routing policy database management",
+      "options": [],
+      "arguments": [],
+      "subcommands": [
+        { "name": "list", "description": "List routing policy rules", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "add", "description": "Add a new rule", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "delete", "description": "Delete a rule", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "flush", "description": "Flush all rules", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "help", "description": "Show help for rule command", "options": [], "arguments": [], "subcommands": [] }
+      ]
+    },
+    {
+      "name": "tunnel",
+      "description": "Tunneling over IP",
+      "options": [],
+      "arguments": [],
+      "subcommands": [
+        { "name": "show", "description": "List tunnels", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "add", "description": "Add a new tunnel", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "change", "description": "Change an existing tunnel", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "delete", "description": "Destroy a tunnel", "options": [], "arguments": [], "subcommands": [] },
+        { "name": "help", "description": "Show help for tunnel command", "options": [], "arguments": [], "subcommands": [] }
+      ]
+    },
+    {
+      "name": "monitor",
+      "description": "Watch for netlink messages",
+      "options": [],
+      "arguments": [
+        {"name": "OBJECT", "description": "'all', 'link', 'address', 'route', 'neigh', 'rule'"}
+      ],
+      "subcommands": []
+    }
+  ]
+}

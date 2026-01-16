@@ -1,0 +1,60 @@
+{
+  "command": "touch",
+  "description": "Change file timestamps or create empty files",
+  "global_options": [
+    {
+      "short": "-a",
+      "description": "Change only the access time"
+    },
+    {
+      "short": "-c",
+      "long": "--no-create",
+      "description": "Do not create any files"
+    },
+    {
+      "short": "-d",
+      "long": "--date",
+      "description": "Parse STRING and use it instead of current time",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-m",
+      "description": "Change only the modification time"
+    },
+    {
+      "short": "-r",
+      "long": "--reference",
+      "description": "Use this file's times instead of current time",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-t",
+      "description": "Use [[CC]YY]MMDDhhmm[.ss] instead of current time",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-h",
+      "long": "--no-dereference",
+      "description": "Affect each symbolic link instead of any referenced file"
+    },
+    {
+      "long": "--help",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": []
+}

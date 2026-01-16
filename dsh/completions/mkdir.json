@@ -1,0 +1,45 @@
+{
+  "command": "mkdir",
+  "description": "Make directories",
+  "global_options": [
+    {
+      "long": "--help",
+      "short": "-?",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "short": "-V",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": [],
+  "options": [
+    {
+      "long": "-p",
+      "short": "-p",
+      "description": "No error if existing, make parent directories as needed"
+    },
+    {
+      "long": "-m",
+      "short": "-m",
+      "description": "Set up mode for directories"
+    },
+    {
+      "long": "-v",
+      "short": "-v",
+      "description": "Verbose output"
+    },
+    {
+      "long": "-Z",
+      "short": "-Z",
+      "description": "Set SELinux security context"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "directories",
+      "description": "Directories to create"
+    }
+  ]
+}

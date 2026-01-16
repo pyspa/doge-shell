@@ -1,0 +1,60 @@
+{
+  "command": "pkill",
+  "description": "Signal processes by name",
+  "global_options": [
+    {
+      "short": "-9",
+      "description": "Send SIGKILL signal"
+    },
+    {
+      "long": "--signal",
+      "short": "-s",
+      "description": "Signal to send (name or number)"
+    },
+    {
+      "long": "--full",
+      "short": "-f",
+      "description": "Match against full command line"
+    },
+    {
+      "long": "--exact",
+      "short": "-x",
+      "description": "Match exactly with the process name"
+    },
+    {
+      "long": "--newest",
+      "short": "-n",
+      "description": "Select only the newest process"
+    },
+    {
+      "long": "--oldest",
+      "short": "-o",
+      "description": "Select only the oldest process"
+    },
+    {
+      "long": "--parent",
+      "short": "-P",
+      "description": "Select processes with matching parent PID"
+    },
+    {
+      "long": "--terminal",
+      "short": "-t",
+      "description": "Select by controlling terminal"
+    },
+    {
+      "long": "--uid",
+      "short": "-u",
+      "description": "Match by effective user ID"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "pattern",
+      "description": "Process name pattern to match",
+      "type": {
+        "type": "Script",
+        "data": "ps -eo comm --no-headers | sort -u"
+      }
+    }
+  ]
+}

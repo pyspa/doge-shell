@@ -1,0 +1,37 @@
+{
+  "command": "zip",
+  "description": "Package and compress (archive) files",
+  "global_options": [
+    {
+      "short": "-r",
+      "long": "--recurse-paths",
+      "description": "Travel the directory structure recursively"
+    },
+    {
+      "short": "-e",
+      "long": "--encrypt",
+      "description": "Encrypt the contents of the zip archive"
+    },
+    {
+      "short": "-q",
+      "long": "--quiet",
+      "description": "Quiet operation"
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Verbose mode"
+    },
+    {
+      "short": "-d",
+      "long": "--delete",
+      "description": "Delete entries from the zip archive"
+    },
+    {
+      "short": "-u",
+      "long": "--update",
+      "description": "Update existing entries in the zip archive"
+    }
+  ],
+  "subcommands": []
+}

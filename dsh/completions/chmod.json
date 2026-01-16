@@ -1,0 +1,69 @@
+{
+  "command": "chmod",
+  "description": "Change file mode bits",
+  "global_options": [
+    {
+      "long": "--help",
+      "short": "-?",
+      "description": "Display help information"
+    },
+    {
+      "long": "--version",
+      "short": "-V",
+      "description": "Display version information"
+    }
+  ],
+  "subcommands": [],
+  "options": [
+    {
+      "long": "--recursive",
+      "short": "-R",
+      "description": "Change files and directories recursively"
+    },
+    {
+      "long": "--verbose",
+      "short": "-v",
+      "description": "Output a diagnostic for every file processed"
+    },
+    {
+      "long": "--changes",
+      "short": "-c",
+      "description": "Like verbose but report only when a change is made"
+    },
+    {
+      "long": "--reference",
+      "description": "Use the mode of given reference file"
+    },
+    {
+      "long": "--force",
+      "short": "-f",
+      "description": "Suppress most error messages"
+    },
+    {
+      "long": "--quiet",
+      "description": "Suppress most error messages"
+    },
+    {
+      "long": "--silent",
+      "description": "Suppress most error messages"
+    },
+    {
+      "long": "--no-preserve-root",
+      "description": "Do not treat '/' specially (the default)"
+    },
+    {
+      "long": "--preserve-root",
+      "description": "Fail to operate recursively on '/'"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "mode",
+      "description": "File mode (e.g., 755, u+rwx)"
+    },
+    {
+      "name": "files",
+      "description": "Files whose mode to change"
+    }
+  ]
+}

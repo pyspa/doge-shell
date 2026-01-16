@@ -1,0 +1,118 @@
+{
+  "command": "reflector",
+  "description": "Retrieve and filter a list of the latest Arch Linux mirrors.",
+  "global_options": [],
+  "subcommands": [],
+  "options": [
+    {
+      "long": "--help",
+      "short": "-h",
+      "description": "Show this help message and exit"
+    },
+    {
+      "long": "--connection-timeout",
+      "description": "Timeout for connection in seconds"
+    },
+    {
+      "long": "--download-timeout",
+      "description": "Timeout for download in seconds"
+    },
+    {
+      "long": "--list-countries",
+      "description": "Display a table of the distribution of servers by country"
+    },
+    {
+      "long": "--cache-timeout",
+      "description": "Cache timeout in seconds for the data from the Mirror Status API"
+    },
+    {
+      "long": "--url",
+      "description": "URL to retrieve mirror data in JSON format"
+    },
+    {
+      "long": "--save",
+      "description": "Save the mirrorlist to the given path"
+    },
+    {
+      "long": "--sort",
+      "description": "Sort the mirrorlist by age, rate, country, score, or delay"
+    },
+    {
+      "long": "--threads",
+      "description": "Use n threads for rating mirrors"
+    },
+    {
+      "long": "--verbose",
+      "description": "Print extra information to STDERR"
+    },
+    {
+      "long": "--info",
+      "description": "Print mirror information instead of a mirror list"
+    },
+    {
+      "long": "--age",
+      "short": "-a",
+      "description": "Only return mirrors that have synchronized in the last n hours"
+    },
+    {
+      "long": "--delay",
+      "description": "Only return mirrors with a reported sync delay of n hours or less"
+    },
+    {
+      "long": "--country",
+      "short": "-c",
+      "description": "Restrict mirrors to selected countries by name or code"
+    },
+    {
+      "long": "--fastest",
+      "short": "-f",
+      "description": "Return the n fastest mirrors that meet other criteria"
+    },
+    {
+      "long": "--include",
+      "short": "-i",
+      "description": "Include servers that match the given Python regex"
+    },
+    {
+      "long": "--exclude",
+      "short": "-x",
+      "description": "Exclude servers that match the given Python regex"
+    },
+    {
+      "long": "--latest",
+      "short": "-l",
+      "description": "Limit the list to the n most recently synchronized servers"
+    },
+    {
+      "long": "--score",
+      "description": "Limit the list to the n servers with the highest score"
+    },
+    {
+      "long": "--number",
+      "short": "-n",
+      "description": "Return at most n mirrors"
+    },
+    {
+      "long": "--protocol",
+      "short": "-p",
+      "description": "Filter by protocol (e.g., https, ftp)"
+    },
+    {
+      "long": "--completion-percent",
+      "description": "Minimum completion percentage for returned mirrors"
+    },
+    {
+      "long": "--isos",
+      "description": "Only return mirrors that host ISOs"
+    },
+    {
+      "long": "--ipv4",
+      "description": "Only return mirrors that support IPv4"
+    },
+    {
+      "long": "--ipv6",
+      "description": "Only return mirrors that support IPv6"
+    }
+  ],
+  "arguments": []
+}

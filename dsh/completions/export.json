@@ -1,0 +1,6 @@
+{
+  "command": "export",
+  "description": "Set environment variables",
+  "global_options": [],
+  "subcommands": []
+}

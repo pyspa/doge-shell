@@ -1,0 +1,93 @@
+{
+  "command": "ping",
+  "description": "Send ICMP ECHO_REQUEST to network hosts",
+  "global_options": [
+    {
+      "short": "-c",
+      "description": "Stop after sending count ECHO_REQUEST packets",
+      "takes_value": true,
+      "value_type": { "type": "Number" }
+    },
+    {
+      "short": "-i",
+      "description": "Wait interval seconds between sending each packet",
+      "takes_value": true,
+      "value_type": { "type": "Number" }
+    },
+    {
+      "short": "-W",
+      "description": "Time to wait for a response, in seconds",
+      "takes_value": true,
+      "value_type": { "type": "Number" }
+    },
+    {
+      "short": "-w",
+      "description": "Specify a timeout, in seconds, before ping exits",
+      "takes_value": true,
+      "value_type": { "type": "Number" }
+    },
+    {
+      "short": "-s",
+      "description": "Specifies the number of data bytes to be sent",
+      "takes_value": true,
+      "value_type": { "type": "Number" }
+    },
+    {
+      "short": "-t",
+      "description": "Set the IP Time to Live",
+      "takes_value": true,
+      "value_type": { "type": "Number" }
+    },
+    {
+      "short": "-q",
+      "description": "Quiet output. Nothing is displayed except the summary lines"
+    },
+    {
+      "short": "-v",
+      "description": "Verbose output"
+    },
+    {
+      "short": "-n",
+      "description": "Numeric output only. No attempt will be made to lookup symbolic names for host addresses"
+    },
+    {
+      "short": "-f",
+      "description": "Flood ping. For every ECHO_REQUEST sent a period is printed"
+    },
+    {
+      "short": "-b",
+      "description": "Allow pinging a broadcast address"
+    },
+    {
+      "short": "-a",
+      "description": "Audible ping"
+    },
+    {
+      "short": "-4",
+      "description": "Use IPv4 only"
+    },
+    {
+      "short": "-6",
+      "description": "Use IPv6 only"
+    },
+    {
+      "short": "-I",
+      "description": "Set source address or interface",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "short": "-D",
+      "description": "Print timestamp before each line"
+    },
+    {
+      "short": "-O",
+      "description": "Report outstanding ICMP ECHO reply before sending next packet"
+    },
+    {
+      "short": "-h",
+      "description": "Display help information"
+    }
+  ],
+  "subcommands": []
+}

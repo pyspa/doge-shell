@@ -1,0 +1,52 @@
+{
+    "command": "htop",
+    "description": "Interactive process viewer",
+    "global_options": [
+        {
+            "short": "-d",
+            "long": "--delay",
+            "description": "Update time in tenths of a second"
+        },
+        {
+            "short": "-C",
+            "long": "--no-color",
+            "description": "Start htop in monochrome mode"
+        },
+        {
+            "short": "-F",
+            "long": "--filter",
+            "description": "Filter processes by terms"
+        },
+        {
+            "short": "-h",
+            "long": "--help",
+            "description": "Display help message"
+        },
+        {
+            "short": "-p",
+            "long": "--pid",
+            "description": "Show only the given PIDs"
+        },
+        {
+            "short": "-s",
+            "long": "--sort-key",
+            "description": "Sort by COLUMN"
+        },
+        {
+            "short": "-u",
+            "long": "--user",
+            "description": "Show only the processes of a given user"
+        },
+        {
+            "short": "-v",
+            "long": "--version",
+            "description": "Output version information and exit"
+        },
+        {
+            "short": "-t",
+            "long": "--tree",
+            "description": "Show processes in tree view"
+        }
+    ],
+    "subcommands": []
+}

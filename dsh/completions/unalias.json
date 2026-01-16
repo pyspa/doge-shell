@@ -1,0 +1,11 @@
+{
+  "command": "unalias",
+  "description": "Remove alias definitions",
+  "global_options": [
+    {
+      "short": "-a",
+      "description": "Remove all alias definitions"
+    }
+  ],
+  "subcommands": []
+}

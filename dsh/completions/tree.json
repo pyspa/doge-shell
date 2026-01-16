@@ -1,0 +1,132 @@
+{
+  "command": "tree",
+  "description": "List contents of directories in a tree-like format",
+  "global_options": [
+    {
+      "long": "--help",
+      "description": "Print usage and exit"
+    },
+    {
+      "long": "--version",
+      "description": "Print version and exit"
+    }
+  ],
+  "options": [
+    {
+      "short": "-a",
+      "description": "All files are listed"
+    },
+    {
+      "short": "-d",
+      "description": "List directories only"
+    },
+    {
+      "short": "-l",
+      "description": "Follow symbolic links like directories"
+    },
+    {
+      "short": "-f",
+      "description": "Print the full path prefix for each file"
+    },
+    {
+      "short": "-x",
+      "description": "Stay on current file-system only"
+    },
+    {
+      "short": "-L",
+      "takes_value": true,
+      "description": "Descend only level directories deep",
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-R",
+      "description": "Rerun tree when max dir level reached"
+    },
+    {
+      "short": "-P",
+      "takes_value": true,
+      "description": "List only those files that match the pattern",
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-I",
+      "takes_value": true,
+      "description": "Do not list files that match the pattern",
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--gitignore",
+      "description": "Filter by using .gitignore files"
+    },
+    {
+      "short": "-o",
+      "takes_value": true,
+      "description": "Output to file instead of stdout",
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-q",
+      "description": "Print non-printable characters as '?'"
+    },
+    {
+      "short": "-N",
+      "description": "Print non-printable characters as is"
+    },
+    {
+      "short": "-Q",
+      "description": "Quote filenames with double quotes"
+    },
+    {
+      "short": "-p",
+      "description": "Print protections for each file"
+    },
+    {
+      "short": "-u",
+      "description": "Displays file owner or UID number"
+    },
+    {
+      "short": "-g",
+      "description": "Displays file group owner or GID number"
+    },
+    {
+      "short": "-s",
+      "description": "Print the size in bytes of each file"
+    },
+    {
+      "short": "-h",
+      "description": "Print the size in a more human readable way"
+    },
+    {
+      "short": "-D",
+      "description": "Print the date of last modification"
+    },
+    {
+      "short": "-C",
+      "description": "Turn colorization on always"
+    },
+    {
+      "short": "-n",
+      "description": "Turn colorization off always"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "directory",
+      "description": "Directory to list",
+      "multiple": true,
+      "required": false,
+      "type": {
+        "type": "Directory"
+      }
+    }
+  ]
+}

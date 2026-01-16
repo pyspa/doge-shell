@@ -1,0 +1,13 @@
+{
+  "command": "cd",
+  "description": "Change the shell working directory",
+  "arguments": [
+    {
+      "name": "directory",
+      "description": "The directory to change to",
+      "type": {
+        "type": "Directory"
+      }
+    }
+  ]
+}

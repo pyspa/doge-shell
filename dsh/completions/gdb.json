@@ -1,0 +1,82 @@
+{
+  "command": "gdb",
+  "description": "GNU Debugger",
+  "global_options": [
+    {
+      "short": "-p",
+      "long": "--pid",
+      "description": "Attach to process ID",
+      "takes_value": true,
+      "value_type": {
+        "type": "Script",
+        "data": "ps -eo pid,comm --no-headers | awk '{print $1 \" \" $2}'"
+      }
+    },
+    {
+      "short": "-c",
+      "long": "--core",
+      "description": "Analyze core dump file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-x",
+      "long": "--command",
+      "description": "Execute GDB commands from file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-q",
+      "long": "--quiet",
+      "description": "Do not print version info"
+    },
+    {
+      "long": "--batch",
+      "description": "Exit after processing options"
+    },
+    {
+      "long": "--args",
+      "description": "Pass arguments to program being debugged"
+    },
+    {
+      "short": "-d",
+      "long": "--directory",
+      "description": "Add directory to source file search path",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-s",
+      "long": "--symbols",
+      "description": "Read symbols from file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "long": "--tui",
+      "description": "Use terminal user interface"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "program",
+      "description": "Program to debug",
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ]
+}

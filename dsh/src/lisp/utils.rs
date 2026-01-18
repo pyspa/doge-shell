@@ -1,4 +1,6 @@
-use crate::lisp::model::{FloatType, HashMapRc, IntType, List, RuntimeError, Symbol, Value};
+use crate::lisp::model::{
+    FloatType, HashMapRc, IntType, List, RuntimeError, Symbol, TableRc, Value,
+};
 use std::{any::Any, rc::Rc};
 
 /// Given a `Value` assumed to be a `Value::List()`, grab the item at `index`
@@ -84,6 +86,12 @@ impl TypeName for &HashMapRc {
 impl TypeName for &Rc<dyn Any> {
     fn get_name() -> &'static str {
         "foreign value"
+    }
+}
+
+impl TypeName for &TableRc {
+    fn get_name() -> &'static str {
+        "table"
     }
 }
 

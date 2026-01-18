@@ -80,5 +80,4 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
         path_value
     ))
 }
-
-// Helper function to normalize a path by resolving all relative components
+// Helper function to normalize a path by resolving all relative componen

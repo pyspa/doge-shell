@@ -57,6 +57,7 @@ clap = { version="4", features = ["derive"] }
 globmatch = "0.3"
 regex = "1.11"
 pulldown-cmark = "0.9"
+csv = "1.3"
 
 chrono = "0.4"
 term_size = "0.3"
@@ -69,6 +70,7 @@ easy_reader = "0.5"
 pest = "2.8"
 pest_derive = "2.8"
 fuzzy-matcher = "0.3"  # "*" → "0.3"
+indexmap = { version = "2", features = ["serde"] }
 tabled = "0.20"    # "*" → "0.20"
 num-bigint = { version = "0.4", optional = true }
 num-traits = "0.2"

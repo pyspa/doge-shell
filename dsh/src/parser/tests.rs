@@ -1108,3 +1108,85 @@ fn test_recursive_glob() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn parse_struct_pipe_simple() {
+    init();
+    let pairs = ShellParser::parse(Rule::command, "cat data.json |: (json-parse $_)")
+        .unwrap_or_else(|e| panic!("{}", e));
+    for pair in pairs {
+        assert_eq!(Rule::command, pair.as_rule());
+        let count = pair.clone().into_inner().count();
+        assert_eq!(2, count);
+
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::simple_command => {
+                    let cmd = inner_pair.as_str();
+                    assert_eq!("cat data.json", cmd);
+                }
+                Rule::struct_pipe_command => {
+                    let inner_pair = inner_pair.into_inner();
+                    let cmd = inner_pair.as_str();
+                    assert!(cmd.contains("|:"));
+                    assert!(cmd.contains("(json-parse $_)"));
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+#[test]
+fn parse_struct_pipe_chain() {
+    init();
+    let pairs = ShellParser::parse(
+        Rule::command,
+        "kubectl get pods -o json |: (get $_ \"items\") |: (head $_ 5)",
+    )
+    .unwrap_or_else(|e| panic!("{}", e));
+    for pair in pairs {
+        assert_eq!(Rule::command, pair.as_rule());
+        let count = pair.clone().into_inner().count();
+        assert_eq!(3, count); // simple_command + 2 struct_pipe_commands
+    }
+}
+
+#[test]
+fn parse_struct_pipe_with_nested_parens() {
+    init();
+    let pairs = ShellParser::parse(
+        Rule::command,
+        "echo test |: (where $_ (lambda (r) (get r \"active\")))",
+    )
+    .unwrap_or_else(|e| panic!("{}", e));
+    for pair in pairs {
+        assert_eq!(Rule::command, pair.as_rule());
+        let count = pair.clone().into_inner().count();
+        assert_eq!(2, count);
+    }
+}
+
+#[test]
+fn parse_struct_pipe_mixed_with_regular_pipe() {
+    init();
+    let pairs = ShellParser::parse(Rule::command, "cat data.json |: (json-parse $_) | head")
+        .unwrap_or_else(|e| panic!("{}", e));
+    for pair in pairs {
+        assert_eq!(Rule::command, pair.as_rule());
+        let count = pair.clone().into_inner().count();
+        assert_eq!(3, count); // simple_command + struct_pipe + pipe_command
+
+        let mut found_struct_pipe = false;
+        let mut found_pipe = false;
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::struct_pipe_command => found_struct_pipe = true,
+                Rule::pipe_command => found_pipe = true,
+                _ => {}
+            }
+        }
+        assert!(found_struct_pipe, "Expected struct_pipe_command");
+        assert!(found_pipe, "Expected pipe_command");
+    }
+}

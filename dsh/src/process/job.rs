@@ -187,6 +187,8 @@ pub struct Job {
     pub pty_output_task: Option<tokio::task::JoinHandle<Result<String>>>,
     pub pty_input_task: Option<tokio::task::JoinHandle<()>>,
     pub disable_pty: bool,
+    /// Lisp expressions to evaluate after command output (from |: operator)
+    pub struct_pipe_exprs: Vec<String>,
 }
 
 fn last_process_state(process: JobProcess) -> ProcessState {
@@ -231,6 +233,7 @@ impl Job {
             pty_output_task: None,
             pty_input_task: None,
             disable_pty: false,
+            struct_pipe_exprs: Vec::new(),
         }
     }
 
@@ -258,6 +261,7 @@ impl Job {
             pty_output_task: None,
             pty_input_task: None,
             disable_pty: false,
+            struct_pipe_exprs: Vec::new(),
         }
     }
 

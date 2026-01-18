@@ -11,7 +11,7 @@ cfg_if::cfg_if! {
     }
 }
 
-use super::{Env, FloatType, IntType, Lambda, List, RuntimeError, Symbol};
+use super::{Env, FloatType, IntType, Lambda, List, RuntimeError, Symbol, TableRc};
 use crate::lisp;
 
 pub type NativeClosureType =
@@ -46,6 +46,9 @@ pub enum Value {
     /// A reference to a foreign value (struct, enum, etc)
     Foreign(Rc<dyn Any>),
 
+    /// A structured table (list of records)
+    Table(TableRc),
+
     /// A tail-call that has yet to be executed. Internal use only!
     TailCall {
         func: Rc<Value>,
@@ -78,6 +81,7 @@ impl Value {
             Value::Float(_) => "float",
             Value::Symbol(_) => "symbol",
             Value::Foreign(_) => "foreign value",
+            Value::Table(_) => "table",
             Value::TailCall { func: _, args: _ } => "tail call",
         }
     }
@@ -248,6 +252,19 @@ impl From<HashMapRc> for Value {
     }
 }
 
+impl<'a> TryFrom<&'a Value> for &'a TableRc {
+    type Error = RuntimeError;
+
+    fn try_from(value: &'a Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Table(this) => Ok(this),
+            _ => Err(RuntimeError {
+                msg: format!("Expected table, got a {value}"),
+            }),
+        }
+    }
+}
+
 impl<'a> TryFrom<&'a Value> for &'a Rc<dyn Any> {
     type Error = RuntimeError;
 
@@ -294,6 +311,7 @@ impl std::fmt::Display for Value {
             Value::Float(this) => write!(f, "{this}"),
             Value::Symbol(Symbol(this)) => write!(f, "{this}"),
             Value::Foreign(_) => f.write_str("<foreign_value>"),
+            Value::Table(table) => write!(f, "{}", table.borrow()),
             Value::TailCall { func, args } => {
                 write!(f, "<tail-call: {func:?} with {args:?} >")
             }
@@ -317,6 +335,7 @@ impl Debug for Value {
             Value::Float(this) => write!(f, "Value::Float({this:?})"),
             Value::Symbol(Symbol(this)) => write!(f, "Value::Symbol({this:?})"),
             Value::Foreign(_) => f.write_str("<foreign_value>"),
+            Value::Table(table) => write!(f, "Value::Table({:?})", table.borrow()),
             Value::TailCall { func, args } => {
                 write!(f, "Value::TailCall {{ func: {func:?}, args: {args:?} }}")
             }
@@ -530,6 +549,7 @@ impl std::hash::Hash for Value {
             Value::Lambda(x) => x.hash(state),
             Value::Macro(x) => x.hash(state),
             Value::Foreign(x) => std::ptr::hash(x, state),
+            Value::Table(x) => x.as_ptr().hash(state),
             Value::TailCall { func, args } => {
                 func.hash(state);
                 args.hash(state);

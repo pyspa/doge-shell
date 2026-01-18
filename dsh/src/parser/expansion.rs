@@ -500,6 +500,14 @@ fn expand_command_alias(
                         }
                     }
                 }
+                Rule::struct_pipe_command => {
+                    // Preserve struct_pipe_command (|: lisp_expr) during alias expansion
+                    buf.push(inner_pair.as_str().to_string());
+                }
+                Rule::capture_suffix => {
+                    // Preserve capture suffix (|>)
+                    buf.push(inner_pair.as_str().to_string());
+                }
                 _ => {
                     debug!(
                         "expand_command_alias missing {:?} {:?}",

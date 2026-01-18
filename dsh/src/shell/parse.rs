@@ -504,6 +504,26 @@ fn parse_jobs(
                     debug!("Capture mode enabled for job: {}", job.cmd);
                 }
             }
+            Rule::struct_pipe_command => {
+                // Extract Lisp expression from struct_pipe_command
+                // The rule is: struct_pipe_command = { struct_pipe_op ~ sp* ~ lisp_expr ~ sp* }
+                for inner_pair in inner_pair.into_inner() {
+                    if let Rule::lisp_expr = inner_pair.as_rule() {
+                        let lisp_expr = inner_pair.as_str().to_string();
+                        debug!("Found struct_pipe Lisp expression: {}", lisp_expr);
+
+                        // Add to last job's struct_pipe_exprs or create new job
+                        if let Some(job) = jobs.last_mut() {
+                            job.struct_pipe_exprs.push(lisp_expr);
+                        } else {
+                            let mut job = Job::new(job_str.clone(), shell.pgid);
+                            job.job_id = shell.get_next_job_id();
+                            job.struct_pipe_exprs.push(lisp_expr);
+                            jobs.push(job);
+                        }
+                    }
+                }
+            }
             _ => {
                 warn!(
                     "missing rule {:?} {:?}",

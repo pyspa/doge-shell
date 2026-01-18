@@ -13,7 +13,7 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 - **Interactive Command Line**: Full-featured interactive shell with readline-like functionality
 - **Command Execution**: Execute external commands, built-in commands, and shell scripts
 - **Background Processing**: Run commands in background with `&` and manage jobs
-- **Pipes and Redirections**: Support for pipes (`|`), input/output redirection (`>`, `>>`, `<`), and error redirection
+- **Pipes and Redirections**: Support for pipes (`|`), structured pipes (`|:`), input/output redirection (`>`, `>>`, `<`), and error redirection
 - **Signal Handling**: Proper handling of signals like SIGINT, SIGQUIT, SIGTSTP
 - **Subshells**: Support for command substitution and process substitution (`<(...)` only; `>(...)` not supported yet)
 - **Safe Paste**: Bracketed paste support ensures pasted multi-line text is not executed immediately
@@ -93,6 +93,43 @@ Protection of sensitive information from history and display.
 - **Dynamic Tools**: Automatic discovery of MCP server tools
 - **Configuration**: MCP servers are configured in `config.lisp`
 
+### 📊 Structured Data Pipeline
+
+Seamlessly handle structured data (JSON, CSV, Tables) within the shell pipeline.
+
+- **`|:` Operator**: The "Structured Pipe" operator allows you to process command output as structured data using Lisp expressions.
+  ```bash
+  command |: (lisp-expression)
+  ```
+  The command output is bound to the `$_` variable in the Lisp expression.
+
+- **Supported Formats**:
+  - **JSON**: `json-parse`, `json-stringify`
+  - **CSV**: `csv-parse`, `csv-stringify`
+  - **Table**: Powerful table manipulation functions
+
+- **Table Operations**:
+  - **Viewing**: `table-display` (rich terminal UI), `table-head`, `table-tail`
+  - **Filtering**: `table-where-eq`, `table-where-contains`, `table-where-cmp`
+  - **Sorting**: `table-order-by`
+  - **Transformation**: `table-select` (pick columns), `table-count`
+  - **AI Integration**: `table-to-ai-context` creates an optimized context string for LLMs
+
+- **Examples**:
+  ```bash
+  # View JSON as a table
+  cat data.json |: (table-display (json-parse $_))
+
+  # Filter and Sort CSV
+  cat users.csv |: (table-display \
+    (table-order-by \
+      (table-where-cmp (csv-parse $_) "age" ">=" 18) \
+      "age" :desc))
+
+  # Convert CSV to JSON
+  cat data.csv |: (json-stringify (csv-parse $_)) > data.json
+  ```
+
 ### Other Features
 
 - **Git Integration**: Commands for Git operations (`ga`, `gco`, `glog`, etc.)
@@ -143,52 +180,52 @@ Run `gh-notify` to view notifications directly in an interactive list.
 
 The shell includes many built-in commands:
 
-| Command | Description |
-|---------|-------------|
-| `exit` | Exit the shell |
-| `cd` | Change directory |
-| `history` | Show command history |
-| `z` | Jump to frequently used directories (use `-i` or `--interactive` for selection, `-` for previous directory, `-l` for list) |
-| `jobs` | Show background jobs |
-| `fg` | Bring job to foreground |
-| `bg` | Send job to background |
-| `lisp` | Execute Lisp expressions |
-| `set` | Set shell variables |
-| `var` | Manage shell variables |
-| `read` | Read input into a variable |
-| `abbr` | Configure abbreviations |
-| `alias` | Configure command aliases |
-| `export` | Set export attribute for shell variables |
-| `chat` | Chat with AI assistant |
-| `chat_prompt` | Set AI assistant system prompt |
-| `chat_model` | Set AI model |
-| `gh-notify` | View GitHub notifications interactively |
-| `glog` | Git log with interactive selection |
-| `gco` | Git checkout with interactive branch selection |
-| `ga` | Git add with interactive file selection |
-| `add_path` | Add path to PATH environment variable |
-| `serve` | Start a static file server |
-| `uuid` | Generate UUIDs |
-| `dmv` | Batch file renaming |
-| `reload` | Reload shell configuration |
-| `timing` | Show command execution statistics |
-| `out` | Display captured command output history |
-| `include` | Execute a bash script and import environment variables |
-| `mcp` | Manage MCP servers (status, connect, disconnect) |
-| `gpr` | GitHub Pull Request checkout with interactive selection |
-| `gwt` | Git Worktree management (add, list, remove) |
-| `pm` | Project Manager (add, list, remove, work, jump) |
-| `pj` | Jump to a project (alias for `pm jump`) |
-| `help` | Show help information |
-| `comp-gen` | Generate command completion using AI (`--stdout`, `--check`) |
-| `dashboard` | Show integrated dashboard (System, Git, GitHub) |
-| `ai-commit` / `aic` | Generate commit message using AI |
-| `tm` | Search and retrieve past command outputs |
-| `trigger` | Monitor file changes and execute commands (saves output to history) |
-| `notebook-play` | Play a notebook file (execute code blocks interactively) |
-| `eproject` | Open current project in Emacs |
-| `eview` | Pipe content to external editor |
-| `magit` | Open Magit status for the current directory |
+| Command             | Description                                                                                                                |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `exit`              | Exit the shell                                                                                                             |
+| `cd`                | Change directory                                                                                                           |
+| `history`           | Show command history                                                                                                       |
+| `z`                 | Jump to frequently used directories (use `-i` or `--interactive` for selection, `-` for previous directory, `-l` for list) |
+| `jobs`              | Show background jobs                                                                                                       |
+| `fg`                | Bring job to foreground                                                                                                    |
+| `bg`                | Send job to background                                                                                                     |
+| `lisp`              | Execute Lisp expressions                                                                                                   |
+| `set`               | Set shell variables                                                                                                        |
+| `var`               | Manage shell variables                                                                                                     |
+| `read`              | Read input into a variable                                                                                                 |
+| `abbr`              | Configure abbreviations                                                                                                    |
+| `alias`             | Configure command aliases                                                                                                  |
+| `export`            | Set export attribute for shell variables                                                                                   |
+| `chat`              | Chat with AI assistant                                                                                                     |
+| `chat_prompt`       | Set AI assistant system prompt                                                                                             |
+| `chat_model`        | Set AI model                                                                                                               |
+| `gh-notify`         | View GitHub notifications interactively                                                                                    |
+| `glog`              | Git log with interactive selection                                                                                         |
+| `gco`               | Git checkout with interactive branch selection                                                                             |
+| `ga`                | Git add with interactive file selection                                                                                    |
+| `add_path`          | Add path to PATH environment variable                                                                                      |
+| `serve`             | Start a static file server                                                                                                 |
+| `uuid`              | Generate UUIDs                                                                                                             |
+| `dmv`               | Batch file renaming                                                                                                        |
+| `reload`            | Reload shell configuration                                                                                                 |
+| `timing`            | Show command execution statistics                                                                                          |
+| `out`               | Display captured command output history                                                                                    |
+| `include`           | Execute a bash script and import environment variables                                                                     |
+| `mcp`               | Manage MCP servers (status, connect, disconnect)                                                                           |
+| `gpr`               | GitHub Pull Request checkout with interactive selection                                                                    |
+| `gwt`               | Git Worktree management (add, list, remove)                                                                                |
+| `pm`                | Project Manager (add, list, remove, work, jump)                                                                            |
+| `pj`                | Jump to a project (alias for `pm jump`)                                                                                    |
+| `help`              | Show help information                                                                                                      |
+| `comp-gen`          | Generate command completion using AI (`--stdout`, `--check`)                                                               |
+| `dashboard`         | Show integrated dashboard (System, Git, GitHub)                                                                            |
+| `ai-commit` / `aic` | Generate commit message using AI                                                                                           |
+| `tm`                | Search and retrieve past command outputs                                                                                   |
+| `trigger`           | Monitor file changes and execute commands (saves output to history)                                                        |
+| `notebook-play`     | Play a notebook file (execute code blocks interactively)                                                                   |
+| `eproject`          | Open current project in Emacs                                                                                              |
+| `eview`             | Pipe content to external editor                                                                                            |
+| `magit`             | Open Magit status for the current directory                                                                                |
 
 ## 🧠 Lisp Functions
 

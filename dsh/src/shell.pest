@@ -1,74 +1,73 @@
-sp = _{ " " | "\t" | "\r" }
-word_char = _{
-    !("|" | "&" | ";" | " " | "\t" | "\r" | "\n" | "`" | "{" | "}" | "<" | ">" | "(" | ")" | "$" | "\"" | "'" | "*" | "?" | "[" | "]" | "\\")
-    ~ ANY
+sp              = _{ " " | "\t" | "\r" }
+word_char       = _{
+    !("|" | "&" | ";" | " " | "\t" | "\r" | "\n" | "`" | "{" | "}" | "<" | ">" | "(" | ")" | "$" | "\"" | "'" | "*" | "?" | "[" | "]" | "\\") ~ ANY
 }
-escape_sequence = { "\\" ~ ANY }
+escape_sequence =  { "\\" ~ ANY }
 
-word = { (escape_sequence | word_char)+ }
-variable = { "$" ~ word }
-glob_char = _{ "*" | "?" | "[" }
+word                =  { (escape_sequence | word_char)+ }
+variable            =  { "$" ~ word }
+glob_char           = _{ "*" | "?" | "[" }
 glob_remaining_char = _{ word_char | glob_char | "]" | "{" | "}" | escape_sequence }
-glob_word = { (word_char | escape_sequence)* ~ glob_char ~ glob_remaining_char* }
+glob_word           =  { (word_char | escape_sequence)* ~ glob_char ~ glob_remaining_char* }
 
 brace_word = { (word_char | escape_sequence | glob_char)* ~ "{" ~ glob_remaining_char* }
 
-s_quoted = { "\'" ~ s_quoted_inner* ~ "\'" }
-s_quoted_inner = _{
+s_quoted         =  { "\'" ~ s_quoted_inner* ~ "\'" }
+s_quoted_inner   = _{
     literal_s_quoted
 }
-literal_s_quoted = ${ ( "\\'"  | !("\'") ~ ANY | sp)+ }
+literal_s_quoted = ${ ("\\'" | !("\'") ~ ANY | sp)+ }
 
-d_quoted = { "\"" ~ d_quoted_inner* ~ "\"" }
-d_quoted_inner = _{
+d_quoted         =  { "\"" ~ d_quoted_inner* ~ "\"" }
+d_quoted_inner   = _{
     literal_d_quoted
 }
 literal_d_quoted = ${
-    (
-        !("\"" | "\\" | "`" | "$") ~ ANY
-        | "\\" ~ ANY
-        | sp
-    )+
+    (!("\"" | "\\" | "`" | "$") ~ ANY | "\\" ~ ANY | sp)+
 }
 
-proc_subst_direction_in = { "<(" }
-proc_subst_direction = { proc_subst_direction_in }
-proc_subst = { proc_subst_direction ~ group_list ~ ")" }
-command_subst = { "$(" ~ sp* ~ group_list ~ sp* ~ ")" }
-subshell = { "(" ~ group_list ~ ")" }
-group_list = _{
+proc_subst_direction_in =  { "<(" }
+proc_subst_direction    =  { proc_subst_direction_in }
+proc_subst              =  { proc_subst_direction ~ group_list ~ ")" }
+command_subst           =  { "$(" ~ sp* ~ group_list ~ sp* ~ ")" }
+subshell                =  { "(" ~ group_list ~ ")" }
+group_list              = _{
     commands
 }
 
-quoted = _{ d_quoted|s_quoted }
+quoted = _{ d_quoted | s_quoted }
 
-stdin_redirect_direction_in = { "<" }
-stdouterr_redirect_direction_out = { "&>" }
+stdin_redirect_direction_in         = { "<" }
+stdouterr_redirect_direction_out    = { "&>" }
 stdouterr_redirect_direction_append = { "&>>" }
-stderr_redirect_direction_out = { "2>" }
-stderr_redirect_direction_append = { "2>>" }
-stdout_redirect_direction_out = { ">" }
-stdout_redirect_direction_append = { ">>" }
-stdouterr_redirect_direction = { ( stdouterr_redirect_direction_append | stdouterr_redirect_direction_out ) }
-stderr_redirect_direction = { ( stderr_redirect_direction_append | stderr_redirect_direction_out ) }
-stdout_redirect_direction = { ( stdout_redirect_direction_append | stdout_redirect_direction_out ) }
-stdin_redirect_direction = { stdin_redirect_direction_in }
-redirect = { (stdouterr_redirect_direction | stderr_redirect_direction | stdout_redirect_direction | stdin_redirect_direction) ~ sp* ~ span }
-span = { quoted | glob_word | brace_word | word | variable | proc_subst | subshell | command_subst }
-argv0 = { span }
-args = { (sp* ~ (redirect|span))+ }
+stderr_redirect_direction_out       = { "2>" }
+stderr_redirect_direction_append    = { "2>>" }
+stdout_redirect_direction_out       = { ">" }
+stdout_redirect_direction_append    = { ">>" }
+stdouterr_redirect_direction        = { (stdouterr_redirect_direction_append | stdouterr_redirect_direction_out) }
+stderr_redirect_direction           = { (stderr_redirect_direction_append | stderr_redirect_direction_out) }
+stdout_redirect_direction           = { (stdout_redirect_direction_append | stdout_redirect_direction_out) }
+stdin_redirect_direction            = { stdin_redirect_direction_in }
+redirect                            = { (stdouterr_redirect_direction | stderr_redirect_direction | stdout_redirect_direction | stdin_redirect_direction) ~ sp* ~ span }
+span                                = { quoted | glob_word | brace_word | word | variable | proc_subst | subshell | command_subst }
+argv0                               = { span }
+args                                = { (sp* ~ (redirect | span))+ }
 
-background_op = { !("&&") ~ "&" }
-capture_op = { "|>" }
-pipeline_op = { !("|>") ~ "|" }
-sequential_op = { ";" }
-and_op = { "&&" }
-or_op = { "||" }
+background_op  = { !("&&") ~ "&" }
+capture_op     = { "|>" }
+struct_pipe_op = { "|:" }
+pipeline_op    = { !("|>" | "|:") ~ "|" }
+sequential_op  = { ";" }
+and_op         = { "&&" }
+or_op          = { "||" }
 
-command_list_sep = { sequential_op | and_op | or_op }
-simple_command = { sp* ~ argv0 ~ args* }
-simple_command_bg = { simple_command ~ sp* ~ background_op}
-pipe_command = { pipeline_op ~ sp* ~ (simple_command_bg|simple_command) ~ sp* }
-capture_suffix = { sp* ~ capture_op }
-command = { (sp* ~ simple_command_bg|simple_command)* ~ sp* ~ pipe_command* ~ capture_suffix? }
-commands = { (sp* ~ command) ~ (command_list_sep ~ sp* ~ command)*   }
+command_list_sep    =  { sequential_op | and_op | or_op }
+simple_command      =  { sp* ~ argv0 ~ args* }
+simple_command_bg   =  { simple_command ~ sp* ~ background_op }
+pipe_command        =  { pipeline_op ~ sp* ~ (simple_command_bg | simple_command) ~ sp* }
+struct_pipe_command =  { struct_pipe_op ~ sp* ~ lisp_expr ~ sp* }
+lisp_expr           =  { "(" ~ lisp_inner* ~ ")" }
+lisp_inner          = _{ !(")" | "(") ~ ANY | lisp_expr }
+capture_suffix      =  { sp* ~ capture_op }
+command             =  { (sp* ~ simple_command_bg | simple_command)* ~ sp* ~ (struct_pipe_command | pipe_command)* ~ capture_suffix? }
+commands            =  { (sp* ~ command) ~ (command_list_sep ~ sp* ~ command)* }

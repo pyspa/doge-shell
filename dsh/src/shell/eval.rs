@@ -239,6 +239,120 @@ pub async fn eval_str(
             continue;
         }
 
+        // Handle struct_pipe mode with |: (Lisp expressions on command output)
+        if !job.struct_pipe_exprs.is_empty() {
+            use crate::lisp::{Symbol, Value};
+
+            // Strip the |: suffix from the command for execution
+            let cmd_str = job.cmd.trim();
+            let cmd_str = cmd_str.split("|:").next().unwrap_or(cmd_str).trim();
+
+            // Skip if no command to execute
+            if cmd_str.is_empty() {
+                debug!("Struct pipe: empty command, skipping");
+                gate_op = next_gate_op;
+                continue;
+            }
+
+            debug!(
+                "Struct pipe: executing command '{}' with {} Lisp expressions",
+                cmd_str,
+                job.struct_pipe_exprs.len()
+            );
+
+            // Execute command and capture output
+            let (output, stderr_output) = {
+                use std::process::Stdio;
+                use tokio::process::Command;
+
+                let result = Command::new("sh")
+                    .arg("-c")
+                    .arg(cmd_str)
+                    .stdin(Stdio::inherit())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .output()
+                    .await;
+
+                match result {
+                    Ok(out) => {
+                        last_exit_code = out.status.code().unwrap_or(1);
+                        (
+                            String::from_utf8_lossy(&out.stdout).to_string(),
+                            String::from_utf8_lossy(&out.stderr).to_string(),
+                        )
+                    }
+                    Err(e) => {
+                        eprintln!("Struct pipe: command execution failed: {}", e);
+                        last_exit_code = 1;
+                        (String::new(), String::new())
+                    }
+                }
+            };
+
+            // Output stderr to terminal (struct_pipe only processes stdout)
+            if !stderr_output.is_empty() {
+                eprint!("{}", stderr_output);
+                std::io::stderr().flush().ok();
+            }
+
+            // If command failed and no output, skip Lisp evaluation
+            if last_exit_code != 0 && output.is_empty() {
+                debug!("Struct pipe: command failed with no output, skipping Lisp eval");
+                if ctx.interactive {
+                    enable_raw_mode().ok();
+                }
+                gate_op = next_gate_op;
+                continue;
+            }
+
+            // Evaluate Lisp expressions in sequence, passing output through $_
+            let mut current_value = Value::String(output);
+
+            for lisp_expr in &job.struct_pipe_exprs {
+                debug!("Struct pipe: evaluating Lisp expression: {}", lisp_expr);
+
+                // Bind $_ to current value
+                {
+                    let engine = shell.lisp_engine.borrow();
+                    engine
+                        .env
+                        .borrow_mut()
+                        .define(Symbol::from("$_"), current_value.clone());
+                }
+
+                // Evaluate the Lisp expression
+                match shell.lisp_engine.borrow().run(lisp_expr) {
+                    Ok(result) => {
+                        debug!("Struct pipe: Lisp result: {:?}", result);
+                        current_value = result;
+                    }
+                    Err(e) => {
+                        eprintln!("Struct pipe error: {}", e);
+                        last_exit_code = 1;
+                        break;
+                    }
+                }
+            }
+
+            // Print final result (unless it's NIL)
+            if current_value != Value::NIL {
+                println!("{}", current_value);
+            }
+
+            // Execute post-exec hooks
+            if let Err(e) = shell.exec_post_exec_hooks(cmd_str, last_exit_code) {
+                debug!("Error executing post-exec hooks: {}", e);
+            }
+
+            // Re-enable raw mode after struct_pipe job (only in interactive mode)
+            if ctx.interactive {
+                enable_raw_mode().ok();
+            }
+            gate_op = next_gate_op;
+            continue;
+        }
+
         let launch_result = job.launch(ctx, shell).await;
         let mut stop_processing = false;
         match launch_result {

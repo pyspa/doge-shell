@@ -15,8 +15,7 @@ tracing-subscriber.workspace = true
 cfg-if.workspace = true
 uuid.workspace = true
 serde.workspace = true
-pulldown-cmark = "0.9"
+pulldown-cmark = "0.13"
 
 [dev-dependencies]
 tempfile = "3.8"
-

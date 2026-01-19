@@ -12,15 +12,30 @@
     },
     {
       "short": "-c",
-      "description": "Read configuration file instead of .screenrc"
+      "description": "Read configuration file instead of .screenrc",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "short": "-d",
-      "description": "Detach the elsewhere running screen (and reattach here)"
+      "description": "Detach the elsewhere running screen (and reattach here)",
+      "takes_value": true,
+      "value_type": {
+        "type": "Script",
+        "data": "screen -ls 2>/dev/null | grep -oE '[0-9]+\\.[^[:space:]]+' | head -20"
+      }
     },
     {
       "short": "-D",
-      "description": "Detach and logout remote (and reattach here)"
+      "description": "Detach and logout remote (and reattach here)",
+      "takes_value": true,
+      "value_type": {
+        "type": "Script",
+        "data": "screen -ls 2>/dev/null | grep -oE '[0-9]+\\.[^[:space:]]+' | head -20"
+      }
     },
     {
       "short": "-dmS",
@@ -72,11 +87,21 @@
     },
     {
       "short": "-r",
-      "description": "Reattach to a detached screen process"
+      "description": "Reattach to a detached screen process",
+      "takes_value": true,
+      "value_type": {
+        "type": "Script",
+        "data": "screen -ls 2>/dev/null | grep -oE '[0-9]+\\.[^[:space:]]+' | head -20"
+      }
     },
     {
       "short": "-R",
-      "description": "Reattach if possible, otherwise start a new session"
+      "description": "Reattach if possible, otherwise start a new session",
+      "takes_value": true,
+      "value_type": {
+        "type": "Script",
+        "data": "screen -ls 2>/dev/null | grep -oE '[0-9]+\\.[^[:space:]]+' | head -20"
+      }
     },
     {
       "short": "-s",
@@ -104,11 +129,26 @@
     },
     {
       "short": "-x",
-      "description": "Attach to a not detached screen (Multi display mode)"
+      "description": "Attach to a not detached screen (Multi display mode)",
+      "takes_value": true,
+      "value_type": {
+        "type": "Script",
+        "data": "screen -ls 2>/dev/null | grep -oE '[0-9]+\\.[^[:space:]]+' | head -20"
+      }
     },
     {
       "short": "-X",
       "description": "Execute <cmd> as a screen command in the specified session"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "session",
+      "description": "Session name to attach",
+      "type": {
+        "type": "Script",
+        "data": "screen -ls 2>/dev/null | grep -oE '[0-9]+\\.[^[:space:]]+' | head -20"
+      }
     }
   ],
   "subcommands": []

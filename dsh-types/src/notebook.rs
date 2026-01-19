@@ -1,5 +1,5 @@
 use anyhow::Result;
-use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag};
+use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -104,7 +104,7 @@ impl Notebook {
                     // Wait, range includes fences for Fenced blocks?
                     // pulldown-cmark range covers the whole event.
                 }
-                Event::End(Tag::CodeBlock(_)) => {
+                Event::End(TagEnd::CodeBlock) => {
                     if in_code_block {
                         // The range end is the end of the block.
                         // However, we want the *content* of the code block.

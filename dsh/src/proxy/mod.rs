@@ -214,12 +214,6 @@ impl ShellProxy for Shell {
     }
 
     fn run_hook(&mut self, hook_name: &str, args: Vec<String>) -> Result<()> {
-        let args_str = args
-            .iter()
-            .map(|a| format!("\"{}\"", a.replace("\"", "\\\"")))
-            .collect::<Vec<_>>()
-            .join(" ");
-
         // Ensure hook name is wrapped in asterisks for Lisp convention
         let hook_var = if hook_name.starts_with('*') {
             hook_name.to_string()
@@ -227,10 +221,18 @@ impl ShellProxy for Shell {
             format!("*{}*", hook_name)
         };
 
-        let lisp_code = format!(
-            "(when (bound? '{hook_var})
-                (map (lambda (hook) (hook {args_str})) {hook_var}))"
-        );
+        // Early return: skip Lisp code generation if no hooks are registered
+        if !self.lisp_engine.borrow().is_bound_nonempty_list(&hook_var) {
+            return Ok(());
+        }
+
+        let args_str = args
+            .iter()
+            .map(|a| format!("\"{}\"", a.replace("\"", "\\\"")))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let lisp_code = format!("(map (lambda (hook) (hook {args_str})) {hook_var})");
 
         if let Err(e) = self.lisp_engine.borrow().run(&lisp_code) {
             // We use warn! but return Ok because hook failure shouldn't crash the command

@@ -11,7 +11,7 @@ use super::parser::{CommandLineParser, CompletionContext, ParsedCommandLine};
 use crate::dirs::is_executable;
 use anyhow::Result;
 use parking_lot::RwLock;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs::read_dir;
 use std::path::Path;
 use std::sync::Arc;
@@ -23,12 +23,12 @@ const SYSTEM_COMMAND_CACHE_TTL_MS: u64 = 2000;
 static SYSTEM_COMMAND_CACHE: LazyLock<CompletionCache<CompletionCandidate>> =
     LazyLock::new(|| CompletionCache::new(Duration::from_millis(SYSTEM_COMMAND_CACHE_TTL_MS)));
 
-static GLOBAL_SYSTEM_COMMANDS: LazyLock<Arc<RwLock<Option<HashSet<String>>>>> =
+static GLOBAL_SYSTEM_COMMANDS: LazyLock<Arc<RwLock<Option<BTreeSet<String>>>>> =
     LazyLock::new(|| Arc::new(RwLock::new(None)));
 
 static GLOBAL_CACHE_INFLIGHT: LazyLock<AtomicBool> = LazyLock::new(|| AtomicBool::new(false));
 
-pub fn set_global_system_commands(commands: HashSet<String>) {
+pub fn set_global_system_commands(commands: BTreeSet<String>) {
     let mut guard = GLOBAL_SYSTEM_COMMANDS.write();
     *guard = Some(commands);
 }
@@ -56,7 +56,7 @@ fn ensure_global_cache_populated() {
             .map(|p| std::env::split_paths(&p).collect())
             .unwrap_or_default();
 
-        let mut commands = HashSet::new();
+        let mut commands = BTreeSet::new();
         for path in paths {
             if let Ok(entries) = read_dir(&path) {
                 for entry in entries.flatten() {
@@ -489,17 +489,11 @@ impl<'a> CompletionGenerator<'a> {
         let cache_hit = {
             let guard = GLOBAL_SYSTEM_COMMANDS.read();
             if let Some(commands) = &*guard {
-                // Filter from cache
-                // We want to sort them?
-                let mut local_candidates: Vec<&str> = commands
+                // Filter from cache - BTreeSet maintains sorted order
+                for cmd in commands
                     .iter()
                     .filter(|cmd| fuzzy_match_score(cmd, current_token).is_some())
-                    .map(|s| s.as_str())
-                    .collect();
-
-                local_candidates.sort();
-
-                for cmd in local_candidates {
+                {
                     if candidates.len() >= super::MAX_RESULT {
                         break;
                     }

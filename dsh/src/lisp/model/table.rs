@@ -149,7 +149,7 @@ impl Table {
             }
             JsonValue::Object(_) => {
                 // Single object - treat as single-row table
-                let table = Self::from_json_objects(&[value.clone()])?;
+                let table = Self::from_json_objects(std::slice::from_ref(value))?;
                 Ok(table)
             }
             _ => {

@@ -95,6 +95,14 @@ pub enum ArgumentType {
     Process,
     /// Command with arguments (delegates completion to the command)
     CommandWithArgs,
+    /// System user name (from /etc/passwd)
+    User,
+    /// System group name (from /etc/group)
+    Group,
+    /// Signal name (SIGTERM, SIGKILL, etc.)
+    Signal,
+    /// Network interface name
+    Interface,
 }
 
 /// Command completion database

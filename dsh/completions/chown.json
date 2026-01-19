@@ -68,11 +68,18 @@
   "arguments": [
     {
       "name": "owner_group",
-      "description": "User:group to set (e.g., user, user:group)"
+      "description": "User:group to set (e.g., user, user:group)",
+      "type": {
+        "type": "User"
+      }
     },
     {
       "name": "files",
-      "description": "Files to change"
+      "description": "Files to change",
+      "type": {
+        "type": "File",
+        "data": {}
+      }
     }
   ]
 }

@@ -288,6 +288,224 @@
         }
       ],
       "subcommands": []
+    },
+    {
+      "name": "check",
+      "description": "Check a local package and all of its dependencies for errors",
+      "options": [
+        {
+          "long": "--release",
+          "description": "Check artifacts in release mode, with optimizations"
+        },
+        {
+          "long": "--package",
+          "short": "-p",
+          "description": "Package to check",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
+          }
+        },
+        {
+          "long": "--all-targets",
+          "description": "Check all targets"
+        },
+        {
+          "long": "--workspace",
+          "description": "Check all packages in the workspace"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "clippy",
+      "description": "Run Clippy lints",
+      "options": [
+        {
+          "long": "--fix",
+          "description": "Automatically apply lint suggestions"
+        },
+        {
+          "long": "--allow-dirty",
+          "description": "Fix code even if the working directory has changes"
+        },
+        {
+          "long": "--package",
+          "short": "-p",
+          "description": "Package to lint",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
+          }
+        },
+        {
+          "long": "--workspace",
+          "description": "Lint all packages in the workspace"
+        },
+        {
+          "long": "--all-targets",
+          "description": "Lint all targets"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "fmt",
+      "description": "Format Rust code",
+      "options": [
+        {
+          "long": "--check",
+          "description": "Run in check mode (don't modify files)"
+        },
+        {
+          "long": "--package",
+          "short": "-p",
+          "description": "Package to format",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
+          }
+        },
+        {
+          "long": "--all",
+          "description": "Format all packages in the workspace"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "bench",
+      "description": "Run benchmarks",
+      "options": [
+        {
+          "long": "--package",
+          "short": "-p",
+          "description": "Package to benchmark",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
+          }
+        },
+        {
+          "long": "--workspace",
+          "description": "Benchmark all packages in workspace"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "benchname",
+          "description": "Benchmark name filter"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "doc",
+      "description": "Build a package's documentation",
+      "options": [
+        {
+          "long": "--open",
+          "description": "Open docs in a browser after building them"
+        },
+        {
+          "long": "--package",
+          "short": "-p",
+          "description": "Package to document",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
+          }
+        },
+        {
+          "long": "--workspace",
+          "description": "Document all packages in workspace"
+        },
+        {
+          "long": "--no-deps",
+          "description": "Do not build documentation for dependencies"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "clean",
+      "description": "Remove generated artifacts",
+      "options": [
+        {
+          "long": "--release",
+          "description": "Clean release artifacts"
+        },
+        {
+          "long": "--package",
+          "short": "-p",
+          "description": "Package to clean",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
+          }
+        },
+        {
+          "long": "--target-dir",
+          "description": "Directory for all generated artifacts"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "update",
+      "description": "Update dependencies in Cargo.lock",
+      "options": [
+        {
+          "long": "--package",
+          "short": "-p",
+          "description": "Package to update",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
+          }
+        },
+        {
+          "long": "--workspace",
+          "description": "Update all packages in workspace"
+        },
+        {
+          "long": "--dry-run",
+          "description": "Don't actually write changes"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "publish",
+      "description": "Upload a package to crates.io",
+      "options": [
+        {
+          "long": "--dry-run",
+          "description": "Perform checks without publishing"
+        },
+        {
+          "long": "--package",
+          "short": "-p",
+          "description": "Package to publish",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
+          }
+        },
+        {
+          "long": "--allow-dirty",
+          "description": "Allow dirty working directories to be packaged"
+        }
+      ],
+      "subcommands": []
     }
   ]
 }

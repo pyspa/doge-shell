@@ -4,23 +4,205 @@
   "subcommands": [
     {
       "name": "general",
-      "description": "General status and operations"
+      "description": "General status and operations",
+      "subcommands": [
+        {
+          "name": "status",
+          "description": "Show overall status"
+        },
+        {
+          "name": "hostname",
+          "description": "Get or change hostname"
+        },
+        {
+          "name": "permissions",
+          "description": "Show permissions"
+        },
+        {
+          "name": "logging",
+          "description": "Get or change logging level"
+        }
+      ]
     },
     {
       "name": "networking",
-      "description": "Enable or disable networking"
+      "description": "Enable or disable networking",
+      "subcommands": [
+        {
+          "name": "on",
+          "description": "Switch networking on"
+        },
+        {
+          "name": "off",
+          "description": "Switch networking off"
+        },
+        {
+          "name": "connectivity",
+          "description": "Show network connectivity state"
+        }
+      ]
     },
     {
       "name": "radio",
-      "description": "Get status of or enable/disable switches"
+      "description": "Get status of or enable/disable switches",
+      "subcommands": [
+        {
+          "name": "wifi",
+          "description": "Show or set WiFi status"
+        },
+        {
+          "name": "wwan",
+          "description": "Show or set WWAN status"
+        },
+        {
+          "name": "all",
+          "description": "Show all radio switches"
+        }
+      ]
     },
     {
       "name": "connection",
-      "description": "Manage connections"
+      "description": "Manage connections",
+      "subcommands": [
+        {
+          "name": "show",
+          "description": "Show connections"
+        },
+        {
+          "name": "up",
+          "description": "Activate a connection",
+          "arguments": [
+            {
+              "name": "connection",
+              "description": "Connection name",
+              "type": {
+                "type": "Script",
+                "data": "nmcli -t -f NAME connection show 2>/dev/null"
+              }
+            }
+          ]
+        },
+        {
+          "name": "down",
+          "description": "Deactivate a connection",
+          "arguments": [
+            {
+              "name": "connection",
+              "description": "Connection name",
+              "type": {
+                "type": "Script",
+                "data": "nmcli -t -f NAME connection show --active 2>/dev/null"
+              }
+            }
+          ]
+        },
+        {
+          "name": "modify",
+          "description": "Modify a connection",
+          "arguments": [
+            {
+              "name": "connection",
+              "description": "Connection name",
+              "type": {
+                "type": "Script",
+                "data": "nmcli -t -f NAME connection show 2>/dev/null"
+              }
+            }
+          ]
+        },
+        {
+          "name": "delete",
+          "description": "Delete a connection",
+          "arguments": [
+            {
+              "name": "connection",
+              "description": "Connection name",
+              "type": {
+                "type": "Script",
+                "data": "nmcli -t -f NAME connection show 2>/dev/null"
+              }
+            }
+          ]
+        },
+        {
+          "name": "add",
+          "description": "Add a connection"
+        },
+        {
+          "name": "reload",
+          "description": "Reload connection files"
+        }
+      ]
     },
     {
       "name": "device",
-      "description": "Show and manage network interfaces"
+      "description": "Show and manage network interfaces",
+      "subcommands": [
+        {
+          "name": "status",
+          "description": "Show device status"
+        },
+        {
+          "name": "show",
+          "description": "Show device details",
+          "arguments": [
+            {
+              "name": "device",
+              "description": "Device name",
+              "type": {
+                "type": "Script",
+                "data": "nmcli -t -f DEVICE device 2>/dev/null"
+              }
+            }
+          ]
+        },
+        {
+          "name": "connect",
+          "description": "Connect a device",
+          "arguments": [
+            {
+              "name": "device",
+              "description": "Device name",
+              "type": {
+                "type": "Script",
+                "data": "nmcli -t -f DEVICE device 2>/dev/null"
+              }
+            }
+          ]
+        },
+        {
+          "name": "disconnect",
+          "description": "Disconnect a device",
+          "arguments": [
+            {
+              "name": "device",
+              "description": "Device name",
+              "type": {
+                "type": "Script",
+                "data": "nmcli -t -f DEVICE device status 2>/dev/null | grep connected | cut -d: -f1"
+              }
+            }
+          ]
+        },
+        {
+          "name": "wifi",
+          "description": "WiFi operations",
+          "subcommands": [
+            {
+              "name": "list",
+              "description": "List available WiFi networks"
+            },
+            {
+              "name": "rescan",
+              "description": "Rescan WiFi networks"
+            },
+            {
+              "name": "connect",
+              "description": "Connect to WiFi network"
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "agent",
@@ -50,7 +232,16 @@
     {
       "short": "-c",
       "long": "--colors",
-      "description": "Control output colorization"
+      "description": "Control output colorization",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "auto",
+          "yes",
+          "no"
+        ]
+      }
     },
     {
       "short": "-f",
@@ -60,7 +251,15 @@
     {
       "short": "-e",
       "long": "--escape",
-      "description": "Escape column separators"
+      "description": "Escape column separators",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "yes",
+          "no"
+        ]
+      }
     },
     {
       "short": "-a",

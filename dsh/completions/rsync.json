@@ -38,6 +38,59 @@
       "short": "-n",
       "long": "--dry-run",
       "description": "Perform a trial run with no changes made"
+    },
+    {
+      "short": "-e",
+      "long": "--rsh",
+      "description": "Specify the remote shell to use"
+    },
+    {
+      "long": "--progress",
+      "description": "Show progress during transfer"
+    },
+    {
+      "long": "--partial",
+      "description": "Keep partially transferred files"
+    },
+    {
+      "long": "--include",
+      "description": "Include files matching PATTERN"
+    },
+    {
+      "short": "-h",
+      "long": "--human-readable",
+      "description": "Output numbers in a human-readable format"
+    },
+    {
+      "long": "--checksum",
+      "description": "Skip based on checksum, not mod-time & size"
+    },
+    {
+      "short": "-u",
+      "long": "--update",
+      "description": "Skip files that are newer on the receiver"
+    },
+    {
+      "long": "--no-perms",
+      "description": "Don't preserve permissions"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "source",
+      "description": "Source file/dir or [user@]host:path",
+      "type": {
+        "type": "Script",
+        "data": "(cat ~/.ssh/known_hosts 2>/dev/null | cut -d' ' -f1 | cut -d',' -f1 | grep -v '^\\['; grep -E '^Host ' ~/.ssh/config 2>/dev/null | awk '{print $2}' | grep -v '*') | sort -u | sed 's/$/:/' 2>/dev/null"
+      }
+    },
+    {
+      "name": "destination",
+      "description": "Destination file/dir or [user@]host:path",
+      "type": {
+        "type": "Script",
+        "data": "(cat ~/.ssh/known_hosts 2>/dev/null | cut -d' ' -f1 | cut -d',' -f1 | grep -v '^\\['; grep -E '^Host ' ~/.ssh/config 2>/dev/null | awk '{print $2}' | grep -v '*') | sort -u | sed 's/$/:/' 2>/dev/null"
+      }
     }
   ]
 }

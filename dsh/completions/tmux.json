@@ -50,11 +50,69 @@
       "options": [
         {
           "short": "-t",
-          "description": "Target session"
+          "description": "Target session",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
+          }
         },
         {
           "short": "-d",
           "description": "Detach other clients"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "session",
+          "description": "Session name",
+          "type": {
+            "type": "Script",
+            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
+          }
+        }
+      ]
+    },
+    {
+      "name": "attach",
+      "description": "Attach to an existing session (alias)",
+      "options": [
+        {
+          "short": "-t",
+          "description": "Target session",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
+          }
+        },
+        {
+          "short": "-d",
+          "description": "Detach other clients"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "session",
+          "description": "Session name",
+          "type": {
+            "type": "Script",
+            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
+          }
+        }
+      ]
+    },
+    {
+      "name": "a",
+      "description": "Attach to an existing session (alias)",
+      "arguments": [
+        {
+          "name": "session",
+          "description": "Session name",
+          "type": {
+            "type": "Script",
+            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
+          }
         }
       ]
     },
@@ -64,7 +122,18 @@
     },
     {
       "name": "has-session",
-      "description": "Check if a session exists"
+      "description": "Check if a session exists",
+      "options": [
+        {
+          "short": "-t",
+          "description": "Target session",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
+          }
+        }
+      ]
     },
     {
       "name": "kill-server",
@@ -76,7 +145,22 @@
       "options": [
         {
           "short": "-t",
-          "description": "Target session"
+          "description": "Target session",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
+          }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "session",
+          "description": "Session name",
+          "type": {
+            "type": "Script",
+            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
+          }
         }
       ]
     },
@@ -107,20 +191,99 @@
         {
           "short": "-s",
           "description": "Session name"
+        },
+        {
+          "short": "-d",
+          "description": "Start session in detached mode"
+        },
+        {
+          "short": "-n",
+          "description": "Window name"
+        },
+        {
+          "short": "-c",
+          "description": "Start directory"
         }
       ]
     },
     {
       "name": "new",
-      "description": "Create a new session (alias)"
+      "description": "Create a new session (alias)",
+      "options": [
+        {
+          "short": "-s",
+          "description": "Session name"
+        },
+        {
+          "short": "-d",
+          "description": "Start session in detached mode"
+        }
+      ]
     },
     {
       "name": "rename-session",
-      "description": "Rename a session"
+      "description": "Rename a session",
+      "options": [
+        {
+          "short": "-t",
+          "description": "Target session",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
+          }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "new-name",
+          "description": "New session name"
+        }
+      ]
+    },
+    {
+      "name": "switch-client",
+      "description": "Switch the current client to another session",
+      "options": [
+        {
+          "short": "-t",
+          "description": "Target session",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
+          }
+        }
+      ]
     },
     {
       "name": "source-file",
-      "description": "Execute commands from a file"
+      "description": "Execute commands from a file",
+      "arguments": [
+        {
+          "name": "file",
+          "description": "Configuration file",
+          "type": {
+            "type": "File",
+            "data": {}
+          }
+        }
+      ]
+    },
+    {
+      "name": "send-keys",
+      "description": "Send keys to a window",
+      "options": [
+        {
+          "short": "-t",
+          "description": "Target pane",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
+          }
+        }
+      ]
     }
   ]
 }

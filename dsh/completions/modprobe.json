@@ -51,6 +51,21 @@
       "short": "-b",
       "long": "--use-blacklist",
       "description": "Apply blacklist to module names too"
+    },
+    {
+      "short": "-a",
+      "long": "--all",
+      "description": "Insert all specified modules"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "module",
+      "description": "Kernel module name",
+      "type": {
+        "type": "Script",
+        "data": "find /lib/modules/$(uname -r)/kernel -name '*.ko*' 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\\.ko.*$//' | sort -u | head -100"
+      }
     }
   ],
   "subcommands": []

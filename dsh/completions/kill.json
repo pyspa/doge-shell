@@ -38,18 +38,22 @@
       "description": "SIGHUP (Reload)"
     },
     {
-        "short": "-2",
-        "description": "SIGINT (Interrupt)"
+      "short": "-2",
+      "description": "SIGINT (Interrupt)"
     },
     {
-        "long": "--signal",
-        "short": "-s",
-        "description": "Specify signal"
+      "long": "--signal",
+      "short": "-s",
+      "description": "Specify signal",
+      "takes_value": true,
+      "value_type": {
+        "type": "Signal"
+      }
     },
     {
-        "long": "--list",
-        "short": "-l",
-        "description": "List signals"
+      "long": "--list",
+      "short": "-l",
+      "description": "List signals"
     }
   ]
 }

@@ -68,7 +68,7 @@
       "name": "group",
       "description": "Group name or ID",
       "type": {
-        "type": "String"
+        "type": "Group"
       }
     },
     {

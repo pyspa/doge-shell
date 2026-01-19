@@ -439,6 +439,22 @@ impl<'a> CompletionGenerator<'a> {
             ArgumentType::CommandWithArgs => {
                 self.generate_system_command_candidates(&parsed.current_token)
             }
+            ArgumentType::User => {
+                use super::generators::user::UserGenerator;
+                UserGenerator::new().generate_candidates(&parsed.current_token)
+            }
+            ArgumentType::Group => {
+                use super::generators::group::GroupGenerator;
+                GroupGenerator::new().generate_candidates(&parsed.current_token)
+            }
+            ArgumentType::Signal => {
+                use super::generators::signal::SignalGenerator;
+                SignalGenerator::new().generate_candidates(&parsed.current_token)
+            }
+            ArgumentType::Interface => {
+                use super::generators::interface::InterfaceGenerator;
+                InterfaceGenerator::new().generate_candidates(&parsed.current_token)
+            }
             _ => Ok(Vec::new()),
         }
     }

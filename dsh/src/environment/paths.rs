@@ -2,7 +2,6 @@
 
 use super::{ABSOLUTE_PATH_REGEX, Environment, RELATIVE_PATH_REGEX};
 use crate::dirs::search_file;
-use std::collections::HashSet;
 use std::env;
 use std::path::Path;
 use tracing::debug;
@@ -117,10 +116,11 @@ impl Environment {
     /// Prewarm the executable names cache by scanning PATH directories.
     /// This should be called in the background after shell startup.
     pub fn prewarm_executables(&self) {
+        use std::collections::BTreeSet;
         use std::fs::read_dir;
         use std::os::unix::fs::PermissionsExt;
 
-        let mut names = HashSet::new();
+        let mut names = BTreeSet::new();
         for path in &self.paths {
             if let Ok(entries) = read_dir(path) {
                 for entry in entries.flatten() {
@@ -136,8 +136,7 @@ impl Environment {
             }
         }
 
-        let mut sorted: Vec<String> = names.iter().cloned().collect();
-        sorted.sort();
+        let sorted: Vec<String> = names.iter().cloned().collect();
         *self.executable_names.write() = sorted;
         crate::completion::generator::set_global_system_commands(names);
         debug!(

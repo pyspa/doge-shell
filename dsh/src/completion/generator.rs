@@ -17,7 +17,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const SYSTEM_COMMAND_CACHE_TTL_MS: u64 = 2000;
 static SYSTEM_COMMAND_CACHE: LazyLock<CompletionCache<CompletionCandidate>> =
@@ -26,21 +26,46 @@ static SYSTEM_COMMAND_CACHE: LazyLock<CompletionCache<CompletionCandidate>> =
 static GLOBAL_SYSTEM_COMMANDS: LazyLock<Arc<RwLock<Option<BTreeSet<String>>>>> =
     LazyLock::new(|| Arc::new(RwLock::new(None)));
 
+static LAST_CACHE_UPDATE: LazyLock<Arc<RwLock<Option<Instant>>>> =
+    LazyLock::new(|| Arc::new(RwLock::new(None)));
+
 static GLOBAL_CACHE_INFLIGHT: LazyLock<AtomicBool> = LazyLock::new(|| AtomicBool::new(false));
 
 pub fn set_global_system_commands(commands: BTreeSet<String>) {
     let mut guard = GLOBAL_SYSTEM_COMMANDS.write();
     *guard = Some(commands);
+    let mut time_guard = LAST_CACHE_UPDATE.write();
+    *time_guard = Some(Instant::now());
 }
 
 pub fn clear_global_system_commands() {
     let mut guard = GLOBAL_SYSTEM_COMMANDS.write();
     *guard = None;
+    let mut time_guard = LAST_CACHE_UPDATE.write();
+    *time_guard = None;
     GLOBAL_CACHE_INFLIGHT.store(false, Ordering::SeqCst);
 }
 
+// 30 seconds TTL for global command cache
+const GLOBAL_CACHE_TTL_SECS: u64 = 30;
+
 fn ensure_global_cache_populated() {
-    if GLOBAL_SYSTEM_COMMANDS.read().is_some() {
+    let should_refresh = {
+        let guard = GLOBAL_SYSTEM_COMMANDS.read();
+        if guard.is_none() {
+            true
+        } else {
+            // Check if expired
+            let time_guard = LAST_CACHE_UPDATE.read();
+            if let Some(last_update) = *time_guard {
+                last_update.elapsed() > Duration::from_secs(GLOBAL_CACHE_TTL_SECS)
+            } else {
+                true
+            }
+        }
+    };
+
+    if !should_refresh {
         return;
     }
 
@@ -77,6 +102,8 @@ fn ensure_global_cache_populated() {
 
         let mut guard = GLOBAL_SYSTEM_COMMANDS.write();
         *guard = Some(commands);
+        let mut time_guard = LAST_CACHE_UPDATE.write();
+        *time_guard = Some(Instant::now());
         GLOBAL_CACHE_INFLIGHT.store(false, Ordering::SeqCst);
     });
 }

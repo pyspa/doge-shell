@@ -36,10 +36,13 @@ impl Environment {
         // Cache miss: search PATH directories
         let result = self.lookup_path_uncached(cmd);
 
-        // Update cache
-        self.command_cache
-            .write()
-            .insert(cmd.to_string(), result.clone());
+        // Update cache ONLY if found
+        if let Some(ref path) = result {
+            self.command_cache
+                .write()
+                .insert(cmd.to_string(), Some(path.clone()));
+        }
+
         result
     }
 

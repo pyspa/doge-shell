@@ -61,8 +61,19 @@ impl OutputEntry {
         }
 
         let stdout_ratio = self.stdout.len() as f64 / total as f64;
-        let stdout_max = (max_size as f64 * stdout_ratio) as usize;
-        let stderr_max = max_size.saturating_sub(stdout_max);
+        let mut stdout_max = (max_size as f64 * stdout_ratio) as usize;
+
+        // Ensure truncation point is at a valid char boundary
+        while !self.stdout.is_char_boundary(stdout_max) {
+            stdout_max = stdout_max.saturating_sub(1);
+        }
+
+        let mut stderr_max = max_size.saturating_sub(stdout_max);
+
+        // Ensure truncation point is at a valid char boundary
+        while !self.stderr.is_char_boundary(stderr_max) {
+            stderr_max = stderr_max.saturating_sub(1);
+        }
 
         if self.stdout.len() > stdout_max {
             self.stdout.truncate(stdout_max);
@@ -341,5 +352,22 @@ mod tests {
         ));
         assert_eq!(history.last_stdout(), Some("out1"));
         assert_eq!(history.last_stderr(), Some("err1"));
+    }
+
+    #[test]
+    fn test_truncate_multibyte_panic() {
+        // "あ" is 3 bytes.
+        // repeating it 10 times makes 30 bytes.
+        let s = "あ".repeat(10);
+        let mut entry = OutputEntry::new("cmd".into(), s.clone(), s.clone(), 0);
+
+        // Truncate to 10 bytes.
+        // 10 is not a multiple of 3, so it lands inside a character.
+        // This should NOT panic, but currently does.
+        entry.truncate(10);
+
+        // We verify that we didn't panic and the size is respected
+        assert!(entry.stdout.len() <= 10 + 20); // +20 for potential "... (truncated)" overhead
+        assert!(entry.stderr.len() <= 10 + 20);
     }
 }

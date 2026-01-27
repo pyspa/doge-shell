@@ -251,6 +251,13 @@ impl ChatGptClient {
         // Use provided model or fall back to default
         let selected_model = model.unwrap_or_else(|| self.default_model.clone());
 
+        // Override temperature for gpt-5-mini
+        let final_temperature = if selected_model == "gpt-5-mini" {
+            Some(1.0)
+        } else {
+            temperature
+        };
+
         let mut body = json!({
             "model": selected_model,
             "messages": messages,
@@ -258,7 +265,7 @@ impl ChatGptClient {
 
         let tool_count = tools.as_ref().map(|items| items.len()).unwrap_or(0);
 
-        if let Some(v) = temperature
+        if let Some(v) = final_temperature
             && let Some(map) = body.as_object_mut()
         {
             map.insert("temperature".into(), json!(v));

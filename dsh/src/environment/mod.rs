@@ -235,6 +235,15 @@ pub fn get_data_file(name: &str) -> Result<PathBuf> {
     xdg_dir.place_data_file(name).context("failed get path")
 }
 
+/// Get the path to a state file (e.g. logs).
+pub fn get_state_file(name: &str) -> Result<PathBuf> {
+    #[cfg(test)]
+    ensure_test_data_dir();
+    let xdg_dir =
+        xdg::BaseDirectories::with_prefix(APP_NAME).context("failed get xdg directory")?;
+    xdg_dir.place_state_file(name).context("failed get path")
+}
+
 #[cfg(test)]
 fn ensure_test_data_dir() {
     use std::sync::OnceLock;

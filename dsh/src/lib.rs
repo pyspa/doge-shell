@@ -288,11 +288,14 @@ pub fn handle_import_command(shell_name: &str, custom_path: Option<&str>) -> Exi
 }
 
 pub fn init_tracing() -> Result<()> {
+    let log_path = crate::environment::get_state_file("debug.log")
+        .unwrap_or_else(|_| std::path::PathBuf::from("./debug.log"));
+
     let log_file = std::sync::Arc::new(
         std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open("./debug.log")?,
+            .open(log_path)?,
     );
 
     let env_filter = tracing_subscriber::EnvFilter::try_from_env("DSH_LOG")
@@ -374,12 +377,15 @@ pub fn setup_panic_handler() {
 
         // Record logs in multiple ways
         // 1. Write directly to log file
-        let log_files = ["./debug.log", "./panic.log"];
-        for log_file in &log_files {
+        let log_files = ["debug.log", "panic.log"];
+        for log_name in &log_files {
+            let log_path = crate::environment::get_state_file(log_name)
+                .unwrap_or_else(|_| std::path::PathBuf::from(log_name));
+
             if let Ok(mut file) = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(log_file)
+                .open(log_path)
             {
                 use std::io::Write;
                 let _ = writeln!(file, "{panic_log}");
@@ -396,7 +402,7 @@ pub fn setup_panic_handler() {
         eprintln!("Location: {location}");
         eprintln!("Thread: {thread_name}");
         eprintln!("Timestamp: {timestamp}");
-        eprintln!("See debug.log and panic.log for detailed information");
+        eprintln!("See log files in state directory for detailed information");
         eprintln!("========================\n");
     }));
 }
@@ -663,7 +669,10 @@ mod tests {
     #[ignore] // Ignore in normal test runs (for manual execution)
     fn test_panic_handler() {
         // Use test log files
-        let test_log_files = ["./debug.log", "./panic.log"];
+        let test_log_files = ["debug.log", "panic.log"]
+            .iter()
+            .map(|name| crate::environment::get_state_file(name).unwrap())
+            .collect::<Vec<_>>();
 
         // Remove existing log files
         for log_file in &test_log_files {
@@ -692,7 +701,7 @@ mod tests {
                 && content.contains("Test panic for logging verification")
             {
                 found_panic_log = true;
-                println!("Panic information found in {log_file}");
+                println!("Panic information found in {:?}", log_file);
                 break;
             }
         }
@@ -701,6 +710,6 @@ mod tests {
             found_panic_log,
             "Panic information not found in any log file"
         );
-        println!("Panic handler test passed - check debug.log and panic.log for details");
+        println!("Panic handler test passed - check log files for details");
     }
 }

@@ -582,6 +582,11 @@ fn handle_history_previous(repl: &mut Repl<'_>) {
         if let Some(mut history) = history_arc.try_lock() {
             let input_str = repl.input.as_str().to_string();
 
+            // Check if input is empty to reset search word
+            if input_str.is_empty() {
+                history.search_word = None;
+            }
+
             // If we are at the start of history navigation (bottom), initialize search
             // Use at_end() to check if we are at the "newest" position
             if history.at_end() && history.search_word.is_none() && !input_str.is_empty() {
@@ -607,6 +612,13 @@ fn handle_history_next(repl: &mut Repl<'_>) {
     if let Some(history_arc) = &repl.shell.cmd_history
         && let Some(mut history) = history_arc.try_lock()
     {
+        let input_str = repl.input.as_str().to_string();
+
+        // Check if input is empty to reset search word
+        if input_str.is_empty() {
+            history.search_word = None;
+        }
+
         // If already at end, we can't go forward
         if history.at_end() {
             return;

@@ -160,14 +160,13 @@ pub fn run(
     items.sort_by(|a, b| b.pid.cmp(&a.pid));
 
     let options = SkimOptionsBuilder::default()
-        .height("50%".to_string())
+        .height(Some("50%"))
         .multi(true)
-        .reverse(true)
         .header(Some(
-            "Select processes to kill (TAB to select multiple, ENTER to kill)".to_string(),
+            "Select processes to kill (TAB to select multiple, ENTER to kill)",
         ))
         .build()
-        .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
+        .unwrap();
 
     let skim_items: Vec<Arc<dyn SkimItem>> = items
         .into_iter()

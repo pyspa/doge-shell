@@ -531,8 +531,8 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
 
             let options = SkimOptionsBuilder::default()
                 .multi(multi)
-                .prompt(prompt.to_string())
-                .bind(vec!["Enter:accept".to_string(), "Esc:abort".to_string()])
+                .prompt(Some(prompt.as_str()))
+                .bind(vec!["Enter:accept", "Esc:abort"])
                 .build()
                 .map_err(|e| RuntimeError {
                     msg: format!("Failed to build skim options: {}", e),

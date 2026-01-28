@@ -37,7 +37,7 @@ impl Action for GitCheckoutAction {
 
         // Show selection UI
         let options = SkimOptionsBuilder::default()
-            .prompt("Branch> ".to_string())
+            .prompt(Some("Branch> "))
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 

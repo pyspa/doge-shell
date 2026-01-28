@@ -34,14 +34,6 @@ impl SkimItem for GitFileItem {
             .unwrap_or_else(|_| "".to_string());
         ItemPreview::AnsiText(output)
     }
-
-    fn get_index(&self) -> usize {
-        self.index
-    }
-
-    fn set_index(&mut self, index: usize) {
-        self.index = index;
-    }
 }
 
 pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -> ExitStatus {
@@ -75,10 +67,10 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
 
     let options = SkimOptionsBuilder::default()
         .multi(true)
-        .prompt("Git Add> ".to_string())
-        .bind(vec!["Enter:accept".to_string(), "Space:toggle".to_string()])
-        .preview(Some("".to_string())) // Preview handled by ItemPreview
-        .preview_window("right:60%".to_string())
+        .prompt(Some("Git Add> "))
+        .bind(vec!["Enter:accept", "Space:toggle"])
+        .preview(Some("")) // Preview handled by ItemPreview
+        .preview_window(Some("right:60%"))
         .build()
         .unwrap();
 

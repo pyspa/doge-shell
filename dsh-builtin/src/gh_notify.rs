@@ -173,19 +173,12 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     drop(tx_item);
 
     // Run Skim
-    let options = match SkimOptionsBuilder::default()
+    let options = SkimOptionsBuilder::default()
         .multi(false)
-        .prompt("GitHub> ".to_string())
-        .bind(vec!["Enter:accept".to_string(), "Esc:abort".to_string()])
+        .prompt(Some("Notification> "))
+        .bind(vec!["Enter:accept", "c:execute(gh notification view {+})"])
         .build()
-    {
-        Ok(opt) => opt,
-        Err(e) => {
-            ctx.write_stderr(&format!("gh-notify: Failed to build options: {}", e))
-                .ok();
-            return ExitStatus::ExitedWith(1);
-        }
-    };
+        .unwrap();
 
     let output = match Skim::run_with(&options, Some(rx_item)) {
         Some(out) => out,

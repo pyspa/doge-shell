@@ -102,8 +102,8 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 
     // Interactive mode
     let options = SkimOptionsBuilder::default()
-        .prompt("Task> ".to_string())
-        .height("40%".to_string())
+        .prompt(Some("Task> "))
+        .height(Some("40%"))
         .multi(false)
         .build()
         .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e));

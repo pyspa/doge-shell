@@ -38,10 +38,9 @@ impl Action for KillProcessAction {
 
         // Show selection UI
         let options = SkimOptionsBuilder::default()
-            .prompt("Process> ".to_string())
+            .prompt(Some("Process> "))
             .header(Some(
-                "USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND"
-                    .to_string(),
+                "USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND",
             ))
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;

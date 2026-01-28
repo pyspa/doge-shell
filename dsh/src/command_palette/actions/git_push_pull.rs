@@ -44,7 +44,7 @@ impl Action for GitPushPullAction {
         ];
 
         let options = SkimOptionsBuilder::default()
-            .prompt("Action> ".to_string())
+            .prompt(Some("Action> "))
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 

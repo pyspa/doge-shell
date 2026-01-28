@@ -48,8 +48,8 @@ impl Action for PortCheckAction {
 
         // Show selection UI
         let options = SkimOptionsBuilder::default()
-            .prompt("Port> ".to_string())
-            .header(Some(ports.lines().next().unwrap_or("").to_string()))
+            .prompt(Some("Port> "))
+            .header(Some(ports.lines().next().unwrap_or("")))
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 

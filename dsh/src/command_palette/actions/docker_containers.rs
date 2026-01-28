@@ -47,8 +47,8 @@ impl Action for DockerContainersAction {
 
         // Select a container
         let container_options = SkimOptionsBuilder::default()
-            .prompt("Container> ".to_string())
-            .header(Some("NAME\tSTATUS\tIMAGE".to_string()))
+            .prompt(Some("Container> "))
+            .header(Some("NAME\tSTATUS\tIMAGE"))
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 
@@ -85,7 +85,7 @@ impl Action for DockerContainersAction {
             "rm",
         ];
         let action_options = SkimOptionsBuilder::default()
-            .prompt("Action> ".to_string())
+            .prompt(Some("Action> "))
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 

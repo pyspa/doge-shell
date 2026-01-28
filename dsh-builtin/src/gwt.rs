@@ -421,8 +421,8 @@ fn remove_worktree_interactive(ctx: &Context, force: bool) -> ExitStatus {
 
     // Multiple worktrees - use skim for selection
     let options = SkimOptionsBuilder::default()
-        .prompt("Select worktree to remove> ".to_string())
-        .bind(vec!["Enter:accept".to_string()])
+        .prompt(Some("Select worktree to remove> "))
+        .bind(vec!["Enter:accept"])
         .build()
         .unwrap();
 
@@ -619,9 +619,9 @@ fn add_worktree_from_pr(ctx: &Context) -> Result<PathBuf, String> {
 
     // Skim options
     let options = SkimOptionsBuilder::default()
-        .height("50%".to_string())
+        .height(Some("50%"))
         .multi(false)
-        .bind(vec!["Enter:accept".to_string()])
+        .bind(vec!["Enter:accept"])
         .build()
         .unwrap();
 

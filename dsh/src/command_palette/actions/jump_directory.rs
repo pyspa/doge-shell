@@ -38,7 +38,7 @@ impl Action for JumpDirectoryAction {
 
         // Show selection UI
         let options = SkimOptionsBuilder::default()
-            .prompt("Dir> ".to_string())
+            .prompt(Some("Jump> "))
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 

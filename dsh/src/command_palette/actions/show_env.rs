@@ -45,7 +45,7 @@ impl Action for ShowEnvAction {
 
         // Show selection UI
         let options = SkimOptionsBuilder::default()
-            .prompt("Env> ".to_string())
+            .prompt(Some("Env> "))
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 

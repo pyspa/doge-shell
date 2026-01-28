@@ -37,7 +37,7 @@ impl Action for SearchHistoryAction {
 
         // Show selection UI
         let options = SkimOptionsBuilder::default()
-            .prompt("History> ".to_string())
+            .prompt(Some("History> "))
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 

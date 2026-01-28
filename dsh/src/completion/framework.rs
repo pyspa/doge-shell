@@ -92,9 +92,9 @@ impl SkimCompletionFramework {
         }
 
         let options = SkimOptionsBuilder::default()
-            .select_1(true)
-            .bind(vec!["Enter:accept".to_string()])
-            .query(query.map(|s| s.to_string()))
+            .select1(true)
+            .bind(vec!["Enter:accept"])
+            .query(query)
             .build()
             .unwrap();
 

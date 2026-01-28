@@ -34,7 +34,7 @@ impl Action for SshConnectAction {
 
         // Show selection UI
         let options = SkimOptionsBuilder::default()
-            .prompt("SSH> ".to_string())
+            .prompt(Some("SSH> "))
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 

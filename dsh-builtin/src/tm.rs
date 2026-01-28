@@ -52,18 +52,11 @@ pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) ->
     }
 
     let options = SkimOptionsBuilder::default()
-        .height("50%".to_string())
+        .height(Some("50%"))
         .multi(false)
-        .preview(Some("".to_string())) // Default preview enabled
-        .build();
-
-    let options = match options {
-        Ok(opt) => opt,
-        Err(e) => {
-            let _ = ctx.write_stderr(&format!("tm: failed to build options: {}\n", e));
-            return ExitStatus::ExitedWith(1);
-        }
-    };
+        .preview(Some("")) // Default preview enabled
+        .build()
+        .unwrap();
 
     let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
 

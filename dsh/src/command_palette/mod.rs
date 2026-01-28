@@ -115,8 +115,8 @@ impl CommandPalette {
         let options = SkimOptionsBuilder::default()
             // .height("40%".to_string()) // Remove height to use full screen / alternate screen
             .multi(false)
-            .prompt("Cmd> ".to_string())
-            .bind(vec!["Enter:accept".to_string(), "Esc:abort".to_string()])
+            .prompt(Some("Cmd> "))
+            .bind(vec!["Enter:accept", "Esc:abort"])
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 

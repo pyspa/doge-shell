@@ -194,11 +194,11 @@ fn checkout_pr(ctx: &Context) -> ExitStatus {
 
     // Skim options
     let options = SkimOptionsBuilder::default()
-        .height("50%".to_string())
+        .height(Some("50%"))
         .multi(false)
-        .preview(Some("".to_string())) // No preview text, but window might show up? set empty function
-        .preview_window("".to_string()) // Disable preview window
-        .bind(vec!["Enter:accept".to_string()])
+        .preview(Some("")) // No preview text, but window might show up? set empty function
+        .preview_window(Some("")) // Disable preview window
+        .bind(vec!["Enter:accept"])
         .build()
         .unwrap();
 

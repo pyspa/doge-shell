@@ -731,6 +731,7 @@ mod tests {
                 SubCommand {
                     name: "add".to_string(),
                     description: Some("Add files".to_string()),
+                    aliases: vec![],
                     options: vec![],
                     arguments: vec![Argument {
                         name: "pathspec".to_string(),
@@ -742,6 +743,7 @@ mod tests {
                 SubCommand {
                     name: "commit".to_string(),
                     description: Some("Commit changes".to_string()),
+                    aliases: vec![],
                     options: vec![],
                     arguments: vec![],
                     subcommands: vec![],
@@ -793,6 +795,131 @@ mod tests {
     }
 
     #[test]
+    fn test_recursive_command_correction() {
+        // This test simulates "sudo pacman -S" where "pacman" is an argument to "sudo"
+        // and "-S" is a flag-like subcommand of "pacman".
+        // The generator needs to reparse "pacman -S" AND apply ContextCorrector to it.
+
+        let mut db = CommandCompletionDatabase::new();
+
+        // Define 'pacman' with '-S' subcommand
+        let pacman_completion = CommandCompletion {
+            command: "pacman".to_string(),
+            description: None,
+            global_options: vec![],
+            subcommands: vec![SubCommand {
+                name: "-S".to_string(),
+                description: None,
+                aliases: vec![],
+                options: vec![],
+                arguments: vec![],
+                subcommands: vec![],
+            }],
+            arguments: vec![],
+        };
+        db.add_command(pacman_completion);
+
+        // Define 'sudo' which takes a command as argument
+        let sudo_completion = CommandCompletion {
+            command: "sudo".to_string(),
+            description: None,
+            global_options: vec![],
+            subcommands: vec![],
+            arguments: vec![Argument {
+                name: "command".to_string(),
+                description: None,
+                arg_type: Some(ArgumentType::CommandWithArgs),
+            }],
+        };
+        db.add_command(sudo_completion);
+
+        let _generator = CompletionGenerator::new(&db);
+
+        // Parse: "sudo pacman -S"
+        // "sudo": Command
+        // "pacman": Argument 0 (CommandWithArgs)
+        // "-S": Argument 1 (of sudo, but really subcommand of pacman)
+        let _parsed = ParsedCommandLine {
+            command: "sudo".to_string(),
+            subcommand_path: vec![],
+            raw_args: vec!["pacman".to_string(), "-S".to_string()],
+            args: vec![], // In strict parser, these might be args
+            options: vec![],
+            current_token: "-S".to_string(),
+            current_arg: None,
+            // Context is Argument 1 of sudo
+            completion_context: CompletionContext::Argument {
+                arg_index: 1,
+                arg_type: None,
+            },
+            specified_options: vec![],
+            specified_arguments: vec!["pacman".to_string(), "-S".to_string()],
+            cursor_index: 0,
+        };
+
+        // When generating candidates, it should eventually delegate to pacman
+        // and find "-S" is a subcommand, then list subcommands/options of -S?
+        // Or if we are completing "-S", it should recognize it valid.
+        // Actually, if we typed "-S", we want to match "-S".
+        // But the issue is context.
+        // If context is NOT corrected, it might treat "-S" as an option to parse.
+
+        // Let's verify we get candidates for pacman's -S subcommand context (like packages?)
+        // Wait, if -S is a subcommand, completing "-S" should return "-S".
+        // If we are "sudo pacman -S ", then we are completing ARGUMENTS of -S.
+
+        // Let's try "sudo pacman -S -" (trigger options)
+        let parsed_trailing = ParsedCommandLine {
+            command: "sudo".to_string(),
+            subcommand_path: vec![],
+            raw_args: vec!["pacman".to_string(), "-S".to_string(), "-".to_string()],
+            args: vec![],
+            options: vec![],
+            current_token: "-".to_string(),
+            current_arg: Some("-".to_string()),
+            // Context is Argument 2 of sudo
+            completion_context: CompletionContext::Argument {
+                arg_index: 2,
+                arg_type: None,
+            },
+            specified_options: vec![],
+            specified_arguments: vec!["pacman".to_string(), "-S".to_string(), "-".to_string()],
+            cursor_index: 0,
+        };
+
+        // The generator should recursively call generate for "pacman -S "
+        // "pacman -S " should be corrected to SubCommand context "-S".
+        // And produce candidates for "-S" (which has no args in my mock, so empty?).
+        // If correction FAILS, it stays as Argument context of pacman (parsing -S as option?).
+        // If it treats -S as option, it might look for files.
+
+        // Let's check candidates. If we get file candidates, it failed?
+        // Let's add an option to -S to verify we get it.
+
+        // RE-SETUP with Option for -S
+        let mut db2 = db.clone();
+        let mut pacman = db2.get_command("pacman").unwrap().clone();
+        pacman.subcommands[0].options.push(CommandOption {
+            short: None,
+            long: Some("--unique-flag".to_string()),
+            description: None,
+            argument: None,
+        });
+        db2.add_command(pacman);
+
+        let generator2 = CompletionGenerator::new(&db2);
+
+        let candidates = generator2.generate_candidates(&parsed_trailing).unwrap();
+
+        // If context was corrected to pacman -S, we should see --unique-flag
+        let has_flag = candidates.iter().any(|c| c.text == "--unique-flag");
+        assert!(
+            has_flag,
+            "Failed to switch context to 'pacman -S' subcommand inside sudo"
+        );
+    }
+
+    #[test]
     fn test_partial_subcommand_is_not_reclassified_as_argument() {
         let mut db = CommandCompletionDatabase::new();
         let docker_completion = CommandCompletion {
@@ -803,6 +930,7 @@ mod tests {
                 SubCommand {
                     name: "compose".to_string(),
                     description: None,
+                    aliases: vec![],
                     options: vec![],
                     arguments: vec![],
                     subcommands: vec![],
@@ -810,6 +938,7 @@ mod tests {
                 SubCommand {
                     name: "build".to_string(),
                     description: None,
+                    aliases: vec![],
                     options: vec![],
                     arguments: vec![],
                     subcommands: vec![],
@@ -842,12 +971,14 @@ mod tests {
             subcommands: vec![SubCommand {
                 name: "compose".to_string(),
                 description: None,
+                aliases: vec![],
                 options: vec![],
                 arguments: vec![],
                 subcommands: vec![
                     SubCommand {
                         name: "up".to_string(),
                         description: None,
+                        aliases: vec![],
                         options: vec![],
                         arguments: vec![],
                         subcommands: vec![],
@@ -855,6 +986,7 @@ mod tests {
                     SubCommand {
                         name: "down".to_string(),
                         description: None,
+                        aliases: vec![],
                         options: vec![],
                         arguments: vec![],
                         subcommands: vec![],
@@ -900,6 +1032,7 @@ mod tests {
             subcommands: vec![SubCommand {
                 name: "commit".to_string(),
                 description: None,
+                aliases: vec![],
                 options: vec![
                     CommandOption {
                         short: Some("-m".to_string()),
@@ -1000,6 +1133,7 @@ mod tests {
             subcommands: vec![SubCommand {
                 name: "add".to_string(),
                 description: None,
+                aliases: vec![],
                 options: vec![
                     CommandOption {
                         short: Some("-A".to_string()),
@@ -1138,6 +1272,7 @@ mod tests {
             subcommands: vec![SubCommand {
                 name: "commit".to_string(),
                 description: Some("Commit".to_string()),
+                aliases: vec![],
                 options: vec![],
                 arguments: vec![],
                 subcommands: vec![],
@@ -1214,6 +1349,7 @@ mod tests {
             subcommands: vec![SubCommand {
                 name: "sub".to_string(),
                 description: None,
+                aliases: vec![],
                 options: vec![],
                 subcommands: vec![],
                 arguments: vec![Argument {
@@ -1455,6 +1591,7 @@ mod tests {
                 SubCommand {
                     name: "add".to_string(),
                     description: Some("Add files".to_string()),
+                    aliases: vec![],
                     options: vec![],
                     arguments: vec![Argument {
                         name: "pathspec".to_string(),
@@ -1466,6 +1603,7 @@ mod tests {
                 SubCommand {
                     name: "push".to_string(),
                     description: Some("Push".to_string()),
+                    aliases: vec![],
                     options: vec![],
                     arguments: vec![
                         Argument {
@@ -1616,6 +1754,7 @@ mod tests {
             subcommands: vec![SubCommand {
                 name: "push".to_string(),
                 description: Some("Push".to_string()),
+                aliases: vec![],
                 options: vec![],
                 arguments: vec![
                     Argument {
@@ -1753,5 +1892,67 @@ mod tests {
         } else {
             unsafe { std::env::remove_var("PATH") };
         }
+    }
+    #[test]
+    fn test_recursive_script_execution() {
+        let mut db = CommandCompletionDatabase::new();
+
+        // 1. Define 'scriptcmd' that uses a script for its argument
+        let script_completion = CommandCompletion {
+            command: "scriptcmd".to_string(),
+            description: None,
+            global_options: vec![],
+            subcommands: vec![],
+            arguments: vec![Argument {
+                name: "arg".to_string(),
+                description: None,
+                arg_type: Some(ArgumentType::Script(
+                    "echo internal_script_candidate".to_string(),
+                )),
+            }],
+        };
+        db.add_command(script_completion);
+
+        // 2. Define 'sudo' wrapping it
+        let sudo_completion = CommandCompletion {
+            command: "sudo".to_string(),
+            description: None,
+            global_options: vec![],
+            subcommands: vec![],
+            arguments: vec![Argument {
+                name: "command".to_string(),
+                description: None,
+                arg_type: Some(ArgumentType::CommandWithArgs),
+            }],
+        };
+        db.add_command(sudo_completion);
+
+        let generator = CompletionGenerator::new(&db);
+
+        // 3. Recursive parse: "sudo scriptcmd " (complete arg of scriptcmd)
+        let parsed = ParsedCommandLine {
+            command: "sudo".to_string(),
+            subcommand_path: vec![],
+            raw_args: vec!["scriptcmd".to_string()],
+            args: vec![],
+            options: vec![],
+            current_token: "".to_string(),
+            current_arg: None,
+            completion_context: CompletionContext::Argument {
+                arg_index: 1, // 0 is scriptcmd, 1 is the arg we are typing
+                arg_type: None,
+            },
+            specified_options: vec![],
+            specified_arguments: vec!["scriptcmd".to_string()],
+            cursor_index: 0,
+        };
+
+        let candidates = generator.generate_candidates(&parsed).unwrap();
+        let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
+
+        assert!(
+            texts.contains(&"internal_script_candidate".to_string()),
+            "Should contain candidates from script execution inside recursion"
+        );
     }
 }

@@ -20,6 +20,7 @@ async fn test_context_switching_logic() {
         subcommands: vec![SubCommand {
             name: "sub".to_string(),
             description: None,
+            aliases: vec![],
             options: vec![CommandOption {
                 short: None,
                 long: Some("--local".to_string()),
@@ -34,6 +35,7 @@ async fn test_context_switching_logic() {
             subcommands: vec![SubCommand {
                 name: "nested".to_string(),
                 description: None,
+                aliases: vec![],
                 options: vec![],
                 arguments: vec![],
                 subcommands: vec![],

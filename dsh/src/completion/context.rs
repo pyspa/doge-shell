@@ -182,6 +182,195 @@ impl<'a> ContextCorrector<'a> {
             }
         }
 
+        // 4. NEW: Scan raw_args for additional subcommands
+        // The parser might have stopped subcommand parsing early (e.g. at a flag like -S).
+        // If we still have valid subcommands in the definition, checkout raw_args.
+        let mut tokens_consumed = 0;
+        let mut subcommands_found = false;
+
+        for token in &parsed.raw_args {
+            // If this token is the current one being typed, don't consume it as a parent
+            // But if it IS a valid subcommand, we should set context to SubCommand
+            let is_current = token == &new_parsed.current_token;
+
+            if let Some(sub) = current_subcommands
+                .iter()
+                .find(|s| &s.name == token || s.aliases.contains(token))
+            {
+                if is_current {
+                    // The current token IS a valid subcommand (e.g. pacman -S|)
+                    new_parsed.completion_context = CompletionContext::SubCommand;
+                    new_parsed.subcommand_path = valid_subcommands.clone();
+                    return new_parsed;
+                } else {
+                    // It is a completed parent subcommand (e.g. pacman -S |package)
+                    valid_subcommands.push(token.clone());
+                    current_subcommands = &sub.subcommands;
+                    tokens_consumed += 1;
+                    subcommands_found = true;
+                }
+            } else {
+                // Token doesn't match any subcommand, stop scanning
+                break;
+            }
+        }
+
+        if subcommands_found {
+            new_parsed.subcommand_path = valid_subcommands;
+
+            // Clean up consumed tokens from options/args lists is complex and maybe unnecessary
+            // as generators usually rely on context and subcommand_path.
+            // But we should update completion context if we consumed everything and are now looking at arguments.
+
+            // Recalculate context based on what remains
+            if parsed.raw_args.len() > tokens_consumed {
+                // We have remaining args.
+                // The next one is the current context?
+                // If cursor is on one of the remaining, context is Argument?
+                new_parsed.completion_context = CompletionContext::Argument {
+                    arg_index: new_parsed.specified_arguments.len(), // approximate
+                    arg_type: None,
+                };
+
+                // If the immediate next token is what we are completing
+                if parsed.raw_args.len() == tokens_consumed + 1
+                    && parsed.raw_args[tokens_consumed] == new_parsed.current_token
+                {
+                    // We are completing the first argument
+                    new_parsed.completion_context = CompletionContext::Argument {
+                        arg_index: 0,
+                        arg_type: None,
+                    };
+                }
+            } else {
+                // Consumed all raw args as path? Then we are expecting new args/options
+                // If we ended exactly on a subcommand (and it wasn't current_token check above?),
+                // then we are completing arguments of that subcommand.
+                new_parsed.completion_context = CompletionContext::Argument {
+                    arg_index: 0,
+                    arg_type: None,
+                };
+            }
+
+            // Override if current token looks like an option and we didn't match it as subcommand?
+            if new_parsed.current_token.starts_with('-')
+                && !current_subcommands
+                    .iter()
+                    .any(|s| s.name == new_parsed.current_token)
+            {
+                // e.g. pacman -S -y
+                // -y is not subcommand.
+                // So it is Option.
+                // But wait, above logic sets context to Argument.
+                // We need to return to Short/LongOption if it looks like one.
+                if matches!(
+                    parsed.completion_context,
+                    CompletionContext::ShortOption | CompletionContext::LongOption
+                ) {
+                    new_parsed.completion_context = parsed.completion_context.clone();
+                }
+            }
+        }
+
         new_parsed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::completion::command::{CommandCompletion, SubCommand};
+
+    #[test]
+    fn test_correct_flag_like_subcommand() {
+        let mut db = CommandCompletionDatabase::new();
+        let completion = CommandCompletion {
+            command: "pacman".to_string(),
+            description: None,
+            global_options: vec![],
+            subcommands: vec![SubCommand {
+                name: "-S".to_string(),
+                description: None,
+                aliases: vec![],
+                options: vec![],
+                arguments: vec![],
+                subcommands: vec![],
+            }],
+            arguments: vec![],
+        };
+        db.add_command(completion);
+
+        let corrector = ContextCorrector::new(&db);
+
+        // Case: "pacman -S" where parser initially thought -S was an option
+        let parsed = ParsedCommandLine {
+            command: "pacman".to_string(),
+            subcommand_path: vec![],
+            // Raw args might just be ["-S"] if "pacman" was consumed as command
+            raw_args: vec!["-S".to_string()],
+            args: vec![],
+            options: vec![],
+            current_token: "-S".to_string(),
+            current_arg: None,
+            completion_context: CompletionContext::ShortOption,
+            specified_options: vec!["-S".to_string()],
+            specified_arguments: vec![],
+            cursor_index: 0,
+        };
+
+        let corrected = corrector.correct_parsed_command_line(&parsed);
+
+        // This assertion is expected to FAIL before the fix
+        assert!(
+            matches!(corrected.completion_context, CompletionContext::SubCommand),
+            "Expected SubCommand context, got {:?}",
+            corrected.completion_context
+        );
+    }
+
+    #[test]
+    fn test_correct_alias_subcommand() {
+        let mut db = CommandCompletionDatabase::new();
+        let completion = CommandCompletion {
+            command: "pacman".to_string(),
+            description: None,
+            global_options: vec![],
+            subcommands: vec![SubCommand {
+                name: "-S".to_string(),
+                description: None,
+                aliases: vec!["--sync".to_string()],
+                options: vec![],
+                arguments: vec![],
+                subcommands: vec![],
+            }],
+            arguments: vec![],
+        };
+        db.add_command(completion);
+
+        let corrector = ContextCorrector::new(&db);
+
+        // Case: "pacman --sync"
+        let parsed = ParsedCommandLine {
+            command: "pacman".to_string(),
+            subcommand_path: vec![],
+            raw_args: vec!["--sync".to_string()],
+            args: vec![],
+            options: vec![],
+            current_token: "--sync".to_string(), // Current token is the alias
+            current_arg: None,
+            completion_context: CompletionContext::LongOption, // Parser thinks it's a long option
+            specified_options: vec!["--sync".to_string()],
+            specified_arguments: vec![],
+            cursor_index: 0,
+        };
+
+        let corrected = corrector.correct_parsed_command_line(&parsed);
+
+        // Should be corrected to SubCommand context because --sync is alias of -S
+        assert!(
+            matches!(corrected.completion_context, CompletionContext::SubCommand),
+            "Expected SubCommand context for alias, got {:?}",
+            corrected.completion_context
+        );
     }
 }

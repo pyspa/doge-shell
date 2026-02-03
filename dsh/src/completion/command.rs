@@ -26,6 +26,9 @@ pub struct SubCommand {
     pub name: String,
     /// Subcommand description
     pub description: Option<String>,
+    /// Subcommand aliases
+    #[serde(default)]
+    pub aliases: Vec<String>,
     /// Options specific to this subcommand
     #[serde(default)]
     pub options: Vec<CommandOption>,

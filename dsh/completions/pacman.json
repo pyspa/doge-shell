@@ -183,7 +183,8 @@
           "required": false,
           "multiple": true,
           "type": {
-            "type": "String"
+            "type": "Script",
+            "data": "pacman -Slq | sort -u"
           }
         }
       ],
@@ -244,7 +245,8 @@
           "required": true,
           "multiple": true,
           "type": {
-            "type": "String"
+            "type": "Script",
+            "data": "pacman -Qq | sort -u"
           }
         }
       ],

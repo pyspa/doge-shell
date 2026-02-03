@@ -33,6 +33,7 @@ mod tests {
                 SubCommand {
                     name: "add".to_string(),
                     description: Some("Add files".to_string()),
+                    aliases: vec![],
                     options: vec![],
                     arguments: vec![],
                     subcommands: vec![],
@@ -40,6 +41,7 @@ mod tests {
                 SubCommand {
                     name: "commit".to_string(),
                     description: Some("Commit changes".to_string()),
+                    aliases: vec![],
                     options: vec![
                         CommandOption {
                             short: Some("-m".to_string()),
@@ -144,6 +146,7 @@ mod tests {
             git.subcommands.push(SubCommand {
                 name: "checkout".to_string(),
                 description: Some("Switch branch".to_string()),
+                aliases: vec![],
                 options: vec![],
                 arguments: vec![Argument {
                     name: "branch".to_string(),

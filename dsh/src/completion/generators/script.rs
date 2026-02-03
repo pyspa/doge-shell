@@ -32,23 +32,40 @@ fn run_with_timeout(command: &str) -> Result<String> {
         .stderr(std::process::Stdio::null())
         .spawn()?;
 
+    // Read stdout in a separate thread to avoid deadlock.
+    // If the child produces more output than the pipe buffer size (typically 64KB on Linux),
+    // it will block on write() until the parent reads from the pipe.
+    // If the parent is waiting for the child to exit before reading, we get a deadlock.
+    let mut stdout = child.stdout.take().expect("Child stdout piped");
+    let reader_thread = std::thread::spawn(move || {
+        let mut buf = String::new();
+        stdout.read_to_string(&mut buf)?;
+        Ok::<String, std::io::Error>(buf)
+    });
+
     let timeout = Duration::from_millis(SCRIPT_TIMEOUT_MS);
     match child.wait_timeout(timeout)? {
         Some(status) => {
+            // Process finished. Join the reader thread to get the output.
+            let output = reader_thread
+                .join()
+                .map_err(|_| anyhow::anyhow!("Stdout reader thread panicked"))??;
+
             if status.success() {
-                let mut stdout = String::new();
-                if let Some(mut out) = child.stdout.take() {
-                    out.read_to_string(&mut stdout)?;
-                }
-                Ok(stdout)
+                Ok(output)
             } else {
                 Ok(String::new())
             }
         }
         None => {
-            // Timeout
+            // Timeout occurred. Kill the child.
             let _ = child.kill();
             let _ = child.wait();
+
+            // The reader thread should finish shortly after the pipe is broken/closed.
+            // We join it to clean up resources, but ignore the result/error.
+            let _ = reader_thread.join();
+
             Ok(String::new())
         }
     }
@@ -64,12 +81,14 @@ fn run_without_timeout(command: &str) -> Result<String> {
         .stderr(std::process::Stdio::null())
         .spawn()?;
 
+    // Read output BEFORE waiting, to prevent deadlock
+    let mut stdout = String::new();
+    if let Some(mut out) = child.stdout.take() {
+        out.read_to_string(&mut stdout)?;
+    }
+
     let status = child.wait()?;
     if status.success() {
-        let mut stdout = String::new();
-        if let Some(mut out) = child.stdout.take() {
-            out.read_to_string(&mut stdout)?;
-        }
         Ok(stdout)
     } else {
         Ok(String::new())
@@ -266,5 +285,28 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].text, "result");
+    }
+    #[test]
+    fn test_large_output_deadlock() {
+        // This test will hang if deadlock exists
+        // We use "yes" to generate large output.
+        // On Linux, pipe buffer is often 64KB. 100KB should be enough to block.
+        // We use a shorter timeout for the test to fail fast if it deadlocks (Wait, wait_without_timeout has NO timeout).
+        // Standard cargo test has a timeout usually? No.
+        // This test might HANG forever if I'm right.
+        // I should use a background thread or something?
+        // Or trust that the environment kills it?
+        // Use a reasonable size.
+
+        let runner = DefaultScriptRunner;
+        // Verify it runs using the 'real' runner (which logic we are testing, albeit without timeout in test mode)
+        // But the deadlock logic is identical: wait() then read().
+
+        // We need a command that produces output quickly and exits or hits the limit.
+        // "python3 -c 'print(\"a\" * 100000)'"
+        // Or "seq 1 10000"
+
+        let res = runner.run("seq 1 20000").unwrap(); // 20000 lines * ~6 chars = 120KB > 64KB.
+        assert!(res.len() > 100000);
     }
 }

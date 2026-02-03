@@ -343,6 +343,7 @@ mod tests {
         let commit = SubCommand {
             name: "commit".to_string(),
             description: Some("Record changes".to_string()),
+            aliases: vec![],
             options: vec![
                 CommandOption {
                     short: Some("-a".to_string()),

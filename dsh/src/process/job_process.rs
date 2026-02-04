@@ -2,6 +2,7 @@ use anyhow::{Context as _, Result};
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::sys::signal::Signal;
 use nix::unistd::{Pid, getpid, pipe};
+use std::os::fd::IntoRawFd;
 use std::os::unix::io::RawFd;
 use tracing::debug;
 
@@ -290,10 +291,11 @@ impl JobProcess {
                 // We don't do this in interactive mode to preserve TTY (colors, etc.)
                 if !ctx.interactive && redirect.is_none() && pty_slave.is_none() {
                     let (pout, pin) = pipe().context("failed pipe")?;
-                    ctx.outfile = pin;
+                    ctx.outfile = pin.into_raw_fd();
+                    let pout_raw = pout.into_raw_fd();
                     match self {
-                        JobProcess::Builtin(p) => p.cap_stdout = Some(pout),
-                        JobProcess::Command(p) => p.cap_stdout = Some(pout),
+                        JobProcess::Builtin(p) => p.cap_stdout = Some(pout_raw),
+                        JobProcess::Command(p) => p.cap_stdout = Some(pout_raw),
                     }
                     None
                 } else {

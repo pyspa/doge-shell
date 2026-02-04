@@ -42,7 +42,7 @@ fn get_tmode_safe(stored_tmode: &Option<Termios>) -> anyhow::Result<Termios> {
     let tty_fd = open("/dev/tty", OFlag::O_RDONLY, Mode::empty())
         .map_err(|e| anyhow::anyhow!("Cannot open /dev/tty: {}", e))?;
 
-    tcgetattr(tty_fd).map_err(|e| anyhow::anyhow!("Cannot get terminal attributes: {}", e))
+    tcgetattr(&tty_fd).map_err(|e| anyhow::anyhow!("Cannot get terminal attributes: {}", e))
 }
 
 pub(crate) async fn check_background_jobs(repl: &mut Repl<'_>, output: bool) -> Result<()> {

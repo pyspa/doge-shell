@@ -68,7 +68,7 @@ mod tests {
     use std::collections::HashMap;
     use std::fs::File;
     use std::io::{Read, Write};
-    use std::os::unix::io::FromRawFd;
+    use std::os::fd::AsRawFd;
 
     struct MockShellProxy {
         pub captured_content: String,
@@ -171,14 +171,14 @@ mod tests {
         let (read_out, write_out) = pipe()?;
 
         // Write to input pipe
-        let mut input_writer = unsafe { File::from_raw_fd(write_in) };
+        let mut input_writer = File::from(write_in);
         input_writer.write_all(b"original content")?;
         drop(input_writer); // Close write end so read ends
 
         // Setup Context
         let mut ctx = Context::new(nix::unistd::getpid(), nix::unistd::getpid(), None, true);
-        ctx.infile = read_in;
-        ctx.outfile = write_out;
+        ctx.infile = read_in.as_raw_fd();
+        ctx.outfile = write_out.as_raw_fd();
 
         // Setup MockProxy
         let mut proxy = MockShellProxy::new();
@@ -192,9 +192,9 @@ mod tests {
         assert_eq!(proxy.file_extension, "txt");
 
         // Verify output
-        nix::unistd::close(write_out)?;
+        drop(write_out);
 
-        let mut output_reader = unsafe { File::from_raw_fd(read_out) };
+        let mut output_reader = File::from(read_out);
         let mut output_content = String::new();
         output_reader.read_to_string(&mut output_content)?;
 

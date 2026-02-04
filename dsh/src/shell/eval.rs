@@ -12,7 +12,7 @@ use nix::sys::termios::{LocalFlags, SetArg, tcgetattr, tcsetattr};
 use nix::unistd::{ForkResult, Pid, fork, getpid, setpgid};
 use pest::Parser;
 use std::io::Write;
-use std::os::unix::io::AsRawFd;
+use std::os::fd::{AsRawFd, BorrowedFd};
 use std::sync::Arc;
 use tokio::task;
 use tracing::debug;
@@ -52,11 +52,16 @@ pub async fn eval_str(
 
         // Force enable ISIG to ensure Ctrl+C generates SIGINT
         // This addresses issues where crossterm might not fully restore terminal flags
-        if let Ok(mut termios) = tcgetattr(std::io::stdin().as_raw_fd())
+        if let Ok(mut termios) =
+            tcgetattr(unsafe { BorrowedFd::borrow_raw(std::io::stdin().as_raw_fd()) })
             && !termios.local_flags.contains(LocalFlags::ISIG)
         {
             termios.local_flags.insert(LocalFlags::ISIG);
-            if let Err(e) = tcsetattr(std::io::stdin().as_raw_fd(), SetArg::TCSANOW, &termios) {
+            if let Err(e) = tcsetattr(
+                unsafe { BorrowedFd::borrow_raw(std::io::stdin().as_raw_fd()) },
+                SetArg::TCSANOW,
+                &termios,
+            ) {
                 tracing::error!("Failed to force enable ISIG: {}", e);
             }
         }

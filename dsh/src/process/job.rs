@@ -8,6 +8,7 @@ use nix::unistd::read;
 use nix::unistd::{Pid, close, getpgrp, isatty, setpgid, tcsetpgrp};
 use std::fs::File;
 use std::io::Write;
+use std::os::fd::BorrowedFd;
 use std::os::unix::io::{AsRawFd, IntoRawFd, RawFd};
 use std::time::Duration;
 use tokio::io::unix::AsyncFd;
@@ -30,17 +31,8 @@ use std::pin::Pin;
 use std::task::{Context as TaskContext, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-#[derive(Debug, Clone, Copy)]
-struct BorrowedFd(RawFd);
-
-impl AsRawFd for BorrowedFd {
-    fn as_raw_fd(&self) -> RawFd {
-        self.0
-    }
-}
-
 struct AsyncStdin {
-    inner: AsyncFd<BorrowedFd>,
+    inner: AsyncFd<RawFd>,
 }
 
 impl AsyncRead for AsyncStdin {
@@ -54,7 +46,7 @@ impl AsyncRead for AsyncStdin {
             match guard.try_io(|inner| {
                 let fd = inner.get_ref().as_raw_fd();
                 let b = buf.initialize_unfilled();
-                match read(fd, b) {
+                match read(unsafe { BorrowedFd::borrow_raw(fd) }, b) {
                     Ok(n) => {
                         buf.advance(n);
                         Ok(n)
@@ -92,9 +84,14 @@ impl AsyncPtyMasterWriter {
     fn new(inner: std::fs::File) -> std::io::Result<Self> {
         // Set non-blocking mode for AsyncFd to work correctly
         let fd = inner.as_raw_fd();
-        let current_flags = fcntl(fd, FcntlArg::F_GETFL).map_err(std::io::Error::other)?;
+        let current_flags = fcntl(unsafe { BorrowedFd::borrow_raw(fd) }, FcntlArg::F_GETFL)
+            .map_err(std::io::Error::other)?;
         let flags = OFlag::from_bits_truncate(current_flags) | OFlag::O_NONBLOCK;
-        fcntl(fd, FcntlArg::F_SETFL(flags)).map_err(std::io::Error::other)?;
+        fcntl(
+            unsafe { BorrowedFd::borrow_raw(fd) },
+            FcntlArg::F_SETFL(flags),
+        )
+        .map_err(std::io::Error::other)?;
 
         Ok(Self {
             inner: AsyncFd::new(inner)?,
@@ -146,11 +143,16 @@ struct NonBlockingFdGuard {
 
 impl NonBlockingFdGuard {
     fn new(fd: RawFd) -> std::io::Result<Self> {
-        let raw_flags = fcntl(fd, FcntlArg::F_GETFL).map_err(std::io::Error::other)?;
+        let raw_flags = fcntl(unsafe { BorrowedFd::borrow_raw(fd) }, FcntlArg::F_GETFL)
+            .map_err(std::io::Error::other)?;
         let original_flags = OFlag::from_bits_truncate(raw_flags);
         let new_flags = original_flags | OFlag::O_NONBLOCK;
         if new_flags != original_flags {
-            fcntl(fd, FcntlArg::F_SETFL(new_flags)).map_err(std::io::Error::other)?;
+            fcntl(
+                unsafe { BorrowedFd::borrow_raw(fd) },
+                FcntlArg::F_SETFL(new_flags),
+            )
+            .map_err(std::io::Error::other)?;
         }
         Ok(Self { fd, original_flags })
     }
@@ -159,7 +161,10 @@ impl NonBlockingFdGuard {
 impl Drop for NonBlockingFdGuard {
     fn drop(&mut self) {
         // Best-effort restore.
-        let _ = fcntl(self.fd, FcntlArg::F_SETFL(self.original_flags));
+        let _ = fcntl(
+            unsafe { BorrowedFd::borrow_raw(self.fd) },
+            FcntlArg::F_SETFL(self.original_flags),
+        );
     }
 }
 
@@ -400,7 +405,7 @@ impl Job {
             Ok(mut master_write) => {
                 let input_task = tokio::spawn(async move {
                     let _nonblock = NonBlockingFdGuard::new(STDIN_FILENO);
-                    match AsyncFd::new(BorrowedFd(STDIN_FILENO)) {
+                    match AsyncFd::new(STDIN_FILENO) {
                         Ok(fd) => {
                             let mut stdin = AsyncStdin { inner: fd };
                             let _ = tokio::io::copy(&mut stdin, &mut master_write).await;
@@ -647,7 +652,7 @@ impl Job {
         );
 
         // Skip process group control if not in terminal environment
-        if !isatty(SHELL_TERMINAL).unwrap_or(false) {
+        if !isatty(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }).unwrap_or(false) {
             debug!("Not a terminal environment, skipping process group control");
             debug!("About to call wait_job with no_hang: {}", no_hang);
             self.wait_job(no_hang).await?;
@@ -664,7 +669,8 @@ impl Job {
         if self.pty.is_none() {
             if let Some(pgid) = self.pgid {
                 debug!("Setting foreground process group to {}", pgid);
-                if let Err(err) = tcsetpgrp(SHELL_TERMINAL, pgid) {
+                if let Err(err) = tcsetpgrp(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }, pgid)
+                {
                     debug!(
                         "tcsetpgrp failed: {}, continuing without terminal control",
                         err
@@ -690,7 +696,10 @@ impl Job {
         debug!("wait_job completed");
 
         debug!("Restoring shell process group {}", self.shell_pgid);
-        if let Err(err) = tcsetpgrp(SHELL_TERMINAL, self.shell_pgid) {
+        if let Err(err) = tcsetpgrp(
+            unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) },
+            self.shell_pgid,
+        ) {
             debug!("tcsetpgrp shell_pgid failed: {}, continuing anyway", err);
         } else {
             debug!(
@@ -712,7 +721,7 @@ impl Job {
         );
 
         // Skip process group control if not in terminal environment
-        if !isatty(SHELL_TERMINAL).unwrap_or(false) {
+        if !isatty(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }).unwrap_or(false) {
             debug!("Not a terminal environment, skipping process group control");
             debug!("About to call wait_job_sync with no_hang: {}", no_hang);
             self.wait_job_sync(no_hang)?;
@@ -729,7 +738,8 @@ impl Job {
         if self.pty.is_none() {
             if let Some(pgid) = self.pgid {
                 debug!("Setting foreground process group to {}", pgid);
-                if let Err(err) = tcsetpgrp(SHELL_TERMINAL, pgid) {
+                if let Err(err) = tcsetpgrp(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }, pgid)
+                {
                     debug!(
                         "tcsetpgrp failed: {}, continuing without terminal control",
                         err
@@ -755,7 +765,10 @@ impl Job {
         debug!("wait_job_sync completed");
 
         debug!("Restoring shell process group {}", self.shell_pgid);
-        if let Err(err) = tcsetpgrp(SHELL_TERMINAL, self.shell_pgid) {
+        if let Err(err) = tcsetpgrp(
+            unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) },
+            self.shell_pgid,
+        ) {
             debug!("tcsetpgrp shell_pgid failed: {}, continuing anyway", err);
         } else {
             debug!(
@@ -772,12 +785,15 @@ impl Job {
         debug!("put_in_background pgid {:?}", self.pgid,);
 
         // Skip process group control if not in terminal environment
-        if !isatty(SHELL_TERMINAL).unwrap_or(false) {
+        if !isatty(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }).unwrap_or(false) {
             debug!("Not a terminal environment, skipping process group control");
             return Ok(());
         }
 
-        if let Err(err) = tcsetpgrp(SHELL_TERMINAL, self.shell_pgid) {
+        if let Err(err) = tcsetpgrp(
+            unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) },
+            self.shell_pgid,
+        ) {
             debug!("tcsetpgrp shell_pgid failed: {}, continuing anyway", err);
         } else {
             debug!(
@@ -1251,8 +1267,8 @@ mod tests {
         let pgid = getpgrp();
 
         // Skip TTY-dependent operations in test environment
-        if isatty(SHELL_TERMINAL).unwrap_or(false) {
-            let tmode = match tcgetattr(SHELL_TERMINAL) {
+        if isatty(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }).unwrap_or(false) {
+            let tmode = match tcgetattr(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }) {
                 Ok(mode) => mode,
                 Err(_) => return Ok(()),
             };

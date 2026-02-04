@@ -2,15 +2,14 @@ use crate::dirs;
 use crate::parser::{self, Rule};
 use crate::process::{self, Job, JobProcess, Redirect, SubshellType};
 use crate::shell::Shell;
-use anyhow::{Context as _, Result, anyhow, bail};
+use anyhow::{Context as _, Result, bail};
 use dsh_types::Context;
 use nix::sys::termios::tcgetattr;
-use nix::unistd::{close, pipe};
+use nix::unistd::pipe;
 use pest::iterators::Pair;
 use std::fs::File;
 use std::io::Read;
-use std::os::unix::io::FromRawFd;
-use std::os::unix::io::RawFd;
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, RawFd};
 use tracing::{debug, warn};
 
 #[derive(Debug)]
@@ -300,7 +299,7 @@ pub fn parse_command(
                 continue;
             }
             debug!("run subshell: {}", cmd_str);
-            let tmode = match tcgetattr(0) {
+            let tmode = match tcgetattr(unsafe { BorrowedFd::borrow_raw(0) }) {
                 Ok(mode) => Some(mode),
                 Err(err) => {
                     debug!("tcgetattr fallback for command substitution: {}", err);
@@ -314,20 +313,20 @@ pub fn parse_command(
                     ctx.foreground = true;
                     // make pipe
                     let (pout, pin) = pipe().context("failed pipe")?;
-                    ctx.outfile = pin;
+                    ctx.outfile = pin.as_raw_fd();
                     shell.launch_subshell(&mut ctx, jobs)?;
-                    close(pin).map_err(|e| anyhow!("failed to close pipe: {}", e))?;
-                    let output = read_fd(pout)?;
+                    drop(pin); // Close write end
+                    let output = read_fd(pout.into_raw_fd())?;
                     output.lines().for_each(|x| argv.push(x.to_owned()));
                 }
                 SubshellType::CommandSubstitution => {
                     let mut ctx = Context::new(shell.pid, shell.pgid, tmode.clone(), false);
                     ctx.foreground = true;
                     let (pout, pin) = pipe().context("failed pipe")?;
-                    ctx.outfile = pin;
+                    ctx.outfile = pin.as_raw_fd();
                     shell.launch_subshell(&mut ctx, jobs)?;
-                    close(pin).map_err(|e| anyhow!("failed to close pipe: {}", e))?;
-                    let output = read_fd(pout)?;
+                    drop(pin); // Close write end
+                    let output = read_fd(pout.into_raw_fd())?;
                     for part in output.split_whitespace() {
                         if !part.is_empty() {
                             argv.push(part.to_owned());
@@ -339,10 +338,11 @@ pub fn parse_command(
                     ctx.foreground = true;
                     // make pipe
                     let (pout, pin) = pipe().context("failed pipe")?;
-                    ctx.outfile = pin;
+                    ctx.outfile = pin.as_raw_fd();
                     shell.launch_subshell(&mut ctx, jobs)?;
-                    close(pin).map_err(|e| anyhow!("failed to close pipe: {}", e))?;
-                    let file_name = format!("/dev/fd/{pout}");
+                    drop(pin); // Close write end
+                    // Leak pout to keep it open for process substitution
+                    let file_name = format!("/dev/fd/{}", pout.into_raw_fd());
                     argv.push(file_name);
                 }
                 SubshellType::None => {}

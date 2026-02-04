@@ -2,7 +2,7 @@ use anyhow::{Context as _, Result};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::unistd::pipe;
 use std::io::{Read, Write};
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
 use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::unix::AsyncFd;
@@ -124,10 +124,9 @@ impl PtyMonitor {
         let file = unsafe { std::fs::File::from_raw_fd(fd) };
 
         // Set non-blocking mode
-        let current_flags =
-            fcntl(file.as_raw_fd(), FcntlArg::F_GETFL).context("fcntl F_GETFL failed")?;
+        let current_flags = fcntl(&file, FcntlArg::F_GETFL).context("fcntl F_GETFL failed")?;
         let flags = OFlag::from_bits_truncate(current_flags) | OFlag::O_NONBLOCK;
-        fcntl(file.as_raw_fd(), FcntlArg::F_SETFL(flags)).context("fcntl F_SETFL failed")?;
+        fcntl(&file, FcntlArg::F_SETFL(flags)).context("fcntl F_SETFL failed")?;
 
         let inner = AsyncFd::new(file).context("AsyncFd creation failed")?;
 
@@ -221,8 +220,8 @@ impl PtyMonitor {
 
 pub(crate) fn create_pipe(ctx: &mut Context) -> Result<Option<RawFd>> {
     let (pout, pin) = pipe().context("failed pipe")?;
-    ctx.outfile = pin;
-    Ok(Some(pout))
+    ctx.outfile = pin.into_raw_fd();
+    Ok(Some(pout.into_raw_fd()))
 }
 
 pub(crate) fn handle_output_redirect(
@@ -234,37 +233,37 @@ pub(crate) fn handle_output_redirect(
         match output {
             Redirect::StdoutOutput(_file) | Redirect::StdoutAppend(_file) => {
                 let (pout, pin) = pipe().context("failed pipe")?;
-                ctx.outfile = pin;
-                Ok(Some(pout))
+                ctx.outfile = pin.into_raw_fd();
+                Ok(Some(pout.into_raw_fd()))
             }
             Redirect::StderrOutput(file) | Redirect::StderrAppend(file) => {
                 tracing::debug!("🔀 REDIRECT: StderrOutput/Append to file: {}", file);
                 let (pout, pin) = pipe().context("failed pipe")?;
                 tracing::debug!(
-                    "🔀 REDIRECT: Created redirect pipe - read_end={}, write_end={}",
+                    "🔀 REDIRECT: Created redirect pipe - read_end={:?}, write_end={:?}",
                     pout,
                     pin
                 );
-                ctx.errfile = pin;
+                ctx.errfile = pin.into_raw_fd();
                 tracing::debug!("🔀 REDIRECT: Set ctx.errfile={}", ctx.errfile);
-                Ok(Some(pout))
+                Ok(Some(pout.into_raw_fd()))
             }
             Redirect::StdouterrOutput(file) | Redirect::StdouterrAppend(file) => {
                 tracing::debug!("🔀 REDIRECT: StdouterrOutput/Append to file: {}", file);
                 let (pout, pin) = pipe().context("failed pipe")?;
                 tracing::debug!(
-                    "🔀 REDIRECT: Created redirect pipe - read_end={}, write_end={}",
+                    "🔀 REDIRECT: Created redirect pipe - read_end={:?}, write_end={:?}",
                     pout,
                     pin
                 );
-                ctx.outfile = pin;
-                ctx.errfile = pin;
+                ctx.outfile = pin.as_raw_fd(); // Keep alive for errfile
+                ctx.errfile = pin.into_raw_fd();
                 tracing::debug!(
                     "🔀 REDIRECT: Set ctx.outfile={}, ctx.errfile={}",
                     ctx.outfile,
                     ctx.errfile
                 );
-                Ok(Some(pout))
+                Ok(Some(pout.into_raw_fd()))
             }
             Redirect::Input(_) => Ok(None),
         }

@@ -2,10 +2,11 @@ use crate::environment::Environment;
 use anyhow::{Context as _, Result};
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
-use nix::unistd::{Pid, close, dup2, execve, setpgid, tcsetpgrp};
+use nix::unistd::{Pid, close, execve, setpgid, tcsetpgrp};
 use parking_lot::RwLock;
 
 use std::ffi::CString;
+use std::os::fd::BorrowedFd;
 use std::os::unix::io::RawFd;
 use std::sync::Arc;
 use tracing::{debug, error};
@@ -279,7 +280,8 @@ impl Process {
             // If we are using PTY, we don't want to set this process as foreground of the SHELL's terminal
             // because the Shell will proxy input/output.
             if foreground && pty_slave.is_none() {
-                tcsetpgrp(SHELL_TERMINAL, pgid).context("failed tcsetpgrp")?;
+                tcsetpgrp(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }, pgid)
+                    .context("failed tcsetpgrp")?;
             }
 
             // Set signals AFTER setting foreground process group to avoid race condition
@@ -332,9 +334,11 @@ impl Process {
         // Standard IO setup (PTY slave is handled via self.stdin/stdout/stderr being set to it by caller if needed)
 
         // 1. Handle STDIN
-        if self.stdin != STDIN_FILENO {
-            dup2(self.stdin, STDIN_FILENO)
-                .map_err(|e| anyhow::anyhow!("dup2 stdin failed: {}", e))?;
+        if self.stdin != STDIN_FILENO && unsafe { libc::dup2(self.stdin, STDIN_FILENO) } < 0 {
+            return Err(anyhow::anyhow!(
+                "dup2 stdin failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
         // Don't close stdin yet if it matches stdout or stderr, as we need it for subsequent dup2 calls
         let keep_stdin = self.stdin == self.stdout || self.stdin == self.stderr;
@@ -345,13 +349,19 @@ impl Process {
         // 2. Handle STDOUT & STDERR
         if self.stdout == self.stderr {
             // Combined stdout/stderr (e.g. PTY or redirected to same file)
-            if self.stdout != STDOUT_FILENO {
-                dup2(self.stdout, STDOUT_FILENO)
-                    .map_err(|e| anyhow::anyhow!("dup2 stdout failed: {}", e))?;
+            if self.stdout != STDOUT_FILENO && unsafe { libc::dup2(self.stdout, STDOUT_FILENO) } < 0
+            {
+                return Err(anyhow::anyhow!(
+                    "dup2 stdout failed: {}",
+                    std::io::Error::last_os_error()
+                ));
             }
-            if self.stderr != STDERR_FILENO {
-                dup2(self.stderr, STDERR_FILENO)
-                    .map_err(|e| anyhow::anyhow!("dup2 stderr failed: {}", e))?;
+            if self.stderr != STDERR_FILENO && unsafe { libc::dup2(self.stderr, STDERR_FILENO) } < 0
+            {
+                return Err(anyhow::anyhow!(
+                    "dup2 stderr failed: {}",
+                    std::io::Error::last_os_error()
+                ));
             }
 
             // Close the source if it is > 2.
@@ -362,8 +372,12 @@ impl Process {
         } else {
             // Separate stdout/stderr
             if self.stdout != STDOUT_FILENO {
-                dup2(self.stdout, STDOUT_FILENO)
-                    .map_err(|e| anyhow::anyhow!("dup2 stdout failed: {}", e))?;
+                if unsafe { libc::dup2(self.stdout, STDOUT_FILENO) } < 0 {
+                    return Err(anyhow::anyhow!(
+                        "dup2 stdout failed: {}",
+                        std::io::Error::last_os_error()
+                    ));
+                }
                 // If stdout matched stdin, it was kept open. Now we can close it.
                 if self.stdout > 2 {
                     close(self.stdout)
@@ -372,8 +386,12 @@ impl Process {
             }
 
             if self.stderr != STDERR_FILENO {
-                dup2(self.stderr, STDERR_FILENO)
-                    .map_err(|e| anyhow::anyhow!("dup2 stderr failed: {}", e))?;
+                if unsafe { libc::dup2(self.stderr, STDERR_FILENO) } < 0 {
+                    return Err(anyhow::anyhow!(
+                        "dup2 stderr failed: {}",
+                        std::io::Error::last_os_error()
+                    ));
+                }
                 // If stderr matched stdin, it was kept open. Now close it.
                 if self.stderr > 2 {
                     close(self.stderr)

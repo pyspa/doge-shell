@@ -33,6 +33,7 @@ use parking_lot::RwLock;
 use pest::Span as PestSpan;
 use pest::iterators::Pairs;
 use std::io::Write;
+use std::os::fd::BorrowedFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -683,7 +684,8 @@ impl<'a> Repl<'a> {
         if let Ok(cwd) = std::env::current_dir()
             && let Ok(hostname) = nix::unistd::gethostname()
         {
-            let hostname_str = hostname.to_string_lossy();
+            let hostname: std::ffi::OsString = hostname;
+            let hostname_str = hostname.to_string_lossy().to_string();
             let cwd_str = cwd.to_string_lossy();
             // Format: \x1b]7;file://<hostname><pwd>\x1b\
             // Note: We skip full URL encoding for simplicity, assumes standard paths.
@@ -1457,8 +1459,12 @@ impl<'a> Repl<'a> {
             "shell setpgid pid:{:?} pgid:{:?}",
             self.shell.pid, self.shell.pgid
         );
-        let _ = tcsetpgrp(SHELL_TERMINAL, self.shell.pgid).context("failed tcsetpgrp");
-        self.tmode = match tcgetattr(SHELL_TERMINAL) {
+        let _ = tcsetpgrp(
+            unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) },
+            self.shell.pgid,
+        )
+        .context("failed tcsetpgrp");
+        self.tmode = match tcgetattr(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }) {
             Ok(tmode) => Some(tmode),
             Err(e) => {
                 warn!("Failed to get terminal attributes: {}", e);

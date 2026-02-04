@@ -6,6 +6,7 @@ use std::fmt::Debug;
 use std::fs::File;
 use std::io::Write;
 use std::mem;
+use std::os::fd::BorrowedFd;
 use std::os::unix::io::FromRawFd;
 use std::os::unix::io::RawFd;
 use thiserror::Error;
@@ -117,9 +118,10 @@ impl Context {
             use nix::sys::termios::tcgetattr;
 
             // Try standard file descriptors in sequence
-            tcgetattr(STDIN_FILENO)
-                .or_else(|_| tcgetattr(STDOUT_FILENO))
-                .or_else(|_| tcgetattr(STDERR_FILENO))
+            // Try standard file descriptors in sequence
+            tcgetattr(unsafe { BorrowedFd::borrow_raw(STDIN_FILENO) })
+                .or_else(|_| tcgetattr(unsafe { BorrowedFd::borrow_raw(STDOUT_FILENO) }))
+                .or_else(|_| tcgetattr(unsafe { BorrowedFd::borrow_raw(STDERR_FILENO) }))
                 .or_else(|_| {
                     // If standard file descriptors don't have terminal settings,
                     // try /dev/tty as a last resort

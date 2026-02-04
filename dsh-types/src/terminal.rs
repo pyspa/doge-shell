@@ -1,5 +1,6 @@
 use nix::sys::termios::{Termios, tcgetattr};
 use nix::unistd::isatty;
+use std::os::fd::BorrowedFd;
 use std::os::unix::io::RawFd;
 use tracing::{debug, warn};
 
@@ -17,11 +18,11 @@ pub struct TerminalState {
 impl TerminalState {
     /// Detect terminal state for the specified file descriptor
     pub fn detect(fd: RawFd) -> Self {
-        let is_terminal = isatty(fd).unwrap_or(false);
+        let is_terminal = isatty(unsafe { BorrowedFd::borrow_raw(fd) }).unwrap_or(false);
         debug!("Terminal detection for fd {}: {}", fd, is_terminal);
 
         let tmodes = if is_terminal {
-            match tcgetattr(fd) {
+            match tcgetattr(unsafe { BorrowedFd::borrow_raw(fd) }) {
                 Ok(tmodes) => {
                     debug!("Successfully retrieved terminal modes for fd {}", fd);
                     Some(tmodes)
@@ -85,8 +86,10 @@ pub enum ShellMode {
 impl ShellMode {
     /// Detect shell mode from current environment
     pub fn detect() -> Self {
-        let stdin_is_tty = isatty(libc::STDIN_FILENO).unwrap_or(false);
-        let stdout_is_tty = isatty(libc::STDOUT_FILENO).unwrap_or(false);
+        let stdin_is_tty =
+            isatty(unsafe { BorrowedFd::borrow_raw(libc::STDIN_FILENO) }).unwrap_or(false);
+        let stdout_is_tty =
+            isatty(unsafe { BorrowedFd::borrow_raw(libc::STDOUT_FILENO) }).unwrap_or(false);
 
         match (stdin_is_tty, stdout_is_tty) {
             (true, true) => ShellMode::Interactive,

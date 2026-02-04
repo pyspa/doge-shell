@@ -7,6 +7,7 @@ use clap::Parser;
 use dsh_types::Context;
 use nix::unistd::isatty;
 use std::io::{self, BufRead, BufReader, Write};
+use std::os::fd::BorrowedFd;
 use std::os::unix::io::AsRawFd;
 use std::process::ExitCode;
 use tracing::debug;
@@ -424,13 +425,13 @@ pub fn create_context_for_command(shell: &Shell) -> Context {
     let stdout_fd = std::io::stdout().as_raw_fd();
     let stderr_fd = std::io::stderr().as_raw_fd();
 
-    let stdin_is_tty = isatty(stdin_fd).unwrap_or(false);
-    let stdout_is_tty = isatty(stdout_fd).unwrap_or(false);
+    let stdin_is_tty = isatty(unsafe { BorrowedFd::borrow_raw(stdin_fd) }).unwrap_or(false);
+    let stdout_is_tty = isatty(unsafe { BorrowedFd::borrow_raw(stdout_fd) }).unwrap_or(false);
 
     // Create a basic terminal state based on whether file descriptors are TTYs
     let terminal_state = if stdin_is_tty {
         // If stdin is a TTY, try to get its terminal settings
-        match tcgetattr(stdin_fd) {
+        match tcgetattr(unsafe { BorrowedFd::borrow_raw(stdin_fd) }) {
             Ok(tmodes) => TerminalState {
                 is_terminal: true,
                 tmodes: Some(tmodes),
@@ -465,9 +466,9 @@ pub fn create_context_for_command(shell: &Shell) -> Context {
         tmodes.clone()
     } else {
         // Try to get terminal settings from any standard file descriptor that might be a TTY
-        match tcgetattr(stdin_fd)
-            .or_else(|_| tcgetattr(stdout_fd))
-            .or_else(|_| tcgetattr(stderr_fd))
+        match tcgetattr(unsafe { BorrowedFd::borrow_raw(stdin_fd) })
+            .or_else(|_| tcgetattr(unsafe { BorrowedFd::borrow_raw(stdout_fd) }))
+            .or_else(|_| tcgetattr(unsafe { BorrowedFd::borrow_raw(stderr_fd) }))
         {
             Ok(tmodes) => tmodes,
             Err(_) => {
@@ -603,7 +604,7 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
     }
 
     // Check if stdin is a terminal
-    if isatty(std::io::stdin().as_raw_fd()).unwrap_or(false) {
+    if isatty(unsafe { BorrowedFd::borrow_raw(std::io::stdin().as_raw_fd()) }).unwrap_or(false) {
         // Interactive mode
         debug!("Running in interactive mode");
         match repl.run_interactive().await {

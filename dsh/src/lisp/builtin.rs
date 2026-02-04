@@ -9,7 +9,7 @@ use nix::unistd::pipe;
 use std::borrow::Cow;
 use std::fs::File;
 use std::io::Read;
-use std::os::unix::io::FromRawFd;
+use std::os::fd::{AsRawFd, BorrowedFd};
 use std::process::Command;
 use std::sync::Arc;
 use std::{cell::RefCell, rc::Rc};
@@ -256,7 +256,7 @@ pub async fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
 
     let mut shell = Shell::new(Arc::clone(&env.borrow().shell_env));
     shell.set_signals();
-    let shell_tmode = match tcgetattr(0) {
+    let shell_tmode = match tcgetattr(unsafe { BorrowedFd::borrow_raw(0) }) {
         Ok(tmode) => tmode,
         Err(err) => {
             eprintln!("error: {err}");
@@ -277,7 +277,7 @@ pub async fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
         }
     };
 
-    ctx.captured_out = Some(pin);
+    ctx.captured_out = Some(pin.as_raw_fd());
     if let Err(err) = shell.eval_str(&mut ctx, input, false).await {
         eprintln!("error: {err}");
         return Err(RuntimeError {
@@ -285,8 +285,12 @@ pub async fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
         });
     }
 
+    // Close write end in parent to avoid hang
+    drop(pin);
+
     let mut raw_stdout = Vec::new();
-    unsafe { File::from_raw_fd(pout).read_to_end(&mut raw_stdout).ok() };
+    // use File::from(pout) to read and automatically close read end
+    File::from(pout).read_to_end(&mut raw_stdout).ok();
 
     let output = match std::str::from_utf8(&raw_stdout) {
         Ok(str) => str.trim_matches('\n').to_owned(),
@@ -381,7 +385,7 @@ pub async fn sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value,
 
     let mut shell = Shell::new(Arc::clone(&env.borrow().shell_env));
     shell.set_signals();
-    let shell_tmode = match tcgetattr(0) {
+    let shell_tmode = match tcgetattr(unsafe { BorrowedFd::borrow_raw(0) }) {
         Ok(tmode) => tmode,
         Err(err) => {
             eprintln!("error: {err}");
@@ -586,7 +590,7 @@ mod tests {
         let engine = LispEngine::new(env);
 
         // Skip TTY-dependent test in non-TTY environments
-        if !nix::unistd::isatty(0).unwrap_or(false) {
+        if !nix::unistd::isatty(unsafe { BorrowedFd::borrow_raw(0) }).unwrap_or(false) {
             println!("Skipping TTY-dependent test");
             return;
         }

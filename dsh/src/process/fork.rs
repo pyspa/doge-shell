@@ -8,6 +8,7 @@ use crate::shell::Shell;
 use dsh_types::Context;
 use libc::{STDERR_FILENO, STDOUT_FILENO};
 use nix::unistd::pipe;
+use std::os::fd::IntoRawFd;
 
 pub(crate) fn fork_builtin_process(
     ctx: &mut Context,
@@ -78,11 +79,12 @@ pub(crate) fn fork_process(
     if ctx.outfile == STDOUT_FILENO && !ctx.foreground && pty_slave.is_none() {
         debug!("🍴 FORK: Creating capture pipe for stdout (background process)");
         let (pout, pin) = pipe().context("failed pipe")?;
-        process.stdout = pin;
-        process.cap_stdout = Some(pout);
+        process.stdout = pin.into_raw_fd();
+        let pout_raw = pout.into_raw_fd();
+        process.cap_stdout = Some(pout_raw);
         debug!(
             "🍴 FORK: Created capture pipe for stdout: read={}, write={}",
-            pout, pin
+            pout_raw, process.stdout
         );
     } else {
         debug!(
@@ -94,11 +96,12 @@ pub(crate) fn fork_process(
     if ctx.errfile == STDERR_FILENO && !ctx.foreground && pty_slave.is_none() {
         debug!("🍴 FORK: Creating capture pipe for stderr (background process)");
         let (pout, pin) = pipe().context("failed pipe")?;
-        process.stderr = pin;
-        process.cap_stderr = Some(pout);
+        process.stderr = pin.into_raw_fd();
+        let pout_raw = pout.into_raw_fd();
+        process.cap_stderr = Some(pout_raw);
         debug!(
             "🍴 FORK: Created capture pipe for stderr: read={}, write={}",
-            pout, pin
+            pout_raw, process.stderr
         );
     } else {
         debug!(

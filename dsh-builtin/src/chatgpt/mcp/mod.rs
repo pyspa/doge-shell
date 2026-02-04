@@ -2,10 +2,9 @@ use anyhow::Result;
 use dsh_types::mcp::{McpServerConfig, McpTransport};
 use rmcp::{
     ServiceExt,
-    model::{CallToolRequestParam, CallToolResult, ListToolsResult, Tool},
+    model::{CallToolRequestParams, CallToolResult, ListToolsResult, Tool},
     transport::{
         child_process::TokioChildProcess,
-        sse_client::SseClientTransport,
         streamable_http_client::{
             StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
         },
@@ -736,12 +735,9 @@ async fn list_tools_via_transport(transport: McpTransport) -> Result<Vec<Tool>> 
             let _ = service.cancel().await;
             Ok(tools)
         }
-        McpTransport::Sse { url } => {
-            let transport = SseClientTransport::start(Arc::from(url.as_str())).await?;
-            let service = ().serve(transport).await?;
-            let ListToolsResult { tools, .. } = service.list_tools(None).await?;
-            let _ = service.cancel().await;
-            Ok(tools)
+        McpTransport::Sse { .. } => {
+            // SseClientTransport is not supported in rmcp 0.14.0
+            anyhow::bail!("SSE transport is not supported in rmcp 0.14.0")
         }
         McpTransport::Http {
             url,
@@ -802,27 +798,19 @@ async fn call_tool_via_transport(
 
             let service = ().serve(TokioChildProcess::new(cmd)?).await?;
             let response = service
-                .call_tool(CallToolRequestParam {
+                .call_tool(CallToolRequestParams {
                     name: tool_name.to_string().into(),
                     arguments,
+                    meta: None,
+                    task: None,
                 })
                 .await?;
             let _ = service.cancel().await;
 
             Ok(response)
         }
-        McpTransport::Sse { url } => {
-            let transport = SseClientTransport::start(Arc::from(url.as_str())).await?;
-            let service = ().serve(transport).await?;
-            let response = service
-                .call_tool(CallToolRequestParam {
-                    name: tool_name.to_string().into(),
-                    arguments,
-                })
-                .await?;
-            let _ = service.cancel().await;
-
-            Ok(response)
+        McpTransport::Sse { .. } => {
+            anyhow::bail!("SSE transport is not supported in rmcp 0.14.0")
         }
         McpTransport::Http {
             url,
@@ -840,9 +828,11 @@ async fn call_tool_via_transport(
             let transport = StreamableHttpClientTransport::from_config(config);
             let service = ().serve(transport).await?;
             let response = service
-                .call_tool(CallToolRequestParam {
+                .call_tool(CallToolRequestParams {
                     name: tool_name.to_string().into(),
                     arguments,
+                    meta: None,
+                    task: None,
                 })
                 .await?;
             let _ = service.cancel().await;
@@ -893,5 +883,36 @@ fn unique_name(base: &str, set: &mut HashSet<String>) -> String {
             return candidate;
         }
         counter += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_sse_transport_error() {
+        let transport = McpTransport::Sse {
+            url: "http://localhost:8080/sse".to_string(),
+        };
+
+        // Test list_tools_via_transport
+        let result = list_tools_via_transport(transport.clone()).await;
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "SSE transport is not supported in rmcp 0.14.0"
+        );
+
+        // Test call_tool_via_transport
+        let result = call_tool_via_transport(transport, "test_tool", None).await;
+        // Verify the specific error message
+        match result {
+            Err(e) => assert_eq!(
+                e.to_string(),
+                "SSE transport is not supported in rmcp 0.14.0"
+            ),
+            Ok(_) => panic!("Expected SSE transport to fail"),
+        }
     }
 }

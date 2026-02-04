@@ -27,28 +27,28 @@ dsh-frecency = { path = "../dsh-frecency" }
 dsh-builtin = { path = "../dsh-builtin" }
 dsh-openai = { path = "../dsh-openai" }
 
-anyhow.workspace = true
-libc.workspace=true
-nix.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
-cfg-if.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-console.workspace = true
-crossterm.workspace = true
-xdg.workspace = true
-shellexpand.workspace = true
-once_cell.workspace = true
-dirs.workspace = true
-tokio.workspace = true
-futures.workspace = true
-futures-timer.workspace = true
-xid.workspace = true
-parking_lot.workspace = true
-skim.workspace = true
-reqwest.workspace = true
-uuid.workspace = true
+anyhow = { workspace = true }
+libc = { workspace = true }
+nix = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+cfg-if = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+console = { workspace = true }
+crossterm = { workspace = true }
+xdg = { workspace = true }
+shellexpand = { workspace = true }
+once_cell = { workspace = true }
+dirs = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+futures-timer = { workspace = true }
+xid = { workspace = true }
+parking_lot = { workspace = true }
+skim = { workspace = true }
+reqwest = { workspace = true }
+uuid = { workspace = true }
 unicode-width = "0.2"
 async-trait = "0.1"
 arboard = "3.4"
@@ -69,9 +69,9 @@ notify = { version = "8", features = ["serde"] }
 easy_reader = "0.5"
 pest = "2.8"
 pest_derive = "2.8"
-fuzzy-matcher = "0.3"  # "*" → "0.3"
+fuzzy-matcher = "0.3"
 indexmap = { version = "2", features = ["serde"] }
-tabled = "0.20"    # "*" → "0.20"
+tabled = "0.20"
 num-bigint = { version = "0.4", optional = true }
 num-traits = "0.2"
 rust-embed = "8.5"

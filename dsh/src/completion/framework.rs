@@ -92,22 +92,26 @@ impl SkimCompletionFramework {
         }
 
         let options = SkimOptionsBuilder::default()
-            .select1(true)
-            .bind(vec!["Enter:accept"])
-            .query(query)
+            .select_1(true)
+            .bind(vec!["Enter:accept".to_string()])
+            .query(query.map(|s| s.to_string()))
             .build()
             .unwrap();
 
         let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
         for item in items {
-            let _ = tx_item.send(Arc::new(item));
+            let _ = tx_item.send(vec![Arc::new(item)]);
         }
         drop(tx_item);
 
-        let selected = Skim::run_with(&options, Some(rx_item))
-            .map(|out| match out.final_key {
-                Key::Enter => out.selected_items,
-                _ => Vec::new(),
+        let selected = Skim::run_with(options, Some(rx_item))
+            .ok()
+            .map(|out| {
+                if out.is_abort {
+                    Vec::new()
+                } else {
+                    out.selected_items
+                }
             })
             .unwrap_or_default();
 

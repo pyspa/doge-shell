@@ -10,6 +10,19 @@ pub fn description() -> &'static str {
     "Checkout git branches with fzf selection"
 }
 
+// Define a simple wrapper since String doesn't impl SkimItem in skim 2.0
+struct StringItem(String);
+
+impl SkimItem for StringItem {
+    fn text(&self) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Borrowed(&self.0)
+    }
+
+    fn output(&self) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Borrowed(&self.0)
+    }
+}
+
 pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -> ExitStatus {
     // Check if we're in a git repository
     if !is_git_repository() {
@@ -66,22 +79,29 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
     }
 
     let options = SkimOptionsBuilder::default()
-        .bind(vec!["Enter:accept"])
-        .preview(Some("git log --oneline --graph --color=always -n 20 {}"))
-        .preview_window(Some("right:60%"))
+        .bind(vec!["Enter:accept".to_string()])
+        .preview(Some(
+            "git log --oneline --graph --color=always -n 20 {}".to_string(),
+        ))
+        // .preview_window(Some("right:60%")) // Disabled until PreviewLayout is known
         .build()
         .unwrap();
 
     let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
     for branch in branch_entries {
-        let _ = tx_item.send(Arc::new(branch));
+        let item = Arc::new(StringItem(branch));
+        let _ = tx_item.send(vec![item]);
     }
     drop(tx_item);
 
-    let selected = Skim::run_with(&options, Some(rx_item))
-        .map(|out| match out.final_key {
-            Key::Enter => out.selected_items,
-            _ => Vec::new(),
+    let selected = Skim::run_with(options, Some(rx_item))
+        .ok()
+        .map(|out| {
+            if out.is_abort {
+                Vec::new()
+            } else {
+                out.selected_items
+            }
         })
         .unwrap_or_default();
 

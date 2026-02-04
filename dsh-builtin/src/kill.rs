@@ -160,10 +160,10 @@ pub fn run(
     items.sort_by(|a, b| b.pid.cmp(&a.pid));
 
     let options = SkimOptionsBuilder::default()
-        .height(Some("50%"))
+        .height("50%".to_string())
         .multi(true)
         .header(Some(
-            "Select processes to kill (TAB to select multiple, ENTER to kill)",
+            "Select processes to kill (TAB to select multiple, ENTER to kill)".to_string(),
         ))
         .build()
         .unwrap();
@@ -176,11 +176,11 @@ pub fn run(
     // Run skim
     let (tx, rx): (SkimItemSender, SkimItemReceiver) = unbounded();
     for item in skim_items {
-        let _ = tx.send(item);
+        let _ = tx.send(vec![item]);
     }
     drop(tx);
 
-    let selected_items = Skim::run_with(&options, Some(rx))
+    let selected_items = Skim::run_with(options, Some(rx))
         .map(|out| out.selected_items)
         .unwrap_or_default();
 

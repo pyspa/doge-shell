@@ -102,8 +102,8 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 
     // Interactive mode
     let options = SkimOptionsBuilder::default()
-        .prompt(Some("Task> "))
-        .height(Some("40%"))
+        .prompt("Task> ".to_string())
+        .height("40%".to_string())
         .multi(false)
         .build()
         .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e));
@@ -118,11 +118,12 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 
     let (tx, rx): (SkimItemSender, SkimItemReceiver) = unbounded();
     for task in tasks {
-        let _ = tx.send(Arc::new(task));
+        let _ = tx.send(vec![Arc::new(task)]);
     }
     drop(tx);
 
-    let selected = Skim::run_with(&options, Some(rx))
+    let selected = Skim::run_with(options, Some(rx))
+        .ok()
         .map(|out| out.selected_items)
         .unwrap_or_default();
 

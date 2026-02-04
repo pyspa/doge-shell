@@ -3,13 +3,14 @@
 //! This module provides `Table` and `Record` types for handling structured data
 //! like JSON objects and arrays in a tabular format.
 
+use cfg_if::cfg_if;
 use indexmap::IndexMap;
 use serde_json::{self, Value as JsonValue};
 use std::cell::RefCell;
 use std::fmt::{self, Display};
 use std::rc::Rc;
 
-use super::Value;
+use super::{IntType, Value};
 
 /// A single row (record) in a table.
 /// Uses IndexMap to preserve insertion order of fields.
@@ -505,7 +506,7 @@ fn json_to_value(json: &JsonValue) -> Value {
         }
         JsonValue::Number(n) => {
             if let Some(i) = n.as_i64() {
-                Value::Int(i as super::IntType)
+                Value::Int(IntType::from(i))
             } else if let Some(f) = n.as_f64() {
                 Value::Float(f as super::FloatType)
             } else {
@@ -521,6 +522,7 @@ fn json_to_value(json: &JsonValue) -> Value {
         JsonValue::Object(obj) => {
             // Convert to HashMap (not Table, for consistency)
             use std::collections::HashMap;
+            #[allow(clippy::mutable_key_type)]
             let mut map: HashMap<Value, Value> = HashMap::new();
             for (k, v) in obj {
                 map.insert(Value::String(k.clone()), json_to_value(v));
@@ -535,7 +537,24 @@ fn value_to_json(value: &Value) -> JsonValue {
         Value::List(list) if list == &super::List::NIL => JsonValue::Null,
         Value::True => JsonValue::Bool(true),
         Value::False => JsonValue::Bool(false),
-        Value::Int(i) => JsonValue::Number((*i).into()),
+        Value::Int(i) => {
+            cfg_if! {
+                if #[cfg(feature = "bigint")] {
+                    use num_traits::ToPrimitive;
+                    if let Some(i64_val) = i.to_i64() {
+                        JsonValue::Number(i64_val.into())
+                    } else if let Some(f64_val) = i.to_f64() {
+                        serde_json::Number::from_f64(f64_val)
+                            .map(JsonValue::Number)
+                            .unwrap_or(JsonValue::Null)
+                    } else {
+                        JsonValue::String(i.to_string())
+                    }
+                } else {
+                    JsonValue::Number((*i).into())
+                }
+            }
+        }
         Value::Float(f) => serde_json::Number::from_f64(*f)
             .map(JsonValue::Number)
             .unwrap_or(JsonValue::Null),
@@ -582,14 +601,14 @@ mod tests {
     fn test_record_basic() {
         let mut record = Record::new();
         record.set("name".to_string(), Value::String("Alice".to_string()));
-        record.set("age".to_string(), Value::Int(30));
+        record.set("age".to_string(), Value::Int(IntType::from(30)));
 
         assert_eq!(record.len(), 2);
         assert_eq!(
             record.get("name"),
             Some(&Value::String("Alice".to_string()))
         );
-        assert_eq!(record.get("age"), Some(&Value::Int(30)));
+        assert_eq!(record.get("age"), Some(&Value::Int(IntType::from(30))));
         assert_eq!(record.get("missing"), None);
     }
 
@@ -608,12 +627,18 @@ mod tests {
             table.rows[0].get("name"),
             Some(&Value::String("Alice".to_string()))
         );
-        assert_eq!(table.rows[0].get("age"), Some(&Value::Int(30)));
+        assert_eq!(
+            table.rows[0].get("age"),
+            Some(&Value::Int(IntType::from(30)))
+        );
         assert_eq!(
             table.rows[1].get("name"),
             Some(&Value::String("Bob".to_string()))
         );
-        assert_eq!(table.rows[1].get("age"), Some(&Value::Int(25)));
+        assert_eq!(
+            table.rows[1].get("age"),
+            Some(&Value::Int(IntType::from(25)))
+        );
     }
 
     #[test]
@@ -636,7 +661,10 @@ mod tests {
 
         assert_eq!(table.columns, vec!["value"]);
         assert_eq!(table.len(), 5);
-        assert_eq!(table.rows[0].get("value"), Some(&Value::Int(1)));
+        assert_eq!(
+            table.rows[0].get("value"),
+            Some(&Value::Int(IntType::from(1)))
+        );
     }
 
     #[test]
@@ -646,8 +674,14 @@ mod tests {
 
         let selected = table.select(&["a", "c"]);
         assert_eq!(selected.columns, vec!["a", "c"]);
-        assert_eq!(selected.rows[0].get("a"), Some(&Value::Int(1)));
-        assert_eq!(selected.rows[0].get("c"), Some(&Value::Int(3)));
+        assert_eq!(
+            selected.rows[0].get("a"),
+            Some(&Value::Int(IntType::from(1)))
+        );
+        assert_eq!(
+            selected.rows[0].get("c"),
+            Some(&Value::Int(IntType::from(3)))
+        );
         assert_eq!(selected.rows[0].get("b"), None);
     }
 
@@ -658,13 +692,13 @@ mod tests {
 
         let head = table.head(2);
         assert_eq!(head.len(), 2);
-        assert_eq!(head.rows[0].get("n"), Some(&Value::Int(1)));
-        assert_eq!(head.rows[1].get("n"), Some(&Value::Int(2)));
+        assert_eq!(head.rows[0].get("n"), Some(&Value::Int(IntType::from(1))));
+        assert_eq!(head.rows[1].get("n"), Some(&Value::Int(IntType::from(2))));
 
         let tail = table.tail(2);
         assert_eq!(tail.len(), 2);
-        assert_eq!(tail.rows[0].get("n"), Some(&Value::Int(4)));
-        assert_eq!(tail.rows[1].get("n"), Some(&Value::Int(5)));
+        assert_eq!(tail.rows[0].get("n"), Some(&Value::Int(IntType::from(4))));
+        assert_eq!(tail.rows[1].get("n"), Some(&Value::Int(IntType::from(5))));
     }
 
     #[test]
@@ -672,7 +706,7 @@ mod tests {
         let mut table = Table::new(vec!["name".to_string(), "age".to_string()]);
         let mut record = Record::new();
         record.set("name".to_string(), Value::String("Test".to_string()));
-        record.set("age".to_string(), Value::Int(42));
+        record.set("age".to_string(), Value::Int(IntType::from(42)));
         table.push(record);
 
         let json = table.to_json();
@@ -764,10 +798,10 @@ mod tests {
         let json = r#"[{"val": 10}, {"val": 20}, {"val": 30}, {"val": 5}]"#;
         let table = Table::from_json(json).unwrap();
 
-        let gt_15 = table.where_cmp("val", ">", 15);
+        let gt_15 = table.where_cmp("val", ">", IntType::from(15));
         assert_eq!(gt_15.len(), 2);
 
-        let le_10 = table.where_cmp("val", "<=", 10);
+        let le_10 = table.where_cmp("val", "<=", IntType::from(10));
         assert_eq!(le_10.len(), 2);
     }
 
@@ -777,14 +811,14 @@ mod tests {
         let table = Table::from_json(json).unwrap();
 
         let asc = table.order_by("n", true);
-        assert_eq!(asc.rows[0].get("n"), Some(&Value::Int(1)));
-        assert_eq!(asc.rows[1].get("n"), Some(&Value::Int(2)));
-        assert_eq!(asc.rows[2].get("n"), Some(&Value::Int(3)));
+        assert_eq!(asc.rows[0].get("n"), Some(&Value::Int(IntType::from(1))));
+        assert_eq!(asc.rows[1].get("n"), Some(&Value::Int(IntType::from(2))));
+        assert_eq!(asc.rows[2].get("n"), Some(&Value::Int(IntType::from(3))));
 
         let desc = table.order_by("n", false);
-        assert_eq!(desc.rows[0].get("n"), Some(&Value::Int(3)));
-        assert_eq!(desc.rows[1].get("n"), Some(&Value::Int(2)));
-        assert_eq!(desc.rows[2].get("n"), Some(&Value::Int(1)));
+        assert_eq!(desc.rows[0].get("n"), Some(&Value::Int(IntType::from(3))));
+        assert_eq!(desc.rows[1].get("n"), Some(&Value::Int(IntType::from(2))));
+        assert_eq!(desc.rows[2].get("n"), Some(&Value::Int(IntType::from(1))));
     }
 
     #[test]
@@ -800,7 +834,10 @@ mod tests {
             table.rows[0].get("name"),
             Some(&Value::String("Alice".to_string()))
         );
-        assert_eq!(table.rows[0].get("age"), Some(&Value::Int(30)));
+        assert_eq!(
+            table.rows[0].get("age"),
+            Some(&Value::Int(IntType::from(30)))
+        );
         // active is string "true" because no boolean inferred
         assert_eq!(
             table.rows[0].get("active"),

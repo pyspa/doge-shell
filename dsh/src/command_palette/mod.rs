@@ -96,6 +96,20 @@ impl SkimItem for PaletteItem {
     }
 }
 
+/// A simple wrapper for String that implements SkimItem
+#[derive(Debug, Clone)]
+pub struct StringItem(pub String);
+
+impl SkimItem for StringItem {
+    fn text(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.0)
+    }
+
+    fn output(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.0)
+    }
+}
+
 /// Command Palette UI
 pub struct CommandPalette;
 
@@ -107,7 +121,7 @@ impl CommandPalette {
         // Prepare items for Skim
         let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
         for action in actions {
-            tx_item.send(Arc::new(PaletteItem { action })).ok();
+            tx_item.send(vec![Arc::new(PaletteItem { action })]).ok();
         }
         drop(tx_item); // Close sender to signal end of items
 
@@ -115,12 +129,13 @@ impl CommandPalette {
         let options = SkimOptionsBuilder::default()
             // .height("40%".to_string()) // Remove height to use full screen / alternate screen
             .multi(false)
-            .prompt(Some("Cmd> "))
-            .bind(vec!["Enter:accept", "Esc:abort"])
+            .prompt("Cmd> ".to_string())
+            .bind(vec!["Enter:accept".to_string(), "Esc:abort".to_string()])
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 
-        let selected_items = Skim::run_with(&options, Some(rx_item))
+        let selected_items = Skim::run_with(options, Some(rx_item))
+            .ok()
             .map(|out| out.selected_items)
             .unwrap_or_default();
 
@@ -193,5 +208,15 @@ mod tests {
         let reload_config = actions::reload_config::ReloadConfigAction;
         assert_eq!(reload_config.name(), "Reload Config");
         assert_eq!(reload_config.description(), "Reload config.lisp");
+    }
+
+    #[test]
+    fn test_string_item() {
+        let item = StringItem("test value".to_string());
+        assert_eq!(item.text(), "test value");
+        assert_eq!(item.output(), "test value");
+
+        let item_clone = item.clone();
+        assert_eq!(item_clone.text(), "test value");
     }
 }

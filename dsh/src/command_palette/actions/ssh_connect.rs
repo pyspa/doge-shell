@@ -34,17 +34,18 @@ impl Action for SshConnectAction {
 
         // Show selection UI
         let options = SkimOptionsBuilder::default()
-            .prompt(Some("SSH> "))
+            .prompt("SSH> ".to_string())
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 
         let (tx, rx): (SkimItemSender, SkimItemReceiver) = unbounded();
         for host in hosts {
-            let _ = tx.send(Arc::new(host));
+            let _ = tx.send(vec![Arc::new(host)]);
         }
         drop(tx);
 
-        let selected = Skim::run_with(&options, Some(rx))
+        let selected = Skim::run_with(options, Some(rx))
+            .ok()
             .map(|out| out.selected_items)
             .unwrap_or_default();
 

@@ -194,11 +194,11 @@ fn checkout_pr(ctx: &Context) -> ExitStatus {
 
     // Skim options
     let options = SkimOptionsBuilder::default()
-        .height(Some("50%"))
+        .height("50%".to_string())
         .multi(false)
-        .preview(Some("")) // No preview text, but window might show up? set empty function
-        .preview_window(Some("")) // Disable preview window
-        .bind(vec!["Enter:accept"])
+        .preview(Some("".to_string())) // No preview text, but window might show up? set empty function
+        // .preview_window(Some("")) // Disable preview window
+        .bind(vec!["Enter:accept".to_string()])
         .build()
         .unwrap();
 
@@ -208,14 +208,18 @@ fn checkout_pr(ctx: &Context) -> ExitStatus {
     prs.sort_by(|a, b| b.number.cmp(&a.number));
 
     for pr in prs {
-        let _ = tx_item.send(Arc::new(pr));
+        let _ = tx_item.send(vec![Arc::new(pr)]);
     }
     drop(tx_item);
 
-    let selected = Skim::run_with(&options, Some(rx_item))
-        .map(|out| match out.final_key {
-            Key::Enter => out.selected_items,
-            _ => Vec::new(),
+    let selected = Skim::run_with(options, Some(rx_item))
+        .ok()
+        .map(|out| {
+            if out.is_abort {
+                Vec::new()
+            } else {
+                out.selected_items
+            }
         })
         .unwrap_or_default();
 

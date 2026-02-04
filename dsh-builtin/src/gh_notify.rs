@@ -168,19 +168,22 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
             display_text: display_text.clone(),
         };
 
-        let _ = tx_item.send(Arc::new(item));
+        let _ = tx_item.send(vec![Arc::new(item)]);
     }
     drop(tx_item);
 
     // Run Skim
     let options = SkimOptionsBuilder::default()
         .multi(false)
-        .prompt(Some("Notification> "))
-        .bind(vec!["Enter:accept", "c:execute(gh notification view {+})"])
+        .prompt("Notification> ".to_string())
+        .bind(vec![
+            "Enter:accept".to_string(),
+            "c:execute(gh notification view {+})".to_string(),
+        ])
         .build()
         .unwrap();
 
-    let output = match Skim::run_with(&options, Some(rx_item)) {
+    let output = match Skim::run_with(options, Some(rx_item)).ok() {
         Some(out) => out,
         None => return ExitStatus::ExitedWith(0),
     };

@@ -522,7 +522,7 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
             let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
             for item in items {
                 tx_item
-                    .send(Arc::new(StringItem { text: item }))
+                    .send(vec![Arc::new(StringItem { text: item })])
                     .map_err(|_| RuntimeError {
                         msg: "Failed to send item to skim".to_string(),
                     })?;
@@ -531,14 +531,15 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
 
             let options = SkimOptionsBuilder::default()
                 .multi(multi)
-                .prompt(Some(prompt.as_str()))
-                .bind(vec!["Enter:accept", "Esc:abort"])
+                .prompt(prompt)
+                .bind(vec!["Enter:accept".to_string(), "Esc:abort".to_string()])
                 .build()
                 .map_err(|e| RuntimeError {
                     msg: format!("Failed to build skim options: {}", e),
                 })?;
 
-            let selected_items = Skim::run_with(&options, Some(rx_item))
+            let selected_items = Skim::run_with(options, Some(rx_item))
+                .ok()
                 .map(|out| out.selected_items)
                 .unwrap_or_default();
 
@@ -1224,7 +1225,14 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
         Value::NativeFunc(|_env, args| {
             let table_rc = require_typed_arg::<&TableRc>("table-count", &args, 0)?;
             let table = table_rc.borrow();
-            Ok(Value::Int(table.count() as IntType))
+            let count = table.count();
+            cfg_if! {
+                if #[cfg(feature = "bigint")] {
+                    Ok(Value::Int(IntType::from(count)))
+                } else {
+                    Ok(Value::Int(count as IntType))
+                }
+            }
         }),
     );
 

@@ -55,21 +55,23 @@ impl Action for GitDiffAction {
             return Ok(());
         }
 
+        use crate::command_palette::StringItem;
+
         // Show selection UI
         let options = SkimOptionsBuilder::default()
-            .prompt(Some("Diff> "))
-            .bind(vec!["Enter:accept", "Space:toggle"])
-            .preview(Some("git diff --color=always -- {}"))
+            .prompt("File> ".to_string())
+            .preview(Some("git diff --color=always {}".to_string()))
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 
         let (tx, rx): (SkimItemSender, SkimItemReceiver) = unbounded();
         for file in file_list {
-            let _ = tx.send(Arc::new(file));
+            let _ = tx.send(vec![Arc::new(StringItem(file))]);
         }
         drop(tx);
 
-        let selected = Skim::run_with(&options, Some(rx))
+        let selected = Skim::run_with(options, Some(rx))
+            .ok()
             .map(|out| out.selected_items)
             .unwrap_or_default();
 

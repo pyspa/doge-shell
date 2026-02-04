@@ -36,21 +36,24 @@ impl Action for GitStashAction {
             return Ok(());
         }
 
+        use crate::command_palette::StringItem;
+
         // First, select a stash entry
         let stash_options = SkimOptionsBuilder::default()
-            .prompt(Some("Stash Action> "))
-            .bind(vec!["Enter:accept", "Esc:abort"])
-            .preview(Some("git stash show -p {}"))
+            .prompt("Stash> ".to_string())
+            .bind(vec!["Enter:accept".to_string(), "Esc:abort".to_string()])
+            .preview(Some("git stash show -p {}".to_string()))
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 
         let (tx, rx): (SkimItemSender, SkimItemReceiver) = unbounded();
         for stash in &stash_list {
-            let _ = tx.send(Arc::new(stash.to_string()));
+            let _ = tx.send(vec![Arc::new(StringItem(stash.to_string()))]);
         }
         drop(tx);
 
-        let selected = Skim::run_with(&stash_options, Some(rx))
+        let selected = Skim::run_with(stash_options, Some(rx))
+            .ok()
             .map(|out| out.selected_items)
             .unwrap_or_default();
 
@@ -69,17 +72,18 @@ impl Action for GitStashAction {
         // Then, select an action
         let actions = vec!["apply", "pop", "drop", "show"];
         let action_options = SkimOptionsBuilder::default()
-            .prompt(Some("Action> "))
+            .prompt("Action> ".to_string())
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 
         let (tx, rx): (SkimItemSender, SkimItemReceiver) = unbounded();
         for action in actions {
-            let _ = tx.send(Arc::new(action.to_string()));
+            let _ = tx.send(vec![Arc::new(StringItem(action.to_string()))]);
         }
         drop(tx);
 
-        let selected_action = Skim::run_with(&action_options, Some(rx))
+        let selected_action = Skim::run_with(action_options, Some(rx))
+            .ok()
             .map(|out| out.selected_items)
             .unwrap_or_default();
 

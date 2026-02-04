@@ -45,20 +45,23 @@ impl Action for DockerContainersAction {
             return Ok(());
         }
 
+        use crate::command_palette::StringItem;
+
         // Select a container
         let container_options = SkimOptionsBuilder::default()
-            .prompt(Some("Container> "))
-            .header(Some("NAME\tSTATUS\tIMAGE"))
+            .prompt("Container> ".to_string())
+            .header(Some("NAME\tSTATUS\tIMAGE".to_string()))
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 
         let (tx, rx): (SkimItemSender, SkimItemReceiver) = unbounded();
-        for container in &container_list {
-            let _ = tx.send(Arc::new(container.to_string()));
+        for container in container_list {
+            let _ = tx.send(vec![Arc::new(StringItem(container.to_string()))]);
         }
         drop(tx);
 
-        let selected = Skim::run_with(&container_options, Some(rx))
+        let selected = Skim::run_with(container_options, Some(rx))
+            .ok()
             .map(|out| out.selected_items)
             .unwrap_or_default();
 
@@ -85,17 +88,21 @@ impl Action for DockerContainersAction {
             "rm",
         ];
         let action_options = SkimOptionsBuilder::default()
-            .prompt(Some("Action> "))
+            .prompt("Action> ".to_string()) // Changed from Some("Action> ") to "Action> ".to_string()
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 
         let (tx, rx): (SkimItemSender, SkimItemReceiver) = unbounded();
-        for action in actions {
-            let _ = tx.send(Arc::new(action.to_string()));
-        }
+        // Prepare items for batch sending
+        let action_items: Vec<Arc<dyn SkimItem>> = actions
+            .into_iter()
+            .map(|s| Arc::new(s.to_string()) as Arc<dyn SkimItem>)
+            .collect();
+        let _ = tx.send(action_items); // Batch send
         drop(tx);
 
-        let selected_action = Skim::run_with(&action_options, Some(rx))
+        let selected_action = Skim::run_with(action_options, Some(rx)) // `action_options` is now owned
+            .ok()
             .map(|out| out.selected_items)
             .unwrap_or_default();
 

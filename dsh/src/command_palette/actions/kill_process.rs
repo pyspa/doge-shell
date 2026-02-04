@@ -36,22 +36,24 @@ impl Action for KillProcessAction {
             return Ok(());
         }
 
+        use crate::command_palette::StringItem;
+
         // Show selection UI
         let options = SkimOptionsBuilder::default()
-            .prompt(Some("Process> "))
-            .header(Some(
-                "USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND",
-            ))
+            .prompt("Select process to kill> ".to_string())
+            .header(Some("PID\tNAME\tCMD".to_string()))
+            .multi(true)
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 
         let (tx, rx): (SkimItemSender, SkimItemReceiver) = unbounded();
         for process in process_list {
-            let _ = tx.send(Arc::new(process.to_string()));
+            let _ = tx.send(vec![Arc::new(StringItem(process.to_string()))]);
         }
         drop(tx);
 
-        let selected = Skim::run_with(&options, Some(rx))
+        let selected = Skim::run_with(options, Some(rx))
+            .ok()
             .map(|out| out.selected_items)
             .unwrap_or_default();
 

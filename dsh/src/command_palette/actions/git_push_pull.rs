@@ -35,6 +35,8 @@ impl Action for GitPushPullAction {
             return Err(anyhow::anyhow!("Not on a branch"));
         }
 
+        use crate::command_palette::StringItem;
+
         // Select action
         let actions = vec![
             format!("push (git push origin {})", current_branch),
@@ -44,17 +46,18 @@ impl Action for GitPushPullAction {
         ];
 
         let options = SkimOptionsBuilder::default()
-            .prompt(Some("Action> "))
+            .prompt("Git Action> ".to_string())
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 
         let (tx, rx): (SkimItemSender, SkimItemReceiver) = unbounded();
         for action in &actions {
-            let _ = tx.send(Arc::new(action.clone()));
+            let _ = tx.send(vec![Arc::new(StringItem(action.to_string()))]);
         }
         drop(tx);
 
-        let selected = Skim::run_with(&options, Some(rx))
+        let selected = Skim::run_with(options, Some(rx))
+            .ok()
             .map(|out| out.selected_items)
             .unwrap_or_default();
 

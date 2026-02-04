@@ -37,17 +37,18 @@ impl Action for GitCheckoutAction {
 
         // Show selection UI
         let options = SkimOptionsBuilder::default()
-            .prompt(Some("Branch> "))
+            .prompt("Branch> ".to_string())
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 
         let (tx, rx): (SkimItemSender, SkimItemReceiver) = unbounded();
         for branch in branch_list {
-            let _ = tx.send(Arc::new(branch.to_string()));
+            let _ = tx.send(vec![Arc::new(branch.to_string())]);
         }
         drop(tx);
 
-        let selected = Skim::run_with(&options, Some(rx))
+        let selected = Skim::run_with(options, Some(rx))
+            .ok()
             .map(|out| out.selected_items)
             .unwrap_or_default();
 

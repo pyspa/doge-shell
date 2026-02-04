@@ -7,8 +7,10 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 pub fn description() -> &'static str {
-    "Interactive git add selection"
+    "Search and retrieve past command outputs"
 }
+
+// Define local StringItem wrapper
 
 #[derive(Debug, Clone)]
 struct GitFileItem {
@@ -67,29 +69,32 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
 
     let options = SkimOptionsBuilder::default()
         .multi(true)
-        .prompt(Some("Git Add> "))
-        .bind(vec!["Enter:accept", "Space:toggle"])
-        .preview(Some("")) // Preview handled by ItemPreview
-        .preview_window(Some("right:60%"))
+        .prompt("Git Add> ".to_string())
+        .bind(vec!["Enter:accept".to_string(), "Space:toggle".to_string()])
+        .preview(Some("".to_string())) // Preview handled by ItemPreview
+        // .preview_window(Some("right:60%")) // Disabled
         .build()
         .unwrap();
 
     let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
-    for item in skim_items {
-        let _ = tx_item.send(item);
-    }
-    drop(tx_item);
 
-    let selected_items = Skim::run_with(&options, Some(rx_item))
+    // item is already Arc<dyn SkimItem>, just wrap in vec
+    for item in skim_items {
+        let _ = tx_item.send(vec![item]);
+    }
+    drop(tx_item); // Close sender
+
+    let selected = Skim::run_with(options, Some(rx_item))
+        .ok()
         .map(|out| out.selected_items)
         .unwrap_or_default();
 
-    if selected_items.is_empty() {
+    if selected.is_empty() {
         return ExitStatus::ExitedWith(0);
     }
 
     let mut added_files = Vec::new();
-    for item in selected_items {
+    for item in selected {
         let path = item.output().to_string();
         added_files.push(path);
     }

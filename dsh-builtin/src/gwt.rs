@@ -21,6 +21,17 @@ pub fn description() -> &'static str {
     "Manage git worktrees (add, list, remove)"
 }
 
+// Define local StringItem wrapper for gwt
+struct StringItem(String);
+impl SkimItem for StringItem {
+    fn text(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.0)
+    }
+    fn output(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.0)
+    }
+}
+
 /// Main command entry point
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     // Check if we're in a git repository
@@ -421,21 +432,24 @@ fn remove_worktree_interactive(ctx: &Context, force: bool) -> ExitStatus {
 
     // Multiple worktrees - use skim for selection
     let options = SkimOptionsBuilder::default()
-        .prompt(Some("Select worktree to remove> "))
-        .bind(vec!["Enter:accept"])
+        .prompt("Select worktree to remove> ".to_string())
+        .bind(vec!["Enter:accept".to_string()])
         .build()
         .unwrap();
 
     let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
     for wt in worktrees {
-        let _ = tx_item.send(Arc::new(wt));
+        let _ = tx_item.send(vec![Arc::new(StringItem(wt))]);
     }
     drop(tx_item);
 
-    let selected = Skim::run_with(&options, Some(rx_item))
-        .map(|out| match out.final_key {
-            Key::Enter => out.selected_items,
-            _ => Vec::new(),
+    let selected = Skim::run_with(options, Some(rx_item))
+        .map(|out| {
+            if out.is_abort {
+                Vec::new()
+            } else {
+                out.selected_items
+            }
         })
         .unwrap_or_default();
 
@@ -619,22 +633,25 @@ fn add_worktree_from_pr(ctx: &Context) -> Result<PathBuf, String> {
 
     // Skim options
     let options = SkimOptionsBuilder::default()
-        .height(Some("50%"))
+        .height("50%".to_string())
         .multi(false)
-        .bind(vec!["Enter:accept"])
+        .bind(vec!["Enter:accept".to_string()])
         .build()
         .unwrap();
 
     let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
     for pr in prs.clone() {
-        let _ = tx_item.send(Arc::new(pr));
+        let _ = tx_item.send(vec![Arc::new(pr)]);
     }
     drop(tx_item);
 
-    let selected = Skim::run_with(&options, Some(rx_item))
-        .map(|out| match out.final_key {
-            Key::Enter => out.selected_items,
-            _ => Vec::new(),
+    let selected = Skim::run_with(options, Some(rx_item))
+        .map(|out| {
+            if out.is_abort {
+                Vec::new()
+            } else {
+                out.selected_items
+            }
         })
         .unwrap_or_default();
 

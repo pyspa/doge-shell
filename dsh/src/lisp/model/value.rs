@@ -20,6 +20,7 @@ pub type NativeClosureType =
 /// `Value` encompasses all possible Lisp values, including atoms, lists, and
 /// others.
 #[derive(Clone)]
+#[allow(clippy::mutable_key_type)]
 pub enum Value {
     True,
     False,

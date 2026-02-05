@@ -54,6 +54,7 @@ pub enum KeyAction {
     AiSmartCommit,
     AiDiagnose,
     ForceAiSuggestion,
+    MacroRecord,
 
     // Others
     Paste,
@@ -195,6 +196,7 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
         (KeyCode::Char('s'), ALT) => KeyAction::ForceAiSuggestion,
         (KeyCode::Char('c'), ALT) => KeyAction::AiSmartCommit,
         (KeyCode::Char('d'), ALT) => KeyAction::AiDiagnose,
+        (KeyCode::Char('m'), ALT) => KeyAction::MacroRecord,
 
         // Tab: Completion
         (KeyCode::Tab, NONE) | (KeyCode::BackTab, NONE) => KeyAction::TriggerCompletion,

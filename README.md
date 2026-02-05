@@ -29,6 +29,7 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 - **Aliases**: Command aliasing with `alias` command
 - **Variables**: Environment variable management with `var`, `set` commands
 - **Abbreviations**: Define and use abbreviations with `abbr` command
+- **Macro Recorder**: Record sequences of commands as reusable macros with `Alt+m`
 
 ### Completion & UI
 
@@ -582,6 +583,7 @@ include setup.sh
 - `Alt+Enter` - Execute command in background
 - `Ctrl+Space` - Force AI suggestion
 - `Alt+[` / `Alt+]` - Rotate through suggestions
+- `Alt+m` - Open Macro Recorder
 
 ## 💻 Command Palette
 
@@ -593,6 +595,30 @@ Access all shell capabilities through a unified fuzzy-search interface, similar 
   - Access AI features (Explain, Fix, etc.)
   - Execute Git operations
   - Extensible via `Action` trait and Lisp interface (coming soon)
+
+## 📼 Macro Recorder
+
+Easily record and replay sequences of shell commands without writing code manually.
+
+1. **Trigger**: Press `Alt+m` to open the Macro Recorder.
+2. **Select Commands**:
+   - The interface shows your recent command history.
+   - Use `Up`/`Down` arrows to navigate.
+   - Press `Tab` to select/deselect multiple commands.
+   - Press `Enter` to confirm selection.
+3. **Name Macro**: Enter a name for your new macro (e.g., `daily-setup`).
+4. **Use**: The macro is immediately available as a custom command.
+   ```bash
+   daily-setup
+   ```
+5. **Persistence**: The macro is saved as a Lisp function in your `config.lisp` file, so it persists across sessions.
+   ```lisp
+   (defun daily-setup ()
+     (sh "cd ~/project")
+     (sh "git pull")
+     (sh "cargo build")
+   )
+   ```
 
 ## 🤖 AI Integration
 

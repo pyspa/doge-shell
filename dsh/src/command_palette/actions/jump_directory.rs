@@ -1,11 +1,13 @@
 use super::super::Action;
 use crate::shell::Shell;
 use anyhow::Result;
+use async_trait::async_trait;
 use dsh_frecency::SortMethod;
 use skim::prelude::*;
 
 pub struct JumpDirectoryAction;
 
+#[async_trait(?Send)]
 impl Action for JumpDirectoryAction {
     fn name(&self) -> &str {
         "Jump to Directory"
@@ -17,7 +19,7 @@ impl Action for JumpDirectoryAction {
         "🚀"
     }
 
-    fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
         // Get directory history (frecency-based)
         let directories: Vec<String> = if let Some(ref history) = shell.path_history {
             let locked = history.lock();

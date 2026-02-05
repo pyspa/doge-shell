@@ -1,11 +1,13 @@
 use super::super::Action;
 use crate::shell::Shell;
 use anyhow::Result;
+use async_trait::async_trait;
 use skim::prelude::*;
 use std::process::{Command, Stdio};
 
 pub struct FindFileAction;
 
+#[async_trait(?Send)]
 impl Action for FindFileAction {
     fn name(&self) -> &str {
         "Find File"
@@ -17,7 +19,7 @@ impl Action for FindFileAction {
         "🔍"
     }
 
-    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         // Try fd first, fall back to find
         let output = Command::new("fd")
             .args(["--type", "f", "--hidden", "--exclude", ".git"])

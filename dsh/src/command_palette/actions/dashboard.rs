@@ -1,12 +1,14 @@
 use super::super::Action;
 use crate::shell::Shell;
 use anyhow::Result;
+use async_trait::async_trait;
 use crossterm::style::Stylize;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
 pub struct DashboardAction;
 
+#[async_trait(?Send)]
 impl Action for DashboardAction {
     fn name(&self) -> &str {
         "Dashboard"
@@ -18,7 +20,7 @@ impl Action for DashboardAction {
         "📊"
     }
 
-    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         let cwd = std::env::current_dir()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| ".".to_string());

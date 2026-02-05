@@ -1,11 +1,13 @@
 use super::super::Action;
 use crate::shell::Shell;
 use anyhow::Result;
+use async_trait::async_trait;
 use skim::prelude::*;
 use std::process::{Command, Stdio};
 
 pub struct KillProcessAction;
 
+#[async_trait(?Send)]
 impl Action for KillProcessAction {
     fn name(&self) -> &str {
         "Kill Process"
@@ -17,7 +19,7 @@ impl Action for KillProcessAction {
         "💀"
     }
 
-    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         // Get process list
         let output = Command::new("ps")
             .args(["aux"])

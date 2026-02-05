@@ -1,11 +1,13 @@
 use super::super::Action;
 use crate::shell::Shell;
 use anyhow::Result;
+use async_trait::async_trait;
 use skim::prelude::*;
 use std::process::{Command, Stdio};
 
 pub struct PortCheckAction;
 
+#[async_trait(?Send)]
 impl Action for PortCheckAction {
     fn name(&self) -> &str {
         "Port Check"
@@ -20,7 +22,7 @@ impl Action for PortCheckAction {
     fn category(&self) -> &str {
         "System"
     }
-    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         // Get listening ports using lsof or ss
         let output = Command::new("lsof")
             .args(["-i", "-P", "-n"])

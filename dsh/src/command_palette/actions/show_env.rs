@@ -1,10 +1,12 @@
 use super::super::Action;
 use crate::shell::Shell;
 use anyhow::Result;
+use async_trait::async_trait;
 use skim::prelude::*;
 
 pub struct ShowEnvAction;
 
+#[async_trait(?Send)]
 impl Action for ShowEnvAction {
     fn name(&self) -> &str {
         "Show Environment"
@@ -16,7 +18,7 @@ impl Action for ShowEnvAction {
         "🌿"
     }
 
-    fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
         // Collect environment variables
         let mut env_vars: Vec<String> = Vec::new();
 

@@ -164,7 +164,16 @@ pub fn execute(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<()
                     })
                     .collect();
 
-                if let Some(selected) = crate::completion::select_item_with_skim(candidates, None) {
+                let res = crate::completion::select_item_with_skim(candidates, None);
+                if let Some(selected) = match res {
+                    crate::completion::CompletionSelection::Selected(val) => Some(val),
+                    crate::completion::CompletionSelection::Interactive(items, query) => {
+                        use crate::completion::framework::SkimCompletionFramework;
+                        let query = query.unwrap_or_default();
+                        SkimCompletionFramework::run_with_skim(items, Some(query))
+                    }
+                    crate::completion::CompletionSelection::None => None,
+                } {
                     shell.changepwd(&selected)?;
                 }
             } else {

@@ -1,6 +1,7 @@
 use super::super::Action;
 use crate::shell::Shell;
 use anyhow::Result;
+use async_trait::async_trait;
 use skim::prelude::*;
 use std::fs;
 use std::path::PathBuf;
@@ -8,6 +9,7 @@ use std::process::Command;
 
 pub struct SshConnectAction;
 
+#[async_trait(?Send)]
 impl Action for SshConnectAction {
     fn name(&self) -> &str {
         "SSH Connect"
@@ -19,7 +21,7 @@ impl Action for SshConnectAction {
         "🌐"
     }
 
-    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         // Parse ~/.ssh/config for Host entries
         let config_path = dirs::home_dir()
             .map(|h| h.join(".ssh/config"))

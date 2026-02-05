@@ -1,11 +1,13 @@
 use super::super::Action;
 use crate::shell::Shell;
 use anyhow::Result;
+use async_trait::async_trait;
 use std::io::{self, Write};
 use std::process::Command;
 
 pub struct GitCommitAction;
 
+#[async_trait(?Send)]
 impl Action for GitCommitAction {
     fn name(&self) -> &str {
         "Git Commit"
@@ -20,7 +22,7 @@ impl Action for GitCommitAction {
     fn category(&self) -> &str {
         "Git"
     }
-    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         // Check for staged changes
         let status = Command::new("git")
             .args(["diff", "--cached", "--name-only"])

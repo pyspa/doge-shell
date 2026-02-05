@@ -9,6 +9,11 @@ pub enum ShellEvent {
     ScreenResized,
 }
 
+pub enum ReplControlFlow {
+    Continue,
+    RunInteractive(Box<dyn FnOnce() -> anyhow::Result<Option<String>> + Send>),
+}
+
 /// State management for detecting double key presses (Ctrl+C, Esc)
 #[derive(Debug)]
 pub struct DoublePressState {

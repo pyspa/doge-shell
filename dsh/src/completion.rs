@@ -46,6 +46,7 @@ mod z_tests;
 pub use crate::completion::command::CompletionType;
 pub use crate::completion::display::Candidate;
 pub use crate::completion::display::CompletionConfig;
+pub use crate::completion::framework::CompletionSelection;
 
 pub const MAX_RESULT: usize = 500;
 
@@ -558,7 +559,7 @@ impl SkimItem for Candidate {
     }
 }
 
-pub fn select_item_with_skim(items: Vec<Candidate>, query: Option<&str>) -> Option<String> {
+pub fn select_item_with_skim(items: Vec<Candidate>, query: Option<&str>) -> CompletionSelection {
     let (prompt_text, input_text) = get_prompt_and_input_for_completion();
     select_completion_items_with_framework(
         items,
@@ -594,7 +595,7 @@ pub fn select_completion_items(
     query: Option<&str>,
     prompt_text: &str,
     input_text: &str,
-) -> Option<String> {
+) -> CompletionSelection {
     select_completion_items_with_config(
         items,
         query,
@@ -610,7 +611,7 @@ pub fn select_completion_items_with_config(
     prompt_text: &str,
     input_text: &str,
     config: CompletionConfig,
-) -> Option<String> {
+) -> CompletionSelection {
     select_completion_items_with_framework(
         items,
         query,
@@ -628,7 +629,7 @@ pub fn select_completion_items_with_framework(
     input_text: &str,
     config: CompletionConfig,
     framework: CompletionFrameworkKind,
-) -> Option<String> {
+) -> CompletionSelection {
     debug!(
         "select_completion_items_with_framework: items={}, query={:?}, prompt_text='{}', input_text='{}', framework={:?}",
         items.len(),
@@ -640,13 +641,13 @@ pub fn select_completion_items_with_framework(
 
     if items.is_empty() {
         debug!("No completion candidates found, returning None");
-        return None;
+        return CompletionSelection::None;
     }
 
     // Fast path: if only one candidate, return it immediately without UI
     if items.len() == 1 {
         debug!("Single candidate fast path: returning {:?}", items[0]);
-        return Some(items[0].output().to_string());
+        return CompletionSelection::Selected(items[0].output().to_string());
     }
 
     let request = CompletionRequest::new(items, query, prompt_text, input_text, config);
@@ -657,7 +658,7 @@ pub fn select_completion_items_with_framework(
 pub fn select_completion_items_simple(
     items: Vec<Candidate>,
     query: Option<&str>,
-) -> Option<String> {
+) -> CompletionSelection {
     let (prompt_text, input_text) = get_prompt_and_input_for_completion();
     select_completion_items_with_framework(
         items,
@@ -669,7 +670,7 @@ pub fn select_completion_items_simple(
     )
 }
 
-pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String> {
+pub fn completion_from_cmd(input: String, query: Option<&str>) -> CompletionSelection {
     debug!("{} ", &input);
     match Command::new("sh").arg("-c").arg(input).output() {
         Ok(output) => {
@@ -683,9 +684,9 @@ pub fn completion_from_cmd(input: String, query: Option<&str>) -> Option<String>
 
                 return select_completion_items_simple(items, query);
             }
-            None
+            CompletionSelection::None
         }
-        _ => None,
+        _ => CompletionSelection::None,
     }
 }
 
@@ -695,7 +696,7 @@ pub async fn input_completion(
     query: Option<&str>,
     prompt_text: &str,
     input_text: &str,
-) -> Option<String> {
+) -> CompletionSelection {
     // Main fallback completion function that tries multiple completion sources in sequence:
     // 1. Lisp-based completion (custom completion definitions)
     // 2. Current context completion (path completion, command completion from PATH)
@@ -707,20 +708,22 @@ pub async fn input_completion(
     // Lisp logic is synchronous but fast (unless user func is slow).
     // We keep it synchronous for now or wrap it if needed.
     let res = completion_from_lisp_with_prompt(input, repl, query, prompt_text, input_text);
-    if res.is_some() {
+    if let CompletionSelection::Selected(_) | CompletionSelection::Interactive(..) = res {
         debug!("Lisp completion returned result: {:?}", res);
         return res;
     }
 
     // Try z completion
-    if let Some(res) = completion_for_z(input, repl, query, prompt_text, input_text) {
-        return Some(res);
+    if let CompletionSelection::Selected(_) | CompletionSelection::Interactive(..) =
+        completion_for_z(input, repl, query, prompt_text, input_text)
+    {
+        return completion_for_z(input, repl, query, prompt_text, input_text);
     }
 
     // Try current context completion (files, directories, commands in PATH)
     let res =
         completion_from_current_with_prompt(input, repl, query, prompt_text, input_text).await;
-    if res.is_some() {
+    if let CompletionSelection::Selected(_) | CompletionSelection::Interactive(..) = res {
         debug!("Context completion returned result: {:?}", res);
         return res;
     }
@@ -730,7 +733,7 @@ pub async fn input_completion(
     // Return None if no completion sources provided any candidates
     // This is the "silent failure" behavior when no matches are found from any source
     // No error message is shown to user, maintaining the "no visible effect" behavior
-    None
+    CompletionSelection::None
 }
 
 fn completion_from_lisp_with_prompt(
@@ -739,7 +742,7 @@ fn completion_from_lisp_with_prompt(
     query: Option<&str>,
     prompt_text: &str,
     input_text: &str,
-) -> Option<String> {
+) -> CompletionSelection {
     // Pass current input as argument to lisp function
     let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
     let environment = Arc::clone(&lisp_engine.borrow().shell_env);
@@ -761,7 +764,7 @@ fn completion_from_lisp_with_prompt(
                         return select_completion_items(items, query, prompt_text, input_text);
                     }
                     Ok(Value::String(str)) => {
-                        return Some(str);
+                        return CompletionSelection::Selected(str);
                     }
                     Err(err) => {
                         warn!("Lisp completion error: {err:?}");
@@ -770,12 +773,15 @@ fn completion_from_lisp_with_prompt(
                 }
             } else if let Some(cmd) = &compl.cmd {
                 // run command
-                if let Some(val) = completion_from_cmd(cmd.to_string(), query) {
+                let res = completion_from_cmd(cmd.to_string(), query);
+                if let CompletionSelection::Selected(val) = res {
                     if val.starts_with('*') {
-                        return Some(val[2..].to_string());
+                        return CompletionSelection::Selected(val[2..].to_string());
                     } else {
-                        return Some(val);
+                        return CompletionSelection::Selected(val);
                     }
+                } else if let CompletionSelection::Interactive(..) = res {
+                    return res;
                 }
             } else if let Some(items) = &compl.candidates {
                 let items: Vec<Candidate> = items
@@ -784,10 +790,10 @@ fn completion_from_lisp_with_prompt(
                     .collect();
                 return select_completion_items(items, query, prompt_text, input_text);
             }
-            return None;
+            return CompletionSelection::None;
         }
     }
-    None
+    CompletionSelection::None
 }
 
 fn completion_for_z(
@@ -796,10 +802,10 @@ fn completion_for_z(
     query: Option<&str>,
     prompt_text: &str,
     input_text: &str,
-) -> Option<String> {
+) -> CompletionSelection {
     let line = input.as_str();
     if !line.trim_start().starts_with("z ") && line.trim() != "z" {
-        return None;
+        return CompletionSelection::None;
     }
 
     if let Some(ref history) = repl.shell.path_history {
@@ -813,7 +819,7 @@ fn completion_for_z(
 
         return select_completion_items(candidates, query, prompt_text, input_text);
     }
-    None
+    CompletionSelection::None
 }
 
 async fn completion_from_current_with_prompt(
@@ -822,10 +828,14 @@ async fn completion_from_current_with_prompt(
     query: Option<&str>,
     prompt_text: &str,
     input_text: &str,
-) -> Option<String> {
+) -> CompletionSelection {
     debug!("completion_from_current_with_prompt: query={:?}", query);
 
-    let query_str = query.filter(|q| !q.is_empty())?;
+    let query_str = if let Some(q) = query.filter(|q| !q.is_empty()) {
+        q
+    } else {
+        return CompletionSelection::None;
+    };
 
     debug!("cache query_str: '{}'", query_str);
     if let Some(hit) = LEGACY_COMPLETION_CACHE.lookup(query_str) {
@@ -846,10 +856,13 @@ async fn completion_from_current_with_prompt(
         }
     }
 
-    let data = collect_current_context_candidates(repl, query_str).await?;
+    let data = match collect_current_context_candidates(repl, query_str).await {
+        Some(d) => d,
+        None => return CompletionSelection::None,
+    };
 
     if data.items.is_empty() {
-        return None;
+        return CompletionSelection::None;
     }
 
     LEGACY_COMPLETION_CACHE.set(query_str.to_string(), data.items.clone());
@@ -1322,7 +1335,11 @@ mod tests {
         // Test that single candidate is returned directly without UI
         let single_candidate = vec![Candidate::Basic("single_item".to_string())];
         let result = select_item_with_skim(single_candidate, None);
-        assert_eq!(result, Some("single_item".to_string()));
+        use framework::CompletionSelection;
+        assert_eq!(
+            result,
+            CompletionSelection::Selected("single_item".to_string())
+        );
     }
 
     #[test]

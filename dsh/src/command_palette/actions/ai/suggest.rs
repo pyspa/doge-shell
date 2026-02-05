@@ -8,8 +8,11 @@ use crossterm::queue;
 use crossterm::style::Print;
 use crossterm::terminal::{Clear, ClearType};
 
+use async_trait::async_trait;
+
 pub struct SuggestImprovementAction;
 
+#[async_trait(?Send)]
 impl Action for SuggestImprovementAction {
     fn name(&self) -> &str {
         "Ai: Suggest Improvement"
@@ -27,7 +30,7 @@ impl Action for SuggestImprovementAction {
         "AI"
     }
 
-    fn execute(&self, shell: &mut Shell, input: &str) -> Result<()> {
+    async fn execute(&self, shell: &mut Shell, input: &str) -> Result<()> {
         if input.trim().is_empty() {
             println!("\r\nNo command to improve.\r\n");
             return Ok(());
@@ -42,8 +45,7 @@ impl Action for SuggestImprovementAction {
         queue!(renderer, Print("\r\n🔄 Processing...\r\n")).ok();
         renderer.flush().ok();
 
-        let result = tokio::runtime::Handle::current()
-            .block_on(async { ai_features::suggest_improvement(service.as_ref(), input).await });
+        let result = ai_features::suggest_improvement(service.as_ref(), input).await;
 
         match result {
             Ok(response) => {

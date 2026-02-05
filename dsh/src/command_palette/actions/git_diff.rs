@@ -1,11 +1,13 @@
 use super::super::Action;
 use crate::shell::Shell;
 use anyhow::Result;
+use async_trait::async_trait;
 use skim::prelude::*;
 use std::process::{Command, Stdio};
 
 pub struct GitDiffAction;
 
+#[async_trait(?Send)]
 impl Action for GitDiffAction {
     fn name(&self) -> &str {
         "Git Diff"
@@ -20,7 +22,7 @@ impl Action for GitDiffAction {
     fn category(&self) -> &str {
         "Git"
     }
-    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         // Get list of changed files
         let output = Command::new("git")
             .args(["diff", "--name-only"])

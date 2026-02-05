@@ -8,8 +8,11 @@ use crossterm::queue;
 use crossterm::style::Print;
 use crossterm::terminal::{Clear, ClearType};
 
+use async_trait::async_trait;
+
 pub struct DescribeDirectoryAction;
 
+#[async_trait(?Send)]
 impl Action for DescribeDirectoryAction {
     fn name(&self) -> &str {
         "Ai: Describe Directory"
@@ -27,7 +30,7 @@ impl Action for DescribeDirectoryAction {
         "AI"
     }
 
-    fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
         let Some(service) = get_ai_service(shell) else {
             println!("\r\nAI service not configured. Set OPENAI_API_KEY or AI_CHAT_API_KEY.\r\n");
             return Ok(());
@@ -42,9 +45,7 @@ impl Action for DescribeDirectoryAction {
         queue!(renderer, Print("\r\n🔄 Processing...\r\n")).ok();
         renderer.flush().ok();
 
-        let result = tokio::runtime::Handle::current().block_on(async {
-            ai_features::describe_directory(service.as_ref(), &dir_listing, &cwd).await
-        });
+        let result = ai_features::describe_directory(service.as_ref(), &dir_listing, &cwd).await;
 
         match result {
             Ok(response) => {

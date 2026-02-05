@@ -8,7 +8,10 @@ use std::sync::{Arc, LazyLock};
 
 pub mod actions;
 
+use async_trait::async_trait;
+
 /// Trait for executable actions in the command palette
+#[async_trait(?Send)]
 pub trait Action: Send + Sync {
     /// Display name of the action
     fn name(&self) -> &str;
@@ -23,7 +26,7 @@ pub trait Action: Send + Sync {
         "General"
     }
     /// Execute the action
-    fn execute(&self, shell: &mut Shell, input: &str) -> Result<()>;
+    async fn execute(&self, shell: &mut Shell, input: &str) -> Result<()>;
 }
 
 /// Registry for managing available actions
@@ -114,9 +117,11 @@ impl SkimItem for StringItem {
 pub struct CommandPalette;
 
 impl CommandPalette {
-    pub fn run(shell: &mut Shell, input: &str) -> Result<()> {
-        let registry = REGISTRY.read();
-        let actions = registry.get_all();
+    pub async fn run(shell: &mut Shell, input: &str) -> Result<()> {
+        let actions = {
+            let registry = REGISTRY.read();
+            registry.get_all()
+        };
 
         // Prepare items for Skim
         let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
@@ -134,6 +139,7 @@ impl CommandPalette {
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 
+        // Run Skim synchronously (blocking the worker thread is acceptable here as it's a modal UI)
         let selected_items = Skim::run_with(options, Some(rx_item))
             .ok()
             .map(|out| out.selected_items)
@@ -145,15 +151,17 @@ impl CommandPalette {
             // We can't easily downcast back to PaletteItem directly from SkimItem without Any.
             // But we know text() matches the name.
 
-            let output = item.output(); // this is the name
-            let action_name = output.as_ref();
+            let output = item.output().to_string(); // this is the name
+            let action_name = output.as_str();
 
             // Re-acquire lock to get the action (we dropped it before running Skim)
-            let registry = REGISTRY.read();
-            if let Some(action) = registry.actions.get(action_name).cloned() {
-                drop(registry); // Release lock before execution to avoid deadlocks if action needs registry
+            let action = {
+                let registry = REGISTRY.read();
+                registry.actions.get(action_name).cloned()
+            };
 
-                action.execute(shell, input)?;
+            if let Some(action) = action {
+                action.execute(shell, input).await?;
             }
         };
         Ok(())
@@ -169,6 +177,7 @@ mod tests {
         desc: &'static str,
     }
 
+    #[async_trait(?Send)]
     impl Action for MockAction {
         fn name(&self) -> &str {
             self.name
@@ -176,7 +185,7 @@ mod tests {
         fn description(&self) -> &str {
             self.desc
         }
-        fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
+        async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
             Ok(())
         }
     }

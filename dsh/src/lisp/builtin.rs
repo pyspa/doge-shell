@@ -241,20 +241,14 @@ pub fn command(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtime
     }
 }
 
-pub fn block_sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    tokio::task::block_in_place(move || tokio::runtime::Handle::current().block_on(sh(env, args)))
-}
+// Helper core for sh
+async fn sh_core(
+    shell_env: Arc<parking_lot::RwLock<crate::environment::Environment>>,
+    args: Vec<String>,
+) -> Result<String, RuntimeError> {
+    let input = args.join(" ");
 
-pub async fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let mut cmd_args: Vec<String> = Vec::new();
-
-    for arg in args {
-        let val = arg.to_string();
-        cmd_args.push(val);
-    }
-    let input = cmd_args.join(" ");
-
-    let mut shell = Shell::new(Arc::clone(&env.borrow().shell_env));
+    let mut shell = Shell::new(shell_env);
     shell.set_signals();
     let shell_tmode = match tcgetattr(unsafe { BorrowedFd::borrow_raw(0) }) {
         Ok(tmode) => tmode,
@@ -302,7 +296,28 @@ pub async fn sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
         }
     };
     debug!("'{}'", output);
-    Ok(Value::String(output))
+    Ok(output)
+}
+
+pub fn block_sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let mut cmd_args: Vec<String> = Vec::new();
+    for arg in args {
+        cmd_args.push(arg.to_string());
+    }
+    let shell_env = Arc::clone(&env.borrow().shell_env);
+
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| RuntimeError { msg: e.to_string() })?;
+        rt.block_on(sh_core(shell_env, cmd_args))
+    })
+    .join()
+    .map_err(|_| RuntimeError {
+        msg: "Thread panicked".to_string(),
+    })?
+    .map(Value::String)
 }
 
 pub fn safety_level(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -368,22 +383,14 @@ pub fn pref_auto_notify(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value
     Ok(Value::NIL)
 }
 
-pub fn block_sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    tokio::task::block_in_place(move || {
-        tokio::runtime::Handle::current().block_on(sh_no_cap(env, args))
-    })
-}
+// Helper core for sh_no_cap
+async fn sh_no_cap_core(
+    shell_env: Arc<parking_lot::RwLock<crate::environment::Environment>>,
+    args: Vec<String>,
+) -> Result<(), RuntimeError> {
+    let input = args.join(" ");
 
-pub async fn sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let mut cmd_args: Vec<String> = Vec::new();
-
-    for arg in args {
-        let val = arg.to_string();
-        cmd_args.push(val);
-    }
-    let input = cmd_args.join(" ");
-
-    let mut shell = Shell::new(Arc::clone(&env.borrow().shell_env));
+    let mut shell = Shell::new(shell_env);
     shell.set_signals();
     let shell_tmode = match tcgetattr(unsafe { BorrowedFd::borrow_raw(0) }) {
         Ok(tmode) => tmode,
@@ -404,7 +411,28 @@ pub async fn sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value,
         });
     }
 
-    Ok(Value::NIL)
+    Ok(())
+}
+
+pub fn block_sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let mut cmd_args: Vec<String> = Vec::new();
+    for arg in args {
+        cmd_args.push(arg.to_string());
+    }
+    let shell_env = Arc::clone(&env.borrow().shell_env);
+
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| RuntimeError { msg: e.to_string() })?;
+        rt.block_on(sh_no_cap_core(shell_env, cmd_args))
+    })
+    .join()
+    .map_err(|_| RuntimeError {
+        msg: "Thread panicked".to_string(),
+    })?
+    .map(|_| Value::NIL)
 }
 
 pub fn edit(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -595,9 +623,9 @@ mod tests {
             return;
         }
 
-        let args = [Value::String("ls -al".to_string())];
-        let env_clone = Rc::clone(&engine.borrow().env);
-        let res = sh(env_clone, args.to_vec()).await;
+        let args = vec!["ls".to_string(), "-al".to_string()];
+        let shell_env = Arc::clone(&engine.borrow().env.borrow().shell_env);
+        let res = sh_core(shell_env, args).await;
         assert!(res.is_ok());
         if let Ok(result) = res {
             println!("{result}");

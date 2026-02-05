@@ -8,8 +8,11 @@ use crossterm::queue;
 use crossterm::style::Print;
 use crossterm::terminal::{Clear, ClearType};
 
+use async_trait::async_trait;
+
 pub struct SuggestCommandsAction;
 
+#[async_trait(?Send)]
 impl Action for SuggestCommandsAction {
     fn name(&self) -> &str {
         "Ai: Suggest Commands"
@@ -27,7 +30,7 @@ impl Action for SuggestCommandsAction {
         "AI"
     }
 
-    fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
         let Some(service) = get_ai_service(shell) else {
             println!("\r\nAI service not configured. Set OPENAI_API_KEY or AI_CHAT_API_KEY.\r\n");
             return Ok(());
@@ -43,15 +46,13 @@ impl Action for SuggestCommandsAction {
         queue!(renderer, Print("\r\n🔄 Processing...\r\n")).ok();
         renderer.flush().ok();
 
-        let result = tokio::runtime::Handle::current().block_on(async {
-            ai_features::suggest_next_commands(
-                service.as_ref(),
-                &recent_commands,
-                &cwd,
-                &dir_listing,
-            )
-            .await
-        });
+        let result = ai_features::suggest_next_commands(
+            service.as_ref(),
+            &recent_commands,
+            &cwd,
+            &dir_listing,
+        )
+        .await;
 
         match result {
             Ok(response) => {

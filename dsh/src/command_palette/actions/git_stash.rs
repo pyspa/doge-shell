@@ -1,11 +1,13 @@
 use super::super::Action;
 use crate::shell::Shell;
 use anyhow::Result;
+use async_trait::async_trait;
 use skim::prelude::*;
 use std::process::{Command, Stdio};
 
 pub struct GitStashAction;
 
+#[async_trait(?Send)]
 impl Action for GitStashAction {
     fn name(&self) -> &str {
         "Git Stash"
@@ -17,7 +19,7 @@ impl Action for GitStashAction {
         "📦"
     }
 
-    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         // Get stash list
         let output = Command::new("git")
             .args(["stash", "list"])

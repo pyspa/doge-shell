@@ -48,6 +48,27 @@ pub(crate) static ABSOLUTE_PATH_REGEX: std::sync::LazyLock<Regex> =
 pub(crate) static RELATIVE_PATH_REGEX: std::sync::LazyLock<Regex> =
     std::sync::LazyLock::new(|| Regex::new(r"^\./").unwrap());
 
+/// Wrapper to force Send/Sync on types that are effectively confined to the main thread
+/// or not accessed in background threads (like autocompletion closures).
+#[derive(Debug, Clone)]
+pub struct UnsafeSend<T>(pub T);
+
+unsafe impl<T> Send for UnsafeSend<T> {}
+unsafe impl<T> Sync for UnsafeSend<T> {}
+
+impl<T> std::ops::Deref for UnsafeSend<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> std::ops::DerefMut for UnsafeSend<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 /// Hook called when the current directory changes.
 pub trait ChangePwdHook: Send + Sync {
     fn call(&self, pwd: &std::path::Path, env: Arc<RwLock<Environment>>) -> Result<()>;
@@ -57,7 +78,7 @@ pub trait ChangePwdHook: Send + Sync {
 pub struct Environment {
     pub alias: HashMap<String, String>,
     pub abbreviations: HashMap<String, String>,
-    pub autocompletion: Vec<AutoComplete>,
+    pub autocompletion: UnsafeSend<Vec<AutoComplete>>,
     pub paths: Vec<String>,
     pub variables: HashMap<String, String>,
     pub exported_vars: HashSet<String>,
@@ -128,7 +149,7 @@ impl Environment {
         let env_arc = Arc::new(RwLock::new(Environment {
             alias: HashMap::new(),
             abbreviations: HashMap::new(),
-            autocompletion: Vec::new(),
+            autocompletion: UnsafeSend(Vec::new()),
             variables: HashMap::new(),
             exported_vars: HashSet::new(),
             paths,

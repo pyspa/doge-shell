@@ -247,7 +247,16 @@ impl ShellProxy for Shell {
             .map(|item| crate::completion::Candidate::Item(item, "".to_string()))
             .collect();
 
-        Ok(crate::completion::select_item_with_skim(candidates, None))
+        let res = crate::completion::select_item_with_skim(candidates, None);
+        match res {
+            crate::completion::CompletionSelection::Selected(val) => Ok(Some(val)),
+            crate::completion::CompletionSelection::Interactive(items, query) => {
+                use crate::completion::framework::SkimCompletionFramework;
+                let query = query.unwrap_or_default();
+                Ok(SkimCompletionFramework::run_with_skim(items, Some(query)))
+            }
+            crate::completion::CompletionSelection::None => Ok(None),
+        }
     }
 
     // New method implementations for export
@@ -345,20 +354,15 @@ impl ShellProxy for Shell {
 
         let ai_service = self.environment.read().ai_service.clone();
         if let Some(service) = ai_service {
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                tokio::task::block_in_place(move || {
-                    handle.block_on(async move {
-                        crate::ai_features::generate_completion_json(
-                            service.as_ref(),
-                            &command_name,
-                            &help_text,
-                        )
-                        .await
-                    })
-                })
-            } else {
-                let runtime = tokio::runtime::Runtime::new()?;
-                runtime.block_on(async move {
+            // Using std::thread::spawn to avoid "Cannot start a runtime from within a runtime" panic
+            // This isolates the blocking operation from the current Tokio runtime
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| anyhow::anyhow!("Failed to create runtime: {}", e))?;
+
+                rt.block_on(async move {
                     crate::ai_features::generate_completion_json(
                         service.as_ref(),
                         &command_name,
@@ -366,7 +370,9 @@ impl ShellProxy for Shell {
                     )
                     .await
                 })
-            }
+            })
+            .join()
+            .map_err(|_| anyhow::anyhow!("Thread panicked"))?
         } else {
             Err(anyhow::anyhow!("AI service not available"))
         }
@@ -375,14 +381,18 @@ impl ShellProxy for Shell {
     fn ask_ai(&mut self, messages: Vec<serde_json::Value>) -> Result<String> {
         let ai_service = self.environment.read().ai_service.clone();
         if let Some(service) = ai_service {
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                tokio::task::block_in_place(move || {
-                    handle.block_on(async move { service.send_request(messages, Some(0.7)).await })
-                })
-            } else {
-                let runtime = tokio::runtime::Runtime::new()?;
-                runtime.block_on(async move { service.send_request(messages, Some(0.7)).await })
-            }
+            // Using std::thread::spawn to avoid "Cannot start a runtime from within a runtime" panic
+            // This isolates the blocking operation from the current Tokio runtime
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| anyhow::anyhow!("Failed to create runtime: {}", e))?;
+
+                rt.block_on(async move { service.send_request(messages, Some(0.7)).await })
+            })
+            .join()
+            .map_err(|_| anyhow::anyhow!("Thread panicked"))?
         } else {
             Err(anyhow::anyhow!("AI service not available"))
         }

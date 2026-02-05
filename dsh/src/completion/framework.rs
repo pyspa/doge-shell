@@ -43,8 +43,17 @@ pub enum CompletionFrameworkKind {
 }
 
 /// Trait implemented by completion presentation backends.
+/// Result of a completion selection attempt.
+#[derive(Debug, PartialEq)]
+pub enum CompletionSelection {
+    Selected(String),
+    None,
+    Interactive(Vec<Candidate>, Option<String>),
+}
+
+/// Trait implemented by completion presentation backends.
 pub trait CompletionFramework {
-    fn select(&self, request: CompletionRequest<'_>) -> Option<String>;
+    fn select(&self, request: CompletionRequest<'_>) -> CompletionSelection;
 }
 
 /// Terminal-native grid renderer backed by [`CompletionDisplay`].
@@ -52,7 +61,7 @@ pub trait CompletionFramework {
 pub struct InlineCompletionFramework;
 
 impl CompletionFramework for InlineCompletionFramework {
-    fn select(&self, request: CompletionRequest<'_>) -> Option<String> {
+    fn select(&self, request: CompletionRequest<'_>) -> CompletionSelection {
         let CompletionRequest {
             items,
             prompt_text,
@@ -66,16 +75,18 @@ impl CompletionFramework for InlineCompletionFramework {
         let mut controller = CompletionInteraction::new(TerminalEventSource);
 
         match controller.run(&mut display) {
-            Ok(CompletionOutcome::Submitted(value)) => Some(value),
+            Ok(CompletionOutcome::Submitted(value)) => CompletionSelection::Selected(value),
             Ok(CompletionOutcome::Input(value)) => {
-                Some(super::last_word(input_text).to_owned() + &value)
+                CompletionSelection::Selected(super::last_word(input_text).to_owned() + &value)
             }
-            Ok(CompletionOutcome::Cancelled) | Ok(CompletionOutcome::NoSelection) => None,
+            Ok(CompletionOutcome::Cancelled) | Ok(CompletionOutcome::NoSelection) => {
+                CompletionSelection::None
+            }
             Err(error) => {
                 warn!("Completion interaction failed: {}", error);
                 let _ = display.clear_display();
                 let _ = execute!(stdout(), cursor::Show);
-                None
+                CompletionSelection::None
             }
         }
     }
@@ -86,60 +97,65 @@ impl CompletionFramework for InlineCompletionFramework {
 pub struct SkimCompletionFramework;
 
 impl SkimCompletionFramework {
-    fn run_with_skim(items: Vec<Candidate>, query: Option<&str>) -> Option<String> {
+    pub fn run_with_skim(items: Vec<Candidate>, query: Option<String>) -> Option<String> {
         if items.len() == 1 {
             return Some(items[0].output().to_string());
         }
 
-        let options = SkimOptionsBuilder::default()
-            .select_1(true)
-            .bind(vec!["Enter:accept".to_string()])
-            .query(query.map(|s| s.to_string()))
-            .build()
-            .unwrap();
+        // Spawn a separate thread to run Skim, isolating it from the tokio runtime
+        // This prevents "Cannot start a runtime from within a runtime" panics
+        std::thread::spawn(move || {
+            let options = SkimOptionsBuilder::default()
+                .select_1(true)
+                .bind(vec!["Enter:accept".to_string()])
+                .query(query)
+                .build()
+                .unwrap();
 
-        let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
-        for item in items {
-            let _ = tx_item.send(vec![Arc::new(item)]);
-        }
-        drop(tx_item);
+            let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
+            for item in items {
+                let _ = tx_item.send(vec![Arc::new(item)]);
+            }
+            drop(tx_item);
 
-        let selected = Skim::run_with(options, Some(rx_item))
-            .ok()
-            .map(|out| {
-                if out.is_abort {
-                    Vec::new()
-                } else {
-                    out.selected_items
-                }
-            })
-            .unwrap_or_default();
+            let selected = Skim::run_with(options, Some(rx_item))
+                .ok()
+                .map(|out| {
+                    if out.is_abort {
+                        Vec::new()
+                    } else {
+                        out.selected_items
+                    }
+                })
+                .unwrap_or_default();
 
-        selected
-            .first()
-            .map(|candidate| candidate.output().to_string())
+            selected
+                .first()
+                .map(|candidate| candidate.output().to_string())
+        })
+        .join()
+        .unwrap_or_else(|e| {
+            warn!("Skim thread panicked: {:?}", e);
+            None
+        })
     }
 }
 
 impl CompletionFramework for SkimCompletionFramework {
-    fn select(&self, request: CompletionRequest<'_>) -> Option<String> {
+    fn select(&self, request: CompletionRequest<'_>) -> CompletionSelection {
         debug!(
             "SkimCompletionFramework selecting from {} candidates (query={:?})",
             request.items.len(),
             request.query
         );
-        for (index, item) in request.items.iter().enumerate() {
-            debug!("Skim candidate {}: {:?}", index, item);
-        }
-
-        Self::run_with_skim(request.items, request.query)
+        CompletionSelection::Interactive(request.items, request.query.map(|s| s.to_string()))
     }
 }
 
 pub fn select_with_framework_kind(
     kind: CompletionFrameworkKind,
     request: CompletionRequest<'_>,
-) -> Option<String> {
+) -> CompletionSelection {
     match kind {
         CompletionFrameworkKind::Inline => InlineCompletionFramework.select(request),
         CompletionFrameworkKind::Skim => SkimCompletionFramework.select(request),

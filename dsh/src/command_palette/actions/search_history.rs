@@ -1,10 +1,12 @@
 use super::super::Action;
 use crate::shell::Shell;
 use anyhow::Result;
+use async_trait::async_trait;
 use skim::prelude::*;
 
 pub struct SearchHistoryAction;
 
+#[async_trait(?Send)]
 impl Action for SearchHistoryAction {
     fn name(&self) -> &str {
         "Search History"
@@ -16,7 +18,7 @@ impl Action for SearchHistoryAction {
         "📜"
     }
 
-    fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
         // Get command history
         let history_entries: Vec<String> = if let Some(ref history) = shell.cmd_history {
             let locked = history.lock();

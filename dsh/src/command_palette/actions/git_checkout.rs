@@ -1,11 +1,13 @@
 use super::super::Action;
 use crate::shell::Shell;
 use anyhow::Result;
+use async_trait::async_trait;
 use skim::prelude::*;
 use std::process::{Command, Stdio};
 
 pub struct GitCheckoutAction;
 
+#[async_trait(?Send)]
 impl Action for GitCheckoutAction {
     fn name(&self) -> &str {
         "Git Checkout"
@@ -17,7 +19,7 @@ impl Action for GitCheckoutAction {
         "🌿"
     }
 
-    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         // Get branches
         let output = Command::new("git")
             .args(["branch", "-a", "--format=%(refname:short)"])

@@ -9,7 +9,7 @@ use crate::completion::display::Candidate;
 use crate::repl::Repl;
 use crate::repl::key_action::{KeyAction, KeyContext, determine_key_action};
 use crate::repl::render_transient_prompt_to;
-use crate::repl::state::{ShellEvent, SuggestionAcceptMode};
+use crate::repl::state::{ReplControlFlow, ShellEvent, SuggestionAcceptMode};
 use crate::terminal::renderer::TerminalRenderer;
 use crate::utils::editor::open_editor;
 use anyhow::Result;
@@ -84,19 +84,19 @@ pub(crate) async fn check_background_jobs(repl: &mut Repl<'_>, output: bool) -> 
     }
     Ok(())
 }
-pub(crate) async fn handle_event(repl: &mut Repl<'_>, ev: ShellEvent) -> Result<()> {
+pub(crate) async fn handle_event(repl: &mut Repl<'_>, ev: ShellEvent) -> Result<ReplControlFlow> {
     match ev {
-        ShellEvent::Input(input) => {
-            match input {
-                Event::Key(key) => repl.handle_key_event(&key).await?,
-                Event::Paste(text) => repl.handle_paste_event(&text).await?,
-                _ => {}
+        ShellEvent::Input(input) => match input {
+            Event::Key(key) => repl.handle_key_event(&key).await,
+            Event::Paste(text) => {
+                repl.handle_paste_event(&text).await?;
+                Ok(ReplControlFlow::Continue)
             }
-            Ok(())
-        }
+            _ => Ok(ReplControlFlow::Continue),
+        },
         ShellEvent::Paste(text) => {
             repl.handle_paste_event(&text).await?;
-            Ok(())
+            Ok(ReplControlFlow::Continue)
         }
         ShellEvent::ScreenResized => {
             let screen_size = crossterm::terminal::size().unwrap_or_else(|e| {
@@ -108,7 +108,7 @@ pub(crate) async fn handle_event(repl: &mut Repl<'_>, ev: ShellEvent) -> Result<
             });
             repl.columns = screen_size.0 as usize;
             repl.lines = screen_size.1 as usize;
-            Ok(())
+            Ok(ReplControlFlow::Continue)
         }
     }
 }
@@ -128,7 +128,7 @@ pub(crate) async fn handle_paste_event(repl: &mut Repl<'_>, text: &str) -> Resul
     renderer.flush().ok();
     Ok(())
 }
-async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<bool> {
+async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<ReplControlFlow> {
     // Check for Smart Pipe Expansion (|? query)
     if let Some(smart_pipe_query) = repl.detect_smart_pipe() {
         match repl.expand_smart_pipe(smart_pipe_query).await {
@@ -141,7 +141,7 @@ async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<bool> {
                     new_input.push_str(&expanded);
                     repl.input.reset(new_input);
                     repl.completion.clear();
-                    return Ok(true);
+                    return Ok(ReplControlFlow::Continue);
                 }
             }
             Err(e) => {
@@ -156,7 +156,7 @@ async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<bool> {
             Ok(expanded) => {
                 repl.input.reset(expanded);
                 repl.completion.clear();
-                return Ok(true);
+                return Ok(ReplControlFlow::Continue);
             }
             Err(e) => {
                 warn!("Generative command expansion failed: {}", e);
@@ -234,26 +234,39 @@ async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<bool> {
             completion_framework,
         );
 
-        // If result is Some, update input.
-        if let Some(val) = res {
-            debug!("Completion selected: '{}'", val);
-            // For history candidates (indicated by clock emoji), replace entire input
-            let is_history_candidate = val.starts_with("🕒 ");
-            if is_history_candidate {
-                let command = val[3..].trim();
-                repl.input.reset(command.to_string());
-            } else {
-                if let Some(len) = removal_len {
-                    repl.input.backspacen(len);
+        match res {
+            completion::CompletionSelection::Selected(val) => {
+                debug!("Completion selected: '{}'", val);
+                // For history candidates (indicated by clock emoji), replace entire input
+                let is_history_candidate = val.starts_with("🕒 ");
+                if is_history_candidate {
+                    let command = val[3..].trim();
+                    repl.input.reset(command.to_string());
+                } else {
+                    if let Some(len) = removal_len {
+                        repl.input.backspacen(len);
+                    }
+                    repl.input.insert_str(val.as_str());
                 }
-                repl.input.insert_str(val.as_str());
+                repl.start_completion = true;
+                return Ok(ReplControlFlow::Continue);
+            }
+            completion::CompletionSelection::Interactive(items, query) => {
+                // Return control flow to run interactive completion (Skim)
+                let query = query.unwrap_or_default();
+                let candidates = items;
+                return Ok(ReplControlFlow::RunInteractive(Box::new(move || {
+                    use crate::completion::framework::SkimCompletionFramework;
+                    Ok(SkimCompletionFramework::run_with_skim(
+                        candidates,
+                        Some(query),
+                    ))
+                })));
+            }
+            completion::CompletionSelection::None => {
+                // Fallthrough to legacy completion below
             }
         }
-
-        // If candidates existed, we consider completion handled (either UI showed or selection made).
-        // We do NOT fallback to suggestion here.
-        repl.start_completion = true;
-        return Ok(true);
     }
 
     // If no candidates from integrated engine, fall back to legacy completion system
@@ -268,29 +281,46 @@ async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<bool> {
     .await;
 
     // Process the completion result
+    // Process the completion result
+    // For legacy completion, we need to handle CompletionSelection::Selected
     let mut completion_handled = false;
-    if let Some(val) = completion_result {
-        debug!("Completion selected: '{}'", val);
-        // For history candidates (indicated by clock emoji), replace entire input
-        let is_history_candidate = val.starts_with("🕒 ");
-        if is_history_candidate {
-            let command = val[3..].trim(); // Remove the clock emoji and any extra spaces
-            repl.input.reset(command.to_string());
-        } else {
-            // For regular completions, replace the query part with the selected value
-            if let Some(len) = removal_len {
-                repl.input.backspacen(len); // Remove the original query text
+    match completion_result {
+        completion::CompletionSelection::Selected(val) => {
+            debug!("Completion selected: '{}'", val);
+            // For history candidates (indicated by clock emoji), replace entire input
+            let is_history_candidate = val.starts_with("🕒 ");
+            if is_history_candidate {
+                let command = val[3..].trim(); // Remove the clock emoji and any extra spaces
+                repl.input.reset(command.to_string());
+            } else {
+                // For regular completions, replace the query part with the selected value
+                if let Some(len) = removal_len {
+                    repl.input.backspacen(len); // Remove the original query text
+                }
+                repl.input.insert_str(val.as_str()); // Insert the completion
             }
-            repl.input.insert_str(val.as_str()); // Insert the completion
+            completion_handled = true;
         }
-        completion_handled = true;
-    } else {
+        completion::CompletionSelection::Interactive(items, query) => {
+            let query = query.unwrap_or_default();
+            return Ok(ReplControlFlow::RunInteractive(Box::new(move || {
+                use crate::completion::framework::SkimCompletionFramework;
+                Ok(SkimCompletionFramework::run_with_skim(items, Some(query)))
+            })));
+        }
+        completion::CompletionSelection::None => {
+            // No completion found
+        }
+    }
+
+    if !completion_handled {
+        // No standard completion selected (Legacy also failed).
         // No standard completion selected (Legacy also failed).
 
         // Fallback: If we have an active suggestion, accept the next word of it.
         if repl.accept_suggestion(SuggestionAcceptMode::Word) {
             debug!("No standard completion, accepted suggestion word fallback");
-            completion_handled = true;
+            // completion_handled = true;
         } else {
             debug!("No completion selected and no suggestion to accept");
         }
@@ -298,7 +328,7 @@ async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<bool> {
 
     // Force a redraw after completion to update the display
     repl.start_completion = true;
-    Ok(completion_handled)
+    Ok(ReplControlFlow::Continue)
 }
 
 async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
@@ -854,7 +884,10 @@ async fn handle_macro_record(repl: &mut Repl<'_>) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Result<()> {
+pub(crate) async fn handle_key_event(
+    repl: &mut Repl<'_>,
+    ev: &KeyEvent,
+) -> Result<ReplControlFlow> {
     // DEBUG: Log all key events to trace the issue
     debug!(
         "KEY_EVENT_RECEIVED: code={:?}, modifiers={:?}, kind={:?}",
@@ -876,7 +909,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
     // Handle Ctrl-x prefix
     if matches!((ev.code, ev.modifiers), (KeyCode::Char('x'), CTRL)) {
         repl.ctrl_x_pressed = true;
-        return Ok(());
+        return Ok(ReplControlFlow::Continue);
     }
 
     // If Ctrl-x was pressed, check for secondary key
@@ -895,11 +928,11 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
                     repl.print_prompt(&mut renderer);
                     repl.print_input(&mut renderer, true, true);
                     renderer.flush()?;
-                    return Ok(());
+                    return Ok(ReplControlFlow::Continue);
                 }
                 Err(e) => {
                     warn!("Failed to open editor: {}", e);
-                    return Ok(());
+                    return Ok(ReplControlFlow::Continue);
                 }
             }
         }
@@ -940,7 +973,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             let mut renderer = TerminalRenderer::new();
             repl.move_cursor_relative(&mut renderer, prev_cursor_disp, new_cursor_disp);
             renderer.flush().ok();
-            return Ok(());
+            return Ok(ReplControlFlow::Continue);
         }
         KeyAction::CursorToEnd => {
             repl.input.move_to_end();
@@ -948,7 +981,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             let mut renderer = TerminalRenderer::new();
             repl.move_cursor_relative(&mut renderer, prev_cursor_disp, new_cursor_disp);
             renderer.flush().ok();
-            return Ok(());
+            return Ok(ReplControlFlow::Continue);
         }
         KeyAction::DeleteWordBackward => {
             repl.input.delete_word_backward();
@@ -969,7 +1002,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             handle_history_next(repl);
         }
         KeyAction::HistorySearch => {
-            repl.select_history();
+            return repl.select_history();
         }
         KeyAction::AcceptSuggestionWord => {
             if repl.accept_suggestion(SuggestionAcceptMode::Word) {
@@ -1008,10 +1041,11 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
                 let new_disp = repl.prompt_mark_width + repl.input.cursor_display_width();
                 repl.move_cursor_relative(&mut renderer, prev_cursor_disp, new_disp);
                 queue!(renderer, cursor::Show).ok();
+                queue!(renderer, cursor::Show).ok();
                 renderer.flush().ok();
-                return Ok(());
+                return Ok(ReplControlFlow::Continue);
             } else {
-                return Ok(());
+                return Ok(ReplControlFlow::Continue);
             }
         }
         KeyAction::CursorRight => {
@@ -1024,9 +1058,9 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
                 repl.move_cursor_relative(&mut renderer, prev_cursor_disp, new_disp);
                 queue!(renderer, cursor::Show).ok();
                 renderer.flush().ok();
-                return Ok(());
+                return Ok(ReplControlFlow::Continue);
             } else {
-                return Ok(());
+                return Ok(ReplControlFlow::Continue);
             }
         }
         KeyAction::CursorWordLeft => {
@@ -1038,7 +1072,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             repl.move_cursor_relative(&mut renderer, prev_cursor_disp, new_disp);
             queue!(renderer, cursor::Show).ok();
             renderer.flush().ok();
-            return Ok(());
+            return Ok(ReplControlFlow::Continue);
         }
         KeyAction::CursorWordRight => {
             repl.input.move_word_right();
@@ -1049,7 +1083,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             repl.move_cursor_relative(&mut renderer, prev_cursor_disp, new_disp);
             queue!(renderer, cursor::Show).ok();
             renderer.flush().ok();
-            return Ok(());
+            return Ok(ReplControlFlow::Continue);
         }
         KeyAction::ExpandAbbreviationAndInsertSpace => {
             if let Some(word) = repl.input.get_current_word_for_abbr()
@@ -1087,7 +1121,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             if let Err(e) = renderer.flush() {
                 warn!("Failed to flush renderer: {}", e);
             }
-            return Ok(());
+            return Ok(ReplControlFlow::Continue);
         }
         KeyAction::InsertChar(ch) => {
             repl.input.insert(ch);
@@ -1121,11 +1155,12 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             // Replace Smart Git Commit logic with "aic" command execution
             repl.input.reset("aic".to_string());
             handle_execute(repl).await?;
-            return Ok(());
+            return Ok(ReplControlFlow::Continue);
         }
 
         KeyAction::AiDiagnose => {
-            return handle_ai_diagnose(repl).await;
+            handle_ai_diagnose(repl).await?;
+            return Ok(ReplControlFlow::Continue);
         }
         KeyAction::ForceAiSuggestion => {
             let mut renderer = TerminalRenderer::new();
@@ -1133,24 +1168,27 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             renderer.flush().ok();
             repl.force_ai_suggestion().await;
         }
-        KeyAction::TriggerCompletion => {
-            if handle_trigger_completion(repl).await? {
+        KeyAction::TriggerCompletion => match handle_trigger_completion(repl).await? {
+            ReplControlFlow::Continue => {
                 reset_completion = true;
             }
-        }
+            ReplControlFlow::RunInteractive(f) => {
+                return Ok(ReplControlFlow::RunInteractive(f));
+            }
+        },
         KeyAction::Execute => {
             handle_execute(repl).await?;
-            return Ok(());
+            return Ok(ReplControlFlow::Continue);
         }
         KeyAction::ExecuteBackground => {
             handle_execute_background(repl).await?;
-            return Ok(());
+            return Ok(ReplControlFlow::Continue);
         }
         KeyAction::OpenCommandPalette => {
             // Disable raw mode so Skim can handle terminal state correctly
             disable_raw_mode().ok();
 
-            CommandPalette::run(repl.shell, repl.input.as_str())?;
+            CommandPalette::run(repl.shell, repl.input.as_str()).await?;
 
             // Re-enable raw mode for the shell
             enable_raw_mode().ok();
@@ -1158,7 +1196,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             let mut renderer = TerminalRenderer::new();
             repl.print_prompt(&mut renderer);
             renderer.flush().ok();
-            return Ok(());
+            return Ok(ReplControlFlow::Continue);
         }
         KeyAction::AcceptCompletion => {
             if let Some(comp) = &repl.input.completion.take() {
@@ -1167,7 +1205,8 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             repl.completion.clear();
         }
         KeyAction::Interrupt => {
-            return handle_interrupt(repl);
+            handle_interrupt(repl)?;
+            return Ok(ReplControlFlow::Continue);
         }
         KeyAction::ClearScreen => {
             let mut renderer = TerminalRenderer::new();
@@ -1176,7 +1215,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
             renderer.flush().ok();
             repl.input.clear();
             repl.suggestion_manager.clear();
-            return Ok(());
+            return Ok(ReplControlFlow::Continue);
         }
         KeyAction::Paste => {
             if let Ok(mut clipboard) = Clipboard::new()
@@ -1194,7 +1233,7 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
                 repl.toggle_sudo().await?;
                 repl.esc_state.reset();
             }
-            return Ok(());
+            return Ok(ReplControlFlow::Continue);
         }
         KeyAction::CancelCompletion => {
             if repl.input.completion.is_some() || repl.suggestion_manager.active.is_some() {
@@ -1217,5 +1256,5 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
     }
     // Note: For cursor-only movements (redraw=false), cursor positioning
     // is handled directly in the key event handlers to avoid full redraw
-    Ok(())
+    Ok(ReplControlFlow::Continue)
 }

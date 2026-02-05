@@ -19,7 +19,7 @@ use crossterm::cursor::{self, MoveLeft};
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, EventStream, KeyEvent};
 use crossterm::queue;
 use crossterm::style::{Color, Print, ResetColor, Stylize};
-use crossterm::terminal::{self, Clear, ClearType, enable_raw_mode};
+use crossterm::terminal::{self, Clear, ClearType, disable_raw_mode, enable_raw_mode};
 
 use dsh_builtin::execute_chat_message;
 use dsh_openai::{ChatGptClient, OpenAiConfig};
@@ -467,7 +467,7 @@ impl<'a> Repl<'a> {
         handler::check_background_jobs(self, output).await
     }
 
-    pub(crate) async fn handle_event(&mut self, ev: ShellEvent) -> Result<()> {
+    pub(crate) async fn handle_event(&mut self, ev: ShellEvent) -> Result<ReplControlFlow> {
         handler::handle_event(self, ev).await
     }
 
@@ -475,7 +475,7 @@ impl<'a> Repl<'a> {
         handler::handle_paste_event(self, text).await
     }
 
-    pub(crate) async fn handle_key_event(&mut self, ev: &KeyEvent) -> Result<()> {
+    pub(crate) async fn handle_key_event(&mut self, ev: &KeyEvent) -> Result<ReplControlFlow> {
         let result = handler::handle_key_event(self, ev).await;
         // Mark explanation as dirty for debounced refresh
         self.explanation_dirty = true;
@@ -1692,15 +1692,41 @@ impl<'a> Repl<'a> {
                     let old_last_time = self.last_command_time;
                     match maybe_event {
                         Some(Ok(event)) => {
-                            // match event {
-                            //     Event::Key(KeyEvent { code: KeyCode::Enter, .. }) => {
-                            //         start_time = Some(Instant::now());
-                            //     }
-                            //     _ => {}
-                            // }
-                            if let Err(err) = self.handle_event(ShellEvent::Input(event)).await{
-                                self.shell.print_error(format!("Error: {err:?}\r"));
-                                break;
+                            match self.handle_event(ShellEvent::Input(event)).await {
+                                Ok(ReplControlFlow::Continue) => {
+                                    // Continue loop
+                                }
+                                Ok(ReplControlFlow::RunInteractive(closure)) => {
+                                    // Drop reader to release stdin lock
+                                    drop(reader);
+
+                                    // Disable raw mode so Skim/interactive command controls terminal
+                                    disable_raw_mode().ok();
+
+                                    // Execute the interactive closure
+                                    if let Err(e) = closure() {
+                                         self.shell.print_error(format!("Interactive session failed: {}\r\n", e));
+                                    }
+
+                                    // Re-enable raw mode
+                                    enable_raw_mode().ok();
+
+                                    // Recreate reader
+                                    reader = EventStream::new();
+
+                                    // Redraw prompt
+                                    let mut renderer = TerminalRenderer::new();
+                                    self.print_prompt(&mut renderer);
+                                    // If we had input, we might want to reprint it?
+                                    // Skim usually returns a selection which updates input.
+                                    // If we are continuing with same input:
+                                    self.print_input(&mut renderer, true, true);
+                                    renderer.flush().ok();
+                                }
+                                Err(err) => {
+                                    self.shell.print_error(format!("Error: {err:?}\r"));
+                                    break;
+                                }
                             }
 
                             // Check for CWD change and trigger AI prefetch
@@ -1772,28 +1798,43 @@ impl<'a> Repl<'a> {
         Ok(())
     }
 
-    pub fn select_history(&mut self) {
+    pub fn select_history(&mut self) -> Result<ReplControlFlow> {
         let query = self.input.as_str();
         if let Some(ref mut history) = self.shell.cmd_history {
             if let Some(mut history) = history.try_lock() {
-                if let Some(val) = completion::select_item_with_skim(
-                    history
-                        .iter()
-                        .rev()
-                        .map(|h| completion::Candidate::Basic(h.entry.clone()))
-                        .collect(),
-                    Some(query),
-                ) {
-                    // Replace current input with the selected history command
-                    self.input.reset(val);
-                }
+                let items: Vec<completion::Candidate> = history
+                    .iter()
+                    .rev()
+                    .map(|h| completion::Candidate::Basic(h.entry.clone()))
+                    .collect();
+
+                let res = completion::select_item_with_skim(items, Some(query));
                 history.reset_index();
+
+                match res {
+                    completion::CompletionSelection::Selected(val) => {
+                        // Replace current input with the selected history command
+                        self.input.reset(val);
+                        return Ok(ReplControlFlow::Continue);
+                    }
+                    completion::CompletionSelection::Interactive(items, query) => {
+                        let query = query.unwrap_or_default();
+                        return Ok(ReplControlFlow::RunInteractive(Box::new(move || {
+                            use crate::completion::framework::SkimCompletionFramework;
+                            Ok(SkimCompletionFramework::run_with_skim(items, Some(query)))
+                        })));
+                    }
+                    completion::CompletionSelection::None => {
+                        return Ok(ReplControlFlow::Continue);
+                    }
+                }
             } else {
                 warn!(
                     "Failed to acquire command history lock for history selection - lock is busy"
                 );
             }
         }
+        Ok(ReplControlFlow::Continue)
     }
 
     fn command_is_valid(&self, word: &str) -> bool {

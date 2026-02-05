@@ -8,8 +8,11 @@ use crossterm::queue;
 use crossterm::style::Print;
 use crossterm::terminal::{Clear, ClearType};
 
+use async_trait::async_trait;
+
 pub struct CheckSafetyAction;
 
+#[async_trait(?Send)]
 impl Action for CheckSafetyAction {
     fn name(&self) -> &str {
         "Ai: Check Safety"
@@ -27,7 +30,7 @@ impl Action for CheckSafetyAction {
         "AI"
     }
 
-    fn execute(&self, shell: &mut Shell, input: &str) -> Result<()> {
+    async fn execute(&self, shell: &mut Shell, input: &str) -> Result<()> {
         if input.trim().is_empty() {
             println!("\r\nNo command to check.\r\n");
             return Ok(());
@@ -42,8 +45,7 @@ impl Action for CheckSafetyAction {
         queue!(renderer, Print("\r\n🔄 Processing...\r\n")).ok();
         renderer.flush().ok();
 
-        let result = tokio::runtime::Handle::current()
-            .block_on(async { ai_features::check_safety(service.as_ref(), input).await });
+        let result = ai_features::check_safety(service.as_ref(), input).await;
 
         match result {
             Ok(response) => {

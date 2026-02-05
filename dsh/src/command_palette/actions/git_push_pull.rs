@@ -1,11 +1,13 @@
 use super::super::Action;
 use crate::shell::Shell;
 use anyhow::Result;
+use async_trait::async_trait;
 use skim::prelude::*;
 use std::process::{Command, Stdio};
 
 pub struct GitPushPullAction;
 
+#[async_trait(?Send)]
 impl Action for GitPushPullAction {
     fn name(&self) -> &str {
         "Git Push/Pull"
@@ -20,7 +22,7 @@ impl Action for GitPushPullAction {
     fn category(&self) -> &str {
         "Git"
     }
-    fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
         // Get current branch
         let branch_output = Command::new("git")
             .args(["branch", "--show-current"])

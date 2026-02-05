@@ -5,6 +5,7 @@ use crate::completion::MAX_RESULT;
 use crate::completion::integrated::CompletionResult;
 use crate::errors::display_user_error;
 // Was missing? repl: &mut Repl might imply Input is visible via Repl, but Repl struct has input field.
+use crate::completion::display::Candidate;
 use crate::repl::Repl;
 use crate::repl::key_action::{KeyAction, KeyContext, determine_key_action};
 use crate::repl::render_transient_prompt_to;
@@ -20,7 +21,9 @@ use crossterm::style::Print;
 use crossterm::terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode};
 use dsh_types::Context;
 use nix::sys::termios::Termios;
+use skim::prelude::*;
 use std::io::Write;
+use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, warn};
 
@@ -741,6 +744,112 @@ fn handle_interrupt(repl: &mut Repl<'_>) -> Result<()> {
     }
 }
 
+async fn handle_macro_record(repl: &mut Repl<'_>) -> Result<()> {
+    let history_items = if let Some(history_arc) = &repl.shell.cmd_history {
+        let history = history_arc.lock();
+        history.get_recent_context(100)
+    } else {
+        return Ok(());
+    };
+
+    if history_items.is_empty() {
+        return Ok(());
+    }
+
+    // Disable raw mode for Skim
+    let _ = disable_raw_mode();
+
+    let options = SkimOptionsBuilder::default()
+        .multi(true)
+        .bind(vec!["Enter:accept".to_string()])
+        .prompt("Select commands for macro > ".to_string())
+        .build()
+        .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
+
+    let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
+    for item in history_items {
+        let _ = tx_item.send(vec![Arc::new(Candidate::Basic(item))]);
+    }
+    drop(tx_item);
+
+    let selected_items = Skim::run_with(options, Some(rx_item))
+        .map(|out| out.selected_items)
+        .unwrap_or_default();
+
+    // Re-enable raw mode
+    let _ = enable_raw_mode();
+
+    if selected_items.is_empty() {
+        return Ok(());
+    }
+
+    // Convert selected items back to strings
+    let commands: Vec<String> = selected_items
+        .iter()
+        .map(|item| item.output().to_string())
+        .collect();
+
+    // Prompt for macro name
+    let mut renderer = TerminalRenderer::new();
+    queue!(renderer, Print("\r\nMacro name: ")).ok();
+    renderer.flush().ok();
+
+    // Simple input reading (since we just re-enabled raw mode, we might need to handle it or just use `read_line` with raw mode disabled temporarily again?)
+    // Actually, asking for name is better done with `repl.input` if possible, but we are in a handler.
+    // Let's use a simple synchronous read with raw mode disabled.
+
+    let _ = disable_raw_mode();
+    let mut name = String::new();
+    std::io::stdin().read_line(&mut name)?;
+    let _ = enable_raw_mode();
+
+    let name = name.trim();
+    if name.is_empty() {
+        queue!(renderer, Print("\r\nMacro creation cancelled.\r\n")).ok();
+        repl.print_prompt(&mut renderer);
+        renderer.flush().ok();
+        return Ok(());
+    }
+
+    // Generate Lisp code
+    let lisp_code = crate::repl::macro_utils::generate_macro_lisp(name, &commands);
+
+    // Save to config.lisp
+    let config_path = crate::environment::get_config_file(crate::lisp::CONFIG_FILE)?;
+
+    // Append
+    use std::fs::OpenOptions;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&config_path)?;
+
+    writeln!(file, "{}", lisp_code)?;
+
+    // Evaluate
+    match repl.shell.lisp_engine.borrow().run(&lisp_code) {
+        Ok(_) => {
+            queue!(
+                renderer,
+                Print(format!("\r\nMacro '{}' saved and loaded.\r\n", name))
+            )
+            .ok();
+        }
+        Err(e) => {
+            queue!(
+                renderer,
+                Print(format!("\r\nMacro saved but failed to load: {}\r\n", e))
+            )
+            .ok();
+        }
+    }
+
+    repl.print_prompt(&mut renderer);
+    renderer.flush().ok();
+
+    Ok(())
+}
+
 pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Result<()> {
     // DEBUG: Log all key events to trace the issue
     debug!(
@@ -817,6 +926,9 @@ pub(crate) async fn handle_key_event(repl: &mut Repl<'_>, ev: &KeyEvent) -> Resu
 
     // Handle actions
     match action {
+        KeyAction::MacroRecord => {
+            handle_macro_record(repl).await?;
+        }
         KeyAction::CursorToBegin => {
             repl.input.move_to_begin();
             // Handle cursor-only movement without full redraw

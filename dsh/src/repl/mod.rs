@@ -54,6 +54,7 @@ use suggestion_manager::*;
 pub mod confirmation;
 mod handler;
 pub mod key_action;
+pub mod macro_utils;
 
 /// AI Quick Actions available to the user
 #[derive(Clone)]

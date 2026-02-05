@@ -48,12 +48,12 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
 
     // Check if there's only one candidate - if so, checkout directly without showing skim interface
     if branch_entries.len() == 1 {
-        let branch = &branch_entries[0];
+        let branch = extract_branch_name(&branch_entries[0]);
         debug!(
             "gco: only one branch candidate, checking out directly: {}",
             branch
         );
-        let args = vec!["checkout", branch];
+        let args = vec!["checkout", &branch];
         match Command::new("git").args(&args).output() {
             Ok(output) => {
                 if !output.status.success() {
@@ -78,35 +78,40 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
         return ExitStatus::ExitedWith(0);
     }
 
-    let options = SkimOptionsBuilder::default()
-        .bind(vec!["Enter:accept".to_string()])
-        .preview(Some(
-            "git log --oneline --graph --color=always -n 20 {}".to_string(),
-        ))
-        // .preview_window(Some("right:60%")) // Disabled until PreviewLayout is known
-        .build()
-        .unwrap();
+    let selected = std::thread::spawn(move || {
+        let options = SkimOptionsBuilder::default()
+            .bind(vec!["Enter:accept".to_string()])
+            .preview(Some(
+                "git log --oneline --graph --color=always -n 20 {}".to_string(),
+            ))
+            // .preview_window(Some("right:60%")) // Disabled until PreviewLayout is known
+            .build()
+            .unwrap();
 
-    let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
-    for branch in branch_entries {
-        let item = Arc::new(StringItem(branch));
-        let _ = tx_item.send(vec![item]);
-    }
-    drop(tx_item);
+        let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
+        for branch in branch_entries {
+            let item = Arc::new(StringItem(branch));
+            let _ = tx_item.send(vec![item]);
+        }
+        drop(tx_item);
 
-    let selected = Skim::run_with(options, Some(rx_item))
-        .ok()
-        .map(|out| {
-            if out.is_abort {
-                Vec::new()
-            } else {
-                out.selected_items
-            }
-        })
-        .unwrap_or_default();
+        Skim::run_with(options, Some(rx_item))
+            .ok()
+            .map(|out| {
+                if out.is_abort {
+                    Vec::new()
+                } else {
+                    out.selected_items
+                }
+            })
+            .unwrap_or_default()
+    })
+    .join()
+    .unwrap_or_default();
 
     if !selected.is_empty() {
         let val = selected[0].output().to_string();
+        let val = extract_branch_name(&val);
         debug!("selected branch {:?}", val);
         let args = vec!["checkout", &val];
         match Command::new("git").args(&args).output() {
@@ -168,4 +173,55 @@ fn get_git_branches() -> Result<Vec<String>, String> {
         .collect();
 
     Ok(entries)
+}
+
+fn extract_branch_name(branch: &str) -> String {
+    let branch = branch.trim();
+
+    // Handle "remotes/origin/HEAD -> origin/main" case
+    if let Some(arrow_idx) = branch.find(" -> ") {
+        // Use the part after " -> " which is usually "origin/main"
+        let target = &branch[arrow_idx + 4..];
+        // Now parse "origin/main" to "main"
+        if let Some((_remote, local)) = target.split_once('/') {
+            return local.to_string();
+        }
+        return target.to_string();
+    }
+
+    if let Some(stripped) = branch.strip_prefix("remotes/") {
+        let parts: Vec<&str> = stripped.splitn(2, '/').collect();
+        if parts.len() == 2 {
+            return parts[1].to_string();
+        }
+    }
+    branch.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_branch_name() {
+        assert_eq!(extract_branch_name("master"), "master");
+        assert_eq!(extract_branch_name("  master  "), "master");
+        assert_eq!(extract_branch_name("remotes/origin/master"), "master");
+        assert_eq!(
+            extract_branch_name("remotes/origin/feature/foo"),
+            "feature/foo"
+        );
+        assert_eq!(extract_branch_name("remotes/upstream/v1.0"), "v1.0");
+        assert_eq!(extract_branch_name("feature/bar"), "feature/bar");
+
+        // Symref handling
+        assert_eq!(
+            extract_branch_name("remotes/origin/HEAD -> origin/main"),
+            "main"
+        );
+        assert_eq!(
+            extract_branch_name("remotes/origin/HEAD -> origin/feature/bar"),
+            "feature/bar"
+        );
+    }
 }

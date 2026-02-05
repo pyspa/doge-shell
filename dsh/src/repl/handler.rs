@@ -759,35 +759,39 @@ async fn handle_macro_record(repl: &mut Repl<'_>) -> Result<()> {
     // Disable raw mode for Skim
     let _ = disable_raw_mode();
 
-    let options = SkimOptionsBuilder::default()
-        .multi(true)
-        .bind(vec!["Enter:accept".to_string()])
-        .prompt("Select commands for macro > ".to_string())
-        .build()
-        .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
+    // Run Skim in a blocking task to avoid runtime conflict
+    let commands = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<String>> {
+        let options = SkimOptionsBuilder::default()
+            .multi(true)
+            .bind(vec!["Enter:accept".to_string()])
+            .prompt("Select commands for macro > ".to_string())
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 
-    let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
-    for item in history_items {
-        let _ = tx_item.send(vec![Arc::new(Candidate::Basic(item))]);
-    }
-    drop(tx_item);
+        let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
+        for item in history_items {
+            let _ = tx_item.send(vec![Arc::new(Candidate::Basic(item))]);
+        }
+        drop(tx_item);
 
-    let selected_items = Skim::run_with(options, Some(rx_item))
-        .map(|out| out.selected_items)
-        .unwrap_or_default();
+        let selected_items = Skim::run_with(options, Some(rx_item))
+            .map(|out| out.selected_items)
+            .unwrap_or_default();
+
+        // Convert selected items back to strings inside the blocking task
+        Ok(selected_items
+            .iter()
+            .map(|item| item.output().to_string())
+            .collect())
+    })
+    .await??;
 
     // Re-enable raw mode
     let _ = enable_raw_mode();
 
-    if selected_items.is_empty() {
+    if commands.is_empty() {
         return Ok(());
     }
-
-    // Convert selected items back to strings
-    let commands: Vec<String> = selected_items
-        .iter()
-        .map(|item| item.output().to_string())
-        .collect();
 
     // Prompt for macro name
     let mut renderer = TerminalRenderer::new();

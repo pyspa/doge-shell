@@ -75,8 +75,8 @@ impl SafetyGuard {
         guard.register_checker("apt-get", Self::check_package_manager);
         guard.register_checker("yum", Self::check_package_manager);
         guard.register_checker("brew", Self::check_package_manager);
-        guard.register_checker("systemctl", Self::check_system_modification);
-        guard.register_checker("service", Self::check_system_modification);
+        //guard.register_checker("systemctl", Self::check_system_modification);
+        //guard.register_checker("service", Self::check_system_modification);
 
         guard
     }

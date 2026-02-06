@@ -69,19 +69,6 @@ pub(crate) struct InputAnalysis {
 
 /// Format directory entries for AI context
 /// This is a pure function for testability
-pub fn format_directory_listing(entries: Vec<(String, bool)>) -> String {
-    let mut files: Vec<String> = entries
-        .into_iter()
-        .take(30) // Limit to avoid token overflow
-        .map(
-            |(name, is_dir)| {
-                if is_dir { format!("{}/", name) } else { name }
-            },
-        )
-        .collect();
-    files.sort();
-    files.join("\n")
-}
 
 #[derive(Debug)]
 pub enum AiEvent {
@@ -1948,36 +1935,6 @@ mod tests {
         );
 
         drop(repl);
-    }
-
-    #[test]
-    fn test_format_directory_listing_basic() {
-        let entries = vec![
-            ("file1.txt".to_string(), false),
-            ("dir1".to_string(), true),
-            ("file2.rs".to_string(), false),
-        ];
-        let result = format_directory_listing(entries);
-        // Should be sorted and directories should have trailing /
-        assert_eq!(result, "dir1/\nfile1.txt\nfile2.rs");
-    }
-
-    #[test]
-    fn test_format_directory_listing_limit() {
-        // Create more than 30 entries
-        let entries: Vec<(String, bool)> = (0..50)
-            .map(|i| (format!("file{:02}.txt", i), false))
-            .collect();
-        let result = format_directory_listing(entries);
-        // Should be limited to 30 entries
-        assert_eq!(result.lines().count(), 30);
-    }
-
-    #[test]
-    fn test_format_directory_listing_empty() {
-        let entries: Vec<(String, bool)> = vec![];
-        let result = format_directory_listing(entries);
-        assert_eq!(result, "");
     }
 }
 

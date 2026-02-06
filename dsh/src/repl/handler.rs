@@ -257,10 +257,13 @@ async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<ReplControlFlo
                 let candidates = items;
                 return Ok(ReplControlFlow::RunInteractive(Box::new(move || {
                     use crate::completion::framework::SkimCompletionFramework;
-                    Ok(SkimCompletionFramework::run_with_skim(
-                        candidates,
-                        Some(query),
-                    ))
+                    let result = SkimCompletionFramework::run_with_skim(candidates, Some(query));
+                    Ok(
+                        result.map(|text| crate::repl::state::InteractiveAction::Patch {
+                            text,
+                            backspace_count: removal_len.unwrap_or(0),
+                        }),
+                    )
                 })));
             }
             completion::CompletionSelection::None => {
@@ -305,7 +308,13 @@ async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<ReplControlFlo
             let query = query.unwrap_or_default();
             return Ok(ReplControlFlow::RunInteractive(Box::new(move || {
                 use crate::completion::framework::SkimCompletionFramework;
-                Ok(SkimCompletionFramework::run_with_skim(items, Some(query)))
+                let result = SkimCompletionFramework::run_with_skim(items, Some(query));
+                Ok(
+                    result.map(|text| crate::repl::state::InteractiveAction::Patch {
+                        text,
+                        backspace_count: removal_len.unwrap_or(0),
+                    }),
+                )
             })));
         }
         completion::CompletionSelection::None => {

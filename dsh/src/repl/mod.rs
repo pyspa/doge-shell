@@ -1512,8 +1512,33 @@ impl<'a> Repl<'a> {
                                     disable_raw_mode().ok();
 
                                     // Execute the interactive closure
-                                    if let Err(e) = closure() {
-                                         self.shell.print_error(format!("Interactive session failed: {}\r\n", e));
+                                    match closure() {
+                                        Ok(Some(action)) => {
+                                            use crate::repl::state::InteractiveAction;
+                                            match action {
+                                                InteractiveAction::Patch { backspace_count, text } => {
+                                                    // Apply the interactive patch
+                                                    if backspace_count > 0 {
+                                                        self.input.backspacen(backspace_count);
+                                                    }
+                                                    self.input.insert_str(&text);
+                                                },
+                                                InteractiveAction::ReplaceAll { text } => {
+                                                    // Apply full replacement
+                                                    self.input.reset(text);
+                                                }
+                                            }
+
+                                            // Trigger validation/highlighting
+                                            self.input.completion = None;
+                                            self.input.color_ranges = None;
+                                        }
+                                        Ok(None) => {
+                                            // Canceled
+                                        }
+                                        Err(e) => {
+                                            self.shell.print_error(format!("Interactive session failed: {}\r\n", e));
+                                        }
                                     }
 
                                     // Re-enable raw mode
@@ -1525,9 +1550,7 @@ impl<'a> Repl<'a> {
                                     // Redraw prompt
                                     let mut renderer = TerminalRenderer::new();
                                     self.print_prompt(&mut renderer);
-                                    // If we had input, we might want to reprint it?
-                                    // Skim usually returns a selection which updates input.
-                                    // If we are continuing with same input:
+                                    // Reprint input with updates
                                     self.print_input(&mut renderer, true, true);
                                     renderer.flush().ok();
                                 }
@@ -1629,7 +1652,10 @@ impl<'a> Repl<'a> {
                         let query = query.unwrap_or_default();
                         return Ok(ReplControlFlow::RunInteractive(Box::new(move || {
                             use crate::completion::framework::SkimCompletionFramework;
-                            Ok(SkimCompletionFramework::run_with_skim(items, Some(query)))
+                            let result = SkimCompletionFramework::run_with_skim(items, Some(query));
+                            Ok(result.map(|text| {
+                                crate::repl::state::InteractiveAction::ReplaceAll { text }
+                            }))
                         })));
                     }
                     completion::CompletionSelection::None => {
@@ -2254,3 +2280,4 @@ async fn test_analyze_input_suffix_calculation() {
         }
     }
 }
+mod state_tests;

@@ -734,6 +734,18 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     - **Content Inspection**: For pipe operations, you can inspect the captured output (preview shown on stderr) before allowing it to pass to the next command.
     - **Confirmation**: Required for execution.
 
+13. **AI Response Language**:
+    Configure the language for AI chat responses.
+
+    ```lisp
+    (vset "AI_MESSAGE_LANG" "Japanese")
+    ```
+
+    Or via environment variable:
+    ```bash
+    export AI_MESSAGE_LANG="Japanese"
+    ```
+
 
 ## 📁 Project Structure
 

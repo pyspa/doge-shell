@@ -12,6 +12,8 @@ use std::time::Duration;
 const PROMPT_KEY: &str = "CHAT_PROMPT";
 /// Primary configuration key for storing the default model
 const MODEL_KEY: &str = "AI_CHAT_MODEL";
+/// Environment variable key for storing the AI response language
+const LANGUAGE_KEY: &str = "AI_MESSAGE_LANG";
 /// Maximum number of iterations to satisfy tool calls before aborting
 const MAX_TOOL_ITERATIONS: usize = 100;
 /// Threshold of characters in the buffer to trigger summarization (~3k-12k tokens)
@@ -252,6 +254,7 @@ pub fn execute_chat_message(
     match ChatGptClient::try_from_config(&config) {
         Ok(client) => {
             let prompt = proxy.get_var(PROMPT_KEY);
+            let language = proxy.get_var(LANGUAGE_KEY);
             let model_override = model_override.map(|model| model.to_string());
             let mcp_manager = McpManager::load_blocking(proxy.list_mcp_servers());
 
@@ -259,6 +262,7 @@ pub fn execute_chat_message(
                 &client,
                 message,
                 prompt,
+                language,
                 Some(0.1),
                 model_override,
                 &mcp_manager,
@@ -347,6 +351,7 @@ fn chat_with_tools(
     client: &ChatGptClient,
     user_input: &str,
     operator_prompt: Option<String>,
+    language: Option<String>,
     temperature: Option<f64>,
     model_override: Option<String>,
     mcp_manager: &McpManager,
@@ -355,7 +360,7 @@ fn chat_with_tools(
     // Build System Prompt (fixed for the session)
     let system_prompt = json!({
         "role": "system",
-        "content": build_system_prompt(operator_prompt, mcp_manager),
+        "content": build_system_prompt(operator_prompt, language, mcp_manager),
     });
 
     // First User Input (Pinned - the original goal)
@@ -498,7 +503,11 @@ impl Drop for SpinnerGuard {
     }
 }
 
-fn build_system_prompt(operator_prompt: Option<String>, mcp_manager: &McpManager) -> String {
+fn build_system_prompt(
+    operator_prompt: Option<String>,
+    language: Option<String>,
+    mcp_manager: &McpManager,
+) -> String {
     let mut base = TOOL_SYSTEM_PROMPT.to_string();
 
     let skills_manager = SkillsManager::new();
@@ -513,7 +522,7 @@ fn build_system_prompt(operator_prompt: Option<String>, mcp_manager: &McpManager
         base.push_str(&fragment);
     }
 
-    match operator_prompt.and_then(|p| {
+    if let Some(extra) = operator_prompt.and_then(|p| {
         let trimmed = p.trim();
         if trimmed.is_empty() {
             None
@@ -521,13 +530,20 @@ fn build_system_prompt(operator_prompt: Option<String>, mcp_manager: &McpManager
             Some(trimmed.to_string())
         }
     }) {
-        Some(extra) => {
-            base.push_str("\n\nAdditional operator instructions:\n");
-            base.push_str(&extra);
-            base
-        }
-        None => base,
+        base.push_str("\n\nAdditional operator instructions:\n");
+        base.push_str(&extra);
     }
+
+    if let Some(lang) = language {
+        let trimmed = lang.trim();
+        if !trimmed.is_empty() {
+            base.push_str("\n\nIMPORTANT: You MUST respond in ");
+            base.push_str(trimmed);
+            base.push('.');
+        }
+    }
+
+    base
 }
 
 fn build_dynamic_context(proxy: &mut dyn ShellProxy) -> String {
@@ -744,5 +760,27 @@ mod tests {
         });
 
         assert_eq!(extract_message_content(&message), None);
+    }
+
+    #[test]
+    fn test_build_system_prompt_with_language() {
+        let mcp_manager = McpManager::load_blocking(vec![]);
+
+        // Case 1: No language
+        let prompt_no_lang = build_system_prompt(None, None, &mcp_manager);
+        assert!(!prompt_no_lang.contains("MUST respond in"));
+
+        // Case 2: With language
+        let prompt_lang = build_system_prompt(None, Some("Japanese".to_string()), &mcp_manager);
+        assert!(prompt_lang.contains("IMPORTANT: You MUST respond in Japanese."));
+
+        // Case 3: With language and operator prompt
+        let prompt_mixed = build_system_prompt(
+            Some("Be polite".to_string()),
+            Some("French".to_string()),
+            &mcp_manager,
+        );
+        assert!(prompt_mixed.contains("Additional operator instructions:\nBe polite"));
+        assert!(prompt_mixed.contains("IMPORTANT: You MUST respond in French."));
     }
 }

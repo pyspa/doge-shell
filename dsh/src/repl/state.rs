@@ -9,9 +9,20 @@ pub enum ShellEvent {
     ScreenResized,
 }
 
+#[derive(Debug)]
+pub enum InteractiveAction {
+    Patch {
+        backspace_count: usize,
+        text: String,
+    },
+    ReplaceAll {
+        text: String,
+    },
+}
+
 pub enum ReplControlFlow {
     Continue,
-    RunInteractive(Box<dyn FnOnce() -> anyhow::Result<Option<String>> + Send>),
+    RunInteractive(Box<dyn FnOnce() -> anyhow::Result<Option<InteractiveAction>> + Send>),
 }
 
 /// State management for detecting double key presses (Ctrl+C, Esc)

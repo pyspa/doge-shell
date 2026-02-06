@@ -6,4 +6,5 @@ pub mod process;
 pub mod script;
 pub mod signal;
 pub mod subcommand;
+pub mod system;
 pub mod user;

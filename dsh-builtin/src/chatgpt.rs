@@ -347,6 +347,7 @@ pub fn chat_model(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) 
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn chat_with_tools(
     client: &ChatGptClient,
     user_input: &str,

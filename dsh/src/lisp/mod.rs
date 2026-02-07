@@ -21,6 +21,8 @@ mod macros;
 mod mcp_tests;
 mod model;
 mod parser;
+pub mod stdlib;
+mod stdlib_tests;
 mod utils;
 
 pub const CONFIG_FILE: &str = "config.lisp";

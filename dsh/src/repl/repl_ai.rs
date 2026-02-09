@@ -114,7 +114,11 @@ impl<'a> Repl<'a> {
             }
         }
 
-        if let Some(extra) = self.completion_suggestion(current_input.as_str()) {
+        if let Some(extra) = super::completion::completion_suggestion(
+            &self.input,
+            current_input.as_str(),
+            &self.shell.environment,
+        ) {
             let duplicate = candidates
                 .iter()
                 .any(|state| state.full == extra.full && state.source == extra.source);

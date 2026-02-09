@@ -1,7 +1,8 @@
 use crate::ai_features::{self, AiService, LiveAiService};
 use crate::command_timing::{self, SharedCommandTiming};
 use crate::completion::integrated::IntegratedCompletionEngine;
-use crate::completion::{self, Completion};
+use crate::completion::{self as completion_lib, Completion};
+
 use crate::dirs;
 use crate::environment::Environment;
 use crate::history::FrecencyHistory;
@@ -11,7 +12,7 @@ use crate::lisp::{Symbol, Value};
 use crate::parser::{self, HighlightKind, Rule};
 use crate::prompt::Prompt;
 use crate::shell::{SHELL_TERMINAL, Shell};
-use crate::suggestion::{InputPreferences, SuggestionBackend, SuggestionSource, SuggestionState};
+use crate::suggestion::{InputPreferences, SuggestionBackend};
 use crate::terminal::renderer::TerminalRenderer;
 use anyhow::Context as _;
 use anyhow::Result;
@@ -30,7 +31,7 @@ use nix::unistd::getpid;
 use nix::unistd::tcsetpgrp;
 use parking_lot::Mutex as ParkingMutex;
 use parking_lot::RwLock;
-use pest::Span as PestSpan;
+
 use pest::iterators::Pairs;
 use std::io::Write;
 use std::os::fd::BorrowedFd;
@@ -42,8 +43,7 @@ use tracing::{debug, warn};
 
 const AI_SUGGESTION_REFRESH_MS: u64 = 300;
 const GIT_STATUS_THROTTLE_MS: u64 = 200;
-const MCP_FORM_SUGGESTIONS: &[&str] =
-    &["mcp-add-stdio", "mcp-add-http", "mcp-add-sse", "mcp-clear"];
+// MCP_FORM_SUGGESTIONS moved to completion.rs
 
 mod state;
 use state::*;
@@ -55,6 +55,7 @@ pub mod confirmation;
 mod handler;
 pub mod key_action;
 
+pub mod completion;
 pub mod macro_utils;
 mod repl_ai; // Extracted AI logic
 
@@ -154,7 +155,7 @@ impl<'a> Repl<'a> {
 
         // Initialize completion notifier channel
         let (completion_tx, completion_rx) = tokio::sync::mpsc::unbounded_channel();
-        crate::completion::set_completion_notifier(completion_tx);
+        completion_lib::set_completion_notifier(completion_tx);
 
         let current = std::env::current_dir().unwrap_or_else(|e| {
             warn!(
@@ -687,145 +688,6 @@ impl<'a> Repl<'a> {
         }
     }
 
-    fn completion_suggestion(&mut self, input: &str) -> Option<SuggestionState> {
-        if input.is_empty() || self.input.cursor() != self.input.len() {
-            return None;
-        }
-
-        if let Ok(words) = self.input.get_words()
-            && let Some(full) = self.word_based_completion(input, &words)
-        {
-            return Some(SuggestionState {
-                full,
-                source: SuggestionSource::Completion,
-            });
-        }
-
-        Self::mcp_form_completion(input).map(|full| SuggestionState {
-            full,
-            source: SuggestionSource::Completion,
-        })
-    }
-
-    fn word_based_completion(
-        &self,
-        input: &str,
-        words: &[(Rule, PestSpan<'_>, bool)],
-    ) -> Option<String> {
-        for (rule, span, current) in words {
-            if !current {
-                continue;
-            }
-            let word = span.as_str();
-            if word.is_empty() {
-                continue;
-            }
-            match rule {
-                Rule::argv0 => {
-                    if let Some(result) = self.complete_command_word(input, span, word) {
-                        return Some(result);
-                    }
-                }
-                Rule::args => {
-                    if let Some(result) = Self::complete_argument_word(input, span, word) {
-                        return Some(result);
-                    }
-                }
-                _ => {}
-            }
-        }
-        None
-    }
-
-    pub(crate) fn complete_command_word(
-        &self,
-        input: &str,
-        span: &PestSpan<'_>,
-        word: &str,
-    ) -> Option<String> {
-        let candidate = {
-            let env = self.shell.environment.read();
-            env.search(word)
-        };
-
-        if let Some(name) = candidate
-            && name.len() > word.len()
-        {
-            return Some(Self::replace_range(input, span.start(), span.end(), &name));
-        }
-
-        if let Ok(Some(path)) = completion::path_completion_prefix(word)
-            && dirs::is_dir(&path)
-            && path.len() > word.len()
-        {
-            return Some(Self::replace_range(input, span.start(), span.end(), &path));
-        }
-
-        None
-    }
-
-    pub(crate) fn complete_argument_word(
-        input: &str,
-        span: &PestSpan<'_>,
-        word: &str,
-    ) -> Option<String> {
-        let path = completion::path_completion_prefix(word).ok().flatten()?;
-        if path.len() <= word.len() || !path.starts_with(word) {
-            return None;
-        }
-        let suffix = &path[word.len()..];
-        if suffix.is_empty() {
-            return None;
-        }
-        let mut result = input.to_string();
-        result.insert_str(span.end(), suffix);
-        Some(result)
-    }
-
-    pub(crate) fn mcp_form_completion(input: &str) -> Option<String> {
-        let trimmed = input.trim_end();
-        if trimmed.is_empty() {
-            return None;
-        }
-        let token = Self::trailing_symbol(trimmed);
-        if token.is_empty() || !token.starts_with("mcp-") {
-            return None;
-        }
-        for candidate in MCP_FORM_SUGGESTIONS {
-            if candidate.starts_with(token) && candidate.len() > token.len() {
-                let suffix = &candidate[token.len()..];
-                let mut output = trimmed.to_string();
-                output.push_str(suffix);
-                if trimmed.len() < input.len() {
-                    output.push_str(&input[trimmed.len()..]);
-                }
-                return Some(output);
-            }
-        }
-        None
-    }
-
-    pub(crate) fn trailing_symbol(input: &str) -> &str {
-        let boundary = input
-            .rfind(|c: char| c.is_whitespace() || matches!(c, '(' | ')'))
-            .map(|idx| idx + 1)
-            .unwrap_or(0);
-        &input[boundary..]
-    }
-
-    pub(crate) fn replace_range(
-        input: &str,
-        start: usize,
-        end: usize,
-        replacement: &str,
-    ) -> String {
-        let mut result = String::with_capacity(input.len() + replacement.len());
-        result.push_str(&input[..start]);
-        result.push_str(replacement);
-        result.push_str(&input[end..]);
-        result
-    }
-
     pub(crate) fn highlight_result_to_ranges(
         &self,
         highlight: parser::HighlightResult,
@@ -913,7 +775,7 @@ impl<'a> Repl<'a> {
 
         let insert_chunk = match mode {
             SuggestionAcceptMode::Full => suffix.to_string(),
-            SuggestionAcceptMode::Word => match Self::next_word_chunk(suffix) {
+            SuggestionAcceptMode::Word => match completion::next_word_chunk(suffix) {
                 Some(chunk) => chunk,
                 None => return false,
             },
@@ -928,31 +790,6 @@ impl<'a> Repl<'a> {
         }
 
         true
-    }
-
-    pub(crate) fn next_word_chunk(suffix: &str) -> Option<String> {
-        if suffix.is_empty() {
-            return None;
-        }
-
-        let mut end = suffix.len();
-        let mut in_word = false;
-        for (idx, ch) in suffix.char_indices() {
-            if ch.is_whitespace() {
-                if in_word {
-                    end = idx + ch.len_utf8();
-                    break;
-                }
-            } else {
-                in_word = true;
-            }
-        }
-
-        if !in_word {
-            return Some(suffix.to_string());
-        }
-
-        Some(suffix[..end.min(suffix.len())].to_string())
     }
 
     fn learn_suggestion(&self, suggestion: &str) {
@@ -1040,7 +877,7 @@ impl<'a> Repl<'a> {
                                     completion_full = Some(file);
                                     break;
                                 } else if let Ok(Some(dir)) =
-                                    completion::path_completion_prefix(word)
+                                    completion_lib::path_completion_prefix(word)
                                     && dirs::is_dir(&dir)
                                 {
                                     if dir.len() >= input.len() && dir.starts_with(input) {
@@ -1055,7 +892,7 @@ impl<'a> Repl<'a> {
                             // Completion logic for arguments
                             if current
                                 && completion.is_none()
-                                && let Ok(Some(path)) = completion::path_completion_prefix(word)
+                                && let Ok(Some(path)) = completion_lib::path_completion_prefix(word)
                                 && path.len() >= word.len()
                                 && path.starts_with(word)
                             {
@@ -1090,7 +927,7 @@ impl<'a> Repl<'a> {
                         // Clean up quotes if present for path check
                         let clean_word = word.trim_matches(|c| c == '\'' || c == '"');
                         let path = std::path::Path::new(clean_word);
-                        if crate::completion::is_path_cached(path) {
+                        if completion_lib::is_path_cached(path) {
                             *kind = crate::input::ColorType::ValidPath;
                         }
                     }
@@ -1633,32 +1470,34 @@ impl<'a> Repl<'a> {
         let query = self.input.as_str();
         if let Some(ref mut history) = self.shell.cmd_history {
             if let Some(mut history) = history.try_lock() {
-                let items: Vec<completion::Candidate> = history
+                let items: Vec<completion_lib::Candidate> = history
                     .iter()
                     .rev()
-                    .map(|h| completion::Candidate::Basic(h.entry.clone()))
+                    .map(|h| completion_lib::Candidate::Basic(h.entry.clone()))
                     .collect();
 
-                let res = completion::select_item_with_skim(items, Some(query));
+                let res = completion_lib::select_item_with_skim(items, Some(query));
+
                 history.reset_index();
 
                 match res {
-                    completion::CompletionSelection::Selected(val) => {
+                    completion_lib::CompletionSelection::Selected(val) => {
                         // Replace current input with the selected history command
                         self.input.reset(val);
                         return Ok(ReplControlFlow::Continue);
                     }
-                    completion::CompletionSelection::Interactive(items, query) => {
+                    completion_lib::CompletionSelection::Interactive(items, query) => {
                         let query = query.unwrap_or_default();
                         return Ok(ReplControlFlow::RunInteractive(Box::new(move || {
-                            use crate::completion::framework::SkimCompletionFramework;
+                            use completion_lib::framework::SkimCompletionFramework;
+
                             let result = SkimCompletionFramework::run_with_skim(items, Some(query));
                             Ok(result.map(|text| {
                                 crate::repl::state::InteractiveAction::ReplaceAll { text }
                             }))
                         })));
                     }
-                    completion::CompletionSelection::None => {
+                    completion_lib::CompletionSelection::None => {
                         return Ok(ReplControlFlow::Continue);
                     }
                 }

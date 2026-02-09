@@ -13,14 +13,14 @@ fn init() {
 #[test]
 fn test_new() {
     init();
-    let history = History::from_file("dsh_cmd_history").unwrap();
+    let history = History::from_file("dsh_cmd_history_new").unwrap();
     assert!(history.db.is_some());
 }
 
 #[test]
 fn test_open() -> anyhow::Result<()> {
     init();
-    let mut history = History::from_file("dsh_cmd_history")?;
+    let mut history = History::from_file("dsh_cmd_history_open")?;
     let history = history.open()?;
     history.close()
 }
@@ -60,7 +60,7 @@ fn test_write_batch() -> anyhow::Result<()> {
 #[test]
 fn test_load() -> anyhow::Result<()> {
     init();
-    let mut history = History::from_file("dsh_cmd_history")?;
+    let mut history = History::from_file("dsh_cmd_history_load")?;
     let s = history.load()?;
     tracing::debug!("loaded {:?}", s);
     Ok(())
@@ -73,7 +73,7 @@ fn test_back() -> anyhow::Result<()> {
     let cmd1 = "docker";
     let cmd2 = "docker-compose";
 
-    let mut history = History::from_file("dsh_cmd_history")?;
+    let mut history = History::from_file("dsh_cmd_history_back")?;
 
     let s = history.load()?;
     tracing::debug!("loaded {:?}", s);

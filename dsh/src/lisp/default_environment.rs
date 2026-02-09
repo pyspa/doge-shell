@@ -12,7 +12,7 @@ use cfg_if::cfg_if;
 
 use parking_lot::RwLock;
 use std::sync::Arc;
-use std::{cell::RefCell, collections::HashMap, convert::TryInto, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use skim::prelude::*;
 use std::borrow::Cow;

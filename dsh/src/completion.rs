@@ -26,6 +26,7 @@ pub mod command;
 pub mod context;
 pub mod display;
 
+pub mod errors;
 pub mod framework;
 pub mod generator;
 pub mod generators;

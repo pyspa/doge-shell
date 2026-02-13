@@ -395,7 +395,7 @@ impl IntegratedCompletionEngine {
                 }
             }
             // Add retry logic for lazy loading of inner commands
-            Err(crate::completion::generator::GeneratorError::MissingCommand(cmd)) => {
+            Err(super::generator::GeneratorError::MissingCommand(cmd)) => {
                 // Drop lock to load
                 drop(db_lock);
                 debug!("Generator requested lazy load for command: {}", cmd);

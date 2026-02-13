@@ -5,7 +5,7 @@ use crossterm::style::{Color, Print, ResetColor, SetForegroundColor};
 use crossterm::terminal::{Clear, ClearType};
 use crossterm::{cursor, execute, queue};
 use serde::{Deserialize, Serialize};
-use skim::prelude::SkimItem;
+use skim::SkimItem;
 use std::io::{Write, stdout};
 use tracing::debug;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};

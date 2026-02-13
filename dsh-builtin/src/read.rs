@@ -11,6 +11,11 @@ pub fn description() -> &'static str {
 /// Commonly used in shell scripts for interactive input collection
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     // Delegate input reading to the shell's input handling system
-    proxy.dispatch(ctx, "read", argv).unwrap();
-    ExitStatus::ExitedWith(0)
+    match proxy.dispatch(ctx, "read", argv) {
+        Ok(_) => ExitStatus::ExitedWith(0),
+        Err(e) => {
+            let _ = ctx.write_stderr(&format!("read: {}\n", e));
+            ExitStatus::ExitedWith(1)
+        }
+    }
 }

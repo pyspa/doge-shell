@@ -200,7 +200,15 @@ fn checkout_pr(ctx: &Context) -> ExitStatus {
         // .preview_window(Some("")) // Disable preview window
         .bind(vec!["Enter:accept".to_string()])
         .build()
-        .unwrap();
+        .map_err(|e| format!("failed to build skim options: {}", e));
+
+    let options = match options {
+        Ok(o) => o,
+        Err(e) => {
+            let _ = ctx.write_stderr(&format!("gpr: {}\n", e));
+            return ExitStatus::ExitedWith(1);
+        }
+    };
 
     let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
 

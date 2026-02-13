@@ -166,7 +166,7 @@ pub fn run(
             "Select processes to kill (TAB to select multiple, ENTER to kill)".to_string(),
         ))
         .build()
-        .unwrap();
+        .map_err(|e| anyhow::anyhow!("failed to build skim options: {}", e))?;
 
     let skim_items: Vec<Arc<dyn SkimItem>> = items
         .into_iter()

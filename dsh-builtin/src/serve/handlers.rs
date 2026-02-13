@@ -683,13 +683,16 @@ pub fn create_error_response(status: StatusCode, message: &str) -> Response<Body
 
 /// Add CORS headers to response
 pub fn add_cors_headers(headers: &mut HeaderMap) {
-    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        axum::http::HeaderValue::from_static("*"),
+    );
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_METHODS,
-        "GET, POST, PUT, DELETE, OPTIONS".parse().unwrap(),
+        axum::http::HeaderValue::from_static("GET, POST, PUT, DELETE, OPTIONS"),
     );
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_HEADERS,
-        "Content-Type, Authorization".parse().unwrap(),
+        axum::http::HeaderValue::from_static("Content-Type, Authorization"),
     );
 }

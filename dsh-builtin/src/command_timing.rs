@@ -441,7 +441,7 @@ mod tests {
     fn test_timing_file_path() {
         let path = get_timing_file_path();
         assert!(path.is_some());
-        let path = path.unwrap();
+        let path = path.expect("path should be some");
         assert!(path.to_string_lossy().contains("timing.json"));
     }
 }

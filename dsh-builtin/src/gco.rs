@@ -85,8 +85,12 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
                 "git log --oneline --graph --color=always -n 20 {}".to_string(),
             ))
             // .preview_window(Some("right:60%")) // Disabled until PreviewLayout is known
-            .build()
-            .unwrap();
+            .build();
+
+        let options = match options {
+            Ok(o) => o,
+            Err(_) => return Vec::new(),
+        };
 
         let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
         for branch in branch_entries {

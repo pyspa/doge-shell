@@ -181,7 +181,15 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
             "c:execute(gh notification view {+})".to_string(),
         ])
         .build()
-        .unwrap();
+        .map_err(|e| format!("failed to build skim options: {}", e));
+
+    let options = match options {
+        Ok(o) => o,
+        Err(e) => {
+            let _ = ctx.write_stderr(&format!("gh-notify: {}\n", e));
+            return ExitStatus::ExitedWith(1);
+        }
+    };
 
     let output = match Skim::run_with(options, Some(rx_item)).ok() {
         Some(out) => out,

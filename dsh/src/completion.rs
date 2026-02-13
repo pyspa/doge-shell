@@ -1,19 +1,13 @@
 use self::cache::CompletionCache;
 use self::framework::{CompletionFrameworkKind, CompletionRequest, select_with_framework_kind};
-use crate::dirs::is_executable;
 use crate::input::Input;
 use crate::lisp::Value;
 use crate::repl::Repl;
-use ::fuzzy_matcher::FuzzyMatcher;
-use ::fuzzy_matcher::skim::SkimMatcherV2;
-use anyhow::Result;
 use dsh_frecency::{ItemStats, SortMethod};
-use regex::Regex;
-use skim::prelude::*;
-use std::borrow::Cow;
+use skim::SkimItem;
 use std::collections::BTreeSet;
 use std::fs::read_dir;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -23,8 +17,12 @@ use tracing::warn;
 
 pub mod cache;
 pub mod command;
+pub mod commands;
 pub mod context;
 pub mod display;
+pub mod fuzzy;
+pub mod path;
+pub mod skim_adapter;
 
 pub mod errors;
 pub mod framework;
@@ -45,9 +43,13 @@ mod z_tests;
 
 // Re-export from completion module
 pub use crate::completion::command::CompletionType;
+pub use crate::completion::commands::{deduplicate_candidates, get_commands};
 pub use crate::completion::display::Candidate;
 pub use crate::completion::display::CompletionConfig;
 pub use crate::completion::framework::CompletionSelection;
+pub use crate::completion::fuzzy::fuzzy_match_score;
+pub use crate::completion::path::*;
+pub use crate::completion::skim_adapter::{replace_space, select_item_with_skim};
 
 pub const MAX_RESULT: usize = 500;
 
@@ -55,9 +57,6 @@ const LEGACY_CACHE_TTL_MS: u64 = 3000;
 
 static LEGACY_COMPLETION_CACHE: LazyLock<CompletionCache<Candidate>> =
     LazyLock::new(|| CompletionCache::new(Duration::from_millis(LEGACY_CACHE_TTL_MS)));
-
-static PATH_COMPLETION_CACHE: LazyLock<CompletionCache<Candidate>> =
-    LazyLock::new(|| CompletionCache::new(Duration::from_millis(2000)));
 
 #[derive(Debug, Clone)]
 pub struct AutoComplete {
@@ -160,420 +159,8 @@ impl Completion {
     }
 }
 
-/// Singleton fuzzy matcher to avoid repeated allocation
-static FUZZY_MATCHER: LazyLock<SkimMatcherV2> = LazyLock::new(SkimMatcherV2::default);
-
-pub fn fuzzy_match_score(choice: &str, pattern: &str) -> Option<i64> {
-    if pattern.is_empty() {
-        return Some(0);
-    }
-    FUZZY_MATCHER.fuzzy_match(choice, pattern)
-}
-
-pub fn path_completion_prefix(input: &str) -> Result<Option<String>> {
-    let pbuf = PathBuf::from(input);
-    let absolute = pbuf.is_absolute();
-    let file_name = pbuf.file_name();
-    if file_name.is_none() {
-        return Ok(None);
-    }
-    let parent = pbuf.parent();
-    let search = input.to_string();
-
-    let paths = if absolute {
-        let dir = if let Some(f) = parent {
-            f.to_string_lossy().to_string()
-        } else {
-            input.to_string()
-        };
-        path_completion_path(PathBuf::from(dir))?
-    } else if let Some(dir) = parent {
-        if dir.display().to_string().is_empty() {
-            // current dir
-            path_completion_path(PathBuf::from("."))?
-        } else {
-            path_completion_path(PathBuf::from(dir))?
-        }
-    } else {
-        path_completion()?
-    };
-
-    let mut best_match: Option<(String, i64)> = None;
-
-    for cand in paths.iter() {
-        if let Candidate::Path(path) = cand {
-            let path_str = path.to_string();
-
-            // Check full path match
-            if let Some(score) = fuzzy_match_score(&path_str, &search) {
-                match best_match {
-                    Some((_, best_score)) if score > best_score => {
-                        best_match = Some((path_str.clone(), score));
-                    }
-                    None => {
-                        best_match = Some((path_str.clone(), score));
-                    }
-                    _ => {}
-                }
-            }
-
-            // Check stripped path match (relative path)
-            if let Ok(striped) = PathBuf::from(path).strip_prefix("./") {
-                let striped_str = striped.display().to_string();
-                if let Some(score) = fuzzy_match_score(&striped_str, &search) {
-                    // Adjust score slightly to prefer shorter/exact matches or keep logic simple?
-                    // Verify if better than current best
-                    match best_match {
-                        Some((_, best_score)) if score > best_score => {
-                            best_match = Some((path_str[2..].to_string(), score));
-                        }
-                        None => {
-                            best_match = Some((path_str[2..].to_string(), score));
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(best_match.map(|(p, _)| p))
-}
-
-pub fn path_completion_prefix_strict(input: &str, only_dirs: bool) -> Result<Option<String>> {
-    let pbuf = PathBuf::from(input);
-    let absolute = pbuf.is_absolute();
-    let _file_name = pbuf.file_name();
-    let parent = pbuf.parent();
-
-    // If input is empty or just a dot, suggest from current dir?
-    // For ghost text, usually we have some letters.
-    // If input ends with '/', parent is the input itself.
-
-    let paths = if absolute {
-        let dir = if let Some(f) = parent {
-            if input.ends_with(std::path::MAIN_SEPARATOR) {
-                input.to_string()
-            } else {
-                f.to_string_lossy().to_string()
-            }
-        } else {
-            // Root?
-            input.to_string()
-        };
-        path_completion_path(PathBuf::from(dir))?
-    } else if let Some(dir) = parent {
-        let dir_str = dir.display().to_string();
-        if dir_str.is_empty() {
-            path_completion_path(PathBuf::from("."))?
-        } else {
-            // if input ends with separator, we should list contents of directory
-            if input.ends_with(std::path::MAIN_SEPARATOR) {
-                path_completion_path(PathBuf::from(input))?
-            } else {
-                path_completion_path(PathBuf::from(dir))?
-            }
-        }
-    } else {
-        path_completion()?
-    };
-
-    let mut candidates: Vec<String> = Vec::new();
-    let search = input.to_string();
-
-    for cand in paths.iter() {
-        if let Candidate::Path(path) = cand {
-            let path_str = path.to_string();
-
-            // Filter by prefix strictly
-            if !path_str.starts_with(&search) {
-                // Try handling "./" prefix if input doesn't have it but path does
-                if let Ok(stripped) = PathBuf::from(path).strip_prefix("./") {
-                    let stripped_str = stripped.display().to_string();
-                    if !stripped_str.starts_with(&search) {
-                        continue;
-                    }
-                    // Use striped version? path_completion_path returns relative paths often with ./ ?
-                    // Actually path_completion_path implementation joins with dir.
-                } else {
-                    continue;
-                }
-            }
-
-            // Filter for directories if requested
-            if only_dirs {
-                // Candidate::Path doesn't store is_dir directly?
-                // Wait, path_completion implementation adds trailing slash for dirs!
-                // Let's rely on trailing slash convention used in path_completion_path.
-                if !path_str.ends_with(std::path::MAIN_SEPARATOR) {
-                    continue;
-                }
-            }
-
-            candidates.push(path_str);
-        }
-    }
-
-    // Sort candidates
-    // 1. Length (shorter is better/more likely next step)
-    // 2. Alphabetical
-    // (Frecency integration is omitted for simplicity in this step, relying on default path order or sort)
-
-    candidates.sort_by(|a, b| {
-        let len_ord = a.len().cmp(&b.len());
-        if len_ord != std::cmp::Ordering::Equal {
-            len_ord
-        } else {
-            a.cmp(b)
-        }
-    });
-
-    Ok(candidates.first().cloned())
-}
-
-fn path_is_dir(path: &PathBuf) -> Result<bool> {
-    if let Ok(mut metadata) = path.metadata() {
-        if metadata.is_symlink() {
-            let link = std::fs::read_link(path)?;
-            let relative = link.is_relative();
-            if relative {
-                metadata = path.join(&link).metadata()?;
-            }
-        }
-        Ok(metadata.is_dir())
-    } else {
-        Ok(false)
-    }
-}
-
-pub fn path_completion() -> Result<Vec<Candidate>> {
-    let current_dir = std::env::current_dir()?;
-    path_completion_path(current_dir)
-}
-
-pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
-    let path_str = path.display().to_string();
-
-    // Check cache first
-    if let Some(hit) = PATH_COMPLETION_CACHE.lookup(&path_str) {
-        return Ok(hit.candidates);
-    }
-
-    #[cfg(test)]
-    {
-        // For tests, run synchronously to avoid "no reactor" panic and ensure results are returned immediately
-        let candidates = scan_dir_candidates(path.clone())?;
-        PATH_COMPLETION_CACHE.set(path_str, candidates.clone());
-        Ok(candidates)
-    }
-
-    #[cfg(not(test))]
-    {
-        // Check if pending to avoid duplicate loaded
-        if PATH_COMPLETION_CACHE.is_pending(&path_str) {
-            // If pending, return empty for now (UI will refresh when ready)
-            return Ok(Vec::new());
-        }
-
-        // Trigger background load
-        // Note: We need to clone path_str for the closure
-        let path_str_clone = path_str.clone();
-        let path_buf = path.clone();
-
-        PATH_COMPLETION_CACHE.mark_pending(path_str.clone());
-
-        // We assume we are running in a tokio runtime (dsh is tokio::main)
-        tokio::spawn(async move {
-            // Use spawn_blocking for IO-heavy directory scanning
-            let result = tokio::task::spawn_blocking(move || scan_dir_candidates(path_buf)).await;
-
-            match result {
-                Ok(Ok(candidates)) => {
-                    PATH_COMPLETION_CACHE.set(path_str_clone.clone(), candidates);
-                    notify_completion_update();
-                }
-                Ok(Err(e)) => {
-                    // Inner scan error
-                    warn!(
-                        "Background path completion failed for '{}': {}",
-                        path_str_clone, e
-                    );
-                }
-                Err(e) => {
-                    // JoinError
-                    warn!("Background task join error: {}", e);
-                }
-            }
-            PATH_COMPLETION_CACHE.clear_pending(&path_str_clone);
-        });
-
-        // Return empty immediately
-        Ok(Vec::new())
-    }
-}
-
-/// Synchronous variant of path_completion_path for explicit user actions (TAB completion).
-/// Always returns results immediately, either from cache or by scanning synchronously.
-pub fn path_completion_path_sync(path: PathBuf) -> Result<Vec<Candidate>> {
-    let path_str = path.display().to_string();
-
-    // Check cache first
-    if let Some(hit) = PATH_COMPLETION_CACHE.lookup(&path_str) {
-        return Ok(hit.candidates);
-    }
-
-    // Scan synchronously and cache
-    let candidates = scan_dir_candidates(path)?;
-    PATH_COMPLETION_CACHE.set(path_str, candidates.clone());
-    Ok(candidates)
-}
-
-/// Check if a path exists in the completion cache without triggering a background scan.
-/// This is used for syntax highlighting to avoid unnecessary I/O during input processing.
-pub fn is_path_cached(path: &Path) -> bool {
-    let parent = match path.parent() {
-        Some(p) if p.as_os_str().is_empty() => PathBuf::from("."),
-        Some(p) => p.to_path_buf(),
-        None => return false,
-    };
-
-    let parent_str = parent.display().to_string();
-
-    // Only check cache, don't trigger background load
-    if let Some(hit) = PATH_COMPLETION_CACHE.lookup(&parent_str) {
-        let path_str = path.display().to_string();
-        let search = path_str.trim_end_matches(std::path::MAIN_SEPARATOR);
-
-        for cand in hit.candidates {
-            if let Candidate::Path(p) = cand {
-                let p_clean = p.trim_end_matches(std::path::MAIN_SEPARATOR);
-                if p_clean == search {
-                    return true;
-                }
-            }
-        }
-    }
-
-    false
-}
-
-// Synchronous helper moved out for clarity and reuse in background task
-fn scan_dir_candidates(path: PathBuf) -> Result<Vec<Candidate>> {
-    let path_str = path.display().to_string();
-    let exp_str = shellexpand::tilde(&path_str).to_string();
-    let expand = path_str != exp_str;
-
-    let home = std::env::var("HOME")
-        .map(std::path::PathBuf::from)
-        .ok()
-        .ok_or_else(|| anyhow::Error::msg("HOME environment variable not set"))?;
-    let path = PathBuf::from(exp_str);
-
-    let dir = read_dir(&path)?;
-    let mut files: Vec<Candidate> = Vec::new();
-
-    for entry in dir.flatten() {
-        let entry_path = entry.path();
-        let is_dir = path_is_dir(&entry_path)?;
-        if expand {
-            if let Ok(part) = entry_path.strip_prefix(&home) {
-                let mut pb = PathBuf::new();
-                pb.push("~/");
-                pb.push(part);
-                let mut path = pb.display().to_string();
-                if is_dir {
-                    path += "/";
-                }
-                files.push(Candidate::Path(path));
-            }
-        } else {
-            let mut path = entry_path.display().to_string();
-            if is_dir {
-                path += "/";
-            }
-            files.push(Candidate::Path(path));
-        }
-    }
-    files.sort();
-    Ok(files)
-}
-
-impl SkimItem for Candidate {
-    fn output(&self) -> Cow<'_, str> {
-        match self {
-            Candidate::Item(x, _) => Cow::Borrowed(x),
-            Candidate::Path(p) => Cow::Borrowed(p),
-            Candidate::Basic(x) => Cow::Borrowed(x),
-            Candidate::Command { name, .. } => Cow::Borrowed(name),
-            Candidate::Option { name, .. } => Cow::Borrowed(name),
-            Candidate::File { path, .. } => Cow::Borrowed(path),
-            Candidate::GitBranch { name, .. } => Cow::Borrowed(name),
-            Candidate::History { command, .. } => Cow::Borrowed(command),
-            Candidate::Process { pid, .. } => Cow::Borrowed(pid),
-        }
-    }
-
-    fn text(&self) -> Cow<'_, str> {
-        match self {
-            Candidate::Item(x, y) => {
-                let desc = format!("{x:<30} {y}");
-                Cow::Owned(desc)
-            }
-            Candidate::Path(p) => Cow::Borrowed(p),
-            Candidate::Basic(x) => Cow::Borrowed(x),
-            Candidate::Command { name, description } => {
-                let icon = "⚡"; // Command icon
-                if description.is_empty() {
-                    Cow::Owned(format!("{icon} {name}"))
-                } else {
-                    Cow::Owned(format!("{icon} {name:<30} {description}"))
-                }
-            }
-            Candidate::Option { name, description } => {
-                let icon = "🔧"; // Option icon
-                if description.is_empty() {
-                    Cow::Owned(format!("{icon} {name}"))
-                } else {
-                    Cow::Owned(format!("{icon} {name:<30} {description}"))
-                }
-            }
-            Candidate::File { path, is_dir } => {
-                let type_indicator = if *is_dir { "/" } else { "" };
-                Cow::Owned(format!("{path}{type_indicator}"))
-            }
-            Candidate::GitBranch { name, is_current } => {
-                let indicator = if *is_current { " (current)" } else { "" };
-                Cow::Owned(format!("{name}{indicator}"))
-            }
-            Candidate::History {
-                command, frequency, ..
-            } => {
-                let desc = format!("{command:<30} used {frequency} times");
-                Cow::Owned(desc)
-            }
-            Candidate::Process { pid, command } => {
-                let icon = "🔧";
-                let desc = format!("{icon} {pid:<8} {command}");
-                Cow::Owned(desc)
-            }
-        }
-    }
-}
-
-pub fn select_item_with_skim(items: Vec<Candidate>, query: Option<&str>) -> CompletionSelection {
-    let (prompt_text, input_text) = get_prompt_and_input_for_completion();
-    select_completion_items_with_framework(
-        items,
-        query,
-        &prompt_text,
-        &input_text,
-        CompletionConfig::default(),
-        CompletionFrameworkKind::Skim,
-    )
-}
-
 // Helper function to get current prompt and input for completion display
-fn get_prompt_and_input_for_completion() -> (String, String) {
+pub(crate) fn get_prompt_and_input_for_completion() -> (String, String) {
     // For backward compatibility, return reasonable defaults
     // In practice, the main completion path should use the version with explicit parameters
     ("$ ".to_string(), "".to_string())
@@ -958,207 +545,6 @@ async fn collect_current_context_candidates(
     })
 }
 
-fn get_commands(paths: &Vec<String>, cmd: &str) -> Vec<Candidate> {
-    let mut list = Vec::new();
-    let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    if cmd.starts_with('/') {
-        let cmd_path = std::path::Path::new(cmd);
-        if cmd_path.exists() && cmd_path.is_file() {
-            // Extract filename for deduplication? Or just add?
-            // Absolute paths usually don't need dedupe against PATH commands by name unless we want to?
-            // Current logic treated them as "(command)".
-            // Let's keep it simple.
-            list.push(Candidate::Item(cmd.to_string(), "(command)".to_string()));
-        }
-    }
-    if cmd.starts_with("./") {
-        let cmd_path = std::path::Path::new(cmd);
-        if cmd_path.exists() && cmd_path.is_file() {
-            list.push(Candidate::Item(cmd.to_string(), "(command)".to_string()));
-        }
-    }
-
-    for path in paths {
-        get_executables_into(path, cmd, &mut list, &mut seen_names);
-    }
-
-    // No need to call deduplicate_candidates(list) here if we trust our seen_names logic for commands.
-    // However, deduplicate_candidates also handles file vs command priority.
-    // But get_commands ONLY produces commands.
-    // So we are safe.
-    list
-}
-
-fn get_executables_into(
-    dir: &str,
-    name: &str,
-    list: &mut Vec<Candidate>,
-    seen: &mut std::collections::HashSet<String>,
-) {
-    match read_dir(dir) {
-        Ok(entries) => {
-            // Optimization: Filter entries while iterating to avoid collecting all files in PATH
-            // (which can be thousands) before sorting.
-            // We can't easily sort if we stream directly to list.
-            // But sorting per-directory is less important than sorting the final result?
-            // Actually, we usually want the final list sorted.
-            // Existing logic sorted `candidates` from ONE directory.
-            // If we append unsorted, the final list might be unsorted.
-            // `select_completion_items` usually handles sorting via Skim or we might expect sorted input.
-            // Skim sorts. Inline completion might expect sorted?
-            // The existing `get_executables` returns a sorted list.
-            // But `get_commands` appends them in PATH order.
-            // So `list` in `get_commands` is blocked by PATH order (bin matches, then usr/bin matches).
-            // Within `bin`, they are sorted.
-
-            // Let's collect local candidates, sort them, then push unique ones to global list.
-
-            let mut local_candidates: Vec<String> = Vec::new();
-
-            for entry in entries.flatten() {
-                let file_name_os = entry.file_name();
-                let Some(file_name) = file_name_os.to_str() else {
-                    continue;
-                };
-
-                if fuzzy_match_score(file_name, name).is_none() {
-                    continue;
-                }
-
-                // Check seen
-                if seen.contains(file_name) {
-                    continue;
-                }
-
-                // Optimization: check file type from entry if possible
-                if let Ok(ft) = entry.file_type()
-                    && !ft.is_file()
-                    && !ft.is_symlink()
-                {
-                    continue;
-                }
-
-                if is_executable(&entry) {
-                    local_candidates.push(file_name.to_string());
-                }
-            }
-
-            local_candidates.sort();
-
-            for candle in local_candidates {
-                // Double check seen (though we checked before, but sorting prevents race? no race, it's serial)
-                // We checked before `is_executable`.
-                if seen.insert(candle.clone()) {
-                    list.push(Candidate::Item(candle, "(command)".to_string()));
-                }
-            }
-        }
-        Err(_err) => {}
-    }
-}
-
-// Keeping signature for compatibility if used elsewhere (it's not pub but module-local)
-// Actually it is not pub.
-#[allow(dead_code)]
-fn get_executables(dir: &str, name: &str) -> Vec<Candidate> {
-    let mut list = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    get_executables_into(dir, name, &mut list, &mut seen);
-    list
-}
-
-/// Deduplicate candidates, prioritizing commands over files for the same name
-fn deduplicate_candidates(items: Vec<Candidate>) -> Vec<Candidate> {
-    debug!("deduplicate_candidates: input items count={}", items.len());
-    let mut seen_names = std::collections::HashMap::new();
-    let mut result = Vec::new();
-
-    for candidate in items {
-        let (name, _description) = match &candidate {
-            Candidate::Item(name, desc) => (name.clone(), desc.clone()),
-            Candidate::Path(name) => (name.clone(), "(path)".to_string()),
-            Candidate::Basic(name) => (name.clone(), "(basic)".to_string()),
-            Candidate::Command { name, description } => (name.clone(), description.clone()),
-            Candidate::Option { name, description } => (name.clone(), description.clone()),
-            Candidate::GitBranch { name, .. } => (name.clone(), "(git-branch)".to_string()),
-            Candidate::File { path, is_dir } => (
-                path.clone(),
-                if *is_dir { "(directory)" } else { "(file)" }.to_string(),
-            ),
-            Candidate::History { command, .. } => (command.clone(), "(history)".to_string()),
-            Candidate::Process { pid, command } => (pid.clone(), command.clone()),
-        };
-
-        // Extract just the filename for comparison (remove path prefixes)
-        let base_name = if let Some(pos) = name.rfind('/') {
-            &name[pos + 1..]
-        } else {
-            &name
-        };
-
-        match seen_names.get(base_name) {
-            Some(existing_idx) => {
-                // debug!(
-                //     "deduplicate_candidates: found duplicate base_name='{}', name='{}'",
-                //     base_name, name
-                // );
-                // If we already have this name, prioritize commands over files
-                let existing_candidate = &result[*existing_idx];
-                let should_replace = match (&existing_candidate, &candidate) {
-                    // Replace file with command
-                    (Candidate::Item(_, existing_desc), Candidate::Item(_, new_desc))
-                        if existing_desc == "(file)" && new_desc == "(command)" =>
-                    {
-                        debug!(
-                            "deduplicate_candidates: replacing file with command for '{}'",
-                            base_name
-                        );
-                        true
-                    }
-                    // Don't replace command with file
-                    (Candidate::Item(_, existing_desc), Candidate::Item(_, new_desc))
-                        if existing_desc == "(command)" && new_desc == "(file)" =>
-                    {
-                        debug!(
-                            "deduplicate_candidates: keeping command over file for '{}'",
-                            base_name
-                        );
-                        false
-                    }
-                    // For other cases, keep the first one
-                    _ => {
-                        debug!(
-                            "deduplicate_candidates: keeping first occurrence for '{}'",
-                            base_name
-                        );
-                        false
-                    }
-                };
-
-                if should_replace {
-                    result[*existing_idx] = candidate;
-                }
-            }
-            None => {
-                // First time seeing this name
-                // debug!(
-                //     "deduplicate_candidates: adding new candidate base_name='{}', name='{}'",
-                //     base_name, name
-                // );
-                seen_names.insert(base_name.to_string(), result.len());
-                result.push(candidate);
-            }
-        }
-    }
-
-    debug!(
-        "deduplicate_candidates: output items count={}",
-        result.len()
-    );
-    result
-}
-
 async fn get_file_completions(dir: &str, prefix: &str) -> Vec<Candidate> {
     debug!("get_file_completions: dir={}, prefix={}", dir, prefix);
     get_file_completions_with_filter(dir, prefix, None).await
@@ -1250,14 +636,6 @@ fn get_file_completions_with_filter_sync(
     candidates_set.into_iter().collect()
 }
 
-// Pre-compiled regex for whitespace replacement - compiled once at first use
-static WHITESPACE_REGEX: std::sync::LazyLock<Regex> =
-    std::sync::LazyLock::new(|| Regex::new(r"\s+").unwrap());
-
-fn replace_space(s: &str) -> String {
-    WHITESPACE_REGEX.replace_all(s, "_").to_string()
-}
-
 /// Legacy compatibility functions
 /// These functions provide backward compatibility with the existing codebase
 #[cfg(test)]
@@ -1267,48 +645,6 @@ mod tests {
     #[allow(dead_code)]
     fn init() {
         let _ = tracing_subscriber::fmt::try_init();
-    }
-
-    #[test]
-    fn test_deduplicate_candidates() {
-        // Test deduplication with command priority over file
-        let items = vec![
-            Candidate::Item("test".to_string(), "(file)".to_string()),
-            Candidate::Item("test".to_string(), "(command)".to_string()),
-            Candidate::Item("other".to_string(), "(file)".to_string()),
-        ];
-
-        let result = deduplicate_candidates(items);
-
-        assert_eq!(result.len(), 2);
-        // Should keep command version of "test", not file version
-        assert!(result.iter().any(
-            |c| matches!(c, Candidate::Item(name, desc) if name == "test" && desc == "(command)")
-        ));
-        assert!(result.iter().any(
-            |c| matches!(c, Candidate::Item(name, desc) if name == "other" && desc == "(file)")
-        ));
-        // Should not have file version of "test"
-        assert!(!result.iter().any(
-            |c| matches!(c, Candidate::Item(name, desc) if name == "test" && desc == "(file)")
-        ));
-    }
-
-    #[test]
-    fn test_deduplicate_candidates_with_paths() {
-        // Test deduplication with path prefixes
-        let items = vec![
-            Candidate::Item("/usr/bin/ls".to_string(), "(command)".to_string()),
-            Candidate::Item("./ls".to_string(), "(file)".to_string()),
-            Candidate::Item("ls".to_string(), "(command)".to_string()),
-        ];
-
-        let result = deduplicate_candidates(items);
-
-        // Should deduplicate based on base filename "ls"
-        assert_eq!(result.len(), 1);
-        // Should keep the first command version
-        assert!(result.iter().any(|c| matches!(c, Candidate::Item(name, desc) if name == "/usr/bin/ls" && desc == "(command)")));
     }
 
     #[test]
@@ -1329,33 +665,6 @@ mod tests {
                 std::env::remove_var("DSH_COMPLETION_FRAMEWORK");
             },
         }
-    }
-
-    #[test]
-    fn test_select_item_with_skim_single_candidate() {
-        // Test that single candidate is returned directly without UI
-        let single_candidate = vec![Candidate::Basic("single_item".to_string())];
-        let result = select_item_with_skim(single_candidate, None);
-        use framework::CompletionSelection;
-        assert_eq!(
-            result,
-            CompletionSelection::Selected("single_item".to_string())
-        );
-    }
-
-    #[test]
-    #[ignore] // Ignored because it requires user interaction
-    fn test_select_item_with_skim_multiple_candidates() {
-        // Test that multiple candidates still require UI selection (would return None in test environment)
-        let multiple_candidates = vec![
-            Candidate::Basic("first_item".to_string()),
-            Candidate::Basic("second_item".to_string()),
-        ];
-        let _result = select_item_with_skim(multiple_candidates, None);
-        // In a test environment without actual UI, this would return None
-        // The important thing is that it doesn't immediately return the first item
-        // Since we can't easily test the actual UI behavior in unit tests,
-        // we rely on the fact that logic will be tested in integration
     }
 
     #[test]
@@ -1457,63 +766,6 @@ mod tests {
         let input_z = format!("{}/z", dir_str);
         let result_z = super::path_completion_prefix(&input_z).unwrap();
         assert!(result_z.is_none());
-    }
-
-    #[test]
-    fn test_get_executables_fuzzy() {
-        use std::fs::File;
-        #[cfg(unix)]
-        use std::os::unix::fs::PermissionsExt;
-        use tempfile::tempdir;
-
-        let dir = tempdir().unwrap();
-        let dir_path = dir.path();
-
-        let cargo_path = dir_path.join("cargo");
-        let docker_path = dir_path.join("docker");
-
-        {
-            let f = File::create(&cargo_path).unwrap();
-            #[cfg(unix)]
-            {
-                let mut perms = f.metadata().unwrap().permissions();
-                perms.set_mode(0o755);
-                f.set_permissions(perms).unwrap();
-            }
-        }
-
-        {
-            let f = File::create(&docker_path).unwrap();
-            #[cfg(unix)]
-            {
-                let mut perms = f.metadata().unwrap().permissions();
-                perms.set_mode(0o755);
-                f.set_permissions(perms).unwrap();
-            }
-        }
-
-        // We use private get_executables for testing logic
-        // "cgo" -> "cargo"
-        let results_cgo = super::get_executables(dir_path.to_str().unwrap(), "cgo");
-        assert!(!results_cgo.is_empty());
-        assert!(
-            results_cgo
-                .iter()
-                .any(|c| matches!(c, Candidate::Item(name, _) if name == "cargo"))
-        );
-
-        // "dck" -> "docker"
-        let results_dck = super::get_executables(dir_path.to_str().unwrap(), "dck");
-        assert!(!results_dck.is_empty());
-        assert!(
-            results_dck
-                .iter()
-                .any(|c| matches!(c, Candidate::Item(name, _) if name == "docker"))
-        );
-
-        // "xyz" -> none
-        let results_none = super::get_executables(dir_path.to_str().unwrap(), "xyz");
-        assert!(results_none.is_empty());
     }
 
     #[test]

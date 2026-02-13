@@ -58,7 +58,6 @@ impl OutputMonitor {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub async fn output(&mut self) -> Result<usize> {
         let mut line = String::new();
         match time::timeout(

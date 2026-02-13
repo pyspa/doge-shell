@@ -3,23 +3,21 @@ use crate::command_timing::{self, SharedCommandTiming};
 use crate::completion::integrated::IntegratedCompletionEngine;
 use crate::completion::{self as completion_lib, Completion};
 
-use crate::dirs;
 use crate::environment::Environment;
 use crate::history::FrecencyHistory;
 
 use crate::input::{ColorType, Input, InputConfig, display_width};
 use crate::lisp::{Symbol, Value};
-use crate::parser::{self, HighlightKind, Rule};
+use crate::parser::Rule;
 use crate::prompt::Prompt;
 use crate::shell::{SHELL_TERMINAL, Shell};
 use crate::suggestion::{InputPreferences, SuggestionBackend};
 use crate::terminal::renderer::TerminalRenderer;
 use anyhow::Context as _;
 use anyhow::Result;
-use crossterm::cursor::{self, MoveLeft};
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, EventStream, KeyEvent};
 use crossterm::queue;
-use crossterm::style::{Color, Print, ResetColor, Stylize};
+use crossterm::style::Print;
 use crossterm::terminal::{self, Clear, ClearType, disable_raw_mode, enable_raw_mode};
 
 use dsh_builtin::execute_chat_message;
@@ -54,19 +52,14 @@ use suggestion_manager::*;
 pub mod confirmation;
 mod handler;
 pub mod key_action;
+mod render;
 
 pub mod completion;
+mod input_analysis;
 pub mod macro_utils;
 mod repl_ai; // Extracted AI logic
 
-/// AI Quick Actions available to the user
-#[derive(Clone)]
-pub(crate) struct InputAnalysis {
-    completion_full: Option<String>,
-    completion: Option<String>,
-    color_ranges: Option<Vec<(usize, usize, ColorType)>>,
-    can_execute: bool,
-}
+pub(crate) use input_analysis::InputAnalysis;
 
 /// Format directory entries for AI context
 /// This is a pure function for testability
@@ -562,38 +555,6 @@ impl<'a> Repl<'a> {
         Self::save_single_history_helper(&mut self.shell.path_history, "path", true);
     }
 
-    pub(crate) fn move_cursor_input_end<W: Write>(&self, out: &mut W) {
-        let prompt_display_width = self.prompt_mark_width;
-        // cache locally to avoid duplicate computation chains
-        let input_cursor_width = self.input.cursor_display_width();
-        let mut cursor_display_pos = prompt_display_width + input_cursor_width;
-
-        // debug!(
-        //     "move_cursor_input_end: prompt_mark='{}', prompt_width={}, input_cursor_width={}, final_pos={}",
-        //     self.prompt_mark_cache, prompt_display_width, input_cursor_width, cursor_display_pos
-        // );
-        // debug!(
-        //     "move_cursor_input_end: input_text='{}', input_cursor_pos={}",
-        //     self.input.as_str(),
-        //     self.input.cursor()
-        // );
-
-        // bound to current terminal columns if available
-        if self.columns > 0 {
-            cursor_display_pos = cursor_display_pos.min(self.columns.saturating_sub(1));
-        } else {
-            cursor_display_pos = cursor_display_pos.min(1000);
-        }
-
-        // crossterm uses 0-based column indexing
-        queue!(
-            out,
-            ResetColor,
-            cursor::MoveToColumn(cursor_display_pos as u16)
-        )
-        .ok();
-    }
-
     /// Move cursor relatively on the input line given previous and new display positions
     pub(crate) fn move_cursor_relative(
         &self,
@@ -601,83 +562,11 @@ impl<'a> Repl<'a> {
         prev_display_pos: usize,
         new_display_pos: usize,
     ) {
-        if new_display_pos == prev_display_pos {
-            return;
-        }
-        if new_display_pos > prev_display_pos {
-            let delta = (new_display_pos - prev_display_pos) as u16;
-            queue!(out, cursor::MoveRight(delta)).ok();
-        } else {
-            let delta = (prev_display_pos - new_display_pos) as u16;
-            queue!(out, cursor::MoveLeft(delta)).ok();
-        }
+        render::move_cursor_relative(self, out, prev_display_pos, new_display_pos)
     }
 
-    // fn move_cursor(&self, len: usize) {
-    //     let mut stdout = std::io::stdout();
-    //     let prompt_size = self.get_prompt().chars().count();
-    //     queue!(
-    //         stdout,
-    //         ResetColor,
-    //         cursor::MoveToColumn((prompt_size + len + 1) as u16),
-    //     )
-    //     .ok();
-    // }
-
     pub(crate) fn print_prompt(&mut self, out: &mut impl Write) {
-        if !self.multiline_buffer.is_empty() {
-            let continuation_prompt = "..> ";
-            out.write_all(continuation_prompt.as_bytes()).ok();
-            self.prompt_mark_cache = continuation_prompt.to_string();
-            self.prompt_mark_width = 4; // length of "..> "
-            return;
-        }
-
-        // OSC 7 Directory Tracking (emit before hooks)
-        if let Ok(cwd) = std::env::current_dir()
-            && let Ok(hostname) = nix::unistd::gethostname()
-        {
-            let hostname: std::ffi::OsString = hostname;
-            let hostname_str = hostname.to_string_lossy().to_string();
-            let cwd_str = cwd.to_string_lossy();
-            // Format: \x1b]7;file://<hostname><pwd>\x1b\
-            // Note: We skip full URL encoding for simplicity, assumes standard paths.
-            let osc7 = format!("\x1b]7;file://{}{}\x1b\\", hostname_str, cwd_str);
-            out.write_all(osc7.as_bytes()).ok();
-        }
-
-        // debug!("print_prompt called - full preprompt + mark redraw");
-
-        // Execute pre-prompt hooks
-        if let Err(e) = self.shell.exec_pre_prompt_hooks() {
-            debug!("Error executing pre-prompt hooks: {}", e);
-        }
-
-        // Update status and render preprompt (acquire write lock)
-        // print_preprompt requires mutable access as it might invalidate cache
-        let mut buffer = Vec::new();
-        let new_mark;
-        {
-            let mut prompt = self.prompt.write();
-            prompt.update_status(self.last_status, self.last_duration);
-            prompt.print_preprompt(&mut buffer);
-            new_mark = prompt.mark.clone();
-        }
-
-        // Perform I/O without holding the lock
-        out.write_all(&buffer).ok();
-        out.write_all(b"\r\n").ok();
-
-        // Update cached mark and width in case mark changed
-        if self.prompt_mark_cache != new_mark {
-            self.prompt_mark_cache = new_mark;
-            self.prompt_mark_width = display_width(&self.prompt_mark_cache);
-        }
-
-        // draw mark only (defer flushing to caller for batching)
-        out.write_all(b"\r").ok();
-        out.write_all(self.prompt_mark_cache.as_bytes()).ok();
-        // no out.flush() here
+        render::print_prompt(self, out)
     }
 
     fn sync_input_preferences(&mut self) {
@@ -688,69 +577,12 @@ impl<'a> Repl<'a> {
         }
     }
 
-    pub(crate) fn highlight_result_to_ranges(
-        &self,
-        highlight: parser::HighlightResult,
-        input: &str,
-    ) -> (Vec<(usize, usize, ColorType)>, bool) {
-        let mut tokens = highlight.tokens;
-        let error = highlight.error;
-
-        // Skip sort if already sorted (common case)
-        let needs_sort = tokens.windows(2).any(|w| w[0].start > w[1].start);
-        if needs_sort {
-            tokens.sort_by_key(|token| token.start);
-        }
-
-        let mut ranges = Vec::with_capacity(tokens.len() + error.as_ref().map(|_| 1).unwrap_or(0));
-        let mut can_execute = false;
-        let len = input.len();
-
-        for token in tokens {
-            if token.start >= token.end || token.end > len {
-                continue;
-            }
-            let color = match token.kind {
-                HighlightKind::Command => {
-                    let word = &input[token.start..token.end];
-                    if self.command_is_valid(word) {
-                        can_execute = true;
-                        ColorType::CommandExists
-                    } else {
-                        ColorType::CommandNotExists
-                    }
-                }
-                HighlightKind::Argument | HighlightKind::Bareword => ColorType::Argument,
-                HighlightKind::Variable => ColorType::Variable,
-                HighlightKind::SingleQuoted => ColorType::SingleQuote,
-                HighlightKind::DoubleQuoted => ColorType::DoubleQuote,
-                HighlightKind::Redirect => ColorType::Redirect,
-                HighlightKind::Pipe => ColorType::Pipe,
-                HighlightKind::Operator => ColorType::Operator,
-                HighlightKind::Background => ColorType::Background,
-                HighlightKind::ProcSubstitution => ColorType::ProcSubst,
-                HighlightKind::Error => ColorType::Error,
-            };
-            ranges.push((token.start, token.end, color));
-        }
-
-        if let Some(err) = error
-            && err.start < err.end
-            && err.end <= len
-        {
-            ranges.push((err.start, err.end, ColorType::Error));
-        }
-
-        (ranges, can_execute)
-    }
-
     pub(crate) fn compute_color_ranges_from_pairs<'p>(
         &self,
         pairs: Pairs<'p, Rule>,
         input: &str,
     ) -> (Vec<(usize, usize, ColorType)>, bool) {
-        let highlight = parser::collect_highlight_tokens_from_pairs(pairs, input.len());
-        self.highlight_result_to_ranges(highlight, input)
+        render::compute_color_ranges_from_pairs(self, pairs, input)
     }
 
     pub(crate) fn accept_active_suggestion(&mut self) -> bool {
@@ -842,118 +674,8 @@ impl<'a> Repl<'a> {
         None
     }
 
-    fn analyze_input(&self, input: &str, mut completion: Option<String>) -> InputAnalysis {
-        // Skip syntax highlighting for AI commands (starting with !)
-        if input.starts_with('!') {
-            return InputAnalysis {
-                completion_full: None,
-                completion: None,
-                color_ranges: None,
-                can_execute: true,
-            };
-        }
-
-        use pest::Parser;
-        match parser::ShellParser::parse(Rule::commands, input) {
-            Ok(pairs) => {
-                // 1. Get words for completion check
-                let words = self.input.get_words_from_pairs(pairs.clone());
-                let mut completion_full = None;
-
-                for (ref rule, ref span, current) in words {
-                    let word = span.as_str();
-                    if word.is_empty() {
-                        continue;
-                    }
-
-                    match rule {
-                        Rule::argv0 => {
-                            // Completion logic for command names
-                            if current && completion.is_none() {
-                                if let Some(file) = self.shell.environment.read().search(word) {
-                                    if file.len() >= input.len() && file.starts_with(input) {
-                                        completion = Some(file[input.len()..].to_string());
-                                    }
-                                    completion_full = Some(file);
-                                    break;
-                                } else if let Ok(Some(dir)) =
-                                    completion_lib::path_completion_prefix(word)
-                                    && dirs::is_dir(&dir)
-                                {
-                                    if dir.len() >= input.len() && dir.starts_with(input) {
-                                        completion = Some(dir[input.len()..].to_string());
-                                    }
-                                    completion_full = Some(dir.to_string());
-                                    break;
-                                }
-                            }
-                        }
-                        Rule::args => {
-                            // Completion logic for arguments
-                            if current
-                                && completion.is_none()
-                                && let Ok(Some(path)) = completion_lib::path_completion_prefix(word)
-                                && path.len() >= word.len()
-                                && path.starts_with(word)
-                            {
-                                let part = path[word.len()..].to_string();
-                                completion = Some(part);
-
-                                if let Some((pre, post)) = self.input.split_current_pos() {
-                                    completion_full =
-                                        Some(pre.to_owned() + &completion.clone().unwrap() + post);
-                                } else {
-                                    completion_full =
-                                        Some(input.to_string() + &completion.clone().unwrap());
-                                }
-                                break;
-                            }
-                        }
-                        _ => {
-                            // For other rule types, leave them with default color
-                        }
-                    }
-                }
-
-                // 2. Compute color ranges using the same pairs
-                let (mut color_ranges, can_execute) =
-                    self.compute_color_ranges_from_pairs(pairs, input);
-
-                // Apply visual improvements for valid paths
-                for (start, end, kind) in color_ranges.iter_mut() {
-                    // Check if Argument is a valid path
-                    if matches!(kind, crate::input::ColorType::Argument) {
-                        let word = &input[*start..*end];
-                        // Clean up quotes if present for path check
-                        let clean_word = word.trim_matches(|c| c == '\'' || c == '"');
-                        let path = std::path::Path::new(clean_word);
-                        if completion_lib::is_path_cached(path) {
-                            *kind = crate::input::ColorType::ValidPath;
-                        }
-                    }
-                }
-
-                InputAnalysis {
-                    completion_full,
-                    completion,
-                    color_ranges: Some(color_ranges),
-                    can_execute,
-                }
-            }
-            Err(err) => {
-                // Parsing failed, highlight the error
-                let mut ranges = Vec::new();
-                if let Some(token) = parser::highlight_error_token(input, err.location) {
-                    ranges.push((token.start, token.end, ColorType::Error));
-                }
-                InputAnalysis {
-                    completion_full: None,
-                    completion: None,
-                    color_ranges: Some(ranges),
-                    can_execute: false,
-                }
-            }
-        }
+    fn analyze_input(&self, input: &str, completion: Option<String>) -> InputAnalysis {
+        input_analysis::analyze_input(self, input, completion)
     }
 
     pub fn print_input(
@@ -962,138 +684,7 @@ impl<'a> Repl<'a> {
         reset_completion: bool,
         refresh_suggestion: bool,
     ) {
-        // debug!("print_input called, reset_completion: {}", reset_completion);
-        queue!(out, cursor::Hide).ok();
-        let input = self.input.as_str().to_owned();
-        let _prompt_display_width = self.prompt_mark_width; // cached at new()/print_prompt()
-        // debug!(
-        //     "Current input: '{}', prompt_display_width: {}",
-        //     input, _prompt_display_width
-        // );
-
-        let mut completion: Option<String> = None;
-        if input.is_empty() || reset_completion {
-            self.input.completion = None;
-            self.input.color_ranges = None;
-            self.input.can_execute = false;
-            self.last_analyzed_input.clear();
-            self.last_analysis_result = None;
-        } else {
-            completion = self.get_completion_from_history(&input);
-
-            // Use cached analysis if input hasn't changed (fast path)
-            let analysis =
-                if self.last_analyzed_input == input && self.last_analysis_result.is_some() {
-                    self.last_analysis_result.clone().unwrap()
-                } else {
-                    let result = self.analyze_input(&input, completion.clone());
-                    self.last_analyzed_input = input.clone();
-                    self.last_analysis_result = Some(result.clone());
-                    result
-                };
-
-            if let Some(c) = analysis.completion_full {
-                self.input.completion = Some(c);
-            }
-            if let Some(suffix) = analysis.completion {
-                completion = Some(suffix);
-            }
-
-            self.input.color_ranges = analysis.color_ranges;
-            self.input.can_execute = analysis.can_execute;
-        }
-
-        if completion.is_none() {
-            if refresh_suggestion {
-                self.refresh_inline_suggestion();
-            }
-        } else {
-            self.suggestion_manager.clear();
-        }
-
-        // Auto-fix ghost text logic
-        let mut ai_suggestion_text = None;
-        if self.input.as_str().is_empty() && self.auto_fix_suggestion.is_some() {
-            ai_suggestion_text = self.auto_fix_suggestion.as_deref();
-        }
-
-        let ghost_suffix = if completion.is_none() {
-            self.suggestion_manager.suffix(&input)
-        } else {
-            None
-        };
-
-        let ai_pending_now = self.suggestion_manager.engine.ai_pending();
-
-        // Clear the current line and redraw prompt mark + input
-        queue!(out, Print("\r"), Clear(ClearType::CurrentLine)).ok();
-
-        // Only redraw the prompt mark (not the full preprompt)
-        // Use cached prompt mark without re-locking prompt
-        // debug!("Redrawing prompt mark: '{}'", self.prompt_mark_cache);
-        queue!(out, Print(self.prompt_mark_cache.as_str())).ok();
-
-        // Print the input
-        self.input.print(out, ghost_suffix.as_deref());
-
-        if let Some(ai_fix) = ai_suggestion_text {
-            // Render AI suggestion with a distinct color
-            queue!(out, Print(ai_fix.with(Color::DarkGrey))).ok();
-            let width = display_width(ai_fix);
-            queue!(out, MoveLeft(width as u16)).ok();
-        }
-
-        // Hint for AI Smart Extensions
-        if self.detect_smart_pipe().is_some() || self.detect_generative_command().is_some() {
-            let hint = " ↹ Tab to expand";
-            let hint_width = display_width(hint);
-            // Only show if we have enough space (avoid overlapping with input)
-            let input_visual_end = self.prompt_mark_width + self.input.display_width();
-
-            if self.columns > hint_width
-                && self.columns.saturating_sub(hint_width) > input_visual_end + 2
-            {
-                let col = self.columns - hint_width;
-                queue!(
-                    out,
-                    cursor::MoveToColumn(col as u16),
-                    Print(hint.with(Color::DarkGrey))
-                )
-                .ok();
-            }
-        } else if self.detect_ai_pipe().is_some() {
-            // Hint for AI Output Pipe
-            let hint = " ↵ Enter to analyze";
-            let hint_width = display_width(hint);
-            let input_visual_end = self.prompt_mark_width + self.input.display_width();
-
-            if self.columns > hint_width
-                && self.columns.saturating_sub(hint_width) > input_visual_end + 2
-            {
-                let col = self.columns - hint_width;
-                queue!(
-                    out,
-                    cursor::MoveToColumn(col as u16),
-                    Print(hint.with(Color::DarkGrey))
-                )
-                .ok();
-            }
-        }
-
-        if ai_pending_now {
-            queue!(out, Print(" ⧗")).ok();
-        }
-
-        self.ai_pending_shown = ai_pending_now;
-
-        self.move_cursor_input_end(out);
-
-        if let Some(completion) = completion {
-            self.input.print_candidates(out, completion);
-            // reuse cached cursor width implicitly via move_cursor_input_end recomputation; avoid extra heavy work here
-            self.move_cursor_input_end(out);
-        }
-        queue!(out, cursor::Show).ok();
+        render::print_input(self, out, reset_completion, refresh_suggestion)
     }
 
     pub async fn run_interactive(&mut self) -> Result<()> {
@@ -1510,43 +1101,12 @@ impl<'a> Repl<'a> {
         Ok(ReplControlFlow::Continue)
     }
 
-    fn command_is_valid(&self, word: &str) -> bool {
-        if word.is_empty() {
-            return false;
-        }
-
-        {
-            let env = self.shell.environment.read();
-            if env.lookup(word).is_some() {
-                return true;
-            }
-
-            if env.alias.contains_key(word) {
-                return true;
-            }
-        }
-
-        if dsh_builtin::get_command(word).is_some() {
-            return true;
-        }
-
-        self.shell.lisp_engine.borrow().is_export(word)
+    pub(crate) fn command_is_valid(&self, word: &str) -> bool {
+        input_analysis::command_is_valid(self, word)
     }
 
     async fn toggle_sudo(&mut self) -> Result<()> {
-        let mut input = self.input.as_str().to_string();
-        if input.starts_with("sudo ") {
-            // Remove sudo
-            input = input[5..].to_string();
-        } else {
-            // Add sudo
-            input.insert_str(0, "sudo ");
-        }
-        self.input.reset(input);
-        let mut renderer = TerminalRenderer::new();
-        self.print_input(&mut renderer, true, true);
-        renderer.flush().ok();
-        Ok(())
+        input_analysis::toggle_sudo(self).await
     }
 
     /// Get directory listing for AI context
@@ -1594,7 +1154,7 @@ impl<'a> Repl<'a> {
 
     /// Detect AI Output Pipe pattern: `command |! "query"`
     /// Returns (command, query) if pattern is found
-    fn detect_ai_pipe(&self) -> Option<(String, String)> {
+    pub(crate) fn detect_ai_pipe(&self) -> Option<(String, String)> {
         let input = self.input.as_str();
         if let Some(idx) = input.rfind("|!") {
             let command = input[..idx].trim().to_string();
@@ -1803,42 +1363,7 @@ mod tests {
     }
 }
 
-/// Helper function to render the transient prompt
-/// Extracted for testability
-pub(crate) fn render_transient_prompt_to<W: Write>(
-    out: &mut W,
-    input: &Input,
-    input_width: usize,
-    prompt_width: usize,
-    cols: u16,
-) -> Result<()> {
-    use crossterm::style::Stylize;
-
-    // Calculate how many lines the prompt+input occupies
-    // Note: Preprompt is always one extra line above
-    let input_lines = (prompt_width + input_width) / (cols as usize);
-    let total_lines = 1 + input_lines; // +1 for preprompt
-
-    queue!(
-        out,
-        cursor::Hide,
-        cursor::MoveToColumn(0),
-        cursor::MoveUp(total_lines as u16),
-        terminal::Clear(ClearType::FromCursorDown)
-    )
-    .ok();
-
-    // Print transient prompt symbol (Green ❯)
-    // We use write! instead of print! to support the generic writer
-    queue!(out, Print("❯".green()), Print(" ")).ok();
-
-    // Render the input with existing syntax highlighting
-    input.print(out, None);
-
-    queue!(out, cursor::Show).ok();
-    out.flush().ok();
-    Ok(())
-}
+pub(crate) use render::render_transient_prompt_to;
 
 #[cfg(test)]
 mod ai_tests {

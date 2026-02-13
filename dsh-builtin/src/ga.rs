@@ -74,7 +74,15 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
         .preview(Some("".to_string())) // Preview handled by ItemPreview
         // .preview_window(Some("right:60%")) // Disabled
         .build()
-        .unwrap();
+        .map_err(|e| format!("failed to build skim options: {}", e));
+
+    let options = match options {
+        Ok(o) => o,
+        Err(e) => {
+            let _ = ctx.write_stderr(&format!("ga: {}\n", e));
+            return ExitStatus::ExitedWith(1);
+        }
+    };
 
     let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
 

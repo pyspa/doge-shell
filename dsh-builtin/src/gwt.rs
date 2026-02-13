@@ -435,7 +435,15 @@ fn remove_worktree_interactive(ctx: &Context, force: bool) -> ExitStatus {
         .prompt("Select worktree to remove> ".to_string())
         .bind(vec!["Enter:accept".to_string()])
         .build()
-        .unwrap();
+        .map_err(|e| format!("failed to build skim options: {}", e));
+
+    let options = match options {
+        Ok(o) => o,
+        Err(e) => {
+            let _ = ctx.write_stderr(&format!("gwt: {}\n", e));
+            return ExitStatus::ExitedWith(1);
+        }
+    };
 
     let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
     for wt in worktrees {
@@ -637,7 +645,7 @@ fn add_worktree_from_pr(ctx: &Context) -> Result<PathBuf, String> {
         .multi(false)
         .bind(vec!["Enter:accept".to_string()])
         .build()
-        .unwrap();
+        .map_err(|e| format!("failed to build skim options: {}", e))?;
 
     let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
     for pr in prs.clone() {

@@ -657,3 +657,22 @@ fn test_generate_usage_text() {
     assert!(usage.contains("Usage: serve"));
     assert!(usage.contains("--help"));
 }
+
+#[test]
+fn test_add_cors_headers() {
+    use super::handlers::add_cors_headers;
+    use axum::http::HeaderMap;
+
+    let mut headers = HeaderMap::new();
+    add_cors_headers(&mut headers);
+
+    assert_eq!(headers.get("access-control-allow-origin").unwrap(), "*");
+    assert_eq!(
+        headers.get("access-control-allow-methods").unwrap(),
+        "GET, POST, PUT, DELETE, OPTIONS"
+    );
+    assert_eq!(
+        headers.get("access-control-allow-headers").unwrap(),
+        "Content-Type, Authorization"
+    );
+}

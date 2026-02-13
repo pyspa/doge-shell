@@ -845,4 +845,245 @@ mod tests {
             );
         }
     }
+
+    // --- Group 1: Tokenizer Edge Cases ---
+
+    #[test]
+    fn test_tokenize_empty_input() {
+        let parser = CommandLineParser::new();
+        let tokens = parser.tokenize("");
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn test_tokenize_whitespace_only() {
+        let parser = CommandLineParser::new();
+        let tokens = parser.tokenize("   ");
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn test_tokenize_single_quotes() {
+        let parser = CommandLineParser::new();
+        let tokens = parser.tokenize("echo 'hello world'");
+        assert_eq!(tokens, vec!["echo", "'hello world'"]);
+    }
+
+    #[test]
+    fn test_tokenize_unclosed_quote() {
+        let parser = CommandLineParser::new();
+        // Unclosed quote should be tokenized as is, from start of quote to end of string
+        let tokens = parser.tokenize("echo \"hello");
+        assert_eq!(tokens, vec!["echo", "\"hello"]);
+    }
+
+    #[test]
+    fn test_tokenize_mixed_quotes() {
+        let parser = CommandLineParser::new();
+        let tokens = parser.tokenize("cmd 'a b' \"c d\" e");
+        assert_eq!(tokens, vec!["cmd", "'a b'", "\"c d\"", "e"]);
+    }
+
+    // --- Group 2: looks_like_subcommand Heuristics ---
+
+    #[test]
+    fn test_looks_like_subcommand_option() {
+        let parser = CommandLineParser::new();
+        assert!(!parser.looks_like_subcommand("-v"));
+        assert!(!parser.looks_like_subcommand("--help"));
+    }
+
+    #[test]
+    fn test_looks_like_subcommand_file_path() {
+        let parser = CommandLineParser::new();
+        assert!(!parser.looks_like_subcommand("./foo"));
+        assert!(!parser.looks_like_subcommand("a/b"));
+        // Backslash on windows/generally
+        assert!(!parser.looks_like_subcommand("a\\b"));
+    }
+
+    #[test]
+    fn test_looks_like_subcommand_file_ext() {
+        let parser = CommandLineParser::new();
+        assert!(!parser.looks_like_subcommand("foo.txt"));
+        assert!(!parser.looks_like_subcommand("script.sh"));
+        // But "v1.2" might be a version number often used as subcommand or arg?
+        // The heuristic says if it contains '.', it's not a subcommand.
+        assert!(!parser.looks_like_subcommand("v1.2"));
+    }
+
+    #[test]
+    fn test_looks_like_subcommand_too_short() {
+        let parser = CommandLineParser::new();
+        assert!(!parser.looks_like_subcommand("a"));
+        assert!(parser.looks_like_subcommand("up")); // 2 chars ok
+    }
+
+    #[test]
+    fn test_looks_like_subcommand_too_long() {
+        let parser = CommandLineParser::new();
+        let long_cmd = "a".repeat(33);
+        assert!(!parser.looks_like_subcommand(&long_cmd));
+    }
+
+    #[test]
+    fn test_looks_like_subcommand_valid() {
+        let parser = CommandLineParser::new();
+        assert!(parser.looks_like_subcommand("add"));
+        assert!(parser.looks_like_subcommand("commit"));
+        assert!(parser.looks_like_subcommand("self-update"));
+        assert!(parser.looks_like_subcommand("install"));
+    }
+
+    // --- Group 3: option_takes_value ---
+
+    #[test]
+    fn test_option_takes_value_known() {
+        let parser = CommandLineParser::new();
+        assert!(parser.option_takes_value("-m"));
+        assert!(parser.option_takes_value("--message"));
+        assert!(parser.option_takes_value("-f"));
+        assert!(parser.option_takes_value("--file"));
+    }
+
+    #[test]
+    fn test_option_takes_value_unknown() {
+        let parser = CommandLineParser::new();
+        assert!(!parser.option_takes_value("-v"));
+        assert!(!parser.option_takes_value("--verbose"));
+        assert!(!parser.option_takes_value("--help"));
+    }
+
+    #[test]
+    fn test_option_takes_value_edge_cases() {
+        let parser = CommandLineParser::new();
+        assert!(!parser.option_takes_value("--"));
+        assert!(!parser.option_takes_value("-"));
+    }
+
+    // --- Group 4: is_redirect_operator ---
+
+    #[test]
+    fn test_redirect_basic_operators() {
+        assert!(CommandLineParser::is_redirect_operator(">"));
+        assert!(CommandLineParser::is_redirect_operator(">>"));
+        assert!(CommandLineParser::is_redirect_operator("<"));
+        assert!(CommandLineParser::is_redirect_operator("&>"));
+        assert!(CommandLineParser::is_redirect_operator("&>>"));
+    }
+
+    #[test]
+    fn test_redirect_numbered_fd() {
+        assert!(CommandLineParser::is_redirect_operator("2>"));
+        assert!(CommandLineParser::is_redirect_operator("1>"));
+        assert!(CommandLineParser::is_redirect_operator("2>>"));
+    }
+
+    #[test]
+    fn test_redirect_non_operators() {
+        assert!(!CommandLineParser::is_redirect_operator("cat"));
+        assert!(!CommandLineParser::is_redirect_operator("->"));
+        assert!(!CommandLineParser::is_redirect_operator("="));
+        assert!(!CommandLineParser::is_redirect_operator(">>>")); // Not supported generally
+    }
+
+    // --- Group 5: find_cursor_token_index Edge Cases ---
+
+    #[test]
+    fn test_cursor_at_very_start() {
+        let parser = CommandLineParser::new();
+        let spans = parser.tokenize_with_positions("git add");
+        // cursor at 0
+        let (idx, inside) = parser.find_cursor_token_index(&spans, 0);
+        // Using "git add", spans[0] is "git" (0..3).
+        // cursor 0 is <= end(3) and >= start(0). So inside=true.
+        assert_eq!(idx, 0);
+        assert!(inside);
+    }
+
+    #[test]
+    fn test_cursor_at_end_of_input() {
+        let parser = CommandLineParser::new();
+        let input = "git add";
+        let spans = parser.tokenize_with_positions(input);
+        // cursor at 7 (len).
+        // spans[1] is "add" (4..7).
+        // cursor 7 is <= end(7) and >= start(4). So inside=true.
+        let (idx, inside) = parser.find_cursor_token_index(&spans, 7);
+        assert_eq!(idx, 1);
+        assert!(inside);
+    }
+
+    #[test]
+    fn test_cursor_between_multiple_spaces() {
+        let parser = CommandLineParser::new();
+        let input = "a    b";
+        let spans = parser.tokenize_with_positions(input);
+        // "a" is 0..1. "b" is 5..6.
+        // cursor at 3 (middle of spaces).
+        // Not inside "a" (<=1). Not inside "b" (>=5).
+        // Should return index 1 (before "b"), inside=false.
+        let (idx, inside) = parser.find_cursor_token_index(&spans, 3);
+        assert_eq!(idx, 1);
+        assert!(!inside);
+    }
+
+    // --- Group 6: parse Integration Edge Cases ---
+
+    #[test]
+    fn test_parse_empty_input() {
+        let parser = CommandLineParser::new();
+        let result = parser.parse("", 0);
+        assert_eq!(result.command, "");
+        assert_eq!(result.completion_context, CompletionContext::Command);
+    }
+
+    #[test]
+    fn test_parse_whitespace_only_input() {
+        let parser = CommandLineParser::new();
+        let result = parser.parse("   ", 3);
+        assert_eq!(result.command, "");
+        assert_eq!(result.completion_context, CompletionContext::Command);
+    }
+
+    #[test]
+    fn test_parse_option_after_argument() {
+        let parser = CommandLineParser::new();
+        // "git add file --force"
+        // command: git, subcommand: add, args: [file], options: [--force]
+        let result = parser.parse("git add file --force", 20);
+        assert_eq!(result.command, "git");
+        assert_eq!(result.subcommand_path, vec!["add"]);
+        assert_eq!(result.specified_arguments, vec!["file"]);
+        assert_eq!(result.specified_options, vec!["--force"]);
+        assert_eq!(result.completion_context, CompletionContext::LongOption);
+    }
+
+    #[test]
+    fn test_parse_multiple_redirects() {
+        let parser = CommandLineParser::new();
+        let input = "cmd < in > out 2>> err";
+        let result = parser.parse(input, input.len());
+        // redirects and their targets should NOT be in arguments
+        // < in, > out, 2>> err
+        // "in", "out", "err" are redirect targets.
+        // current logic in `analyze_tokens`:
+        // It iterates. If is_redirect_operator, set skip_next.
+        // So "in", "out", "err" should be skipped.
+        assert!(result.specified_arguments.is_empty());
+        assert!(result.specified_options.is_empty());
+    }
+
+    #[test]
+    fn test_parse_option_value_chain() {
+        let parser = CommandLineParser::new();
+        // "git commit -m msg --file f.txt arg1"
+        // -m takes value -> msg skipped
+        // --file takes value -> f.txt skipped
+        // arg1 -> kept
+        let result = parser.parse("git commit -m msg --file f.txt arg1", 35);
+        assert_eq!(result.specified_arguments, vec!["arg1"]);
+        assert!(result.specified_options.contains(&"-m".to_string()));
+        assert!(result.specified_options.contains(&"--file".to_string()));
+    }
 }

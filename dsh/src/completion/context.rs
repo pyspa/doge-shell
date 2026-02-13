@@ -1,5 +1,5 @@
-use super::command::CommandCompletionDatabase;
-use super::parser::{CompletionContext, ParsedCommandLine};
+use super::command::{ArgumentType, CommandCompletionDatabase};
+use super::parser::{CommandLineParser, CompletionContext, ParsedCommandLine};
 
 /// Responsible for correcting parsed command line based on completion database
 pub struct ContextCorrector<'a> {
@@ -273,6 +273,65 @@ impl<'a> ContextCorrector<'a> {
         }
 
         new_parsed
+    }
+
+    pub fn find_command_with_args_arg(
+        &self,
+        parsed: &ParsedCommandLine,
+    ) -> Option<(usize, String)> {
+        if let Some(command_completion) = self.database.get_command(&parsed.command) {
+            let args_def = &command_completion.arguments;
+            for (i, arg_val) in parsed.specified_arguments.iter().enumerate() {
+                if let Some(arg_def) = args_def.get(i)
+                    && let Some(ArgumentType::CommandWithArgs) = arg_def.arg_type
+                {
+                    return Some((i, arg_val.clone()));
+                }
+            }
+        }
+        None
+    }
+
+    pub fn reparse_inner_command(
+        &self,
+        parsed: &ParsedCommandLine,
+        cmd_index: usize,
+        cmd_name: String,
+    ) -> ParsedCommandLine {
+        let mut input_parts = Vec::new();
+        input_parts.push(cmd_name);
+
+        let mut found_start = false;
+
+        let target_arg = &parsed.specified_arguments[cmd_index];
+        let mut tokens_to_skip = 0;
+
+        for (i, token) in parsed.raw_args.iter().enumerate() {
+            if token == target_arg {
+                tokens_to_skip = i + 1;
+                found_start = true;
+                break;
+            }
+        }
+
+        if found_start {
+            for arg in parsed.raw_args.iter().skip(tokens_to_skip) {
+                if arg.contains(' ') || arg.contains('\t') {
+                    input_parts.push(format!("{:?}", arg));
+                } else {
+                    input_parts.push(arg.to_string());
+                }
+            }
+        }
+
+        // When cursor is in a trailing gap (empty current_token), append empty string
+        // to signal the parser about the gap position
+        if parsed.current_token.is_empty() {
+            input_parts.push(String::new());
+        }
+
+        let input = input_parts.join(" ");
+        CommandLineParser::new().parse(&input, input.len())
     }
 }
 

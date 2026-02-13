@@ -52,6 +52,7 @@ use suggestion_manager::*;
 pub mod confirmation;
 mod handler;
 pub mod key_action;
+mod key_handlers;
 mod render;
 
 pub mod completion;
@@ -409,15 +410,11 @@ impl<'a> Repl<'a> {
     }
 
     pub(crate) async fn check_background_jobs(&mut self, output: bool) -> Result<()> {
-        handler::check_background_jobs(self, output).await
+        key_handlers::auxiliary::check_background_jobs(self, output).await
     }
 
     pub(crate) async fn handle_event(&mut self, ev: ShellEvent) -> Result<ReplControlFlow> {
         handler::handle_event(self, ev).await
-    }
-
-    pub(crate) async fn handle_paste_event(&mut self, text: &str) -> Result<()> {
-        handler::handle_paste_event(self, text).await
     }
 
     pub(crate) async fn handle_key_event(&mut self, ev: &KeyEvent) -> Result<ReplControlFlow> {

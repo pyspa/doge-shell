@@ -1,10 +1,13 @@
 #![allow(clippy::module_inception)]
 
+pub mod async_io;
 pub mod builtin;
 pub mod fork;
 pub mod io;
 pub mod job;
 pub mod job_process;
+pub mod job_pty;
+pub mod job_wait;
 pub mod process;
 pub mod pty;
 pub mod redirect;

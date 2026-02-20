@@ -54,6 +54,16 @@ impl Environment {
         self.input_preferences.block_separator = enabled;
     }
 
+    /// Check if floating completion UI is enabled.
+    pub fn use_floating_completion_enabled(&self) -> bool {
+        self.input_preferences.use_floating_completion
+    }
+
+    /// Enable or disable floating completion UI.
+    pub fn set_use_floating_completion_enabled(&mut self, enabled: bool) {
+        self.input_preferences.use_floating_completion = enabled;
+    }
+
     /// Get the current input preferences.
     pub fn input_preferences(&self) -> InputPreferences {
         self.input_preferences

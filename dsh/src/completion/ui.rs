@@ -173,7 +173,7 @@ fn interpret_event(event: &Event) -> InteractionCommand {
 mod tests {
     use super::*;
     use anyhow::anyhow;
-    use crossterm::event::{KeyEvent, KeyEventKind};
+    use crossterm::event::KeyEvent;
 
     struct TestEventSource {
         events: Vec<Event>,

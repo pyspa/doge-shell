@@ -1127,6 +1127,7 @@ dependencies = [
  "pest",
  "pest_derive",
  "pulldown-cmark",
+ "ratatui",
  "regex",
  "reqwest 0.13.2",
  "rusqlite",

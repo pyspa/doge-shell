@@ -84,6 +84,9 @@ pub(crate) fn print_prompt(repl: &mut Repl<'_>, out: &mut impl Write) {
         return;
     }
 
+    // OSC 133 A: Prompt start
+    out.write_all(b"\x1b]133;A\x1b\\").ok();
+
     // OSC 7 Directory Tracking (emit before hooks)
     if let Ok(cwd) = std::env::current_dir()
         && let Ok(hostname) = nix::unistd::gethostname()
@@ -267,6 +270,9 @@ pub fn print_input(
     // Use cached prompt mark without re-locking prompt
     queue!(out, Print(repl.prompt_mark_cache.as_str())).ok();
 
+    // OSC 133 B: Command start
+    out.write_all(b"\x1b]133;B\x1b\\").ok();
+
     // Print the input
     repl.input.print(out, ghost_suffix.as_deref());
 
@@ -356,6 +362,9 @@ pub(crate) fn render_transient_prompt_to<W: Write>(
     // Print transient prompt symbol (Green ❯)
     // We use write! instead of print! to support the generic writer
     queue!(out, Print("❯".green()), Print(" ")).ok();
+
+    // OSC 133 B: Command start
+    out.write_all(b"\x1b]133;B\x1b\\").ok();
 
     // Render the input with existing syntax highlighting
     input.print(out, None);

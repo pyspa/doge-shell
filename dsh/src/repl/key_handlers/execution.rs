@@ -105,6 +105,10 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
                     &anyhow::anyhow!("terminal initialization error: {}", e),
                     false,
                 );
+
+                // Command failed to start due to terminal init error
+                print!("\x1b]133;D;1\x1b\\");
+
                 // Show new prompt and skip command execution
                 let mut renderer = TerminalRenderer::new();
                 repl.print_block_separator(&mut renderer);
@@ -114,6 +118,10 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
             }
         };
         let mut ctx = Context::new(repl.shell.pid, repl.shell.pgid, Some(shell_tmode), true);
+
+        // OSC 133 C: Command executed / Output start
+        print!("\x1b]133;C\x1b\\");
+
         let exit_code = match repl
             .shell
             .eval_str(&mut ctx, input_str.clone(), false)
@@ -130,6 +138,9 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
                 1
             }
         };
+
+        // OSC 133 D: Command finished
+        print!("\x1b]133;D;{}\x1b\\", exit_code);
 
         repl.cache.invalidate();
 
@@ -241,6 +252,10 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
                     &anyhow::anyhow!("terminal initialization error: {}", e),
                     false,
                 );
+
+                // Command failed to start due to terminal init error
+                print!("\x1b]133;D;1\x1b\\");
+
                 let mut renderer = TerminalRenderer::new();
                 repl.print_block_separator(&mut renderer);
                 repl.print_prompt(&mut renderer);
@@ -249,15 +264,25 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
             }
         };
         let mut ctx = Context::new(repl.shell.pid, repl.shell.pgid, Some(shell_tmode), true);
-        match repl.shell.eval_str(&mut ctx, input, true).await {
+
+        // OSC 133 C: Command executed / Output start
+        print!("\x1b]133;C\x1b\\");
+
+        let exit_code = match repl.shell.eval_str(&mut ctx, input, true).await {
             Ok(code) => {
                 repl.last_status = code;
+                code
             }
             Err(err) => {
                 display_user_error(&err, false);
                 repl.last_status = 1;
+                1
             }
-        }
+        };
+
+        // OSC 133 D: Command finished
+        print!("\x1b]133;D;{}\x1b\\", exit_code);
+
         repl.cache.invalidate();
         repl.input.clear();
         repl.suggestion_manager.clear();
@@ -303,6 +328,11 @@ pub(crate) fn handle_interrupt(repl: &mut Repl<'_>) -> Result<()> {
         } else {
             queue!(renderer, Print("\r\n")).ok();
         }
+
+        // OSC 133 D: Command finished (interrupted)
+        // 130 is the standard exit code for SIGINT
+        print!("\x1b]133;D;130\x1b\\");
+
         repl.print_block_separator(&mut renderer);
         repl.print_prompt(&mut renderer);
         renderer.flush().ok();

@@ -21,6 +21,7 @@ mod command;
 mod directory;
 mod service;
 mod suggestion;
+pub mod ui;
 
 #[cfg(test)]
 mod tests;

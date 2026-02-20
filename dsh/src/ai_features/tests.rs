@@ -3,7 +3,7 @@
 use super::*;
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::sync::Mutex;
 
 struct MockAiService {
@@ -279,4 +279,53 @@ async fn test_analyze_output_with_stderr() {
             .unwrap()
             .contains("Permission denied")
     );
+}
+
+#[tokio::test]
+async fn test_diagnose_output_with_history() {
+    let service = MockAiService::new("```bash\nchmod +x script.sh\n```");
+    let result =
+        diagnose_output_with_history(&service, "./script.sh", "Permission denied", 126).await;
+
+    assert!(result.is_ok());
+    let (diagnosis, history) = result.unwrap();
+
+    // Check returned diagnosis
+    assert!(diagnosis.contains("chmod +x script.sh"));
+
+    // Check history length (system, user, assistant)
+    assert_eq!(history.len(), 3);
+    assert_eq!(history[0]["role"], "system");
+    assert_eq!(history[1]["role"], "user");
+    assert!(
+        history[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Permission denied")
+    );
+    assert_eq!(history[2]["role"], "assistant");
+    assert!(history[2]["content"].as_str().unwrap().contains("chmod +x"));
+}
+
+#[tokio::test]
+async fn test_send_followup_question() {
+    let service = MockAiService::new("Yes, you need to use sudo.");
+
+    let mut history = vec![
+        json!({"role": "system", "content": "system prompt"}),
+        json!({"role": "user", "content": "initial error"}),
+        json!({"role": "assistant", "content": "some response"}),
+    ];
+
+    let result = send_followup_question(&service, &mut history, "Do I need sudo?").await;
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), "Yes, you need to use sudo.");
+
+    // Check history updated correctly
+    assert_eq!(history.len(), 5);
+    assert_eq!(history[3]["role"], "user");
+    assert_eq!(history[3]["content"], "Do I need sudo?");
+    assert_eq!(history[4]["role"], "assistant");
+    assert_eq!(history[4]["content"], "Yes, you need to use sudo.");
 }

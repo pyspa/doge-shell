@@ -68,15 +68,66 @@ pub(crate) async fn handle_ai_diagnose(repl: &mut Repl<'_>) -> Result<()> {
         queue!(renderer, Print("\r\n🔍 Diagnosing error...\r\n")).ok();
         renderer.flush().ok();
 
-        match crate::ai_features::diagnose_output(service.as_ref(), &command, &output, exit_code)
-            .await
+        match crate::ai_features::diagnose_output_with_history(
+            service.as_ref(),
+            &command,
+            &output,
+            exit_code,
+        )
+        .await
         {
-            Ok(diagnosis) => {
-                let mut ui = AiChatUi::new(context, diagnosis);
-                if let Err(e) = ui.run() {
-                    let mut err_renderer = TerminalRenderer::new();
-                    queue!(err_renderer, Print(format!("❌ UI Error: {}\r\n", e))).ok();
-                    err_renderer.flush().ok();
+            Ok((initial_diagnosis, mut history)) => {
+                let mut current_diagnosis = initial_diagnosis;
+
+                loop {
+                    let mut ui = AiChatUi::new(context.clone(), current_diagnosis.clone());
+                    match ui.run() {
+                        Ok(crate::ai_features::ui::UiOutcome::ApplyCommand(cmd)) => {
+                            repl.input.reset(cmd);
+                            break;
+                        }
+                        Ok(crate::ai_features::ui::UiOutcome::Ask(query)) => {
+                            // Print a loading message in the normal alternate screen or terminal
+                            // Since ui.run() drops the TerminalGuard, we are back in raw mode but not alt screen?
+                            // TerminalGuard restores stdout so it disables alt screen.
+                            // We should just print a loading message on the main screen,
+                            // or ideally we could retain the alt screen for loading, but for simplicity:
+                            let mut tmp_renderer = TerminalRenderer::new();
+                            queue!(tmp_renderer, Print("\r\n 🤖 Thinking...\r\n")).ok();
+                            tmp_renderer.flush().ok();
+
+                            match crate::ai_features::send_followup_question(
+                                service.as_ref(),
+                                &mut history,
+                                &query,
+                            )
+                            .await
+                            {
+                                Ok(new_diagnosis) => {
+                                    current_diagnosis = new_diagnosis;
+                                    // Loop will re-enter UiChatUi and alternate screen
+                                }
+                                Err(e) => {
+                                    queue!(
+                                        tmp_renderer,
+                                        Print(format!("❌ Chat failed: {}\r\n", e))
+                                    )
+                                    .ok();
+                                    tmp_renderer.flush().ok();
+                                    break;
+                                }
+                            }
+                        }
+                        Ok(crate::ai_features::ui::UiOutcome::Quit) => {
+                            break;
+                        }
+                        Err(e) => {
+                            let mut err_renderer = TerminalRenderer::new();
+                            queue!(err_renderer, Print(format!("❌ UI Error: {}\r\n", e))).ok();
+                            err_renderer.flush().ok();
+                            break;
+                        }
+                    }
                 }
             }
             Err(e) => {

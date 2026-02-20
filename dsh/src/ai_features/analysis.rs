@@ -114,6 +114,69 @@ pub async fn diagnose_output<S: AiService + ?Sized>(
     service.send_request(messages, Some(0.2)).await
 }
 
+/// Diagnose command output and return both the response and the conversation history.
+pub async fn diagnose_output_with_history<S: AiService + ?Sized>(
+    service: &S,
+    command: &str,
+    output: &str,
+    exit_code: i32,
+) -> Result<(String, Vec<serde_json::Value>)> {
+    let sanitized_command = SafetyGuard::sanitize_ai_input(command, 1000);
+    // Output can be huge, sanitize and truncate
+    let sanitized_output = SafetyGuard::sanitize_ai_input(output, 2000);
+
+    let system_prompt = "You are a debugging expert. Analyze the command output and diagnose any issues. \
+    Focus on error messages and their root causes. Provide clear, actionable solutions. \
+    Respond in the same language as the user's environment if possible, or match the language of their request. \
+    Additionally, output markdown bash code blocks (```bash ... ```) when proposing commands, \
+    so the user can easily copy or apply them.";
+
+    // Truncate output if too long
+    let truncated_output = if sanitized_output.len() > 4000 {
+        format!("{}...(truncated)", &sanitized_output[..4000])
+    } else {
+        sanitized_output.to_string()
+    };
+
+    let query = format!(
+        "Command: `{}`\nExit code: {}\nOutput:\n```\n{}\n```",
+        sanitized_command, exit_code, truncated_output
+    );
+
+    let mut messages = vec![
+        json!({"role": "system", "content": system_prompt}),
+        json!({"role": "user", "content": query}),
+    ];
+
+    let response = service.send_request(messages.clone(), Some(0.2)).await?;
+    messages.push(json!({"role": "assistant", "content": response}));
+
+    Ok((response, messages))
+}
+
+/// Send a followup question leveraging existing conversation history.
+pub async fn send_followup_question<S: AiService + ?Sized>(
+    service: &S,
+    history: &mut Vec<serde_json::Value>,
+    query: &str,
+) -> Result<String> {
+    if let PromptInjectionResult::Suspicious(warnings) = SafetyGuard::check_prompt_injection(query)
+    {
+        tracing::warn!(
+            "Potential prompt injection in followup_question: {:?}",
+            warnings
+        );
+    }
+    let sanitized_query = SafetyGuard::sanitize_ai_input(query, 1000);
+
+    history.push(json!({"role": "user", "content": sanitized_query}));
+
+    let response = service.send_request(history.clone(), Some(0.2)).await?;
+    history.push(json!({"role": "assistant", "content": response.clone()}));
+
+    Ok(response)
+}
+
 /// Analyze command output with AI based on a user query.
 pub async fn analyze_output<S: AiService + ?Sized>(
     service: &S,

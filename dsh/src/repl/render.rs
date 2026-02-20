@@ -207,28 +207,33 @@ pub fn print_input(
 ) {
     // debug!("print_input called, reset_completion: {}", reset_completion);
     queue!(out, cursor::Hide).ok();
-    let input = repl.input.as_str().to_owned();
+
+    // Extract values needed before any mutable borrow of repl
+    let is_empty = repl.input.is_empty();
+    let input_string = repl.input.as_str().to_owned(); // Must allocate here to avoid E0502 when calling &mut repl methods
     let _prompt_display_width = repl.prompt_mark_width; // cached at new()/print_prompt()
 
     let mut completion: Option<String> = None;
-    if input.is_empty() || reset_completion {
+    if is_empty || reset_completion {
         repl.input.completion = None;
         repl.input.color_ranges = None;
         repl.input.can_execute = false;
         repl.last_analyzed_input.clear();
         repl.last_analysis_result = None;
     } else {
-        completion = repl.get_completion_from_history(&input);
+        // Safe to use &mut repl now because input_string is owned
+        completion = repl.get_completion_from_history(&input_string);
 
         // Use cached analysis if input hasn't changed (fast path)
-        let analysis = if repl.last_analyzed_input == input && repl.last_analysis_result.is_some() {
-            repl.last_analysis_result.clone().unwrap()
-        } else {
-            let result = repl.analyze_input(&input, completion.clone());
-            repl.last_analyzed_input = input.clone();
-            repl.last_analysis_result = Some(result.clone());
-            result
-        };
+        let analysis =
+            if repl.last_analyzed_input == input_string && repl.last_analysis_result.is_some() {
+                repl.last_analysis_result.clone().unwrap()
+            } else {
+                let result = repl.analyze_input(&input_string, completion.clone());
+                repl.last_analyzed_input = input_string.clone();
+                repl.last_analysis_result = Some(result.clone());
+                result
+            };
 
         if let Some(c) = analysis.completion_full {
             repl.input.completion = Some(c);
@@ -251,12 +256,12 @@ pub fn print_input(
 
     // Auto-fix ghost text logic
     let mut ai_suggestion_text = None;
-    if repl.input.as_str().is_empty() && repl.auto_fix_suggestion.is_some() {
+    if is_empty && repl.auto_fix_suggestion.is_some() {
         ai_suggestion_text = repl.auto_fix_suggestion.as_deref();
     }
 
     let ghost_suffix = if completion.is_none() {
-        repl.suggestion_manager.suffix(&input)
+        repl.suggestion_manager.suffix(&input_string)
     } else {
         None
     };

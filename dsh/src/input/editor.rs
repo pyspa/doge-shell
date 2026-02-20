@@ -640,20 +640,20 @@ impl Input {
         let current_byte = self.byte_index();
         let is_end = current_byte == self.input.len();
 
-        // Build the complete output string to reduce write_fmt calls
-        let mut output = String::new();
-        output.push_str(&format!(
-            "{}",
-            completion.with(self.config.completion_color)
-        ));
+        // Write colored completion directly to the writer
+        writer
+            .write_fmt(format_args!(
+                "{}",
+                completion.with(self.config.completion_color)
+            ))
+            .ok();
 
         if !is_end {
             let tmp = &self.input[current_byte..];
-            output.push_str(&format!("{}", tmp.with(self.config.fg_color)));
+            writer
+                .write_fmt(format_args!("{}", tmp.with(self.config.fg_color)))
+                .ok();
         }
-
-        // Single write operation
-        writer.write_fmt(format_args!("{output}")).ok();
 
         // Ensure all buffered output is written immediately
         writer.flush().ok();

@@ -580,6 +580,10 @@ impl<'a> Repl<'a> {
         render::print_prompt(self, out)
     }
 
+    pub(crate) fn print_block_separator(&self, out: &mut impl Write) {
+        render::print_block_separator(self, out)
+    }
+
     fn sync_input_preferences(&mut self) {
         let prefs = self.shell.environment.read().input_preferences();
         if prefs != self.input_preferences {
@@ -722,6 +726,7 @@ impl<'a> Repl<'a> {
         {
             let mut renderer = TerminalRenderer::new();
             // start repl loop
+            self.print_block_separator(&mut renderer);
             self.print_prompt(&mut renderer);
             // ensure preprompt + mark are flushed on initial draw
             renderer.flush().ok();
@@ -988,6 +993,7 @@ impl<'a> Repl<'a> {
 
                                     // Redraw prompt
                                     let mut renderer = TerminalRenderer::new();
+                                    self.print_block_separator(&mut renderer);
                                     self.print_prompt(&mut renderer);
                                     // Reprint input with updates
                                     self.print_input(&mut renderer, true, true);

@@ -107,6 +107,7 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
                 );
                 // Show new prompt and skip command execution
                 let mut renderer = TerminalRenderer::new();
+                repl.print_block_separator(&mut renderer);
                 repl.print_prompt(&mut renderer);
                 renderer.flush().ok();
                 return Ok(());
@@ -216,6 +217,7 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
 
     // After command execution, show new prompt
     let mut renderer = TerminalRenderer::new();
+    repl.print_block_separator(&mut renderer);
     repl.print_prompt(&mut renderer);
     renderer.flush().ok();
     Ok(())
@@ -240,6 +242,7 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
                     false,
                 );
                 let mut renderer = TerminalRenderer::new();
+                repl.print_block_separator(&mut renderer);
                 repl.print_prompt(&mut renderer);
                 renderer.flush().ok();
                 return Ok(());
@@ -268,6 +271,7 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
 
     // After command execution, show new prompt
     let mut renderer = TerminalRenderer::new();
+    repl.print_block_separator(&mut renderer);
     repl.print_prompt(&mut renderer);
     renderer.flush().ok();
     Ok(())
@@ -299,6 +303,7 @@ pub(crate) fn handle_interrupt(repl: &mut Repl<'_>) -> Result<()> {
         } else {
             queue!(renderer, Print("\r\n")).ok();
         }
+        repl.print_block_separator(&mut renderer);
         repl.print_prompt(&mut renderer);
         renderer.flush().ok();
         repl.input.clear();

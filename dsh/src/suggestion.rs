@@ -39,6 +39,8 @@ pub struct InputPreferences {
     pub auto_notify_threshold: u64,
     /// When enabled, automatically insert pairs for brackets and quotes
     pub auto_pair: bool,
+    /// When enabled, visually separate command blocks
+    pub block_separator: bool,
 }
 
 impl Default for InputPreferences {
@@ -52,6 +54,7 @@ impl Default for InputPreferences {
             auto_notify_enabled: false,
             auto_notify_threshold: 10,
             auto_pair: false,
+            block_separator: true,
         }
     }
 }

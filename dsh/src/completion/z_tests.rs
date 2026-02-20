@@ -45,7 +45,14 @@ mod tests {
         }
 
         // Execute completion
-        let result = completion_for_z(&input, &repl, query, prompt_text, input_text);
+        let result = completion_for_z(
+            &input,
+            &repl,
+            query,
+            prompt_text,
+            input_text,
+            crate::completion::framework::CompletionFrameworkKind::Inline,
+        );
 
         println!("Completion result: {:?}", result);
 

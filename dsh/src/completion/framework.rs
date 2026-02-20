@@ -1,5 +1,5 @@
 use super::display::{Candidate, CompletionConfig, CompletionDisplay};
-use super::ui::{CompletionInteraction, CompletionOutcome, TerminalEventSource};
+use super::ui::{CompletionInteraction, CompletionOutcome, CompletionUi, TerminalEventSource};
 use crossterm::{cursor, execute};
 use skim::prelude::*;
 use skim::{Skim, SkimItemReceiver, SkimItemSender};
@@ -39,6 +39,7 @@ impl<'a> CompletionRequest<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompletionFrameworkKind {
     Inline,
+    Floating,
     Skim,
 }
 
@@ -85,6 +86,40 @@ impl CompletionFramework for InlineCompletionFramework {
             Err(error) => {
                 warn!("Completion interaction failed: {}", error);
                 let _ = display.clear_display();
+                let _ = execute!(stdout(), cursor::Show);
+                CompletionSelection::None
+            }
+        }
+    }
+}
+
+/// TUI grid renderer backed by ratatui and [`RatatuiCompletionUi`].
+#[derive(Debug, Default)]
+pub struct FloatingCompletionFramework;
+
+impl CompletionFramework for FloatingCompletionFramework {
+    fn select(&self, request: CompletionRequest<'_>) -> CompletionSelection {
+        let CompletionRequest {
+            items,
+            config,
+            input_text,
+            ..
+        } = request;
+
+        let mut display = crate::completion::floating::RatatuiCompletionUi::new(items, config);
+        let mut controller = CompletionInteraction::new(TerminalEventSource);
+
+        match controller.run(&mut display) {
+            Ok(CompletionOutcome::Submitted(value)) => CompletionSelection::Selected(value),
+            Ok(CompletionOutcome::Input(value)) => {
+                CompletionSelection::Selected(super::last_word(input_text).to_owned() + &value)
+            }
+            Ok(CompletionOutcome::Cancelled) | Ok(CompletionOutcome::NoSelection) => {
+                CompletionSelection::None
+            }
+            Err(error) => {
+                warn!("Floating completion interaction failed: {}", error);
+                let _ = display.clear();
                 let _ = execute!(stdout(), cursor::Show);
                 CompletionSelection::None
             }
@@ -158,6 +193,7 @@ pub fn select_with_framework_kind(
 ) -> CompletionSelection {
     match kind {
         CompletionFrameworkKind::Inline => InlineCompletionFramework.select(request),
+        CompletionFrameworkKind::Floating => FloatingCompletionFramework.select(request),
         CompletionFrameworkKind::Skim => SkimCompletionFramework.select(request),
     }
 }

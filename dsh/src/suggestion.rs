@@ -41,6 +41,8 @@ pub struct InputPreferences {
     pub auto_pair: bool,
     /// When enabled, visually separate command blocks
     pub block_separator: bool,
+    /// When enabled, use floating UI (Ratatui) for command completion
+    pub use_floating_completion: bool,
 }
 
 impl Default for InputPreferences {
@@ -55,6 +57,7 @@ impl Default for InputPreferences {
             auto_notify_threshold: 10,
             auto_pair: false,
             block_separator: true,
+            use_floating_completion: true,
         }
     }
 }

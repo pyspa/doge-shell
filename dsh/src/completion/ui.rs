@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use tracing::debug;
 
 /// Abstraction over the display implementation so it can be tested
@@ -11,6 +11,8 @@ pub trait CompletionUi {
     fn move_down(&mut self);
     fn move_left(&mut self);
     fn move_right(&mut self);
+    fn handle_click(&mut self, col: u16, row: u16) -> Option<usize>;
+    fn set_selection(&mut self, index: usize);
     fn selected_output(&self) -> Option<String>;
 }
 
@@ -61,49 +63,59 @@ where
 
         loop {
             let event = self.event_source.next_event()?;
-            match event {
-                Event::Key(key_event) => match interpret_key_event(&key_event) {
-                    InteractionCommand::MoveUp => {
-                        ui.move_up();
-                        ui.refresh_selection()?;
-                    }
-                    InteractionCommand::MoveDown => {
-                        ui.move_down();
-                        ui.refresh_selection()?;
-                    }
-                    InteractionCommand::MoveLeft => {
-                        ui.move_left();
-                        ui.refresh_selection()?;
-                    }
-                    InteractionCommand::MoveRight => {
-                        ui.move_right();
-                        ui.refresh_selection()?;
-                    }
-                    InteractionCommand::Submit => {
-                        let selection = ui.selected_output();
-                        ui.clear()?;
-                        if let Some(value) = selection {
-                            debug!("Completion submitted: {}", value);
+            let command = interpret_event(&event);
+            match command {
+                InteractionCommand::MoveUp => {
+                    ui.move_up();
+                    ui.refresh_selection()?;
+                }
+                InteractionCommand::MoveDown => {
+                    ui.move_down();
+                    ui.refresh_selection()?;
+                }
+                InteractionCommand::MoveLeft => {
+                    ui.move_left();
+                    ui.refresh_selection()?;
+                }
+                InteractionCommand::MoveRight => {
+                    ui.move_right();
+                    ui.refresh_selection()?;
+                }
+                InteractionCommand::Click(col, row) => {
+                    if let Some(index) = ui.handle_click(col, row) {
+                        ui.set_selection(index);
+                        if let Some(value) = ui.selected_output() {
+                            ui.clear()?;
+                            debug!("Completion submitted via click: {}", value);
                             return Ok(CompletionOutcome::Submitted(value));
                         }
-                        debug!("Completion confirmed without selection");
-                        return Ok(CompletionOutcome::NoSelection);
-                    }
-                    InteractionCommand::Input(ch) => {
+                    } else {
                         ui.clear()?;
-                        debug!("Completion cancelled by input");
-                        return Ok(CompletionOutcome::Input(ch.to_string()));
-                    }
-                    InteractionCommand::Cancel => {
-                        ui.clear()?;
-                        debug!("Completion cancelled by user");
+                        debug!("Completion cancelled by outside click");
                         return Ok(CompletionOutcome::Cancelled);
                     }
-                    InteractionCommand::Noop => {}
-                },
-                _ => {
-                    debug!("Ignoring non-key event during completion interaction");
                 }
+                InteractionCommand::Submit => {
+                    let selection = ui.selected_output();
+                    ui.clear()?;
+                    if let Some(value) = selection {
+                        debug!("Completion submitted: {}", value);
+                        return Ok(CompletionOutcome::Submitted(value));
+                    }
+                    debug!("Completion confirmed without selection");
+                    return Ok(CompletionOutcome::NoSelection);
+                }
+                InteractionCommand::Input(ch) => {
+                    ui.clear()?;
+                    debug!("Completion cancelled by input");
+                    return Ok(CompletionOutcome::Input(ch.to_string()));
+                }
+                InteractionCommand::Cancel => {
+                    ui.clear()?;
+                    debug!("Completion cancelled by user");
+                    return Ok(CompletionOutcome::Cancelled);
+                }
+                InteractionCommand::Noop => {}
             }
         }
     }
@@ -116,28 +128,43 @@ enum InteractionCommand {
     MoveLeft,
     MoveRight,
     Submit,
+    Click(u16, u16),
     Input(char),
     Cancel,
     Noop,
 }
 
-fn interpret_key_event(key: &KeyEvent) -> InteractionCommand {
-    if key.kind != KeyEventKind::Press {
-        return InteractionCommand::Noop;
-    }
+fn interpret_event(event: &Event) -> InteractionCommand {
+    match event {
+        Event::Key(key) => {
+            if key.kind != event::KeyEventKind::Press {
+                return InteractionCommand::Noop;
+            }
 
-    match (key.code, key.modifiers) {
-        (KeyCode::Up, _) => InteractionCommand::MoveUp,
-        (KeyCode::Down, _) => InteractionCommand::MoveDown,
-        (KeyCode::Left, _) => InteractionCommand::MoveLeft,
-        (KeyCode::Right, _) | (KeyCode::Tab, KeyModifiers::NONE) => InteractionCommand::MoveRight,
-        (KeyCode::Enter, _) => InteractionCommand::Submit,
-        (KeyCode::Esc, _)
-        | (KeyCode::Backspace, _)
-        | (KeyCode::Char('c'), KeyModifiers::CONTROL)
-        | (KeyCode::Char('g'), KeyModifiers::CONTROL)
-        | (KeyCode::Char('q'), KeyModifiers::NONE) => InteractionCommand::Cancel,
-        (KeyCode::Char(ch), _) => InteractionCommand::Input(ch),
+            match (key.code, key.modifiers) {
+                (KeyCode::Up, _) => InteractionCommand::MoveUp,
+                (KeyCode::Down, _) => InteractionCommand::MoveDown,
+                (KeyCode::Left, _) => InteractionCommand::MoveLeft,
+                (KeyCode::Right, _) | (KeyCode::Tab, KeyModifiers::NONE) => {
+                    InteractionCommand::MoveRight
+                }
+                (KeyCode::Enter, _) => InteractionCommand::Submit,
+                (KeyCode::Esc, _)
+                | (KeyCode::Backspace, _)
+                | (KeyCode::Char('c'), KeyModifiers::CONTROL)
+                | (KeyCode::Char('g'), KeyModifiers::CONTROL)
+                | (KeyCode::Char('q'), KeyModifiers::NONE) => InteractionCommand::Cancel,
+                (KeyCode::Char(ch), _) => InteractionCommand::Input(ch),
+                _ => InteractionCommand::Noop,
+            }
+        }
+        Event::Mouse(mouse_ev) => {
+            if mouse_ev.kind == event::MouseEventKind::Down(event::MouseButton::Left) {
+                InteractionCommand::Click(mouse_ev.column, mouse_ev.row)
+            } else {
+                InteractionCommand::Noop
+            }
+        }
         _ => InteractionCommand::Noop,
     }
 }
@@ -146,6 +173,7 @@ fn interpret_key_event(key: &KeyEvent) -> InteractionCommand {
 mod tests {
     use super::*;
     use anyhow::anyhow;
+    use crossterm::event::{KeyEvent, KeyEventKind};
 
     struct TestEventSource {
         events: Vec<Event>,
@@ -212,6 +240,12 @@ mod tests {
         fn move_right(&mut self) {
             self.move_right_calls += 1;
         }
+
+        fn handle_click(&mut self, _col: u16, _row: u16) -> Option<usize> {
+            None
+        }
+
+        fn set_selection(&mut self, _index: usize) {}
 
         fn selected_output(&self) -> Option<String> {
             self.selected.clone()

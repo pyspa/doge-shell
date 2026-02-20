@@ -355,6 +355,28 @@ impl Input {
             .sum();
     }
 
+    /// Set the cursor position based on a target visual display width offset.
+    /// This is used for mapping mouse clicks to string character positions.
+    pub fn set_cursor_from_display_width(&mut self, target_width: usize) {
+        let mut current_width = 0;
+        let mut new_cursor = 0;
+
+        for ch in self.input.chars() {
+            let char_width = ch.width().unwrap_or_default();
+
+            // Calculate distance to left and right edges.
+            // Tie goes to the right edge (advancing the cursor).
+            if 2 * target_width < 2 * current_width + char_width {
+                break;
+            }
+
+            current_width += char_width;
+            new_cursor += 1;
+        }
+
+        self.cursor = new_cursor;
+    }
+
     pub fn is_empty(&self) -> bool {
         self.input.is_empty()
     }
@@ -925,5 +947,77 @@ mod tests {
 
         input.move_word_right();
         assert_eq!(input.cursor(), 13); // end of string
+    }
+
+    #[test]
+    fn test_set_cursor_from_display_width() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+
+        // Test with ASCII
+        input.insert_str("abcdef");
+
+        // Target width exact matches
+        input.set_cursor_from_display_width(0);
+        assert_eq!(input.cursor(), 0);
+
+        input.set_cursor_from_display_width(1);
+        assert_eq!(input.cursor(), 1);
+
+        input.set_cursor_from_display_width(3);
+        assert_eq!(input.cursor(), 3);
+
+        // Target width beyond end of string
+        input.set_cursor_from_display_width(100);
+        assert_eq!(input.cursor(), 6);
+
+        // Test with multi-byte characters
+        input.clear();
+        input.insert_str("あいう");
+
+        // The 'あ' is width 2.
+        // Clicking at width 0 snaps to 0.
+        input.set_cursor_from_display_width(0);
+        assert_eq!(input.cursor(), 0);
+
+        // Clicking at width 1 (middle of 'あ') snaps to 1 (after 'あ').
+        input.set_cursor_from_display_width(1);
+        assert_eq!(input.cursor(), 1);
+
+        // Clicking at width 2 (start of 'い') snaps to 1.
+        input.set_cursor_from_display_width(2);
+        assert_eq!(input.cursor(), 1);
+
+        // Clicking at width 3 (middle of 'い') snaps to 2.
+        input.set_cursor_from_display_width(3);
+        assert_eq!(input.cursor(), 2);
+
+        // Test mixed characters
+        input.clear();
+        input.insert_str("aあbいc");
+
+        // "a" (0..1) -> width 0-1
+        // "あ" (1..2) -> width 1-3
+        // "b" (2..3) -> width 3-4
+        // "い" (3..4) -> width 4-6
+        // "c" (4..5) -> width 6-7
+
+        input.set_cursor_from_display_width(0);
+        assert_eq!(input.cursor(), 0);
+
+        input.set_cursor_from_display_width(1);
+        assert_eq!(input.cursor(), 1);
+
+        input.set_cursor_from_display_width(2);
+        assert_eq!(input.cursor(), 2);
+
+        input.set_cursor_from_display_width(3);
+        assert_eq!(input.cursor(), 2);
+
+        input.set_cursor_from_display_width(4);
+        assert_eq!(input.cursor(), 3);
+
+        input.set_cursor_from_display_width(10);
+        assert_eq!(input.cursor(), 5);
     }
 }

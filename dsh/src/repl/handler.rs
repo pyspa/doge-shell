@@ -37,6 +37,7 @@ pub(crate) async fn handle_event(repl: &mut Repl<'_>, ev: ShellEvent) -> Result<
     match ev {
         ShellEvent::Input(input) => match input {
             Event::Key(key) => repl.handle_key_event(&key).await,
+            Event::Mouse(mouse_ev) => mouse::handle_mouse_event(repl, &mouse_ev).await,
             Event::Paste(text) => {
                 editing::handle_paste_event(repl, &text).await?;
                 Ok(ReplControlFlow::Continue)

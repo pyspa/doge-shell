@@ -10,20 +10,23 @@ use crate::input::{ColorType, Input, InputConfig, display_width};
 use crate::lisp::{Symbol, Value};
 use crate::parser::Rule;
 use crate::prompt::Prompt;
+use crate::repl::state::{DoublePressState, ReplControlFlow, ShellEvent};
+use crate::repl::suggestion_manager::SuggestionManager;
 use crate::shell::{SHELL_TERMINAL, Shell};
 use crate::suggestion::{InputPreferences, SuggestionBackend};
 use crate::terminal::renderer::TerminalRenderer;
 use anyhow::Context as _;
 use anyhow::Result;
-use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste, EventStream, KeyEvent};
-use crossterm::queue;
+use crossterm::event::{EnableBracketedPaste, EventStream, KeyEvent};
 use crossterm::style::Print;
-use crossterm::terminal::{self, Clear, ClearType, disable_raw_mode, enable_raw_mode};
+use crossterm::terminal::ClearType;
+use crossterm::terminal::{self, disable_raw_mode, enable_raw_mode};
+use crossterm::{queue, terminal::Clear};
+use futures::StreamExt;
 
 use dsh_builtin::execute_chat_message;
 use dsh_openai::{ChatGptClient, OpenAiConfig};
 use dsh_types::Context;
-use futures::StreamExt;
 use nix::sys::termios::{Termios, tcgetattr};
 use nix::unistd::getpid;
 use nix::unistd::tcsetpgrp;
@@ -47,13 +50,12 @@ mod state;
 use state::*;
 mod cache;
 use cache::*;
-mod suggestion_manager;
-use suggestion_manager::*;
 pub mod confirmation;
 mod handler;
 pub mod key_action;
 mod key_handlers;
 mod render;
+mod suggestion_manager;
 
 pub mod completion;
 mod input_analysis;
@@ -127,11 +129,18 @@ impl<'a> Drop for Repl<'a> {
         // Cancel background task
         if let Some(handle) = self.github_task.take() {
             handle.abort();
-        }
+        };
 
         let mut renderer = TerminalRenderer::new();
-        queue!(renderer, DisableBracketedPaste).ok();
+        queue!(
+            renderer,
+            crossterm::event::DisableBracketedPaste,
+            crossterm::event::DisableMouseCapture
+        )
+        .ok();
         renderer.flush().ok();
+
+        disable_raw_mode().ok();
         self.save_history();
         // Save command timing statistics
         if let Some(path) = command_timing::get_timing_file_path()
@@ -405,7 +414,12 @@ impl<'a> Repl<'a> {
         self.lines = screen_size.1 as usize;
         enable_raw_mode().ok();
         let mut renderer = TerminalRenderer::new();
-        queue!(renderer, EnableBracketedPaste).ok();
+        queue!(
+            renderer,
+            EnableBracketedPaste,
+            crossterm::event::EnableMouseCapture
+        )
+        .ok();
         renderer.flush().ok();
     }
 

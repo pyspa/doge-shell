@@ -3,4 +3,5 @@ pub(crate) mod auxiliary;
 pub(crate) mod completion;
 pub(crate) mod editing;
 pub(crate) mod execution;
+pub(crate) mod mouse;
 pub(crate) mod navigation;

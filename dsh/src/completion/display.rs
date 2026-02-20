@@ -363,6 +363,63 @@ impl CompletionDisplay {
         }
     }
 
+    /// Selects an item at a specific index.
+    /// Used by mouse click handler to force a selection.
+    pub fn set_selection(&mut self, index: usize) {
+        if index < self.candidates.len() {
+            self.selected_index = index;
+        }
+    }
+
+    /// Handle a mouse click at the given terminal coordinates.
+    /// Returns the index of the clicked candidate, if any.
+    pub fn handle_click(&mut self, col: u16, row: u16) -> Option<usize> {
+        let start_row = self.display_start_row?;
+        // Display starts printing elements at start_row + 1.
+        let grid_start_row = start_row + 1;
+
+        if row < grid_start_row {
+            return None; // Clicked above the items
+        }
+
+        let layout = self.layout_cache.as_ref()?;
+        let rel_row = (row - grid_start_row) as usize;
+
+        if rel_row >= layout.total_rows {
+            return None; // Clicked below the items
+        }
+
+        // Items are laid out with column_width plus 1 char for ">" and at least 2 spaces between columns
+        let stride = layout.column_width + 1 + 2;
+
+        if stride == 0 {
+            return None;
+        }
+
+        // 0-indexed column offset starts from col 0 (self.display_start_col is typically not strictly maintained for the grid, as render_all_items moves to column 0)
+        let rel_col = col as usize;
+        let col_idx = rel_col / stride;
+
+        if col_idx >= layout.items_per_row {
+            return None; // Clicked beyond the items on the row
+        }
+
+        let index = rel_row * layout.items_per_row + col_idx;
+
+        if index < self.candidates.len() {
+            let candidate = &self.candidates[index];
+            if self.has_more_items
+                && index == self.candidates.len() - 1
+                && candidate.get_display_name().starts_with("📋")
+            {
+                return None;
+            }
+            Some(index)
+        } else {
+            None
+        }
+    }
+
     pub fn display(&mut self) -> Result<()> {
         self.display_with_mode(DisplayMode::Full)
     }
@@ -674,6 +731,14 @@ impl CompletionUi for CompletionDisplay {
 
     fn move_right(&mut self) {
         CompletionDisplay::move_right(self);
+    }
+
+    fn handle_click(&mut self, col: u16, row: u16) -> Option<usize> {
+        CompletionDisplay::handle_click(self, col, row)
+    }
+
+    fn set_selection(&mut self, index: usize) {
+        CompletionDisplay::set_selection(self, index)
     }
 
     fn selected_output(&self) -> Option<String> {
@@ -1104,5 +1169,69 @@ mod tests {
 
         // Verify description is returned
         assert_eq!(desc, Some("  Short description".to_string()));
+    }
+
+    #[test]
+    fn test_handle_click() {
+        let candidates = vec![
+            Candidate::Item("c1".to_string(), "d1".to_string()),
+            Candidate::Item("c2".to_string(), "d2".to_string()),
+            Candidate::Item("c3".to_string(), "d3".to_string()),
+            Candidate::Item("c4".to_string(), "d4".to_string()),
+        ];
+        let config = CompletionConfig::default();
+        let mut display = CompletionDisplay::new_with_config(candidates, "$ ", "", config);
+
+        display.layout_cache = Some(LayoutCache {
+            column_width: 10,
+            max_name_width: 10,
+            items_per_row: 2,
+            total_rows: 2,
+            terminal_width: 80,
+        });
+
+        // Mock the display start position
+        display.display_start_row = Some(5);
+        display.display_start_col = Some(0);
+
+        // Click on the prompt or input above the grid (row < start_row + 1)
+        assert_eq!(display.handle_click(0, 5), None);
+
+        // Click on the grid's first row (row 6)
+        // stride = column_width (10) + 1 + 2 = 13
+        // Column 0-12 maps to first item
+        assert_eq!(display.handle_click(0, 6), Some(0)); // Start of "c1"
+        assert_eq!(display.handle_click(12, 6), Some(0)); // End of stride for "c1"
+
+        // Column 13-25 maps to second item
+        assert_eq!(display.handle_click(13, 6), Some(1)); // Start of "c2"
+
+        // Click on the second row (row 7)
+        assert_eq!(display.handle_click(0, 7), Some(2)); // "c3"
+        assert_eq!(display.handle_click(13, 7), Some(3)); // "c4"
+
+        // Click far right on a valid row
+        assert_eq!(display.handle_click(40, 6), None);
+
+        // Click below the grid
+        assert_eq!(display.handle_click(0, 8), None);
+
+        // Click on info/message item
+        let info_candidates = vec![
+            Candidate::Item("item".to_string(), "".to_string()),
+            Candidate::Item("📋 info".to_string(), "".to_string()),
+        ];
+        let mut display_info = CompletionDisplay::new_with_config(
+            info_candidates,
+            "$ ",
+            "",
+            CompletionConfig::default(),
+        );
+        display_info.has_more_items = true;
+        display_info.layout_cache = display.layout_cache.clone();
+        display_info.display_start_row = Some(5);
+
+        assert_eq!(display_info.handle_click(0, 6), Some(0)); // Valid item
+        assert_eq!(display_info.handle_click(13, 6), None); // Info item should not be selectable
     }
 }

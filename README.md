@@ -197,7 +197,11 @@ The shell includes many built-in commands:
 | `abbr`              | Configure abbreviations                                                                                                    |
 | `alias`             | Configure command aliases                                                                                                  |
 | `export`            | Set export attribute for shell variables                                                                                   |
-| `chat`              | Chat with AI assistant                                                                                                     |
+| `task`              | Task runner command                                                                                                        |
+| `procs`             | Interactive process viewer                                                                                                 |
+| `project`           | Project management (see also `pm`, `pj`)                                                                                   |
+| `snippet`           | Snippet management command                                                                                                 |
+| `bookmark`          | Bookmark management command                                                                                                |
 | `chat_prompt`       | Set AI assistant system prompt                                                                                             |
 | `chat_model`        | Set AI model                                                                                                               |
 | `gh-notify`         | View GitHub notifications interactively                                                                                    |
@@ -235,7 +239,7 @@ The embedded Lisp interpreter includes many built-in functions:
 ### Core Functions
 
 - `print` - Print a value
-- `is_null`, `is_number`, `is_symbol`, `is_boolean`, `is_procedure`, `is_pair` - Type checking
+- `is_null`, `is_number`, `is_symbol`, `is_boolean`, `is_procedure`, `is_pair`, `is_table` - Type checking
 - `car`, `cdr`, `cons`, `list`, `nth`, `sort`, `reverse` - List operations
 - `map`, `filter` - Higher-order functions
 - `length`, `range` - List utilities
@@ -252,11 +256,12 @@ The embedded Lisp interpreter includes many built-in functions:
 - `sh` - Execute shell commands in the current shell context
 - `sh!` - Execute shell commands with output capture
 - `setenv` - Set environment variables
-- `getenv` - Get environment variables
 - `vset` - Set shell variables
 - `add_path` - Add paths to PATH
-- `number->string` - Convert number to string
-- `string-append` - Concatenate strings
+- `pref-auto-pair` - Configure automatic pairing of quotes/brackets
+- `pref-auto-notify` - Configure automatic notification
+- `set-auto-fix-enabled` - Enable or disable AI auto-fix
+- `set-notify-config` - Configure notification behavior
 - `allow-direnv` - Configure direnv roots
 - `edit` - Open a file in the external editor
 
@@ -292,6 +297,10 @@ The embedded Lisp interpreter includes many built-in functions:
 - `mcp-add-http` - Add an MCP server with HTTP transport
 - `mcp-add-sse` - Add an MCP server with SSE transport
 - `mcp-list` - List registered MCP servers
+- `mcp-status` - Show connection status of all MCP servers
+- `mcp-connect` - Connect to a specific MCP server
+- `mcp-disconnect` - Disconnect from a specific MCP server
+- `mcp-disconnect-all` - Disconnect from all MCP servers
 - `mcp-list-tools` - List all available MCP tools
 - `chat-execute-clear` - Clear execute tool allowlist
 - `chat-execute-add` - Add command(s) to execute tool allowlist (accepts multiple commands)
@@ -573,7 +582,6 @@ include setup.sh
 - `Ctrl+R` - Interactive history search
 - `Ctrl+C` - Cancel current command (press twice to exit shell)
 - `Ctrl+L` - Clear screen
-- `Ctrl+D` - Show exit hint (use `exit` to leave)
 - `Ctrl+K` - Delete from cursor to end of line
 - `Ctrl+U` - Delete from cursor to beginning of line
 - `Ctrl+W` - Delete word backward
@@ -581,7 +589,7 @@ include setup.sh
 - `Esc` (double press) - Toggle `sudo` prefix for the current command
 - `Ctrl+x Ctrl+e` - Edit current input in external editor (`$VISUAL` or `$EDITOR`)
 - `Alt+Enter` - Execute command in background
-- `Ctrl+Space` - Force AI suggestion
+- `Alt+s` - Force AI suggestion
 - `Alt+[` / `Alt+]` - Rotate through suggestions
 - `Alt+m` - Open Macro Recorder
 
@@ -638,34 +646,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    !explain how to use the grep command
    ```
 
-   chat "How do I compress a directory with tar?"
-
-   ```
-
-5. **Smart Pipe Expansion (`|?`)**:
-
-   Describe how you want to filter or process data in natural language, and let AI expand it into shell commands.
-
-   ```bash
-   # Type:
-   ls -l |? sort by size and take top 5<Tab>
-   
-   # Expands to:
-   ls -l | sort -rn -k 5 | head -n 5
-   ```
-
-6. **Generative Command (`??`)**:
-   Describe what you want to do in natural language at the start of the line, and let AI generate the command for you.
-
-   ```bash
-   # Type:
-   ?? undo last git commit<Enter>
-   
-   # Expands to:
-   git reset --soft HEAD~1
-   ```
-
-7. **Auto-Fix (Error Recovery) (`Alt+f`)**:
+4. **Auto-Fix (Error Recovery) (`Alt+f`)**:
    If a command fails, press `Alt+f` to have AI suggest a fix for the last failed command.
 
    ```bash
@@ -677,7 +658,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    git status
    ```
 
-8. **Smart Git Commit (`Alt+c`)**:
+5. **Smart Git Commit (`Alt+c`)**:
    Stage your changes, then press `Alt+c` to invoke the `aic` command, which analyzes the diff and generates a conventional commit message.
 
    ```bash
@@ -687,21 +668,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    # Press Enter to generate message
    ```
 
-9. **AI Output Pipe (`|!`)**:
-   Pipe command output to AI for analysis with a natural language query.
-
-   ```bash
-   # Analyze log files:
-   docker logs app |! "summarize the errors"
-   
-   # Find specific information:
-   kubectl get pods |! "which pods are failing?"
-   
-   # Get file statistics:
-   ls -la |! "what is the largest file?"
-   ```
-
-10. **Error Diagnosis (`Alt+d`)**:
+6. **Error Diagnosis (`Alt+d`)**:
     When a command fails, press `Alt+d` to have AI diagnose the error and suggest fixes.
 
     ```bash
@@ -710,16 +677,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     # "The command 'gti' was not found. Did you mean 'git'?"
     ```
 
-11. **AI Quick Actions (`Alt+a`)**:
-    Press `Alt+a` to open a menu of AI-powered actions including:
-    - Explain Command
-    - Suggest Improvement
-    - Check Safety
-    - Diagnose Error
-    - Describe Directory
-    - Suggest Commands
-    
-12. **Safe Run (`safe-run`)**:
+7. **Safe Run (`safe-run`)**:
     Execute commands with AI-powered safety analysis. Useful for auditing potential risky commands or inspecting output before piping.
 
     ```bash
@@ -734,7 +692,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     - **Content Inspection**: For pipe operations, you can inspect the captured output (preview shown on stderr) before allowing it to pass to the next command.
     - **Confirmation**: Required for execution.
 
-13. **AI Response Language**:
+8. **AI Response Language**:
     Configure the language for AI chat responses.
 
     ```lisp

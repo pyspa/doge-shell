@@ -164,31 +164,6 @@ impl CompletionUi for RatatuiCompletionUi {
         // No-op for a vertical list
     }
 
-    fn handle_click(&mut self, col: u16, row: u16) -> Option<usize> {
-        if let Some(area) = self.list_area {
-            // Check if click is inside the list area, excluding borders
-            if col > area.x
-                && col < area.x + area.width.saturating_sub(1)
-                && row > area.y
-                && row < area.y + area.height.saturating_sub(1)
-            {
-                // Calculate item index based on click row
-                let clicked_index = (row - area.y - 1) as usize;
-
-                if clicked_index < self.candidates.len().min(self.config.max_items) {
-                    return Some(clicked_index);
-                }
-            }
-        }
-        None
-    }
-
-    fn set_selection(&mut self, index: usize) {
-        if index < self.candidates.len() {
-            self.state.select(Some(index));
-        }
-    }
-
     fn selected_output(&self) -> Option<String> {
         self.state
             .selected()
@@ -248,45 +223,5 @@ mod tests {
 
         ui.move_up();
         assert_eq!(ui.state.selected(), Some(0));
-    }
-
-    #[test]
-    fn test_set_selection() {
-        let mut ui = setup_ui(5);
-        ui.set_selection(3);
-        assert_eq!(ui.state.selected(), Some(3));
-
-        // Out of bounds should do nothing
-        ui.set_selection(10);
-        assert_eq!(ui.state.selected(), Some(3));
-    }
-
-    #[test]
-    fn test_handle_click_within_bounds() {
-        let mut ui = setup_ui(5);
-        // Mock list area
-        ui.list_area = Some(Rect {
-            x: 5,
-            y: 10,
-            width: 20,
-            height: 10,
-        });
-
-        // Click on the first item (y = 11 because border takes y = 10)
-        let idx1 = ui.handle_click(6, 11);
-        assert_eq!(idx1, Some(0));
-
-        // Click on the third item (y = 13)
-        let idx3 = ui.handle_click(15, 13);
-        assert_eq!(idx3, Some(2));
-
-        // Click outside width
-        assert_eq!(ui.handle_click(30, 11), None);
-
-        // Click on top border
-        assert_eq!(ui.handle_click(6, 10), None);
-
-        // Click below bounds
-        assert_eq!(ui.handle_click(6, 25), None);
     }
 }

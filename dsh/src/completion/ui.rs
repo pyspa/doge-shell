@@ -11,8 +11,6 @@ pub trait CompletionUi {
     fn move_down(&mut self);
     fn move_left(&mut self);
     fn move_right(&mut self);
-    fn handle_click(&mut self, col: u16, row: u16) -> Option<usize>;
-    fn set_selection(&mut self, index: usize);
     fn selected_output(&self) -> Option<String>;
 }
 
@@ -81,20 +79,6 @@ where
                     ui.move_right();
                     ui.refresh_selection()?;
                 }
-                InteractionCommand::Click(col, row) => {
-                    if let Some(index) = ui.handle_click(col, row) {
-                        ui.set_selection(index);
-                        if let Some(value) = ui.selected_output() {
-                            ui.clear()?;
-                            debug!("Completion submitted via click: {}", value);
-                            return Ok(CompletionOutcome::Submitted(value));
-                        }
-                    } else {
-                        ui.clear()?;
-                        debug!("Completion cancelled by outside click");
-                        return Ok(CompletionOutcome::Cancelled);
-                    }
-                }
                 InteractionCommand::Submit => {
                     let selection = ui.selected_output();
                     ui.clear()?;
@@ -128,7 +112,6 @@ enum InteractionCommand {
     MoveLeft,
     MoveRight,
     Submit,
-    Click(u16, u16),
     Input(char),
     Cancel,
     Noop,
@@ -156,13 +139,6 @@ fn interpret_event(event: &Event) -> InteractionCommand {
                 | (KeyCode::Char('q'), KeyModifiers::NONE) => InteractionCommand::Cancel,
                 (KeyCode::Char(ch), _) => InteractionCommand::Input(ch),
                 _ => InteractionCommand::Noop,
-            }
-        }
-        Event::Mouse(mouse_ev) => {
-            if mouse_ev.kind == event::MouseEventKind::Down(event::MouseButton::Left) {
-                InteractionCommand::Click(mouse_ev.column, mouse_ev.row)
-            } else {
-                InteractionCommand::Noop
             }
         }
         _ => InteractionCommand::Noop,
@@ -240,12 +216,6 @@ mod tests {
         fn move_right(&mut self) {
             self.move_right_calls += 1;
         }
-
-        fn handle_click(&mut self, _col: u16, _row: u16) -> Option<usize> {
-            None
-        }
-
-        fn set_selection(&mut self, _index: usize) {}
 
         fn selected_output(&self) -> Option<String> {
             self.selected.clone()

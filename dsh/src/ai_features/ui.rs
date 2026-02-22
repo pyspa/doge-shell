@@ -1,6 +1,6 @@
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -25,7 +25,7 @@ struct TerminalGuard;
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+        let _ = execute!(io::stdout(), LeaveAlternateScreen);
         let _ = execute!(io::stdout(), crossterm::cursor::Show);
     }
 }
@@ -58,7 +58,7 @@ impl AiChatUi {
     pub fn run(&mut self) -> Result<UiOutcome> {
         let mut stdout = stdout();
         enable_raw_mode()?;
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+        execute!(stdout, EnterAlternateScreen)?;
 
         let _guard = TerminalGuard; // Ensures cleanup on ? or panic
         let backend = CrosstermBackend::new(stdout);

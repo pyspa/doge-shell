@@ -132,12 +132,7 @@ impl<'a> Drop for Repl<'a> {
         };
 
         let mut renderer = TerminalRenderer::new();
-        queue!(
-            renderer,
-            crossterm::event::DisableBracketedPaste,
-            crossterm::event::DisableMouseCapture
-        )
-        .ok();
+        queue!(renderer, crossterm::event::DisableBracketedPaste).ok();
         renderer.flush().ok();
 
         disable_raw_mode().ok();
@@ -414,12 +409,7 @@ impl<'a> Repl<'a> {
         self.lines = screen_size.1 as usize;
         enable_raw_mode().ok();
         let mut renderer = TerminalRenderer::new();
-        queue!(
-            renderer,
-            EnableBracketedPaste,
-            crossterm::event::EnableMouseCapture
-        )
-        .ok();
+        queue!(renderer, EnableBracketedPaste).ok();
         renderer.flush().ok();
     }
 

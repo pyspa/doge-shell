@@ -210,7 +210,7 @@ pub async fn eval_str(
 
         // Handle capture mode with |>
         if job.capture_output {
-            let (exit, stdout, stderr) = execute_with_capture(shell, ctx, &job).await?;
+            let (exit, stdout, stderr) = execute_with_capture(shell, ctx, &mut job).await?;
             last_exit_code = exit;
 
             // Save to output history
@@ -236,6 +236,11 @@ pub async fn eval_str(
                 std::io::stderr().flush().ok();
             }
 
+            // Execute post-exec hooks
+            if let Err(e) = shell.exec_post_exec_hooks(&job.cmd, last_exit_code) {
+                debug!("Error executing post-exec hooks: {}", e);
+            }
+
             // Re-enable raw mode after capture job (only in interactive mode)
             if ctx.interactive {
                 enable_raw_mode().ok();
@@ -248,52 +253,22 @@ pub async fn eval_str(
         if !job.struct_pipe_exprs.is_empty() {
             use crate::lisp::{Symbol, Value};
 
-            // Strip the |: suffix from the command for execution
-            let cmd_str = job.cmd.trim();
-            let cmd_str = cmd_str.split("|:").next().unwrap_or(cmd_str).trim();
-
-            // Skip if no command to execute
-            if cmd_str.is_empty() {
-                debug!("Struct pipe: empty command, skipping");
+            if !job.has_process() {
+                debug!("Struct pipe: no executable process, skipping");
                 gate_op = next_gate_op;
                 continue;
             }
 
             debug!(
                 "Struct pipe: executing command '{}' with {} Lisp expressions",
-                cmd_str,
+                job.cmd,
                 job.struct_pipe_exprs.len()
             );
 
-            // Execute command and capture output
-            let (output, stderr_output) = {
-                use std::process::Stdio;
-                use tokio::process::Command;
-
-                let result = Command::new("sh")
-                    .arg("-c")
-                    .arg(cmd_str)
-                    .stdin(Stdio::inherit())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .output()
-                    .await;
-
-                match result {
-                    Ok(out) => {
-                        last_exit_code = out.status.code().unwrap_or(1);
-                        (
-                            String::from_utf8_lossy(&out.stdout).to_string(),
-                            String::from_utf8_lossy(&out.stderr).to_string(),
-                        )
-                    }
-                    Err(e) => {
-                        eprintln!("Struct pipe: command execution failed: {}", e);
-                        last_exit_code = 1;
-                        (String::new(), String::new())
-                    }
-                }
-            };
+            // Execute command through regular job launch path and capture output.
+            let (exit_code, output, stderr_output) =
+                execute_with_capture(shell, ctx, &mut job).await?;
+            last_exit_code = exit_code;
 
             // Output stderr to terminal (struct_pipe only processes stdout)
             if !stderr_output.is_empty() {
@@ -346,7 +321,7 @@ pub async fn eval_str(
             }
 
             // Execute post-exec hooks
-            if let Err(e) = shell.exec_post_exec_hooks(cmd_str, last_exit_code) {
+            if let Err(e) = shell.exec_post_exec_hooks(&job.cmd, last_exit_code) {
                 debug!("Error executing post-exec hooks: {}", e);
             }
 
@@ -416,33 +391,81 @@ pub async fn eval_str(
 /// Execute a job and capture its stdout and stderr
 /// Returns (exit_code, stdout, stderr)
 pub async fn execute_with_capture(
-    _shell: &mut Shell,
-    _ctx: &mut Context,
-    job: &Job,
+    shell: &mut Shell,
+    ctx: &Context,
+    job: &mut Job,
 ) -> Result<(i32, String, String)> {
-    use std::process::Stdio;
-    use tokio::process::Command;
+    use libc::STDOUT_FILENO;
+    use nix::unistd::{close, pipe};
+    use std::fs::File;
+    use std::io::Read;
+    use std::os::fd::{FromRawFd, IntoRawFd, RawFd};
+    use std::thread;
 
-    // Strip the |> suffix from the command
-    let cmd_str = job.cmd.trim();
-    let cmd_str = cmd_str.strip_suffix("|>").unwrap_or(cmd_str).trim();
+    fn spawn_pipe_reader(fd: RawFd) -> thread::JoinHandle<std::io::Result<Vec<u8>>> {
+        thread::spawn(move || {
+            let mut file = unsafe { File::from_raw_fd(fd) };
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf)?;
+            Ok(buf)
+        })
+    }
 
-    debug!("Executing with capture: '{}'", cmd_str);
+    fn join_pipe_reader(
+        handle: thread::JoinHandle<std::io::Result<Vec<u8>>>,
+        name: &str,
+    ) -> Result<String> {
+        let bytes = handle
+            .join()
+            .map_err(|_| anyhow!("{} reader thread panicked", name))?
+            .with_context(|| format!("Failed to read {} capture stream", name))?;
+        Ok(String::from_utf8_lossy(&bytes).to_string())
+    }
 
-    // Use sh -c to execute the command via Tokio (async)
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(cmd_str)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .with_context(|| format!("Failed to execute command: {}", cmd_str))?;
+    let (stdout_read, stdout_write) = pipe().context("failed to create stdout capture pipe")?;
+    let (stderr_read, stderr_write) = pipe().context("failed to create stderr capture pipe")?;
 
-    let exit_code = output.status.code().unwrap_or(1);
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout_read_fd = stdout_read.into_raw_fd();
+    let stdout_write_fd = stdout_write.into_raw_fd();
+    let stderr_read_fd = stderr_read.into_raw_fd();
+    let stderr_write_fd = stderr_write.into_raw_fd();
+
+    // Drain capture streams concurrently to avoid pipe-buffer deadlocks on large output.
+    let stdout_reader = spawn_pipe_reader(stdout_read_fd);
+    let stderr_reader = spawn_pipe_reader(stderr_read_fd);
+
+    let mut capture_ctx = ctx.clone();
+    capture_ctx.outfile = STDOUT_FILENO;
+    capture_ctx.errfile = stderr_write_fd;
+    capture_ctx.captured_out = Some(stdout_write_fd);
+    capture_ctx.pid = None;
+    capture_ctx.pgid = None;
+    capture_ctx.process_count = 0;
+    capture_ctx.foreground = true;
+
+    let original_disable_pty = job.disable_pty;
+    let original_foreground = job.foreground;
+    job.disable_pty = true;
+    job.foreground = true;
+
+    let launch_result = job.launch(&mut capture_ctx, shell).await;
+
+    job.disable_pty = original_disable_pty;
+    job.foreground = original_foreground;
+
+    // Ensure writer ends are closed in parent so reader threads can finish.
+    let _ = close(stdout_write_fd);
+    let _ = close(stderr_write_fd);
+
+    let stdout = join_pipe_reader(stdout_reader, "stdout")?;
+    let stderr = join_pipe_reader(stderr_reader, "stderr")?;
+
+    let state = launch_result?;
+    let exit_code = match state {
+        ProcessState::Completed(code, _) => i32::from(code),
+        ProcessState::Stopped(_, _) => 130,
+        ProcessState::Running => 0,
+    };
 
     debug!(
         "Capture complete: exit={}, stdout={} bytes, stderr={} bytes",

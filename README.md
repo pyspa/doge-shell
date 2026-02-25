@@ -90,7 +90,7 @@ Protection of sensitive information from history and display.
 ### Model Context Protocol (MCP) Integration
 
 - **MCP Client**: Connect to external Model Context Protocol servers
-- **Multiple Transport**: Support for stdio, HTTP, and SSE transports
+- **Multiple Transport**: Support for stdio and HTTP transports (SSE is currently unsupported at runtime)
 - **Dynamic Tools**: Automatic discovery of MCP server tools
 - **Configuration**: MCP servers are configured in `config.lisp`
 
@@ -295,7 +295,7 @@ The embedded Lisp interpreter includes many built-in functions:
 - `mcp-clear` - Clear all MCP servers
 - `mcp-add-stdio` - Add an MCP server with stdio transport
 - `mcp-add-http` - Add an MCP server with HTTP transport
-- `mcp-add-sse` - Add an MCP server with SSE transport
+- `mcp-add-sse` - Add an MCP server with SSE transport (currently unsupported at runtime)
 - `mcp-list` - List registered MCP servers
 - `mcp-status` - Show connection status of all MCP servers
 - `mcp-connect` - Connect to a specific MCP server
@@ -386,6 +386,7 @@ Create a `~/.config/dsh/config.lisp` file to configure your shell:
 )
 
 ;; Add MCP server with SSE transport
+;; NOTE: SSE transport is currently unsupported at runtime (rmcp 0.14.0 limitation)
 ;; Parameters: label, URL, description (optional)
 (mcp-add-sse 
   "streaming-service"                 ; label
@@ -492,6 +493,7 @@ Example:
 #### `(mcp-add-sse label url description)`
 
 Adds an MCP server that communicates via Server-Sent Events.
+This function is currently configuration-only: runtime connection attempts return an error because SSE transport is not supported in rmcp 0.14.0.
 
 - `label`: A unique identifier for the server
 - `url`: The SSE endpoint URL

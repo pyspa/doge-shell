@@ -82,6 +82,18 @@ impl Env {
         }
     }
 
+    /// Snapshot the current environment bindings.
+    ///
+    /// This is used by transactional config reload to restore Lisp symbols on failure.
+    pub fn snapshot_entries(&self) -> HashMap<Symbol, Value> {
+        self.entries.clone()
+    }
+
+    /// Restore environment bindings from a snapshot.
+    pub fn restore_entries(&mut self, entries: HashMap<Symbol, Value>) {
+        self.entries = entries;
+    }
+
     fn display_recursive(&self, output: &mut String, depth: i32) {
         let indent = &(0..depth).map(|_| "  ").collect::<String>();
 

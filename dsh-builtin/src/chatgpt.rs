@@ -220,7 +220,7 @@ impl ConversationManager {
 }
 
 mod mcp;
-pub use mcp::{McpConnectionStatus, McpManager, McpServerStatus};
+pub use mcp::{McpConnectionStatus, McpManager, McpRuntimeStateSnapshot, McpServerStatus};
 mod tool;
 
 use tool::{build_tools, execute_tool_call};

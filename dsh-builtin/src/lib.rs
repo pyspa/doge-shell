@@ -22,7 +22,7 @@ mod magit;
 mod markdown;
 mod safe_run;
 pub use chatgpt::execute_chat_message;
-pub use chatgpt::{McpConnectionStatus, McpManager, McpServerStatus};
+pub use chatgpt::{McpConnectionStatus, McpManager, McpRuntimeStateSnapshot, McpServerStatus};
 mod bookmark;
 pub mod command_timing;
 mod commit_ai;

@@ -159,6 +159,12 @@ pub struct McpSyncStats {
     pub unchanged: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct McpRuntimeStateSnapshot {
+    pub session_meta: HashMap<String, Instant>,
+    pub connection_errors: HashMap<String, String>,
+}
+
 /// MCP Manager with session caching support
 pub struct McpManager {
     servers: Vec<McpServer>,
@@ -278,6 +284,42 @@ impl McpManager {
                 }
             })
             .collect()
+    }
+
+    /// Snapshot mutable runtime metadata (connection state and last errors).
+    ///
+    /// This intentionally excludes static server/tool definitions.
+    pub fn snapshot_runtime_state(&self) -> McpRuntimeStateSnapshot {
+        let session_meta = self
+            .session_meta
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(label, meta)| (label.clone(), meta.connected_at))
+            .collect();
+        let connection_errors = self.connection_errors.read().unwrap().clone();
+        McpRuntimeStateSnapshot {
+            session_meta,
+            connection_errors,
+        }
+    }
+
+    /// Restore mutable runtime metadata from a snapshot.
+    pub fn restore_runtime_state(&self, snapshot: McpRuntimeStateSnapshot) {
+        let McpRuntimeStateSnapshot {
+            session_meta,
+            connection_errors,
+        } = snapshot;
+
+        let mut meta_lock = self.session_meta.write().unwrap();
+        meta_lock.clear();
+        meta_lock.extend(
+            session_meta
+                .into_iter()
+                .map(|(label, connected_at)| (label, SessionMeta { connected_at })),
+        );
+
+        *self.connection_errors.write().unwrap() = connection_errors;
     }
 
     /// Connect to a specific MCP server (validates connectivity)
@@ -1121,6 +1163,35 @@ mod tests {
         );
         assert_eq!(manager.server_count(), 1);
         assert_eq!(manager.servers[0].label, "beta");
+    }
+
+    #[test]
+    fn test_runtime_state_snapshot_restore() {
+        let manager = McpManager::default();
+        manager.session_meta.write().unwrap().insert(
+            "alpha".to_string(),
+            SessionMeta {
+                connected_at: Instant::now(),
+            },
+        );
+        manager
+            .connection_errors
+            .write()
+            .unwrap()
+            .insert("beta".to_string(), "network error".to_string());
+
+        let snapshot = manager.snapshot_runtime_state();
+
+        manager.session_meta.write().unwrap().clear();
+        manager
+            .connection_errors
+            .write()
+            .unwrap()
+            .insert("gamma".to_string(), "temporary mutation".to_string());
+
+        manager.restore_runtime_state(snapshot.clone());
+
+        assert_eq!(manager.snapshot_runtime_state(), snapshot);
     }
 
     #[tokio::test]

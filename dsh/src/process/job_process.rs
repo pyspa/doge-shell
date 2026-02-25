@@ -289,7 +289,11 @@ impl JobProcess {
             None => {
                 // Automatic capture for non-interactive mode (e.g. smart pipe tests)
                 // We don't do this in interactive mode to preserve TTY (colors, etc.)
-                if !ctx.interactive && redirect.is_none() && pty_slave.is_none() {
+                if !ctx.interactive
+                    && redirect.is_none()
+                    && pty_slave.is_none()
+                    && ctx.captured_out.is_none()
+                {
                     let (pout, pin) = pipe().context("failed pipe")?;
                     ctx.outfile = pin.into_raw_fd();
                     let pout_raw = pout.into_raw_fd();

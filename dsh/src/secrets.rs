@@ -74,6 +74,14 @@ pub struct SecretManager {
     additional_keywords: RwLock<HashSet<String>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct SecretManagerSnapshot {
+    custom_patterns: Vec<Regex>,
+    session_secrets: HashMap<String, String>,
+    history_mode: SecretHistoryMode,
+    additional_keywords: HashSet<String>,
+}
+
 impl Default for SecretManager {
     fn default() -> Self {
         Self::new()
@@ -234,6 +242,24 @@ impl SecretManager {
     /// Clear all session secrets
     pub fn clear_session_secrets(&self) {
         self.session_secrets.write().clear();
+    }
+
+    /// Create a full state snapshot for transactional rollback.
+    pub fn snapshot(&self) -> SecretManagerSnapshot {
+        SecretManagerSnapshot {
+            custom_patterns: self.custom_patterns.read().clone(),
+            session_secrets: self.session_secrets.read().clone(),
+            history_mode: self.history_mode.read().clone(),
+            additional_keywords: self.additional_keywords.read().clone(),
+        }
+    }
+
+    /// Restore state from a snapshot.
+    pub fn restore(&self, snapshot: SecretManagerSnapshot) {
+        *self.custom_patterns.write() = snapshot.custom_patterns;
+        *self.session_secrets.write() = snapshot.session_secrets;
+        *self.history_mode.write() = snapshot.history_mode;
+        *self.additional_keywords.write() = snapshot.additional_keywords;
     }
 
     /// Get list of session secret keys

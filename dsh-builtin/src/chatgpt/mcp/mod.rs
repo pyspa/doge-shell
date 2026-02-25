@@ -151,6 +151,14 @@ struct SessionMeta {
     connected_at: Instant,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct McpSyncStats {
+    pub removed: usize,
+    pub updated: usize,
+    pub added: usize,
+    pub unchanged: usize,
+}
+
 /// MCP Manager with session caching support
 pub struct McpManager {
     servers: Vec<McpServer>,
@@ -219,6 +227,18 @@ impl McpManager {
     /// Get the number of connected servers (based on metadata)
     pub fn connected_count(&self) -> usize {
         self.session_meta.read().unwrap().len()
+    }
+
+    /// Get the currently registered MCP server configurations.
+    pub fn server_configs(&self) -> Vec<McpServerConfig> {
+        self.servers
+            .iter()
+            .map(|server| McpServerConfig {
+                label: server.label.clone(),
+                description: server.description.clone(),
+                transport: server.transport.clone(),
+            })
+            .collect()
     }
 
     /// Get the total number of available tools
@@ -600,6 +620,103 @@ impl McpManager {
         Ok(())
     }
 
+    /// Remove a registered MCP server and its associated metadata.
+    pub fn remove_server(&mut self, label: &str) -> bool {
+        let before = self.servers.len();
+        self.servers.retain(|server| server.label != label);
+        let removed = self.servers.len() != before;
+        if removed {
+            self.bindings
+                .retain(|_, binding| binding.server_label != label);
+            self.session_meta.write().unwrap().remove(label);
+            self.connection_errors.write().unwrap().remove(label);
+        }
+        removed
+    }
+
+    fn replace_server_blocking(&mut self, config: McpServerConfig) -> Result<()> {
+        let label = config.label.clone();
+        let config_clone = config.clone();
+        let (server_struct, tools) = Self::execute_async_with_loader(move || async move {
+            Self::load_server_tools(config_clone).await
+        })?;
+        self.remove_server(&label);
+        self.register_server(server_struct, tools)?;
+        Ok(())
+    }
+
+    /// Synchronize the registered servers to the desired configuration set.
+    ///
+    /// This applies add/update/remove as a diff by label:
+    /// - removed: label exists currently but not in desired
+    /// - updated: label exists in both, but config changed
+    /// - added: label exists only in desired
+    pub fn sync_servers_blocking(&mut self, desired_servers: Vec<McpServerConfig>) -> McpSyncStats {
+        let current_by_label: HashMap<String, McpServerConfig> = self
+            .server_configs()
+            .into_iter()
+            .map(|config| (config.label.clone(), config))
+            .collect();
+
+        let mut desired_by_label: HashMap<String, McpServerConfig> = HashMap::new();
+        for server in desired_servers {
+            if server.label.trim().is_empty() {
+                warn!("skipped MCP server with empty label during sync");
+                continue;
+            }
+            if desired_by_label.contains_key(&server.label) {
+                warn!(
+                    "skipped duplicated MCP server label `{}` during sync",
+                    server.label
+                );
+                continue;
+            }
+            desired_by_label.insert(server.label.clone(), server);
+        }
+
+        let mut stats = McpSyncStats::default();
+
+        let mut labels_to_remove: Vec<String> = current_by_label
+            .keys()
+            .filter(|label| !desired_by_label.contains_key(*label))
+            .cloned()
+            .collect();
+        labels_to_remove.sort_unstable();
+        for label in labels_to_remove {
+            if self.remove_server(&label) {
+                stats.removed += 1;
+            }
+        }
+
+        let mut desired_labels: Vec<String> = desired_by_label.keys().cloned().collect();
+        desired_labels.sort_unstable();
+        for label in desired_labels {
+            let desired = match desired_by_label.remove(&label) {
+                Some(server) => server,
+                None => continue,
+            };
+            match current_by_label.get(&label) {
+                Some(current) if current == &desired => {
+                    stats.unchanged += 1;
+                }
+                Some(_) => match self.replace_server_blocking(desired) {
+                    Ok(_) => stats.updated += 1,
+                    Err(err) => {
+                        warn!(server = label, "failed to update MCP server: {err}");
+                    }
+                },
+                None => match self.add_server_blocking(desired) {
+                    Ok(_) => stats.added += 1,
+                    Err(err) => {
+                        warn!(server = label, "failed to add MCP server: {err}");
+                    }
+                },
+            }
+        }
+
+        stats
+    }
+
     async fn load_server_tools(config: McpServerConfig) -> Result<(McpServer, Vec<Tool>)> {
         let McpServerConfig {
             label,
@@ -889,6 +1006,122 @@ fn unique_name(base: &str, set: &mut HashSet<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mock_server(label: &str) -> McpServer {
+        McpServer {
+            label: label.to_string(),
+            description: Some(format!("{label} server")),
+            transport: McpTransport::Sse {
+                url: format!("https://example.com/{label}"),
+            },
+            tools: Vec::new(),
+        }
+    }
+
+    fn mock_config(label: &str) -> McpServerConfig {
+        McpServerConfig {
+            label: label.to_string(),
+            description: Some(format!("{label} server")),
+            transport: McpTransport::Sse {
+                url: format!("https://example.com/{label}"),
+            },
+        }
+    }
+
+    #[test]
+    fn test_remove_server_cleans_related_state() {
+        let mut manager = McpManager::default();
+        manager.servers.push(mock_server("alpha"));
+        manager.servers.push(mock_server("beta"));
+
+        manager.bindings.insert(
+            "mcp__alpha__tool".to_string(),
+            ToolBinding {
+                server_label: "alpha".to_string(),
+                tool_name: "tool".to_string(),
+                function_name: "mcp__alpha__tool".to_string(),
+            },
+        );
+        manager.bindings.insert(
+            "mcp__beta__tool".to_string(),
+            ToolBinding {
+                server_label: "beta".to_string(),
+                tool_name: "tool".to_string(),
+                function_name: "mcp__beta__tool".to_string(),
+            },
+        );
+
+        manager.session_meta.write().unwrap().insert(
+            "alpha".to_string(),
+            SessionMeta {
+                connected_at: Instant::now(),
+            },
+        );
+        manager
+            .connection_errors
+            .write()
+            .unwrap()
+            .insert("alpha".to_string(), "error".to_string());
+
+        assert!(manager.remove_server("alpha"));
+        assert_eq!(manager.server_count(), 1);
+        assert_eq!(manager.servers[0].label, "beta");
+        assert!(
+            !manager
+                .bindings
+                .values()
+                .any(|binding| binding.server_label == "alpha")
+        );
+        assert!(!manager.session_meta.read().unwrap().contains_key("alpha"));
+        assert!(
+            !manager
+                .connection_errors
+                .read()
+                .unwrap()
+                .contains_key("alpha")
+        );
+    }
+
+    #[test]
+    fn test_sync_servers_blocking_ignores_order_only() {
+        let mut manager = McpManager::default();
+        manager.servers.push(mock_server("alpha"));
+        manager.servers.push(mock_server("beta"));
+
+        let stats = manager.sync_servers_blocking(vec![mock_config("beta"), mock_config("alpha")]);
+
+        assert_eq!(
+            stats,
+            McpSyncStats {
+                removed: 0,
+                updated: 0,
+                added: 0,
+                unchanged: 2
+            }
+        );
+        assert_eq!(manager.server_count(), 2);
+    }
+
+    #[test]
+    fn test_sync_servers_blocking_removes_missing_servers() {
+        let mut manager = McpManager::default();
+        manager.servers.push(mock_server("alpha"));
+        manager.servers.push(mock_server("beta"));
+
+        let stats = manager.sync_servers_blocking(vec![mock_config("beta")]);
+
+        assert_eq!(
+            stats,
+            McpSyncStats {
+                removed: 1,
+                updated: 0,
+                added: 0,
+                unchanged: 1
+            }
+        );
+        assert_eq!(manager.server_count(), 1);
+        assert_eq!(manager.servers[0].label, "beta");
+    }
 
     #[tokio::test]
     async fn test_sse_transport_error() {

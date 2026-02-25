@@ -64,6 +64,16 @@ impl ActionRegistry {
         });
         actions
     }
+
+    /// Snapshot current registry state for transactional operations.
+    pub fn snapshot_actions(&self) -> HashMap<String, Arc<dyn Action>> {
+        self.actions.clone()
+    }
+
+    /// Restore registry state from a snapshot.
+    pub fn restore_actions(&mut self, actions: HashMap<String, Arc<dyn Action>>) {
+        self.actions = actions;
+    }
 }
 
 pub static REGISTRY: LazyLock<RwLock<ActionRegistry>> =

@@ -7,8 +7,12 @@ pub use crate::lisp::model::Value;
 pub use crate::lisp::model::{Env, Symbol};
 use crate::lisp::model::{List, RuntimeError};
 use crate::lisp::parser::parse;
+use crate::secrets::SecretManagerSnapshot;
+use crate::suggestion::InputPreferences;
 use anyhow::Context;
 use parking_lot::RwLock;
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::sync::Arc;
 use std::{cell::RefCell, rc::Rc};
 
@@ -33,6 +37,49 @@ pub struct LispEngine {
     pub shell_env: Arc<RwLock<Environment>>,
 }
 
+#[derive(Debug, Clone)]
+struct EnvironmentSnapshot {
+    alias: HashMap<String, String>,
+    abbreviations: HashMap<String, String>,
+    paths: Vec<String>,
+    variables: HashMap<String, String>,
+    exported_vars: HashSet<String>,
+    direnv_roots: Vec<crate::direnv::DirEnvironment>,
+    mcp_servers: Vec<dsh_types::mcp::McpServerConfig>,
+    execute_allowlist: Vec<String>,
+    system_env_vars: HashMap<String, String>,
+    input_preferences: InputPreferences,
+    safety_level: crate::safety::SafetyLevel,
+    command_cache: HashMap<String, Option<String>>,
+    executable_names: Vec<String>,
+    z_exclude: Vec<String>,
+    startup_mode: bool,
+    secret_manager: SecretManagerSnapshot,
+}
+
+impl EnvironmentSnapshot {
+    fn capture(env: &Environment) -> Self {
+        Self {
+            alias: env.alias.clone(),
+            abbreviations: env.abbreviations.clone(),
+            paths: env.paths.clone(),
+            variables: env.variables.clone(),
+            exported_vars: env.exported_vars.clone(),
+            direnv_roots: env.direnv_roots.clone(),
+            mcp_servers: env.mcp_servers().to_vec(),
+            execute_allowlist: env.execute_allowlist.read().clone(),
+            system_env_vars: env.system_env_vars.clone(),
+            input_preferences: env.input_preferences,
+            safety_level: env.safety_level.read().clone(),
+            command_cache: env.command_cache.read().clone(),
+            executable_names: env.executable_names.read().clone(),
+            z_exclude: env.z_exclude.clone(),
+            startup_mode: env.startup_mode,
+            secret_manager: env.secret_manager.snapshot(),
+        }
+    }
+}
+
 impl LispEngine {
     pub fn new(shell_env: Arc<RwLock<Environment>>) -> Rc<RefCell<Self>> {
         let env = make_env(Arc::clone(&shell_env));
@@ -49,19 +96,65 @@ impl LispEngine {
             .trim()
             .to_string();
 
-        self.shell_env.write().clear_mcp_servers();
+        let env_snapshot = {
+            let env = self.shell_env.read();
+            EnvironmentSnapshot::capture(&env)
+        };
+        let lisp_entries_snapshot = self.env.borrow().snapshot_entries();
+        let action_registry_snapshot = crate::command_palette::REGISTRY.read().snapshot_actions();
+        let process_env_snapshot: HashMap<OsString, OsString> = std::env::vars_os().collect();
+
+        {
+            // Treat config evaluation as startup mode to avoid mutating active MCP connections
+            // while the file is being parsed/evaluated.
+            let mut env = self.shell_env.write();
+            env.startup_mode = true;
+            env.clear_mcp_servers();
+        }
 
         let wrapped_config = format!("(begin {config_lisp}\n)");
-        match self.run(&wrapped_config) {
+        let run_result = self.run(&wrapped_config);
+
+        match run_result {
             Ok(_) => {
+                // Restore original startup mode regardless of success/failure.
+                self.shell_env.write().startup_mode = env_snapshot.startup_mode;
                 tracing::debug!("Successfully loaded config.lisp");
                 Ok(())
             }
             Err(e) => {
+                // Roll back shell environment and Lisp symbols on failure so partial
+                // config evaluation does not leave the shell in a broken state.
+                self.restore_environment_snapshot(env_snapshot);
+                self.env.borrow_mut().restore_entries(lisp_entries_snapshot);
+                crate::command_palette::REGISTRY
+                    .write()
+                    .restore_actions(action_registry_snapshot);
+                restore_process_env(process_env_snapshot);
                 tracing::error!("Failed to execute config.lisp: {}", e);
                 Err(e)
             }
         }
+    }
+
+    fn restore_environment_snapshot(&self, snapshot: EnvironmentSnapshot) {
+        let mut env = self.shell_env.write();
+        env.alias = snapshot.alias;
+        env.abbreviations = snapshot.abbreviations;
+        env.paths = snapshot.paths;
+        env.variables = snapshot.variables;
+        env.exported_vars = snapshot.exported_vars;
+        env.direnv_roots = snapshot.direnv_roots;
+        env.replace_mcp_servers(snapshot.mcp_servers);
+        *env.execute_allowlist.write() = snapshot.execute_allowlist;
+        env.system_env_vars = snapshot.system_env_vars;
+        env.input_preferences = snapshot.input_preferences;
+        *env.safety_level.write() = snapshot.safety_level;
+        *env.command_cache.write() = snapshot.command_cache;
+        *env.executable_names.write() = snapshot.executable_names;
+        env.z_exclude = snapshot.z_exclude;
+        env.startup_mode = snapshot.startup_mode;
+        env.secret_manager.restore(snapshot.secret_manager);
     }
 
     pub fn run(&self, src: &str) -> anyhow::Result<Value> {
@@ -179,6 +272,24 @@ impl LispEngine {
     }
 }
 
+fn restore_process_env(snapshot: HashMap<OsString, OsString>) {
+    let current_keys: Vec<OsString> = std::env::vars_os().map(|(key, _)| key).collect();
+
+    for key in current_keys {
+        if !snapshot.contains_key(&key) {
+            unsafe {
+                std::env::remove_var(&key);
+            }
+        }
+    }
+
+    for (key, value) in snapshot {
+        unsafe {
+            std::env::set_var(&key, &value);
+        }
+    }
+}
+
 pub fn make_env(environment: Arc<RwLock<Environment>>) -> Rc<RefCell<Env>> {
     let env = Rc::new(RefCell::new(default_env(environment)));
 
@@ -276,9 +387,43 @@ impl Applicable for Value {
 mod tests {
 
     use super::*;
+    use std::ffi::OsString;
+    use std::sync::Mutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static CONFIG_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn init() {
         let _ = tracing_subscriber::fmt::try_init();
+    }
+
+    fn with_test_config_home<F>(test_fn: F)
+    where
+        F: FnOnce(),
+    {
+        let _guard = CONFIG_ENV_LOCK.lock().unwrap();
+        let previous = std::env::var_os("XDG_CONFIG_HOME");
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("dsh-test-config-{unique}"));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", OsString::from(dir));
+        }
+
+        test_fn();
+
+        match previous {
+            Some(value) => unsafe {
+                std::env::set_var("XDG_CONFIG_HOME", value);
+            },
+            None => unsafe {
+                std::env::remove_var("XDG_CONFIG_HOME");
+            },
+        }
     }
 
     #[test]
@@ -372,5 +517,110 @@ mod tests {
         // 4. (Optional) Check if it works without real Shell if possible,
         // but since execute() needs &mut Shell, we'll stop here for unit test
         // or just verify it doesn't panic when we look it up.
+    }
+
+    #[test]
+    fn run_config_lisp_rolls_back_state_on_error() {
+        init();
+        with_test_config_home(|| {
+            let env = Environment::new();
+            let engine = LispEngine::new(env.clone());
+            let rollback_action_name = "ROLLBACK_TEST_ACTION_SHOULD_NOT_EXIST";
+            let rollback_env_key = "ROLLBACK_TEST_TEMP_ENV";
+
+            let config_path = crate::environment::get_config_file(CONFIG_FILE).unwrap();
+
+            std::fs::write(
+                &config_path,
+                r#"
+(mcp-clear)
+(mcp-add-sse "stable" "https://example.com/stable" "stable")
+(alias "stable-alias" "echo stable")
+(vset "STABLE_VAR" "stable")
+(chat-execute-clear)
+(chat-execute-add "ls")
+(secret-history-mode "redact")
+(defun stable-func () "stable")
+"#,
+            )
+            .unwrap();
+            engine.borrow().run_config_lisp().unwrap();
+
+            {
+                let env_read = env.read();
+                assert_eq!(env_read.mcp_servers().len(), 1);
+                assert_eq!(env_read.mcp_servers()[0].label, "stable");
+                assert!(!env_read.startup_mode);
+                assert_eq!(
+                    env_read.alias.get("stable-alias"),
+                    Some(&"echo stable".to_string())
+                );
+                assert_eq!(
+                    env_read.variables.get("STABLE_VAR"),
+                    Some(&"stable".to_string())
+                );
+                let allowlist = env_read.execute_allowlist.read().clone();
+                assert_eq!(allowlist, vec!["ls".to_string()]);
+                assert_eq!(
+                    env_read.secret_manager.history_mode(),
+                    crate::secrets::SecretHistoryMode::Redact
+                );
+            }
+            assert!(engine.borrow().has("stable-func"));
+
+            std::fs::write(
+                &config_path,
+                format!(
+                    r#"
+(mcp-clear)
+(mcp-add-sse "broken" "https://example.com/broken" "broken")
+(alias "broken-alias" "echo broken")
+(vset "BROKEN_VAR" "broken")
+(chat-execute-clear)
+(chat-execute-add "rm -rf /")
+(secret-history-mode "none")
+(setenv "{rollback_env_key}" "broken")
+(register-action "{rollback_action_name}" "Rollback test action" "stable-func")
+(defun broken-func () "broken")
+(this-function-does-not-exist)
+            "#,
+                ),
+            )
+            .unwrap();
+
+            let err = engine.borrow().run_config_lisp().unwrap_err();
+            assert!(err.to_string().contains("this-function-does-not-exist"));
+
+            let env_read = env.read();
+            assert_eq!(env_read.mcp_servers().len(), 1);
+            assert_eq!(env_read.mcp_servers()[0].label, "stable");
+            assert!(!env_read.startup_mode);
+            assert_eq!(
+                env_read.alias.get("stable-alias"),
+                Some(&"echo stable".to_string())
+            );
+            assert!(!env_read.alias.contains_key("broken-alias"));
+            assert_eq!(
+                env_read.variables.get("STABLE_VAR"),
+                Some(&"stable".to_string())
+            );
+            assert!(!env_read.variables.contains_key("BROKEN_VAR"));
+            assert_eq!(
+                env_read.secret_manager.history_mode(),
+                crate::secrets::SecretHistoryMode::Redact
+            );
+            let allowlist = env_read.execute_allowlist.read().clone();
+            assert_eq!(allowlist, vec!["ls".to_string()]);
+
+            assert!(engine.borrow().has("stable-func"));
+            assert!(!engine.borrow().has("broken-func"));
+            assert!(std::env::var(rollback_env_key).is_err());
+            let has_broken_action = crate::command_palette::REGISTRY
+                .read()
+                .get_all()
+                .iter()
+                .any(|action| action.name() == rollback_action_name);
+            assert!(!has_broken_action);
+        });
     }
 }

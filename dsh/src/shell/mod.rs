@@ -9,7 +9,6 @@ use crate::history::FrecencyHistory;
 use crate::lisp;
 use crate::process::Job;
 use anyhow::Result;
-use dsh_builtin::McpManager;
 use dsh_types::notebook::NotebookSession;
 use dsh_types::{Context, ExitStatus};
 use libc::{STDIN_FILENO, c_int};
@@ -225,18 +224,38 @@ impl Shell {
         let mcp_manager = self.environment.read().mcp_manager.clone();
 
         tokio::spawn(async move {
-            // Wait for 1 second to let the shell startup settle
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let current_servers = mcp_manager.read().server_configs();
+            if current_servers == mcp_servers {
+                tracing::debug!("MCP config unchanged; skipping reload");
+                return;
+            }
 
             tracing::info!(
                 "Reloading MCP config (background) with {} servers",
                 mcp_servers.len()
             );
-            // McpManager::load calls build_from_servers (async)
-            let new_manager = McpManager::load(mcp_servers).await;
-            // Update the manager in the environment
-            *mcp_manager.write() = new_manager;
-            tracing::info!("MCP config reload complete");
+
+            let manager_for_sync = mcp_manager.clone();
+            let sync_result = tokio::task::spawn_blocking(move || {
+                let mut manager = manager_for_sync.write();
+                manager.sync_servers_blocking(mcp_servers)
+            })
+            .await;
+
+            match sync_result {
+                Ok(stats) => {
+                    tracing::info!(
+                        "MCP config reload complete (added={}, updated={}, removed={}, unchanged={})",
+                        stats.added,
+                        stats.updated,
+                        stats.removed,
+                        stats.unchanged
+                    );
+                }
+                Err(err) => {
+                    tracing::warn!("MCP config reload worker failed: {}", err);
+                }
+            }
         });
     }
 }

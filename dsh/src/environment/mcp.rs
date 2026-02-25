@@ -27,6 +27,14 @@ impl Environment {
         &self.mcp_servers
     }
 
+    /// Replace MCP server configurations atomically.
+    ///
+    /// This only updates the desired configuration set.
+    /// Active manager reload is handled separately by `Shell::reload_mcp_config`.
+    pub fn replace_mcp_servers(&mut self, servers: Vec<McpServerConfig>) {
+        self.mcp_servers = servers;
+    }
+
     /// Clear the execute allowlist.
     pub fn clear_execute_allowlist(&self) {
         self.execute_allowlist.write().clear();

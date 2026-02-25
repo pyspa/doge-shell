@@ -10,6 +10,7 @@ use crate::lisp::parser::parse;
 use crate::secrets::SecretManagerSnapshot;
 use crate::suggestion::InputPreferences;
 use anyhow::Context;
+use dsh_builtin::McpRuntimeStateSnapshot;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
@@ -46,6 +47,7 @@ struct EnvironmentSnapshot {
     exported_vars: HashSet<String>,
     direnv_roots: Vec<crate::direnv::DirEnvironment>,
     mcp_servers: Vec<dsh_types::mcp::McpServerConfig>,
+    mcp_runtime_state: McpRuntimeStateSnapshot,
     execute_allowlist: Vec<String>,
     system_env_vars: HashMap<String, String>,
     input_preferences: InputPreferences,
@@ -67,6 +69,7 @@ impl EnvironmentSnapshot {
             exported_vars: env.exported_vars.clone(),
             direnv_roots: env.direnv_roots.clone(),
             mcp_servers: env.mcp_servers().to_vec(),
+            mcp_runtime_state: env.mcp_manager.read().snapshot_runtime_state(),
             execute_allowlist: env.execute_allowlist.read().clone(),
             system_env_vars: env.system_env_vars.clone(),
             input_preferences: env.input_preferences,
@@ -146,6 +149,9 @@ impl LispEngine {
         env.exported_vars = snapshot.exported_vars;
         env.direnv_roots = snapshot.direnv_roots;
         env.replace_mcp_servers(snapshot.mcp_servers);
+        env.mcp_manager
+            .write()
+            .restore_runtime_state(snapshot.mcp_runtime_state);
         *env.execute_allowlist.write() = snapshot.execute_allowlist;
         env.system_env_vars = snapshot.system_env_vars;
         env.input_preferences = snapshot.input_preferences;
@@ -568,12 +574,27 @@ mod tests {
             }
             assert!(engine.borrow().has("stable-func"));
 
+            let mcp_runtime_before = {
+                let env_read = env.read();
+                let manager = env_read.mcp_manager.read();
+                let mut snapshot = manager.snapshot_runtime_state();
+                snapshot
+                    .session_meta
+                    .insert("stable".to_string(), std::time::Instant::now());
+                snapshot
+                    .connection_errors
+                    .insert("stable".to_string(), "seeded".to_string());
+                manager.restore_runtime_state(snapshot.clone());
+                snapshot
+            };
+
             std::fs::write(
                 &config_path,
                 format!(
                     r#"
 (mcp-clear)
 (mcp-add-sse "broken" "https://example.com/broken" "broken")
+(mcp-disconnect-all)
 (alias "broken-alias" "echo broken")
 (vset "BROKEN_VAR" "broken")
 (chat-execute-clear)
@@ -611,6 +632,8 @@ mod tests {
             );
             let allowlist = env_read.execute_allowlist.read().clone();
             assert_eq!(allowlist, vec!["ls".to_string()]);
+            let mcp_runtime_after = env_read.mcp_manager.read().snapshot_runtime_state();
+            assert_eq!(mcp_runtime_after, mcp_runtime_before);
 
             assert!(engine.borrow().has("stable-func"));
             assert!(!engine.borrow().has("broken-func"));

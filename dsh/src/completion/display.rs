@@ -18,6 +18,15 @@ enum DisplayMode {
 
 // Completion display configuration
 const MAX_COMPLETION_ITEMS: usize = 30;
+const COMPLETION_MAX_ITEMS_ENV: &str = "DSH_COMPLETION_MAX_ITEMS";
+
+fn default_max_completion_items() -> usize {
+    std::env::var(COMPLETION_MAX_ITEMS_ENV)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(MAX_COMPLETION_ITEMS)
+}
 
 fn unicode_display_width(s: &str) -> usize {
     s.width()
@@ -56,7 +65,7 @@ pub struct CompletionConfig {
 impl Default for CompletionConfig {
     fn default() -> Self {
         Self {
-            max_items: MAX_COMPLETION_ITEMS,
+            max_items: default_max_completion_items(),
             more_items_message_template: "...and {} more items available".to_string(),
             show_item_count: true,
         }
@@ -874,6 +883,25 @@ impl Candidate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completion_config_default_uses_env_override() {
+        let original = std::env::var(COMPLETION_MAX_ITEMS_ENV).ok();
+        unsafe {
+            std::env::set_var(COMPLETION_MAX_ITEMS_ENV, "42");
+        }
+        let config = CompletionConfig::default();
+        assert_eq!(config.max_items, 42);
+
+        match original {
+            Some(value) => unsafe {
+                std::env::set_var(COMPLETION_MAX_ITEMS_ENV, value);
+            },
+            None => unsafe {
+                std::env::remove_var(COMPLETION_MAX_ITEMS_ENV);
+            },
+        }
+    }
 
     #[test]
     fn test_terminal_size_calculation() {

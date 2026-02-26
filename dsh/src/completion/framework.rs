@@ -103,9 +103,12 @@ impl CompletionFramework for FloatingCompletionFramework {
             items,
             config,
             input_text,
+            query,
             ..
         } = request;
 
+        let fallback_items = items.clone();
+        let fallback_query = query.map(|s| s.to_string());
         let mut display = crate::completion::floating::RatatuiCompletionUi::new(items, config);
         let mut controller = CompletionInteraction::new(TerminalEventSource);
 
@@ -121,7 +124,8 @@ impl CompletionFramework for FloatingCompletionFramework {
                 warn!("Floating completion interaction failed: {}", error);
                 let _ = display.clear();
                 let _ = execute!(stdout(), cursor::Show);
-                CompletionSelection::None
+                warn!("Falling back to skim interactive completion");
+                CompletionSelection::Interactive(fallback_items, fallback_query)
             }
         }
     }

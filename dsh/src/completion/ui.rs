@@ -11,6 +11,10 @@ pub trait CompletionUi {
     fn move_down(&mut self);
     fn move_left(&mut self);
     fn move_right(&mut self);
+    fn move_page_up(&mut self) {}
+    fn move_page_down(&mut self) {}
+    fn move_home(&mut self) {}
+    fn move_end(&mut self) {}
     fn selected_output(&self) -> Option<String>;
 }
 
@@ -79,6 +83,22 @@ where
                     ui.move_right();
                     ui.refresh_selection()?;
                 }
+                InteractionCommand::MovePageUp => {
+                    ui.move_page_up();
+                    ui.refresh_selection()?;
+                }
+                InteractionCommand::MovePageDown => {
+                    ui.move_page_down();
+                    ui.refresh_selection()?;
+                }
+                InteractionCommand::MoveHome => {
+                    ui.move_home();
+                    ui.refresh_selection()?;
+                }
+                InteractionCommand::MoveEnd => {
+                    ui.move_end();
+                    ui.refresh_selection()?;
+                }
                 InteractionCommand::Submit => {
                     let selection = ui.selected_output();
                     ui.clear()?;
@@ -111,6 +131,10 @@ enum InteractionCommand {
     MoveDown,
     MoveLeft,
     MoveRight,
+    MovePageUp,
+    MovePageDown,
+    MoveHome,
+    MoveEnd,
     Submit,
     Input(char),
     Cancel,
@@ -131,6 +155,10 @@ fn interpret_event(event: &Event) -> InteractionCommand {
                 (KeyCode::Right, _) | (KeyCode::Tab, KeyModifiers::NONE) => {
                     InteractionCommand::MoveRight
                 }
+                (KeyCode::PageUp, _) => InteractionCommand::MovePageUp,
+                (KeyCode::PageDown, _) => InteractionCommand::MovePageDown,
+                (KeyCode::Home, _) => InteractionCommand::MoveHome,
+                (KeyCode::End, _) => InteractionCommand::MoveEnd,
                 (KeyCode::Enter, _) => InteractionCommand::Submit,
                 (KeyCode::Esc, _)
                 | (KeyCode::Backspace, _)
@@ -182,6 +210,10 @@ mod tests {
         move_down_calls: usize,
         move_left_calls: usize,
         move_right_calls: usize,
+        move_page_up_calls: usize,
+        move_page_down_calls: usize,
+        move_home_calls: usize,
+        move_end_calls: usize,
         selected: Option<String>,
     }
 
@@ -215,6 +247,22 @@ mod tests {
 
         fn move_right(&mut self) {
             self.move_right_calls += 1;
+        }
+
+        fn move_page_up(&mut self) {
+            self.move_page_up_calls += 1;
+        }
+
+        fn move_page_down(&mut self) {
+            self.move_page_down_calls += 1;
+        }
+
+        fn move_home(&mut self) {
+            self.move_home_calls += 1;
+        }
+
+        fn move_end(&mut self) {
+            self.move_end_calls += 1;
         }
 
         fn selected_output(&self) -> Option<String> {
@@ -272,5 +320,30 @@ mod tests {
         assert_eq!(ui.move_down_calls, 1);
         assert_eq!(ui.move_right_calls, 1);
         assert_eq!(ui.refresh_calls, 2);
+    }
+
+    #[test]
+    fn handles_paging_and_jump_keys() {
+        let mut ui = MockUi {
+            selected: Some("grep".to_string()),
+            ..MockUi::default()
+        };
+        let events = vec![
+            key(KeyCode::PageDown),
+            key(KeyCode::PageUp),
+            key(KeyCode::Home),
+            key(KeyCode::End),
+            key(KeyCode::Enter),
+        ];
+        let mut controller = CompletionInteraction::new(TestEventSource::new(events));
+
+        let outcome = controller.run(&mut ui).expect("controller run succeeds");
+
+        assert_eq!(outcome, CompletionOutcome::Submitted("grep".to_string()));
+        assert_eq!(ui.move_page_down_calls, 1);
+        assert_eq!(ui.move_page_up_calls, 1);
+        assert_eq!(ui.move_home_calls, 1);
+        assert_eq!(ui.move_end_calls, 1);
+        assert_eq!(ui.refresh_calls, 4);
     }
 }

@@ -192,11 +192,14 @@ impl FileServer {
                     && (client_etag == etag || client_etag == "*")
                 {
                     debug!("returning 304 Not Modified for ETag match");
-                    return Ok(Response::builder()
+                    return Response::builder()
                         .status(StatusCode::NOT_MODIFIED)
                         .header(header::ETAG, etag)
                         .body(Body::empty())
-                        .unwrap());
+                        .map_err(|e| {
+                            error!("failed to build not-modified response (etag): {}", e);
+                            StatusCode::INTERNAL_SERVER_ERROR
+                        });
                 }
             }
 
@@ -215,11 +218,17 @@ impl FileServer {
 
                     if client_time_str.contains(&client_timestamp_str) {
                         debug!("returning 304 Not Modified for If-Modified-Since");
-                        return Ok(Response::builder()
+                        return Response::builder()
                             .status(StatusCode::NOT_MODIFIED)
                             .header(header::ETAG, etag)
                             .body(Body::empty())
-                            .unwrap());
+                            .map_err(|e| {
+                                error!(
+                                    "failed to build not-modified response (if-modified-since): {}",
+                                    e
+                                );
+                                StatusCode::INTERNAL_SERVER_ERROR
+                            });
                     }
                 }
             }
@@ -674,10 +683,9 @@ pub fn create_error_response(status: StatusCode, message: &str) -> Response<Body
         .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
         .body(Body::from(html))
         .unwrap_or_else(|_| {
-            Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from("Internal Server Error"))
-                .unwrap()
+            let mut response = Response::new(Body::from("Internal Server Error"));
+            *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+            response
         })
 }
 

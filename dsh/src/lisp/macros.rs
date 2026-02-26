@@ -48,6 +48,9 @@ macro_rules! lisp {
         // distinguish different kinds of literals,
         // so we just kick those out to be parsed
         // at runtime.
-        $crate::parser::parse(stringify!($e)).next().unwrap().unwrap()
+        $crate::parser::parse(stringify!($e))
+            .next()
+            .and_then(|parsed| parsed.ok())
+            .unwrap_or($crate::lisp::model::Value::NIL)
     };
 }

@@ -6,6 +6,7 @@ pub const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1/";
 
 /// Default model used when none is provided.
 pub const DEFAULT_MODEL: &str = "gpt-5-mini";
+const ALLOW_INSECURE_HTTP_ENV: &str = "AI_CHAT_ALLOW_INSECURE_HTTP";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenAiConfig {
@@ -67,7 +68,17 @@ impl OpenAiConfig {
 }
 
 fn sanitize_base_url(base_url: Option<String>) -> String {
-    base_url
+    let allow_insecure_http = std::env::var(ALLOW_INSECURE_HTTP_ENV)
+        .ok()
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false);
+
+    let sanitized = base_url
         .and_then(|value| {
             let trimmed = value.trim();
             if trimmed.is_empty() {
@@ -76,7 +87,13 @@ fn sanitize_base_url(base_url: Option<String>) -> String {
                 Some(trimmed.trim_end_matches('/').to_string())
             }
         })
-        .unwrap_or_else(|| DEFAULT_BASE_URL.trim_end_matches('/').to_string())
+        .unwrap_or_else(|| DEFAULT_BASE_URL.trim_end_matches('/').to_string());
+
+    if allow_insecure_http || sanitized.starts_with("https://") {
+        sanitized
+    } else {
+        DEFAULT_BASE_URL.trim_end_matches('/').to_string()
+    }
 }
 
 fn build_chat_endpoint(base_url: &str) -> String {
@@ -91,6 +108,9 @@ fn build_chat_endpoint(base_url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn sanitize_base_url_defaults_when_none() {
@@ -150,5 +170,50 @@ mod tests {
         assert_eq!(cfg.api_key(), Some("legacy"));
         assert_eq!(cfg.base_url(), "https://api.openai.com/v1");
         assert_eq!(cfg.default_model(), DEFAULT_MODEL);
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(v) = &self.previous {
+                unsafe {
+                    std::env::set_var(self.key, v);
+                }
+            } else {
+                unsafe {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sanitize_base_url_rejects_insecure_http_by_default() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::set(ALLOW_INSECURE_HTTP_ENV, "false");
+        let cfg = OpenAiConfig::new(None, Some("http://localhost:8080/v1".to_string()), None);
+        assert_eq!(cfg.base_url(), "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn sanitize_base_url_allows_http_with_explicit_opt_in() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _guard = EnvGuard::set(ALLOW_INSECURE_HTTP_ENV, "true");
+        let cfg = OpenAiConfig::new(None, Some("http://localhost:8080/v1".to_string()), None);
+        assert_eq!(cfg.base_url(), "http://localhost:8080/v1");
     }
 }

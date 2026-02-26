@@ -149,26 +149,51 @@ impl App {
 
 pub fn command(_ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -> ExitStatus {
     // Setup terminal
-    enable_raw_mode().unwrap();
+    if let Err(err) = enable_raw_mode() {
+        eprintln!("procs: failed to enable raw mode: {err}");
+        return ExitStatus::ExitedWith(1);
+    }
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen).unwrap();
+    if let Err(err) = execute!(stdout, EnterAlternateScreen) {
+        let _ = disable_raw_mode();
+        eprintln!("procs: failed to enter alternate screen: {err}");
+        return ExitStatus::ExitedWith(1);
+    }
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend).unwrap();
+    let mut terminal = match Terminal::new(backend) {
+        Ok(terminal) => terminal,
+        Err(err) => {
+            let _ = execute!(io::stdout(), LeaveAlternateScreen);
+            let _ = disable_raw_mode();
+            eprintln!("procs: failed to initialize terminal: {err}");
+            return ExitStatus::ExitedWith(1);
+        }
+    };
 
     let mut app = App::new();
-    let res = run_app(&mut terminal, &mut app);
+    let run_result = run_app(&mut terminal, &mut app);
 
     // Restore terminal
-    disable_raw_mode().unwrap();
-    execute!(terminal.backend_mut(), LeaveAlternateScreen).unwrap();
-    terminal.show_cursor().unwrap();
+    let restore_result = restore_terminal(&mut terminal);
 
-    if let Err(err) = res {
-        println!("{:?}", err);
+    if let Err(err) = run_result {
+        eprintln!("procs: {err}");
+        return ExitStatus::ExitedWith(1);
+    }
+
+    if let Err(err) = restore_result {
+        eprintln!("procs: failed to restore terminal: {err}");
         return ExitStatus::ExitedWith(1);
     }
 
     ExitStatus::ExitedWith(0)
+}
+
+fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>) -> Result<()> {
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+    Ok(())
 }
 
 fn run_app(

@@ -215,7 +215,12 @@ impl Process {
         // Ensure TERM is set, falling back to xterm if missing or empty
         if !term_set {
             debug!("TERM environment variable missing, defaulting to xterm-256color");
-            envp.push(CString::new("TERM=xterm-256color").unwrap());
+            match CString::new("TERM=xterm-256color") {
+                Ok(term_default) => envp.push(term_default),
+                Err(err) => {
+                    debug!("failed to construct default TERM environment variable: {err}");
+                }
+            }
         } else {
             // Debug logging for TERM if needed, but we don't have the value easily accessible here without iterating
             // Retaining behavior of "defaulting if empty" is tricky without map.

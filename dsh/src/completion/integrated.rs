@@ -14,16 +14,11 @@ use anyhow::Result;
 use dsh_builtin::{project, task};
 use dsh_types::mcp::McpTransport;
 use parking_lot::{Mutex, RwLock};
-use regex::Regex;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, warn};
-
-// Pre-compiled regex for efficient whitespace splitting
-static WHITESPACE_SPLIT_REGEX: std::sync::LazyLock<Regex> =
-    std::sync::LazyLock::new(|| Regex::new(r"\s+").unwrap());
 
 const DEFAULT_CACHE_TTL_MS: u64 = 3000;
 
@@ -311,10 +306,10 @@ impl IntegratedCompletionEngine {
         }
 
         // 3. Context analysis placeholder (reserved for future providers)
-        let parts: Vec<&str> = WHITESPACE_SPLIT_REGEX.split(request.input).collect();
+        let parts: Vec<&str> = request.input.split_whitespace().collect();
         if !parts.is_empty() {
             let _command = parts[0];
-            let _args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
+            let _args: Vec<String> = parts[1..].iter().map(|s| (*s).to_string()).collect();
         }
 
         // 4. History-based completion (skipped when command-specific data exists)

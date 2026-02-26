@@ -380,7 +380,11 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
             let mut hash = HashMap::new();
 
             for pair in chunks {
-                let key = pair.first().unwrap();
+                let Some(key) = pair.first() else {
+                    return Err(RuntimeError {
+                        msg: "internal error: empty key/value chunk while building hash".into(),
+                    });
+                };
                 let value = pair.get(1);
 
                 if let Some(value) = value {

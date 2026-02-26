@@ -230,37 +230,119 @@ impl SafetyGuard {
         level: &SafetyLevel,
         allowlist: &[String],
     ) -> SafetyResult {
-        // If it's a command execution tool, parse the command inside
-        if tool_name == "bash" || tool_name == "run_command" || tool_name == "execute_command" {
-            // Try to extract command string from JSON args.
-            // This is a best-effort heuristic.
-            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(args_json)
-                && let Some(cmd_str) = json_val.get("command").and_then(|v| v.as_str())
-            {
-                if allowlist.contains(&cmd_str.to_string()) {
-                    return SafetyResult::Allowed;
-                }
+        if matches!(level, SafetyLevel::Loose) {
+            return SafetyResult::Allowed;
+        }
 
-                // Recursively check the extracted command
-                // We need to split into cmd + args
+        if Self::is_allowlisted_mcp_call(tool_name, args_json, allowlist) {
+            return SafetyResult::Allowed;
+        }
+
+        // If it is a command execution tool, recursively apply command-level checks.
+        if Self::is_mcp_command_execution_tool(tool_name) {
+            if let Some(cmd_str) = Self::extract_mcp_command(args_json) {
                 let parts: Vec<String> =
                     cmd_str.split_whitespace().map(|s| s.to_string()).collect();
                 if let Some(c) = parts.first() {
-                    // If the command name is in allowlist, allow without confirmation
-                    if allowlist.contains(c) {
-                        return SafetyResult::Allowed;
-                    }
-
                     let a = if parts.len() > 1 { &parts[1..] } else { &[] };
                     return self.check_command(level, c, a, allowlist);
                 }
             }
+            return SafetyResult::Confirm(format!(
+                "MCP tool '{}' requested command execution, but arguments could not be validated safely. Proceed?",
+                tool_name
+            ));
         }
 
-        // For other tools, allowed in Normal/Loose, but implementation in ai_features
-        // handles the confirmation logic for Strict mode if needed.
-        // Here we just say Allowed unless we detect specific dangerous tools.
-        SafetyResult::Allowed
+        if matches!(level, SafetyLevel::Strict) {
+            return SafetyResult::Confirm(format!(
+                "MCP tool '{}' execution requested in Strict mode. Proceed?",
+                tool_name
+            ));
+        }
+
+        if Self::is_read_only_mcp_tool(tool_name) {
+            SafetyResult::Allowed
+        } else {
+            SafetyResult::Confirm(format!(
+                "MCP tool '{}' may have side effects. Proceed?",
+                tool_name
+            ))
+        }
+    }
+
+    pub fn mcp_allowlist_entry(tool_name: &str, args_json: &str) -> String {
+        let normalized_args = serde_json::from_str::<serde_json::Value>(args_json)
+            .ok()
+            .and_then(|v| serde_json::to_string(&v).ok())
+            .unwrap_or_else(|| args_json.trim().to_string());
+        format!("mcp:{}:{}", tool_name, normalized_args)
+    }
+
+    fn mcp_allowlist_prefix(tool_name: &str) -> String {
+        format!("mcp:{}", tool_name)
+    }
+
+    fn is_allowlisted_mcp_call(tool_name: &str, args_json: &str, allowlist: &[String]) -> bool {
+        let exact = Self::mcp_allowlist_entry(tool_name, args_json);
+        if allowlist.contains(&exact) {
+            return true;
+        }
+
+        let wildcard = Self::mcp_allowlist_prefix(tool_name);
+        allowlist.contains(&wildcard)
+    }
+
+    fn is_mcp_command_execution_tool(tool_name: &str) -> bool {
+        matches!(
+            tool_name,
+            "bash" | "run_command" | "execute_command" | "execute" | "terminal"
+        )
+    }
+
+    fn extract_mcp_command(args_json: &str) -> Option<String> {
+        let json_val = serde_json::from_str::<serde_json::Value>(args_json).ok()?;
+        json_val
+            .get("command")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+
+    fn is_read_only_mcp_tool(tool_name: &str) -> bool {
+        let name = tool_name.to_ascii_lowercase();
+        let mutating_markers = [
+            "write",
+            "edit",
+            "update",
+            "delete",
+            "remove",
+            "create",
+            "execute",
+            "run",
+            "apply",
+            "install",
+            "set",
+            "post",
+            "put",
+            "patch",
+            "push",
+            "kill",
+            "start",
+            "stop",
+            "restart",
+            "connect",
+            "disconnect",
+            "submit",
+        ];
+        if mutating_markers.iter().any(|marker| name.contains(marker)) {
+            return false;
+        }
+
+        let read_markers = [
+            "list", "get", "read", "search", "find", "show", "status", "describe", "fetch",
+            "query", "view", "ls", "stat",
+        ];
+        read_markers.iter().any(|marker| name.contains(marker))
     }
 
     fn get_command_name(cmd: &str) -> String {
@@ -710,7 +792,7 @@ mod tests {
     fn test_mcp_tool_check() {
         let guard = SafetyGuard::new();
 
-        // Safe tool
+        // Safe read-only tool
         assert_eq!(
             guard.check_mcp_tool("list_files", "{}", &SafetyLevel::Normal, &[]),
             SafetyResult::Allowed
@@ -726,6 +808,31 @@ mod tests {
             SafetyResult::Confirm(msg) => assert!(msg.contains("High Risk")),
             _ => panic!("Should have detected dangerous command in MCP tool"),
         }
+
+        // Non-read-only tools require confirmation in Normal mode
+        assert!(matches!(
+            guard.check_mcp_tool("delete_file", "{}", &SafetyLevel::Normal, &[]),
+            SafetyResult::Confirm(msg) if msg.contains("may have side effects")
+        ));
+    }
+
+    #[test]
+    fn test_mcp_tool_strict_and_allowlist() {
+        let guard = SafetyGuard::new();
+        let args = serde_json::json!({ "path": "README.md" }).to_string();
+
+        // Strict mode asks confirmation even for read-only tools by default
+        assert!(matches!(
+            guard.check_mcp_tool("read_file", &args, &SafetyLevel::Strict, &[]),
+            SafetyResult::Confirm(_)
+        ));
+
+        // Exact MCP allowlist entry bypasses confirmation
+        let allow = vec![SafetyGuard::mcp_allowlist_entry("read_file", &args)];
+        assert_eq!(
+            guard.check_mcp_tool("read_file", &args, &SafetyLevel::Strict, &allow),
+            SafetyResult::Allowed
+        );
     }
 
     #[test]

@@ -44,7 +44,8 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
     let current_dir = _proxy
         .get_current_dir()
         .map_err(|err| format!("chat: failed to get current working directory: {err}"))?;
-    let normalized_current_dir = super::normalize_path(&current_dir);
+    let normalized_current_dir =
+        std::fs::canonicalize(&current_dir).unwrap_or_else(|_| super::normalize_path(&current_dir));
 
     // Check if the file is ignored by .gitignore
     if super::gitignore::is_gitignored(&normalized_abs_path, &normalized_current_dir) {
@@ -172,7 +173,11 @@ mod tests {
         };
         let result = run(r#"{"path": "/etc/passwd"}"#, &mut proxy);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("absolute path"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("resolves outside allowed directories")
+        );
     }
 
     #[test]

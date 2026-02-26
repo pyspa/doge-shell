@@ -13,11 +13,17 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     if argv.len() < 2 {
         // Require at least one s-expression argument
         ctx.write_stderr("lisp: missing s-expression").ok();
+        ExitStatus::ExitedWith(1)
     } else {
         // Delegate Lisp evaluation to the shell's Lisp interpreter
-        proxy.dispatch(ctx, "lisp", argv).unwrap();
+        match proxy.dispatch(ctx, "lisp", argv) {
+            Ok(_) => ExitStatus::ExitedWith(0),
+            Err(err) => {
+                let _ = ctx.write_stderr(&format!("lisp: {err}"));
+                ExitStatus::ExitedWith(1)
+            }
+        }
     }
-    ExitStatus::ExitedWith(0)
 }
 
 /// Built-in lisp-run command implementation

@@ -3,6 +3,14 @@ use dsh_types::{Context, ExitStatus};
 use std::collections::HashMap;
 use std::process::Command;
 
+const PROTECTED_ENV_VARS: &[&str] = &[
+    "HOME", "PATH", "PWD", "OLDPWD", "SHELL", "TERM", "USER", "LOGNAME", "LANG",
+];
+
+fn shell_escape_single(input: &str) -> String {
+    format!("'{}'", input.replace('\'', r"'\''"))
+}
+
 pub fn description() -> &'static str {
     "Execute a bash script and import its environment variables"
 }
@@ -22,17 +30,18 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     bash_cmd.arg("-c");
 
     // We need to source the script with arguments if provided
+    let escaped_script = shell_escape_single(script);
     let source_cmd = if args.is_empty() {
-        format!("source \"{}\" && env -0", script)
+        format!("source {} && env -0", escaped_script)
     } else {
         // To pass arguments to the sourced script, we can use:
         // set -- arg1 arg2 ...; source script
         let args_str = args
             .iter()
-            .map(|a| format!("\"{}\"", a.replace('"', "\\\"")))
+            .map(|a| shell_escape_single(a))
             .collect::<Vec<_>>()
             .join(" ");
-        format!("set -- {}; source \"{}\" && env -0", args_str, script)
+        format!("set -- {}; source {} && env -0", args_str, escaped_script)
     };
 
     bash_cmd.arg(&source_cmd);
@@ -113,7 +122,10 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
             // Handle Unset
             // We iterate over CURRENT environment variables
             for (key, _) in std::env::vars() {
-                if !new_env.contains_key(&key) {
+                if !new_env.contains_key(&key)
+                    && !PROTECTED_ENV_VARS.contains(&key.as_str())
+                    && !key.starts_with("DSH_")
+                {
                     // It was removed in the subshell
                     proxy.unset_env_var(&key);
                 }

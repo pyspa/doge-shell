@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 
 use super::mcp::McpManager;
 use crate::ShellProxy;
@@ -103,51 +104,94 @@ pub(crate) fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
     normalized
 }
 
+pub(crate) fn tool_skills_dir() -> PathBuf {
+    dirs::config_dir()
+        .map(|p| p.join("dsh/skills"))
+        .unwrap_or_else(|| PathBuf::from(".config/dsh/skills"))
+}
+
+fn canonicalize_or_normalize(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| normalize_path(path))
+}
+
+fn resolve_with_existing_ancestor(path: &Path) -> Result<PathBuf, String> {
+    let mut current = path.to_path_buf();
+    let mut suffix = PathBuf::new();
+
+    loop {
+        if current.exists() {
+            let canonical = std::fs::canonicalize(&current).map_err(|err| {
+                format!(
+                    "chat: failed to canonicalize path ancestor `{}`: {err}",
+                    current.display()
+                )
+            })?;
+            return Ok(if suffix.as_os_str().is_empty() {
+                canonical
+            } else {
+                canonical.join(suffix)
+            });
+        }
+
+        let name = current.file_name().ok_or_else(|| {
+            format!(
+                "chat: path `{}` has no existing ancestor",
+                path.to_string_lossy()
+            )
+        })?;
+        suffix = PathBuf::from(name).join(suffix);
+
+        if !current.pop() {
+            return Err(format!(
+                "chat: path `{}` has no existing ancestor",
+                path.to_string_lossy()
+            ));
+        }
+    }
+}
+
+fn allowed_tool_roots(current_dir: &Path) -> Vec<PathBuf> {
+    vec![
+        canonicalize_or_normalize(current_dir),
+        canonicalize_or_normalize(&tool_skills_dir()),
+    ]
+}
+
+pub(crate) fn is_path_within_tool_roots(path: &Path, current_dir: &Path) -> bool {
+    let roots = allowed_tool_roots(current_dir);
+    roots.iter().any(|root| path.starts_with(root))
+}
+
 pub(crate) fn resolve_tool_path(
     path_str: &str,
     proxy: &mut dyn ShellProxy,
 ) -> Result<std::path::PathBuf, String> {
-    use std::path::{Path, PathBuf};
-
     // Use shellexpand to handle ~
     let expanded = shellexpand::full(path_str)
         .map_err(|e| format!("chat: failed to expand path `{path_str}`: {e}"))?;
     let path = Path::new(expanded.as_ref());
-
-    let skills_dir = dirs::config_dir()
-        .map(|p| p.join("dsh/skills"))
-        .unwrap_or_else(|| PathBuf::from(".config/dsh/skills"));
-    let normalized_skills_dir = normalize_path(&skills_dir);
-
-    if path.is_absolute() {
-        let normalized_path = normalize_path(path);
-        if normalized_path.starts_with(&normalized_skills_dir) {
-            return Ok(normalized_path);
-        } else {
-            // Also check if it's within CWD (unlikely for absolute paths but possible if they refer to it)
-            let current_dir = proxy
-                .get_current_dir()
-                .map_err(|err| format!("chat: failed to get current working directory: {err}"))?;
-            let normalized_current_dir = normalize_path(&current_dir);
-            if normalized_path.starts_with(&normalized_current_dir) {
-                return Ok(normalized_path);
-            }
-            return Err(format!("chat: absolute path `{path_str}` is not allowed"));
-        }
-    }
-
-    // Relative path handling
     let current_dir = proxy
         .get_current_dir()
         .map_err(|err| format!("chat: failed to get current working directory: {err}"))?;
-    let abs_path = current_dir.join(path);
-    let normalized_abs_path = normalize_path(&abs_path);
-    let normalized_current_dir = normalize_path(&current_dir);
 
-    if normalized_abs_path.starts_with(&normalized_current_dir)
-        || normalized_abs_path.starts_with(&normalized_skills_dir)
-    {
-        return Ok(normalized_abs_path);
+    let absolute_path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        current_dir.join(path)
+    };
+    let resolved_path = if absolute_path.exists() {
+        std::fs::canonicalize(&absolute_path).map_err(|err| {
+            format!(
+                "chat: failed to canonicalize path `{}`: {err}",
+                absolute_path.display()
+            )
+        })?
+    } else {
+        resolve_with_existing_ancestor(&absolute_path)?
+    };
+
+    if is_path_within_tool_roots(&resolved_path, &current_dir) {
+        return Ok(resolved_path);
     }
 
     Err(format!(
@@ -159,6 +203,7 @@ pub(crate) fn resolve_tool_path(
 mod tests {
     use super::*;
     use dsh_types::Context;
+    use tempfile::tempdir;
 
     struct NoopProxy;
     impl ShellProxy for NoopProxy {
@@ -276,5 +321,104 @@ mod tests {
         let result = execute_tool_call(&tool_call, &mcp, &mut proxy);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "chat: unsupported tool `unknown_tool`");
+    }
+
+    struct CwdProxy {
+        cwd: PathBuf,
+    }
+
+    impl ShellProxy for CwdProxy {
+        fn get_current_dir(&self) -> anyhow::Result<std::path::PathBuf> {
+            Ok(self.cwd.clone())
+        }
+        fn exit_shell(&mut self) {}
+        fn dispatch(
+            &mut self,
+            _ctx: &Context,
+            _cmd: &str,
+            _argv: Vec<String>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn save_path_history(&mut self, _path: &str) {}
+        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn insert_path(&mut self, _index: usize, _path: &str) {}
+        fn get_var(&mut self, _key: &str) -> Option<String> {
+            None
+        }
+        fn set_var(&mut self, _key: String, _value: String) {}
+        fn set_env_var(&mut self, _key: String, _value: String) {}
+        fn unset_env_var(&mut self, _key: &str) {}
+        fn get_alias(&mut self, _name: &str) -> Option<String> {
+            None
+        }
+        fn set_alias(&mut self, _name: String, _command: String) {}
+        fn list_aliases(&mut self) -> std::collections::HashMap<String, String> {
+            std::collections::HashMap::new()
+        }
+        fn add_abbr(&mut self, _name: String, _expansion: String) {}
+        fn remove_abbr(&mut self, _name: &str) -> bool {
+            false
+        }
+        fn list_abbrs(&self) -> Vec<(String, String)> {
+            Vec::new()
+        }
+        fn get_abbr(&self, _name: &str) -> Option<String> {
+            None
+        }
+        fn list_mcp_servers(&mut self) -> Vec<dsh_types::mcp::McpServerConfig> {
+            Vec::new()
+        }
+        fn list_execute_allowlist(&mut self) -> Vec<String> {
+            Vec::new()
+        }
+        fn list_exported_vars(&self) -> Vec<(String, String)> {
+            vec![]
+        }
+        fn export_var(&mut self, _key: &str) -> bool {
+            true
+        }
+        fn set_and_export_var(&mut self, _key: String, _value: String) {}
+        fn get_github_status(&self) -> (usize, usize, usize) {
+            (0, 0, 0)
+        }
+        fn get_git_branch(&self) -> Option<String> {
+            None
+        }
+        fn get_job_count(&self) -> usize {
+            0
+        }
+        fn get_lisp_var(&self, _key: &str) -> Option<String> {
+            None
+        }
+    }
+
+    #[test]
+    fn resolve_tool_path_rejects_parent_traversal() {
+        let dir = tempdir().unwrap();
+        let mut proxy = CwdProxy {
+            cwd: dir.path().to_path_buf(),
+        };
+        let result = resolve_tool_path("../outside.txt", &mut proxy);
+        assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_tool_path_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let base = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        std::fs::create_dir_all(base.path().join("inside")).unwrap();
+        symlink(outside.path(), base.path().join("inside/link_out")).unwrap();
+
+        let mut proxy = CwdProxy {
+            cwd: base.path().to_path_buf(),
+        };
+        let result = resolve_tool_path("inside/link_out/pwned.txt", &mut proxy);
+        assert!(result.is_err());
     }
 }

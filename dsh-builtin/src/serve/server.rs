@@ -72,10 +72,24 @@ impl SignalHandler {
 
         #[cfg(unix)]
         {
-            let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
-                .expect("failed to install SIGTERM handler");
-            let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())
-                .expect("failed to install SIGINT handler");
+            let mut sigterm = match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+                Ok(sigterm) => sigterm,
+                Err(err) => {
+                    error!("failed to install SIGTERM handler: {}", err);
+                    let _ = signal::ctrl_c().await;
+                    info!("received Ctrl+C");
+                    return;
+                }
+            };
+            let mut sigint = match signal::unix::signal(signal::unix::SignalKind::interrupt()) {
+                Ok(sigint) => sigint,
+                Err(err) => {
+                    error!("failed to install SIGINT handler: {}", err);
+                    let _ = signal::ctrl_c().await;
+                    info!("received Ctrl+C");
+                    return;
+                }
+            };
 
             tokio::select! {
                 _ = sigterm.recv() => {

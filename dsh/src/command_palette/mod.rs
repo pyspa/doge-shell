@@ -150,8 +150,7 @@ impl CommandPalette {
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 
         // Run Skim synchronously (blocking the worker thread is acceptable here as it's a modal UI)
-        let selected_items = Skim::run_with(options, Some(rx_item))
-            .ok()
+        let selected_items = crate::utils::skim::run_skim_with(options, Some(rx_item))
             .map(|out| out.selected_items)
             .unwrap_or_default();
 

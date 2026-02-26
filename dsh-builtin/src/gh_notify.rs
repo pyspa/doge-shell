@@ -191,7 +191,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         }
     };
 
-    let output = match Skim::run_with(options, Some(rx_item)).ok() {
+    let output = match crate::skim_runner::run_skim_with(options, Some(rx_item)) {
         Some(out) => out,
         None => return ExitStatus::ExitedWith(0),
     };

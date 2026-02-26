@@ -8,7 +8,7 @@ use crate::github_client;
 use dsh_types::{Context, ExitStatus};
 use getopts::Options;
 use skim::prelude::*;
-use skim::{Skim, SkimItemReceiver, SkimItemSender};
+use skim::{SkimItemReceiver, SkimItemSender};
 use std::io::{self, Write};
 use std::process::Command;
 use std::process::Stdio;
@@ -220,8 +220,7 @@ fn checkout_pr(ctx: &Context) -> ExitStatus {
     }
     drop(tx_item);
 
-    let selected = Skim::run_with(options, Some(rx_item))
-        .ok()
+    let selected = crate::skim_runner::run_skim_with(options, Some(rx_item))
         .map(|out| {
             if out.is_abort {
                 Vec::new()

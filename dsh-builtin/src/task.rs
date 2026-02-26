@@ -122,8 +122,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     }
     drop(tx);
 
-    let selected = Skim::run_with(options, Some(rx))
-        .ok()
+    let selected = crate::skim_runner::run_skim_with(options, Some(rx))
         .map(|out| out.selected_items)
         .unwrap_or_default();
 

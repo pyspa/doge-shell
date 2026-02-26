@@ -54,8 +54,7 @@ impl Action for KillProcessAction {
         }
         drop(tx);
 
-        let selected = Skim::run_with(options, Some(rx))
-            .ok()
+        let selected = crate::utils::skim::run_skim_with(options, Some(rx))
             .map(|out| out.selected_items)
             .unwrap_or_default();
 

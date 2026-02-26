@@ -6,7 +6,7 @@ use getopts::Options;
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 use skim::prelude::*;
-use skim::{Skim, SkimItemReceiver, SkimItemSender};
+use skim::{SkimItemReceiver, SkimItemSender};
 use std::borrow::Cow;
 use std::sync::Arc;
 use sysinfo::System;
@@ -180,7 +180,7 @@ pub fn run(
     }
     drop(tx);
 
-    let selected_items = Skim::run_with(options, Some(rx))
+    let selected_items = crate::skim_runner::run_skim_with(options, Some(rx))
         .map(|out| out.selected_items)
         .unwrap_or_default();
 

@@ -62,8 +62,7 @@ impl Action for DockerContainersAction {
         }
         drop(tx);
 
-        let selected = Skim::run_with(container_options, Some(rx))
-            .ok()
+        let selected = crate::utils::skim::run_skim_with(container_options, Some(rx))
             .map(|out| out.selected_items)
             .unwrap_or_default();
 
@@ -103,8 +102,7 @@ impl Action for DockerContainersAction {
         let _ = tx.send(action_items); // Batch send
         drop(tx);
 
-        let selected_action = Skim::run_with(action_options, Some(rx)) // `action_options` is now owned
-            .ok()
+        let selected_action = crate::utils::skim::run_skim_with(action_options, Some(rx)) // `action_options` is now owned
             .map(|out| out.selected_items)
             .unwrap_or_default();
 

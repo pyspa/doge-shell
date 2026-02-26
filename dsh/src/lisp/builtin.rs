@@ -38,6 +38,9 @@ fn redact_value_for_log<'a>(key: &str, value: &'a str) -> Cow<'a, str> {
 }
 
 pub fn set_env(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    if args.len() < 2 {
+        return Err(RuntimeError::new("set-env requires at least 2 arguments"));
+    }
     let key = &args[0];
     let key = key.to_string();
 
@@ -87,6 +90,9 @@ pub fn set_env(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtime
 }
 
 pub fn set_variable(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    if args.len() < 2 {
+        return Err(RuntimeError::new("set requires 2 arguments"));
+    }
     let key = args[0].to_string();
     let val = args[1].to_string();
 
@@ -116,6 +122,11 @@ pub fn set_variable(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
 }
 
 pub fn alias(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    if args.len() < 2 {
+        return Err(RuntimeError::new(
+            "alias requires 2 arguments: alias and command",
+        ));
+    }
     let alias = &args[0];
     let command = &args[1];
     debug!("set alias {} {}", alias, command);
@@ -630,5 +641,35 @@ mod tests {
         if let Ok(result) = res {
             println!("{result}");
         }
+    }
+
+    #[test]
+    fn test_builtin_argument_length_checks() {
+        init();
+        let env = Environment::new();
+        // LispEngine::new registers builtins using make_env
+        let engine = LispEngine::new(env);
+
+        // setenv requires 2 arguments
+        let result = engine.borrow().run("(setenv \"VAR\")");
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.to_string().contains("requires at least 2 arguments"));
+        }
+
+        // vset requires 2 arguments
+        let result = engine.borrow().run("(vset \"VAR\")");
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert!(e.to_string().contains("requires 2 arguments"));
+        }
+
+        // alias requires 2 arguments
+        let result = engine.borrow().run("(alias \"ll\")");
+        assert!(result.is_err());
+
+        // abbr requires 2 arguments
+        let result = engine.borrow().run("(abbr \"ll\")");
+        assert!(result.is_err());
     }
 }

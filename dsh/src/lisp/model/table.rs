@@ -493,7 +493,7 @@ impl PartialEq for Table {
     }
 }
 
-/// Converts a serde_json Value to our Lisp Value.
+#[allow(clippy::mutable_key_type)]
 fn json_to_value(json: &JsonValue) -> Value {
     match json {
         JsonValue::Null => Value::NIL,
@@ -522,7 +522,6 @@ fn json_to_value(json: &JsonValue) -> Value {
         JsonValue::Object(obj) => {
             // Convert to HashMap (not Table, for consistency)
             use std::collections::HashMap;
-            #[allow(clippy::mutable_key_type)]
             let mut map: HashMap<Value, Value> = HashMap::new();
             for (k, v) in obj {
                 map.insert(Value::String(k.clone()), json_to_value(v));

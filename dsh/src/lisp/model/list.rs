@@ -64,7 +64,13 @@ struct ConsCell {
 impl std::hash::Hash for ConsCell {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.car.hash(state);
-        self.cdr.as_ref().map(|rc| rc.as_ptr()).hash(state);
+        // We hash the structural content recursively using borrow(), matching the behavior
+        // of structural equality (PartialEq)
+        if let Some(cdr) = &self.cdr {
+            cdr.borrow().hash(state);
+        } else {
+            "nil".hash(state);
+        }
     }
 }
 
@@ -89,7 +95,11 @@ impl Display for ConsCell {
 
 impl std::hash::Hash for List {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.head.as_ref().map(|rc| rc.as_ptr()).hash(state);
+        if let Some(rc) = &self.head {
+            rc.borrow().hash(state);
+        } else {
+            "nil".hash(state);
+        }
     }
 }
 

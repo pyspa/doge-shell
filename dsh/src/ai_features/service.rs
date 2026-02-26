@@ -183,34 +183,45 @@ impl AiService for LiveAiService {
                     let result = self
                         .safety_guard
                         .check_mcp_tool(name, args, &level, &allowlist);
-                    if let SafetyResult::Confirm(msg) = result
-                        && let Some(handler) = &self.confirmation_handler
-                    {
-                        match handler.confirm(&msg).await? {
-                            ConfirmationAction::Yes => {
-                                // Proceed
-                            }
-                            ConfirmationAction::AlwaysAllow => {
-                                // Add to allowlist
-                                if let Ok(json_val) =
-                                    serde_json::from_str::<serde_json::Value>(args)
-                                    && let Some(cmd_str) =
-                                        json_val.get("command").and_then(|v| v.as_str())
-                                {
+                    match result {
+                        SafetyResult::Allowed => {}
+                        SafetyResult::Denied(msg) => {
+                            messages.push(json!({
+                                "role": "tool",
+                                "tool_call_id": id,
+                                "content": format!("Tool execution denied by safety policy: {}", msg)
+                            }));
+                            continue;
+                        }
+                        SafetyResult::Confirm(msg) => {
+                            let Some(handler) = &self.confirmation_handler else {
+                                messages.push(json!({
+                                    "role": "tool",
+                                    "tool_call_id": id,
+                                    "content": "Tool execution requires user confirmation, but confirmation is unavailable in this context"
+                                }));
+                                continue;
+                            };
+
+                            match handler.confirm(&msg).await? {
+                                ConfirmationAction::Yes => {
+                                    // Proceed
+                                }
+                                ConfirmationAction::AlwaysAllow => {
                                     let mut list = self.execute_allowlist.write();
-                                    let entry = cmd_str.to_string();
+                                    let entry = SafetyGuard::mcp_allowlist_entry(name, args);
                                     if !list.contains(&entry) {
                                         list.push(entry);
                                     }
                                 }
-                            }
-                            ConfirmationAction::No => {
-                                messages.push(json!({
-                                    "role": "tool",
-                                    "tool_call_id": id,
-                                    "content": "User rejected tool execution"
-                                }));
-                                continue;
+                                ConfirmationAction::No => {
+                                    messages.push(json!({
+                                        "role": "tool",
+                                        "tool_call_id": id,
+                                        "content": "User rejected tool execution"
+                                    }));
+                                    continue;
+                                }
                             }
                         }
                     }

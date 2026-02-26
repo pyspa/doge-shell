@@ -36,7 +36,10 @@ fn run_with_timeout(command: &str) -> Result<String> {
     // If the child produces more output than the pipe buffer size (typically 64KB on Linux),
     // it will block on write() until the parent reads from the pipe.
     // If the parent is waiting for the child to exit before reading, we get a deadlock.
-    let mut stdout = child.stdout.take().expect("Child stdout piped");
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("Child stdout not captured"))?;
     let reader_thread = std::thread::spawn(move || {
         let mut buf = String::new();
         stdout.read_to_string(&mut buf)?;

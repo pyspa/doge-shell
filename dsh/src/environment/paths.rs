@@ -1,15 +1,25 @@
 //! PATH lookup and command caching.
 
-use super::{ABSOLUTE_PATH_REGEX, Environment, RELATIVE_PATH_REGEX};
+use super::Environment;
 use crate::dirs::search_file;
 use std::env;
 use std::path::Path;
 use tracing::debug;
 
+#[inline]
+fn is_absolute_command_path(cmd: &str) -> bool {
+    cmd.starts_with('/')
+}
+
+#[inline]
+fn is_relative_command_path(cmd: &str) -> bool {
+    cmd.starts_with("./")
+}
+
 impl Environment {
     /// Lookup a command in PATH with caching.
     pub fn lookup(&self, cmd: &str) -> Option<String> {
-        if ABSOLUTE_PATH_REGEX.is_match(cmd) {
+        if is_absolute_command_path(cmd) {
             let cmd_path = Path::new(cmd);
             if cmd_path.exists() && cmd_path.is_file() {
                 return Some(cmd.to_string());
@@ -17,7 +27,7 @@ impl Environment {
                 return None;
             }
         }
-        if RELATIVE_PATH_REGEX.is_match(cmd) {
+        if is_relative_command_path(cmd) {
             let cmd_path = Path::new(cmd);
             if cmd_path.exists() && cmd_path.is_file() {
                 return Some(cmd.to_string());
@@ -64,7 +74,7 @@ impl Environment {
 
     /// Search for a command, including fuzzy matching.
     pub fn search(&self, cmd: &str) -> Option<String> {
-        if ABSOLUTE_PATH_REGEX.is_match(cmd) {
+        if is_absolute_command_path(cmd) {
             let cmd_path = Path::new(cmd);
             if cmd_path.exists() && cmd_path.is_file() {
                 return Some(cmd.to_string());
@@ -72,7 +82,7 @@ impl Environment {
                 return None;
             }
         }
-        if RELATIVE_PATH_REGEX.is_match(cmd) {
+        if is_relative_command_path(cmd) {
             let cmd_path = Path::new(cmd);
             if cmd_path.exists() && cmd_path.is_file() {
                 return Some(cmd.to_string());

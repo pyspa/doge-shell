@@ -59,8 +59,19 @@ pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) ->
         .multi(false)
         .preview(Some("".to_string())) // Default preview enabled
         .build()
-        .map_err(|e| anyhow::anyhow!("failed to build skim options: {}", e))
-        .unwrap_or(SkimOptionsBuilder::default().build().unwrap()); // Fallback or handle error? The unwrap_or is not ideal.
+        .or_else(|err| {
+            let _ = ctx.write_stderr(&format!(
+                "tm: failed to build skim options, retrying with defaults: {err}"
+            ));
+            SkimOptionsBuilder::default().build()
+        });
+    let options = match options {
+        Ok(options) => options,
+        Err(err) => {
+            let _ = ctx.write_stderr(&format!("tm: failed to initialize skim options: {err}"));
+            return ExitStatus::ExitedWith(1);
+        }
+    };
 
     let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
     // The user's comments indicate they are aware of the `String` vs `SkimItem` issue.

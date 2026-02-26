@@ -242,7 +242,9 @@ impl FrecencyHistory {
             return Ok(());
         }
 
-        let db = self.db.as_ref().unwrap();
+        let Some(db) = self.db.as_ref() else {
+            return Ok(());
+        };
         let conn = db.get_connection();
         let mut stmt = conn.prepare("SELECT path, score, last_accessed, access_count, half_life, context FROM directory_snapshot")?;
 
@@ -256,7 +258,9 @@ impl FrecencyHistory {
             Ok((path, score, last_accessed, access_count, half_life, context))
         })?;
 
-        let store = self.store.as_mut().unwrap();
+        let Some(store) = self.store.as_mut() else {
+            return Ok(());
+        };
         let store_mut = Arc::make_mut(store);
 
         for row in rows {

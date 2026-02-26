@@ -58,8 +58,25 @@ static DEFAULT_SENSITIVE_KEYWORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
 });
 
 /// Command patterns containing secret values (e.g., export API_KEY=xxx, VAR=value command)
-static ASSIGNMENT_PATTERN: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)\b([A-Z_][A-Z0-9_]*)=(\S+)").unwrap());
+static ASSIGNMENT_PATTERN: Lazy<Option<Regex>> =
+    Lazy::new(|| Regex::new(r"(?i)\b([A-Z_][A-Z0-9_]*)=(\S+)").ok());
+
+/// Secret-like CLI options (e.g., --password xxx, --token=xxx, -p xxx)
+static OPTION_SECRET_PATTERN: Lazy<Option<Regex>> = Lazy::new(|| {
+    Regex::new(
+        r#"(?i)(--?(?:password|passwd|passphrase|token|secret|api[-_]?key|access[-_]?token)(?:\s+|=)|-p\s+)([^\s"']+|\"[^\"]*\"|'[^']*')"#,
+    )
+    .ok()
+});
+
+/// Authorization header style secrets (e.g., Authorization: Bearer xxx)
+static AUTH_BEARER_PATTERN: Lazy<Option<Regex>> =
+    Lazy::new(|| Regex::new(r#"(?i)(authorization\s*:\s*bearer\s+)([A-Za-z0-9._~+/=-]+)"#).ok());
+
+/// URL/query token style secrets (e.g., ?token=xxx&...)
+static QUERY_SECRET_PATTERN: Lazy<Option<Regex>> = Lazy::new(|| {
+    Regex::new(r#"(?i)([?&](?:token|access_token|api_key|apikey|auth|password)=)([^&\s]+)"#).ok()
+});
 
 /// Secret management
 #[derive(Debug)]
@@ -131,11 +148,13 @@ impl SecretManager {
     /// Check if the command contains secrets
     pub fn is_sensitive_command(&self, cmd: &str) -> bool {
         // Check assignment patterns (VAR=value)
-        for cap in ASSIGNMENT_PATTERN.captures_iter(cmd) {
-            if let Some(var_name) = cap.get(1)
-                && self.is_sensitive_key(var_name.as_str())
-            {
-                return true;
+        if let Some(pattern) = ASSIGNMENT_PATTERN.as_ref() {
+            for cap in pattern.captures_iter(cmd) {
+                if let Some(var_name) = cap.get(1)
+                    && self.is_sensitive_key(var_name.as_str())
+                {
+                    return true;
+                }
             }
         }
 
@@ -147,22 +166,61 @@ impl SecretManager {
             }
         }
 
-        false
+        OPTION_SECRET_PATTERN
+            .as_ref()
+            .is_some_and(|pattern| pattern.is_match(cmd))
+            || AUTH_BEARER_PATTERN
+                .as_ref()
+                .is_some_and(|pattern| pattern.is_match(cmd))
+            || QUERY_SECRET_PATTERN
+                .as_ref()
+                .is_some_and(|pattern| pattern.is_match(cmd))
     }
 
     /// Redact secret parts and return
     pub fn redact_command(&self, cmd: &str) -> String {
         let mut result = cmd.to_string();
 
-        // Redact assignment patterns
-        for cap in ASSIGNMENT_PATTERN.captures_iter(cmd) {
-            if let (Some(var_match), Some(val_match)) = (cap.get(1), cap.get(2))
-                && self.is_sensitive_key(var_match.as_str())
-            {
-                let original = format!("{}={}", var_match.as_str(), val_match.as_str());
-                let redacted = format!("{}=***", var_match.as_str());
-                result = result.replace(&original, &redacted);
-            }
+        if let Some(pattern) = ASSIGNMENT_PATTERN.as_ref() {
+            result = pattern
+                .replace_all(&result, |caps: &regex::Captures<'_>| {
+                    let key = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                    if self.is_sensitive_key(key) {
+                        format!("{key}=***")
+                    } else {
+                        caps.get(0)
+                            .map(|m| m.as_str().to_string())
+                            .unwrap_or_default()
+                    }
+                })
+                .to_string();
+        }
+
+        if let Some(pattern) = OPTION_SECRET_PATTERN.as_ref() {
+            result = pattern
+                .replace_all(&result, |caps: &regex::Captures<'_>| {
+                    let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                    format!("{prefix}***")
+                })
+                .to_string();
+        }
+
+        if let Some(pattern) = AUTH_BEARER_PATTERN.as_ref() {
+            result = pattern
+                .replace_all(&result, |caps: &regex::Captures<'_>| {
+                    let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                    format!("{prefix}***")
+                })
+                .to_string();
+        }
+
+        if let Some(pattern) = QUERY_SECRET_PATTERN.as_ref() {
+            result = pattern
+                .replace_all(&result, |caps: &regex::Captures<'_>| {
+                    let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                    format!("{prefix}***")
+                })
+                .to_string();
         }
 
         result
@@ -303,8 +361,9 @@ mod tests {
         assert!(!manager.is_sensitive_command("ls -la"));
         assert!(!manager.is_sensitive_command("echo hello"));
         assert!(!manager.is_sensitive_command("export HOME=/home/user"));
-        // curl headers are not assignment patterns, so not detected (future custom pattern support)
-        assert!(!manager.is_sensitive_command("curl -H 'Authorization: Bearer xxx' URL"));
+        assert!(manager.is_sensitive_command("curl -H 'Authorization: Bearer xxx' URL"));
+        assert!(manager.is_sensitive_command("curl --token abc123 https://example.com"));
+        assert!(manager.is_sensitive_command("curl 'https://api.example.com?token=abc123'"));
     }
 
     #[test]
@@ -317,6 +376,15 @@ mod tests {
         assert!(redacted.contains("DB_PASSWORD=***"));
         assert!(!redacted.contains("abc123"));
         assert!(!redacted.contains("secret"));
+
+        let with_flags = "curl --token abc123 -H 'Authorization: Bearer xyz' 'https://a?token=qwe'";
+        let with_flags_redacted = manager.redact_command(with_flags);
+        assert!(with_flags_redacted.contains("--token ***"));
+        assert!(with_flags_redacted.contains("Authorization: Bearer ***"));
+        assert!(with_flags_redacted.contains("?token=***"));
+        assert!(!with_flags_redacted.contains("abc123"));
+        assert!(!with_flags_redacted.contains("xyz"));
+        assert!(!with_flags_redacted.contains("qwe"));
     }
 
     #[test]

@@ -199,6 +199,34 @@ impl std::fmt::Debug for McpManager {
 }
 
 impl McpManager {
+    fn session_meta_read(&self) -> std::sync::RwLockReadGuard<'_, HashMap<String, SessionMeta>> {
+        self.session_meta.read().unwrap_or_else(|poisoned| {
+            warn!("session metadata lock poisoned; recovering read access");
+            poisoned.into_inner()
+        })
+    }
+
+    fn session_meta_write(&self) -> std::sync::RwLockWriteGuard<'_, HashMap<String, SessionMeta>> {
+        self.session_meta.write().unwrap_or_else(|poisoned| {
+            warn!("session metadata lock poisoned; recovering write access");
+            poisoned.into_inner()
+        })
+    }
+
+    fn connection_errors_read(&self) -> std::sync::RwLockReadGuard<'_, HashMap<String, String>> {
+        self.connection_errors.read().unwrap_or_else(|poisoned| {
+            warn!("connection errors lock poisoned; recovering read access");
+            poisoned.into_inner()
+        })
+    }
+
+    fn connection_errors_write(&self) -> std::sync::RwLockWriteGuard<'_, HashMap<String, String>> {
+        self.connection_errors.write().unwrap_or_else(|poisoned| {
+            warn!("connection errors lock poisoned; recovering write access");
+            poisoned.into_inner()
+        })
+    }
+
     pub async fn load(runtime_servers: Vec<McpServerConfig>) -> Self {
         match Self::build_from_servers(runtime_servers).await {
             Ok(manager) => manager,
@@ -232,7 +260,7 @@ impl McpManager {
 
     /// Get the number of connected servers (based on metadata)
     pub fn connected_count(&self) -> usize {
-        self.session_meta.read().unwrap().len()
+        self.session_meta_read().len()
     }
 
     /// Get the currently registered MCP server configurations.
@@ -254,8 +282,8 @@ impl McpManager {
 
     /// Get status of all registered MCP servers
     pub fn get_status(&self) -> Vec<McpServerStatus> {
-        let meta = self.session_meta.read().unwrap();
-        let errors = self.connection_errors.read().unwrap();
+        let meta = self.session_meta_read();
+        let errors = self.connection_errors_read();
 
         self.servers
             .iter()
@@ -291,13 +319,11 @@ impl McpManager {
     /// This intentionally excludes static server/tool definitions.
     pub fn snapshot_runtime_state(&self) -> McpRuntimeStateSnapshot {
         let session_meta = self
-            .session_meta
-            .read()
-            .unwrap()
+            .session_meta_read()
             .iter()
             .map(|(label, meta)| (label.clone(), meta.connected_at))
             .collect();
-        let connection_errors = self.connection_errors.read().unwrap().clone();
+        let connection_errors = self.connection_errors_read().clone();
         McpRuntimeStateSnapshot {
             session_meta,
             connection_errors,
@@ -311,7 +337,7 @@ impl McpManager {
             connection_errors,
         } = snapshot;
 
-        let mut meta_lock = self.session_meta.write().unwrap();
+        let mut meta_lock = self.session_meta_write();
         meta_lock.clear();
         meta_lock.extend(
             session_meta
@@ -319,7 +345,7 @@ impl McpManager {
                 .map(|(label, connected_at)| (label, SessionMeta { connected_at })),
         );
 
-        *self.connection_errors.write().unwrap() = connection_errors;
+        *self.connection_errors_write() = connection_errors;
     }
 
     /// Connect to a specific MCP server (validates connectivity)
@@ -339,20 +365,18 @@ impl McpManager {
         ) {
             Ok(()) => {
                 info!(server = label, "validated MCP server connection");
-                self.session_meta.write().unwrap().insert(
+                self.session_meta_write().insert(
                     label_owned.clone(),
                     SessionMeta {
                         connected_at: Instant::now(),
                     },
                 );
-                self.connection_errors.write().unwrap().remove(&label_owned);
+                self.connection_errors_write().remove(&label_owned);
                 Ok(())
             }
             Err(err) => {
                 let error_msg = format!("{err}");
-                self.connection_errors
-                    .write()
-                    .unwrap()
+                self.connection_errors_write()
                     .insert(label_owned, error_msg.clone());
                 Err(error_msg)
             }
@@ -361,14 +385,14 @@ impl McpManager {
 
     /// Disconnect from a specific MCP server (clears metadata)
     pub fn disconnect(&self, label: &str) -> Result<(), String> {
-        self.session_meta.write().unwrap().remove(label);
+        self.session_meta_write().remove(label);
         info!(server = label, "disconnected from MCP server");
         Ok(())
     }
 
     /// Disconnect from all MCP servers
     pub fn disconnect_all(&self) {
-        let count = self.session_meta.write().unwrap().drain().count();
+        let count = self.session_meta_write().drain().count();
         if count > 0 {
             info!(count, "disconnected from all MCP servers");
         }
@@ -670,8 +694,8 @@ impl McpManager {
         if removed {
             self.bindings
                 .retain(|_, binding| binding.server_label != label);
-            self.session_meta.write().unwrap().remove(label);
-            self.connection_errors.write().unwrap().remove(label);
+            self.session_meta_write().remove(label);
+            self.connection_errors_write().remove(label);
         }
         removed
     }

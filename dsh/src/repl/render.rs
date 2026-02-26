@@ -225,15 +225,21 @@ pub fn print_input(
         completion = repl.get_completion_from_history(&input_string);
 
         // Use cached analysis if input hasn't changed (fast path)
-        let analysis =
-            if repl.last_analyzed_input == input_string && repl.last_analysis_result.is_some() {
-                repl.last_analysis_result.clone().unwrap()
+        let analysis = if repl.last_analyzed_input == input_string {
+            if let Some(result) = repl.last_analysis_result.clone() {
+                result
             } else {
                 let result = repl.analyze_input(&input_string, completion.clone());
                 repl.last_analyzed_input = input_string.clone();
                 repl.last_analysis_result = Some(result.clone());
                 result
-            };
+            }
+        } else {
+            let result = repl.analyze_input(&input_string, completion.clone());
+            repl.last_analyzed_input = input_string.clone();
+            repl.last_analysis_result = Some(result.clone());
+            result
+        };
 
         if let Some(c) = analysis.completion_full {
             repl.input.completion = Some(c);

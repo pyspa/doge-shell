@@ -1,14 +1,7 @@
 use super::ShellProxy;
 use dirs;
 use dsh_types::{Context, ExitStatus};
-use once_cell::sync::Lazy;
-use regex::Regex;
 use std::path::Path;
-
-// Pre-compiled regex patterns for efficient path processing
-// These patterns are compiled once and reused for all cd operations
-static ABSOLUTE_PATH_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^/").unwrap());
-static HOME_PATH_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^~").unwrap());
 
 /// Built-in cd command description
 pub fn description() -> &'static str {
@@ -35,10 +28,10 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     // Determine target directory based on argument
     let dir = match argv.get(1).map(|s| s.as_str()) {
         // Handle absolute paths (starting with /)
-        Some(dir) if ABSOLUTE_PATH_REGEX.is_match(dir) => dir.to_string(),
+        Some(dir) if dir.starts_with('/') => dir.to_string(),
 
         // Handle home directory paths (starting with ~)
-        Some(dir) if HOME_PATH_REGEX.is_match(dir) => shellexpand::tilde(dir).to_string(),
+        Some(dir) if dir.starts_with('~') => shellexpand::tilde(dir).to_string(),
 
         // Handle previous directory (cd -)
         Some("-") => match proxy.get_var("OLDPWD") {

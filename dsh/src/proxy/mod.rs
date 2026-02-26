@@ -146,7 +146,17 @@ impl ShellProxy for Shell {
             self.environment.write().reload_path();
         } else {
             unsafe { std::env::set_var(&key, &value) };
-            debug!("set env {} {}", &key, &value);
+            let masked = if self
+                .environment
+                .read()
+                .secret_manager
+                .is_sensitive_key(&key)
+            {
+                "<redacted>"
+            } else {
+                value.as_str()
+            };
+            debug!("set env {} {}", &key, masked);
         }
     }
 

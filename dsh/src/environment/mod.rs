@@ -34,19 +34,12 @@ use dsh_builtin::McpManager;
 use dsh_types::mcp::McpServerConfig;
 use dsh_types::output_history::OutputHistory;
 use parking_lot::RwLock;
-use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use tracing::debug;
-
-// Pre-compiled regex patterns for path processing
-pub(crate) static ABSOLUTE_PATH_REGEX: std::sync::LazyLock<Regex> =
-    std::sync::LazyLock::new(|| Regex::new(r"^/").unwrap());
-pub(crate) static RELATIVE_PATH_REGEX: std::sync::LazyLock<Regex> =
-    std::sync::LazyLock::new(|| Regex::new(r"^\./").unwrap());
 
 /// Wrapper to force Send/Sync on types that are effectively confined to the main thread
 /// or not accessed in background threads (like autocompletion closures).
@@ -225,16 +218,17 @@ impl Environment {
 
 impl std::fmt::Debug for Environment {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
+        let execute_allowlist_len = self.execute_allowlist.read().len();
         f.debug_struct("Environment")
             .field("alias", &self.alias)
             .field("abbreviations", &self.abbreviations)
             .field("autocompletion", &self.autocompletion)
             .field("direnv_paths", &self.direnv_roots)
             .field("paths", &self.paths)
-            .field("variables", &self.variables)
+            .field("variables_count", &self.variables.len())
             .field("exported_vars", &self.exported_vars)
             .field("mcp_servers", &self.mcp_servers)
-            .field("execute_allowlist", &self.execute_allowlist)
+            .field("execute_allowlist_len", &execute_allowlist_len)
             .field("input_preferences", &self.input_preferences)
             .finish()
     }

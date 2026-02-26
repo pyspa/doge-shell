@@ -1,9 +1,7 @@
 use crate::completion::display::{Candidate, CompletionConfig};
 use crate::completion::framework::{CompletionFrameworkKind, CompletionSelection};
-use regex::Regex;
 use skim::SkimItem;
 use std::borrow::Cow;
-use std::sync::LazyLock;
 
 impl SkimItem for Candidate {
     fn output(&self) -> Cow<'_, str> {
@@ -79,11 +77,23 @@ pub fn select_item_with_skim(items: Vec<Candidate>, query: Option<&str>) -> Comp
     )
 }
 
-// Pre-compiled regex for whitespace replacement - compiled once at first use
-static WHITESPACE_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
-
 pub fn replace_space(s: &str) -> String {
-    WHITESPACE_REGEX.replace_all(s, "_").to_string()
+    let mut out = String::with_capacity(s.len());
+    let mut in_whitespace = false;
+
+    for ch in s.chars() {
+        if ch.is_whitespace() {
+            if !in_whitespace {
+                out.push('_');
+                in_whitespace = true;
+            }
+        } else {
+            out.push(ch);
+            in_whitespace = false;
+        }
+    }
+
+    out
 }
 
 #[cfg(test)]

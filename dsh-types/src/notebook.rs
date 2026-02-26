@@ -22,10 +22,9 @@ impl Block {
         match &self.kind {
             BlockKind::Code(_) | BlockKind::Output => {
                 let lines: Vec<&str> = self.content.trim().lines().collect();
-                if lines.len() >= 2
-                    && lines[0].starts_with("```")
-                    && lines.last().unwrap().starts_with("```")
-                {
+                let last_line_is_fence =
+                    lines.last().map(|line| line.starts_with("```")) == Some(true);
+                if lines.len() >= 2 && lines[0].starts_with("```") && last_line_is_fence {
                     lines[1..lines.len() - 1].join("\n")
                 } else {
                     self.content.clone()

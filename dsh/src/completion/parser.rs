@@ -1,11 +1,15 @@
 use super::command::ArgumentType;
-use regex::Regex;
 use std::collections::VecDeque;
 
-static OPTION_REGEX: std::sync::LazyLock<Regex> =
-    std::sync::LazyLock::new(|| Regex::new(r"^-").unwrap());
-static DOUBLE_DASH_REGEX: std::sync::LazyLock<Regex> =
-    std::sync::LazyLock::new(|| Regex::new(r"^--").unwrap());
+#[inline]
+fn is_option_token(token: &str) -> bool {
+    token.starts_with('-')
+}
+
+#[inline]
+fn is_long_option_token(token: &str) -> bool {
+    token.starts_with("--")
+}
 
 #[derive(Debug, Clone)]
 struct TokenSpan {
@@ -241,7 +245,7 @@ impl CommandLineParser {
 
         // Parse subcommands
         while let Some(token) = tokens_queue.front() {
-            if OPTION_REGEX.is_match(token) {
+            if is_option_token(token) {
                 break; // End subcommand parsing when options start
             }
 
@@ -249,7 +253,11 @@ impl CommandLineParser {
             // Treat consecutive "subcommand-like" tokens as subcommands.
             // Invalid ones will be reclassified as arguments by CompletionGenerator.
             if self.looks_like_subcommand(token) {
-                subcommand_path.push(tokens_queue.pop_front().unwrap());
+                if let Some(next_token) = tokens_queue.pop_front() {
+                    subcommand_path.push(next_token);
+                } else {
+                    break;
+                }
             } else {
                 break; // End subcommand parsing when arguments start
             }
@@ -277,12 +285,12 @@ impl CommandLineParser {
                 continue;
             }
 
-            if OPTION_REGEX.is_match(token) {
+            if is_option_token(token) {
                 specified_options.push(token.clone());
 
                 // Check if next token is option value
                 if let Some(next_token) = tokens_queue.get(i + 1)
-                    && !OPTION_REGEX.is_match(next_token)
+                    && !is_option_token(next_token)
                     && self.option_takes_value(token)
                 {
                     skip_next_option_value = true;
@@ -359,7 +367,7 @@ impl CommandLineParser {
     /// Determine if token looks like a subcommand
     fn looks_like_subcommand(&self, token: &str) -> bool {
         // Simple determination: not an option and not a file path
-        if OPTION_REGEX.is_match(token) {
+        if is_option_token(token) {
             return false;
         }
 
@@ -439,9 +447,9 @@ impl CommandLineParser {
         }
 
         // If current token is an option
-        if DOUBLE_DASH_REGEX.is_match(params.current_token) {
+        if is_long_option_token(params.current_token) {
             return CompletionContext::LongOption;
-        } else if OPTION_REGEX.is_match(params.current_token) {
+        } else if is_option_token(params.current_token) {
             // Support both short options (-x) and long options starting with single dash (-xxx)
             if params.current_token.len() == 2 {
                 return CompletionContext::ShortOption;
@@ -453,7 +461,7 @@ impl CommandLineParser {
         // If previous token is an option that takes a value
         if params.cursor_token_index > 0 {
             let prev_token = &params.all_tokens[params.cursor_token_index - 1];
-            if OPTION_REGEX.is_match(prev_token) && self.option_takes_value(prev_token) {
+            if is_option_token(prev_token) && self.option_takes_value(prev_token) {
                 return CompletionContext::OptionValue {
                     option_name: prev_token.clone(),
                     value_type: None, // In actual implementation, get from completion data

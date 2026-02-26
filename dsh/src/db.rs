@@ -10,7 +10,19 @@ pub struct Db {
 
 impl Db {
     pub fn new(path: PathBuf) -> Result<Self> {
-        let conn = Connection::open(path).context("Failed to open SQLite database")?;
+        let conn = Connection::open(&path).context("Failed to open SQLite database")?;
+
+        #[cfg(unix)]
+        {
+            use std::fs;
+            use std::os::unix::fs::PermissionsExt;
+
+            let metadata = fs::metadata(&path).context("Failed to read SQLite metadata")?;
+            let mut perms = metadata.permissions();
+            // Restrict database access to current user.
+            perms.set_mode(0o600);
+            fs::set_permissions(&path, perms).context("Failed to set SQLite permissions")?;
+        }
 
         // Optimize SQLite settings for performance
         conn.execute_batch(
@@ -29,7 +41,10 @@ impl Db {
     }
 
     fn init_schema(&self) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // Command History Table
         conn.execute(
@@ -137,6 +152,8 @@ impl Db {
     }
 
     pub fn get_connection(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap()
+        self.conn
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }

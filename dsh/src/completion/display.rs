@@ -7,7 +7,7 @@ use crossterm::{cursor, execute, queue};
 use serde::{Deserialize, Serialize};
 use skim::SkimItem;
 use std::io::{Write, stdout};
-use tracing::debug;
+use tracing::{debug, warn};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[derive(Debug, Clone, Copy)]
@@ -99,6 +99,14 @@ pub(crate) struct LayoutCache {
     items_per_row: usize,
     total_rows: usize,
 }
+
+const FALLBACK_LAYOUT: LayoutCache = LayoutCache {
+    terminal_width: 80,
+    column_width: 80,
+    max_name_width: 80,
+    items_per_row: 1,
+    total_rows: 0,
+};
 
 impl Drop for CompletionDisplay {
     fn drop(&mut self) {
@@ -208,9 +216,12 @@ impl CompletionDisplay {
     }
 
     fn layout(&self) -> &LayoutCache {
-        self.layout_cache
-            .as_ref()
-            .expect("layout must be prepared before rendering")
+        if let Some(layout) = self.layout_cache.as_ref() {
+            layout
+        } else {
+            warn!("layout cache missing during render; using fallback layout");
+            &FALLBACK_LAYOUT
+        }
     }
 
     #[allow(dead_code)]

@@ -103,7 +103,13 @@ pub fn lib_main() -> ExitCode {
     // Set up panic handler
     setup_panic_handler();
 
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(err) => {
+            eprintln!("Failed to create Tokio runtime: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
     rt.block_on(run_shell())
 }
 

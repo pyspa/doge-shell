@@ -79,14 +79,12 @@ pub(crate) fn analyze_input(
                             && path.starts_with(word)
                         {
                             let part = path[word.len()..].to_string();
-                            completion = Some(part);
+                            completion = Some(part.clone());
 
                             if let Some((pre, post)) = repl.input.split_current_pos() {
-                                completion_full =
-                                    Some(pre.to_owned() + &completion.clone().unwrap() + post);
+                                completion_full = Some(pre.to_owned() + &part + post);
                             } else {
-                                completion_full =
-                                    Some(input.to_string() + &completion.clone().unwrap());
+                                completion_full = Some(input.to_string() + &part);
                             }
                             break;
                         }

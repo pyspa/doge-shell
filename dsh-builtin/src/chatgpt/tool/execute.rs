@@ -4,7 +4,7 @@ use shell_words::split;
 use std::env;
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use xdg::BaseDirectories;
 
@@ -23,13 +23,13 @@ pub(crate) fn definition() -> Value {
         "type": "function",
         "function": {
             "name": NAME,
-            "description": "Execute an allowed shell command via bash and return its exit code, stdout, and stderr. Configure the allowlist in ~/.config/dsh/openai-execute-tool.json or the AI_CHAT_EXECUTE_ALLOWLIST environment variable.",
+            "description": "Execute an allowlisted command directly (without shell evaluation) and return exit code, stdout, and stderr. Configure allowlist in ~/.config/dsh/openai-execute-tool.json or AI_CHAT_EXECUTE_ALLOWLIST.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "Command line to execute. The first program token must appear in the configured allowlist."
+                        "description": "Command line to execute. Shell operators are not allowed."
                     }
                 },
                 "required": ["command"],
@@ -52,30 +52,41 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
         return Err("chat: execute tool command must not be empty".to_string());
     }
 
-    let allowlist = load_allowed_commands(proxy.list_execute_allowlist())?;
-    let program = extract_program_name(command)?;
+    let tokens = parse_command_tokens(command)?;
+    if contains_shell_expression(&tokens) {
+        return Err(
+            "chat: execute tool does not allow shell operators or substitutions; pass plain command and arguments only".to_string(),
+        );
+    }
 
-    let skills_dir = dirs::config_dir()
-        .map(|p| p.join("dsh/skills"))
-        .unwrap_or_else(|| PathBuf::from(".config/dsh/skills"));
-    let normalized_skills_dir = super::normalize_path(&skills_dir);
-    let program_path = PathBuf::from(&program);
-    let normalized_program_path = super::normalize_path(&program_path);
+    let program = tokens[0].clone();
+    let args = tokens[1..].to_vec();
 
-    let is_skill_script = normalized_program_path.starts_with(&normalized_skills_dir);
-
-    if !allowlist.iter().any(|item| item == &program) && !is_skill_script {
+    if invokes_string_eval(&program, &args) {
         return Err(format!(
-            "chat: execute tool command `{}` from request `{}` is not permitted. Allowed commands: {} (or scripts in skills directory)",
+            "chat: execute tool blocked `{}` because string-eval flags (-c/-e/-command) are not allowed",
+            program
+        ));
+    }
+
+    let allowlist = load_allowed_commands(proxy.list_execute_allowlist())?;
+    let allowed = command_is_allowlisted(&program, &args, &allowlist);
+    let is_skill_script = is_skill_script_program(&program, proxy)?;
+
+    if !allowed && !is_skill_script {
+        return Err(format!(
+            "chat: execute tool command `{}` from request `{}` is not permitted. Allowed entries: {} (or scripts in skills directory)",
             program,
             command.trim(),
             allowlist.join(", ")
         ));
     }
 
-    // Safety Guard: Request confirmation from user (skip if command is in allowlist)
-    if !allowlist.iter().any(|item| item == &program) {
-        let confirm_msg = format!("AI wants to execute command: `{}`. \r\nProceed?", command);
+    if is_skill_script {
+        let confirm_msg = format!(
+            "AI wants to execute skill script: `{}`. \r\nProceed?",
+            command.trim()
+        );
         if !proxy
             .confirm_action(&confirm_msg)
             .map_err(|e: anyhow::Error| e.to_string())?
@@ -84,11 +95,10 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
         }
     }
 
-    let output = Command::new("bash")
-        .arg("-lc")
-        .arg(command)
+    let output = Command::new(&program)
+        .args(&args)
         .output()
-        .map_err(|err| format!("chat: failed to spawn bash: {err}"))?;
+        .map_err(|err| format!("chat: failed to execute `{}`: {err}", command.trim()))?;
 
     let exit_code = output.status.code().unwrap_or(-1);
     let stdout_text = String::from_utf8_lossy(&output.stdout).to_string();
@@ -117,12 +127,103 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
     Ok(result.to_string())
 }
 
-fn extract_program_name(command: &str) -> Result<String, String> {
+fn parse_command_tokens(command: &str) -> Result<Vec<String>, String> {
     let tokens = split(command).map_err(|err| format!("chat: failed to parse command: {err}"))?;
-    tokens
-        .first()
-        .cloned()
-        .ok_or_else(|| "chat: execute tool command must specify a program".to_string())
+    if tokens.is_empty() {
+        Err("chat: execute tool command must specify a program".to_string())
+    } else {
+        Ok(tokens)
+    }
+}
+
+#[cfg(test)]
+fn extract_program_name(command: &str) -> Result<String, String> {
+    parse_command_tokens(command).map(|tokens| tokens[0].clone())
+}
+
+fn contains_shell_expression(tokens: &[String]) -> bool {
+    tokens.iter().any(|token| {
+        token.contains("$(")
+            || token.contains('`')
+            || token.contains('\n')
+            || token
+                .chars()
+                .any(|ch| matches!(ch, '|' | '&' | ';' | '>' | '<'))
+    })
+}
+
+fn program_name(program: &str) -> String {
+    Path::new(program)
+        .file_name()
+        .and_then(|p| p.to_str())
+        .unwrap_or(program)
+        .to_string()
+}
+
+fn invokes_string_eval(program: &str, args: &[String]) -> bool {
+    let name = program_name(program);
+    match name.as_str() {
+        "sh" | "bash" | "zsh" | "fish" | "ksh" => {
+            args.iter().any(|arg| arg == "-c" || arg == "-lc")
+        }
+        "python" | "python3" | "perl" | "ruby" | "node" => {
+            args.iter().any(|arg| arg == "-c" || arg == "-e")
+        }
+        "pwsh" | "powershell" => args
+            .iter()
+            .any(|arg| arg.eq_ignore_ascii_case("-c") || arg.eq_ignore_ascii_case("-command")),
+        _ => false,
+    }
+}
+
+fn allowlist_program_matches(entry_program: &str, program: &str) -> bool {
+    let entry_name = program_name(entry_program);
+    let target_name = program_name(program);
+
+    if entry_program.contains('/') {
+        entry_program == program
+    } else {
+        entry_name == target_name
+    }
+}
+
+fn allowlist_entry_matches(entry: &str, program: &str, args: &[String]) -> bool {
+    let entry_tokens = match split(entry) {
+        Ok(tokens) if !tokens.is_empty() => tokens,
+        _ => return false,
+    };
+
+    if !allowlist_program_matches(&entry_tokens[0], program) {
+        return false;
+    }
+
+    if entry_tokens.len() == 1 {
+        true
+    } else {
+        entry_tokens[1..] == args[..]
+    }
+}
+
+fn command_is_allowlisted(program: &str, args: &[String], allowlist: &[String]) -> bool {
+    allowlist
+        .iter()
+        .any(|entry| allowlist_entry_matches(entry, program, args))
+}
+
+fn is_skill_script_program(program: &str, proxy: &mut dyn ShellProxy) -> Result<bool, String> {
+    if !program.contains('/') && !Path::new(program).is_absolute() {
+        return Ok(false);
+    }
+
+    let resolved_program = match super::resolve_tool_path(program, proxy) {
+        Ok(path) => path,
+        Err(_) => return Ok(false),
+    };
+
+    let skills_root = std::fs::canonicalize(super::tool_skills_dir())
+        .unwrap_or_else(|_| super::normalize_path(&super::tool_skills_dir()));
+
+    Ok(resolved_program.starts_with(skills_root))
 }
 
 fn load_allowed_commands(runtime_allowed: Vec<String>) -> Result<Vec<String>, String> {
@@ -211,13 +312,16 @@ mod tests {
 
     static ENV_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
-    struct NoopProxy {
+    struct TestProxy {
         allow: Vec<String>,
+        cwd: PathBuf,
+        confirm_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        confirm_result: bool,
     }
 
-    impl ShellProxy for NoopProxy {
+    impl ShellProxy for TestProxy {
         fn get_current_dir(&self) -> anyhow::Result<std::path::PathBuf> {
-            Ok(std::env::current_dir()?)
+            Ok(self.cwd.clone())
         }
         fn exit_shell(&mut self) {}
         fn dispatch(
@@ -283,6 +387,11 @@ mod tests {
         }
         fn get_lisp_var(&self, _key: &str) -> Option<String> {
             None
+        }
+        fn confirm_action(&mut self, _message: &str) -> anyhow::Result<bool> {
+            self.confirm_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(self.confirm_result)
         }
     }
 
@@ -339,9 +448,12 @@ mod tests {
     #[test]
     fn run_reports_full_command_on_disallowed_program() {
         let _lock = ENV_LOCK.lock().unwrap();
-        let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls"); // Set env to include the allowed command
-        let mut proxy = NoopProxy {
+        let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls");
+        let mut proxy = TestProxy {
             allow: vec!["ls".to_string()],
+            cwd: std::env::current_dir().unwrap(),
+            confirm_calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            confirm_result: true,
         };
         let result = run("{\"command\":\"cat README.md\"}", &mut proxy);
         let err = result.expect_err("command should be rejected");
@@ -350,11 +462,81 @@ mod tests {
     }
 
     #[test]
-    fn run_reports_command_when_allowlist_empty() {
-        let mut proxy = NoopProxy { allow: Vec::new() };
-        let result = run("{\"command\":\"rm -rf /\"}", &mut proxy);
-        let err = result.expect_err("command should be rejected due to empty allowlist");
-        assert!(err.contains("rm -rf /")); // ensure full command noted
+    fn run_rejects_shell_expression() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls");
+        let mut proxy = TestProxy {
+            allow: vec!["ls".to_string()],
+            cwd: std::env::current_dir().unwrap(),
+            confirm_calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            confirm_result: true,
+        };
+
+        let result = run("{\"command\":\"ls ; rm -rf /tmp/x\"}", &mut proxy);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("does not allow shell operators")
+        );
+    }
+
+    #[test]
+    fn run_rejects_string_eval_flags() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "bash");
+        let mut proxy = TestProxy {
+            allow: vec!["bash".to_string()],
+            cwd: std::env::current_dir().unwrap(),
+            confirm_calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            confirm_result: true,
+        };
+
+        let result = run("{\"command\":\"bash -lc 'echo hi'\"}", &mut proxy);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("string-eval flags"));
+    }
+
+    #[test]
+    fn run_skips_confirmation_for_allowlisted_command() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls");
+        let confirm_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut proxy = TestProxy {
+            allow: vec!["ls".to_string()],
+            cwd: std::env::current_dir().unwrap(),
+            confirm_calls: confirm_calls.clone(),
+            confirm_result: true,
+        };
+        let result = run("{\"command\":\"ls -la\"}", &mut proxy);
+        assert!(result.is_ok());
+        assert_eq!(confirm_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn run_requires_confirmation_for_skill_script() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let config_root = tempdir().unwrap();
+        let skills_dir = config_root.path().join("dsh/skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        let script_path = skills_dir.join("script.sh");
+        std::fs::write(&script_path, "#!/usr/bin/env bash\necho hello\n").unwrap();
+
+        let _cfg_guard = EnvGuard::set("XDG_CONFIG_HOME", config_root.path().to_str().unwrap());
+
+        let confirm_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut proxy = TestProxy {
+            allow: vec![],
+            cwd: std::env::current_dir().unwrap(),
+            confirm_calls: confirm_calls.clone(),
+            confirm_result: false,
+        };
+
+        let command = format!("{{\"command\":\"{}\"}}", script_path.to_string_lossy());
+        let result = run(&command, &mut proxy);
+
+        assert_eq!(result.unwrap(), "Execution cancelled by user.".to_string());
+        assert_eq!(confirm_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     struct EnvGuard {
@@ -384,120 +566,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    struct ConfirmProxy {
-        allow: Vec<String>,
-        confirm_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-        confirm_result: bool,
-    }
-
-    impl ShellProxy for ConfirmProxy {
-        fn get_current_dir(&self) -> anyhow::Result<std::path::PathBuf> {
-            Ok(std::env::current_dir()?)
-        }
-        fn exit_shell(&mut self) {}
-        fn dispatch(
-            &mut self,
-            _ctx: &Context,
-            _cmd: &str,
-            _argv: Vec<String>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn save_path_history(&mut self, _path: &str) {}
-        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn insert_path(&mut self, _index: usize, _path: &str) {}
-        fn get_var(&mut self, _key: &str) -> Option<String> {
-            None
-        }
-        fn set_var(&mut self, _key: String, _value: String) {}
-        fn set_env_var(&mut self, _key: String, _value: String) {}
-        fn unset_env_var(&mut self, _key: &str) {}
-        fn get_alias(&mut self, _name: &str) -> Option<String> {
-            None
-        }
-        fn set_alias(&mut self, _name: String, _command: String) {}
-        fn list_aliases(&mut self) -> std::collections::HashMap<String, String> {
-            std::collections::HashMap::new()
-        }
-        fn add_abbr(&mut self, _name: String, _expansion: String) {}
-        fn remove_abbr(&mut self, _name: &str) -> bool {
-            false
-        }
-        fn list_abbrs(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-        fn get_abbr(&self, _name: &str) -> Option<String> {
-            None
-        }
-        fn list_mcp_servers(&mut self) -> Vec<dsh_types::mcp::McpServerConfig> {
-            Vec::new()
-        }
-        fn list_execute_allowlist(&mut self) -> Vec<String> {
-            self.allow.clone()
-        }
-        fn list_exported_vars(&self) -> Vec<(String, String)> {
-            vec![]
-        }
-        fn export_var(&mut self, _key: &str) -> bool {
-            true
-        }
-        fn set_and_export_var(&mut self, _key: String, _value: String) {}
-        fn get_lisp_var(&self, _key: &str) -> Option<String> {
-            None
-        }
-        fn get_github_status(&self) -> (usize, usize, usize) {
-            (0, 0, 0)
-        }
-
-        fn get_git_branch(&self) -> Option<String> {
-            None
-        }
-
-        fn get_job_count(&self) -> usize {
-            0
-        }
-
-        fn confirm_action(&mut self, _message: &str) -> anyhow::Result<bool> {
-            self.confirm_calls
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(self.confirm_result)
-        }
-    }
-
-    #[test]
-    fn run_skips_confirmation_for_allowed_command() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls");
-        let confirm_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let mut proxy = ConfirmProxy {
-            allow: vec!["ls".to_string()],
-            confirm_calls: confirm_calls.clone(),
-            confirm_result: true,
-        };
-        let result = run("{\"command\":\"ls -la\"}", &mut proxy);
-        assert!(result.is_ok());
-        // Confirmation should be skipped for allowed commands
-        assert_eq!(confirm_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn run_requests_confirmation_for_non_allowed_command() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls,cat");
-        let confirm_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let mut proxy = ConfirmProxy {
-            allow: vec!["ls".to_string(), "cat".to_string()],
-            confirm_calls: confirm_calls.clone(),
-            confirm_result: false,
-        };
-        // grep is not in allowlist, so it should be rejected before confirmation
-        let result = run("{\"command\":\"grep foo\"}", &mut proxy);
-        assert!(result.is_err()); // Not permitted
-        // Confirmation should not be called because command is not in allowlist
-        assert_eq!(confirm_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }

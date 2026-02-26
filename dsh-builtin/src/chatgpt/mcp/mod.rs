@@ -848,23 +848,18 @@ impl McpManager {
         Fut: std::future::Future<Output = Result<T>> + Send + 'static,
         T: Send + 'static,
     {
-        // Use a dedicated thread to ensure we can block even if called from
-        // within a single-threaded runtime context (where block_in_place panics).
-        let handle = tokio::runtime::Handle::try_current().ok();
-
+        // Always execute on a dedicated runtime in a dedicated thread.
+        // This avoids nested-runtime panics from Handle::block_on when callers
+        // are already inside a Tokio runtime.
         let (tx, rx) = std::sync::mpsc::channel();
 
         std::thread::spawn(move || {
-            let res = if let Some(rt) = handle {
-                rt.block_on(f())
-            } else {
-                match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(rt) => rt.block_on(f()),
-                    Err(e) => Err(anyhow::anyhow!("failed to create async runtime: {}", e)),
-                }
+            let res = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt.block_on(f()),
+                Err(e) => Err(anyhow::anyhow!("failed to create async runtime: {}", e)),
             };
             let _ = tx.send(res);
         })
@@ -1242,5 +1237,15 @@ mod tests {
             ),
             Ok(_) => panic!("Expected SSE transport to fail"),
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_load_blocking_inside_runtime_does_not_panic() {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            McpManager::load_blocking(vec![])
+        }));
+
+        assert!(result.is_ok(), "load_blocking panicked inside runtime");
+        assert!(result.expect("panic check").is_empty());
     }
 }

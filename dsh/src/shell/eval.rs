@@ -498,7 +498,8 @@ pub fn launch_subshell(shell: &mut Shell, ctx: &mut Context, jobs: Vec<Job>) -> 
     for mut job in jobs {
         disable_raw_mode().ok();
         let pid = task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(spawn_subshell(shell, ctx, &mut job))
+            // Avoid nested-runtime panic by driving only this future directly.
+            futures::executor::block_on(spawn_subshell(shell, ctx, &mut job))
         })?;
         debug!("spawned subshell cmd:{} pid: {:?}", job.cmd, pid);
         let res = wait_pid_job(pid, false);

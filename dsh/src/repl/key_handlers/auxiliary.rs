@@ -105,7 +105,7 @@ pub(crate) async fn handle_macro_record(repl: &mut Repl<'_>) -> Result<()> {
         }
         drop(tx_item);
 
-        let selected_items = Skim::run_with(options, Some(rx_item))
+        let selected_items = crate::utils::skim::run_skim_with(options, Some(rx_item))
             .map(|out| out.selected_items)
             .unwrap_or_default();
 

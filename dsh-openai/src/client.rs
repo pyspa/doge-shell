@@ -86,11 +86,16 @@ impl ChatGptClient {
         model: Option<String>,
         cancel_check: Option<&dyn Fn() -> bool>,
     ) -> Result<String> {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            // Avoid nested-runtime panic by running the request on an isolated runtime
+            // inside a blocking section instead of calling Handle::block_on().
             let prompt_clone = prompt.clone();
             let model_clone = model.clone();
             tokio::task::block_in_place(move || {
-                handle.block_on(self.send_message_inner(
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?;
+                runtime.block_on(self.send_message_inner(
                     input,
                     prompt_clone,
                     temperature,
@@ -118,12 +123,15 @@ impl ChatGptClient {
         tools: Option<&[Value]>,
         cancel_check: Option<&dyn Fn() -> bool>,
     ) -> Result<Value> {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        if tokio::runtime::Handle::try_current().is_ok() {
             let messages_vec = messages.to_vec();
             let tools_vec = tools.map(|items| items.to_vec());
             let model_clone = model.clone();
             tokio::task::block_in_place(move || {
-                handle.block_on(self.send_chat_request_inner(
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?;
+                runtime.block_on(self.send_chat_request_inner(
                     messages_vec,
                     temperature,
                     model_clone,
@@ -310,6 +318,7 @@ impl ChatGptClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use tokio::time::{Duration, sleep};
@@ -346,5 +355,41 @@ mod tests {
 
         assert!(result.is_err());
         assert!(is_ctrl_c_cancelled(&result.unwrap_err()));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn sync_send_chat_request_inside_runtime_does_not_panic() {
+        let client = ChatGptClient::new_with_settings(
+            "test-key".to_string(),
+            Some("gpt-5-mini".to_string()),
+            Some("https://example.invalid".to_string()),
+        )
+        .expect("client should initialize");
+
+        let messages = vec![json!({ "role": "user", "content": "hello" })];
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.send_chat_request(&messages, Some(0.0), None, None, Some(&|| true))
+        }));
+
+        assert!(result.is_ok(), "send_chat_request panicked inside runtime");
+        assert!(result.expect("panic check").is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn sync_send_message_inside_runtime_does_not_panic() {
+        let client = ChatGptClient::new_with_settings(
+            "test-key".to_string(),
+            Some("gpt-5-mini".to_string()),
+            Some("https://example.invalid".to_string()),
+        )
+        .expect("client should initialize");
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            client.send_message("hello", None, Some(0.0), Some(&|| true))
+        }));
+
+        assert!(result.is_ok(), "send_message panicked inside runtime");
+        assert!(result.expect("panic check").is_err());
     }
 }

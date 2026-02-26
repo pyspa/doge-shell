@@ -1,7 +1,7 @@
 use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
 use skim::prelude::*;
-use skim::{Skim, SkimItemReceiver, SkimItemSender};
+use skim::{SkimItemReceiver, SkimItemSender};
 use std::borrow::Cow;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -92,8 +92,7 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
     }
     drop(tx_item); // Close sender
 
-    let selected = Skim::run_with(options, Some(rx_item))
-        .ok()
+    let selected = crate::skim_runner::run_skim_with(options, Some(rx_item))
         .map(|out| out.selected_items)
         .unwrap_or_default();
 

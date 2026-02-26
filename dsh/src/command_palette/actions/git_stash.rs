@@ -54,8 +54,7 @@ impl Action for GitStashAction {
         }
         drop(tx);
 
-        let selected = Skim::run_with(stash_options, Some(rx))
-            .ok()
+        let selected = crate::utils::skim::run_skim_with(stash_options, Some(rx))
             .map(|out| out.selected_items)
             .unwrap_or_default();
 
@@ -84,8 +83,7 @@ impl Action for GitStashAction {
         }
         drop(tx);
 
-        let selected_action = Skim::run_with(action_options, Some(rx))
-            .ok()
+        let selected_action = crate::utils::skim::run_skim_with(action_options, Some(rx))
             .map(|out| out.selected_items)
             .unwrap_or_default();
 

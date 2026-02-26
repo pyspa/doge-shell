@@ -51,6 +51,7 @@ mod read;
 mod reload;
 pub mod serve;
 mod set;
+mod skim_runner;
 mod snippet;
 pub mod task;
 pub mod tm;

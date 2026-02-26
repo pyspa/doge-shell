@@ -10,7 +10,7 @@
 use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
 use skim::prelude::*;
-use skim::{Skim, SkimItemReceiver, SkimItemSender};
+use skim::{SkimItemReceiver, SkimItemSender};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -451,7 +451,7 @@ fn remove_worktree_interactive(ctx: &Context, force: bool) -> ExitStatus {
     }
     drop(tx_item);
 
-    let selected = Skim::run_with(options, Some(rx_item))
+    let selected = crate::skim_runner::run_skim_with(options, Some(rx_item))
         .map(|out| {
             if out.is_abort {
                 Vec::new()
@@ -653,7 +653,7 @@ fn add_worktree_from_pr(ctx: &Context) -> Result<PathBuf, String> {
     }
     drop(tx_item);
 
-    let selected = Skim::run_with(options, Some(rx_item))
+    let selected = crate::skim_runner::run_skim_with(options, Some(rx_item))
         .map(|out| {
             if out.is_abort {
                 Vec::new()

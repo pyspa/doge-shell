@@ -91,8 +91,7 @@ pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) ->
     }
     drop(tx_item);
 
-    let selected = Skim::run_with(options, Some(rx_item))
-        .ok()
+    let selected = crate::skim_runner::run_skim_with(options, Some(rx_item))
         .map(|out| {
             if out.is_abort {
                 Vec::new()

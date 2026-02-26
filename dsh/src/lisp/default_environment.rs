@@ -93,8 +93,7 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
                     msg: format!("Failed to build skim options: {}", e),
                 })?;
 
-            let selected_items = Skim::run_with(options, Some(rx_item))
-                .ok()
+            let selected_items = crate::utils::skim::run_skim_with(options, Some(rx_item))
                 .map(|out| out.selected_items)
                 .unwrap_or_default();
 

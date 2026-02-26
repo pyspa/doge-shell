@@ -180,6 +180,12 @@ fn eval_inner(
                 Value::Symbol(Symbol(keyword)) if keyword == "autocomplete" => {
                     let args = &list.cdr().into_iter().collect::<Vec<Value>>();
 
+                    if args.len() < 2 {
+                        return Err(RuntimeError {
+                            msg: "autocomplete requires at least 2 arguments".to_string(),
+                        });
+                    }
+
                     let name_symbol = require_typed_arg::<&Symbol>(keyword, args, 0)?;
                     let target = name_symbol.to_string().replace('-', "_");
                     let mut cmd = None;

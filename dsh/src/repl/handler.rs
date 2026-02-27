@@ -98,6 +98,9 @@ pub(crate) async fn handle_key_event(
             match open_editor(repl.input.as_str(), "sh") {
                 Ok(content) => {
                     repl.input.reset(content);
+                    repl.last_input_change_time = std::time::Instant::now();
+                    repl.current_ai_explanation = None;
+
                     let mut renderer = TerminalRenderer::new();
                     repl.print_prompt(&mut renderer);
                     repl.print_input(&mut renderer, true, true);
@@ -277,6 +280,30 @@ pub(crate) async fn handle_key_event(
         KeyAction::Unsupported => {
             warn!("unsupported key event: {:?}", ev);
         }
+    }
+
+    // Determine if input was likely modified by the action
+    // We update last_input_change_time broadly to ensure the AI ghost text doesn't show randomly.
+    if matches!(
+        action,
+        KeyAction::InsertChar(_)
+            | KeyAction::Backspace
+            | KeyAction::DeleteWordBackward
+            | KeyAction::DeleteToEnd
+            | KeyAction::DeleteToBeginning
+            | KeyAction::AcceptSuggestionWord
+            | KeyAction::AcceptSuggestionFull
+            | KeyAction::AcceptCompletion
+            | KeyAction::ExpandAbbreviationAndInsertSpace
+            | KeyAction::InsertPairedChar { .. }
+            | KeyAction::Paste
+            | KeyAction::HistoryPrevious
+            | KeyAction::HistoryNext
+            | KeyAction::HistorySearch
+    ) {
+        repl.last_input_change_time = std::time::Instant::now();
+        repl.current_ai_explanation = None;
+        repl.pending_ai_explanation_input = None;
     }
 
     if redraw {

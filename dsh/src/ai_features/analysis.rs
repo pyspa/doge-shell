@@ -33,6 +33,33 @@ pub async fn explain_command<S: AiService + ?Sized>(service: &S, command: &str) 
     service.send_request(messages, Some(0.2)).await
 }
 
+/// Explain a shell command briefly in a single line (for inline ghost text).
+pub async fn explain_command_inline<S: AiService + ?Sized>(
+    service: &S,
+    command: &str,
+) -> Result<String> {
+    if let PromptInjectionResult::Suspicious(warnings) =
+        SafetyGuard::check_prompt_injection(command)
+    {
+        tracing::warn!(
+            "Potential prompt injection in explain_command_inline: {:?}",
+            warnings
+        );
+    }
+    let sanitized_command = SafetyGuard::sanitize_ai_input(command, 200);
+
+    let system_prompt = "You are a shell command expert. Explain the given command briefly in a single line. \
+    Do NOT use Markdown formatting (like `backticks` or **bold**). Keep it under 60 characters if possible. \
+    Respond in the same language as the user's environment if possible, or match the language of their request.";
+
+    let messages = vec![
+        json!({"role": "system", "content": system_prompt}),
+        json!({"role": "user", "content": format!("Explain this briefly:\n{}", sanitized_command)}),
+    ];
+
+    service.send_request(messages, Some(0.1)).await
+}
+
 /// Suggest improvements for a shell command.
 pub async fn suggest_improvement<S: AiService + ?Sized>(
     service: &S,

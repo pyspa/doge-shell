@@ -282,8 +282,9 @@ pub(crate) async fn handle_key_event(
         }
     }
 
-    // Determine if input was likely modified by the action
-    // We update last_input_change_time broadly to ensure the AI ghost text doesn't show randomly.
+    // Determine if input was likely modified by the action.
+    // Reset AI explanation state when input changes so a fresh explanation
+    // will be requested after the next idle period.
     if matches!(
         action,
         KeyAction::InsertChar(_)
@@ -296,6 +297,7 @@ pub(crate) async fn handle_key_event(
             | KeyAction::AcceptCompletion
             | KeyAction::ExpandAbbreviationAndInsertSpace
             | KeyAction::InsertPairedChar { .. }
+            | KeyAction::OvertypeClosingBracket(_)
             | KeyAction::Paste
             | KeyAction::HistoryPrevious
             | KeyAction::HistoryNext
@@ -304,6 +306,16 @@ pub(crate) async fn handle_key_event(
         repl.last_input_change_time = std::time::Instant::now();
         repl.current_ai_explanation = None;
         repl.pending_ai_explanation_input = None;
+    }
+
+    // On execute or interrupt, clear explanation state and erase the explanation line
+    if matches!(
+        action,
+        KeyAction::Execute | KeyAction::ExecuteBackground | KeyAction::Interrupt
+    ) {
+        repl.current_ai_explanation = None;
+        repl.pending_ai_explanation_input = None;
+        repl.last_explanation = None;
     }
 
     if redraw {

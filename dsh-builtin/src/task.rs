@@ -295,9 +295,13 @@ fn detect_js_manager(path: &Path) -> String {
     }
 }
 
+use std::sync::LazyLock;
+
+static JSONC_COMMENT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)//[^\n]*|/\*.*?\*/").expect("Invalid JSONC comment regex"));
+
 fn remove_jsonc_comments(json: &str) -> String {
-    let re = Regex::new(r"(?s)//[^\n]*|/\*.*?\*/").unwrap();
-    re.replace_all(json, "").to_string()
+    JSONC_COMMENT_RE.replace_all(json, "").to_string()
 }
 
 #[cfg(test)]

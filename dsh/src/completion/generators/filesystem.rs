@@ -37,11 +37,15 @@ impl FileSystemGenerator {
                 continue;
             };
 
-            if !file_prefix.is_empty()
-                && !file_name.starts_with(&file_prefix)
-                && fuzzy_match_score(file_name, &file_prefix).is_none()
-            {
-                continue;
+            let mut score_bonus = 0;
+            if !file_prefix.is_empty() {
+                if file_name.starts_with(&file_prefix) {
+                    score_bonus = 1000;
+                } else if let Some(score) = fuzzy_match_score(file_name, &file_prefix) {
+                    score_bonus = score.max(0) as u32;
+                } else {
+                    continue;
+                }
             }
 
             if !is_dir && let Some(exts) = extensions {
@@ -56,11 +60,13 @@ impl FileSystemGenerator {
             }
 
             let full_path = Self::build_candidate_path(&dir_path, file_name);
-            if is_dir {
-                candidates.push(CompletionCandidate::directory(full_path));
+            let mut cand = if is_dir {
+                CompletionCandidate::directory(full_path)
             } else {
-                candidates.push(CompletionCandidate::file(full_path));
-            }
+                CompletionCandidate::file(full_path)
+            };
+            cand.priority = cand.priority.saturating_add(score_bonus);
+            candidates.push(cand);
         }
 
         Ok(candidates)
@@ -92,15 +98,21 @@ impl FileSystemGenerator {
                 continue;
             };
 
-            if !dir_prefix.is_empty()
-                && !file_name.starts_with(&dir_prefix)
-                && fuzzy_match_score(file_name, &dir_prefix).is_none()
-            {
-                continue;
+            let mut score_bonus = 0;
+            if !dir_prefix.is_empty() {
+                if file_name.starts_with(&dir_prefix) {
+                    score_bonus = 1000;
+                } else if let Some(score) = fuzzy_match_score(file_name, &dir_prefix) {
+                    score_bonus = score.max(0) as u32;
+                } else {
+                    continue;
+                }
             }
 
             let full_path = Self::build_candidate_path(&dir_path, file_name);
-            candidates.push(CompletionCandidate::directory(full_path));
+            let mut cand = CompletionCandidate::directory(full_path);
+            cand.priority = cand.priority.saturating_add(score_bonus);
+            candidates.push(cand);
         }
 
         Ok(candidates)
@@ -184,6 +196,35 @@ mod tests {
             "expected fuzzy matched file {:?} in {:?}",
             expected,
             texts
+        );
+    }
+
+    #[test]
+    fn file_candidates_prefix_priority_boost() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("apple.rs"), "").unwrap();
+        std::fs::write(dir.path().join("aleph.txt"), "").unwrap();
+
+        let token = dir.path().join("ap").to_string_lossy().to_string();
+        let candidates =
+            FileSystemGenerator::generate_file_candidates(&token).expect("file candidates");
+
+        let apple = candidates
+            .iter()
+            .find(|c| c.text.ends_with("apple.rs"))
+            .unwrap();
+        let aleph = candidates
+            .iter()
+            .find(|c| c.text.ends_with("aleph.txt"))
+            .unwrap();
+
+        assert!(
+            apple.priority > aleph.priority,
+            "Exact prefix should have higher priority than fuzzy match"
+        );
+        assert!(
+            apple.priority >= 1000,
+            "Exact prefix should have at least +1000 bonus"
         );
     }
 }

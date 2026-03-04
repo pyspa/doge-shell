@@ -47,7 +47,10 @@ pub fn path_completion_prefix(input: &str) -> Result<Option<String>> {
             let path_str = path.to_string();
 
             // Check full path match
-            if let Some(score) = fuzzy_match_score(&path_str, &search) {
+            if let Some(mut score) = fuzzy_match_score(&path_str, &search) {
+                if path_str.starts_with(&search) {
+                    score += 1000;
+                }
                 match best_match {
                     Some((_, best_score)) if score > best_score => {
                         best_match = Some((path_str.clone(), score));
@@ -62,7 +65,10 @@ pub fn path_completion_prefix(input: &str) -> Result<Option<String>> {
             // Check stripped path match (relative path)
             if let Ok(striped) = PathBuf::from(path).strip_prefix("./") {
                 let striped_str = striped.display().to_string();
-                if let Some(score) = fuzzy_match_score(&striped_str, &search) {
+                if let Some(mut score) = fuzzy_match_score(&striped_str, &search) {
+                    if striped_str.starts_with(&search) {
+                        score += 1000;
+                    }
                     // Adjust score slightly to prefer shorter/exact matches or keep logic simple?
                     // Verify if better than current best
                     match best_match {
@@ -373,6 +379,20 @@ mod tests {
             val.ends_with("apple.txt"),
             "Expected apple.txt, got {}",
             val
+        );
+
+        // Case 2: Exact prefix has higher priority than pure fuzzy match.
+        // "aleph.txt" is fuzzy matched by "ap".
+        File::create(dir_path.join("aleph.txt")).unwrap();
+        let input_ap = format!("{}/ap", dir_str);
+        let result_ap = path_completion_prefix(&input_ap).unwrap();
+
+        assert!(result_ap.is_some());
+        let val_ap = result_ap.unwrap();
+        assert!(
+            val_ap.ends_with("apple.txt") || val_ap.ends_with("application.rs"),
+            "Expected exact prefix match to have higher priority, got {}",
+            val_ap
         );
     }
 }

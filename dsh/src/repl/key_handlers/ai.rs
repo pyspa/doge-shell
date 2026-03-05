@@ -6,12 +6,39 @@ use anyhow::Result;
 use crossterm::style::Print;
 use crossterm::{cursor, queue};
 
-/// Handle force AI suggestion.
 pub(crate) async fn handle_force_ai_suggestion(repl: &mut Repl<'_>) {
     let mut renderer = TerminalRenderer::new();
     queue!(renderer, Print(" 🤖 Generating...\r"), cursor::Hide).ok();
     renderer.flush().ok();
     repl.force_ai_suggestion().await;
+}
+
+pub(crate) async fn handle_ai_explain_command(repl: &mut Repl<'_>) {
+    // Only proceed if we have an AI service configured and the input is not empty
+    if repl.ai_service.is_some() && !repl.input.is_empty() {
+        let input_str = repl.input.as_str().to_string();
+
+        // Clear any existing explanation so the new one takes precedence
+        repl.current_ai_explanation = None;
+        repl.pending_ai_explanation_input = Some(input_str.clone());
+
+        let ai_tx = repl.ai_tx.clone();
+        let service = repl.ai_service.clone().unwrap();
+
+        tokio::spawn(async move {
+            match crate::ai_features::explain_command_inline(service.as_ref(), &input_str).await {
+                Ok(explanation) => {
+                    let _ = ai_tx.send(crate::repl::AiEvent::CommandExplanation {
+                        input: input_str,
+                        explanation,
+                    });
+                }
+                Err(e) => {
+                    tracing::debug!("Failed to get AI explanation on demand: {}", e);
+                }
+            }
+        });
+    }
 }
 
 pub(crate) async fn handle_ai_smart_commit(repl: &mut Repl<'_>) -> Result<ReplControlFlow> {

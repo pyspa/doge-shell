@@ -224,6 +224,9 @@ pub(crate) async fn handle_key_event(
         KeyAction::ForceAiSuggestion => {
             ai::handle_force_ai_suggestion(repl).await;
         }
+        KeyAction::AiExplainCommand => {
+            ai::handle_ai_explain_command(repl).await;
+        }
         KeyAction::TriggerCompletion => match completion::handle_trigger_completion(repl).await? {
             ReplControlFlow::Continue => {
                 reset_completion = true;

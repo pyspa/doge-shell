@@ -54,6 +54,7 @@ pub enum KeyAction {
     AiSmartCommit,
     AiDiagnose,
     ForceAiSuggestion,
+    AiExplainCommand,
     MacroRecord,
 
     // Others
@@ -194,6 +195,7 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
         // AI features
         (KeyCode::Char('f'), ALT) => KeyAction::AiAutoFix,
         (KeyCode::Char('s'), ALT) => KeyAction::ForceAiSuggestion,
+        (KeyCode::Char('e'), ALT) => KeyAction::AiExplainCommand,
         (KeyCode::Char('c'), ALT) => KeyAction::AiSmartCommit,
         (KeyCode::Char('d'), ALT) => KeyAction::AiDiagnose,
         (KeyCode::Char('m'), ALT) => KeyAction::MacroRecord,
@@ -806,6 +808,15 @@ mod tests {
         assert_eq!(
             determine_key_action(&k, &ctx_default()),
             KeyAction::ForceAiSuggestion
+        );
+    }
+
+    #[test]
+    fn test_alt_e_is_ai_explain_command() {
+        let k = key(KeyCode::Char('e'), ALT);
+        assert_eq!(
+            determine_key_action(&k, &ctx_default()),
+            KeyAction::AiExplainCommand
         );
     }
 }

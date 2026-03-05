@@ -64,6 +64,16 @@ impl Environment {
         self.input_preferences.use_floating_completion = enabled;
     }
 
+    /// Check if AI command explanation is enabled.
+    pub fn ai_explanation_enabled(&self) -> bool {
+        self.input_preferences.ai_explanation
+    }
+
+    /// Enable or disable AI command explanation.
+    pub fn set_ai_explanation_enabled(&mut self, enabled: bool) {
+        self.input_preferences.ai_explanation = enabled;
+    }
+
     /// Get the current input preferences.
     pub fn input_preferences(&self) -> InputPreferences {
         self.input_preferences

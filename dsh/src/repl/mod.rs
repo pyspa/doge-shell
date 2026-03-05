@@ -535,6 +535,8 @@ impl<'a> Repl<'a> {
         if prefs != self.input_preferences {
             self.input_preferences = prefs;
             self.suggestion_manager.engine.set_preferences(prefs);
+            // If explanation was just enabled, we don't necessarily need to reset the timer here,
+            // as the next event or tick will handle it.
         }
     }
 
@@ -836,7 +838,8 @@ impl<'a> Repl<'a> {
                 // Dedicated idle timer for AI command explanation.
                 // This future is stored outside the loop so it does NOT reset on every iteration.
                 _ = idle_sleep.as_mut() => {
-                    if self.ai_service.is_some()
+                    if self.input_preferences.ai_explanation
+                        && self.ai_service.is_some()
                         && !self.input.is_empty()
                         && self.pending_ai_explanation_input.as_deref() != Some(self.input.as_str())
                         && self.current_ai_explanation.is_none()
@@ -1037,9 +1040,11 @@ impl<'a> Repl<'a> {
                         },
                         None => break,
                     }
-                    // Reset the idle explanation timer on every key event.
+                    // Reset the idle explanation timer on every key event if enabled.
                     // This ensures the 5-second countdown restarts after each keypress.
-                    idle_sleep.as_mut().reset(TokioInstant::now() + Duration::from_secs(5));
+                    if self.input_preferences.ai_explanation {
+                        idle_sleep.as_mut().reset(TokioInstant::now() + Duration::from_secs(5));
+                    }
                 }
             };
 

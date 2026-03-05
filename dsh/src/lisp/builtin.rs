@@ -394,6 +394,27 @@ pub fn pref_auto_notify(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value
     Ok(Value::NIL)
 }
 
+pub fn pref_ai_explanation(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    if args.is_empty() {
+        return Ok(Value::from(
+            env.borrow()
+                .shell_env
+                .read()
+                .input_preferences
+                .ai_explanation,
+        ));
+    }
+
+    let enabled = bool::from(&args[0]);
+
+    debug!("setting ai-explanation to {:?}", enabled);
+    env.borrow()
+        .shell_env
+        .write()
+        .set_ai_explanation_enabled(enabled);
+    Ok(Value::NIL)
+}
+
 // Helper core for sh_no_cap
 async fn sh_no_cap_core(
     shell_env: Arc<parking_lot::RwLock<crate::environment::Environment>>,

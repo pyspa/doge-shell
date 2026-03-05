@@ -43,6 +43,8 @@ pub struct InputPreferences {
     pub block_separator: bool,
     /// When enabled, use floating UI (Ratatui) for command completion
     pub use_floating_completion: bool,
+    /// When enabled, show AI command explanation after idle time
+    pub ai_explanation: bool,
 }
 
 impl Default for InputPreferences {
@@ -58,6 +60,7 @@ impl Default for InputPreferences {
             auto_pair: false,
             block_separator: true,
             use_floating_completion: true,
+            ai_explanation: false,
         }
     }
 }
@@ -883,6 +886,12 @@ mod tests {
             self.calls.lock().push(request);
             self.response.lock().clone()
         }
+    }
+
+    #[test]
+    fn test_input_preferences_default() {
+        let prefs = InputPreferences::default();
+        assert!(!prefs.ai_explanation);
     }
 
     #[test]

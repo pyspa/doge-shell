@@ -231,6 +231,7 @@ The shell includes many built-in commands:
 | `eproject`          | Open current project in Emacs                                                                                              |
 | `eview`             | Pipe content to external editor                                                                                            |
 | `magit`             | Open Magit status for the current directory                                                                                |
+| `safe-run`          | Execute commands with AI-powered safety analysis                                                                           |
 
 ## 🧠 Lisp Functions
 
@@ -260,7 +261,9 @@ The embedded Lisp interpreter includes many built-in functions:
 - `add_path` - Add paths to PATH
 - `pref-auto-pair` - Configure automatic pairing of quotes/brackets
 - `pref-auto-notify` - Configure automatic notification
+- `pref-ai-explanation` - Configure AI-powered command explanations
 - `set-auto-fix-enabled` - Enable or disable AI auto-fix
+- `safety-level` - Configure safety level (`loose`, `normal`, `strict`)
 - `set-notify-config` - Configure notification behavior
 - `allow-direnv` - Configure direnv roots
 - `edit` - Open a file in the external editor

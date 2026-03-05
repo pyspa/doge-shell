@@ -338,6 +338,10 @@ pub fn make_env(environment: Arc<RwLock<Environment>>) -> Rc<RefCell<Env>> {
         Symbol::from("pref-auto-notify"),
         Value::NativeFunc(builtin::pref_auto_notify),
     );
+    env.borrow_mut().define(
+        Symbol::from("pref-ai-explanation"),
+        Value::NativeFunc(builtin::pref_ai_explanation),
+    );
 
     // Secret management functions
     env.borrow_mut().define(

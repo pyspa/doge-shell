@@ -10,20 +10,25 @@ use pest::iterators::Pairs;
 use std::io::Write;
 use tracing::debug;
 
-pub(crate) fn move_cursor_input_end<W: Write>(repl: &Repl<'_>, out: &mut W) {
-    let prompt_display_width = repl.prompt_mark_width;
-    // cache locally to avoid duplicate computation chains
-    let input_cursor_width = repl.input.cursor_display_width();
-    let mut cursor_display_pos = prompt_display_width + input_cursor_width;
+pub(crate) fn restore_cursor_position<W: Write>(repl: &Repl<'_>, out: &mut W, extra_lines: usize) {
+    let (cursor_x, cursor_y) = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
 
-    // bound to current terminal columns if available
+    let mut cursor_display_pos = cursor_x;
+
     if repl.columns > 0 {
         cursor_display_pos = cursor_display_pos.min(repl.columns.saturating_sub(1));
     } else {
         cursor_display_pos = cursor_display_pos.min(1000);
     }
 
-    // crossterm uses 0-based column indexing
+    let input_lines = repl.input.line_count(repl.columns, repl.prompt_mark_width);
+    let current_y = (input_lines.saturating_sub(1)) + extra_lines;
+    let move_up = current_y.saturating_sub(cursor_y);
+
+    if move_up > 0 {
+        queue!(out, cursor::MoveUp(move_up as u16)).ok();
+    }
+
     queue!(
         out,
         ResetColor,
@@ -36,18 +41,20 @@ pub(crate) fn move_cursor_input_end<W: Write>(repl: &Repl<'_>, out: &mut W) {
 pub(crate) fn move_cursor_relative(
     _repl: &Repl<'_>,
     out: &mut impl Write,
-    prev_display_pos: usize,
-    new_display_pos: usize,
+    prev_pos: (usize, usize),
+    new_pos: (usize, usize),
 ) {
-    if new_display_pos == prev_display_pos {
-        return;
+    let (prev_col, prev_y) = prev_pos;
+    let (new_col, new_y) = new_pos;
+
+    if new_y < prev_y {
+        queue!(out, cursor::MoveUp((prev_y - new_y) as u16)).ok();
+    } else if new_y > prev_y {
+        queue!(out, cursor::MoveDown((new_y - prev_y) as u16)).ok();
     }
-    if new_display_pos > prev_display_pos {
-        let delta = (new_display_pos - prev_display_pos) as u16;
-        queue!(out, cursor::MoveRight(delta)).ok();
-    } else {
-        let delta = (prev_display_pos - new_display_pos) as u16;
-        queue!(out, cursor::MoveLeft(delta)).ok();
+
+    if new_col != prev_col {
+        queue!(out, cursor::MoveToColumn(new_col as u16)).ok();
     }
 }
 
@@ -275,11 +282,18 @@ pub fn print_input(
     let ai_pending_now = repl.suggestion_manager.engine.ai_pending();
 
     // Clear the current line and redraw prompt mark + input
-    queue!(out, Print("\r"), Clear(ClearType::CurrentLine)).ok();
+    if repl.last_drawn_cursor_y > 0 {
+        queue!(out, cursor::MoveUp(repl.last_drawn_cursor_y as u16)).ok();
+    }
+    queue!(out, Print("\r"), Clear(ClearType::FromCursorDown)).ok();
 
     // Only redraw the prompt mark (not the full preprompt)
     // Use cached prompt mark without re-locking prompt
     queue!(out, Print(repl.prompt_mark_cache.as_str())).ok();
+
+    // Set new cursor Y
+    let (_, new_y) = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
+    repl.last_drawn_cursor_y = new_y;
 
     // OSC 133 B: Command start
     out.write_all(b"\x1b]133;B\x1b\\").ok();
@@ -337,12 +351,28 @@ pub fn print_input(
 
     repl.ai_pending_shown = ai_pending_now;
 
-    move_cursor_input_end(repl, out);
+    let ghost_extra_lines = if let Some(suffix) = ghost_suffix.as_deref() {
+        suffix.chars().filter(|&c| c == '\n').count()
+    } else {
+        0
+    };
+
+    restore_cursor_position(repl, out, ghost_extra_lines);
 
     if let Some(completion) = completion {
+        let comp_extra_lines = completion.chars().filter(|&c| c == '\n').count();
+        let rest_of_input_extra_lines = repl
+            .input
+            .split_current_pos()
+            .map(|(_, post)| post)
+            .unwrap_or("")
+            .chars()
+            .filter(|&c| c == '\n')
+            .count();
+        let total_extra_lines = comp_extra_lines + rest_of_input_extra_lines;
+
         repl.input.print_candidates(out, completion);
-        // reuse cached cursor width implicitly via move_cursor_input_end recomputation; avoid extra heavy work here
-        move_cursor_input_end(repl, out);
+        restore_cursor_position(repl, out, total_extra_lines);
     }
     queue!(out, cursor::Show).ok();
 }

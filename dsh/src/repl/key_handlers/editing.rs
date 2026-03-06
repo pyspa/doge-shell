@@ -62,13 +62,14 @@ pub(crate) fn handle_insert_paired_char(repl: &mut Repl<'_>, open: char, close: 
 
 pub(crate) async fn handle_overtype_closing_bracket(
     repl: &mut Repl<'_>,
-    prev_cursor_disp: usize,
+    _prev_cursor_disp: usize,
 ) -> Result<ReplControlFlow> {
+    let prev_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
     repl.input.move_by(1);
+    let new_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
 
     let mut renderer = TerminalRenderer::new();
-    let new_disp = repl.prompt_mark_width + repl.input.cursor_display_width();
-    repl.move_cursor_relative(&mut renderer, prev_cursor_disp, new_disp);
+    repl.move_cursor_relative(&mut renderer, prev_pos, new_pos);
     if let Err(e) = queue!(renderer, cursor::Show) {
         warn!("Failed to show cursor: {}", e);
     }

@@ -127,6 +127,8 @@ pub struct Repl<'a> {
     pub(crate) last_analysis_result: Option<InputAnalysis>,
     /// Handle to the background GitHub task, allowing cancellation on drop
     pub(crate) github_task: Option<tokio::task::JoinHandle<()>>,
+    /// Y coordinate of the cursor in the previously drawn input to allow proper clearing backward
+    pub(crate) last_drawn_cursor_y: usize,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -323,6 +325,7 @@ impl<'a> Repl<'a> {
             last_analyzed_input: String::new(),
             last_analysis_result: None,
             github_task: Some(github_task),
+            last_drawn_cursor_y: 0,
         }
     }
 
@@ -517,10 +520,10 @@ impl<'a> Repl<'a> {
     pub(crate) fn move_cursor_relative(
         &self,
         out: &mut impl Write,
-        prev_display_pos: usize,
-        new_display_pos: usize,
+        prev_pos: (usize, usize),
+        new_pos: (usize, usize),
     ) {
-        render::move_cursor_relative(self, out, prev_display_pos, new_display_pos)
+        render::move_cursor_relative(self, out, prev_pos, new_pos)
     }
 
     pub(crate) fn print_prompt(&mut self, out: &mut impl Write) {

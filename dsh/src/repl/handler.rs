@@ -74,10 +74,7 @@ pub(crate) async fn handle_key_event(
 
     let redraw = true;
     let mut reset_completion = false;
-    // compute previous and new cursor display positions for relative move
-    let prompt_w = repl.prompt_mark_width;
-    // compute once per event to avoid duplicate width computation
-    let prev_cursor_disp = prompt_w + repl.input.cursor_display_width();
+    let _prompt_w = repl.prompt_mark_width;
 
     // Reset Ctrl+C state on any key input other than Ctrl+C
     if !matches!((ev.code, ev.modifiers), (KeyCode::Char('c'), CTRL)) {
@@ -137,10 +134,10 @@ pub(crate) async fn handle_key_event(
             auxiliary::handle_macro_record(repl).await?;
         }
         KeyAction::CursorToBegin => {
-            return navigation::handle_cursor_to_begin(repl, prev_cursor_disp).await;
+            return navigation::handle_cursor_to_begin(repl, 0).await;
         }
         KeyAction::CursorToEnd => {
-            return navigation::handle_cursor_to_end(repl, prev_cursor_disp).await;
+            return navigation::handle_cursor_to_end(repl, 0).await;
         }
         KeyAction::DeleteWordBackward => {
             reset_completion = editing::handle_delete_word_backward(repl);
@@ -173,16 +170,16 @@ pub(crate) async fn handle_key_event(
             reset_completion = completion::handle_rotate_suggestion_backward(repl);
         }
         KeyAction::CursorLeft => {
-            return navigation::handle_cursor_left(repl, prev_cursor_disp).await;
+            return navigation::handle_cursor_left(repl, 0).await;
         }
         KeyAction::CursorRight => {
-            return navigation::handle_cursor_right(repl, prev_cursor_disp).await;
+            return navigation::handle_cursor_right(repl, 0).await;
         }
         KeyAction::CursorWordLeft => {
-            return navigation::handle_cursor_word_left(repl, prev_cursor_disp).await;
+            return navigation::handle_cursor_word_left(repl, 0).await;
         }
         KeyAction::CursorWordRight => {
-            return navigation::handle_cursor_word_right(repl, prev_cursor_disp).await;
+            return navigation::handle_cursor_word_right(repl, 0).await;
         }
         KeyAction::ExpandAbbreviationAndInsertSpace => {
             if let Some(word) = repl.input.get_current_word_for_abbr()
@@ -203,7 +200,7 @@ pub(crate) async fn handle_key_event(
             editing::handle_insert_paired_char(repl, open, close);
         }
         KeyAction::OvertypeClosingBracket(_ch) => {
-            return editing::handle_overtype_closing_bracket(repl, prev_cursor_disp).await;
+            return editing::handle_overtype_closing_bracket(repl, 0).await;
         }
         KeyAction::InsertChar(ch) => {
             editing::handle_insert_char(repl, ch);

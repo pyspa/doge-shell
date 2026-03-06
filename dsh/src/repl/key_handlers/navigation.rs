@@ -93,16 +93,17 @@ pub(crate) fn handle_history_next(repl: &mut Repl<'_>) {
 
 pub(crate) async fn handle_cursor_left(
     repl: &mut Repl<'_>,
-    prev_cursor_disp: usize,
+    _prev_cursor_disp: usize,
 ) -> Result<ReplControlFlow> {
     if repl.input.cursor() > 0 {
         repl.input.completion = None;
+        let prev_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
         repl.input.move_by(-1);
+        let new_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
         repl.completion.clear();
 
         let mut renderer = TerminalRenderer::new();
-        let new_disp = repl.prompt_mark_width + repl.input.cursor_display_width();
-        repl.move_cursor_relative(&mut renderer, prev_cursor_disp, new_disp);
+        repl.move_cursor_relative(&mut renderer, prev_pos, new_pos);
         queue!(renderer, cursor::Show).ok();
         queue!(renderer, cursor::Show).ok(); // Duplicate in original, keeping it?
         renderer.flush().ok();
@@ -114,15 +115,16 @@ pub(crate) async fn handle_cursor_left(
 
 pub(crate) async fn handle_cursor_right(
     repl: &mut Repl<'_>,
-    prev_cursor_disp: usize,
+    _prev_cursor_disp: usize,
 ) -> Result<ReplControlFlow> {
     if repl.input.cursor() < repl.input.len() {
+        let prev_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
         repl.input.move_by(1);
+        let new_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
         repl.completion.clear();
 
         let mut renderer = TerminalRenderer::new();
-        let new_disp = repl.prompt_mark_width + repl.input.cursor_display_width();
-        repl.move_cursor_relative(&mut renderer, prev_cursor_disp, new_disp);
+        repl.move_cursor_relative(&mut renderer, prev_pos, new_pos);
         queue!(renderer, cursor::Show).ok();
         renderer.flush().ok();
         Ok(ReplControlFlow::Continue)
@@ -133,14 +135,15 @@ pub(crate) async fn handle_cursor_right(
 
 pub(crate) async fn handle_cursor_word_left(
     repl: &mut Repl<'_>,
-    prev_cursor_disp: usize,
+    _prev_cursor_disp: usize,
 ) -> Result<ReplControlFlow> {
+    let prev_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
     repl.input.move_word_left();
+    let new_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
     repl.completion.clear();
 
     let mut renderer = TerminalRenderer::new();
-    let new_disp = repl.prompt_mark_width + repl.input.cursor_display_width();
-    repl.move_cursor_relative(&mut renderer, prev_cursor_disp, new_disp);
+    repl.move_cursor_relative(&mut renderer, prev_pos, new_pos);
     queue!(renderer, cursor::Show).ok();
     renderer.flush().ok();
     Ok(ReplControlFlow::Continue)
@@ -148,14 +151,15 @@ pub(crate) async fn handle_cursor_word_left(
 
 pub(crate) async fn handle_cursor_word_right(
     repl: &mut Repl<'_>,
-    prev_cursor_disp: usize,
+    _prev_cursor_disp: usize,
 ) -> Result<ReplControlFlow> {
+    let prev_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
     repl.input.move_word_right();
+    let new_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
     repl.completion.clear();
 
     let mut renderer = TerminalRenderer::new();
-    let new_disp = repl.prompt_mark_width + repl.input.cursor_display_width();
-    repl.move_cursor_relative(&mut renderer, prev_cursor_disp, new_disp);
+    repl.move_cursor_relative(&mut renderer, prev_pos, new_pos);
     queue!(renderer, cursor::Show).ok();
     renderer.flush().ok();
     Ok(ReplControlFlow::Continue)
@@ -163,25 +167,28 @@ pub(crate) async fn handle_cursor_word_right(
 
 pub(crate) async fn handle_cursor_to_begin(
     repl: &mut Repl<'_>,
-    prev_cursor_disp: usize,
+    _prev_cursor_disp: usize,
 ) -> Result<ReplControlFlow> {
+    let prev_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
     repl.input.move_to_begin();
-    // Handle cursor-only movement without full redraw
-    let new_cursor_disp = repl.prompt_mark_width + repl.input.cursor_display_width();
+    let new_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
+
     let mut renderer = TerminalRenderer::new();
-    repl.move_cursor_relative(&mut renderer, prev_cursor_disp, new_cursor_disp);
+    repl.move_cursor_relative(&mut renderer, prev_pos, new_pos);
     renderer.flush().ok();
     Ok(ReplControlFlow::Continue)
 }
 
 pub(crate) async fn handle_cursor_to_end(
     repl: &mut Repl<'_>,
-    prev_cursor_disp: usize,
+    _prev_cursor_disp: usize,
 ) -> Result<ReplControlFlow> {
+    let prev_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
     repl.input.move_to_end();
-    let new_cursor_disp = repl.prompt_mark_width + repl.input.cursor_display_width();
+    let new_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
+
     let mut renderer = TerminalRenderer::new();
-    repl.move_cursor_relative(&mut renderer, prev_cursor_disp, new_cursor_disp);
+    repl.move_cursor_relative(&mut renderer, prev_pos, new_pos);
     renderer.flush().ok();
     Ok(ReplControlFlow::Continue)
 }

@@ -324,20 +324,61 @@ impl Input {
         self.indices.len()
     }
 
-    /// Get the display width from the beginning to the cursor position
-    pub fn cursor_display_width(&self) -> usize {
+    /// Returns the (display_column, visual_line_index) of the cursor.
+    pub fn cursor_pos(&self, columns: usize, prompt_width: usize) -> (usize, usize) {
         if self.cursor == 0 {
-            return 0;
+            return (prompt_width, 0);
         }
 
         let cursor_byte_pos = self.byte_index();
         let text_to_cursor = &self.input[..cursor_byte_pos];
 
-        // Calculate width character by character for better control
-        text_to_cursor
-            .chars()
-            .map(|c| c.width().unwrap_or_default())
-            .sum()
+        let mut width = prompt_width;
+        let mut lines = 0;
+
+        for c in text_to_cursor.chars() {
+            if c == '\n' {
+                width = 0;
+                lines += 1;
+            } else {
+                let w = c.width().unwrap_or_default();
+                if columns > 0 && width + w > columns {
+                    width = w;
+                    lines += 1;
+                } else {
+                    width += w;
+                }
+            }
+        }
+
+        (width, lines)
+    }
+
+    /// Returns the total number of visual lines in the input.
+    pub fn line_count(&self, columns: usize, prompt_width: usize) -> usize {
+        if self.input.is_empty() {
+            return 1;
+        }
+
+        let mut width = prompt_width;
+        let mut lines = 1;
+
+        for c in self.input.chars() {
+            if c == '\n' {
+                width = 0;
+                lines += 1;
+            } else {
+                let w = c.width().unwrap_or_default();
+                if columns > 0 && width + w > columns {
+                    width = w;
+                    lines += 1;
+                } else {
+                    width += w;
+                }
+            }
+        }
+
+        lines
     }
 
     /// Get the cached display width of the full input string
@@ -538,14 +579,16 @@ impl Input {
             // Write colored segments directly to reduce allocation
             self.write_colored_ranges_to(&mut writer, color_ranges).ok();
         } else {
+            let formatted = self.as_str().replace('\n', "\r\n");
             writer
-                .write_fmt(format_args!("{}", self.as_str().with(self.config.fg_color)))
+                .write_fmt(format_args!("{}", formatted.with(self.config.fg_color)))
                 .ok();
         }
 
         if let Some(suffix) = ghost_suffix.filter(|s| !s.is_empty()) {
+            let formatted = suffix.replace('\n', "\r\n");
             writer
-                .write_fmt(format_args!("{}", suffix.with(self.config.ghost_color)))
+                .write_fmt(format_args!("{}", formatted.with(self.config.ghost_color)))
                 .ok();
         }
 
@@ -570,11 +613,13 @@ impl Input {
             // Add any uncolored text before this range
             if start > last_end {
                 let prefix = &input_str[last_end..start];
-                write!(writer, "{}", prefix.with(self.config.fg_color))?;
+                let formatted = prefix.replace('\n', "\r\n");
+                write!(writer, "{}", formatted.with(self.config.fg_color))?;
             }
 
             // Add the colored text for this range
             let colored_text = &input_str[start..end];
+            let formatted_colored = colored_text.replace('\n', "\r\n");
             let color = match color_type {
                 ColorType::CommandExists => self.config.command_exists_color,
                 ColorType::CommandNotExists => self.config.command_not_exists_color,
@@ -590,7 +635,7 @@ impl Input {
                 ColorType::Error => self.config.error_color,
                 ColorType::ValidPath => self.config.valid_path_color,
             };
-            write!(writer, "{}", colored_text.with(color))?;
+            write!(writer, "{}", formatted_colored.with(color))?;
 
             // Update the last processed position
             last_end = end.max(last_end);
@@ -599,7 +644,8 @@ impl Input {
         // Add any remaining uncolored text after the last range
         if last_end < input_str.len() {
             let suffix = &input_str[last_end..];
-            write!(writer, "{}", suffix.with(self.config.fg_color))?;
+            let formatted = suffix.replace('\n', "\r\n");
+            write!(writer, "{}", formatted.with(self.config.fg_color))?;
         }
 
         Ok(())
@@ -716,14 +762,14 @@ mod tests {
         input.insert('a');
         input.insert('b');
         assert_eq!(input.cursor(), 2);
-        assert_eq!(input.cursor_display_width(), 2);
+        assert_eq!(input.cursor_pos(80, 0).0, 2);
 
         // Clear and test Japanese characters (width = 2 each)
         input.clear();
         input.insert('あ'); // Japanese hiragana 'a'
         input.insert('い'); // Japanese hiragana 'i'
         assert_eq!(input.cursor(), 2); // 2 characters
-        assert_eq!(input.cursor_display_width(), 4); // 4 display width
+        assert_eq!(input.cursor_pos(80, 0).0, 4); // 4 display width
 
         // Test mixed ASCII and Japanese
         input.clear();
@@ -731,7 +777,7 @@ mod tests {
         input.insert('あ'); // width = 2
         input.insert('b'); // width = 1
         assert_eq!(input.cursor(), 3); // 3 characters
-        assert_eq!(input.cursor_display_width(), 4); // 1 + 2 + 1 = 4 display width
+        assert_eq!(input.cursor_pos(80, 0).0, 4); // 1 + 2 + 1 = 4 display width
     }
 
     #[test]
@@ -747,19 +793,19 @@ mod tests {
         // Move cursor to different positions and check display width
         input.move_to_begin();
         assert_eq!(input.cursor(), 0);
-        assert_eq!(input.cursor_display_width(), 0);
+        assert_eq!(input.cursor_pos(80, 0).0, 0);
 
         input.move_by(1); // After 'a'
         assert_eq!(input.cursor(), 1);
-        assert_eq!(input.cursor_display_width(), 1);
+        assert_eq!(input.cursor_pos(80, 0).0, 1);
 
         input.move_by(1); // After 'あ'
         assert_eq!(input.cursor(), 2);
-        assert_eq!(input.cursor_display_width(), 3); // 1 + 2
+        assert_eq!(input.cursor_pos(80, 0).0, 3); // 1 + 2
 
         input.move_by(1); // After 'b'
         assert_eq!(input.cursor(), 3);
-        assert_eq!(input.cursor_display_width(), 4); // 1 + 2 + 1
+        assert_eq!(input.cursor_pos(80, 0).0, 4); // 1 + 2 + 1
     }
 
     #[test]

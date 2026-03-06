@@ -208,6 +208,7 @@ pub async fn run_shell() -> ExitCode {
         let err_str = e.to_string();
         if !err_str.contains("No such file or directory") && !err_str.contains("config file") {
             tracing::warn!("Failed to load config.lisp: {}", e);
+            eprintln!("Warning: Failed to load config.lisp: {}", e);
         }
     }
     // Disable startup mode

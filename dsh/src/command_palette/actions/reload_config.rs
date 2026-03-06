@@ -17,7 +17,10 @@ impl Action for ReloadConfigAction {
     }
 
     async fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
-        shell.lisp_engine.borrow().run_config_lisp()?;
+        if let Err(e) = shell.lisp_engine.borrow().run_config_lisp() {
+            eprintln!("Warning: Failed to load config.lisp: {}", e);
+            return Err(e);
+        }
         shell.reload_mcp_config();
         Ok(())
     }

@@ -914,6 +914,46 @@ mod tests {
         assert_eq!(recorder.calls().len(), 1);
     }
 
+    #[derive(Default)]
+    struct FailingBackend {
+        calls: Mutex<usize>,
+    }
+
+    impl SuggestionBackend for FailingBackend {
+        fn predict(&self, _request: SuggestionRequest) -> Option<String> {
+            *self.calls.lock() += 1;
+            None // simulate error / no suggestion
+        }
+    }
+
+    #[test]
+    fn engine_handles_backend_returning_none() {
+        let backend = Arc::new(FailingBackend::default());
+        let mut engine = SuggestionEngine::new();
+        engine.set_ai_backend(Some(backend.clone()));
+        engine.set_preferences(InputPreferences {
+            suggestion_mode: SuggestionMode::Ghost,
+            ai_backfill: true,
+            ..Default::default()
+        });
+
+        let result = engine.predict("git s", 5, None);
+        assert!(result.is_empty(), "Should return empty when backend fails");
+        assert_eq!(
+            *backend.calls.lock(),
+            1,
+            "Backend should have been called once"
+        );
+
+        // Ensure state is clean for a subsequent call
+        let result2 = engine.predict("git st", 6, None);
+        assert!(
+            result2.is_empty(),
+            "Should return empty when backend fails again"
+        );
+        assert_eq!(*backend.calls.lock(), 2, "Backend should be called again");
+    }
+
     #[test]
     fn engine_skips_ai_when_history_matches() {
         let recorder = Arc::new(RecordingBackend::with_response("git commit"));

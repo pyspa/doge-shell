@@ -71,6 +71,7 @@ pub(crate) use input_analysis::InputAnalysis;
 pub enum AiEvent {
     AutoFix(String),
     CommandExplanation { input: String, explanation: String },
+    CommandExplanationError { input: String },
 }
 
 pub struct Repl<'a> {
@@ -854,14 +855,21 @@ impl<'a> Repl<'a> {
                                 match crate::ai_features::explain_command_inline(service.as_ref(), &input_str).await {
                                     Ok(explanation) => {
                                         let _ = ai_tx.send(AiEvent::CommandExplanation {
-                                            input: input_str,
+                                            input: input_str.clone(),
                                             explanation,
                                         });
                                     }
                                     Err(e) => {
                                         tracing::debug!("Failed to get AI explanation: {}", e);
+                                        let _ = ai_tx.send(AiEvent::CommandExplanationError {
+                                            input: input_str.clone(),
+                                        });
                                     }
                                 }
+                            } else {
+                                let _ = ai_tx.send(AiEvent::CommandExplanationError {
+                                    input: input_str,
+                                });
                             }
                         });
                     }
@@ -929,6 +937,11 @@ impl<'a> Repl<'a> {
                             if self.input.as_str() == input {
                                 self.current_ai_explanation = Some(explanation);
                                 self.explanation_dirty = true;
+                            }
+                        }
+                        AiEvent::CommandExplanationError { input } => {
+                            if self.pending_ai_explanation_input.as_deref() == Some(input.as_str()) {
+                                self.pending_ai_explanation_input = None;
                             }
                         }
                     }

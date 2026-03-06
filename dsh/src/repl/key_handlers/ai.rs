@@ -35,6 +35,8 @@ pub(crate) async fn handle_ai_explain_command(repl: &mut Repl<'_>) {
                 }
                 Err(e) => {
                     tracing::debug!("Failed to get AI explanation on demand: {}", e);
+                    let _ = ai_tx
+                        .send(crate::repl::AiEvent::CommandExplanationError { input: input_str });
                 }
             }
         });

@@ -975,14 +975,9 @@ async fn call_tool_via_transport(
             }
 
             let service = ().serve(TokioChildProcess::new(cmd)?).await?;
-            let response = service
-                .call_tool(CallToolRequestParams {
-                    name: tool_name.to_string().into(),
-                    arguments,
-                    meta: None,
-                    task: None,
-                })
-                .await?;
+            let mut params = CallToolRequestParams::new(tool_name.to_string());
+            params.arguments = arguments;
+            let response = service.call_tool(params).await?;
             let _ = service.cancel().await;
 
             Ok(response)
@@ -1005,14 +1000,9 @@ async fn call_tool_via_transport(
 
             let transport = StreamableHttpClientTransport::from_config(config);
             let service = ().serve(transport).await?;
-            let response = service
-                .call_tool(CallToolRequestParams {
-                    name: tool_name.to_string().into(),
-                    arguments,
-                    meta: None,
-                    task: None,
-                })
-                .await?;
+            let mut params = CallToolRequestParams::new(tool_name.to_string());
+            params.arguments = arguments;
+            let response = service.call_tool(params).await?;
             let _ = service.cancel().await;
 
             Ok(response)

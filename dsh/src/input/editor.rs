@@ -579,17 +579,25 @@ impl Input {
             // Write colored segments directly to reduce allocation
             self.write_colored_ranges_to(&mut writer, color_ranges).ok();
         } else {
-            let formatted = self.as_str().replace('\n', "\r\n");
-            writer
-                .write_fmt(format_args!("{}", formatted.with(self.config.fg_color)))
-                .ok();
+            for (i, line) in self.as_str().split('\n').enumerate() {
+                if i > 0 {
+                    writer.write_all(b"\r\n").ok();
+                }
+                writer
+                    .write_fmt(format_args!("{}", line.with(self.config.fg_color)))
+                    .ok();
+            }
         }
 
         if let Some(suffix) = ghost_suffix.filter(|s| !s.is_empty()) {
-            let formatted = suffix.replace('\n', "\r\n");
-            writer
-                .write_fmt(format_args!("{}", formatted.with(self.config.ghost_color)))
-                .ok();
+            for (i, line) in suffix.split('\n').enumerate() {
+                if i > 0 {
+                    writer.write_all(b"\r\n").ok();
+                }
+                writer
+                    .write_fmt(format_args!("{}", line.with(self.config.ghost_color)))
+                    .ok();
+            }
         }
 
         // Ensure all buffered output is written immediately
@@ -613,13 +621,16 @@ impl Input {
             // Add any uncolored text before this range
             if start > last_end {
                 let prefix = &input_str[last_end..start];
-                let formatted = prefix.replace('\n', "\r\n");
-                write!(writer, "{}", formatted.with(self.config.fg_color))?;
+                for (i, line) in prefix.split('\n').enumerate() {
+                    if i > 0 {
+                        write!(writer, "\r\n")?;
+                    }
+                    write!(writer, "{}", line.with(self.config.fg_color))?;
+                }
             }
 
             // Add the colored text for this range
             let colored_text = &input_str[start..end];
-            let formatted_colored = colored_text.replace('\n', "\r\n");
             let color = match color_type {
                 ColorType::CommandExists => self.config.command_exists_color,
                 ColorType::CommandNotExists => self.config.command_not_exists_color,
@@ -635,7 +646,13 @@ impl Input {
                 ColorType::Error => self.config.error_color,
                 ColorType::ValidPath => self.config.valid_path_color,
             };
-            write!(writer, "{}", formatted_colored.with(color))?;
+
+            for (i, line) in colored_text.split('\n').enumerate() {
+                if i > 0 {
+                    write!(writer, "\r\n")?;
+                }
+                write!(writer, "{}", line.with(color))?;
+            }
 
             // Update the last processed position
             last_end = end.max(last_end);
@@ -644,8 +661,12 @@ impl Input {
         // Add any remaining uncolored text after the last range
         if last_end < input_str.len() {
             let suffix = &input_str[last_end..];
-            let formatted = suffix.replace('\n', "\r\n");
-            write!(writer, "{}", formatted.with(self.config.fg_color))?;
+            for (i, line) in suffix.split('\n').enumerate() {
+                if i > 0 {
+                    write!(writer, "\r\n")?;
+                }
+                write!(writer, "{}", line.with(self.config.fg_color))?;
+            }
         }
 
         Ok(())

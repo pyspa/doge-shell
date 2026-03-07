@@ -45,7 +45,7 @@ fn find_glob_root(path: &str) -> (String, String) {
     }
 }
 
-fn expand_braces(pattern: &str) -> Vec<String> {
+pub(crate) fn expand_braces(pattern: &str) -> Vec<String> {
     let mut result = Vec::new();
     let mut stack = Vec::new();
     let mut starts = Vec::new();
@@ -64,23 +64,21 @@ fn expand_braces(pattern: &str) -> Vec<String> {
             // Found outermost brace pair
             let prefix: String = chars[0..start].iter().collect();
             let suffix: String = chars[i + 1..].iter().collect();
-            let content: String = chars[start + 1..i].iter().collect(); // content inside {}
-
             // Split content by comma, respecting nested braces
             let mut parts = Vec::new();
             let mut current_part = String::new();
             let mut depth = 0;
-            let content_chars: Vec<char> = content.chars().collect();
+            let content_slice = &chars[start + 1..i];
             let mut j = 0;
-            while j < content_chars.len() {
-                let c = content_chars[j];
-                if c == '{' && (j == 0 || content_chars[j - 1] != '\\') {
+            while j < content_slice.len() {
+                let c = content_slice[j];
+                if c == '{' && (j == 0 || content_slice[j - 1] != '\\') {
                     depth += 1;
                     current_part.push(c);
-                } else if c == '}' && (j == 0 || content_chars[j - 1] != '\\') {
+                } else if c == '}' && (j == 0 || content_slice[j - 1] != '\\') {
                     depth -= 1;
                     current_part.push(c);
-                } else if c == ',' && depth == 0 && (j == 0 || content_chars[j - 1] != '\\') {
+                } else if c == ',' && depth == 0 && (j == 0 || content_slice[j - 1] != '\\') {
                     parts.push(current_part.clone());
                     current_part.clear();
                 } else {
@@ -324,6 +322,20 @@ pub fn parse_with_expansion<'a>(
 )> {
     let pairs = ShellParser::parse(Rule::commands, input).map_err(|e| anyhow!(e))?;
 
+    let has_meta = input.contains('~')
+        || input.contains('$')
+        || input.contains('{')
+        || input.contains('*')
+        || input.contains('?')
+        || input.contains('[');
+
+    if !has_meta {
+        let env_read = environment.read();
+        if env_read.alias.is_empty() {
+            return Ok((std::borrow::Cow::Borrowed(input), Some(pairs)));
+        }
+    }
+
     // Check if expansion is needed
     let mut needs_expansion = false;
     {
@@ -370,16 +382,18 @@ fn check_expansion_needed(pair: Pair<Rule>, alias: &HashMap<String, String>) -> 
             s.contains('~') || s.contains('$')
         }
         Rule::argv0 => {
-            for inner in pair.into_inner() {
-                if check_expansion_needed(inner.clone(), alias) {
+            let mut it = pair.into_inner();
+            if let Some(first) = it.next() {
+                if let Some(cmd) = get_string(first.clone())
+                    && alias.contains_key(&cmd) {
+                        return true;
+                    }
+                if check_expansion_needed(first, alias) {
                     return true;
                 }
-                // Check alias for the first word
-                // This is a simplification; a more robust check would mirror expand_alias_tilde
-                // But for argv0, we primarily care if the command itself is an alias
-                if let Some(cmd) = get_string(inner)
-                    && alias.contains_key(&cmd)
-                {
+            }
+            for inner in it {
+                if check_expansion_needed(inner, alias) {
                     return true;
                 }
             }
@@ -420,6 +434,26 @@ pub fn expand_alias_from_pairs(
     Ok(buf.join(" "))
 }
 
+fn expand_var_args(args: Vec<String>, env: &Environment, buf: &mut Vec<String>) {
+    for arg in args {
+        if let Some(val) = env.get_var(&arg) {
+            if val.is_empty() {
+                buf.push("\"\"".to_string());
+            } else {
+                let needs_quote = val.contains('\n') || val.contains(' ') || val.contains('\t');
+                if needs_quote {
+                    let escaped = val.replace('"', r#"\""#);
+                    buf.push(format!("\"{}\"", escaped));
+                } else {
+                    buf.push(val.trim().to_string());
+                }
+            }
+        } else {
+            buf.push(arg);
+        }
+    }
+}
+
 fn expand_command_alias(
     pair: Pair<Rule>,
     environment: Arc<RwLock<Environment>>,
@@ -428,77 +462,22 @@ fn expand_command_alias(
     let mut buf: Vec<String> = Vec::new();
 
     if let Rule::command = pair.as_rule() {
+        let env_guard = environment.read();
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::simple_command => {
-                    let args =
-                        expand_alias_tilde(inner_pair, &environment.read().alias, _current_dir)?;
-                    for arg in args {
-                        if let Some(val) = environment.read().get_var(&arg) {
-                            if val.is_empty() {
-                                buf.push("\"\"".to_string());
-                            } else {
-                                // Quote multiline or whitespace-containing values
-                                let needs_quote =
-                                    val.contains('\n') || val.contains(' ') || val.contains('\t');
-                                if needs_quote {
-                                    // Escape existing double quotes and wrap
-                                    let escaped = val.replace('"', r#"\""#);
-                                    buf.push(format!("\"{}\"", escaped));
-                                } else {
-                                    buf.push(val.trim().to_string());
-                                }
-                            }
-                        } else {
-                            buf.push(arg);
-                        }
-                    }
+                    let args = expand_alias_tilde(inner_pair, &env_guard.alias, _current_dir)?;
+                    expand_var_args(args, &env_guard, &mut buf);
                 }
                 Rule::simple_command_bg => {
-                    let args =
-                        expand_alias_tilde(inner_pair, &environment.read().alias, _current_dir)?;
-                    for arg in args {
-                        if let Some(val) = environment.read().get_var(&arg) {
-                            if val.is_empty() {
-                                buf.push("\"\"".to_string());
-                            } else {
-                                let needs_quote =
-                                    val.contains('\n') || val.contains(' ') || val.contains('\t');
-                                if needs_quote {
-                                    let escaped = val.replace('"', r#"\""#);
-                                    buf.push(format!("\"{}\"", escaped));
-                                } else {
-                                    buf.push(val.trim().to_string());
-                                }
-                            }
-                        } else {
-                            buf.push(arg);
-                        }
-                    }
+                    let args = expand_alias_tilde(inner_pair, &env_guard.alias, _current_dir)?;
+                    expand_var_args(args, &env_guard, &mut buf);
                     buf.push("&".to_string());
                 }
                 Rule::pipe_command => {
                     buf.push("|".to_string());
-                    let args =
-                        expand_alias_tilde(inner_pair, &environment.read().alias, _current_dir)?;
-                    for arg in args {
-                        if let Some(val) = environment.read().get_var(&arg) {
-                            if val.is_empty() {
-                                buf.push("\"\"".to_string());
-                            } else {
-                                let needs_quote =
-                                    val.contains('\n') || val.contains(' ') || val.contains('\t');
-                                if needs_quote {
-                                    let escaped = val.replace('"', r#"\""#);
-                                    buf.push(format!("\"{}\"", escaped));
-                                } else {
-                                    buf.push(val.trim().to_string());
-                                }
-                            }
-                        } else {
-                            buf.push(arg);
-                        }
-                    }
+                    let args = expand_alias_tilde(inner_pair, &env_guard.alias, _current_dir)?;
+                    expand_var_args(args, &env_guard, &mut buf);
                 }
                 Rule::struct_pipe_command => {
                     // Preserve struct_pipe_command (|: lisp_expr) during alias expansion

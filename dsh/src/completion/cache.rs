@@ -122,26 +122,22 @@ impl<T: CacheableCandidate> CompletionCache<T> {
 
     pub fn lookup(&self, input: &str) -> Option<CacheLookup<T>> {
         let now = Instant::now();
-        let mut expired = Vec::new();
         let guard = self.entries.read();
-        let mut best_match: Option<(String, CacheEntry<T>, bool)> = None;
+        let mut best_key: Option<&String> = None;
+        let mut best_exact = false;
 
         for (key, entry) in guard.iter() {
             if entry.is_expired(now) {
-                expired.push(key.clone());
                 continue;
             }
 
             debug!("cache lookup key: {}, input: {}", key, input);
-            if input.starts_with(key) {
+            if input.starts_with(key.as_str()) {
                 let exact = key == input;
 
-                if best_match
-                    .as_ref()
-                    .map(|(k, _, _)| key.len() > k.len())
-                    .unwrap_or(true)
-                {
-                    best_match = Some((key.clone(), entry.clone(), exact));
+                if best_key.map(|k| key.len() > k.len()).unwrap_or(true) {
+                    best_key = Some(key);
+                    best_exact = exact;
                 }
 
                 if exact {
@@ -149,19 +145,13 @@ impl<T: CacheableCandidate> CompletionCache<T> {
                 }
             }
         }
-        drop(guard);
 
-        debug!("best match: {:?}", best_match);
+        debug!("best match key: {:?}", best_key);
 
-        if !expired.is_empty() {
-            let mut write_guard = self.entries.write();
-            for key in expired {
-                write_guard.remove(&key);
-            }
-        }
-
-        best_match.map(|(key, entry, exact)| {
-            let candidates = if exact {
+        let result = best_key.and_then(|key| {
+            let entry = guard.get(key)?;
+            let key_owned = key.to_string();
+            let candidates = if best_exact {
                 entry.candidates.as_ref().clone()
             } else {
                 let last_token = input
@@ -181,12 +171,15 @@ impl<T: CacheableCandidate> CompletionCache<T> {
                     .collect()
             };
 
-            CacheLookup {
-                key,
+            Some(CacheLookup {
+                key: key_owned,
                 candidates,
-                exact,
-            }
-        })
+                exact: best_exact,
+            })
+        });
+
+        drop(guard);
+        result
     }
 
     fn purge_expired_locked(entries: &mut HashMap<String, CacheEntry<T>>) {

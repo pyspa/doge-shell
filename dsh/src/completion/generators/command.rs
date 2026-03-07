@@ -23,10 +23,8 @@ impl<'a> CommandGenerator<'a> {
         let mut candidates = Vec::with_capacity(32);
 
         // Commands registered in database
-        for command_name in self.database.get_command_names() {
-            if fuzzy_match_score(command_name, current_token).is_some()
-                && let Some(completion) = self.database.get_command(command_name)
-            {
+        for (command_name, completion) in self.database.iter_commands() {
+            if fuzzy_match_score(command_name, current_token).is_some() {
                 candidates.push(CompletionCandidate::subcommand(
                     command_name.clone(),
                     completion.description.clone(),

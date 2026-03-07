@@ -1190,3 +1190,39 @@ fn parse_struct_pipe_mixed_with_regular_pipe() {
         assert!(found_pipe, "Expected pipe_command");
     }
 }
+
+#[test]
+fn test_expand_braces() {
+    use super::expansion::expand_braces;
+
+    // Basic
+    assert_eq!(expand_braces("a{b,c}d"), vec!["abd", "acd"]);
+
+    // Nested braces
+    assert_eq!(expand_braces("a{b,c{d,e}}f"), vec!["abf", "acdf", "acef"]);
+
+    // No braces
+    assert_eq!(expand_braces("abcd"), vec!["abcd"]);
+
+    // Escaped braces
+    assert_eq!(expand_braces("a\\{b,c\\}d"), vec!["a\\{b,c\\}d"]);
+
+    // Unmatched opening brace
+    assert_eq!(expand_braces("a{b,cd"), vec!["a{b,cd"]);
+
+    // Empty comma (implicit empty string)
+    assert_eq!(expand_braces("a{,c}d"), vec!["ad", "acd"]);
+    assert_eq!(expand_braces("a{b,}d"), vec!["abd", "ad"]);
+
+    // Multiple top level braces
+    assert_eq!(
+        expand_braces("a{b,c}d{e,f}g"),
+        vec!["abdeg", "abdfg", "acdeg", "acdfg"]
+    );
+
+    // Complex nested and consecutive braces
+    assert_eq!(
+        expand_braces("{a,b{c,d}}{e,f}"),
+        vec!["ae", "af", "bce", "bcf", "bde", "bdf"]
+    );
+}

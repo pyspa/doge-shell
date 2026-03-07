@@ -136,6 +136,30 @@ pub(crate) fn analyze_input(
     }
 }
 
+use std::collections::HashMap;
+
+/// Cache for command validity checks during syntax highlighting
+pub(crate) struct CommandValidityCache {
+    cache: HashMap<String, bool>,
+}
+
+impl CommandValidityCache {
+    pub(crate) fn new() -> Self {
+        Self {
+            cache: HashMap::with_capacity(8),
+        }
+    }
+
+    pub(crate) fn is_valid(&mut self, repl: &Repl<'_>, word: &str) -> bool {
+        if let Some(&result) = self.cache.get(word) {
+            return result;
+        }
+        let result = command_is_valid(repl, word);
+        self.cache.insert(word.to_string(), result);
+        result
+    }
+}
+
 /// Check whether the given word is a valid (known) command.
 ///
 /// This looks up the word against:

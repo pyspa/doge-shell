@@ -138,6 +138,11 @@ impl CommandCompletionDatabase {
         self.commands.keys().collect()
     }
 
+    /// Iterate over registered command completions
+    pub fn iter_commands(&self) -> impl Iterator<Item = (&String, &CommandCompletion)> {
+        self.commands.iter()
+    }
+
     /// Number of registered commands
     pub fn len(&self) -> usize {
         self.commands.len()

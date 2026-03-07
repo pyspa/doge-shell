@@ -385,9 +385,10 @@ fn check_expansion_needed(pair: Pair<Rule>, alias: &HashMap<String, String>) -> 
             let mut it = pair.into_inner();
             if let Some(first) = it.next() {
                 if let Some(cmd) = get_string(first.clone())
-                    && alias.contains_key(&cmd) {
-                        return true;
-                    }
+                    && alias.contains_key(&cmd)
+                {
+                    return true;
+                }
                 if check_expansion_needed(first, alias) {
                     return true;
                 }

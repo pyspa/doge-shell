@@ -159,6 +159,8 @@ pub(crate) fn highlight_result_to_ranges(
     let mut can_execute = false;
     let len = input.len();
 
+    let mut command_cache = crate::repl::input_analysis::CommandValidityCache::new();
+
     for token in tokens {
         if token.start >= token.end || token.end > len {
             continue;
@@ -166,7 +168,7 @@ pub(crate) fn highlight_result_to_ranges(
         let color = match token.kind {
             HighlightKind::Command => {
                 let word = &input[token.start..token.end];
-                if repl.command_is_valid(word) {
+                if command_cache.is_valid(repl, word) {
                     can_execute = true;
                     ColorType::CommandExists
                 } else {

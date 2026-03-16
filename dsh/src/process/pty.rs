@@ -81,7 +81,11 @@ impl Pty {
             // To be safe and simple, let's look for a helper or implement needed ioctl.
 
             // libc::TIOCSWINSZ
-            let res = libc::ioctl(self.master.as_raw_fd(), libc::TIOCSWINSZ, &ws);
+            let res = libc::ioctl(
+                self.master.as_raw_fd(),
+                libc::TIOCSWINSZ as libc::c_ulong,
+                &ws,
+            );
             if res != 0 {
                 return Err(anyhow::anyhow!("ioctl TIOCSWINSZ failed"));
             }
@@ -97,7 +101,7 @@ pub fn make_controlling_terminal(slave_fd: RawFd) -> Result<()> {
 
     // Set controlling terminal
     unsafe {
-        if libc::ioctl(slave_fd, libc::TIOCSCTTY, 0) != 0 {
+        if libc::ioctl(slave_fd, libc::TIOCSCTTY as libc::c_ulong, 0) != 0 {
             return Err(anyhow::anyhow!("ioctl TIOCSCTTY failed"));
         }
     }

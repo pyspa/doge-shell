@@ -7,6 +7,7 @@ pub fn search_file(dir: &str, name: &str) -> Option<String> {
         Ok(entries) => {
             let mut entries: Vec<DirEntry> = entries.flatten().collect();
             entries.sort_by_key(|x| x.file_name());
+            let mut prefix_match = None;
 
             for entry in entries {
                 let buf = entry.file_name();
@@ -16,10 +17,17 @@ pub fn search_file(dir: &str, name: &str) -> Option<String> {
                     && file_type.is_file()
                     && is_executable(&entry)
                 {
-                    return Some(file_name.to_string());
+                    if file_name == name {
+                        return Some(file_name.to_string());
+                    }
+
+                    if prefix_match.is_none() {
+                        prefix_match = Some(file_name.to_string());
+                    }
                 }
             }
-            None
+
+            prefix_match
         }
         Err(_err) => None,
     }
@@ -43,6 +51,7 @@ pub fn is_dir(input: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::{self, File};
 
     fn init() {
         let _ = tracing_subscriber::fmt::try_init();
@@ -63,5 +72,22 @@ mod tests {
         init();
         let b = search_file("/bin", "g");
         println!("{b:?}");
+    }
+
+    #[test]
+    fn test_search_file_prefers_exact_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let lsappinfo = dir.path().join("lsappinfo");
+        let ls = dir.path().join("ls");
+
+        File::create(&lsappinfo).unwrap();
+        File::create(&ls).unwrap();
+
+        let executable = fs::Permissions::from_mode(0o755);
+        fs::set_permissions(&lsappinfo, executable.clone()).unwrap();
+        fs::set_permissions(&ls, executable).unwrap();
+
+        let found = search_file(dir.path().to_str().unwrap(), "ls");
+        assert_eq!(found, Some("ls".to_string()));
     }
 }

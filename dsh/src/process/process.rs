@@ -322,7 +322,7 @@ impl Process {
             }
 
             unsafe {
-                if libc::ioctl(slave_fd, libc::TIOCSCTTY, 0) != 0 {
+                if libc::ioctl(slave_fd, libc::TIOCSCTTY as libc::c_ulong, 0) != 0 {
                     // ignore error? sometimes it fails if already leader
                     debug!("ioctl TIOCSCTTY failed (may be already leader)");
                 }

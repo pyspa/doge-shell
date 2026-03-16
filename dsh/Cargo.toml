@@ -50,6 +50,7 @@ skim = { workspace = true }
 reqwest = { workspace = true }
 uuid = { workspace = true }
 ratatui = { workspace = true }
+sysinfo = { workspace = true }
 unicode-width = "0.2"
 async-trait = "0.1"
 arboard = "3.4"

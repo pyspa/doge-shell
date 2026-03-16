@@ -90,6 +90,9 @@ impl Environment {
                 return None;
             }
         }
+        if self.lookup(cmd).is_some() {
+            return Some(cmd.to_string());
+        }
         for path in &self.paths {
             if let Some(file) = search_file(path, cmd) {
                 return Some(file);

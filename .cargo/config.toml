@@ -1,2 +1,5 @@
 [build]
-rustflags = ["-Clink-arg=-fuse-ld=mold", "-Ctarget-cpu=native"]
+rustflags = ["-Ctarget-cpu=native"]
+
+[target.'cfg(target_os = "linux")']
+rustflags = ["-Clink-arg=-fuse-ld=mold"]

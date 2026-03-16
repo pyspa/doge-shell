@@ -1156,6 +1156,7 @@ dependencies = [
  "serde_json",
  "shellexpand",
  "skim",
+ "sysinfo",
  "tabled",
  "tempfile",
  "term_size",

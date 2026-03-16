@@ -2,6 +2,7 @@ use crate::completion::cache::CompletionCache;
 use crate::completion::command::CompletionCandidate;
 use anyhow::Result;
 use std::fs;
+use std::process::Command;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -25,42 +26,9 @@ impl InterfaceGenerator {
             return Ok(self.filter_candidates(&cached, current_token));
         }
 
-        // Read from /sys/class/net/ for interface names
-        let mut candidates = Vec::new();
-
-        if let Ok(entries) = fs::read_dir("/sys/class/net") {
-            for entry in entries.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    let interface_name = name.to_string();
-
-                    // Try to get interface state from operstate
-                    let state_path = entry.path().join("operstate");
-                    let state = fs::read_to_string(state_path)
-                        .ok()
-                        .map(|s| s.trim().to_string());
-
-                    // Try to get interface type
-                    let type_path = entry.path().join("type");
-                    let if_type = fs::read_to_string(type_path)
-                        .ok()
-                        .and_then(|s| s.trim().parse::<u32>().ok())
-                        .map(|t| match t {
-                            1 => "ethernet",
-                            772 => "loopback",
-                            801 => "wireless",
-                            _ => "other",
-                        });
-
-                    let description = match (state, if_type) {
-                        (Some(s), Some(t)) => Some(format!("{} ({})", t, s)),
-                        (Some(s), None) => Some(s),
-                        (None, Some(t)) => Some(t.to_string()),
-                        (None, None) => None,
-                    };
-
-                    candidates.push(CompletionCandidate::argument(interface_name, description));
-                }
-            }
+        let mut candidates = self.read_sys_class_net_candidates();
+        if candidates.is_empty() {
+            candidates = self.read_ifconfig_candidates();
         }
 
         // Sort: physical interfaces first (eth, wlan, enp), then virtual (lo, docker, etc.)
@@ -110,6 +78,70 @@ impl InterfaceGenerator {
             .cloned()
             .collect()
     }
+
+    fn read_sys_class_net_candidates(&self) -> Vec<CompletionCandidate> {
+        let mut candidates = Vec::new();
+
+        if let Ok(entries) = fs::read_dir("/sys/class/net") {
+            for entry in entries.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    let interface_name = name.to_string();
+
+                    let state_path = entry.path().join("operstate");
+                    let state = fs::read_to_string(state_path)
+                        .ok()
+                        .map(|s| s.trim().to_string());
+
+                    let type_path = entry.path().join("type");
+                    let if_type = fs::read_to_string(type_path)
+                        .ok()
+                        .and_then(|s| s.trim().parse::<u32>().ok())
+                        .map(|t| match t {
+                            1 => "ethernet",
+                            772 => "loopback",
+                            801 => "wireless",
+                            _ => "other",
+                        });
+
+                    let description = match (state, if_type) {
+                        (Some(s), Some(t)) => Some(format!("{} ({})", t, s)),
+                        (Some(s), None) => Some(s),
+                        (None, Some(t)) => Some(t.to_string()),
+                        (None, None) => None,
+                    };
+
+                    candidates.push(CompletionCandidate::argument(interface_name, description));
+                }
+            }
+        }
+
+        candidates
+    }
+
+    fn read_ifconfig_candidates(&self) -> Vec<CompletionCandidate> {
+        let output = Command::new("ifconfig").arg("-l").output();
+        let Ok(output) = output else {
+            return Vec::new();
+        };
+
+        if !output.status.success() {
+            return Vec::new();
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Self::parse_ifconfig_list(&stdout)
+            .into_iter()
+            .map(|name| CompletionCandidate::argument(name, Some("network interface".to_string())))
+            .collect()
+    }
+
+    fn parse_ifconfig_list(output: &str) -> Vec<String> {
+        output
+            .split_whitespace()
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
 }
 
 impl Default for InterfaceGenerator {
@@ -133,11 +165,11 @@ mod tests {
         let generator = InterfaceGenerator::new();
         let result = generator.generate_candidates("");
         assert!(result.is_ok());
-        let candidates = result.unwrap();
+        let _candidates = result.unwrap();
         // On Linux, at least 'lo' should be present
         #[cfg(target_os = "linux")]
         assert!(
-            candidates.iter().any(|c| c.text == "lo"),
+            _candidates.iter().any(|c| c.text == "lo"),
             "Expected 'lo' interface on Linux"
         );
     }
@@ -209,5 +241,11 @@ mod tests {
         });
         // This might not always be true depending on system, so just check it compiles
         let _ = has_state;
+    }
+
+    #[test]
+    fn test_parse_ifconfig_list() {
+        let parsed = InterfaceGenerator::parse_ifconfig_list("lo0 en0 awdl0 utun0\n");
+        assert_eq!(parsed, vec!["lo0", "en0", "awdl0", "utun0"]);
     }
 }

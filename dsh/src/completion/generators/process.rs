@@ -1,9 +1,9 @@
 use crate::completion::cache::CompletionCache;
 use crate::completion::command::CompletionCandidate;
 use anyhow::Result;
-use std::fs;
 use std::sync::LazyLock;
 use std::time::Duration;
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 
 // Cache TTL for process list (1 second should be enough to feel responsive but vaguely fresh)
 const PROCESS_CACHE_TTL_MS: u64 = 1000;
@@ -30,32 +30,20 @@ impl ProcessGenerator {
             candidates_arc = hit;
             candidates_arc.iter()
         } else {
-            // 2. If not in cache, scan /proc
-            let mut candidates = Vec::new();
+            // sysinfo abstracts process enumeration across Linux and macOS.
+            let mut system = System::new_with_specifics(
+                RefreshKind::nothing().with_processes(ProcessRefreshKind::everything()),
+            );
+            system.refresh_processes(ProcessesToUpdate::All, true);
 
-            if let Ok(entries) = fs::read_dir("/proc") {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir()
-                        && let Some(file_name) = path.file_name().and_then(|n| n.to_str())
-                    {
-                        // Check if it's a PID (all digits)
-                        if let Ok(pid) = file_name.parse::<u32>() {
-                            let pid_str = pid.to_string();
-
-                            // Read process name from /proc/<pid>/comm
-                            let comm_path = path.join("comm");
-                            let description = if let Ok(comm) = fs::read_to_string(comm_path) {
-                                Some(comm.trim().to_string())
-                            } else {
-                                None
-                            };
-
-                            candidates.push(CompletionCandidate::process(pid_str, description));
-                        }
-                    }
-                }
-            }
+            let mut candidates: Vec<_> = system
+                .processes()
+                .iter()
+                .map(|(pid, process)| {
+                    let description = Some(process.name().to_string_lossy().into_owned());
+                    CompletionCandidate::process(pid.to_string(), description)
+                })
+                .collect();
 
             // Sort by PID
             candidates.sort_by(|a, b| {

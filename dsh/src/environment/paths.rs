@@ -170,6 +170,10 @@ impl Environment {
     /// Search for an executable name by prefix using the prewarmed cache.
     /// Returns the first matching executable name, or None if not found.
     pub fn search_prefix(&self, prefix: &str) -> Option<String> {
+        if is_absolute_command_path(prefix) || is_relative_command_path(prefix) {
+            return self.search(prefix);
+        }
+
         let names = self.executable_names.read();
         if names.is_empty() {
             // Cache not prewarmed yet, fall back to synchronous search

@@ -116,3 +116,34 @@ fn test_search() {
     assert!(p.is_some());
     assert_eq!(p.unwrap(), "ls");
 }
+
+#[test]
+fn search_prefix_uses_prewarmed_executable_names() {
+    init();
+    let env = Environment::new();
+    env.write().set_executable_names(vec![
+        "cargo".to_string(),
+        "curl".to_string(),
+        "git".to_string(),
+    ]);
+
+    let p = env.read().search_prefix("ca");
+    assert_eq!(Some("cargo".to_string()), p);
+}
+
+#[test]
+fn search_prefix_preserves_relative_path_lookup_with_prewarmed_cache() {
+    init();
+    let env = Environment::new();
+    env.write().set_executable_names(vec![
+        "cargo".to_string(),
+        "curl".to_string(),
+        "git".to_string(),
+    ]);
+
+    let rel_path = "./Cargo.toml";
+    if Path::new(rel_path).exists() {
+        let p = env.read().search_prefix(rel_path);
+        assert_eq!(Some(rel_path.to_string()), p);
+    }
+}

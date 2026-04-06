@@ -14,6 +14,15 @@ use dsh_types::Context;
 use libc::STDIN_FILENO;
 
 const MONITOR_TIMEOUT: u64 = 200;
+const FIRST_MONITOR_OUTPUT_PREFIX: &str = "\r\n";
+
+fn append_output_chunk(output_started: &mut bool, buffer: &mut String, chunk: &str) {
+    if !*output_started {
+        *output_started = true;
+        buffer.push_str(FIRST_MONITOR_OUTPUT_PREFIX);
+    }
+    buffer.push_str(chunk);
+}
 
 #[derive(Debug)]
 pub struct OutputMonitor {
@@ -37,12 +46,8 @@ impl OutputMonitor {
         }
     }
 
-    fn append_line(&mut self, buffer: &mut String, line: &str, first_prefix: &str) {
-        if !self.outputed {
-            self.outputed = true;
-            buffer.push_str(first_prefix);
-        }
-        buffer.push_str(line);
+    fn append_line(&mut self, buffer: &mut String, line: &str) {
+        append_output_chunk(&mut self.outputed, buffer, line);
         // Also capture the raw line (we might want to be careful about prefixes/newlines)
         // The line from read_line includes the newline character usually.
         self.captured_output.push_str(line);
@@ -69,7 +74,7 @@ impl OutputMonitor {
             Ok(Ok(len)) => {
                 if len > 0 {
                     let mut buffer = String::new();
-                    self.append_line(&mut buffer, &line, "\n\r");
+                    self.append_line(&mut buffer, &line);
                     self.flush_buffer(&buffer)?;
                 }
                 Ok(len)
@@ -96,7 +101,7 @@ impl OutputMonitor {
                             break;
                         }
                     } else {
-                        self.append_line(&mut buffer, &line, "\r");
+                        self.append_line(&mut buffer, &line);
                     }
                 }
                 Ok(Err(_)) | Err(_) => {
@@ -273,5 +278,31 @@ pub(crate) fn handle_output_redirect(
             ctx.outfile = stdout;
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::append_output_chunk;
+
+    #[test]
+    fn append_output_chunk_prefixes_only_first_chunk() {
+        let mut started = false;
+        let mut buffer = String::new();
+
+        append_output_chunk(&mut started, &mut buffer, "first\n");
+        append_output_chunk(&mut started, &mut buffer, "second\n");
+
+        assert_eq!(buffer, "\r\nfirst\nsecond\n");
+    }
+
+    #[test]
+    fn append_output_chunk_keeps_payload_unchanged() {
+        let mut started = false;
+        let mut buffer = String::new();
+
+        append_output_chunk(&mut started, &mut buffer, "\u{1b}[31mred\u{1b}[0m\n");
+
+        assert_eq!(buffer, "\r\n\u{1b}[31mred\u{1b}[0m\n");
     }
 }

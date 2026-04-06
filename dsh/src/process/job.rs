@@ -150,6 +150,7 @@ impl Job {
 
         // 1. Setup PTY if needed
         let pty_slave_fd = self.setup_pty(ctx).await?;
+        let _pty_raw_mode_guard = job_pty::ForegroundPtyRawModeGuard::new(self, ctx);
 
         // 2. Launch processes
         if let Some(mut process) = self.process.take() {

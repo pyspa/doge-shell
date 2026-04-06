@@ -13,12 +13,49 @@ use std::os::unix::io::{AsRawFd, IntoRawFd, RawFd};
 use tokio::io::unix::AsyncFd;
 use tracing::{debug, error};
 
+const DSH_NO_PTY_ENV: &str = "DSH_NO_PTY";
+
+#[derive(Debug)]
+pub(crate) struct ForegroundPtyRawModeGuard {
+    enabled: bool,
+}
+
+impl ForegroundPtyRawModeGuard {
+    pub(crate) fn new(job: &Job, ctx: &Context) -> Self {
+        if should_enable_foreground_pty_raw_mode(job, ctx) {
+            match enable_raw_mode() {
+                Ok(()) => Self { enabled: true },
+                Err(err) => {
+                    error!("Failed to enable raw mode for PTY job: {}", err);
+                    Self { enabled: false }
+                }
+            }
+        } else {
+            Self { enabled: false }
+        }
+    }
+}
+
+impl Drop for ForegroundPtyRawModeGuard {
+    fn drop(&mut self) {
+        if self.enabled
+            && let Err(err) = disable_raw_mode()
+        {
+            error!("Failed to disable raw mode after PTY job: {}", err);
+        }
+    }
+}
+
+pub(crate) fn should_create_pty(ctx: &Context, disable_pty: bool, no_pty_env: bool) -> bool {
+    ctx.foreground && ctx.interactive && !disable_pty && !no_pty_env
+}
+
+fn should_enable_foreground_pty_raw_mode(job: &Job, ctx: &Context) -> bool {
+    ctx.foreground && ctx.interactive && job.pty.is_some()
+}
+
 pub async fn setup_pty(job: &mut Job, ctx: &mut Context) -> Result<Option<RawFd>> {
-    if !(ctx.foreground
-        && ctx.interactive
-        && std::env::var("DSH_NO_PTY").is_err()
-        && !job.disable_pty)
-    {
+    if !should_create_pty(ctx, job.disable_pty, std::env::var(DSH_NO_PTY_ENV).is_ok()) {
         return Ok(None);
     }
 
@@ -116,19 +153,9 @@ pub async fn manage_execution(job: &mut Job, ctx: &mut Context) -> Result<()> {
         wait_job(job, false).await?;
     } else if ctx.foreground {
         if ctx.process_count > 0 {
-            let raw_mode_enabled = if job.pty.is_some() {
-                enable_raw_mode().is_ok()
-            } else {
-                false
-            };
-
             // Similarly, put_in_foreground will be moved or refactored.
             // Assuming it's available on Job or as a helper.
-            let res = crate::process::job_wait::put_in_foreground(job, false, false).await;
-            if raw_mode_enabled {
-                let _ = disable_raw_mode();
-            }
-            res?;
+            crate::process::job_wait::put_in_foreground(job, false, false).await?;
         }
     } else {
         crate::process::job_wait::put_in_background(job).await?;
@@ -185,4 +212,60 @@ pub async fn capture_output_and_history(
         shell.environment.write().output_history.push(entry);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_create_pty;
+    use dsh_types::Context;
+    use dsh_types::terminal::{ShellMode, TerminalState};
+    use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
+    use nix::unistd::Pid;
+
+    fn test_context(foreground: bool, interactive: bool) -> Context {
+        Context {
+            shell_pid: Pid::from_raw(1),
+            shell_pgid: Pid::from_raw(1),
+            shell_tmode: None,
+            terminal_state: TerminalState::non_terminal(),
+            shell_mode: if interactive {
+                ShellMode::Interactive
+            } else {
+                ShellMode::Script
+            },
+            foreground,
+            interactive,
+            infile: STDIN_FILENO,
+            outfile: STDOUT_FILENO,
+            errfile: STDERR_FILENO,
+            captured_out: None,
+            save_history: true,
+            pid: None,
+            pgid: None,
+            process_count: 0,
+        }
+    }
+
+    #[test]
+    fn should_create_pty_only_for_foreground_interactive_jobs() {
+        let interactive_foreground = test_context(true, true);
+        let interactive_background = test_context(false, true);
+        let non_interactive_foreground = test_context(true, false);
+
+        assert!(should_create_pty(&interactive_foreground, false, false));
+        assert!(!should_create_pty(&interactive_background, false, false));
+        assert!(!should_create_pty(
+            &non_interactive_foreground,
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn should_create_pty_respects_disable_flags() {
+        let ctx = test_context(true, true);
+
+        assert!(!should_create_pty(&ctx, true, false));
+        assert!(!should_create_pty(&ctx, false, true));
+    }
 }

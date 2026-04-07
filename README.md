@@ -709,6 +709,17 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     export AI_MESSAGE_LANG="Japanese"
     ```
 
+9. **Runtime Skills**:
+   The chat runtime can load local skills from `~/.config/dsh/skills/`. This repository keeps canonical sample skills under `docs/ai/skills/`.
+
+   ```bash
+   scripts/install-runtime-skills.sh dsh
+   ```
+
+   Keep each skill summary in the YAML frontmatter `description`, and move long details into `references/` so runtime prompts stay compact.
+
+For maintainers, concise AI/Skill authoring notes live in `docs/ai/README.md`.
+
 
 ## 📁 Project Structure
 

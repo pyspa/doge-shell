@@ -1,38 +1,39 @@
-# Repository Guidelines
+# Agent Guide
 
-## プロジェクト構成
-- Rust ワークスペース。主要クレート `dsh` (本体シェル) と補助クレート `dsh-builtin`, `dsh-frecency`, `dsh-types`, `dsh-openai` が `Cargo.toml` に列挙。
-- エントリポイント: `dsh/src/main.rs`。REPL・パーサー・補完・Lisp 実装は `dsh/src` 以下の各モジュールに分割。
-- 統合テストは `dsh/tests`、ユニットテストは各モジュール内に併設。補完スキーマやサンプルは `completions` / `dynamic-completions` に配置。
+このリポジトリでは、トークン消費を抑えるために「最小探索・最小検証」を徹底すること。
 
-## ビルド・実行・テスト
-```bash
-cargo build                # デバッグビルド
-cargo build --release      # 最適化ビルド
-cargo run -p dsh -- --help # シェル起動オプションの確認
-cargo run -p dsh --        # シェル本体の起動
-cargo test                 # ワークスペース全体のテスト
-cargo test -p dsh -- --nocapture # dsh クレート限定で出力を表示
-cargo fmt                  # `rustfmt.toml` に沿った整形
-cargo clippy --all-targets --all-features # 静的解析
-```
+## 基本方針
+- チャットは日本語で行う。
+- Python 実行は禁止。補助スクリプトは shell を使う。
+- まず `rg --files` / `rg -n` で当たりを付け、必要なファイルだけ読む。
+- `README.md` 全文を最初から読まない。ユーザー向け挙動、設定例、公開文書の更新時だけ必要箇所を開く。
+- 変更後は関係する最小コマンドで検証し、無関係なワークスペース全体テストは最後に限定する。
 
-## コーディングスタイル & 命名
-- `rustfmt` 準拠 (4 スペース、Edition 2024)。PR 前に必ず `cargo fmt`。
-- 命名: モジュール/関数は snake_case、型は UpperCamelCase、定数は SCREAMING_SNAKE_CASE。
-- ロジックが複雑な箇所のみ短いコメントを付与。非同期は Tokio パターンに合わせる。
-- 新しい機能は既存ディレクトリ構造に倣い、補完関連は `dsh/src/completion/` 配下に配置。
+## 探索順
+1. `Cargo.toml` でクレート境界を確認する。
+2. `rg -n "<symbol>|<feature>" dsh dsh-builtin dsh-openai dsh-types` で実装位置を絞る。
+3. 迷ったら `docs/ai/skills/doge-shell-repo/references/module-map.md` を読む。
 
-## テスト指針
-- 標準の `cargo test` フレームワークを使用。公開 API やバグ修正には回帰テストを追加。
-- テスト名は振る舞いを示す説明的な snake_case で統一 (例: `handles_ctrl_c_signal`)。
-- I/O を伴うテストは可能ならモック・一時ディレクトリを利用し、副作用を隔離。
+## 主要モジュール
+- シェル本体: `dsh/src`
+- REPL / 入力: `dsh/src/repl`, `dsh/src/input`
+- パーサー: `dsh/src/parser`
+- 補完: `dsh/src/completion`, `dsh/src/repl/completion`
+- Lisp: `dsh/src/lisp`
+- prompt / UI: `dsh/src/prompt`, `dsh/src/terminal`
+- safety: `dsh/src/safety`
+- builtin: `dsh-builtin/src`
+- chat / tool / skills: `dsh-builtin/src/chatgpt`
+- OpenAI client: `dsh-openai/src`
 
-## コミット & PR ガイド
-- コミットは Conventional Commits に従う: `<type>(<scope>): <subject>`、命令形・72 文字以内。例: `feat(parser): support here-doc`.
-- PR には概要、動機、主要変更点、実行したコマンド (テスト/フォーマット) を記載し、関連 Issue があればリンク。
-- 動作確認が必要な変更は再現手順やスクリーンショットを添付。レビュー可能な粒度でコミットを分割。
+## 検証の最小単位
+- `dsh-builtin` を触ったとき: `cargo test -p dsh-builtin`
+- `dsh` 本体を触ったとき: `cargo test -p dsh`
+- 複数クレートを跨いだときだけ: `cargo test`
+- 広いビルド確認が必要なら: `cargo check --workspace`
 
-## セキュリティ・設定の注意
-- API キーやトークンをリポジトリに含めない。必要な場合はローカル環境変数や個人設定ファイル (`~/.config/dsh/config.lisp` など) で管理。
-- サードパーティ通信を伴う機能 (OpenAI/MCP 等) は、ネットワーク不可環境でもフェイルセーフに振る舞うか確認すること。
+## Skill 運用
+- canonical source は `docs/ai/skills/` に置く。
+- runtime 配置先は `~/.codex/skills/` と `~/.config/dsh/skills/`。
+- 導入や更新は `scripts/install-runtime-skills.sh` を使う。
+- Skill は frontmatter の `description` を短い要約兼トリガー文として書く。

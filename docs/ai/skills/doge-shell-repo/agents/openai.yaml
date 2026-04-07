@@ -1,0 +1,4 @@
+interface:
+  display_name: "Doge Shell Repo"
+  short_description: "Navigate doge-shell code and validate narrowly."
+  default_prompt: "Use $doge-shell-repo to inspect this repository and choose the smallest correct edit and validation path."

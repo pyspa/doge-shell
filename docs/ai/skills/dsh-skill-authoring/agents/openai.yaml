@@ -1,0 +1,4 @@
+interface:
+  display_name: "DSH Skill Authoring"
+  short_description: "Write short runtime skills for dsh and Codex."
+  default_prompt: "Use $dsh-skill-authoring to create or refine a concise runtime skill for this repository."

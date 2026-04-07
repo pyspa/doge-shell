@@ -20,34 +20,26 @@ const MAX_TOOL_ITERATIONS: usize = 100;
 const MAX_BUFFER_CHARS: usize = 96000;
 /// Environment variable key to override the model used for summarization
 const SUMMARY_MODEL_KEY: &str = "AI_SUMMARY_MODEL";
+const MAX_VISIBLE_FILES: usize = 12;
+const MAX_VISIBLE_ALIASES: usize = 8;
 
 /// System prompt that explains how to use the builtin tools
-const TOOL_SYSTEM_PROMPT: &str = r#"You are DogeShell Assistant, a highly capable, autonomous DevOps and Software Engineering agent running directly inside the user's terminal (doge-shell). Your goal is to help the user perform tasks, fix issues, and write code efficiently and accurately.
+const TOOL_SYSTEM_PROMPT: &str = r#"You are DogeShell Assistant, an autonomous software engineering agent running inside doge-shell.
 
-## Operational Rules
-1. **Plan first**: Before executing any tools, briefly analyze the request and outline your plan.
-2. **Execute**: Use the provided tools to carry out your plan.
-3. **Verify**: ALWAYS verify your actions.
-   - If you create or edit a file, read it back to confirm the content is correct.
-   - If you run a command, check its exit code and output.
-4. **Analyze Errors**: If a tool fails (especially `execute`), DO NOT immediately ask the user for help.
-   - Analyze the error message.
-   - If it's a permission issue or a missing command, propose an alternative.
-   - If a command is not on the allowlist, explain this constraint and ask the user to add it or try a different approach.
+Rules:
+1. Briefly plan before using tools.
+2. Explore cheaply first: prefer `search` and `ls`; use `read_file` only after locating the exact target.
+3. Verify every change. After `edit`, read the file back. After `execute`, check exit code, stdout, and stderr.
+4. If a tool fails, analyze the error before asking the user. Respect the `execute` allowlist.
 
-## Tools
-You have access to the following tools:
+Tools:
+- `search`: find files or matching text
+- `ls`: inspect directories
+- `read_file`: read a file
+- `edit`: overwrite a file with exact contents
+- `execute`: run an allowlisted command without shell evaluation
 
-- `execute`: Run shell commands.
-  - **IMPORTANT**: This tool uses an allowlist. You might be blocked from running arbitrary commands. Check the error message carefully.
-- `ls`: List files in a directory. Use this to explore the filesystem.
-- `read`: Read the contents of a file.
-- `edit`: Create or modify files.
-- `search`: Search for string patterns in files (grep-like).
-
-## Formatting
-- Use Markdown for all methodology and code blocks.
-- Be concise in your explanations but thorough in your verification.
+Respond in Markdown. Be concise and avoid unnecessary repetition.
 "#;
 
 struct ConversationManager {
@@ -556,40 +548,33 @@ fn environment_snapshot(proxy: &mut dyn ShellProxy) -> String {
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
 
-    let cwd = std::env::current_dir()
+    let current_dir = proxy
+        .get_current_dir()
+        .or_else(|_| std::env::current_dir())
+        .ok();
+    let cwd = current_dir
+        .as_ref()
         .map(|path| path.display().to_string())
-        .unwrap_or_else(|err| format!("(failed to resolve current directory: {err})"));
+        .unwrap_or_else(|| "(failed to resolve current directory)".to_string());
 
-    let mut aliases: Vec<_> = proxy.list_aliases().into_iter().collect();
-    aliases.sort_by(|a, b| a.0.cmp(&b.0));
-
-    let alias_str = if aliases.is_empty() {
-        "none".to_string()
-    } else {
-        aliases
-            .iter()
-            .map(|(name, cmd)| format!("{name}='{cmd}'"))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
+    let alias_str = summarize_aliases(proxy.list_aliases().into_iter().collect());
 
     let mut files_str = String::new();
-    if let Ok(entries) = fs::read_dir(".") {
-        let names: Vec<String> = entries
+    if let Some(current_dir) = &current_dir
+        && let Ok(entries) = fs::read_dir(current_dir)
+    {
+        let visible_entries = entries
             .filter_map(|e| e.ok())
             .map(|e| {
                 let name = e.file_name().to_string_lossy().into_owned();
-                if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                    format!("{}/", name)
-                } else {
-                    name
-                }
+                let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                (name, is_dir)
             })
-            .take(50) // Limit to 50 files to avoid context bloating
-            .collect();
+            .collect::<Vec<_>>();
 
-        if !names.is_empty() {
-            files_str = format!("\n- Visible files: {}", names.join(", "));
+        let summarized = summarize_visible_entries(visible_entries);
+        if !summarized.is_empty() {
+            files_str = format!("\n- Visible files: {summarized}");
         }
     }
 
@@ -598,6 +583,48 @@ fn environment_snapshot(proxy: &mut dyn ShellProxy) -> String {
         describe_git_state(),
         files_str
     )
+}
+
+fn summarize_aliases(mut aliases: Vec<(String, String)>) -> String {
+    aliases.sort_by(|a, b| a.0.cmp(&b.0));
+    let total = aliases.len();
+
+    if total == 0 {
+        return "none".to_string();
+    }
+
+    let mut rendered = aliases
+        .into_iter()
+        .take(MAX_VISIBLE_ALIASES)
+        .map(|(name, cmd)| format!("{name}='{cmd}'"))
+        .collect::<Vec<_>>();
+
+    if total > MAX_VISIBLE_ALIASES {
+        rendered.push(format!("(+{} more)", total - MAX_VISIBLE_ALIASES));
+    }
+
+    rendered.join(", ")
+}
+
+fn summarize_visible_entries(mut entries: Vec<(String, bool)>) -> String {
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let total = entries.len();
+
+    if total == 0 {
+        return String::new();
+    }
+
+    let mut rendered = entries
+        .into_iter()
+        .take(MAX_VISIBLE_FILES)
+        .map(|(name, is_dir)| if is_dir { format!("{name}/") } else { name })
+        .collect::<Vec<_>>();
+
+    if total > MAX_VISIBLE_FILES {
+        rendered.push(format!("(+{} more)", total - MAX_VISIBLE_FILES));
+    }
+
+    rendered.join(", ")
 }
 
 fn describe_git_state() -> String {
@@ -783,5 +810,37 @@ mod tests {
         );
         assert!(prompt_mixed.contains("Additional operator instructions:\nBe polite"));
         assert!(prompt_mixed.contains("IMPORTANT: You MUST respond in French."));
+    }
+
+    #[test]
+    fn system_prompt_uses_exact_tool_names() {
+        assert!(TOOL_SYSTEM_PROMPT.contains("prefer `search` and `ls`"));
+        assert!(TOOL_SYSTEM_PROMPT.contains("use `read_file` only after locating"));
+        assert!(TOOL_SYSTEM_PROMPT.contains("- `read_file`: read a file"));
+        assert!(!TOOL_SYSTEM_PROMPT.contains("- `read`:"));
+    }
+
+    #[test]
+    fn summarize_aliases_limits_output() {
+        let aliases = (0..10)
+            .map(|idx| (format!("a{idx}"), format!("cmd{idx}")))
+            .collect::<Vec<_>>();
+
+        let summary = summarize_aliases(aliases);
+
+        assert!(summary.contains("(+2 more)"));
+        assert!(summary.contains("a0='cmd0'"));
+    }
+
+    #[test]
+    fn summarize_visible_entries_limits_output() {
+        let entries = (0..14)
+            .map(|idx| (format!("file{idx}"), idx % 2 == 0))
+            .collect::<Vec<_>>();
+
+        let summary = summarize_visible_entries(entries);
+
+        assert!(summary.contains("(+2 more)"));
+        assert!(summary.contains("file0/"));
     }
 }

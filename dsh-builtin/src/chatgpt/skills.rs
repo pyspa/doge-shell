@@ -5,7 +5,7 @@ use tracing::{debug, warn};
 #[derive(Debug, Clone)]
 pub struct Skill {
     pub name: String,
-    pub instruction: String,
+    summary: String,
 }
 
 impl Skill {
@@ -26,10 +26,7 @@ impl Skill {
 
         debug!("Loaded folder skill: {}", name);
 
-        Ok(Self {
-            name,
-            instruction: content,
-        })
+        Ok(Self::from_content(name, content))
     }
 
     pub fn from_file(path: &Path) -> Result<Self> {
@@ -44,21 +41,116 @@ impl Skill {
 
         debug!("Loaded file skill: {}", name);
 
-        Ok(Self {
-            name,
-            instruction: content,
-        })
+        Ok(Self::from_content(name, content))
     }
 
-    pub fn summary(&self) -> String {
-        // Extract first non-empty line as summary if it's not a header
-        self.instruction
-            .lines()
-            .map(|l| l.trim())
-            .find(|l| !l.is_empty() && !l.starts_with('#'))
-            .unwrap_or("No description available.")
-            .to_string()
+    fn from_content(name: String, instruction: String) -> Self {
+        let summary = extract_skill_summary(&instruction);
+
+        Self { name, summary }
     }
+
+    pub fn summary(&self) -> &str {
+        &self.summary
+    }
+}
+
+const MAX_SKILL_SUMMARY_CHARS: usize = 140;
+
+fn extract_skill_summary(instruction: &str) -> String {
+    let (frontmatter, body) = split_frontmatter(instruction);
+    if let Some(description) = frontmatter_field(frontmatter, "description") {
+        return truncate_chars(&collapse_whitespace(&description), MAX_SKILL_SUMMARY_CHARS);
+    }
+
+    let body_summary = body
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with('#'))
+        .unwrap_or("No description available.");
+
+    truncate_chars(&collapse_whitespace(body_summary), MAX_SKILL_SUMMARY_CHARS)
+}
+
+fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
+    let mut offset = 0usize;
+    let mut lines = content.split_inclusive('\n');
+
+    let Some(first) = lines.next() else {
+        return (None, content);
+    };
+    offset += first.len();
+
+    if first.trim() != "---" {
+        return (None, content);
+    }
+
+    for line in lines {
+        offset += line.len();
+        if line.trim() == "---" {
+            let frontmatter = &content[first.len()..offset - line.len()];
+            let body = &content[offset..];
+            return (Some(frontmatter), body);
+        }
+    }
+
+    (None, content)
+}
+
+fn frontmatter_field(frontmatter: Option<&str>, key: &str) -> Option<String> {
+    let frontmatter = frontmatter?;
+
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let Some((field, value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        if field.trim() == key {
+            let value = value.trim();
+            if value.is_empty() {
+                return None;
+            }
+
+            return Some(strip_matching_quotes(value).to_string());
+        }
+    }
+
+    None
+}
+
+fn strip_matching_quotes(value: &str) -> &str {
+    if value.len() >= 2 {
+        let bytes = value.as_bytes();
+        let first = bytes[0];
+        let last = bytes[value.len() - 1];
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            return &value[1..value.len() - 1];
+        }
+    }
+
+    value
+}
+
+fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    let char_count = text.chars().count();
+    if char_count <= max_chars {
+        return text.to_string();
+    }
+
+    let end = text
+        .char_indices()
+        .nth(max_chars)
+        .map(|(idx, _)| idx)
+        .unwrap_or(text.len());
+    format!("{}...", &text[..end])
 }
 
 pub struct SkillsManager {
@@ -118,23 +210,86 @@ impl SkillsManager {
         }
 
         let mut fragment = String::from(
-            "\n\n## Agent Skills\nYou have access to the following specialized skills. Each skill is defined in a folder under `~/.config/dsh/skills/`.\n",
+            "\n\n## Agent Skills\nAvailable runtime skills from `~/.config/dsh/skills/`:\n",
         );
 
-        fragment.push_str("\n### Available Skills:\n");
         for skill in &skills {
-            fragment.push_str(&format!("- **{}**: {}\n", skill.name, skill.summary()));
+            fragment.push_str(&format!("- `{}`: {}\n", skill.name, skill.summary()));
         }
 
-        fragment.push_str("\n### Progressive Disclosure:\n");
-        fragment.push_str("For detailed instructions on a specific skill, use the `read_file` tool to read its `SKILL.md` file.\n");
+        fragment.push_str("\nRead a skill only when needed with `read_file(path=\"~/.config/dsh/skills/<skill>/SKILL.md\")`.\n");
         fragment.push_str(
-            "Example: `read_file(path=\"~/.config/dsh/skills/<skill_name>/SKILL.md\")`\n",
-        );
-        fragment.push_str(
-            "Skill resources (scripts, data) are also located in their respective folders.\n",
+            "Use files in that skill directory only after you know the skill is relevant.\n",
         );
 
         fragment
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn summary_prefers_frontmatter_description() {
+        let skill = Skill::from_content(
+            "demo".to_string(),
+            r#"---
+name: demo
+description: "Short runtime summary"
+---
+
+# Demo
+
+Longer explanation.
+"#
+            .to_string(),
+        );
+
+        assert_eq!(skill.summary(), "Short runtime summary");
+    }
+
+    #[test]
+    fn summary_falls_back_to_body_without_frontmatter() {
+        let skill = Skill::from_content(
+            "demo".to_string(),
+            "# Demo\n\nUse this to inspect prompts.\n".to_string(),
+        );
+
+        assert_eq!(skill.summary(), "Use this to inspect prompts.");
+    }
+
+    #[test]
+    fn summary_truncates_long_descriptions() {
+        let repeated = "a".repeat(MAX_SKILL_SUMMARY_CHARS + 10);
+        let skill = Skill::from_content(
+            "demo".to_string(),
+            format!("---\ndescription: \"{repeated}\"\n---\n"),
+        );
+
+        assert!(skill.summary().ends_with("..."));
+        assert!(skill.summary().chars().count() <= MAX_SKILL_SUMMARY_CHARS + 3);
+    }
+
+    #[test]
+    fn system_prompt_fragment_uses_compact_summary() {
+        let dir = tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let skill_dir = skills_dir.join("demo-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\ndescription: compact summary\n---\n# Demo\n",
+        )
+        .unwrap();
+
+        let manager = SkillsManager { skills_dir };
+        let fragment = manager.get_system_prompt_fragment();
+
+        assert!(fragment.contains("- `demo-skill`: compact summary"));
+        assert!(fragment.contains("read_file(path=\"~/.config/dsh/skills/<skill>/SKILL.md\")"));
+        assert!(!fragment.contains("### Progressive Disclosure"));
     }
 }

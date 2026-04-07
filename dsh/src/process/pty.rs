@@ -97,7 +97,7 @@ pub fn make_controlling_terminal(slave_fd: RawFd) -> Result<()> {
 
     // Set controlling terminal
     unsafe {
-        if libc::ioctl(slave_fd, libc::TIOCSCTTY, 0) != 0 {
+        if libc::ioctl(slave_fd, libc::TIOCSCTTY as libc::c_ulong, 0) != 0 {
             return Err(anyhow::anyhow!("ioctl TIOCSCTTY failed"));
         }
     }

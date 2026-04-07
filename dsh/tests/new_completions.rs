@@ -1,3 +1,4 @@
+use doge_shell::completion::command::ArgumentType;
 use doge_shell::completion::json_loader::JsonCompletionLoader;
 
 use std::path::PathBuf;
@@ -135,4 +136,45 @@ fn test_git_completion_with_real_json() {
         has_version_commit,
         "Should suggest --version for 'git commit -'"
     );
+}
+
+#[test]
+fn test_pacman_completion_keeps_multiple_script_package_arguments() {
+    let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = root_dir.parent().unwrap();
+    let completions_dir = repo_root.join("completions");
+
+    let loader = JsonCompletionLoader::with_dirs(vec![completions_dir]);
+    let pacman_completion = loader
+        .load_command_completion("pacman")
+        .unwrap()
+        .expect("pacman completion not found in json");
+
+    let sync = pacman_completion
+        .subcommands
+        .iter()
+        .find(|sub| sub.name == "-S")
+        .expect("missing pacman -S subcommand");
+    let remove = pacman_completion
+        .subcommands
+        .iter()
+        .find(|sub| sub.name == "-R")
+        .expect("missing pacman -R subcommand");
+
+    let sync_arg = sync
+        .arguments
+        .first()
+        .expect("missing pacman -S package arg");
+    assert!(sync_arg.multiple, "pacman -S package arg must be multiple");
+    assert!(matches!(sync_arg.arg_type, Some(ArgumentType::Script(_))));
+
+    let remove_arg = remove
+        .arguments
+        .first()
+        .expect("missing pacman -R package arg");
+    assert!(
+        remove_arg.multiple,
+        "pacman -R package arg must be multiple"
+    );
+    assert!(matches!(remove_arg.arg_type, Some(ArgumentType::Script(_))));
 }

@@ -132,6 +132,7 @@ mod tests {
                     arguments: vec![Argument {
                         name: "pathspec".to_string(),
                         description: Some("Files to add".to_string()),
+                        multiple: false,
                         arg_type: None,
                     }],
                     subcommands: vec![],
@@ -224,6 +225,7 @@ mod tests {
             arguments: vec![Argument {
                 name: "command".to_string(),
                 description: None,
+                multiple: false,
                 arg_type: Some(ArgumentType::CommandWithArgs),
             }],
         };
@@ -604,6 +606,7 @@ mod tests {
             arguments: vec![Argument {
                 name: "directory".to_string(),
                 description: Some("Directory to change to".to_string()),
+                multiple: false,
                 arg_type: Some(ArgumentType::Directory),
             }],
         };
@@ -676,6 +679,7 @@ mod tests {
             arguments: vec![Argument {
                 name: "file".to_string(),
                 description: Some("File".to_string()),
+                multiple: false,
                 arg_type: Some(ArgumentType::File { extensions: None }),
             }],
         };
@@ -751,6 +755,7 @@ mod tests {
                 arguments: vec![Argument {
                     name: "arg".to_string(),
                     description: None,
+                    multiple: false,
                     arg_type: Some(ArgumentType::File { extensions: None }), // Default
                 }],
             }],
@@ -796,6 +801,7 @@ mod tests {
             arguments: vec![Argument {
                 name: "arg".to_string(),
                 description: None,
+                multiple: false,
                 arg_type: Some(ArgumentType::Script(
                     "echo candidate1\necho candidate2".to_string(),
                 )),
@@ -842,6 +848,7 @@ mod tests {
             arguments: vec![Argument {
                 name: "arg".to_string(),
                 description: None,
+                multiple: false,
                 arg_type: Some(ArgumentType::Script(
                     "echo $COMMAND:$CURRENT_TOKEN".to_string(),
                 )),
@@ -889,6 +896,7 @@ mod tests {
             arguments: vec![Argument {
                 name: "arg".to_string(),
                 description: None,
+                multiple: false,
                 arg_type: Some(ArgumentType::Script(
                     "echo $CURRENT_TOKEN_suffix".to_string(),
                 )),
@@ -992,6 +1000,7 @@ mod tests {
                     arguments: vec![Argument {
                         name: "pathspec".to_string(),
                         description: Some("Files to add".to_string()),
+                        multiple: false,
                         arg_type: None,
                     }],
                     subcommands: vec![],
@@ -1005,11 +1014,13 @@ mod tests {
                         Argument {
                             name: "remote".to_string(),
                             description: None,
+                            multiple: false,
                             arg_type: None,
                         },
                         Argument {
                             name: "branch".to_string(),
                             description: None,
+                            multiple: false,
                             arg_type: None,
                         },
                     ],
@@ -1156,11 +1167,13 @@ mod tests {
                     Argument {
                         name: "remote".to_string(),
                         description: None,
+                        multiple: false,
                         arg_type: None,
                     },
                     Argument {
                         name: "branch".to_string(),
                         description: None,
+                        multiple: false,
                         arg_type: None,
                     },
                 ],
@@ -1246,65 +1259,136 @@ mod tests {
     }
 
     #[test]
-    fn test_recursive_script_execution() {
+    fn test_multiple_argument_reuses_last_definition() {
         let mut db = CommandCompletionDatabase::new();
-
-        // 1. Define 'scriptcmd' that uses a script for its argument
-        let script_completion = CommandCompletion {
-            command: "scriptcmd".to_string(),
+        let multi_arg_completion = CommandCompletion {
+            command: "pkgcmd".to_string(),
             description: None,
-            global_options: vec![],
             subcommands: vec![],
+            global_options: vec![],
             arguments: vec![Argument {
                 name: "arg".to_string(),
                 description: None,
-                arg_type: Some(ArgumentType::Script(
-                    "echo internal_script_candidate".to_string(),
-                )),
+                multiple: true,
+                arg_type: Some(ArgumentType::Choice(vec![
+                    "__pkg_candidate_one".to_string(),
+                    "__pkg_candidate_two".to_string(),
+                ])),
             }],
         };
-        db.add_command(script_completion);
-
-        // 2. Define 'sudo' wrapping it
-        let sudo_completion = CommandCompletion {
-            command: "sudo".to_string(),
-            description: None,
-            global_options: vec![],
-            subcommands: vec![],
-            arguments: vec![Argument {
-                name: "command".to_string(),
-                description: None,
-                arg_type: Some(ArgumentType::CommandWithArgs),
-            }],
-        };
-        db.add_command(sudo_completion);
+        db.add_command(multi_arg_completion);
 
         let generator = CompletionGenerator::new(&db);
-
-        // 3. Recursive parse: "sudo scriptcmd " (complete arg of scriptcmd)
         let parsed = ParsedCommandLine {
-            command: "sudo".to_string(),
+            command: "pkgcmd".to_string(),
             subcommand_path: vec![],
-            raw_args: vec!["scriptcmd".to_string()],
+            raw_args: vec!["installed".to_string(), "__pkg".to_string()],
             args: vec![],
             options: vec![],
-            current_token: "".to_string(),
-            current_arg: None,
+            current_token: "__pkg".to_string(),
+            current_arg: Some("__pkg".to_string()),
             completion_context: CompletionContext::Argument {
-                arg_index: 1, // 0 is scriptcmd, 1 is the arg we are typing
+                arg_index: 1,
                 arg_type: None,
             },
             specified_options: vec![],
-            specified_arguments: vec!["scriptcmd".to_string()],
+            specified_arguments: vec!["installed".to_string(), "__pkg".to_string()],
             cursor_index: 0,
         };
 
         let candidates = generator.generate_candidates(&parsed).unwrap();
         let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
 
-        assert!(
-            texts.contains(&"internal_script_candidate".to_string()),
-            "Should contain candidates from script execution inside recursion"
-        );
+        assert!(texts.contains(&"__pkg_candidate_one".to_string()));
+        assert!(texts.contains(&"__pkg_candidate_two".to_string()));
+    }
+
+    #[test]
+    fn test_non_multiple_argument_does_not_reuse_last_definition() {
+        let mut db = CommandCompletionDatabase::new();
+        let single_arg_completion = CommandCompletion {
+            command: "singlepkg".to_string(),
+            description: None,
+            subcommands: vec![],
+            global_options: vec![],
+            arguments: vec![Argument {
+                name: "arg".to_string(),
+                description: None,
+                multiple: false,
+                arg_type: Some(ArgumentType::Choice(vec![
+                    "__single_candidate_one".to_string(),
+                    "__single_candidate_two".to_string(),
+                ])),
+            }],
+        };
+        db.add_command(single_arg_completion);
+
+        let generator = CompletionGenerator::new(&db);
+        let parsed = ParsedCommandLine {
+            command: "singlepkg".to_string(),
+            subcommand_path: vec![],
+            raw_args: vec!["installed".to_string(), "__single".to_string()],
+            args: vec![],
+            options: vec![],
+            current_token: "__single".to_string(),
+            current_arg: Some("__single".to_string()),
+            completion_context: CompletionContext::Argument {
+                arg_index: 1,
+                arg_type: None,
+            },
+            specified_options: vec![],
+            specified_arguments: vec!["installed".to_string(), "__single".to_string()],
+            cursor_index: 0,
+        };
+
+        let candidates = generator.generate_candidates(&parsed).unwrap();
+        let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
+
+        assert!(!texts.contains(&"__single_candidate_one".to_string()));
+        assert!(!texts.contains(&"__single_candidate_two".to_string()));
+    }
+
+    #[test]
+    fn test_multiple_script_argument_reuses_last_definition() {
+        let mut db = CommandCompletionDatabase::new();
+        let multi_arg_completion = CommandCompletion {
+            command: "scriptcmd".to_string(),
+            description: None,
+            subcommands: vec![],
+            global_options: vec![],
+            arguments: vec![Argument {
+                name: "arg".to_string(),
+                description: None,
+                multiple: true,
+                arg_type: Some(ArgumentType::Script(
+                    "printf '%s\\n' pkg-alpha pkg-beta".to_string(),
+                )),
+            }],
+        };
+        db.add_command(multi_arg_completion);
+
+        let generator = CompletionGenerator::new(&db);
+        let parsed = ParsedCommandLine {
+            command: "scriptcmd".to_string(),
+            subcommand_path: vec![],
+            raw_args: vec!["pkg-alpha".to_string(), "pkg".to_string()],
+            args: vec![],
+            options: vec![],
+            current_token: "pkg".to_string(),
+            current_arg: Some("pkg".to_string()),
+            completion_context: CompletionContext::Argument {
+                arg_index: 1,
+                arg_type: None,
+            },
+            specified_options: vec![],
+            specified_arguments: vec!["pkg-alpha".to_string(), "pkg".to_string()],
+            cursor_index: 0,
+        };
+
+        let candidates = generator.generate_candidates(&parsed).unwrap();
+        let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
+
+        assert!(texts.contains(&"pkg-alpha".to_string()));
+        assert!(texts.contains(&"pkg-beta".to_string()));
     }
 }

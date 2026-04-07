@@ -61,6 +61,9 @@ pub struct Argument {
     pub name: String,
     /// Argument description
     pub description: Option<String>,
+    /// Whether the final argument definition can repeat
+    #[serde(default)]
+    pub multiple: bool,
     /// Argument type
     #[serde(default, rename = "type")]
     pub arg_type: Option<ArgumentType>,

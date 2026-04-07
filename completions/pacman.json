@@ -61,7 +61,8 @@
       "description": "Set an alternate configuration file",
       "takes_value": true,
       "value_type": {
-        "type": "File"
+        "type": "File",
+        "data": {}
       },
       "required": false,
       "multiple": false
@@ -78,7 +79,9 @@
     {
       "name": "-S",
       "description": "Synchronize packages (install)",
-      "aliases": ["--sync"],
+      "aliases": [
+        "--sync"
+      ],
       "options": [
         {
           "short": "-y",
@@ -177,11 +180,12 @@
         {
           "name": "package",
           "description": "Package name to install",
-          "arg_type": {
-            "type": "String"
-          },
           "required": false,
-          "multiple": true
+          "multiple": true,
+          "type": {
+            "type": "Script",
+            "data": "pacman -Slq | sort -u"
+          }
         }
       ],
       "subcommands": []
@@ -189,7 +193,9 @@
     {
       "name": "-R",
       "description": "Remove packages",
-      "aliases": ["--remove"],
+      "aliases": [
+        "--remove"
+      ],
       "options": [
         {
           "short": "-s",
@@ -236,11 +242,12 @@
         {
           "name": "package",
           "description": "Package name to remove",
-          "arg_type": {
-            "type": "String"
-          },
           "required": true,
-          "multiple": true
+          "multiple": true,
+          "type": {
+            "type": "Script",
+            "data": "pacman -Qq | sort -u"
+          }
         }
       ],
       "subcommands": []
@@ -248,7 +255,9 @@
     {
       "name": "-Q",
       "description": "Query the package database",
-      "aliases": ["--query"],
+      "aliases": [
+        "--query"
+      ],
       "options": [
         {
           "short": "-s",
@@ -350,11 +359,11 @@
         {
           "name": "package",
           "description": "Package name to query",
-          "arg_type": {
-            "type": "String"
-          },
           "required": false,
-          "multiple": true
+          "multiple": true,
+          "type": {
+            "type": "String"
+          }
         }
       ],
       "subcommands": []
@@ -362,7 +371,9 @@
     {
       "name": "-U",
       "description": "Upgrade packages from files",
-      "aliases": ["--upgrade"],
+      "aliases": [
+        "--upgrade"
+      ],
       "options": [
         {
           "long": "--needed",
@@ -390,14 +401,17 @@
         {
           "name": "file",
           "description": "Package file to install",
-          "arg_type": {
+          "required": true,
+          "multiple": true,
+          "type": {
             "type": "File",
             "data": {
-              "extensions": ["pkg.tar.xz", "pkg.tar.zst"]
+              "extensions": [
+                "pkg.tar.xz",
+                "pkg.tar.zst"
+              ]
             }
-          },
-          "required": true,
-          "multiple": true
+          }
         }
       ],
       "subcommands": []
@@ -405,7 +419,9 @@
     {
       "name": "-F",
       "description": "Query the files database",
-      "aliases": ["--files"],
+      "aliases": [
+        "--files"
+      ],
       "options": [
         {
           "short": "-y",
@@ -452,11 +468,11 @@
         {
           "name": "target",
           "description": "Package name or file path",
-          "arg_type": {
-            "type": "String"
-          },
           "required": false,
-          "multiple": true
+          "multiple": true,
+          "type": {
+            "type": "String"
+          }
         }
       ],
       "subcommands": []
@@ -464,7 +480,9 @@
     {
       "name": "-D",
       "description": "Operate on the package database",
-      "aliases": ["--database"],
+      "aliases": [
+        "--database"
+      ],
       "options": [
         {
           "long": "--asdeps",
@@ -501,11 +519,11 @@
         {
           "name": "package",
           "description": "Package name",
-          "arg_type": {
-            "type": "String"
-          },
           "required": false,
-          "multiple": true
+          "multiple": true,
+          "type": {
+            "type": "String"
+          }
         }
       ],
       "subcommands": []
@@ -513,17 +531,19 @@
     {
       "name": "-T",
       "description": "Check dependencies",
-      "aliases": ["--deptest"],
+      "aliases": [
+        "--deptest"
+      ],
       "options": [],
       "arguments": [
         {
           "name": "package",
           "description": "Package name to check",
-          "arg_type": {
-            "type": "String"
-          },
           "required": false,
-          "multiple": true
+          "multiple": true,
+          "type": {
+            "type": "String"
+          }
         }
       ],
       "subcommands": []

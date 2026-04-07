@@ -19,6 +19,7 @@ mod tests {
             arguments: vec![Argument {
                 name: "command".to_string(),
                 description: Some("Command to execute".to_string()),
+                multiple: false,
                 arg_type: Some(ArgumentType::CommandWithArgs),
             }],
         };
@@ -151,6 +152,7 @@ mod tests {
                 arguments: vec![Argument {
                     name: "branch".to_string(),
                     description: None,
+                    multiple: false,
                     arg_type: Some(ArgumentType::Choice(vec![
                         "main".to_string(),
                         "feature".to_string(),

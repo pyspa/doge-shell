@@ -1,4 +1,6 @@
-use crate::completion::command::{ArgumentType, CommandCompletionDatabase, CompletionCandidate};
+use crate::completion::command::{
+    Argument, ArgumentType, CommandCompletionDatabase, CompletionCandidate,
+};
 use crate::completion::context::ContextCorrector;
 use crate::completion::errors::GeneratorError;
 use crate::completion::fuzzy_match_score;
@@ -59,7 +61,8 @@ impl<'a> ArgumentGenerator<'a> {
                     }
                 }
 
-                if let Some(arg_def) = current_arguments.get(arg_index)
+                if let Some(arg_def) =
+                    Self::resolve_argument_definition(current_arguments, arg_index)
                     && let Some(ref arg_type) = arg_def.arg_type
                 {
                     candidates.extend(self.generate_candidates_for_type(arg_type, parsed)?);
@@ -262,5 +265,16 @@ impl<'a> ArgumentGenerator<'a> {
             }
             _ => Ok(Vec::new()),
         }
+    }
+
+    fn resolve_argument_definition(
+        arguments: &[Argument],
+        arg_index: usize,
+    ) -> Option<&Argument> {
+        arguments.get(arg_index).or_else(|| {
+            arguments
+                .last()
+                .filter(|argument| argument.multiple && !arguments.is_empty())
+        })
     }
 }

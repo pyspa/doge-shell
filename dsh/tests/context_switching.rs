@@ -30,6 +30,7 @@ async fn test_context_switching_logic() {
             arguments: vec![Argument {
                 name: "arg1".to_string(),
                 description: None,
+                multiple: false,
                 arg_type: Some(ArgumentType::File { extensions: None }),
             }],
             subcommands: vec![SubCommand {

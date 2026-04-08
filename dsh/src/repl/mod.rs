@@ -957,6 +957,34 @@ impl<'a> Repl<'a> {
                                 Ok(ReplControlFlow::Continue) => {
                                     // Continue loop
                                 }
+                                Ok(ReplControlFlow::ExecuteCurrentInput) => {
+                                    drop(reader);
+
+                                    match key_handlers::execution::handle_execute(self).await {
+                                        Ok(()) => {}
+                                        Err(err) => {
+                                            self.shell.print_error(format!("Error: {err:?}\r"));
+                                            break;
+                                        }
+                                    }
+
+                                    reader = EventStream::new();
+                                }
+                                Ok(ReplControlFlow::OpenCommandPalette) => {
+                                    drop(reader);
+
+                                    match key_handlers::auxiliary::handle_open_command_palette(self)
+                                        .await
+                                    {
+                                        Ok(_) => {}
+                                        Err(err) => {
+                                            self.shell.print_error(format!("Error: {err:?}\r"));
+                                            break;
+                                        }
+                                    }
+
+                                    reader = EventStream::new();
+                                }
                                 Ok(ReplControlFlow::RunInteractive(closure)) => {
                                     // Drop reader to release stdin lock
                                     drop(reader);

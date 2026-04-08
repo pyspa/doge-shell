@@ -231,17 +231,22 @@ pub(crate) async fn handle_key_event(
             ReplControlFlow::RunInteractive(f) => {
                 return Ok(ReplControlFlow::RunInteractive(f));
             }
+            control_flow => {
+                return Ok(control_flow);
+            }
         },
         KeyAction::Execute => {
-            execution::handle_execute(repl).await?;
-            return Ok(ReplControlFlow::Continue);
+            repl.current_ai_explanation = None;
+            repl.pending_ai_explanation_input = None;
+            repl.last_explanation = None;
+            return Ok(ReplControlFlow::ExecuteCurrentInput);
         }
         KeyAction::ExecuteBackground => {
             execution::handle_execute_background(repl).await?;
             return Ok(ReplControlFlow::Continue);
         }
         KeyAction::OpenCommandPalette => {
-            return auxiliary::handle_open_command_palette(repl).await;
+            return Ok(ReplControlFlow::OpenCommandPalette);
         }
         KeyAction::AcceptCompletion => {
             completion::handle_accept_completion(repl);

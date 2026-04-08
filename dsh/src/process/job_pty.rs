@@ -50,8 +50,15 @@ pub(crate) fn should_create_pty(ctx: &Context, disable_pty: bool, no_pty_env: bo
     ctx.foreground && ctx.interactive && !disable_pty && !no_pty_env
 }
 
+fn is_builtin_job(job: &Job) -> bool {
+    job.process
+        .as_ref()
+        .map(|p| matches!(**p, JobProcess::Builtin(_)))
+        .unwrap_or(false)
+}
+
 fn should_enable_foreground_pty_raw_mode(job: &Job, ctx: &Context) -> bool {
-    ctx.foreground && ctx.interactive && job.pty.is_some()
+    ctx.foreground && ctx.interactive && job.pty.is_some() && !is_builtin_job(job)
 }
 
 pub async fn setup_pty(job: &mut Job, ctx: &mut Context) -> Result<Option<RawFd>> {
@@ -77,16 +84,8 @@ pub async fn setup_pty(job: &mut Job, ctx: &mut Context) -> Result<Option<RawFd>
                     });
                     job.pty_output_task = Some(output_task);
 
-                    if ctx.interactive {
-                        let is_builtin = job
-                            .process
-                            .as_ref()
-                            .map(|p| matches!(**p, JobProcess::Builtin(_)))
-                            .unwrap_or(false);
-
-                        if !is_builtin {
-                            setup_pty_input_proxy(job, pty.try_clone()?).await;
-                        }
+                    if ctx.interactive && !is_builtin_job(job) {
+                        setup_pty_input_proxy(job, pty.try_clone()?).await;
                     }
                 }
                 Err(e) => error!("Failed to clone PTY for output: {}", e),
@@ -216,8 +215,10 @@ pub async fn capture_output_and_history(
 
 #[cfg(test)]
 mod tests {
-    use super::should_create_pty;
+    use super::{is_builtin_job, should_create_pty, should_enable_foreground_pty_raw_mode};
+    use crate::process::{BuiltinProcess, Job, JobProcess, Process, Pty};
     use dsh_types::Context;
+    use dsh_types::ExitStatus;
     use dsh_types::terminal::{ShellMode, TerminalState};
     use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
     use nix::unistd::Pid;
@@ -246,6 +247,23 @@ mod tests {
         }
     }
 
+    fn test_builtin(
+        _ctx: &Context,
+        _argv: Vec<String>,
+        _proxy: &mut dyn dsh_builtin::ShellProxy,
+    ) -> ExitStatus {
+        ExitStatus::ExitedWith(0)
+    }
+
+    fn test_job_with_process(process: JobProcess, with_pty: bool) -> Job {
+        let mut job = Job::new("test".to_string(), Pid::from_raw(1));
+        job.set_process(process);
+        if with_pty {
+            job.pty = Some(Pty::new().expect("failed to create test pty"));
+        }
+        job
+    }
+
     #[test]
     fn should_create_pty_only_for_foreground_interactive_jobs() {
         let interactive_foreground = test_context(true, true);
@@ -267,5 +285,50 @@ mod tests {
 
         assert!(!should_create_pty(&ctx, true, false));
         assert!(!should_create_pty(&ctx, false, true));
+    }
+
+    #[test]
+    fn detects_builtin_jobs() {
+        let builtin_job = test_job_with_process(
+            JobProcess::Builtin(BuiltinProcess::new(
+                "aic".to_string(),
+                test_builtin,
+                vec!["aic".to_string()],
+            )),
+            false,
+        );
+        let command_job = test_job_with_process(
+            JobProcess::Command(Process::new(
+                "/bin/echo".to_string(),
+                vec!["echo".to_string()],
+            )),
+            false,
+        );
+
+        assert!(is_builtin_job(&builtin_job));
+        assert!(!is_builtin_job(&command_job));
+    }
+
+    #[test]
+    fn foreground_builtin_pty_jobs_do_not_reenable_raw_mode() {
+        let ctx = test_context(true, true);
+        let builtin_job = test_job_with_process(
+            JobProcess::Builtin(BuiltinProcess::new(
+                "aic".to_string(),
+                test_builtin,
+                vec!["aic".to_string()],
+            )),
+            true,
+        );
+        let command_job = test_job_with_process(
+            JobProcess::Command(Process::new(
+                "/bin/echo".to_string(),
+                vec!["echo".to_string()],
+            )),
+            true,
+        );
+
+        assert!(!should_enable_foreground_pty_raw_mode(&builtin_job, &ctx));
+        assert!(should_enable_foreground_pty_raw_mode(&command_job, &ctx));
     }
 }

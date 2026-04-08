@@ -23,6 +23,8 @@ pub enum InteractiveAction {
 pub enum ReplControlFlow {
     Continue,
     RunInteractive(Box<dyn FnOnce() -> anyhow::Result<Option<InteractiveAction>> + Send>),
+    ExecuteCurrentInput,
+    OpenCommandPalette,
 }
 
 /// State management for detecting double key presses (Ctrl+C, Esc)

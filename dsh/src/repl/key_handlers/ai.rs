@@ -46,11 +46,10 @@ pub(crate) async fn handle_ai_explain_command(repl: &mut Repl<'_>) {
 pub(crate) async fn handle_ai_smart_commit(repl: &mut Repl<'_>) -> Result<ReplControlFlow> {
     // Replace Smart Git Commit logic with "aic" command execution
     repl.input.reset("aic".to_string());
-    // We need to call execute. Since we are in AI module, we can depend on execution module?
-    // Or we returns checks in the main handler.
-    // For now, let's just delegate to the main execution handler which we can import.
-    super::execution::handle_execute(repl).await?;
-    Ok(ReplControlFlow::Continue)
+    repl.current_ai_explanation = None;
+    repl.pending_ai_explanation_input = None;
+    repl.last_explanation = None;
+    Ok(ReplControlFlow::ExecuteCurrentInput)
 }
 
 pub(crate) async fn handle_ai_diagnose(repl: &mut Repl<'_>) -> Result<()> {

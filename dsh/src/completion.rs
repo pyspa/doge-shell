@@ -18,7 +18,6 @@ pub mod errors;
 pub mod framework;
 pub mod generator;
 pub mod generators;
-mod history;
 pub mod integrated;
 pub mod json_loader;
 pub mod parser;

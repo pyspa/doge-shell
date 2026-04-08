@@ -1132,10 +1132,6 @@ impl<'a> Repl<'a> {
         Ok(ReplControlFlow::Continue)
     }
 
-    pub(crate) fn command_is_valid(&self, word: &str) -> bool {
-        input_analysis::command_is_valid(self, word)
-    }
-
     async fn toggle_sudo(&mut self) -> Result<()> {
         input_analysis::toggle_sudo(self).await
     }
@@ -1381,12 +1377,15 @@ mod tests {
         let repl = Repl::new(&mut shell);
 
         assert!(
-            repl.command_is_valid("cd"),
+            super::input_analysis::command_is_valid(&repl, "cd"),
             "built-in command should be valid"
         );
-        assert!(repl.command_is_valid("ll"), "alias should be valid");
         assert!(
-            !repl.command_is_valid("definitely_not_a_command_42"),
+            super::input_analysis::command_is_valid(&repl, "ll"),
+            "alias should be valid"
+        );
+        assert!(
+            !super::input_analysis::command_is_valid(&repl, "definitely_not_a_command_42"),
             "unknown command should not be valid"
         );
 

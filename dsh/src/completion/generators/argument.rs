@@ -267,10 +267,7 @@ impl<'a> ArgumentGenerator<'a> {
         }
     }
 
-    fn resolve_argument_definition(
-        arguments: &[Argument],
-        arg_index: usize,
-    ) -> Option<&Argument> {
+    fn resolve_argument_definition(arguments: &[Argument], arg_index: usize) -> Option<&Argument> {
         arguments.get(arg_index).or_else(|| {
             arguments
                 .last()

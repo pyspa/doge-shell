@@ -39,7 +39,6 @@ mod gwt;
 mod help;
 mod history;
 mod jobs;
-mod kill;
 pub mod lisp;
 mod mcp;
 mod notebook_play;
@@ -379,13 +378,6 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
                 include::description(),
             )) as Box<dyn BuiltinCommandTrait>,
         );
-
-        //builtin.insert(
-        //    "kill",
-        //    Box::new(BuiltinCommandFn::new(kill::command, kill::description()))
-        //        as Box<dyn BuiltinCommandTrait>,
-        //);
-
         // Scripting and configuration
         builtin.insert(
             "lisp",

@@ -494,12 +494,6 @@ impl SafetyGuard {
         None
     }
 
-    #[allow(dead_code)]
-    fn check_network_tool(_args: &[String]) -> Option<String> {
-        // This is replaced by check_data_exfiltration but kept for backward compatibility if needed logic
-        None
-    }
-
     fn check_data_exfiltration(args: &[String]) -> Option<String> {
         for arg in args {
             // curl data exfiltration flags

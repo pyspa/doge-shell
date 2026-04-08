@@ -39,10 +39,6 @@ pub use crate::prompt::context::PromptContext as Context; // just in case
 
 // Constants
 const BRANCH_MARK: &str = "🐾";
-#[allow(dead_code)]
-const BRANCH_CONFLICT: &str = "🏴‍☠️";
-#[allow(dead_code)]
-const NEW_FILE: &str = "+";
 const EXTERNAL_TOOL_BACKOFF_BASE: Duration = Duration::from_secs(5);
 const EXTERNAL_TOOL_BACKOFF_MAX: Duration = Duration::from_secs(300);
 

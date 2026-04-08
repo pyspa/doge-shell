@@ -16,13 +16,12 @@ pub fn description() -> &'static str {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-#[allow(dead_code)]
 struct Notification {
     id: String,
     subject: Subject,
     repository: Repository,
     reason: String,
-    updated_at: String,
+    _updated_at: String,
     #[serde(default = "default_unread")]
     unread: bool,
 }
@@ -32,11 +31,10 @@ fn default_unread() -> bool {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-#[allow(dead_code)]
 struct Subject {
     title: String,
     #[serde(rename = "type")]
-    subject_type: String,
+    _subject_type: String,
     url: Option<String>,
 }
 
@@ -369,7 +367,7 @@ mod tests {
             id: "1".to_string(),
             subject: Subject {
                 title: "Pull Request Title".to_string(),
-                subject_type: "PullRequest".to_string(),
+                _subject_type: "PullRequest".to_string(),
                 url: None,
             },
             repository: Repository {
@@ -377,7 +375,7 @@ mod tests {
                 html_url: "https://github.com/owner/repo".to_string(),
             },
             reason: "review_requested".to_string(),
-            updated_at: "2023-01-01T00:00:00Z".to_string(),
+            _updated_at: "2023-01-01T00:00:00Z".to_string(),
             unread: true,
         };
 
@@ -394,7 +392,7 @@ mod tests {
             id: "2".to_string(),
             subject: Subject {
                 title: "Issue Title".to_string(),
-                subject_type: "Issue".to_string(),
+                _subject_type: "Issue".to_string(),
                 url: None,
             },
             repository: Repository {
@@ -402,7 +400,7 @@ mod tests {
                 html_url: "https://github.com/owner/repo".to_string(),
             },
             reason: "mention".to_string(),
-            updated_at: "2023-01-01T00:00:00Z".to_string(),
+            _updated_at: "2023-01-01T00:00:00Z".to_string(),
             unread: true,
         };
 
@@ -441,7 +439,7 @@ mod tests {
             id: "1".to_string(),
             subject: Subject {
                 title: "T1".to_string(),
-                subject_type: "Issue".to_string(),
+                _subject_type: "Issue".to_string(),
                 url: None,
             },
             repository: Repository {
@@ -449,7 +447,7 @@ mod tests {
                 html_url: "".to_string(),
             },
             reason: "m".to_string(),
-            updated_at: "".to_string(),
+            _updated_at: "".to_string(),
             unread: true,
         };
         // actually let's make n2 different

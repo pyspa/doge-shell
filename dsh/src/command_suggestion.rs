@@ -67,33 +67,12 @@ pub fn find_similar_commands(
     paths: &[String],
     builtins: &[String],
 ) -> Vec<CommandSuggestion> {
-    let typo_len = typo.len();
-
-    // Don't suggest for very short or very long commands
-    if !(2..=30).contains(&typo_len) {
-        return Vec::new();
-    }
-
-    // Threshold: allow distance up to 2 or 30% of input length (whichever is larger)
-    let max_distance = std::cmp::max(2, typo_len * 30 / 100);
-
     let mut seen: HashSet<String> = HashSet::new();
     let mut suggestions: Vec<CommandSuggestion> = Vec::new();
 
     // Check builtin commands first
     for builtin in builtins {
-        if seen.contains(builtin) {
-            continue;
-        }
-
-        let distance = levenshtein_distance(typo, builtin);
-        if distance <= max_distance && distance > 0 {
-            seen.insert(builtin.clone());
-            suggestions.push(CommandSuggestion {
-                command: builtin.clone(),
-                distance,
-            });
-        }
+        push_candidate(typo, builtin, &mut seen, &mut suggestions);
     }
 
     // Check commands in PATH
@@ -122,14 +101,7 @@ pub fn find_similar_commands(
                     continue;
                 }
 
-                let distance = levenshtein_distance(typo, name);
-                if distance <= max_distance && distance > 0 {
-                    seen.insert(name.to_string());
-                    suggestions.push(CommandSuggestion {
-                        command: name.to_string(),
-                        distance,
-                    });
-                }
+                push_candidate(typo, name, &mut seen, &mut suggestions);
             }
         }
     }
@@ -144,6 +116,46 @@ pub fn find_similar_commands(
     // Return top 3 suggestions
     suggestions.truncate(3);
     suggestions
+}
+
+pub fn find_similar_candidates(typo: &str, candidates: &[String]) -> Vec<CommandSuggestion> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut suggestions: Vec<CommandSuggestion> = Vec::new();
+
+    for candidate in candidates {
+        push_candidate(typo, candidate, &mut seen, &mut suggestions);
+    }
+
+    suggestions.sort_by(|a, b| {
+        a.distance
+            .cmp(&b.distance)
+            .then_with(|| a.command.cmp(&b.command))
+    });
+    suggestions.truncate(3);
+    suggestions
+}
+
+fn push_candidate(
+    typo: &str,
+    candidate: &str,
+    seen: &mut HashSet<String>,
+    suggestions: &mut Vec<CommandSuggestion>,
+) {
+    let typo_len = typo.len();
+
+    if !(2..=30).contains(&typo_len) || seen.contains(candidate) {
+        return;
+    }
+
+    let max_distance = std::cmp::max(2, typo_len * 30 / 100);
+    let distance = levenshtein_distance(typo, candidate);
+    if distance <= max_distance && distance > 0 {
+        seen.insert(candidate.to_string());
+        suggestions.push(CommandSuggestion {
+            command: candidate.to_string(),
+            distance,
+        });
+    }
 }
 
 /// Format suggestions for display
@@ -269,5 +281,15 @@ mod tests {
         // Too short input should not get suggestions
         let suggestions = find_similar_commands("a", &paths, &builtins);
         assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn test_find_similar_candidates_generic() {
+        let candidates = vec!["build".to_string(), "test".to_string(), "check".to_string()];
+        let suggestions = find_similar_candidates("buld", &candidates);
+        assert_eq!(
+            suggestions.first().map(|item| item.command.as_str()),
+            Some("build")
+        );
     }
 }

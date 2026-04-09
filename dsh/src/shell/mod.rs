@@ -5,7 +5,7 @@ pub mod parse;
 pub mod terminal;
 
 use crate::environment::Environment;
-use crate::history::FrecencyHistory;
+use crate::history::{FrecencyHistory, HistoryMetadata};
 use crate::lisp;
 use crate::process::Job;
 use anyhow::Result;
@@ -37,6 +37,7 @@ pub struct Shell {
     pub notebook_session: Option<NotebookSession>,
     pub safety_guard: Arc<crate::safety::SafetyGuard>,
     pub github_status: Option<Arc<RwLock<crate::github::GitHubStatus>>>,
+    pub session_id: String,
 }
 
 impl std::fmt::Debug for Shell {
@@ -76,6 +77,7 @@ impl Shell {
             notebook_session: None,
             safety_guard,
             github_status: None,
+            session_id: xid::new().to_string(),
         }
     }
 
@@ -217,6 +219,43 @@ impl Shell {
 
     pub fn close_notebook(&mut self) {
         self.notebook_session = None;
+    }
+
+    pub fn record_history_outcome(
+        &mut self,
+        input: &str,
+        exit_code: i32,
+        duration: std::time::Duration,
+    ) {
+        let Some(history) = &self.cmd_history else {
+            return;
+        };
+
+        let processed = {
+            let env = self.environment.read();
+            env.secret_manager.process_for_history(input)
+        };
+        let Some(command) = processed else {
+            return;
+        };
+
+        let cwd = std::env::current_dir()
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned());
+        let hostname = nix::unistd::gethostname()
+            .ok()
+            .map(|hostname| hostname.to_string_lossy().into_owned());
+
+        let metadata = HistoryMetadata {
+            exit_code: Some(exit_code),
+            duration_ms: Some(duration.as_millis() as u64),
+            cwd,
+            session_id: Some(self.session_id.clone()),
+            hostname,
+        };
+
+        let mut history = history.lock();
+        let _ = history.record_outcome(&command, metadata);
     }
 
     pub fn reload_mcp_config(&self) {

@@ -22,6 +22,7 @@ mod tests;
 
 // Re-export main types for backward compatibility
 pub use command_history::History;
+pub use command_history::{HistoryMetadata, HistoryQuery, HistoryScope, HistoryStatusFilter};
 pub use context::get_current_context;
 pub use entry::Entry;
 pub use frecency_history::FrecencyHistory;

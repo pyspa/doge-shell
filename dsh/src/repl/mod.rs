@@ -1120,9 +1120,18 @@ impl<'a> Repl<'a> {
         let query = self.input.as_str();
         if let Some(ref mut history) = self.shell.cmd_history {
             if let Some(mut history) = history.try_lock() {
+                let history_query = crate::history::HistoryQuery {
+                    text: if query.is_empty() {
+                        None
+                    } else {
+                        Some(query.to_string())
+                    },
+                    limit: Some(500),
+                    ..Default::default()
+                };
                 let items: Vec<completion_lib::Candidate> = history
-                    .iter()
-                    .rev()
+                    .search_entries(&history_query)
+                    .into_iter()
                     .map(|h| completion_lib::Candidate::Basic(h.entry.clone()))
                     .collect();
 

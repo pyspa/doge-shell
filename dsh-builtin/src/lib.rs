@@ -14,6 +14,7 @@ mod bg;
 pub mod cd;
 mod chatgpt;
 mod dashboard;
+mod doctor;
 mod eproject;
 mod eview;
 mod export;
@@ -600,6 +601,13 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             Box::new(BuiltinCommandFn::new(
                 dashboard::command,
                 dashboard::description(),
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "doctor",
+            Box::new(BuiltinCommandFn::new(
+                doctor::command,
+                doctor::description(),
             )) as Box<dyn BuiltinCommandTrait>,
         );
 

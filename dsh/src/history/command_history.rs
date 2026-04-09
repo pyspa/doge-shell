@@ -15,6 +15,45 @@ use std::thread;
 /// Message types for background history writer.
 enum HistoryMsg {
     WriteBatch(Vec<(String, i64)>, Option<String>), // entries, context
+    UpdateMetadata(String, Option<String>, HistoryMetadata),
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct HistoryMetadata {
+    pub exit_code: Option<i32>,
+    pub duration_ms: Option<u64>,
+    pub cwd: Option<String>,
+    pub session_id: Option<String>,
+    pub hostname: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub enum HistoryScope {
+    #[default]
+    Global,
+    Session,
+    Cwd,
+    Project,
+}
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub enum HistoryStatusFilter {
+    #[default]
+    Any,
+    Success,
+    Failure,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct HistoryQuery {
+    pub text: Option<String>,
+    pub scope: HistoryScope,
+    pub status: HistoryStatusFilter,
+    pub min_duration_ms: Option<u64>,
+    pub limit: Option<usize>,
+    pub current_cwd: Option<String>,
+    pub current_project: Option<String>,
+    pub current_session_id: Option<String>,
 }
 
 /// Command history with SQLite persistence.
@@ -149,9 +188,9 @@ impl History {
         if let Some(db) = &self.db {
             let conn = db.get_connection();
             let mut stmt = conn.prepare(
-                "SELECT command, timestamp, count 
+                "SELECT command, timestamp, count, context, exit_code, duration_ms, cwd, session_id, hostname
                  FROM (
-                    SELECT command, timestamp, count 
+                    SELECT command, timestamp, count, context, exit_code, duration_ms, cwd, session_id, hostname
                     FROM command_history 
                     ORDER BY timestamp DESC 
                     LIMIT ?1
@@ -164,6 +203,12 @@ impl History {
                     entry: row.get(0)?,
                     when: row.get(1)?,
                     count: row.get(2).unwrap_or(1),
+                    context: row.get(3).ok(),
+                    exit_code: row.get(4).ok(),
+                    duration_ms: row.get::<_, Option<i64>>(5)?.map(|v| v.max(0) as u64),
+                    cwd: row.get(6).ok(),
+                    session_id: row.get(7).ok(),
+                    hostname: row.get(8).ok(),
                 })
             })?;
 
@@ -194,9 +239,9 @@ impl History {
         if let Some(db) = &self.db {
             let conn = db.get_connection();
             let mut stmt = conn.prepare(
-                "SELECT command, timestamp, count 
+                "SELECT command, timestamp, count, context, exit_code, duration_ms, cwd, session_id, hostname
                  FROM (
-                    SELECT command, timestamp, count 
+                    SELECT command, timestamp, count, context, exit_code, duration_ms, cwd, session_id, hostname
                     FROM command_history 
                     WHERE timestamp < ?1
                     ORDER BY timestamp DESC 
@@ -210,6 +255,12 @@ impl History {
                     entry: row.get(0)?,
                     when: row.get(1)?,
                     count: row.get(2).unwrap_or(1),
+                    context: row.get(3).ok(),
+                    exit_code: row.get(4).ok(),
+                    duration_ms: row.get::<_, Option<i64>>(5)?.map(|v| v.max(0) as u64),
+                    cwd: row.get(6).ok(),
+                    session_id: row.get(7).ok(),
+                    hostname: row.get(8).ok(),
                 })
             })?;
 
@@ -242,9 +293,9 @@ impl History {
 
         let conn = db.get_connection();
         let mut stmt = conn.prepare(
-            "SELECT command, timestamp, count 
+            "SELECT command, timestamp, count, context, exit_code, duration_ms, cwd, session_id, hostname
                  FROM (
-                    SELECT command, timestamp, count 
+                    SELECT command, timestamp, count, context, exit_code, duration_ms, cwd, session_id, hostname
                     FROM command_history 
                     ORDER BY timestamp DESC 
                     LIMIT 10000
@@ -257,6 +308,12 @@ impl History {
                 entry: row.get(0)?,
                 when: row.get(1)?,
                 count: row.get(2).unwrap_or(1),
+                context: row.get(3).ok(),
+                exit_code: row.get(4).ok(),
+                duration_ms: row.get::<_, Option<i64>>(5)?.map(|v| v.max(0) as u64),
+                cwd: row.get(6).ok(),
+                session_id: row.get(7).ok(),
+                hostname: row.get(8).ok(),
             })
         })?;
 
@@ -277,6 +334,12 @@ impl History {
                         entry: local_item.entry.clone(),
                         when: local_item.when,
                         count: local_item.count,
+                        context: local_item.context.clone(),
+                        exit_code: local_item.exit_code,
+                        duration_ms: local_item.duration_ms,
+                        cwd: local_item.cwd.clone(),
+                        session_id: local_item.session_id.clone(),
+                        hostname: local_item.hostname.clone(),
                     });
                 }
             }
@@ -287,6 +350,12 @@ impl History {
                     entry: local_item.entry.clone(),
                     when: local_item.when,
                     count: local_item.count,
+                    context: local_item.context.clone(),
+                    exit_code: local_item.exit_code,
+                    duration_ms: local_item.duration_ms,
+                    cwd: local_item.cwd.clone(),
+                    session_id: local_item.session_id.clone(),
+                    hostname: local_item.hostname.clone(),
                 });
             }
         }
@@ -316,6 +385,10 @@ impl History {
                     match msg {
                         HistoryMsg::WriteBatch(entries, context) => {
                             let _ = Self::write_batch_sync(&mut db, entries, context);
+                        }
+                        HistoryMsg::UpdateMetadata(command, context, metadata) => {
+                            let _ =
+                                Self::update_metadata_sync(&mut db, &command, context, &metadata);
                         }
                     }
                 }
@@ -353,6 +426,35 @@ impl History {
         Ok(())
     }
 
+    fn update_metadata_sync(
+        db: &mut Db,
+        command: &str,
+        context: Option<String>,
+        metadata: &HistoryMetadata,
+    ) -> Result<()> {
+        let conn = db.get_connection();
+        conn.execute(
+            "UPDATE command_history
+             SET context = COALESCE(?2, context),
+                 exit_code = ?3,
+                 duration_ms = ?4,
+                 cwd = ?5,
+                 session_id = ?6,
+                 hostname = ?7
+             WHERE command = ?1",
+            rusqlite::params![
+                command,
+                context,
+                metadata.exit_code,
+                metadata.duration_ms.map(|v| v as i64),
+                metadata.cwd,
+                metadata.session_id,
+                metadata.hostname
+            ],
+        )?;
+        Ok(())
+    }
+
     #[allow(dead_code)]
     pub(crate) fn open(&mut self) -> Result<&mut History> {
         Ok(self)
@@ -383,6 +485,12 @@ impl History {
                 entry: cmd.clone(),
                 when: *when,
                 count,
+                context: context.clone(),
+                exit_code: None,
+                duration_ms: None,
+                cwd: None,
+                session_id: None,
+                hostname: None,
             });
         }
         self.reset_index();
@@ -401,6 +509,34 @@ impl History {
             let _ = sender.send(HistoryMsg::WriteBatch(entries, context));
         } else if let Some(db) = &mut self.db {
             let _ = Self::write_batch_sync(db, entries, context);
+        }
+        Ok(())
+    }
+
+    pub fn record_outcome(&mut self, command: &str, metadata: HistoryMetadata) -> Result<()> {
+        if let Some(entry) = self
+            .histories
+            .iter_mut()
+            .rev()
+            .find(|entry| entry.entry == command)
+        {
+            entry.context = get_current_context();
+            entry.exit_code = metadata.exit_code;
+            entry.duration_ms = metadata.duration_ms;
+            entry.cwd = metadata.cwd.clone();
+            entry.session_id = metadata.session_id.clone();
+            entry.hostname = metadata.hostname.clone();
+        }
+
+        let context = get_current_context();
+        if let Some(sender) = &self.sender {
+            let _ = sender.send(HistoryMsg::UpdateMetadata(
+                command.to_string(),
+                context,
+                metadata,
+            ));
+        } else if let Some(db) = &mut self.db {
+            let _ = Self::update_metadata_sync(db, command, context, &metadata);
         }
         Ok(())
     }
@@ -432,6 +568,70 @@ impl History {
             .collect()
     }
 
+    pub fn search_entries(&self, query: &HistoryQuery) -> Vec<Entry> {
+        let normalized_text = query.text.as_ref().map(|text| text.to_lowercase());
+        let mut matched: Vec<Entry> = self
+            .histories
+            .iter()
+            .rev()
+            .filter(|entry| {
+                if let Some(text) = &normalized_text
+                    && !entry.entry.to_lowercase().contains(text)
+                {
+                    return false;
+                }
+
+                match query.status {
+                    HistoryStatusFilter::Any => {}
+                    HistoryStatusFilter::Success => {
+                        if entry.exit_code != Some(0) {
+                            return false;
+                        }
+                    }
+                    HistoryStatusFilter::Failure => {
+                        if entry.exit_code.is_none() || entry.exit_code == Some(0) {
+                            return false;
+                        }
+                    }
+                }
+
+                if let Some(min_duration_ms) = query.min_duration_ms
+                    && entry.duration_ms.unwrap_or_default() < min_duration_ms
+                {
+                    return false;
+                }
+
+                match query.scope {
+                    HistoryScope::Global => {}
+                    HistoryScope::Session => {
+                        if entry.session_id.as_deref() != query.current_session_id.as_deref() {
+                            return false;
+                        }
+                    }
+                    HistoryScope::Cwd => {
+                        if entry.cwd.as_deref() != query.current_cwd.as_deref() {
+                            return false;
+                        }
+                    }
+                    HistoryScope::Project => {
+                        if entry.context.as_deref() != query.current_project.as_deref() {
+                            return false;
+                        }
+                    }
+                }
+
+                true
+            })
+            .cloned()
+            .collect();
+
+        if let Some(limit) = query.limit {
+            matched.truncate(limit);
+        }
+
+        matched
+    }
+
     /// Get an iterator over history entries.
     pub fn iter(&self) -> std::slice::Iter<'_, Entry> {
         self.histories.iter()
@@ -444,8 +644,86 @@ impl History {
             entry: entry.to_string(),
             when: Local::now().timestamp(),
             count: 1,
+            context: None,
+            exit_code: None,
+            duration_ms: None,
+            cwd: None,
+            session_id: None,
+            hostname: None,
         });
         self.size = self.histories.len();
         self.current_index = self.histories.len();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_entry(
+        entry: &str,
+        exit_code: Option<i32>,
+        duration_ms: Option<u64>,
+        cwd: Option<&str>,
+        context: Option<&str>,
+        session_id: Option<&str>,
+    ) -> Entry {
+        Entry {
+            entry: entry.to_string(),
+            when: Local::now().timestamp(),
+            count: 1,
+            context: context.map(str::to_string),
+            exit_code,
+            duration_ms,
+            cwd: cwd.map(str::to_string),
+            session_id: session_id.map(str::to_string),
+            hostname: Some("test-host".to_string()),
+        }
+    }
+
+    #[test]
+    fn search_entries_filters_by_scope_status_and_query() {
+        let mut history = History::new();
+        history.histories = vec![
+            sample_entry(
+                "cargo test",
+                Some(0),
+                Some(1200),
+                Some("/repo"),
+                Some("/repo"),
+                Some("session-a"),
+            ),
+            sample_entry(
+                "cargo build",
+                Some(1),
+                Some(3200),
+                Some("/repo"),
+                Some("/repo"),
+                Some("session-a"),
+            ),
+            sample_entry(
+                "npm test",
+                Some(0),
+                Some(800),
+                Some("/web"),
+                Some("/web"),
+                Some("session-b"),
+            ),
+        ];
+
+        let query = HistoryQuery {
+            text: Some("cargo".to_string()),
+            scope: HistoryScope::Session,
+            status: HistoryStatusFilter::Failure,
+            min_duration_ms: Some(1000),
+            limit: None,
+            current_cwd: Some("/repo".to_string()),
+            current_project: Some("/repo".to_string()),
+            current_session_id: Some("session-a".to_string()),
+        };
+
+        let results = history.search_entries(&query);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].entry, "cargo build");
     }
 }

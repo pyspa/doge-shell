@@ -56,6 +56,8 @@ impl Db {
                 exit_code INTEGER,
                 duration_ms INTEGER,
                 cwd TEXT,
+                session_id TEXT,
+                hostname TEXT,
                 count INTEGER DEFAULT 1
             )",
             [],
@@ -66,6 +68,17 @@ impl Db {
             "ALTER TABLE command_history ADD COLUMN count INTEGER DEFAULT 1",
             [],
         );
+        let _ = conn.execute(
+            "ALTER TABLE command_history ADD COLUMN exit_code INTEGER",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE command_history ADD COLUMN duration_ms INTEGER",
+            [],
+        );
+        let _ = conn.execute("ALTER TABLE command_history ADD COLUMN cwd TEXT", []);
+        let _ = conn.execute("ALTER TABLE command_history ADD COLUMN session_id TEXT", []);
+        let _ = conn.execute("ALTER TABLE command_history ADD COLUMN hostname TEXT", []);
 
         // Directory Visits Log (Append Only)
         conn.execute(

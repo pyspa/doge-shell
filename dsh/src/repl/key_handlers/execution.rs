@@ -157,6 +157,9 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
             }
         }
 
+        repl.shell
+            .record_history_outcome(&input_str, exit_code, elapsed);
+
         // Auto-Notify logic
         {
             // Check threshold
@@ -268,7 +271,7 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
         // OSC 133 C: Command executed / Output start
         print!("\x1b]133;C\x1b\\");
 
-        let exit_code = match repl.shell.eval_str(&mut ctx, input, true).await {
+        let exit_code = match repl.shell.eval_str(&mut ctx, input.clone(), true).await {
             Ok(code) => {
                 repl.last_status = code;
                 code
@@ -286,7 +289,10 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
         repl.cache.invalidate();
         repl.input.clear();
         repl.suggestion_manager.clear();
-        repl.last_duration = Some(start_time.elapsed());
+        let elapsed = start_time.elapsed();
+        repl.shell
+            .record_history_outcome(&input, exit_code, elapsed);
+        repl.last_duration = Some(elapsed);
     }
 
     // Synchronously refresh git status for accurate display after command execution

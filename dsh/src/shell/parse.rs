@@ -405,14 +405,33 @@ pub fn parse_command(
 
             let suggestions =
                 crate::command_suggestion::find_similar_commands(cmd, &paths, &builtins);
+            let task_suggestions = std::env::current_dir()
+                .ok()
+                .and_then(|cwd| dsh_builtin::task::list_tasks_in_dir(&cwd).ok())
+                .map(|tasks| {
+                    let task_names: Vec<String> = tasks.into_iter().map(|task| task.name).collect();
+                    crate::command_suggestion::find_similar_candidates(cmd, &task_names)
+                })
+                .unwrap_or_default();
 
-            if let Some(suggestion_msg) =
-                crate::command_suggestion::format_suggestions(&suggestions)
-            {
-                bail!("unknown command: {}\n{}", cmd, suggestion_msg);
+            let suggestion_msg =
+                crate::command_suggestion::format_suggestions(&suggestions).unwrap_or_default();
+            let task_msg = if task_suggestions.is_empty() {
+                String::new()
             } else {
-                bail!("unknown command: {}", cmd);
+                let commands = task_suggestions
+                    .iter()
+                    .map(|suggestion| format!("task {}", suggestion.command))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("\rProject tasks: {commands}\r\n")
+            };
+
+            if !suggestion_msg.is_empty() || !task_msg.is_empty() {
+                bail!("unknown command: {}\n{}{}", cmd, suggestion_msg, task_msg);
             }
+
+            bail!("unknown command: {}", cmd);
         }
     }
     Ok(())

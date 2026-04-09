@@ -566,6 +566,7 @@ pub async fn execute_command(shell: &mut Shell, _ctx: &mut Context, command: &st
 
     match shell.eval_str(&mut ctx, command.to_string(), false).await {
         Ok(code) => {
+            shell.record_history_outcome(command, code, std::time::Duration::from_millis(0));
             debug!("run command mode {:?} : {:?}", command, &code);
             ExitCode::from(code.clamp(0, 255) as u8)
         }

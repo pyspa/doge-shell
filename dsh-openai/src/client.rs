@@ -33,6 +33,7 @@ pub struct ChatGptClient {
     api_key: String,
     default_model: String,
     chat_endpoint: String,
+    client: Client,
 }
 
 impl ChatGptClient {
@@ -62,9 +63,8 @@ impl ChatGptClient {
             api_key: api_key.to_string(),
             default_model: config.default_model().to_string(),
             chat_endpoint: config.chat_endpoint(),
+            client: Self::build_client()?,
         };
-
-        let _ = client.build_client()?;
         Ok(client)
     }
 
@@ -244,7 +244,7 @@ impl ChatGptClient {
         }
     }
 
-    fn build_client(&self) -> Result<Client> {
+    fn build_client() -> Result<Client> {
         let client = Client::builder().timeout(CONNECT_TIMEOUT).build()?;
         Ok(client)
     }
@@ -295,7 +295,8 @@ impl ChatGptClient {
 
         let header_value = format!("Bearer {}", &self.api_key);
         let builder = self
-            .build_client()?
+            .client
+            .clone()
             .post(&self.chat_endpoint)
             .header("Authorization", header_value)
             .json(&body);

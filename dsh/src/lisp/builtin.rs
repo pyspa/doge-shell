@@ -75,16 +75,21 @@ pub fn set_env(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtime
             }
         }
         let env_path = path_vec.join(":");
-        unsafe { std::env::set_var("PATH", &env_path) };
         let display_val = redact_value_for_log(&key, &env_path);
         debug!("set env {} {}", &key, display_val);
-        env.borrow().shell_env.write().paths = path_vec;
+        env.borrow()
+            .shell_env
+            .write()
+            .set_system_env_var("PATH".to_string(), env_path);
     } else {
         let val = &args[1];
         let val_string = val.to_string();
-        unsafe { std::env::set_var(&key, &val_string) };
         let display_val = redact_value_for_log(&key, &val_string);
         debug!("set env {} {}", &key, display_val);
+        env.borrow()
+            .shell_env
+            .write()
+            .set_system_env_var(key.clone(), val_string);
     }
     Ok(Value::NIL)
 }

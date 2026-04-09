@@ -2,7 +2,6 @@
 
 use super::Environment;
 use crate::dirs::search_file;
-use std::env;
 use std::path::Path;
 use tracing::debug;
 
@@ -105,7 +104,7 @@ impl Environment {
             .map(|s| s.to_string())
             .collect();
 
-        if let Ok(val) = env::var("PATH") {
+        if let Some(val) = self.system_env_vars.get("PATH") {
             paths = val.split(':').map(|s| s.to_string()).collect();
         }
         self.paths = paths;
@@ -118,7 +117,7 @@ impl Environment {
 
     /// Reload Z_EXCLUDE from the environment.
     pub fn reload_z_exclude(&mut self) {
-        self.z_exclude = super::parse_z_exclude();
+        self.z_exclude = super::parse_z_exclude_from_vars(&self.system_env_vars);
     }
 
     /// Clear the command lookup cache.

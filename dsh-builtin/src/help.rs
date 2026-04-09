@@ -41,7 +41,8 @@ mod tests {
             *name == "history" && *desc == "Search and filter command history"
         }));
         assert!(commands.iter().any(|(name, desc)| {
-            *name == "doctor" && *desc == "Diagnose config, AI, MCP, project, and runtime state"
+            *name == "doctor"
+                && *desc == "Diagnose config, AI, MCP, project, runtime, and performance state"
         }));
     }
 }

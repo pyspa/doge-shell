@@ -65,7 +65,8 @@ pub fn exec_chpwd_hooks(shell: &mut Shell, pwd: &str) -> Result<()> {
 
 fn chpwd_update_env(pwd: &Path, _env: Arc<RwLock<Environment>>) {
     debug!("chpwd update env {:?}", pwd);
-    unsafe { std::env::set_var("PWD", pwd) };
+    _env.write()
+        .set_system_env_var("PWD".to_string(), pwd.display().to_string());
 }
 
 /// Execute pre-prompt hooks

@@ -116,23 +116,23 @@ fn env_has_nonempty(key: &str) -> bool {
     matches!(env::var(key), Ok(value) if !value.trim().is_empty())
 }
 
-fn parse_z_exclude() -> Vec<String> {
-    if let Ok(val) = env::var("Z_EXCLUDE") {
-        val.split(':').map(|s| s.to_string()).collect()
-    } else {
-        Vec::new()
-    }
+fn parse_z_exclude_from_vars(vars: &HashMap<String, String>) -> Vec<String> {
+    vars.get("Z_EXCLUDE")
+        .map(|val| val.split(':').map(|s| s.to_string()).collect())
+        .unwrap_or_default()
 }
 
 impl Environment {
     /// Create a new environment with default settings.
     pub fn new() -> Arc<RwLock<Self>> {
+        let system_env_vars: HashMap<String, String> = env::vars().collect();
+        let z_exclude = parse_z_exclude_from_vars(&system_env_vars);
         let mut paths = ["/bin", "/usr/bin", "/sbin", "/usr/sbin"]
             .iter()
             .map(|s| s.to_string())
             .collect();
 
-        if let Ok(val) = env::var("PATH") {
+        if let Some(val) = system_env_vars.get("PATH") {
             paths = val.split(':').map(|s| s.to_string()).collect();
         }
 
@@ -151,7 +151,7 @@ impl Environment {
             mcp_servers: Vec::new(),
             mcp_manager: Arc::new(RwLock::new(McpManager::default())),
             execute_allowlist: Arc::new(RwLock::new(Vec::new())),
-            system_env_vars: env::vars().collect(),
+            system_env_vars,
             input_preferences: default_input_preferences(),
             safety_level: Arc::new(RwLock::new(crate::safety::SafetyLevel::Normal)),
 
@@ -159,7 +159,7 @@ impl Environment {
             executable_names: Arc::new(RwLock::new(Vec::new())),
             output_history: OutputHistory::new(),
             ai_service: None,
-            z_exclude: parse_z_exclude(),
+            z_exclude,
             startup_mode: false,
             secret_manager: SecretManager::new(),
         }));

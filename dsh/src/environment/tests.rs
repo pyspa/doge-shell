@@ -116,3 +116,49 @@ fn test_search() {
     assert!(p.is_some());
     assert_eq!(p.unwrap(), "ls");
 }
+
+#[test]
+fn test_system_env_updates_refresh_path_and_child_env() {
+    init();
+    let env = Environment::new();
+
+    {
+        let mut guard = env.write();
+        guard.set_system_env_var("PATH".to_string(), "/tmp/bin:/usr/bin".to_string());
+        guard
+            .variables
+            .insert("EXPORTED_ONLY".to_string(), "value".to_string());
+        guard.exported_vars.insert("EXPORTED_ONLY".to_string());
+    }
+
+    let guard = env.read();
+    assert_eq!(
+        guard.paths,
+        vec!["/tmp/bin".to_string(), "/usr/bin".to_string()]
+    );
+
+    let child_env = guard.child_process_env();
+    assert_eq!(
+        child_env.get("PATH"),
+        Some(&"/tmp/bin:/usr/bin".to_string())
+    );
+    assert_eq!(child_env.get("EXPORTED_ONLY"), Some(&"value".to_string()));
+}
+
+#[test]
+fn test_unset_system_env_updates_z_exclude() {
+    init();
+    let env = Environment::new();
+
+    {
+        let mut guard = env.write();
+        guard.set_system_env_var("Z_EXCLUDE".to_string(), "/tmp:/var".to_string());
+        assert_eq!(
+            guard.z_exclude,
+            vec!["/tmp".to_string(), "/var".to_string()]
+        );
+        guard.unset_system_env_var("Z_EXCLUDE");
+    }
+
+    assert!(env.read().z_exclude.is_empty());
+}

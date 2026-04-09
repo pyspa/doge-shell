@@ -2,6 +2,7 @@
 
 use super::Environment;
 use dsh_types::output_history;
+use std::collections::HashMap;
 
 impl Environment {
     /// Get the value of a variable.
@@ -49,5 +50,44 @@ impl Environment {
             .get(name)
             .cloned()
             .unwrap_or_else(|| name.to_string())
+    }
+
+    /// Set a process-visible environment variable in the shell snapshot.
+    pub fn set_system_env_var(&mut self, key: String, value: String) {
+        self.system_env_vars.insert(key.clone(), value);
+
+        match key.as_str() {
+            "PATH" => self.reload_path(),
+            "Z_EXCLUDE" => self.reload_z_exclude(),
+            _ => {}
+        }
+    }
+
+    /// Remove a process-visible environment variable from the shell snapshot.
+    pub fn unset_system_env_var(&mut self, key: &str) {
+        self.system_env_vars.remove(key);
+
+        match key {
+            "PATH" => self.reload_path(),
+            "Z_EXCLUDE" => self.reload_z_exclude(),
+            _ => {}
+        }
+    }
+
+    /// Build the effective environment for child processes.
+    pub fn child_process_env(&self) -> HashMap<String, String> {
+        let mut env_map = self.system_env_vars.clone();
+
+        for key in &self.exported_vars {
+            if let Some(value) = self.variables.get(key) {
+                env_map.insert(key.clone(), value.clone());
+            }
+        }
+
+        if env_map.get("TERM").is_none_or(|value| value.is_empty()) {
+            env_map.insert("TERM".to_string(), "xterm-256color".to_string());
+        }
+
+        env_map
     }
 }

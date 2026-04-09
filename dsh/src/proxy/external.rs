@@ -1,15 +1,23 @@
 //! External command execution handler.
 
+use crate::environment::Environment;
 use anyhow::Result;
 use dsh_types::Context;
+use parking_lot::RwLock;
 use std::process::Command;
+use std::sync::Arc;
 use tracing::debug;
 
 /// Execute an external command.
 ///
 /// This is the fallback handler when no builtin command matches.
 /// Uses `std::process::Command` for synchronous execution.
-pub fn execute(_ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()> {
+pub fn execute(
+    _ctx: &Context,
+    cmd: &str,
+    argv: Vec<String>,
+    environment: Arc<RwLock<Environment>>,
+) -> Result<()> {
     // For other commands, try to execute them as external commands
     // We use std::process::Command because we are in a sync context and cannot call async eval_str
     // Note: This bypasses shell aliases/functions for now, which is a limitation of sync proxy.
@@ -21,11 +29,21 @@ pub fn execute(_ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()> {
     let use_shell = argv.is_empty()
         && (cmd.contains(' ') || cmd.contains('|') || cmd.contains('>') || cmd.contains('&'));
 
+    let child_env = environment.read().child_process_env();
     let status = if use_shell {
         debug!("Detected complex command, using sh -c");
-        Command::new("sh").arg("-c").arg(cmd).status()
+        Command::new("sh")
+            .env_clear()
+            .envs(&child_env)
+            .arg("-c")
+            .arg(cmd)
+            .status()
     } else {
-        Command::new(cmd).args(argv).status()
+        Command::new(cmd)
+            .env_clear()
+            .envs(&child_env)
+            .args(argv)
+            .status()
     };
 
     match status {

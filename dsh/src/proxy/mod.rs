@@ -112,7 +112,7 @@ impl ShellProxy for Shell {
         if let Some(handler) = BUILTIN_REGISTRY.get(cmd) {
             handler(self, ctx, argv)
         } else {
-            external::execute(ctx, cmd, argv)
+            external::execute(ctx, cmd, argv, self.environment.clone())
         }
     }
 
@@ -135,37 +135,23 @@ impl ShellProxy for Shell {
     }
 
     fn set_env_var(&mut self, key: String, value: String) {
-        if key == "PATH" {
-            let mut path_vec = vec![];
-            for value in value.split(':') {
-                path_vec.push(value.to_string());
-            }
-            let env_path = path_vec.join(":");
-            unsafe { std::env::set_var("PATH", &env_path) };
-            debug!("set env {} {}", &key, &env_path);
-            self.environment.write().reload_path();
+        let masked = if self
+            .environment
+            .read()
+            .secret_manager
+            .is_sensitive_key(&key)
+        {
+            "<redacted>"
         } else {
-            unsafe { std::env::set_var(&key, &value) };
-            let masked = if self
-                .environment
-                .read()
-                .secret_manager
-                .is_sensitive_key(&key)
-            {
-                "<redacted>"
-            } else {
-                value.as_str()
-            };
-            debug!("set env {} {}", &key, masked);
-        }
+            value.as_str()
+        };
+        debug!("set env {} {}", &key, masked);
+        self.environment.write().set_system_env_var(key, value);
     }
 
     fn unset_env_var(&mut self, key: &str) {
-        unsafe { std::env::remove_var(key) };
         debug!("unset env {}", key);
-        if key == "PATH" {
-            self.environment.write().reload_path();
-        }
+        self.environment.write().unset_system_env_var(key);
     }
 
     fn get_alias(&mut self, name: &str) -> Option<String> {

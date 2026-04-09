@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub fn description() -> &'static str {
-    "Diagnose config, AI, MCP, project, and runtime state"
+    "Diagnose config, AI, MCP, project, runtime, and performance state"
 }
 
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
@@ -39,6 +39,10 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         print_header(ctx, "runtimes");
         check_runtimes(ctx);
     }
+    if show_section(section, "performance") || show_section(section, "perf") {
+        print_header(ctx, "performance");
+        check_performance(ctx);
+    }
 
     ExitStatus::ExitedWith(0)
 }
@@ -50,7 +54,7 @@ fn print_help(ctx: &Context) -> ExitStatus {
 
 fn help_text() -> &'static str {
     concat!(
-        "Usage: doctor [config|ai|mcp|project|runtime]\n",
+        "Usage: doctor [config|ai|mcp|project|runtime|performance]\n",
         "\n",
         "Run diagnostics for the current shell setup. Without a section, all checks run.\n",
         "\n",
@@ -60,6 +64,7 @@ fn help_text() -> &'static str {
         "  mcp      Check configured MCP servers and connection counters\n",
         "  project  Detect project marker files in the current directory\n",
         "  runtime  Check common developer tools in PATH\n",
+        "  performance  Show command timing and runtime skill scan state\n",
         "\n",
         "Examples:\n",
         "  doctor\n",
@@ -221,6 +226,66 @@ fn check_runtimes(ctx: &Context) {
     }
 }
 
+fn check_performance(ctx: &Context) {
+    let timing_file = crate::command_timing::get_timing_file_path();
+    match timing_file
+        .as_ref()
+        .and_then(crate::command_timing::CommandTiming::load_from_file)
+    {
+        Some(timing) => {
+            let _ = ctx.write_stdout(&format!("ok timing-entries {}", timing.stats.len()));
+
+            if let Some(slowest) = timing.top_slowest(1).first() {
+                let _ = ctx.write_stdout(&format!(
+                    "ok slowest {} avg={} success={:.1}%",
+                    slowest.command,
+                    crate::command_timing::format_duration(slowest.average_duration_ms()),
+                    slowest.success_rate()
+                ));
+            } else {
+                let _ = ctx.write_stdout("skip slowest none");
+            }
+
+            if let Some(frequent) = timing.top_frequent(1).first() {
+                let _ = ctx.write_stdout(&format!(
+                    "ok frequent {} calls={}",
+                    frequent.command, frequent.total_calls
+                ));
+            } else {
+                let _ = ctx.write_stdout("skip frequent none");
+            }
+        }
+        None => {
+            let display_path = timing_file
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            let _ = ctx.write_stdout(&format!("warn timing missing {}", display_path));
+        }
+    }
+
+    let Some(config_root) = dirs::config_dir().map(|path| path.join("dsh")) else {
+        let _ = ctx.write_stdout("warn skills-scan unable-to-determine-config-dir");
+        return;
+    };
+
+    let skills_dir = config_root.join("skills");
+    if skills_dir.exists() {
+        let count = fs::read_dir(&skills_dir)
+            .map(|entries| entries.count())
+            .unwrap_or(0);
+        let _ = ctx.write_stdout(&format!(
+            "ok skills-scan {} entries={count}",
+            skills_dir.display()
+        ));
+    } else {
+        let _ = ctx.write_stdout(&format!(
+            "skip skills-scan missing {}",
+            skills_dir.display()
+        ));
+    }
+}
+
 fn mask_secret(value: Option<String>) -> String {
     match value {
         Some(secret) if !secret.is_empty() => {
@@ -302,6 +367,7 @@ mod tests {
         assert!(help.contains("mcp"));
         assert!(help.contains("project"));
         assert!(help.contains("runtime"));
+        assert!(help.contains("performance"));
         assert!(help.contains("doctor ai"));
     }
 

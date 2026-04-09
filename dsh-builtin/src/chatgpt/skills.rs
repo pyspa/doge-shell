@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
+use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::UNIX_EPOCH;
 use tracing::{debug, warn};
 
 #[derive(Debug, Clone)]
@@ -56,6 +59,22 @@ impl Skill {
 }
 
 const MAX_SKILL_SUMMARY_CHARS: usize = 140;
+static SKILLS_FRAGMENT_CACHE: Lazy<Mutex<Option<CachedSkillsFragment>>> =
+    Lazy::new(|| Mutex::new(None));
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SkillsDirSignature {
+    root: PathBuf,
+    exists: bool,
+    entries: usize,
+    newest_modified_ms: u128,
+}
+
+#[derive(Debug, Clone)]
+struct CachedSkillsFragment {
+    signature: SkillsDirSignature,
+    fragment: String,
+}
 
 fn extract_skill_summary(instruction: &str) -> String {
     let (frontmatter, body) = split_frontmatter(instruction);
@@ -204,25 +223,96 @@ impl SkillsManager {
     }
 
     pub fn get_system_prompt_fragment(&self) -> String {
+        let signature = self.skills_dir_signature();
+        if let Some(fragment) = SKILLS_FRAGMENT_CACHE
+            .lock()
+            .ok()
+            .and_then(|cache| cache.as_ref().cloned())
+            .filter(|cached| cached.signature == signature)
+            .map(|cached| cached.fragment)
+        {
+            debug!("Using cached runtime skills fragment");
+            return fragment;
+        }
+
         let skills = self.load_skills();
-        if skills.is_empty() {
-            return String::new();
+        let fragment = if skills.is_empty() {
+            String::new()
+        } else {
+            let mut fragment = String::from(
+                "\n\n## Agent Skills\nAvailable runtime skills from `~/.config/dsh/skills/`:\n",
+            );
+
+            for skill in &skills {
+                fragment.push_str(&format!("- `{}`: {}\n", skill.name, skill.summary()));
+            }
+
+            fragment.push_str(
+                "\nRead a skill only when needed with `read_file(path=\"~/.config/dsh/skills/<skill>/SKILL.md\")`.\n",
+            );
+            fragment.push_str(
+                "Use files in that skill directory only after you know the skill is relevant.\n",
+            );
+            fragment
+        };
+
+        if let Ok(mut cache) = SKILLS_FRAGMENT_CACHE.lock() {
+            *cache = Some(CachedSkillsFragment {
+                signature,
+                fragment: fragment.clone(),
+            });
         }
-
-        let mut fragment = String::from(
-            "\n\n## Agent Skills\nAvailable runtime skills from `~/.config/dsh/skills/`:\n",
-        );
-
-        for skill in &skills {
-            fragment.push_str(&format!("- `{}`: {}\n", skill.name, skill.summary()));
-        }
-
-        fragment.push_str("\nRead a skill only when needed with `read_file(path=\"~/.config/dsh/skills/<skill>/SKILL.md\")`.\n");
-        fragment.push_str(
-            "Use files in that skill directory only after you know the skill is relevant.\n",
-        );
 
         fragment
+    }
+
+    fn skills_dir_signature(&self) -> SkillsDirSignature {
+        if !self.skills_dir.exists() {
+            return SkillsDirSignature {
+                root: self.skills_dir.clone(),
+                exists: false,
+                entries: 0,
+                newest_modified_ms: 0,
+            };
+        }
+
+        let mut entries = 0usize;
+        let mut newest_modified_ms = 0u128;
+
+        if let Ok(dir_entries) = std::fs::read_dir(&self.skills_dir) {
+            for entry in dir_entries.flatten() {
+                entries += 1;
+                let path = entry.path();
+                let metadata_paths = if path.is_dir() {
+                    vec![path.join("SKILL.md")]
+                } else {
+                    vec![path]
+                };
+
+                for metadata_path in metadata_paths {
+                    if let Ok(metadata) = std::fs::metadata(&metadata_path)
+                        && let Ok(modified) = metadata.modified()
+                        && let Ok(duration) = modified.duration_since(UNIX_EPOCH)
+                    {
+                        newest_modified_ms = newest_modified_ms.max(duration.as_millis());
+                    }
+                }
+            }
+        }
+
+        SkillsDirSignature {
+            root: self.skills_dir.clone(),
+            exists: true,
+            entries,
+            newest_modified_ms,
+        }
+    }
+}
+
+#[cfg(test)]
+fn clear_skills_fragment_cache() {
+    if let Ok(mut cache) = SKILLS_FRAGMENT_CACHE.lock() {
+        *cache = None;
     }
 }
 
@@ -275,6 +365,7 @@ Longer explanation.
 
     #[test]
     fn system_prompt_fragment_uses_compact_summary() {
+        clear_skills_fragment_cache();
         let dir = tempdir().unwrap();
         let skills_dir = dir.path().join("skills");
         let skill_dir = skills_dir.join("demo-skill");
@@ -291,5 +382,37 @@ Longer explanation.
         assert!(fragment.contains("- `demo-skill`: compact summary"));
         assert!(fragment.contains("read_file(path=\"~/.config/dsh/skills/<skill>/SKILL.md\")"));
         assert!(!fragment.contains("### Progressive Disclosure"));
+    }
+
+    #[test]
+    fn system_prompt_fragment_cache_invalidates_when_skills_change() {
+        clear_skills_fragment_cache();
+        let dir = tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let first_skill_dir = skills_dir.join("demo-skill");
+        fs::create_dir_all(&first_skill_dir).unwrap();
+        fs::write(
+            first_skill_dir.join("SKILL.md"),
+            "---\ndescription: first summary\n---\n",
+        )
+        .unwrap();
+
+        let manager = SkillsManager {
+            skills_dir: skills_dir.clone(),
+        };
+        let first = manager.get_system_prompt_fragment();
+        assert!(first.contains("first summary"));
+
+        let second_skill_dir = skills_dir.join("second-skill");
+        fs::create_dir_all(&second_skill_dir).unwrap();
+        fs::write(
+            second_skill_dir.join("SKILL.md"),
+            "---\ndescription: second summary\n---\n",
+        )
+        .unwrap();
+
+        let second = manager.get_system_prompt_fragment();
+        assert!(second.contains("first summary"));
+        assert!(second.contains("second summary"));
     }
 }

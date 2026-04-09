@@ -43,18 +43,17 @@ impl DirEnvironment {
         })
     }
 
-    pub fn set_env(&self, out: &mut BufWriter<StdoutLock>) -> Result<()> {
+    pub fn set_env(&self, env: &mut Environment, out: &mut BufWriter<StdoutLock>) -> Result<()> {
         if self.loaded {
             return Ok(());
         }
 
-        let mut env_path = std::env::var("PATH")?;
+        let mut env_path = env.system_env_vars.get("PATH").cloned().unwrap_or_default();
         for entry in &self.entries {
             match entry {
                 Entry::Env(env_entry) => {
-                    unsafe { std::env::set_var(&env_entry.key, &env_entry.value) };
+                    env.set_system_env_var(env_entry.key.clone(), env_entry.value.clone());
                     out.write_fmt(format_args!("+{} ", &env_entry.key)).ok();
-                    // print!("+{} ", &env_entry.key);
                 }
                 Entry::PathAdd(path_entry) => {
                     let mut path = path_entry.path.clone();
@@ -63,12 +62,12 @@ impl DirEnvironment {
                 }
             }
         }
-        unsafe { std::env::set_var("PATH", &env_path) };
+        env.set_system_env_var("PATH".to_string(), env_path);
 
         Ok(())
     }
 
-    pub fn remove_env(&mut self) {
+    pub fn remove_env(&mut self, env: &mut Environment) {
         if !self.loaded {
             return;
         }
@@ -76,7 +75,7 @@ impl DirEnvironment {
         for entry in &self.entries {
             match entry {
                 Entry::Env(env_entry) => {
-                    unsafe { std::env::remove_var(&env_entry.key) };
+                    env.unset_system_env_var(&env_entry.key);
                 }
                 Entry::PathAdd(_) => {
                     require_reset = true;
@@ -84,7 +83,7 @@ impl DirEnvironment {
             }
         }
         if require_reset {
-            unsafe { std::env::set_var("PATH", &self.env_path) };
+            env.set_system_env_var("PATH".to_string(), self.env_path.clone());
         }
         self.entries = Vec::new();
     }
@@ -166,28 +165,40 @@ fn read_envrc_config_file(file: &str) -> Result<Vec<Entry>> {
 
 pub fn check_path(pwd: &Path, environment: Arc<RwLock<Environment>>) -> Result<()> {
     let environment = &mut environment.write();
-    let entries = &mut environment.direnv_roots;
     let out = std::io::stdout().lock();
     let mut out = BufWriter::new(out);
 
-    for env in entries {
-        if pwd.starts_with(&env.path) {
-            if !env.loaded {
-                env.read_env_file()?;
-                out.write_fmt(format_args!("direnv: loading {}\n", env.path))
-                    .ok();
-                out.write_all(b"direnv: export ").ok();
-                env.set_env(&mut out)?;
-                out.write_all(b"\n").ok();
-                env.loaded = true;
-            }
-            // env.set_env();
-        } else if env.loaded {
-            out.write_fmt(format_args!("direnv: unloading {}\n", env.path))
+    let mut idx = 0;
+    while idx < environment.direnv_roots.len() {
+        let should_load = {
+            let env = &environment.direnv_roots[idx];
+            pwd.starts_with(&env.path) && !env.loaded
+        };
+        let should_unload = {
+            let env = &environment.direnv_roots[idx];
+            !pwd.starts_with(&env.path) && env.loaded
+        };
+
+        if should_load {
+            let mut dir_env = environment.direnv_roots.remove(idx);
+            dir_env.read_env_file()?;
+            out.write_fmt(format_args!("direnv: loading {}\n", dir_env.path))
                 .ok();
-            env.remove_env();
-            env.loaded = false;
+            out.write_all(b"direnv: export ").ok();
+            dir_env.set_env(environment, &mut out)?;
+            out.write_all(b"\n").ok();
+            dir_env.loaded = true;
+            environment.direnv_roots.insert(idx, dir_env);
+        } else if should_unload {
+            let mut dir_env = environment.direnv_roots.remove(idx);
+            out.write_fmt(format_args!("direnv: unloading {}\n", dir_env.path))
+                .ok();
+            dir_env.remove_env(environment);
+            dir_env.loaded = false;
+            environment.direnv_roots.insert(idx, dir_env);
         }
+
+        idx += 1;
     }
     out.flush().ok();
     environment.reload_path();

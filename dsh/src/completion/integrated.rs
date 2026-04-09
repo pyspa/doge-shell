@@ -11,7 +11,7 @@ use super::parser::{self, CommandLineParser, ParsedCommandLine};
 use crate::completion::display::Candidate;
 use crate::environment::Environment;
 use anyhow::Result;
-use dsh_builtin::{project, task};
+use dsh_builtin::{project, project_context, task};
 use dsh_types::mcp::McpTransport;
 use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, HashSet};
@@ -20,11 +20,12 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 use tracing::{debug, warn};
 use wait_timeout::ChildExt;
 
 const DEFAULT_CACHE_TTL_MS: u64 = 3000;
+const DYNAMIC_COMMAND_CACHE_TTL_MS: u64 = 1000;
 
 #[derive(Debug, Clone, Copy)]
 struct CompletionRequest<'a> {
@@ -45,6 +46,53 @@ impl<'a> CompletionRequest<'a> {
             cursor_pos,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileMetadataSignature {
+    exists: bool,
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
+#[derive(Debug, Clone)]
+struct TaskCacheEntry {
+    signature: Vec<FileMetadataSignature>,
+    tasks: Vec<task::TaskInfo>,
+}
+
+#[derive(Debug, Clone)]
+struct ComposeCacheEntry {
+    signature: FileMetadataSignature,
+    services: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct CommandValueCacheEntry {
+    values: Vec<String>,
+    cached_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum DynamicCommandCacheKind {
+    GitBranch,
+    GitRemote,
+    GitWorktree,
+    KubectlContext,
+    KubectlNamespace,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DynamicCommandCacheKey {
+    kind: DynamicCommandCacheKind,
+    scope_dir: PathBuf,
+}
+
+#[derive(Debug, Default)]
+struct ProjectDynamicCache {
+    tasks: HashMap<PathBuf, TaskCacheEntry>,
+    compose_services: HashMap<PathBuf, ComposeCacheEntry>,
+    commands: HashMap<DynamicCommandCacheKey, CommandValueCacheEntry>,
 }
 
 #[derive(Debug, Default)]
@@ -203,6 +251,7 @@ pub struct IntegratedCompletionEngine {
     /// Short lived completion cache
     cache: CompletionCache<EnhancedCandidate>,
     framework_cache: RwLock<HashMap<String, CompletionFrameworkKind>>,
+    dynamic_cache: RwLock<ProjectDynamicCache>,
 
     /// Shell environment (for dynamic completion)
     pub environment: Arc<RwLock<Environment>>,
@@ -218,6 +267,7 @@ impl IntegratedCompletionEngine {
 
             cache: CompletionCache::new(Duration::from_millis(DEFAULT_CACHE_TTL_MS)),
             framework_cache: RwLock::new(HashMap::new()),
+            dynamic_cache: RwLock::new(ProjectDynamicCache::default()),
             environment,
         }
     }
@@ -505,7 +555,7 @@ impl IntegratedCompletionEngine {
         current_dir: &Path,
     ) -> Vec<EnhancedCandidate> {
         let current_token = parsed_command_line.current_token.as_str();
-        match task::list_tasks_in_dir(current_dir) {
+        match self.load_project_tasks(current_dir) {
             Ok(tasks) => tasks
                 .into_iter()
                 .filter(|task| matches_prefix(current_token, &task.name))
@@ -848,12 +898,23 @@ impl IntegratedCompletionEngine {
         current_dir: &Path,
         current_token: &str,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_command_line_candidates(
-            current_dir,
-            "git",
-            &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        let scope_dir = project_context::find_project_root(current_dir);
+        self.collect_cached_command_candidates(
+            DynamicCommandCacheKind::GitBranch,
+            scope_dir,
             current_token,
             "git branch",
+            || {
+                let Some(command_path) = self.resolve_command_path("git") else {
+                    return Ok(Vec::new());
+                };
+
+                run_command_lines(
+                    &command_path,
+                    &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+                    current_dir,
+                )
+            },
         )
     }
 
@@ -862,12 +923,19 @@ impl IntegratedCompletionEngine {
         current_dir: &Path,
         current_token: &str,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_command_line_candidates(
-            current_dir,
-            "git",
-            &["remote"],
+        let scope_dir = project_context::find_project_root(current_dir);
+        self.collect_cached_command_candidates(
+            DynamicCommandCacheKind::GitRemote,
+            scope_dir,
             current_token,
             "git remote",
+            || {
+                let Some(command_path) = self.resolve_command_path("git") else {
+                    return Ok(Vec::new());
+                };
+
+                run_command_lines(&command_path, &["remote"], current_dir)
+            },
         )
     }
 
@@ -876,31 +944,27 @@ impl IntegratedCompletionEngine {
         current_dir: &Path,
         current_token: &str,
     ) -> Vec<EnhancedCandidate> {
-        let Some(command_path) = self.resolve_command_path("git") else {
-            return Vec::new();
-        };
+        let scope_dir = project_context::find_project_root(current_dir);
+        self.collect_cached_command_candidates(
+            DynamicCommandCacheKind::GitWorktree,
+            scope_dir,
+            current_token,
+            "git worktree",
+            || {
+                let Some(command_path) = self.resolve_command_path("git") else {
+                    return Ok(Vec::new());
+                };
 
-        match run_command_lines(
-            &command_path,
-            &["worktree", "list", "--porcelain"],
-            current_dir,
-        ) {
-            Ok(lines) => lines
+                Ok(run_command_lines(
+                    &command_path,
+                    &["worktree", "list", "--porcelain"],
+                    current_dir,
+                )?
                 .into_iter()
                 .filter_map(|line| line.strip_prefix("worktree ").map(str::to_string))
-                .filter(|path| matches_prefix(current_token, path))
-                .map(|path| EnhancedCandidate {
-                    text: path,
-                    description: Some("git worktree".to_string()),
-                    candidate_type: CandidateType::Argument,
-                    priority: 130,
-                })
-                .collect(),
-            Err(err) => {
-                warn!("Failed to load git worktree completions: {}", err);
-                Vec::new()
-            }
-        }
+                .collect())
+            },
+        )
     }
 
     fn collect_compose_service_candidates(
@@ -908,12 +972,8 @@ impl IntegratedCompletionEngine {
         current_dir: &Path,
         current_token: &str,
     ) -> Vec<EnhancedCandidate> {
-        let Some(compose_file) = find_compose_file(current_dir) else {
-            return Vec::new();
-        };
-
-        match parse_compose_service_names(&compose_file) {
-            Ok(services) => services
+        match self.load_compose_services(current_dir) {
+            Ok(Some((compose_file, services))) => services
                 .into_iter()
                 .filter(|service| matches_prefix(current_token, service))
                 .map(|service| EnhancedCandidate {
@@ -923,10 +983,11 @@ impl IntegratedCompletionEngine {
                     priority: 125,
                 })
                 .collect(),
+            Ok(None) => Vec::new(),
             Err(err) => {
                 warn!(
-                    "Failed to parse compose services from {:?}: {}",
-                    compose_file, err
+                    "Failed to load compose services from {:?}: {}",
+                    current_dir, err
                 );
                 Vec::new()
             }
@@ -938,12 +999,22 @@ impl IntegratedCompletionEngine {
         current_dir: &Path,
         current_token: &str,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_command_line_candidates(
-            current_dir,
-            "kubectl",
-            &["config", "get-contexts", "-o", "name"],
+        self.collect_cached_command_candidates(
+            DynamicCommandCacheKind::KubectlContext,
+            canonicalize_path(current_dir),
             current_token,
             "kubectl context",
+            || {
+                let Some(command_path) = self.resolve_command_path("kubectl") else {
+                    return Ok(Vec::new());
+                };
+
+                run_command_lines(
+                    &command_path,
+                    &["config", "get-contexts", "-o", "name"],
+                    current_dir,
+                )
+            },
         )
     }
 
@@ -952,34 +1023,43 @@ impl IntegratedCompletionEngine {
         current_dir: &Path,
         current_token: &str,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_command_line_candidates(
-            current_dir,
-            "kubectl",
-            &[
-                "get",
-                "namespaces",
-                "-o",
-                "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}",
-            ],
+        self.collect_cached_command_candidates(
+            DynamicCommandCacheKind::KubectlNamespace,
+            canonicalize_path(current_dir),
             current_token,
             "kubectl namespace",
+            || {
+                let Some(command_path) = self.resolve_command_path("kubectl") else {
+                    return Ok(Vec::new());
+                };
+
+                run_command_lines(
+                    &command_path,
+                    &[
+                        "get",
+                        "namespaces",
+                        "-o",
+                        "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}",
+                    ],
+                    current_dir,
+                )
+            },
         )
     }
 
-    fn collect_command_line_candidates(
+    fn collect_cached_command_candidates<F>(
         &self,
-        current_dir: &Path,
-        command_name: &str,
-        args: &[&str],
+        kind: DynamicCommandCacheKind,
+        scope_dir: PathBuf,
         current_token: &str,
         description: &str,
-    ) -> Vec<EnhancedCandidate> {
-        let Some(command_path) = self.resolve_command_path(command_name) else {
-            return Vec::new();
-        };
-
-        match run_command_lines(&command_path, args, current_dir) {
-            Ok(lines) => lines
+        loader: F,
+    ) -> Vec<EnhancedCandidate>
+    where
+        F: FnOnce() -> Result<Vec<String>>,
+    {
+        match self.load_command_values(kind, scope_dir, loader) {
+            Ok(values) => values
                 .into_iter()
                 .filter(|value| matches_prefix(current_token, value))
                 .map(|value| EnhancedCandidate {
@@ -990,10 +1070,112 @@ impl IntegratedCompletionEngine {
                 })
                 .collect(),
             Err(err) => {
-                warn!("Failed to load {} completions: {}", command_name, err);
+                warn!("Failed to load {} completions: {}", description, err);
                 Vec::new()
             }
         }
+    }
+
+    fn load_project_tasks(&self, current_dir: &Path) -> Result<Vec<task::TaskInfo>> {
+        let project_root = project_context::find_project_root(current_dir);
+        let signature = task_completion_signature(&project_root);
+
+        if let Some(tasks) = self.lookup_task_cache(&project_root, &signature) {
+            return Ok(tasks);
+        }
+
+        let tasks = task::list_tasks_in_dir(&project_root)?;
+        self.dynamic_cache.write().tasks.insert(
+            project_root,
+            TaskCacheEntry {
+                signature,
+                tasks: tasks.clone(),
+            },
+        );
+        Ok(tasks)
+    }
+
+    fn lookup_task_cache(
+        &self,
+        project_root: &Path,
+        signature: &[FileMetadataSignature],
+    ) -> Option<Vec<task::TaskInfo>> {
+        let cache = self.dynamic_cache.read();
+        let entry = cache.tasks.get(project_root)?;
+        if entry.signature == signature {
+            Some(entry.tasks.clone())
+        } else {
+            None
+        }
+    }
+
+    fn load_compose_services(&self, current_dir: &Path) -> Result<Option<(PathBuf, Vec<String>)>> {
+        let Some(compose_file) = find_compose_file(current_dir) else {
+            return Ok(None);
+        };
+        let cache_key = canonicalize_path(&compose_file);
+        let signature = file_metadata_signature(&cache_key);
+
+        if let Some(services) = self.lookup_compose_cache(&cache_key, &signature) {
+            return Ok(Some((cache_key, services)));
+        }
+
+        let services = parse_compose_service_names(&cache_key)?;
+        self.dynamic_cache.write().compose_services.insert(
+            cache_key.clone(),
+            ComposeCacheEntry {
+                signature,
+                services: services.clone(),
+            },
+        );
+
+        Ok(Some((cache_key, services)))
+    }
+
+    fn lookup_compose_cache(
+        &self,
+        compose_file: &Path,
+        signature: &FileMetadataSignature,
+    ) -> Option<Vec<String>> {
+        let cache = self.dynamic_cache.read();
+        let entry = cache.compose_services.get(compose_file)?;
+        if entry.signature == *signature {
+            Some(entry.services.clone())
+        } else {
+            None
+        }
+    }
+
+    fn load_command_values<F>(
+        &self,
+        kind: DynamicCommandCacheKind,
+        scope_dir: PathBuf,
+        loader: F,
+    ) -> Result<Vec<String>>
+    where
+        F: FnOnce() -> Result<Vec<String>>,
+    {
+        let cache_key = DynamicCommandCacheKey { kind, scope_dir };
+        let ttl = Duration::from_millis(DYNAMIC_COMMAND_CACHE_TTL_MS);
+
+        {
+            let cache = self.dynamic_cache.read();
+            if let Some(entry) = cache.commands.get(&cache_key)
+                && entry.cached_at.elapsed() < ttl
+            {
+                return Ok(entry.values.clone());
+            }
+        }
+
+        let values = loader()?;
+        self.dynamic_cache.write().commands.insert(
+            cache_key,
+            CommandValueCacheEntry {
+                values: values.clone(),
+                cached_at: Instant::now(),
+            },
+        );
+        Ok(values)
     }
 
     fn resolve_command_path(&self, command_name: &str) -> Option<String> {
@@ -1157,6 +1339,44 @@ impl IntegratedCompletionEngine {
 
 fn matches_prefix(current_token: &str, value: &str) -> bool {
     current_token.is_empty() || super::fuzzy_match_score(value, current_token).is_some()
+}
+
+fn canonicalize_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn file_metadata_signature(path: &Path) -> FileMetadataSignature {
+    match fs::metadata(path) {
+        Ok(metadata) => FileMetadataSignature {
+            exists: true,
+            modified: metadata.modified().ok(),
+            len: metadata.len(),
+        },
+        Err(_) => FileMetadataSignature {
+            exists: false,
+            modified: None,
+            len: 0,
+        },
+    }
+}
+
+fn task_completion_signature(project_root: &Path) -> Vec<FileMetadataSignature> {
+    [
+        "mise.toml",
+        "Taskfile.yml",
+        "Taskfile.yaml",
+        "turbo.json",
+        "project.json",
+        "package.json",
+        "Cargo.toml",
+        "Makefile",
+        "makefile",
+        "deno.json",
+        "deno.jsonc",
+    ]
+    .into_iter()
+    .map(|name| file_metadata_signature(&project_root.join(name)))
+    .collect()
 }
 
 fn find_compose_file(current_dir: &Path) -> Option<PathBuf> {
@@ -1891,6 +2111,157 @@ volumes:
                 .iter()
                 .any(|candidate| candidate.text == "deploy"),
             "expected external completer fallback"
+        );
+    }
+
+    #[test]
+    fn task_completion_cache_refreshes_when_taskfile_changes() {
+        let dir = tempdir().unwrap();
+        let nested = dir.path().join("apps").join("api");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(
+            dir.path().join("Taskfile.yml"),
+            "version: '3'\ntasks:\n  build:\n    cmds:\n      - cargo build\n",
+        )
+        .unwrap();
+
+        let engine = IntegratedCompletionEngine::new(Environment::new());
+        let build_candidates = engine.collect_task_candidates(
+            &engine.convert_to_parsed_command_line("task bu", "task bu".len()),
+            &nested,
+        );
+
+        assert!(
+            build_candidates
+                .iter()
+                .any(|candidate| candidate.text == "build"),
+            "expected task completion from project root"
+        );
+
+        std::thread::sleep(Duration::from_millis(20));
+        fs::write(
+            dir.path().join("Taskfile.yml"),
+            "version: '3'\ntasks:\n  build:\n    cmds:\n      - cargo build\n  test:\n    cmds:\n      - cargo test\n",
+        )
+        .unwrap();
+
+        let test_candidates = engine.collect_task_candidates(
+            &engine.convert_to_parsed_command_line("task te", "task te".len()),
+            &nested,
+        );
+
+        assert!(
+            test_candidates
+                .iter()
+                .any(|candidate| candidate.text == "test"),
+            "expected task cache invalidation after Taskfile change"
+        );
+    }
+
+    #[test]
+    fn compose_service_cache_refreshes_when_compose_file_changes() {
+        let dir = tempdir().unwrap();
+        let nested = dir.path().join("services").join("api");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(
+            dir.path().join("compose.yaml"),
+            "services:\n  api:\n    image: example/api\n",
+        )
+        .unwrap();
+
+        let engine = IntegratedCompletionEngine::new(Environment::new());
+        let api_candidates = engine.collect_compose_service_candidates(&nested, "ap");
+
+        assert!(
+            api_candidates
+                .iter()
+                .any(|candidate| candidate.text == "api"),
+            "expected compose service completion from ancestor compose file"
+        );
+
+        std::thread::sleep(Duration::from_millis(20));
+        fs::write(
+            dir.path().join("compose.yaml"),
+            "services:\n  api:\n    image: example/api\n  worker:\n    image: example/worker\n",
+        )
+        .unwrap();
+
+        let worker_candidates = engine.collect_compose_service_candidates(&nested, "wo");
+        assert!(
+            worker_candidates
+                .iter()
+                .any(|candidate| candidate.text == "worker"),
+            "expected compose cache invalidation after file change"
+        );
+    }
+
+    #[test]
+    fn git_branch_cache_is_shared_per_project_root_and_expires_by_ttl() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("repo");
+        let nested = root.join("apps").join("web");
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&nested).unwrap();
+        fs::create_dir_all(&bin_dir).unwrap();
+        fs::write(root.join("package.json"), "{\"name\":\"demo\"}\n").unwrap();
+
+        let counter = dir.path().join("git-count");
+        let git = bin_dir.join("git");
+        fs::write(
+            &git,
+            format!(
+                "#!/bin/sh\ncount_file=\"{}\"\ncount=0\nif [ -f \"$count_file\" ]; then\n  count=$(cat \"$count_file\")\nfi\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$count_file\"\nif [ \"$1\" = \"for-each-ref\" ]; then\n  printf 'feature/cache\\nmain\\n'\nfi\n",
+                counter.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&git).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&git, permissions).unwrap();
+
+        let environment = Environment::new();
+        {
+            let mut env = environment.write();
+            env.paths = vec![bin_dir.display().to_string()];
+            env.clear_command_cache();
+        }
+        let engine = IntegratedCompletionEngine::new(environment);
+
+        let root_candidates = engine.collect_git_branch_candidates(&root, "fe");
+        assert!(
+            root_candidates
+                .iter()
+                .any(|candidate| candidate.text == "feature/cache"),
+            "expected git branch completion from fake git"
+        );
+
+        let nested_candidates = engine.collect_git_branch_candidates(&nested, "ma");
+        assert!(
+            nested_candidates
+                .iter()
+                .any(|candidate| candidate.text == "main"),
+            "expected cached git branch completion from nested cwd"
+        );
+
+        assert_eq!(
+            fs::read_to_string(&counter).unwrap(),
+            "1",
+            "git command should run once within the same project root"
+        );
+
+        std::thread::sleep(Duration::from_millis(DYNAMIC_COMMAND_CACHE_TTL_MS + 50));
+        let refreshed_candidates = engine.collect_git_branch_candidates(&nested, "fe");
+        assert!(
+            refreshed_candidates
+                .iter()
+                .any(|candidate| candidate.text == "feature/cache"),
+            "expected git branch completion after ttl refresh"
+        );
+
+        assert_eq!(
+            fs::read_to_string(&counter).unwrap(),
+            "2",
+            "git command should run again after ttl expiry"
         );
     }
 }

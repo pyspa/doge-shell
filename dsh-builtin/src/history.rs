@@ -3,7 +3,7 @@ use dsh_types::{Context, ExitStatus};
 
 /// Built-in history command description
 pub fn description() -> &'static str {
-    "Show command history"
+    "Search and filter command history"
 }
 
 /// Built-in history command implementation
@@ -17,5 +17,15 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
             let _ = ctx.write_stderr(&format!("history: {err}"));
             ExitStatus::ExitedWith(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::description;
+
+    #[test]
+    fn description_mentions_search_and_filter() {
+        assert_eq!(description(), "Search and filter command history");
     }
 }

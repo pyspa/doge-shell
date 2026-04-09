@@ -29,3 +29,19 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::get_all_commands;
+
+    #[test]
+    fn help_registry_includes_updated_history_and_doctor_entries() {
+        let commands = get_all_commands();
+        assert!(commands.iter().any(|(name, desc)| {
+            *name == "history" && *desc == "Search and filter command history"
+        }));
+        assert!(commands.iter().any(|(name, desc)| {
+            *name == "doctor" && *desc == "Diagnose config, AI, MCP, project, and runtime state"
+        }));
+    }
+}

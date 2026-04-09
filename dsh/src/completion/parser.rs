@@ -535,6 +535,8 @@ impl CommandLineParser {
             | "--name"
             | "-u" | "--user"    // sudo, etc
             | "-g" | "--group"   // sudo
+            | "-n" | "--namespace" // kubectl
+            | "--context"        // kubectl
             | "-C" | "--chdir"   // git, others
             | "-c"               // bash -c, etc
             | "-o" | "--output"  // gcc, etc
@@ -952,6 +954,9 @@ mod tests {
         assert!(parser.option_takes_value("--message"));
         assert!(parser.option_takes_value("-f"));
         assert!(parser.option_takes_value("--file"));
+        assert!(parser.option_takes_value("-n"));
+        assert!(parser.option_takes_value("--namespace"));
+        assert!(parser.option_takes_value("--context"));
     }
 
     #[test]

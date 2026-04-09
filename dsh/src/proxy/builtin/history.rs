@@ -167,8 +167,50 @@ fn format_entry(entry: &crate::history::Entry) -> String {
 }
 
 fn print_help(ctx: &Context) -> Result<()> {
-    ctx.write_stdout(
-        "history [query] [--scope global|session|cwd|project] [--status any|success|failure] [--slow <ms>] [--limit <n>] [--verbose]",
-    )?;
+    ctx.write_stdout(help_text())?;
     Ok(())
+}
+
+fn help_text() -> &'static str {
+    concat!(
+        "Usage: history [query] [OPTIONS]\n",
+        "\n",
+        "Search and filter command history.\n",
+        "\n",
+        "Options:\n",
+        "  -q, --query <text>              Match command text explicitly\n",
+        "  -s, --scope <global|session|cwd|project>\n",
+        "                                 Restrict search scope\n",
+        "      --status <any|success|failure>\n",
+        "                                 Filter by exit status\n",
+        "      --slow <ms>                Show commands with duration >= ms\n",
+        "  -n, --limit <n>                Limit result count (default: 200)\n",
+        "  -v, --verbose                  Show timestamp, status, duration, and cwd\n",
+        "  -h, --help                     Show this help message\n",
+        "\n",
+        "You can pass the query as the first positional argument instead of --query.\n",
+        "\n",
+        "Examples:\n",
+        "  history cargo\n",
+        "  history --status failure\n",
+        "  history --scope project --slow 1000 -v\n",
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::help_text;
+
+    #[test]
+    fn help_text_lists_filters_and_examples() {
+        let help = help_text();
+        assert!(help.contains("Usage: history"));
+        assert!(help.contains("--scope"));
+        assert!(help.contains("--status"));
+        assert!(help.contains("--slow"));
+        assert!(help.contains("--limit"));
+        assert!(help.contains("--verbose"));
+        assert!(help.contains("history cargo"));
+        assert!(help.contains("history --status failure"));
+    }
 }

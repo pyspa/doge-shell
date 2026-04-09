@@ -1,4 +1,5 @@
 use super::ShellProxy;
+use crate::project_context;
 use anyhow::Result;
 use dsh_types::{Context, ExitStatus};
 use regex::Regex;
@@ -173,7 +174,19 @@ pub fn list_tasks_in_dir(current_dir: &Path) -> Result<Vec<TaskInfo>> {
 }
 
 fn detect_tasks_in_dir(current_dir: &Path) -> Result<Vec<TaskInfo>> {
+    let project_tasks = project_context::detect_task_names_in_dir(current_dir)?
+        .into_iter()
+        .map(|task| TaskInfo {
+            source: task.source,
+            name: task.name,
+            command: task.command,
+        })
+        .collect::<Vec<_>>();
+    let project = project_context::resolve_project_context(current_dir);
+    let current_dir = project.project_root.as_path();
     let mut tasks = Vec::new();
+
+    tasks.extend(project_tasks);
 
     // 1. package.json (npm, yarn, pnpm, bun)
     if let Ok(content) = fs::read_to_string(current_dir.join("package.json"))
@@ -280,7 +293,7 @@ fn detect_tasks_in_dir(current_dir: &Path) -> Result<Vec<TaskInfo>> {
         }
     }
 
-    Ok(tasks)
+    Ok(dedup_task_infos(tasks))
 }
 
 fn detect_js_manager(path: &Path) -> String {
@@ -302,6 +315,18 @@ static JSONC_COMMENT_RE: LazyLock<Regex> =
 
 fn remove_jsonc_comments(json: &str) -> String {
     JSONC_COMMENT_RE.replace_all(json, "").to_string()
+}
+
+fn dedup_task_infos(tasks: Vec<TaskInfo>) -> Vec<TaskInfo> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut deduped = Vec::new();
+    for task in tasks {
+        let key = (task.source.clone(), task.name.clone(), task.command.clone());
+        if seen.insert(key) {
+            deduped.push(task);
+        }
+    }
+    deduped
 }
 
 #[cfg(test)]
@@ -364,5 +389,33 @@ mod tests {
         let task = tasks.first().unwrap();
         assert_eq!(task.source, "yarn");
         assert_eq!(task.command, "yarn run build");
+    }
+
+    #[test]
+    fn test_detect_tasks_from_project_root_when_called_from_subdir() {
+        let dir = tempdir().unwrap();
+        let package_json = r#"{ "scripts": { "build": "echo build" } }"#;
+        File::create(dir.path().join("package.json"))
+            .unwrap()
+            .write_all(package_json.as_bytes())
+            .unwrap();
+        File::create(dir.path().join("mise.toml"))
+            .unwrap()
+            .write_all(b"[tasks.dev]\nrun = 'npm run dev'\n")
+            .unwrap();
+        let nested = dir.path().join("src").join("nested");
+        fs::create_dir_all(&nested).unwrap();
+
+        let tasks = detect_tasks_in_dir(&nested).unwrap();
+        assert!(
+            tasks
+                .iter()
+                .any(|task| task.name == "build" && task.source == "npm")
+        );
+        assert!(
+            tasks
+                .iter()
+                .any(|task| task.name == "dev" && task.source == "mise")
+        );
     }
 }

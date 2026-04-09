@@ -23,16 +23,31 @@ impl PromptModule for PythonModule {
     }
 
     fn render(&self, context: &PromptContext<'_>) -> Option<String> {
-        let has_python = context.current_dir.join("requirements.txt").exists()
-            || context.current_dir.join("pyproject.toml").exists()
-            || context.current_dir.join("Pipfile").exists()
-            || context.current_dir.join(".venv").exists()
-            || context.current_dir.join("venv").exists();
+        let project_dir = context.project_root.unwrap_or(context.current_dir);
+        let has_python = project_dir.join("requirements.txt").exists()
+            || project_dir.join("pyproject.toml").exists()
+            || project_dir.join("Pipfile").exists()
+            || project_dir.join(".venv").exists()
+            || project_dir.join("venv").exists();
+        let source = context
+            .python_source
+            .map(|source| format!("({source})").dark_grey().to_string());
 
         if let Some(version) = &context.python_version {
-            Some(format!(" {} {}", "🐍".yellow().bold(), version.dim()))
+            match source {
+                Some(source) => Some(format!(
+                    " {} {} {}",
+                    "🐍".yellow().bold(),
+                    version.dim(),
+                    source
+                )),
+                None => Some(format!(" {} {}", "🐍".yellow().bold(), version.dim())),
+            }
         } else if has_python {
-            Some(format!(" {}", "🐍".yellow().bold()))
+            match source {
+                Some(source) => Some(format!(" {} {}", "🐍".yellow().bold(), source)),
+                None => Some(format!(" {}", "🐍".yellow().bold())),
+            }
         } else {
             None
         }

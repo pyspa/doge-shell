@@ -23,12 +23,27 @@ impl PromptModule for GoModule {
     }
 
     fn render(&self, context: &PromptContext<'_>) -> Option<String> {
-        let go_mod = context.current_dir.join("go.mod");
+        let project_dir = context.project_root.unwrap_or(context.current_dir);
+        let go_mod = project_dir.join("go.mod");
+        let source = context
+            .go_source
+            .map(|source| format!("({source})").dark_grey().to_string());
 
         if let Some(version) = &context.go_version {
-            Some(format!(" {} {}", "🐹".cyan().bold(), version.dim()))
+            match source {
+                Some(source) => Some(format!(
+                    " {} {} {}",
+                    "🐹".cyan().bold(),
+                    version.dim(),
+                    source
+                )),
+                None => Some(format!(" {} {}", "🐹".cyan().bold(), version.dim())),
+            }
         } else if go_mod.exists() {
-            Some(format!(" {}", "🐹".cyan().bold()))
+            match source {
+                Some(source) => Some(format!(" {} {}", "🐹".cyan().bold(), source)),
+                None => Some(format!(" {}", "🐹".cyan().bold())),
+            }
         } else {
             None
         }

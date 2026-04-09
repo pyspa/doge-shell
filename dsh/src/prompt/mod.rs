@@ -4,6 +4,7 @@ use anyhow::Result;
 use crossterm::cursor;
 use crossterm::queue;
 use crossterm::style::Stylize;
+use dsh_builtin::project_context;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::RwLock;
 use std::collections::HashSet;
@@ -178,7 +179,12 @@ pub struct Prompt {
     go_check_backoff: BackoffGate,
 
     // Project type detection cache (updated on chpwd only)
+    project_root: Option<PathBuf>,
     project_types: ProjectTypeCache,
+    rust_runtime_source: Option<String>,
+    node_runtime_source: Option<String>,
+    python_runtime_source: Option<String>,
+    go_runtime_source: Option<String>,
 
     // Cloud Context
     k8s_context_cache: Option<String>,
@@ -199,7 +205,6 @@ pub struct Prompt {
 struct ProjectTypeCache {
     has_cargo_toml: bool,
     has_package_json: bool,
-    has_node_modules: bool,
     has_python_project: bool,
     has_go_mod: bool,
 }
@@ -227,7 +232,12 @@ impl Prompt {
             go_check_backoff: BackoffGate::new(),
 
             // Project type cache (will be populated in set_current)
+            project_root: None,
             project_types: ProjectTypeCache::default(),
+            rust_runtime_source: None,
+            node_runtime_source: None,
+            python_runtime_source: None,
+            go_runtime_source: None,
 
             // Cloud Context
             k8s_context_cache: None,
@@ -257,6 +267,7 @@ impl Prompt {
 
         // Set Git root during initialization
         prompt.set_current(&current_dir);
+        prompt.refresh_project_types();
         prompt
     }
 
@@ -362,12 +373,17 @@ impl Prompt {
 
         let context = PromptContext {
             current_dir: &self.current_dir,
+            project_root: self.project_root.as_deref(),
             git_root: self.current_git_root.as_deref(),
             git_status: status_to_display.as_ref(),
             rust_version: self.rust_version_cache.as_deref(),
+            rust_source: self.rust_runtime_source.as_deref(),
             node_version: self.node_version_cache.as_deref(),
+            node_source: self.node_runtime_source.as_deref(),
             python_version: self.python_version_cache.as_deref(),
+            python_source: self.python_runtime_source.as_deref(),
             go_version: self.go_version_cache.as_deref(),
+            go_source: self.go_runtime_source.as_deref(),
             k8s_context: self.k8s_context_cache.as_deref(),
             k8s_namespace: self.k8s_namespace_cache.as_deref(),
             aws_profile: self.aws_profile_cache.as_deref(),
@@ -550,16 +566,30 @@ impl Prompt {
 
     /// Refresh project type cache by checking file existence (called on chpwd only)
     fn refresh_project_types(&mut self) {
+        let project = project_context::resolve_project_context(&self.current_dir);
+        let root = project.project_root.clone();
+
+        self.project_root = Some(root.clone());
+        self.rust_runtime_source = project
+            .runtime("rust")
+            .map(|runtime| runtime.source.clone());
+        self.node_runtime_source = project
+            .runtime("node")
+            .map(|runtime| runtime.source.clone());
+        self.python_runtime_source = project
+            .runtime("python")
+            .map(|runtime| runtime.source.clone());
+        self.go_runtime_source = project.runtime("go").map(|runtime| runtime.source.clone());
+
         self.project_types = ProjectTypeCache {
-            has_cargo_toml: self.current_dir.join("Cargo.toml").exists(),
-            has_package_json: self.current_dir.join("package.json").exists(),
-            has_node_modules: self.current_dir.join("node_modules").exists(),
-            has_python_project: self.current_dir.join("requirements.txt").exists()
-                || self.current_dir.join("pyproject.toml").exists()
-                || self.current_dir.join("Pipfile").exists()
-                || self.current_dir.join(".venv").exists()
-                || self.current_dir.join("venv").exists(),
-            has_go_mod: self.current_dir.join("go.mod").exists(),
+            has_cargo_toml: root.join("Cargo.toml").exists(),
+            has_package_json: root.join("package.json").exists(),
+            has_python_project: root.join("requirements.txt").exists()
+                || root.join("pyproject.toml").exists()
+                || root.join("Pipfile").exists()
+                || root.join(".venv").exists()
+                || root.join("venv").exists(),
+            has_go_mod: root.join("go.mod").exists(),
         };
     }
 
@@ -699,7 +729,7 @@ impl Prompt {
     pub fn needs_node_check(&self) -> bool {
         self.node_version_cache.is_none()
             && self.node_check_backoff.should_check()
-            && (self.project_types.has_package_json || self.project_types.has_node_modules)
+            && self.project_types.has_package_json
     }
 
     pub fn update_python_version(&mut self, version: Option<String>) {

@@ -14,11 +14,15 @@ use anyhow::Result;
 use dsh_builtin::{project, task};
 use dsh_types::mcp::McpTransport;
 use parking_lot::{Mutex, RwLock};
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, warn};
+use wait_timeout::ChildExt;
 
 const DEFAULT_CACHE_TTL_MS: u64 = 3000;
 
@@ -288,16 +292,7 @@ impl IntegratedCompletionEngine {
         let mut aggregator =
             CandidateAggregator::new(self, request.max_results, command_context.clone());
 
-        // 1. JSON-based command completion
-        let command_collection = self.collect_command_candidates(&request, &parsed_command_line);
-
-        if !aggregator.extend(command_collection.batch) {
-            let results = aggregator.finalize(history);
-            self.store_in_cache(request.input, &results.candidates, results.framework);
-            return results;
-        }
-
-        // 2. Dynamic completion (project-aware, built-ins)
+        // 1. Project-aware dynamic completion
         let dynamic_batch = self.collect_dynamic_candidates(&request, &parsed_command_line);
         if !aggregator.extend(dynamic_batch) {
             let results = aggregator.finalize(history);
@@ -305,14 +300,30 @@ impl IntegratedCompletionEngine {
             return results;
         }
 
-        // 3. Context analysis placeholder (reserved for future providers)
+        // 2. JSON-based command completion
+        let command_collection = self.collect_command_candidates(&request, &parsed_command_line);
+        if !aggregator.extend(command_collection.batch) {
+            let results = aggregator.finalize(history);
+            self.store_in_cache(request.input, &results.candidates, results.framework);
+            return results;
+        }
+
+        // 3. External completer fallback
+        let external_batch = self.collect_external_candidates(&request, &parsed_command_line);
+        if !aggregator.extend(external_batch) {
+            let results = aggregator.finalize(history);
+            self.store_in_cache(request.input, &results.candidates, results.framework);
+            return results;
+        }
+
+        // 4. Context analysis placeholder (reserved for future providers)
         let parts: Vec<&str> = request.input.split_whitespace().collect();
         if !parts.is_empty() {
             let _command = parts[0];
             let _args: Vec<String> = parts[1..].iter().map(|s| (*s).to_string()).collect();
         }
 
-        // 4. History-based completion (skipped when command-specific data exists)
+        // 5. History-based completion (skipped when command-specific data exists)
         // History completion removed as per user request
         /*
         if !has_command_specific_data {
@@ -470,23 +481,14 @@ impl IntegratedCompletionEngine {
         request: &CompletionRequest,
         parsed_command_line: &parser::ParsedCommandLine,
     ) -> CandidateBatch {
-        use parser::CompletionContext;
-
-        match parsed_command_line.completion_context {
-            CompletionContext::Command
-            | CompletionContext::ShortOption
-            | CompletionContext::LongOption
-            | CompletionContext::OptionValue { .. } => return CandidateBatch::empty(),
-            CompletionContext::SubCommand
-            | CompletionContext::Argument { .. }
-            | CompletionContext::Unknown => {}
-        }
-
         let candidates = match parsed_command_line.command.as_str() {
             "task" => self.collect_task_candidates(parsed_command_line, request.current_dir),
             "pm" => self.collect_pm_candidates(parsed_command_line),
             "pj" => self.collect_pj_candidates(parsed_command_line),
             "mcp" => self.collect_mcp_candidates(parsed_command_line),
+            "git" => self.collect_git_candidates(parsed_command_line, request.current_dir),
+            "docker" => self.collect_docker_candidates(parsed_command_line, request.current_dir),
+            "kubectl" => self.collect_kubectl_candidates(parsed_command_line, request.current_dir),
             _ => Vec::new(),
         };
 
@@ -663,6 +665,373 @@ impl IntegratedCompletionEngine {
         }
     }
 
+    fn collect_git_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        use parser::CompletionContext;
+
+        let Some(primary_subcommand) = parsed_command_line.subcommand_path.first() else {
+            return Vec::new();
+        };
+        let current_token = parsed_command_line.current_token.as_str();
+        let inferred_subcommand_arg_index =
+            parsed_command_line.subcommand_path.len().saturating_sub(2);
+
+        match parsed_command_line.completion_context {
+            CompletionContext::Argument { arg_index, .. } => match primary_subcommand.as_str() {
+                "checkout" | "switch" | "merge" | "rebase" => {
+                    self.collect_git_branch_candidates(current_dir, current_token)
+                }
+                "push" | "pull" | "fetch" => {
+                    if arg_index == 0 {
+                        self.collect_git_remote_candidates(current_dir, current_token)
+                    } else {
+                        self.collect_git_branch_candidates(current_dir, current_token)
+                    }
+                }
+                "remote" => {
+                    let secondary = parsed_command_line
+                        .subcommand_path
+                        .get(1)
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    match secondary {
+                        "remove" | "rename" | "show" | "get-url" | "set-url" => {
+                            self.collect_git_remote_candidates(current_dir, current_token)
+                        }
+                        _ => Vec::new(),
+                    }
+                }
+                "worktree" => {
+                    let secondary = parsed_command_line
+                        .subcommand_path
+                        .get(1)
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    match secondary {
+                        "remove" | "move" | "lock" | "unlock" | "repair" => {
+                            self.collect_git_worktree_candidates(current_dir, current_token)
+                        }
+                        "add" if arg_index > 0 => {
+                            self.collect_git_branch_candidates(current_dir, current_token)
+                        }
+                        _ => Vec::new(),
+                    }
+                }
+                _ => Vec::new(),
+            },
+            CompletionContext::SubCommand => match primary_subcommand.as_str() {
+                "checkout" | "switch" | "merge" | "rebase" => {
+                    self.collect_git_branch_candidates(current_dir, current_token)
+                }
+                "push" | "pull" | "fetch" => {
+                    if inferred_subcommand_arg_index == 0 {
+                        self.collect_git_remote_candidates(current_dir, current_token)
+                    } else {
+                        self.collect_git_branch_candidates(current_dir, current_token)
+                    }
+                }
+                "remote" => {
+                    let secondary = parsed_command_line
+                        .subcommand_path
+                        .get(1)
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    match secondary {
+                        "remove" | "rename" | "show" | "get-url" | "set-url" => {
+                            self.collect_git_remote_candidates(current_dir, current_token)
+                        }
+                        _ => Vec::new(),
+                    }
+                }
+                "worktree" => {
+                    let secondary = parsed_command_line
+                        .subcommand_path
+                        .get(1)
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    match secondary {
+                        "remove" | "move" | "lock" | "unlock" | "repair" => {
+                            self.collect_git_worktree_candidates(current_dir, current_token)
+                        }
+                        "add" if inferred_subcommand_arg_index > 0 => {
+                            self.collect_git_branch_candidates(current_dir, current_token)
+                        }
+                        _ => Vec::new(),
+                    }
+                }
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        }
+    }
+
+    fn collect_docker_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        use parser::CompletionContext;
+
+        if parsed_command_line
+            .subcommand_path
+            .first()
+            .map(String::as_str)
+            != Some("compose")
+        {
+            return Vec::new();
+        }
+
+        let Some(command_name) = parsed_command_line
+            .subcommand_path
+            .get(1)
+            .map(String::as_str)
+        else {
+            return Vec::new();
+        };
+
+        match parsed_command_line.completion_context {
+            CompletionContext::SubCommand | CompletionContext::Argument { .. } => {
+                let service_commands = [
+                    "build", "cp", "create", "down", "exec", "kill", "logs", "pause", "port", "ps",
+                    "pull", "push", "restart", "rm", "run", "scale", "start", "stop", "top",
+                    "unpause", "up", "wait",
+                ];
+
+                if service_commands.contains(&command_name) {
+                    let current_token = parsed_command_line.current_token.as_str();
+                    self.collect_compose_service_candidates(current_dir, current_token)
+                } else {
+                    Vec::new()
+                }
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn collect_kubectl_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        use parser::CompletionContext;
+
+        let current_token = parsed_command_line.current_token.as_str();
+        match &parsed_command_line.completion_context {
+            CompletionContext::OptionValue { option_name, .. } => match option_name.as_str() {
+                "--context" => self.collect_kubectl_context_candidates(current_dir, current_token),
+                "-n" | "--namespace" => {
+                    self.collect_kubectl_namespace_candidates(current_dir, current_token)
+                }
+                _ => Vec::new(),
+            },
+            CompletionContext::SubCommand | CompletionContext::Argument { .. } => {
+                let path = parsed_command_line
+                    .subcommand_path
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
+                if path.len() >= 2 && path[0] == "config" && path[1] == "use-context" {
+                    self.collect_kubectl_context_candidates(current_dir, current_token)
+                } else {
+                    Vec::new()
+                }
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn collect_git_branch_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_command_line_candidates(
+            current_dir,
+            "git",
+            &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+            current_token,
+            "git branch",
+        )
+    }
+
+    fn collect_git_remote_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_command_line_candidates(
+            current_dir,
+            "git",
+            &["remote"],
+            current_token,
+            "git remote",
+        )
+    }
+
+    fn collect_git_worktree_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+    ) -> Vec<EnhancedCandidate> {
+        let Some(command_path) = self.resolve_command_path("git") else {
+            return Vec::new();
+        };
+
+        match run_command_lines(
+            &command_path,
+            &["worktree", "list", "--porcelain"],
+            current_dir,
+        ) {
+            Ok(lines) => lines
+                .into_iter()
+                .filter_map(|line| line.strip_prefix("worktree ").map(str::to_string))
+                .filter(|path| matches_prefix(current_token, path))
+                .map(|path| EnhancedCandidate {
+                    text: path,
+                    description: Some("git worktree".to_string()),
+                    candidate_type: CandidateType::Argument,
+                    priority: 130,
+                })
+                .collect(),
+            Err(err) => {
+                warn!("Failed to load git worktree completions: {}", err);
+                Vec::new()
+            }
+        }
+    }
+
+    fn collect_compose_service_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+    ) -> Vec<EnhancedCandidate> {
+        let Some(compose_file) = find_compose_file(current_dir) else {
+            return Vec::new();
+        };
+
+        match parse_compose_service_names(&compose_file) {
+            Ok(services) => services
+                .into_iter()
+                .filter(|service| matches_prefix(current_token, service))
+                .map(|service| EnhancedCandidate {
+                    text: service,
+                    description: Some(format!("compose service ({})", compose_file.display())),
+                    candidate_type: CandidateType::Argument,
+                    priority: 125,
+                })
+                .collect(),
+            Err(err) => {
+                warn!(
+                    "Failed to parse compose services from {:?}: {}",
+                    compose_file, err
+                );
+                Vec::new()
+            }
+        }
+    }
+
+    fn collect_kubectl_context_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_command_line_candidates(
+            current_dir,
+            "kubectl",
+            &["config", "get-contexts", "-o", "name"],
+            current_token,
+            "kubectl context",
+        )
+    }
+
+    fn collect_kubectl_namespace_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_command_line_candidates(
+            current_dir,
+            "kubectl",
+            &[
+                "get",
+                "namespaces",
+                "-o",
+                "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}",
+            ],
+            current_token,
+            "kubectl namespace",
+        )
+    }
+
+    fn collect_command_line_candidates(
+        &self,
+        current_dir: &Path,
+        command_name: &str,
+        args: &[&str],
+        current_token: &str,
+        description: &str,
+    ) -> Vec<EnhancedCandidate> {
+        let Some(command_path) = self.resolve_command_path(command_name) else {
+            return Vec::new();
+        };
+
+        match run_command_lines(&command_path, args, current_dir) {
+            Ok(lines) => lines
+                .into_iter()
+                .filter(|value| matches_prefix(current_token, value))
+                .map(|value| EnhancedCandidate {
+                    text: value,
+                    description: Some(description.to_string()),
+                    candidate_type: CandidateType::Argument,
+                    priority: 130,
+                })
+                .collect(),
+            Err(err) => {
+                warn!("Failed to load {} completions: {}", command_name, err);
+                Vec::new()
+            }
+        }
+    }
+
+    fn resolve_command_path(&self, command_name: &str) -> Option<String> {
+        self.environment.read().lookup(command_name)
+    }
+
+    fn collect_external_candidates(
+        &self,
+        request: &CompletionRequest,
+        parsed_command_line: &ParsedCommandLine,
+    ) -> CandidateBatch {
+        let Some(command_template) = self
+            .environment
+            .read()
+            .get_var("DSH_EXTERNAL_COMPLETER")
+            .filter(|value| !value.trim().is_empty())
+        else {
+            return CandidateBatch::empty();
+        };
+
+        match run_external_completer(
+            &command_template,
+            request.current_dir,
+            request.input,
+            request.cursor_pos,
+            parsed_command_line,
+        ) {
+            Ok(candidates) if !candidates.is_empty() => {
+                CandidateBatch::inclusive_with_framework(candidates, CompletionFrameworkKind::Skim)
+            }
+            Ok(_) => CandidateBatch::empty(),
+            Err(err) => {
+                warn!("External completer failed: {}", err);
+                CandidateBatch::empty()
+            }
+        }
+    }
+
     /// Convert CompletionCandidate to EnhancedCandidate
     fn convert_to_enhanced_candidate(&self, candidate: CompletionCandidate) -> EnhancedCandidate {
         EnhancedCandidate {
@@ -788,6 +1157,171 @@ impl IntegratedCompletionEngine {
 
 fn matches_prefix(current_token: &str, value: &str) -> bool {
     current_token.is_empty() || super::fuzzy_match_score(value, current_token).is_some()
+}
+
+fn find_compose_file(current_dir: &Path) -> Option<PathBuf> {
+    const CANDIDATES: [&str; 4] = [
+        "compose.yaml",
+        "compose.yml",
+        "docker-compose.yaml",
+        "docker-compose.yml",
+    ];
+
+    current_dir.ancestors().find_map(|dir| {
+        CANDIDATES
+            .iter()
+            .map(|name| dir.join(name))
+            .find(|path| path.exists())
+    })
+}
+
+fn parse_compose_service_names(path: &Path) -> Result<Vec<String>> {
+    let contents = fs::read_to_string(path)?;
+    let mut in_services = false;
+    let mut services_indent = 0usize;
+    let mut service_indent = None;
+    let mut names = Vec::new();
+
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let indent = line.chars().take_while(|c| c.is_whitespace()).count();
+        if !in_services {
+            if trimmed == "services:" {
+                in_services = true;
+                services_indent = indent;
+            }
+            continue;
+        }
+
+        if indent <= services_indent {
+            break;
+        }
+
+        if trimmed.starts_with('-') {
+            continue;
+        }
+
+        if !trimmed.ends_with(':') {
+            continue;
+        }
+
+        let key = trimmed.trim_end_matches(':').trim();
+        if key.is_empty() || key.contains(' ') {
+            continue;
+        }
+
+        match service_indent {
+            None => {
+                service_indent = Some(indent);
+                names.push(key.to_string());
+            }
+            Some(expected_indent) if indent == expected_indent => names.push(key.to_string()),
+            _ => {}
+        }
+    }
+
+    let mut seen = HashSet::new();
+    names.retain(|name| seen.insert(name.clone()));
+    Ok(names)
+}
+
+fn run_external_completer(
+    command_template: &str,
+    current_dir: &Path,
+    input: &str,
+    cursor_pos: usize,
+    parsed_command_line: &ParsedCommandLine,
+) -> Result<Vec<EnhancedCandidate>> {
+    let subcommand_path = parsed_command_line.subcommand_path.join(" ");
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg(command_template)
+        .current_dir(current_dir)
+        .env("DSH_COMPLETION_INPUT", input)
+        .env("DSH_COMPLETION_CURSOR", cursor_pos.to_string())
+        .env("DSH_COMPLETION_COMMAND", &parsed_command_line.command)
+        .env(
+            "DSH_COMPLETION_CURRENT_TOKEN",
+            &parsed_command_line.current_token,
+        )
+        .env("DSH_COMPLETION_SUBCOMMAND_PATH", &subcommand_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    let lines = wait_and_collect_lines(&mut child)?;
+    Ok(lines
+        .into_iter()
+        .filter_map(|line| {
+            let (text, description) = if let Some((text, description)) = line.split_once('\t') {
+                (text.trim(), Some(description.trim().to_string()))
+            } else {
+                (line.trim(), None)
+            };
+
+            if text.is_empty() || !matches_prefix(&parsed_command_line.current_token, text) {
+                return None;
+            }
+
+            Some(EnhancedCandidate {
+                text: text.to_string(),
+                description,
+                candidate_type: CandidateType::Argument,
+                priority: 200,
+            })
+        })
+        .collect())
+}
+
+fn run_command_lines(command_path: &str, args: &[&str], current_dir: &Path) -> Result<Vec<String>> {
+    let mut child = Command::new(command_path)
+        .args(args)
+        .current_dir(current_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    wait_and_collect_lines(&mut child)
+}
+
+fn wait_and_collect_lines(child: &mut std::process::Child) -> Result<Vec<String>> {
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("Child stdout not captured"))?;
+    let reader_thread = std::thread::spawn(move || {
+        let mut buf = String::new();
+        stdout.read_to_string(&mut buf)?;
+        Ok::<String, std::io::Error>(buf)
+    });
+
+    match child.wait_timeout(Duration::from_millis(1500))? {
+        Some(status) => {
+            let output = reader_thread
+                .join()
+                .map_err(|_| anyhow::anyhow!("Stdout reader thread panicked"))??;
+            if !status.success() {
+                return Ok(Vec::new());
+            }
+
+            Ok(output
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+                .collect())
+        }
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader_thread.join();
+            Ok(Vec::new())
+        }
+    }
 }
 
 fn format_task_description(source: &str, command: &str) -> String {
@@ -973,6 +1507,9 @@ impl CandidateType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::tempdir;
 
     #[test]
     fn test_integrated_completion_engine_creation() {
@@ -1203,6 +1740,157 @@ mod tests {
         assert_eq!(
             score_docker, score_none,
             "Mismatch context should have same score as no context (base match)"
+        );
+    }
+
+    #[test]
+    fn parse_compose_services_reads_top_level_service_names() {
+        let dir = tempdir().unwrap();
+        let compose_file = dir.path().join("compose.yaml");
+        fs::write(
+            &compose_file,
+            r#"
+services:
+  api:
+    image: example/api
+  worker:
+    build: .
+volumes:
+  cache:
+"#,
+        )
+        .unwrap();
+
+        let services = parse_compose_service_names(&compose_file).unwrap();
+        assert_eq!(services, vec!["api".to_string(), "worker".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn git_checkout_completes_local_branches() {
+        let dir = tempdir().unwrap();
+
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        fs::write(dir.path().join("README.md"), "hello\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["checkout", "-b", "feature/test-branch"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "git checkout feat";
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "feature/test-branch"),
+            "expected dynamic git branch completion"
+        );
+    }
+
+    #[tokio::test]
+    async fn kubectl_context_option_value_uses_dynamic_provider() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+
+        let kubectl = bin_dir.join("kubectl");
+        fs::write(
+            &kubectl,
+            "#!/bin/sh\nif [ \"$1\" = \"config\" ] && [ \"$2\" = \"get-contexts\" ]; then\n  printf 'dev-cluster\\nprod-cluster\\n'\nfi\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&kubectl).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&kubectl, permissions).unwrap();
+
+        let environment = Environment::new();
+        {
+            let mut env = environment.write();
+            env.paths = vec![bin_dir.display().to_string()];
+            env.clear_command_cache();
+        }
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "kubectl --context de";
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "dev-cluster"),
+            "expected kubectl context completion"
+        );
+    }
+
+    #[tokio::test]
+    async fn external_completer_runs_as_fallback() {
+        let dir = tempdir().unwrap();
+        let script = dir.path().join("external-completer.sh");
+        fs::write(
+            &script,
+            "#!/bin/sh\nprintf 'deploy\\tExternal completer\\n'\nprintf 'debug\\tExternal completer\\n'\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).unwrap();
+
+        let environment = Environment::new();
+        environment.write().variables.insert(
+            "DSH_EXTERNAL_COMPLETER".to_string(),
+            script.display().to_string(),
+        );
+
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "unknown-command de";
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "deploy"),
+            "expected external completer fallback"
         );
     }
 }

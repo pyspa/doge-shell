@@ -1,9 +1,12 @@
+use super::Prompt;
 use super::context::PromptContext;
 use super::modules::PromptModule;
 use super::modules::execution_time::ExecutionTimeModule;
 use super::modules::exit_status::ExitStatusModule;
+use super::modules::nodejs::NodeModule;
 use std::path::PathBuf;
 use std::time::Duration;
+use tempfile::tempdir;
 
 #[test]
 fn test_execution_time_module_short() {
@@ -11,12 +14,17 @@ fn test_execution_time_module_short() {
     let current_dir = PathBuf::from("/");
     let context = PromptContext {
         current_dir: &current_dir,
+        project_root: None,
         git_root: None,
         git_status: None,
         rust_version: None,
+        rust_source: None,
         node_version: None,
+        node_source: None,
         python_version: None,
+        python_source: None,
         go_version: None,
+        go_source: None,
         k8s_context: None,
         k8s_namespace: None,
         aws_profile: None,
@@ -35,12 +43,17 @@ fn test_execution_time_module_long() {
     let current_dir = PathBuf::from("/");
     let context = PromptContext {
         current_dir: &current_dir,
+        project_root: None,
         git_root: None,
         git_status: None,
         rust_version: None,
+        rust_source: None,
         node_version: None,
+        node_source: None,
         python_version: None,
+        python_source: None,
         go_version: None,
+        go_source: None,
         k8s_context: None,
         k8s_namespace: None,
         aws_profile: None,
@@ -59,12 +72,17 @@ fn test_execution_time_module_none_under_threshold() {
     let current_dir = PathBuf::from("/");
     let context = PromptContext {
         current_dir: &current_dir,
+        project_root: None,
         git_root: None,
         git_status: None,
         rust_version: None,
+        rust_source: None,
         node_version: None,
+        node_source: None,
         python_version: None,
+        python_source: None,
         go_version: None,
+        go_source: None,
         k8s_context: None,
         k8s_namespace: None,
         aws_profile: None,
@@ -82,12 +100,17 @@ fn test_exit_status_module_success() {
     let current_dir = PathBuf::from("/");
     let context = PromptContext {
         current_dir: &current_dir,
+        project_root: None,
         git_root: None,
         git_status: None,
         rust_version: None,
+        rust_source: None,
         node_version: None,
+        node_source: None,
         python_version: None,
+        python_source: None,
         go_version: None,
+        go_source: None,
         k8s_context: None,
         k8s_namespace: None,
         aws_profile: None,
@@ -105,12 +128,17 @@ fn test_exit_status_module_failure() {
     let current_dir = PathBuf::from("/");
     let context = PromptContext {
         current_dir: &current_dir,
+        project_root: None,
         git_root: None,
         git_status: None,
         rust_version: None,
+        rust_source: None,
         node_version: None,
+        node_source: None,
         python_version: None,
+        python_source: None,
         go_version: None,
+        go_source: None,
         k8s_context: None,
         k8s_namespace: None,
         aws_profile: None,
@@ -149,4 +177,53 @@ u UU N... 100644 100644 100644 (hash) (hash) conflicted_file
     assert_eq!(status.untracked, 1);
     assert_eq!(status.conflicted, 1);
     assert_eq!(status.renamed, 1);
+}
+
+#[test]
+fn node_module_uses_project_root_and_runtime_source() {
+    let module = NodeModule::new();
+    let dir = tempdir().unwrap();
+    let project_root = dir.path().join("web");
+    let nested = project_root.join("src");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(project_root.join("package.json"), "{\"name\":\"web\"}").unwrap();
+
+    let context = PromptContext {
+        current_dir: &nested,
+        project_root: Some(&project_root),
+        git_root: None,
+        git_status: None,
+        rust_version: None,
+        rust_source: None,
+        node_version: Some("v20.11.0"),
+        node_source: Some(".nvmrc"),
+        python_version: None,
+        python_source: None,
+        go_version: None,
+        go_source: None,
+        k8s_context: None,
+        k8s_namespace: None,
+        aws_profile: None,
+        docker_context: None,
+        last_exit_status: 0,
+        last_duration: None,
+    };
+
+    let output = module.render(&context).unwrap();
+    assert!(output.contains("v20.11.0"));
+    assert!(output.contains("(.nvmrc)"));
+}
+
+#[test]
+fn prompt_detects_project_types_from_parent_directory() {
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("package.json"), "{\"name\":\"demo\"}").unwrap();
+    std::fs::write(dir.path().join(".nvmrc"), "20.11.0\n").unwrap();
+    let nested = dir.path().join("src").join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    let mut prompt = Prompt::new(nested.clone(), "🐕 < ".to_string());
+    prompt.set_current(&nested);
+
+    assert!(prompt.needs_node_check());
 }

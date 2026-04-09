@@ -46,6 +46,7 @@ mod notebook_play;
 mod out;
 pub mod procs;
 pub mod project;
+pub mod project_context;
 mod read;
 
 mod reload;

@@ -23,13 +23,27 @@ impl PromptModule for RustModule {
     }
 
     fn render(&self, context: &PromptContext<'_>) -> Option<String> {
-        let cargo_toml = context.current_dir.join("Cargo.toml");
+        let project_dir = context.project_root.unwrap_or(context.current_dir);
+        let cargo_toml = project_dir.join("Cargo.toml");
+        let source = context
+            .rust_source
+            .map(|source| format!("({source})").dark_grey().to_string());
 
         if let Some(version) = &context.rust_version {
-            Some(format!(" {} {}", "🦀".red().bold(), version.dim()))
+            match source {
+                Some(source) => Some(format!(
+                    " {} {} {}",
+                    "🦀".red().bold(),
+                    version.dim(),
+                    source
+                )),
+                None => Some(format!(" {} {}", "🦀".red().bold(), version.dim())),
+            }
         } else if cargo_toml.exists() {
-            // Still loading or failed
-            Some(format!(" {}", "🦀".red().bold()))
+            match source {
+                Some(source) => Some(format!(" {} {}", "🦀".red().bold(), source)),
+                None => Some(format!(" {}", "🦀".red().bold())),
+            }
         } else {
             None
         }

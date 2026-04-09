@@ -23,14 +23,28 @@ impl PromptModule for NodeModule {
     }
 
     fn render(&self, context: &PromptContext<'_>) -> Option<String> {
-        let package_json = context.current_dir.join("package.json");
-        let node_modules = context.current_dir.join("node_modules");
+        let project_dir = context.project_root.unwrap_or(context.current_dir);
+        let package_json = project_dir.join("package.json");
+        let node_modules = project_dir.join("node_modules");
+        let source = context
+            .node_source
+            .map(|source| format!("({source})").dark_grey().to_string());
 
         if let Some(version) = &context.node_version {
-            Some(format!(" {} {}", "⬢".green().bold(), version.dim()))
+            match source {
+                Some(source) => Some(format!(
+                    " {} {} {}",
+                    "⬢".green().bold(),
+                    version.dim(),
+                    source
+                )),
+                None => Some(format!(" {} {}", "⬢".green().bold(), version.dim())),
+            }
         } else if package_json.exists() || node_modules.exists() {
-            // Still loading
-            Some(format!(" {}", "⬢".green().bold()))
+            match source {
+                Some(source) => Some(format!(" {} {}", "⬢".green().bold(), source)),
+                None => Some(format!(" {}", "⬢".green().bold())),
+            }
         } else {
             None
         }

@@ -23,6 +23,7 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 - **Command Palette**: Unified interface for accessing shell commands and features with `Alt+x`
 - **Frecency-based History**: Intelligent command history using frecency scoring (frequency + recency)
 - **Context-Aware History**: Prioritizes commands based on the current directory or Git repository context
+- **Queryable History**: Search history by text, scope, exit status, and duration with the `history` command
 - **Directory Navigation**: Smart directory history and jump with `z` command
 - **Path Management**: Dynamic PATH management with `add_path` command
 - **Job Control**: Background job management with `jobs`, `bg`, `fg` commands
@@ -35,7 +36,7 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 
 - **Context-Aware Completion**: Intelligent tab completion for commands, files, and options
 - **Skim Integration**: Fuzzy finding interface for completion using [skim](https://github.com/lotabout/skim)
-- **History Search**: Interactive history search with Ctrl+R
+- **History Search**: Interactive history search with Ctrl+R using the current input as the search query
 - **Command Abbreviations**: Define and use abbreviations with `abbr` command
 - **AI-Powered Completion**: OpenAI integration for intelligent command completion suggestions
 - **Right Prompt**: Displays command execution status and duration on the right side
@@ -185,7 +186,7 @@ The shell includes many built-in commands:
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `exit`              | Exit the shell                                                                                                             |
 | `cd`                | Change directory                                                                                                           |
-| `history`           | Show command history                                                                                                       |
+| `history`           | Search and filter command history                                                                                          |
 | `z`                 | Jump to frequently used directories (use `-i` or `--interactive` for selection, `-` for previous directory, `-l` for list) |
 | `jobs`              | Show background jobs                                                                                                       |
 | `fg`                | Bring job to foreground                                                                                                    |
@@ -224,6 +225,7 @@ The shell includes many built-in commands:
 | `help`              | Show help information                                                                                                      |
 | `comp-gen`          | Generate command completion using AI (`--stdout`, `--check`)                                                               |
 | `dashboard`         | Show integrated dashboard (System, Git, GitHub)                                                                            |
+| `doctor`            | Diagnose config, AI, MCP, project, and runtime state                                                                       |
 | `ai-commit` / `aic` | Generate commit message using AI                                                                                           |
 | `tm`                | Search and retrieve past command outputs                                                                                   |
 | `trigger`           | Monitor file changes and execute commands (saves output to history)                                                        |
@@ -572,6 +574,41 @@ dsh import fish
 dsh import bash --path /path/to/bash_history
 ```
 
+### `history` Command
+
+Search command history with text and metadata filters.
+
+```bash
+# Search by text
+history cargo
+
+# Show recent failures
+history --status failure
+
+# Show slow commands in the current project with metadata
+history --scope project --slow 1000 --verbose
+```
+
+`--scope` accepts `global`, `session`, `cwd`, and `project`. Use `--limit` to control result count, or `--query` if you prefer an explicit flag instead of the positional search text.
+
+### `doctor` Command
+
+Inspect the current shell setup and project context.
+
+```bash
+# Run all diagnostics
+doctor
+
+# Focus on one area
+doctor ai
+doctor project
+
+# Show command help
+doctor --help
+```
+
+`doctor` reports on configuration files, AI settings, MCP connection counters, project marker files, and common developer runtimes found in `PATH`.
+
 ### `include` Command
 
 Source a bash script and import its environment variables into the current shell session.
@@ -584,7 +621,7 @@ include setup.sh
 ### Key Bindings
 
 - `Tab` - Context-aware completion
-- `Ctrl+R` - Interactive history search
+- `Ctrl+R` - Interactive history search using the current input as the query
 - `Ctrl+C` - Cancel current command (press twice to exit shell)
 - `Ctrl+L` - Clear screen
 - `Ctrl+K` - Delete from cursor to end of line
@@ -608,6 +645,10 @@ Access all shell capabilities through a unified fuzzy-search interface, similar 
   - Access AI features (Explain, Fix, etc.)
   - Execute Git operations
   - Extensible via `Action` trait and Lisp interface (coming soon)
+
+## Command Suggestions
+
+When a command is not found, dsh can suggest close command names. If the current directory exposes tasks through the built-in task runner, task suggestions may also appear as `task <name>` candidates.
 
 ## 📼 Macro Recorder
 

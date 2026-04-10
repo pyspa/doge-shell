@@ -4,6 +4,7 @@ use crate::shell::{
     Shell,
     parse::{ParseContext, parse_commands},
 };
+use crate::terminal::title;
 use anyhow::{Context as _, Result, anyhow};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dsh_builtin::execute_chat_message;
@@ -16,6 +17,28 @@ use std::os::fd::{AsRawFd, BorrowedFd};
 use std::sync::Arc;
 use tokio::task;
 use tracing::debug;
+
+struct TitleGuard {
+    active: bool,
+}
+
+impl TitleGuard {
+    fn new(ctx: &Context, job: &Job) -> Self {
+        let active = ctx.interactive && job.foreground;
+        if active {
+            title::set_running_title(job).ok();
+        }
+        Self { active }
+    }
+}
+
+impl Drop for TitleGuard {
+    fn drop(&mut self) {
+        if self.active {
+            title::reset_title().ok();
+        }
+    }
+}
 
 pub async fn eval_str(
     shell: &mut Shell,
@@ -207,6 +230,7 @@ pub async fn eval_str(
             "start job '{:?}' foreground:{:?} redirect:{:?} list_op:{:?} capture:{:?}",
             job.cmd, job.foreground, job.redirect, job.list_op, job.capture_output,
         );
+        let _title_guard = TitleGuard::new(ctx, &job);
 
         // Handle capture mode with |>
         if job.capture_output {

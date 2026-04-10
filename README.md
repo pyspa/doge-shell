@@ -437,6 +437,21 @@ Create a `~/.config/dsh/config.lisp` file to configure your shell:
 (add-hook 'on-chdir-hooks 'my-chdir-func)
 ```
 
+### tmux title integration
+
+`dsh` updates the terminal title while a foreground command is running. To let tmux reflect that in the window name, add this to `~/.tmux.conf`:
+
+```tmux
+set -g allow-rename on
+set -g automatic-rename off
+```
+
+If you also want the outer terminal emulator title to follow tmux, enable:
+
+```tmux
+set -g set-titles on
+```
+
 ### MCP Configuration Details
 
 MCP (Model Context Protocol) allows the shell to connect to external services that provide tools for AI assistants. You can configure MCP servers in your `config.lisp` file using these functions:

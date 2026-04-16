@@ -23,8 +23,6 @@ impl PromptModule for GoModule {
     }
 
     fn render(&self, context: &PromptContext<'_>) -> Option<String> {
-        let project_dir = context.project_root.unwrap_or(context.current_dir);
-        let go_mod = project_dir.join("go.mod");
         let source = context
             .go_source
             .map(|source| format!("({source})").dark_grey().to_string());
@@ -39,7 +37,7 @@ impl PromptModule for GoModule {
                 )),
                 None => Some(format!(" {} {}", "🐹".cyan().bold(), version.dim())),
             }
-        } else if go_mod.exists() {
+        } else if context.has_go_project {
             match source {
                 Some(source) => Some(format!(" {} {}", "🐹".cyan().bold(), source)),
                 None => Some(format!(" {}", "🐹".cyan().bold())),

@@ -52,7 +52,7 @@ pub(crate) fn analyze_input(
                     Rule::argv0 => {
                         // Completion logic for command names
                         if current && completion.is_none() {
-                            if let Some(file) = repl.shell.environment.read().search(word) {
+                            if let Some(file) = repl.shell.environment.read().search_prefix(word) {
                                 if file.len() >= input.len() && file.starts_with(input) {
                                     completion = Some(file[input.len()..].to_string());
                                 }

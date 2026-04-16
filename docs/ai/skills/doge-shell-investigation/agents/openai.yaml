@@ -1,0 +1,4 @@
+interface:
+  display_name: "Doge Shell Investigation"
+  short_description: "Run read-first investigation with minimal spread."
+  default_prompt: "Use $doge-shell-investigation to inspect or review this repository before editing anything."

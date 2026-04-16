@@ -1,0 +1,26 @@
+# Task Map
+
+- completion / suggestion / ghost text / TAB
+  - Read: `dsh/src/completion/`, `dsh/src/repl/completion/`, `dsh/src/repl/input_analysis.rs`
+  - Validate: `cargo test -p doge-shell`
+- parser / AST / redirect / expansion / brace
+  - Read: `dsh/src/parser/`
+  - Validate: `cargo test -p doge-shell`
+- prompt / right prompt / transient / terminal UI
+  - Read: `dsh/src/prompt/`, `dsh/src/terminal/`, `dsh/src/repl/`
+  - Validate: `cargo test -p doge-shell`
+- chatgpt / MCP / tool / runtime skill / OpenAI config
+  - Read: `dsh-builtin/src/chatgpt/`, `dsh-openai/src/`, `dsh-builtin/src/doctor.rs`
+  - Validate: `cargo test -p dsh-builtin`
+- builtin command / help / doctor
+  - Read: `dsh-builtin/src/`
+  - Validate: `cargo test -p dsh-builtin`
+- safety / guard / command policy
+  - Read: `dsh/src/safety/`
+  - Validate: `cargo test -p doge-shell`
+- lisp / config loader / startup behavior
+  - Read: `dsh/src/lisp/`, `dsh/src/lib.rs`, `dsh/src/main.rs`
+  - Validate: `cargo test -p doge-shell`
+- cross-crate integration
+  - Read: affected crate entry points from `module-map.md`
+  - Validate: `cargo test` or `cargo check --workspace` only when the behavior spans crates

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Doge Shell Chat Tools"
+  short_description: "Inspect chat, MCP, and runtime skill paths narrowly."
+  default_prompt: "Use $doge-shell-chat-tools to work on chat tools and runtime skills with minimal reading and validation."

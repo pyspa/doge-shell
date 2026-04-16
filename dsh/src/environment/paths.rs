@@ -45,12 +45,9 @@ impl Environment {
         // Cache miss: search PATH directories
         let result = self.lookup_path_uncached(cmd);
 
-        // Update cache ONLY if found
-        if let Some(ref path) = result {
-            self.command_cache
-                .write()
-                .insert(cmd.to_string(), Some(path.clone()));
-        }
+        self.command_cache
+            .write()
+            .insert(cmd.to_string(), result.clone());
 
         result
     }
@@ -88,6 +85,9 @@ impl Environment {
             } else {
                 return None;
             }
+        }
+        if self.lookup_path_uncached(cmd).is_some() {
+            return Some(cmd.to_string());
         }
         for path in &self.paths {
             if let Some(file) = search_file(path, cmd) {

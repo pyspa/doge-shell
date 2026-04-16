@@ -1,0 +1,4 @@
+interface:
+  display_name: "Doge Shell Validation"
+  short_description: "Choose the narrowest cargo validation path."
+  default_prompt: "Use $doge-shell-validation to pick the smallest correct validation command for this repository."

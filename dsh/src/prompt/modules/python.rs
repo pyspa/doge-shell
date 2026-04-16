@@ -23,12 +23,6 @@ impl PromptModule for PythonModule {
     }
 
     fn render(&self, context: &PromptContext<'_>) -> Option<String> {
-        let project_dir = context.project_root.unwrap_or(context.current_dir);
-        let has_python = project_dir.join("requirements.txt").exists()
-            || project_dir.join("pyproject.toml").exists()
-            || project_dir.join("Pipfile").exists()
-            || project_dir.join(".venv").exists()
-            || project_dir.join("venv").exists();
         let source = context
             .python_source
             .map(|source| format!("({source})").dark_grey().to_string());
@@ -43,7 +37,7 @@ impl PromptModule for PythonModule {
                 )),
                 None => Some(format!(" {} {}", "🐍".yellow().bold(), version.dim())),
             }
-        } else if has_python {
+        } else if context.has_python_project {
             match source {
                 Some(source) => Some(format!(" {} {}", "🐍".yellow().bold(), source)),
                 None => Some(format!(" {}", "🐍".yellow().bold())),

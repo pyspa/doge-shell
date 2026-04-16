@@ -1,7 +1,8 @@
 use anyhow::{Context as _, Result};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
-use nix::unistd::pipe;
+use nix::unistd::{isatty, pipe};
 use std::io::{Read, Write};
+use std::os::fd::BorrowedFd;
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
 use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
@@ -121,6 +122,33 @@ impl OutputMonitor {
 pub struct PtyMonitor {
     inner: AsyncFd<std::fs::File>,
     pub captured_output: Vec<u8>,
+    stdout_is_tty: bool,
+    last_passthrough_byte: Option<u8>,
+}
+
+fn normalize_tty_newlines(data: &[u8], last_byte: &mut Option<u8>) -> Option<Vec<u8>> {
+    let mut prev = *last_byte;
+    let mut normalized = Vec::new();
+    let mut changed = false;
+
+    for (index, &byte) in data.iter().enumerate() {
+        if byte == b'\n' && prev != Some(b'\r') {
+            if !changed {
+                normalized.reserve(data.len() + 8);
+                normalized.extend_from_slice(&data[..index]);
+                changed = true;
+            }
+            normalized.push(b'\r');
+            normalized.push(b'\n');
+        } else if changed {
+            normalized.push(byte);
+        }
+        prev = Some(byte);
+    }
+
+    *last_byte = prev;
+
+    if changed { Some(normalized) } else { None }
 }
 
 impl PtyMonitor {
@@ -137,6 +165,9 @@ impl PtyMonitor {
         Ok(PtyMonitor {
             inner,
             captured_output: Vec::new(),
+            stdout_is_tty: isatty(unsafe { BorrowedFd::borrow_raw(libc::STDOUT_FILENO) })
+                .unwrap_or(false),
+            last_passthrough_byte: None,
         })
     }
 
@@ -175,9 +206,16 @@ impl PtyMonitor {
                 Ok(Ok(n)) => {
                     tracing::debug!("PtyMonitor: Read {} bytes", n);
                     let data = &buf[..n];
+                    let display_data = if self.stdout_is_tty {
+                        normalize_tty_newlines(data, &mut self.last_passthrough_byte)
+                    } else {
+                        self.last_passthrough_byte = data.last().copied();
+                        None
+                    };
+                    let display_bytes = display_data.as_deref().unwrap_or(data);
 
                     // Print to real stdout (Passthrough) - use async write
-                    if let Err(e) = stdout.write_all(data).await {
+                    if let Err(e) = stdout.write_all(display_bytes).await {
                         tracing::error!("PtyMonitor: Failed to write to stdout: {}", e);
                     }
                     if let Err(e) = stdout.flush().await {
@@ -283,7 +321,7 @@ pub(crate) fn handle_output_redirect(
 
 #[cfg(test)]
 mod tests {
-    use super::append_output_chunk;
+    use super::{append_output_chunk, normalize_tty_newlines};
 
     #[test]
     fn append_output_chunk_prefixes_only_first_chunk() {
@@ -304,5 +342,60 @@ mod tests {
         append_output_chunk(&mut started, &mut buffer, "\u{1b}[31mred\u{1b}[0m\n");
 
         assert_eq!(buffer, "\r\n\u{1b}[31mred\u{1b}[0m\n");
+    }
+
+    #[test]
+    fn normalize_tty_newlines_converts_bare_lf() {
+        let mut last = None;
+
+        let normalized = normalize_tty_newlines(b"first\nsecond\n", &mut last)
+            .expect("bare LF should be normalized");
+
+        assert_eq!(normalized, b"first\r\nsecond\r\n");
+        assert_eq!(last, Some(b'\n'));
+    }
+
+    #[test]
+    fn normalize_tty_newlines_preserves_existing_crlf() {
+        let mut last = None;
+
+        let normalized = normalize_tty_newlines(b"first\r\nsecond\r\n", &mut last);
+
+        assert!(normalized.is_none());
+        assert_eq!(last, Some(b'\n'));
+    }
+
+    #[test]
+    fn normalize_tty_newlines_handles_ansi_colored_output() {
+        let mut last = None;
+
+        let normalized = normalize_tty_newlines(b"\x1b[31mred\x1b[0m\n", &mut last)
+            .expect("colored LF should be normalized");
+
+        assert_eq!(normalized, b"\x1b[31mred\x1b[0m\r\n");
+        assert_eq!(last, Some(b'\n'));
+    }
+
+    #[test]
+    fn normalize_tty_newlines_preserves_split_crlf_across_chunks() {
+        let mut last = None;
+
+        let first = normalize_tty_newlines(b"prefix\r", &mut last);
+        let second = normalize_tty_newlines(b"\nsuffix\n", &mut last)
+            .expect("second chunk should only normalize the bare trailing LF");
+
+        assert!(first.is_none());
+        assert_eq!(second, b"\nsuffix\r\n");
+        assert_eq!(last, Some(b'\n'));
+    }
+
+    #[test]
+    fn normalize_tty_newlines_preserves_carriage_return_progress_updates() {
+        let mut last = None;
+
+        let normalized = normalize_tty_newlines(b"loading\rstep2\r", &mut last);
+
+        assert!(normalized.is_none());
+        assert_eq!(last, Some(b'\r'));
     }
 }

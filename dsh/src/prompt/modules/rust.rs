@@ -23,8 +23,6 @@ impl PromptModule for RustModule {
     }
 
     fn render(&self, context: &PromptContext<'_>) -> Option<String> {
-        let project_dir = context.project_root.unwrap_or(context.current_dir);
-        let cargo_toml = project_dir.join("Cargo.toml");
         let source = context
             .rust_source
             .map(|source| format!("({source})").dark_grey().to_string());
@@ -39,7 +37,7 @@ impl PromptModule for RustModule {
                 )),
                 None => Some(format!(" {} {}", "🦀".red().bold(), version.dim())),
             }
-        } else if cargo_toml.exists() {
+        } else if context.has_rust_project {
             match source {
                 Some(source) => Some(format!(" {} {}", "🦀".red().bold(), source)),
                 None => Some(format!(" {}", "🦀".red().bold())),

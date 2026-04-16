@@ -12,28 +12,25 @@
 ## 探索順
 1. `Cargo.toml` でクレート境界を確認する。
 2. `rg -n "<symbol>|<feature>" dsh dsh-builtin dsh-openai dsh-types` で実装位置を絞る。
-3. 迷ったら `docs/ai/skills/doge-shell-repo/references/module-map.md` を読む。
-
-## 主要モジュール
-- シェル本体: `dsh/src`
-- REPL / 入力: `dsh/src/repl`, `dsh/src/input`
-- パーサー: `dsh/src/parser`
-- 補完: `dsh/src/completion`, `dsh/src/repl/completion`
-- Lisp: `dsh/src/lisp`
-- prompt / UI: `dsh/src/prompt`, `dsh/src/terminal`
-- safety: `dsh/src/safety`
-- builtin: `dsh-builtin/src`
-- chat / tool / skills: `dsh-builtin/src/chatgpt`
-- OpenAI client: `dsh-openai/src`
+3. タスク別の入口が必要なら `docs/ai/skills/doge-shell-repo/references/task-map.md` を読む。
+4. package 名が曖昧なら `docs/ai/skills/doge-shell-repo/references/package-map.md` を読む。
+5. 所有範囲が曖昧なら `docs/ai/skills/doge-shell-repo/references/module-map.md` を読む。
 
 ## 検証の最小単位
 - `dsh-builtin` を触ったとき: `cargo test -p dsh-builtin`
-- `dsh` 本体を触ったとき: `cargo test -p dsh`
+- `dsh` 本体を触ったとき: `cargo test -p doge-shell`
 - 複数クレートを跨いだときだけ: `cargo test`
 - 広いビルド確認が必要なら: `cargo check --workspace`
+
+## 参照の使い分け
+- `task-map.md`: タスクごとの最初の読みに行く先と最小検証を決める。
+- `package-map.md`: ディレクトリ名と Cargo package 名のズレを避ける。
+- `module-map.md`: crate や主要ディレクトリの ownership を確認する。
+- `read-boundaries.md`: README や workspace 全体 test を開く条件を確認する。
 
 ## Skill 運用
 - canonical source は `docs/ai/skills/` に置く。
 - runtime 配置先は `~/.codex/skills/` と `~/.config/dsh/skills/`。
 - 導入や更新は `scripts/install-runtime-skills.sh` を使う。
+- 普段は必要な skill だけ install する。引数なしの全件 install は初期セットアップ時だけ使う。
 - Skill は frontmatter の `description` を短い要約兼トリガー文として書く。

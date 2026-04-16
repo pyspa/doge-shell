@@ -74,7 +74,7 @@ pub fn complete_command_word(
 ) -> Option<String> {
     let candidate = {
         let env = environment.read();
-        env.search(word)
+        env.search_prefix(word)
     };
 
     if let Some(name) = candidate

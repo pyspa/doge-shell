@@ -43,6 +43,29 @@ fn test_extend() {
 }
 
 #[test]
+fn lookup_caches_misses() {
+    init();
+    let env = Environment::new();
+    let missing = "definitely-not-a-command-12345";
+
+    assert_eq!(None, env.read().lookup(missing));
+    assert_eq!(Some(&None), env.read().command_cache.read().get(missing));
+}
+
+#[test]
+fn search_prefix_uses_prewarmed_names() {
+    init();
+    let env = Environment::new();
+    env.write().set_executable_names(vec![
+        "cargo".to_string(),
+        "cat".to_string(),
+        "git".to_string(),
+    ]);
+
+    assert_eq!(env.read().search_prefix("ca"), Some("cargo".to_string()));
+}
+
+#[test]
 fn test_resolve_alias() {
     init();
     let env = Environment::new();

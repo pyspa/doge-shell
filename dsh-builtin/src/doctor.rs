@@ -143,6 +143,64 @@ fn check_ai(ctx: &Context, proxy: &mut dyn ShellProxy) {
     let _ = ctx.write_stdout(&format!("ok model {model}"));
     let _ = ctx.write_stdout(&format!("ok base-url {base_url}"));
     let _ = ctx.write_stdout(&format!("ok message-lang {lang}"));
+
+    let dsh_skills_dir = dirs::config_dir().map(|path| path.join("dsh").join("skills"));
+    let dsh_skill_count = match dsh_skills_dir.as_ref() {
+        Some(path) if path.exists() => {
+            let count = count_skill_dirs(path);
+            let _ = ctx.write_stdout(&format!(
+                "ok dsh-runtime-skills {} entries={count}",
+                path.display()
+            ));
+            count
+        }
+        Some(path) => {
+            let _ = ctx.write_stdout(&format!(
+                "skip dsh-runtime-skills missing {}",
+                path.display()
+            ));
+            0
+        }
+        None => {
+            let _ = ctx.write_stdout("warn dsh-runtime-skills unable-to-determine-config-dir");
+            0
+        }
+    };
+
+    let codex_root = proxy
+        .get_var("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|path| path.join(".codex")));
+    let codex_skills_dir = codex_root.map(|path| path.join("skills"));
+    let codex_skill_count = match codex_skills_dir.as_ref() {
+        Some(path) if path.exists() => {
+            let count = count_skill_dirs(path);
+            let _ = ctx.write_stdout(&format!(
+                "ok codex-runtime-skills {} entries={count}",
+                path.display()
+            ));
+            count
+        }
+        Some(path) => {
+            let _ = ctx.write_stdout(&format!(
+                "skip codex-runtime-skills missing {}",
+                path.display()
+            ));
+            0
+        }
+        None => {
+            let _ = ctx.write_stdout("warn codex-runtime-skills unable-to-determine-home-dir");
+            0
+        }
+    };
+
+    if dsh_skill_count + codex_skill_count > 8 {
+        let _ = ctx.write_stdout(
+            "warn runtime-skill-footprint high consider installing only the skills needed for this repository",
+        );
+    } else {
+        let _ = ctx.write_stdout("ok runtime-skill-footprint minimal");
+    }
 }
 
 fn check_mcp(ctx: &Context, proxy: &mut dyn ShellProxy) {
@@ -341,6 +399,20 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
+fn count_skill_dirs(root: &Path) -> usize {
+    fs::read_dir(root)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    let path = entry.path();
+                    path.is_dir() && path.join("SKILL.md").is_file()
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,7 +450,9 @@ mod tests {
         std::fs::write(dir.path().join("package.json"), "{\"name\":\"demo\"}").unwrap();
 
         let project = project_context::resolve_project_context(dir.path());
-        assert_eq!(project.project_root, dir.path());
+        let expected_root = std::fs::canonicalize(dir.path()).unwrap();
+        let actual_root = std::fs::canonicalize(&project.project_root).unwrap();
+        assert_eq!(actual_root, expected_root);
         assert!(
             project
                 .project_markers
@@ -391,5 +465,18 @@ mod tests {
                 .iter()
                 .any(|runtime| runtime.name == "node" && runtime.source == "mise")
         );
+    }
+
+    #[test]
+    fn count_skill_dirs_only_counts_skill_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill_dir = dir.path().join("doge-shell-repo");
+        let plain_dir = dir.path().join("notes");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::create_dir_all(&plain_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "# skill").unwrap();
+        std::fs::write(plain_dir.join("README.md"), "# note").unwrap();
+
+        assert_eq!(count_skill_dirs(dir.path()), 1);
     }
 }

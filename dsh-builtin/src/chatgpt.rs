@@ -45,6 +45,7 @@ Respond in Markdown. Be concise and avoid unnecessary repetition.
 struct ConversationManager {
     summary: Option<String>,
     buffer: Vec<Value>,
+    buffer_chars: usize,
     /// System prompt (fixed) - index 0
     /// First user message (pinned) - index 1
     pinned_messages: Vec<Value>,
@@ -55,16 +56,18 @@ impl ConversationManager {
         Self {
             summary: None,
             buffer: Vec::new(),
+            buffer_chars: 0,
             pinned_messages: vec![system_prompt, first_user_message],
         }
     }
 
     fn add_message(&mut self, message: Value) {
+        self.buffer_chars += message_serialized_len(&message);
         self.buffer.push(message);
     }
 
     fn buffer_size_chars(&self) -> usize {
-        self.buffer.iter().map(|msg| msg.to_string().len()).sum()
+        self.buffer_chars
     }
 
     fn should_summarize(&self) -> bool {
@@ -180,6 +183,7 @@ impl ConversationManager {
         const RETAIN_AFTER_SUMMARY: usize = 6; // Keep last ~3 exchanges (assistant+tool pairs)
         let retain_start = self.buffer.len().saturating_sub(RETAIN_AFTER_SUMMARY);
         self.buffer = self.buffer.split_off(retain_start);
+        self.buffer_chars = sum_message_lengths(&self.buffer);
         self.summary = Some(new_summary);
 
         Ok(())
@@ -219,6 +223,14 @@ use tool::{build_tools, execute_tool_call};
 
 mod skills;
 use skills::SkillsManager;
+
+fn message_serialized_len(message: &Value) -> usize {
+    message.to_string().len()
+}
+
+fn sum_message_lengths(messages: &[Value]) -> usize {
+    messages.iter().map(message_serialized_len).sum()
+}
 
 pub fn load_openai_config(proxy: &mut dyn ShellProxy) -> OpenAiConfig {
     OpenAiConfig::from_getter(|key| proxy.get_var(key).or_else(|| std::env::var(key).ok()))
@@ -563,16 +575,8 @@ fn environment_snapshot(proxy: &mut dyn ShellProxy) -> String {
     if let Some(current_dir) = &current_dir
         && let Ok(entries) = fs::read_dir(current_dir)
     {
-        let visible_entries = entries
-            .filter_map(|e| e.ok())
-            .map(|e| {
-                let name = e.file_name().to_string_lossy().into_owned();
-                let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                (name, is_dir)
-            })
-            .collect::<Vec<_>>();
-
-        let summarized = summarize_visible_entries(visible_entries);
+        let (visible_entries, total_entries) = collect_visible_entries_preview(entries);
+        let summarized = summarize_visible_entries(visible_entries, total_entries);
         if !summarized.is_empty() {
             files_str = format!("\n- Visible files: {summarized}");
         }
@@ -606,9 +610,39 @@ fn summarize_aliases(mut aliases: Vec<(String, String)>) -> String {
     rendered.join(", ")
 }
 
-fn summarize_visible_entries(mut entries: Vec<(String, bool)>) -> String {
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
-    let total = entries.len();
+fn collect_visible_entries_preview(entries: fs::ReadDir) -> (Vec<(String, bool)>, usize) {
+    let mut preview = Vec::new();
+    let mut total = 0;
+
+    for entry in entries.filter_map(|e| e.ok()) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        total += 1;
+        insert_visible_entry_preview(&mut preview, (name, is_dir), MAX_VISIBLE_FILES);
+    }
+
+    (preview, total)
+}
+
+fn insert_visible_entry_preview(
+    preview: &mut Vec<(String, bool)>,
+    entry: (String, bool),
+    limit: usize,
+) {
+    let insert_at = preview
+        .binary_search_by(|(current, _)| current.cmp(&entry.0))
+        .unwrap_or_else(|idx| idx);
+
+    if preview.len() < limit {
+        preview.insert(insert_at, entry);
+    } else if insert_at < limit {
+        preview.insert(insert_at, entry);
+        preview.truncate(limit);
+    }
+}
+
+fn summarize_visible_entries(entries: Vec<(String, bool)>, total: usize) -> String {
+    let shown = entries.len();
 
     if total == 0 {
         return String::new();
@@ -616,12 +650,11 @@ fn summarize_visible_entries(mut entries: Vec<(String, bool)>) -> String {
 
     let mut rendered = entries
         .into_iter()
-        .take(MAX_VISIBLE_FILES)
         .map(|(name, is_dir)| if is_dir { format!("{name}/") } else { name })
         .collect::<Vec<_>>();
 
-    if total > MAX_VISIBLE_FILES {
-        rendered.push(format!("(+{} more)", total - MAX_VISIBLE_FILES));
+    if total > shown {
+        rendered.push(format!("(+{} more)", total - shown));
     }
 
     rendered.join(", ")
@@ -641,12 +674,12 @@ fn describe_git_state() -> String {
                 return "not inside a Git worktree".to_string();
             }
 
-            let root = git_string(["rev-parse", "--show-toplevel"]);
-            let branch = git_branch_description();
-
-            match root {
-                Some(root) => format!("inside a Git worktree (root: {root}, {branch})"),
-                None => format!("inside a Git worktree ({branch})"),
+            match git_state_details() {
+                Some((root, branch)) => match root {
+                    Some(root) => format!("inside a Git worktree (root: {root}, {branch})"),
+                    None => format!("inside a Git worktree ({branch})"),
+                },
+                None => "inside a Git worktree (branch unknown)".to_string(),
             }
         }
         Ok(output) => {
@@ -666,24 +699,41 @@ fn describe_git_state() -> String {
     }
 }
 
-fn git_branch_description() -> String {
-    match git_string(["rev-parse", "--abbrev-ref", "HEAD"]) {
-        Some(name) if name == "HEAD" => git_string(["rev-parse", "--short", "HEAD"])
-            .map(|commit| format!("detached at {commit}"))
-            .unwrap_or_else(|| "detached HEAD".to_string()),
-        Some(name) => format!("branch {name}"),
-        None => "branch unknown".to_string(),
-    }
-}
-
-fn git_string<const N: usize>(args: [&str; N]) -> Option<String> {
-    Command::new("git")
-        .args(args)
+fn git_state_details() -> Option<(Option<String>, String)> {
+    let output = Command::new("git")
+        .args([
+            "rev-parse",
+            "--show-toplevel",
+            "--abbrev-ref",
+            "HEAD",
+            "--short",
+            "HEAD",
+        ])
         .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-        .filter(|value| !value.is_empty())
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
+    let root = lines.next().map(|line| line.to_string());
+    let branch = lines.next()?;
+    let short_head = lines.next().map(|line| line.to_string());
+
+    let branch_description = if branch == "HEAD" {
+        short_head
+            .map(|commit| format!("detached at {commit}"))
+            .unwrap_or_else(|| "detached HEAD".to_string())
+    } else {
+        format!("branch {branch}")
+    };
+
+    Some((root, branch_description))
 }
 
 fn extract_message_content(message: &Value) -> Option<String> {
@@ -725,6 +775,13 @@ fn collect_text_segments(value: &Value, out: &mut Vec<String>) {
         }
         _ => {}
     }
+}
+
+#[cfg(test)]
+fn summarize_visible_entries_for_test(mut entries: Vec<(String, bool)>) -> String {
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let total = entries.len();
+    summarize_visible_entries(entries.into_iter().take(MAX_VISIBLE_FILES).collect(), total)
 }
 
 #[cfg(test)]
@@ -838,9 +895,24 @@ mod tests {
             .map(|idx| (format!("file{idx}"), idx % 2 == 0))
             .collect::<Vec<_>>();
 
-        let summary = summarize_visible_entries(entries);
+        let summary = summarize_visible_entries_for_test(entries);
 
         assert!(summary.contains("(+2 more)"));
         assert!(summary.contains("file0/"));
+    }
+
+    #[test]
+    fn conversation_manager_tracks_buffer_size_incrementally() {
+        let system_prompt = json!({"role": "system", "content": "sys"});
+        let first_user_message = json!({"role": "user", "content": "hello"});
+        let mut manager = ConversationManager::new(system_prompt, first_user_message);
+        let msg1 = json!({"role": "assistant", "content": "abc"});
+        let msg2 = json!({"role": "tool", "content": "def"});
+
+        let expected = message_serialized_len(&msg1) + message_serialized_len(&msg2);
+        manager.add_message(msg1);
+        manager.add_message(msg2);
+
+        assert_eq!(manager.buffer_size_chars(), expected);
     }
 }

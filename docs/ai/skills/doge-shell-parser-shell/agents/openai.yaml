@@ -1,0 +1,4 @@
+interface:
+  display_name: "Doge Shell Parser"
+  short_description: "Inspect parser and AST paths narrowly."
+  default_prompt: "Use $doge-shell-parser-shell to work on parser and expansion behavior with minimal reading and validation."

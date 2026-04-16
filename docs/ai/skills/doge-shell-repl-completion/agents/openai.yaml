@@ -1,0 +1,4 @@
+interface:
+  display_name: "Doge Shell REPL Completion"
+  short_description: "Inspect completion and ghost text narrowly."
+  default_prompt: "Use $doge-shell-repl-completion to work on completion and suggestion paths with minimal reading and validation."

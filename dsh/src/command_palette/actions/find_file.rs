@@ -49,7 +49,7 @@ impl Action for FindFileAction {
         // Show selection UI
         let options = SkimOptionsBuilder::default()
             .prompt("File> ".to_string())
-            .preview(Some("head -50 {}".to_string()))
+            .preview("head -50 {}".to_string())
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 

@@ -752,10 +752,8 @@ fn extract_message_content(message: &Value) -> Option<String> {
 
 fn collect_text_segments(value: &Value, out: &mut Vec<String>) {
     match value {
-        Value::String(text) => {
-            if !text.is_empty() {
-                out.push(text.to_string());
-            }
+        Value::String(text) if !text.is_empty() => {
+            out.push(text.to_string());
         }
         Value::Array(items) => {
             for item in items {

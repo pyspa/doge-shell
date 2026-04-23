@@ -618,7 +618,7 @@ impl IntegratedCompletionEngine {
             return Vec::new();
         };
 
-        projects.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+        projects.sort_by_key(|project| std::cmp::Reverse(project.last_accessed));
         projects
             .into_iter()
             .filter(|project| matches_prefix(current_token, &project.name))

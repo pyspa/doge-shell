@@ -57,7 +57,7 @@ pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) ->
     let options = SkimOptionsBuilder::default()
         .height("50%".to_string())
         .multi(false)
-        .preview(Some("".to_string())) // Default preview enabled
+        .preview("".to_string()) // Default preview enabled
         .build()
         .or_else(|err| {
             let _ = ctx.write_stderr(&format!(

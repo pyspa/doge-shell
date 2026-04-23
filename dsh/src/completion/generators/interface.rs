@@ -133,13 +133,18 @@ mod tests {
         let generator = InterfaceGenerator::new();
         let result = generator.generate_candidates("");
         assert!(result.is_ok());
-        let candidates = result.unwrap();
-        // On Linux, at least 'lo' should be present
         #[cfg(target_os = "linux")]
-        assert!(
-            candidates.iter().any(|c| c.text == "lo"),
-            "Expected 'lo' interface on Linux"
-        );
+        {
+            let candidates = result.unwrap();
+            assert!(
+                candidates.iter().any(|c| c.text == "lo"),
+                "Expected 'lo' interface on Linux"
+            );
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = result.unwrap();
+        }
     }
 
     #[test]

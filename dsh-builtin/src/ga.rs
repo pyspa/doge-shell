@@ -71,8 +71,8 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
         .multi(true)
         .prompt("Git Add> ".to_string())
         .bind(vec!["Enter:accept".to_string(), "Space:toggle".to_string()])
-        .preview(Some("".to_string())) // Preview handled by ItemPreview
-        // .preview_window(Some("right:60%")) // Disabled
+        .preview("".to_string()) // Preview handled by ItemPreview
+        // .preview_window("right:60%") // Disabled
         .build()
         .map_err(|e| format!("failed to build skim options: {}", e));
 

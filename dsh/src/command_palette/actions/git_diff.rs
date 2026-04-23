@@ -62,7 +62,7 @@ impl Action for GitDiffAction {
         // Show selection UI
         let options = SkimOptionsBuilder::default()
             .prompt("File> ".to_string())
-            .preview(Some("git diff --color=always {}".to_string()))
+            .preview("git diff --color=always {}".to_string())
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 

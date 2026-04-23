@@ -166,7 +166,7 @@ fn add(ctx: &Context, args: &[String]) -> Result<()> {
 
 fn list(ctx: &Context, _proxy: &mut dyn ShellProxy) -> Result<()> {
     let mut projects = load_projects()?;
-    projects.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+    projects.sort_by_key(|project| std::cmp::Reverse(project.last_accessed));
 
     if projects.is_empty() {
         let _ = ctx.write_stdout("No projects registered.");
@@ -242,7 +242,7 @@ fn jump(ctx: &Context, args: &[String], proxy: &mut dyn ShellProxy) -> Result<()
     }
 
     let mut projects = load_projects()?;
-    projects.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+    projects.sort_by_key(|project| std::cmp::Reverse(project.last_accessed));
 
     if projects.is_empty() {
         let _ = ctx.write_stdout("No projects registered.");

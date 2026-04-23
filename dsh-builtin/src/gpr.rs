@@ -196,8 +196,8 @@ fn checkout_pr(ctx: &Context) -> ExitStatus {
     let options = SkimOptionsBuilder::default()
         .height("50%".to_string())
         .multi(false)
-        .preview(Some("".to_string())) // No preview text, but window might show up? set empty function
-        // .preview_window(Some("")) // Disable preview window
+        .preview("".to_string()) // No preview text, but window might show up? set empty function
+        // .preview_window("") // Disable preview window
         .bind(vec!["Enter:accept".to_string()])
         .build()
         .map_err(|e| format!("failed to build skim options: {}", e));
@@ -213,7 +213,7 @@ fn checkout_pr(ctx: &Context) -> ExitStatus {
     let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
 
     // Sort PRs by number descending (usually newer first)
-    prs.sort_by(|a, b| b.number.cmp(&a.number));
+    prs.sort_by_key(|pr| std::cmp::Reverse(pr.number));
 
     for pr in prs {
         let _ = tx_item.send(vec![Arc::new(pr)]);

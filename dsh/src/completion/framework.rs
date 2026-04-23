@@ -144,12 +144,14 @@ impl SkimCompletionFramework {
         // Spawn a separate thread to run Skim, isolating it from the tokio runtime
         // This prevents "Cannot start a runtime from within a runtime" panics
         std::thread::spawn(move || {
-            let options = match SkimOptionsBuilder::default()
-                .select_1(true)
-                .bind(vec!["Enter:accept".to_string()])
-                .query(query)
-                .build()
-            {
+            let mut options_builder = SkimOptionsBuilder::default();
+            options_builder.select_1(true);
+            options_builder.bind(vec!["Enter:accept".to_string()]);
+            if let Some(query) = query {
+                options_builder.query(query);
+            }
+
+            let options = match options_builder.build() {
                 Ok(options) => options,
                 Err(err) => {
                     warn!("Failed to build skim options: {}", err);

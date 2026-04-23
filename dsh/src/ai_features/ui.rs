@@ -121,11 +121,9 @@ impl AiChatUi {
                 && key.kind == KeyEventKind::Press
             {
                 match key.code {
-                    KeyCode::Enter => {
-                        if !self.input_buffer.trim().is_empty() {
-                            outcome = UiOutcome::Ask(self.input_buffer.clone());
-                            should_quit = true;
-                        }
+                    KeyCode::Enter if !self.input_buffer.trim().is_empty() => {
+                        outcome = UiOutcome::Ask(self.input_buffer.clone());
+                        should_quit = true;
                     }
                     KeyCode::Backspace => {
                         self.input_buffer.pop();
@@ -155,14 +153,13 @@ impl AiChatUi {
                     {
                         should_quit = true;
                     }
-                    KeyCode::Char(c) => {
+                    KeyCode::Char(c)
                         if !key
                             .modifiers
                             .contains(crossterm::event::KeyModifiers::CONTROL)
-                            && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT)
-                        {
-                            self.input_buffer.push(c);
-                        }
+                            && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT) =>
+                    {
+                        self.input_buffer.push(c);
                     }
                     KeyCode::Esc => should_quit = true,
                     _ => {}

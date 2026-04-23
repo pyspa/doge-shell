@@ -43,7 +43,7 @@ impl Action for KillProcessAction {
         // Show selection UI
         let options = SkimOptionsBuilder::default()
             .prompt("Select process to kill> ".to_string())
-            .header(Some("PID\tNAME\tCMD".to_string()))
+            .header("PID\tNAME\tCMD".to_string())
             .multi(true)
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;

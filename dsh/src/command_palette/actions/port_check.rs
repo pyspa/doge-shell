@@ -53,9 +53,7 @@ impl Action for PortCheckAction {
         // Show selection UI
         let options = SkimOptionsBuilder::default()
             .prompt("Port> ".to_string())
-            .header(Some(
-                "PROTO\tLOCAL\tREMOTE\tSTATUS\tPID/PROGRAM".to_string(),
-            ))
+            .header("PROTO\tLOCAL\tREMOTE\tSTATUS\tPID/PROGRAM".to_string())
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 

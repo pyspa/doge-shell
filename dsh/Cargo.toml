@@ -76,7 +76,7 @@ tabled = "0.20"
 num-bigint = { version = "0.4", optional = true }
 num-traits = "0.2"
 rust-embed = "8.5"
-rusqlite = { version = "0.38", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 tempfile = "3.0"
 which = "6.0"
 wait-timeout = "0.2"

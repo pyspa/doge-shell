@@ -35,11 +35,9 @@ pub struct CommandStats {
 impl CommandStats {
     /// Calculate average execution time in milliseconds
     pub fn average_duration_ms(&self) -> u64 {
-        if self.total_calls == 0 {
-            0
-        } else {
-            self.total_duration_ms / self.total_calls
-        }
+        self.total_duration_ms
+            .checked_div(self.total_calls)
+            .unwrap_or(0)
     }
 
     /// Calculate success rate as a percentage
@@ -127,7 +125,7 @@ impl CommandTiming {
     /// Get the top N most frequently called commands
     pub fn top_frequent(&self, n: usize) -> Vec<&CommandStats> {
         let mut sorted: Vec<_> = self.stats.values().collect();
-        sorted.sort_by(|a, b| b.total_calls.cmp(&a.total_calls));
+        sorted.sort_by_key(|stat| std::cmp::Reverse(stat.total_calls));
         sorted.into_iter().take(n).collect()
     }
 

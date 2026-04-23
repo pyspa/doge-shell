@@ -103,33 +103,31 @@ impl Notebook {
                     // Wait, range includes fences for Fenced blocks?
                     // pulldown-cmark range covers the whole event.
                 }
-                Event::End(TagEnd::CodeBlock) => {
-                    if in_code_block {
-                        // The range end is the end of the block.
-                        // However, we want the *content* of the code block.
-                        // Actually, taking the whole range is better for reproduction,
-                        // but we need inner content for execution.
+                Event::End(TagEnd::CodeBlock) if in_code_block => {
+                    // The range end is the end of the block.
+                    // However, we want the *content* of the code block.
+                    // Actually, taking the whole range is better for reproduction,
+                    // but we need inner content for execution.
 
-                        let full_block = &content[last_offset..range.end];
-                        // We need to strip fences if we want just code.
-                        // This is getting complicated to do perfectly round-trip.
+                    let full_block = &content[last_offset..range.end];
+                    // We need to strip fences if we want just code.
+                    // This is getting complicated to do perfectly round-trip.
 
-                        // Alternate simple strategy:
-                        // Just store the whole range as "Code Block" and parse inner content when executing.
-                        let kind = if code_lang == "text" {
-                            BlockKind::Output
-                        } else {
-                            BlockKind::Code(code_lang.clone())
-                        };
+                    // Alternate simple strategy:
+                    // Just store the whole range as "Code Block" and parse inner content when executing.
+                    let kind = if code_lang == "text" {
+                        BlockKind::Output
+                    } else {
+                        BlockKind::Code(code_lang.clone())
+                    };
 
-                        blocks.push(Block {
-                            content: full_block.to_string(),
-                            kind,
-                        });
+                    blocks.push(Block {
+                        content: full_block.to_string(),
+                        kind,
+                    });
 
-                        last_offset = range.end;
-                        in_code_block = false;
-                    }
+                    last_offset = range.end;
+                    in_code_block = false;
                 }
                 _ => {}
             }

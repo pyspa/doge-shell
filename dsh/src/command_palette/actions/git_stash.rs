@@ -44,7 +44,7 @@ impl Action for GitStashAction {
         let stash_options = SkimOptionsBuilder::default()
             .prompt("Stash> ".to_string())
             .bind(vec!["Enter:accept".to_string(), "Esc:abort".to_string()])
-            .preview(Some("git stash show -p {}".to_string()))
+            .preview("git stash show -p {}".to_string())
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 

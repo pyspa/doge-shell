@@ -52,7 +52,7 @@ impl Action for DockerContainersAction {
         // Select a container
         let container_options = SkimOptionsBuilder::default()
             .prompt("Container> ".to_string())
-            .header(Some("NAME\tSTATUS\tIMAGE".to_string()))
+            .header("NAME\tSTATUS\tIMAGE".to_string())
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to build skim options: {}", e))?;
 

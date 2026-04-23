@@ -174,11 +174,8 @@ impl CompletionDisplay {
             let width_per_item = effective_column_width + inter_column_spacing;
 
             // Calculate maximum items that can fit
-            let max_items = if width_per_item > 0 {
-                std::cmp::max(1, available_width / width_per_item)
-            } else {
-                1
-            };
+            let max_items =
+                std::cmp::max(1, available_width.checked_div(width_per_item).unwrap_or(0));
 
             std::cmp::min(max_items, self.candidates.len().max(1))
         } else {

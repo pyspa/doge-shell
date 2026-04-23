@@ -31,7 +31,7 @@ getopts = "0.2"
 regex = "1.11"
 shell-words = "1.1"
 indicatif = "0.18"
-toml = "0.9"
+toml = "1"
 rmcp = { version = "1.1.0", features = ["client", "transport-child-process", "transport-streamable-http-client", "transport-streamable-http-client-reqwest"] }
 pulldown-cmark = "0.13"
 walkdir = "2.4"

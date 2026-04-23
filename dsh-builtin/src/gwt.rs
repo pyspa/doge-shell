@@ -637,7 +637,7 @@ fn add_worktree_from_pr(ctx: &Context) -> Result<PathBuf, String> {
     }
 
     // Sort PRs by number descending (usually newer first)
-    prs.sort_by(|a, b| b.number.cmp(&a.number));
+    prs.sort_by_key(|pr| std::cmp::Reverse(pr.number));
 
     // Skim options
     let options = SkimOptionsBuilder::default()

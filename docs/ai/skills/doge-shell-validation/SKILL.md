@@ -9,4 +9,6 @@ description: Use for doge-shell validation planning or smallest-test selection. 
 - Read [../doge-shell-repo/references/test-scope.md](../doge-shell-repo/references/test-scope.md) for the default validation boundaries.
 - Read [../doge-shell-repo/references/task-map.md](../doge-shell-repo/references/task-map.md) when the change maps to a known subsystem.
 - Default to `cargo test -p doge-shell` for `dsh/` changes and `cargo test -p dsh-builtin` for builtin/chat changes.
+- Never run `cargo test -p dsh`; the `dsh/` directory is the Cargo package `doge-shell`.
+- For `AGENTS.md`, `docs/ai/`, or runtime skill installer guidance, run `scripts/check-ai-guidance.sh` plus a focused installer dry run instead of Rust tests.
 - Use `cargo test` or `cargo check --workspace` only when the change clearly spans crates.

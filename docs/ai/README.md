@@ -20,9 +20,12 @@
 ## 導入
 - sample Skill の配置には `scripts/install-runtime-skills.sh` を使う。
 - `both` を指定すると Codex と doge-shell の両方へ入れる。
+- 普段は `--list` と `--dry-run` で対象を確認してから、必要な Skill だけ入れる。
 
 ```bash
-scripts/install-runtime-skills.sh both
+scripts/install-runtime-skills.sh --list
+scripts/install-runtime-skills.sh --dry-run --target codex doge-shell-repo doge-shell-validation
+scripts/install-runtime-skills.sh --target codex doge-shell-repo doge-shell-validation
 ```
 
 ## authoring ルール
@@ -30,3 +33,4 @@ scripts/install-runtime-skills.sh both
 - `SKILL.md` 本文には長い「when to use」を書かない。
 - バリエーションごとの詳細は `references/` に逃がす。
 - shell / Rust / reference で済むなら、新しい長文ドキュメントを増やさない。
+- 変更後は `scripts/check-ai-guidance.sh` で軽量 lint する。

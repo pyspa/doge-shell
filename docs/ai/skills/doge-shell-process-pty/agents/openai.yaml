@@ -1,0 +1,4 @@
+interface:
+  display_name: "Doge Shell Process PTY"
+  short_description: "Inspect PTY, jobs, raw terminal, and output rendering narrowly."
+  default_prompt: "Use $doge-shell-process-pty to work on process, PTY, job control, raw terminal, and colored-output behavior with minimal reading and validation."

@@ -6,6 +6,7 @@ usage() {
     cat <<'EOF'
 Usage: scripts/install-runtime-skills.sh [--target codex|dsh|both] [skill-name ...]
        scripts/install-runtime-skills.sh [codex|dsh|both]
+       scripts/install-runtime-skills.sh --list [skill-name ...]
 
 Installs sample runtime skills from docs/ai/skills/ into:
   codex -> ~/.codex/skills
@@ -13,6 +14,8 @@ Installs sample runtime skills from docs/ai/skills/ into:
   both  -> both destinations
 
 Examples:
+  scripts/install-runtime-skills.sh --list
+  scripts/install-runtime-skills.sh --dry-run --target codex doge-shell-repo
   scripts/install-runtime-skills.sh
   scripts/install-runtime-skills.sh --target codex doge-shell-repo
   scripts/install-runtime-skills.sh dsh
@@ -20,6 +23,8 @@ EOF
 }
 
 mode="both"
+dry_run=0
+list_only=0
 requested_skills=()
 
 while [ "$#" -gt 0 ]; do
@@ -32,6 +37,12 @@ while [ "$#" -gt 0 ]; do
             mode="$2"
             shift 2
             continue
+            ;;
+        --dry-run)
+            dry_run=1
+            ;;
+        --list)
+            list_only=1
             ;;
         codex|dsh|both)
             if [ "$mode" = "both" ] && [ "${#requested_skills[@]}" -eq 0 ]; then
@@ -75,6 +86,11 @@ install_skill_dir() {
     src_dir="$source_root/$skill_name"
     dest_dir="$dest_root/$skill_name"
 
+    if [ "$dry_run" -eq 1 ]; then
+        echo "would install $skill_name -> $dest_dir"
+        return
+    fi
+
     mkdir -p "$dest_root"
     rm -rf "$dest_dir"
     cp -R "$src_dir" "$dest_dir"
@@ -111,6 +127,11 @@ install_selected() {
         install_skill_dir "$skill_name" "$dest_root"
     done
 }
+
+if [ "$list_only" -eq 1 ]; then
+    skill_list
+    exit 0
+fi
 
 if [ "$mode" = "codex" ] || [ "$mode" = "both" ]; then
     skill_list | install_selected "${CODEX_HOME:-$HOME/.codex}/skills"

@@ -13,4 +13,4 @@ description: Use when working in the doge-shell repository. Routes to the right 
 - Read [references/test-scope.md](references/test-scope.md) before choosing cargo commands.
 - Open `README.md` only for user-facing docs, config examples, or feature behavior that is described there.
 - Prefer the smallest test or check that proves the change.
-- Switch to a narrower skill when the task is clearly about completion, parser work, chat tools, investigation, or validation.
+- Switch to a narrower skill when the task is clearly about completion, parser work, process/PTY, chat tools, investigation, or validation.

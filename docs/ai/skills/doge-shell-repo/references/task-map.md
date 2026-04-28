@@ -9,9 +9,15 @@
 - prompt / right prompt / transient / terminal UI
   - Read: `dsh/src/prompt/`, `dsh/src/terminal/`, `dsh/src/repl/`
   - Validate: `cargo test -p doge-shell`
+- process / PTY / job / raw terminal / colored output
+  - Read: `dsh/src/process/`, `dsh/src/shell/eval.rs`, `dsh/src/terminal/`
+  - Validate: `cargo test -p doge-shell`
 - chatgpt / MCP / tool / runtime skill / OpenAI config
   - Read: `dsh-builtin/src/chatgpt/`, `dsh-openai/src/`, `dsh-builtin/src/doctor.rs`
   - Validate: `cargo test -p dsh-builtin`
+- serve / MCP server / shared MCP types
+  - Read: `dsh-builtin/src/serve/`, `dsh-builtin/src/mcp.rs`, `dsh-builtin/src/chatgpt/mcp/`, `dsh-types/src/mcp.rs`
+  - Validate: `cargo test -p dsh-builtin`; add `cargo test -p dsh-types` when shared types change
 - builtin command / help / doctor
   - Read: `dsh-builtin/src/`
   - Validate: `cargo test -p dsh-builtin`
@@ -21,6 +27,18 @@
 - lisp / config loader / startup behavior
   - Read: `dsh/src/lisp/`, `dsh/src/lib.rs`, `dsh/src/main.rs`
   - Validate: `cargo test -p doge-shell`
+- environment / project context / direnv / path activation
+  - Read: `dsh/src/environment/`, `dsh/src/direnv.rs`, `dsh-builtin/src/project_context.rs`
+  - Validate: package for touched files; use `cargo test -p doge-shell` for `dsh/` and `cargo test -p dsh-builtin` for builtin project context
+- history / frecency / command timing
+  - Read: `dsh/src/history/`, `dsh-frecency/src/`, `dsh/src/command_timing.rs`, `dsh-builtin/src/command_timing.rs`
+  - Validate: package for touched files; use `cargo test -p dsh-frecency` for frecency changes
+- command palette / AI actions
+  - Read: `dsh/src/command_palette/`, `dsh/src/ai_features/`, `dsh-openai/src/`
+  - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-openai` when client/config changes
+- AI guidance / Skills / runtime skill installer
+  - Read: `AGENTS.md`, `docs/ai/`, `scripts/install-runtime-skills.sh`
+  - Validate: `scripts/check-ai-guidance.sh` and focused installer dry runs
 - cross-crate integration
   - Read: affected crate entry points from `module-map.md`
   - Validate: `cargo test` or `cargo check --workspace` only when the behavior spans crates

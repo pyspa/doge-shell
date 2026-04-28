@@ -5,14 +5,14 @@
 ## 基本方針
 - チャットは日本語で行う。
 - Python 実行は禁止。補助スクリプトは shell を使う。
-- まず `rg --files` / `rg -n` で当たりを付け、必要なファイルだけ読む。
+- `Cargo.toml` と必要なら task map で範囲を絞り、`rg --files` / `rg -n` で当たりを付けてから必要なファイルだけ読む。
 - `README.md` 全文を最初から読まない。ユーザー向け挙動、設定例、公開文書の更新時だけ必要箇所を開く。
 - 変更後は関係する最小コマンドで検証し、無関係なワークスペース全体テストは最後に限定する。
 
 ## 探索順
 1. `Cargo.toml` でクレート境界を確認する。
-2. `rg -n "<symbol>|<feature>" dsh dsh-builtin dsh-openai dsh-types` で実装位置を絞る。
-3. タスク別の入口が必要なら `docs/ai/skills/doge-shell-repo/references/task-map.md` を読む。
+2. タスク種別が明確なら `docs/ai/skills/doge-shell-repo/references/task-map.md` で入口と検証候補を確認する。
+3. `rg -n "<symbol>|<feature>" dsh dsh-builtin dsh-openai dsh-types` で実装位置を絞る。
 4. package 名が曖昧なら `docs/ai/skills/doge-shell-repo/references/package-map.md` を読む。
 5. 所有範囲が曖昧なら `docs/ai/skills/doge-shell-repo/references/module-map.md` を読む。
 

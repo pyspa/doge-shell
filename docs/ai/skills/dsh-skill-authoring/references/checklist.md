@@ -7,3 +7,4 @@
 - Detailed examples, module maps, or schemas live in `references/`.
 - Repeated deterministic steps live in `scripts/`.
 - Paths mentioned from `SKILL.md` point directly to needed files.
+- Run `scripts/check-ai-guidance.sh` after editing AGENTS, docs/ai, or Skill files.

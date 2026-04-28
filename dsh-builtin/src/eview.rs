@@ -86,7 +86,6 @@ mod tests {
         }
     }
 
-    #[allow(unused)]
     impl ShellProxy for MockShellProxy {
         fn exit_shell(&mut self) {}
         fn dispatch(&mut self, _ctx: &Context, _cmd: &str, _argv: Vec<String>) -> Result<()> {

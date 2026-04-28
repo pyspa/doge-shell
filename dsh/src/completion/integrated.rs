@@ -30,10 +30,8 @@ const DYNAMIC_COMMAND_CACHE_TTL_MS: u64 = 1000;
 #[derive(Debug, Clone, Copy)]
 struct CompletionRequest<'a> {
     input: &'a str,
-    #[allow(dead_code)]
     current_dir: &'a Path,
     max_results: usize,
-    #[allow(dead_code)]
     cursor_pos: usize,
 }
 
@@ -111,14 +109,6 @@ impl CandidateBatch {
         }
     }
 
-    fn _inclusive(candidates: Vec<EnhancedCandidate>) -> Self {
-        Self {
-            candidates,
-            exclusive: false,
-            framework: None,
-        }
-    }
-
     fn inclusive_with_framework(
         candidates: Vec<EnhancedCandidate>,
         framework: CompletionFrameworkKind,
@@ -126,18 +116,6 @@ impl CandidateBatch {
         Self {
             candidates,
             exclusive: false,
-            framework: Some(framework),
-        }
-    }
-
-    #[allow(dead_code)]
-    fn exclusive_with_framework(
-        candidates: Vec<EnhancedCandidate>,
-        framework: CompletionFrameworkKind,
-    ) -> Self {
-        Self {
-            candidates,
-            exclusive: true,
             framework: Some(framework),
         }
     }
@@ -366,30 +344,6 @@ impl IntegratedCompletionEngine {
             return results;
         }
 
-        // 4. Context analysis placeholder (reserved for future providers)
-        let parts: Vec<&str> = request.input.split_whitespace().collect();
-        if !parts.is_empty() {
-            let _command = parts[0];
-            let _args: Vec<String> = parts[1..].iter().map(|s| (*s).to_string()).collect();
-        }
-
-        // 5. History-based completion (skipped when command-specific data exists)
-        // History completion removed as per user request
-        /*
-        if !has_command_specific_data {
-            let history_batch = self.collect_history_candidates(&request);
-            if !aggregator.extend(history_batch) {
-                let results = aggregator.finalize();
-                self.store_in_cache(request.input, &results.candidates, results.framework);
-                return results;
-            }
-        } else {
-            debug!(
-                "Skipping history completion as command '{}' has JSON completion data",
-                parsed_command_line.command
-            );
-        }
-        */
         let results = aggregator.finalize(history);
         self.store_in_cache(request.input, &results.candidates, results.framework);
         results

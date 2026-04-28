@@ -184,19 +184,11 @@ impl Process {
             }
         }
 
-        // Check if TERM was set in system vars (if not overridden)
+        // Check whether TERM was already copied from system vars or exported shell vars.
         if !term_set {
-            // It might be in system_env_vars and NOT in exported_vars
-            // in which case it was added in step 1.
-            // We need to check if we added it?
-            // Or simpler: check existence in the appropriate source.
             if env_guard.exported_vars.contains("TERM") {
-                // It is in exported vars, so `term_set` logic handles it (it was true if var exists).
-                // If it's in exported_vars but NOT in variables, it's effectively unset?
-                // Logic in original code: `if let Some(value) = variables.get(key) { insert }`.
-                // So if it's exported but missing value, it's not added.
+                // Exported but missing/empty TERM is treated as unset and falls back below.
             } else {
-                // Not exported. Check system.
                 if let Some(val) = env_guard.system_env_vars.get("TERM")
                     && !val.is_empty()
                 {
@@ -221,15 +213,6 @@ impl Process {
                     debug!("failed to construct default TERM environment variable: {err}");
                 }
             }
-        } else {
-            // Debug logging for TERM if needed, but we don't have the value easily accessible here without iterating
-            // Retaining behavior of "defaulting if empty" is tricky without map.
-            // But usually env vars are not empty string if unset.
-            // If TERM is set to "", original code defaulted.
-            // We skip that check for perf? Or iter to check?
-            // "if term.is_empty()" check is valuable.
-            // To support this, we might need to check the value when adding.
-            // Let's refine the loop above.
         }
 
         if ls_colors_set {
@@ -237,11 +220,6 @@ impl Process {
         } else {
             debug!("LS_COLORS is NOT set");
         }
-
-        // Final sanity check for TERM empty value if we want strict parity?
-        // Original code: if env_map.get("TERM").unwrap().is_empty() -> set default.
-        // We can ignore this edge case for now or handle it if critical.
-        // Assuming TERM="" is rare/user error. Defaults usually handle missing key.
 
         Ok(PreparedExecution { cmd, argv, envp })
     }

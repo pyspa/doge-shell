@@ -98,8 +98,6 @@ pub struct CompletionDisplay {
     prompt_text: String,
     input_text: String,
     cursor_hidden: bool,
-    #[allow(dead_code)]
-    config: CompletionConfig,
     has_more_items: bool,
     total_items_count: usize,
 }
@@ -275,7 +273,6 @@ impl CompletionDisplay {
             prompt_text: prompt_text.to_string(),
             input_text: input_text.to_string(),
             cursor_hidden: false,
-            config,
             has_more_items,
             total_items_count,
         }

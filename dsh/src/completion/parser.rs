@@ -134,6 +134,22 @@ impl CommandLineParser {
             .collect()
     }
 
+    /// Return the complete token under the cursor and the cursor offset inside it.
+    pub(crate) fn token_at_cursor(
+        &self,
+        input: &str,
+        cursor_pos: usize,
+    ) -> Option<(String, usize)> {
+        let spans = self.tokenize_with_positions(input);
+        let (index, is_inside_token) = self.find_cursor_token_index(&spans, cursor_pos);
+        if !is_inside_token {
+            return None;
+        }
+
+        let span = spans.get(index)?;
+        Some((span.text.clone(), cursor_pos.saturating_sub(span.start)))
+    }
+
     /// Split input string into tokens and keep their character spans.
     fn tokenize_with_positions(&self, input: &str) -> Vec<TokenSpan> {
         let mut spans = Vec::new();

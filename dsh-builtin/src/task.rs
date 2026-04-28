@@ -194,8 +194,7 @@ fn detect_tasks_in_dir(current_dir: &Path) -> Result<Vec<TaskInfo>> {
         && let Some(scripts) = json.get("scripts").and_then(|s| s.as_object())
     {
         let manager = detect_js_manager(current_dir);
-        for (name, cmd) in scripts {
-            let _ = cmd; // unused
+        for name in scripts.keys() {
             tasks.push(TaskInfo {
                 source: manager.clone(),
                 name: name.clone(),

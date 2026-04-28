@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use super::command::{CommandCompletion, CommandCompletionDatabase};
 use crate::shell::APP_NAME;
 use anyhow::{Context, Result};
@@ -59,8 +58,8 @@ impl JsonCompletionLoader {
     }
 
     pub fn load_database(&self) -> Result<Arc<CommandCompletionDatabase>> {
-        // Use the static cache to avoid re-parsing JSON files on each call
-        // Since get_or_try_init is unstable, we need to handle the Result manually
+        // Keep the eager database to embedded resources. Filesystem definitions are loaded
+        // lazily by load_command_completion so user overrides do not change this cache.
         match COMPLETION_DATABASE_CACHE.get() {
             Some(database) => {
                 debug!("Using cached completion database (already loaded)");
@@ -71,39 +70,26 @@ impl JsonCompletionLoader {
                     "Starting completion database loading from embedded resources (first time)..."
                 );
                 let mut database = CommandCompletionDatabase::new();
-                let mut loaded_count = 0;
-
-                // First, load from embedded resources
                 debug!("Loading completions from embedded resources...");
-                match self.load_from_embedded(&mut database) {
+                let loaded_count = match self.load_from_embedded(&mut database) {
                     Ok(count) => {
-                        loaded_count += count;
                         debug!(
                             "Successfully loaded {} completion files from embedded resources",
                             count
                         );
+                        count
                     }
                     Err(e) => {
                         warn!("Failed to load completions from embedded resources: {}", e);
-                        // Even on error, we could still store a partially loaded database
-                        // but in this case, if embedded loading fails, we return the error
                         return Err(e);
                     }
-                }
+                };
 
                 debug!(
-                    "Checking {} completion directories for additional files",
-                    self.completion_dirs.len()
+                    "Completion database loading complete: {} embedded files loaded",
+                    loaded_count
                 );
 
-                debug!(
-                    "Completion loading complete: {} files loaded from embedded resources + {} directories",
-                    loaded_count,
-                    self.completion_dirs.len()
-                );
-
-                // Store the result in the cache to avoid reloading on subsequent calls
-                // We only reach this point if loading was successful
                 let shared_db = Arc::new(database);
                 let _ = COMPLETION_DATABASE_CACHE.set(Arc::clone(&shared_db));
 
@@ -165,61 +151,6 @@ impl JsonCompletionLoader {
         debug!(
             "Embedded resource scan complete: found {} files, loaded {} JSON completion files",
             file_count, loaded_count
-        );
-        Ok(loaded_count)
-    }
-
-    /// Load completion data from specified directory
-    fn load_from_directory(
-        &self,
-        dir: &Path,
-        database: &mut CommandCompletionDatabase,
-    ) -> Result<usize> {
-        debug!("Reading directory entries from: {:?}", dir);
-        let entries =
-            fs::read_dir(dir).with_context(|| format!("Failed to read directory: {dir:?}"))?;
-
-        let mut loaded_count = 0;
-        let mut file_count = 0;
-
-        for entry in entries {
-            let entry =
-                entry.with_context(|| format!("Failed to read directory entry in {dir:?}"))?;
-            let path = entry.path();
-            file_count += 1;
-
-            debug!("Found file: {:?}", path);
-
-            // Process only .json files
-            if path.extension().and_then(|s| s.to_str()) != Some("json") {
-                debug!("Skipping non-JSON file: {:?}", path);
-                continue;
-            }
-
-            debug!("Processing JSON completion file: {:?}", path);
-            match self.load_completion_file(&path) {
-                Ok(completion) => {
-                    debug!(
-                        "Successfully loaded completion for command: {} from {:?}",
-                        completion.command, path
-                    );
-                    debug!(
-                        "Completion details - subcommands: {}, global_options: {}",
-                        completion.subcommands.len(),
-                        completion.global_options.len()
-                    );
-                    database.add_command(completion);
-                    loaded_count += 1;
-                }
-                Err(e) => {
-                    warn!("Failed to load completion file {:?}: {}", path, e);
-                }
-            }
-        }
-
-        debug!(
-            "Directory scan complete: found {} files, loaded {} JSON completion files from {:?}",
-            file_count, loaded_count, dir
         );
         Ok(loaded_count)
     }

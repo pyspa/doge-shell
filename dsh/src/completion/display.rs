@@ -34,6 +34,10 @@ fn unicode_display_width(s: &str) -> usize {
 
 /// Truncate a Unicode string to fit within the specified display width
 fn truncate_to_width(s: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+
     if unicode_display_width(s) <= max_width {
         return s.to_string();
     }
@@ -797,7 +801,11 @@ impl Candidate {
         }
     }
 
-    /// Get formatted display string with type character and description
+    /// Get formatted display string with type character and description.
+    ///
+    /// The returned name part plus optional description part always occupies
+    /// exactly `width` display cells. `render_item` prints the selection
+    /// indicator separately, so the full rendered cell is `width + 1` cells.
     pub fn get_formatted_display(
         &self,
         width: usize,
@@ -808,22 +816,7 @@ impl Candidate {
 
         let type_char_width = type_char.width().unwrap_or(2);
 
-        // Calculate max width available for the name part (excluding description)
-        // If we have multiple columns, width is constrained by column_width
-        // If we have description space, we want to align descriptions
-
         let mut result_name = String::new();
-
-        // --- 1. Format Name Part (Icon + Name + Padding) ---
-
-        // Calculate effective max width for the name part
-        // If max_name_width is provided (from layout cache), use it to align descriptions
-        // limited by total available width
-        // let target_name_width = if max_name_width > 0 {
-        //      max_name_width.min(width.saturating_sub(2)) // Ensure at least room for 2 chars
-        // } else {
-        //      width.saturating_sub(type_char_width + 1)
-        // };
 
         let max_content_width = width.saturating_sub(type_char_width + 1);
 
@@ -851,16 +844,20 @@ impl Candidate {
 
         result_name.push_str(&" ".repeat(padding_needed));
 
-        // --- 2. Format Description Part ---
         let description_part = if let Some(desc) = self.get_description() {
             let used_width = current_width + padding_needed;
             let remaining_width = width.saturating_sub(used_width);
 
             if remaining_width > 3 {
-                // Spacing before description
-                let actual_desc = truncate_to_width(desc, remaining_width.saturating_sub(2));
-                Some(format!("  {}", actual_desc))
+                let desc_width = remaining_width.saturating_sub(2);
+                let actual_desc = truncate_to_width(desc, desc_width);
+                let actual_desc_width = unicode_display_width(&actual_desc);
+                let trailing_padding = desc_width.saturating_sub(actual_desc_width);
+                Some(format!("  {}{}", actual_desc, " ".repeat(trailing_padding)))
             } else {
+                if remaining_width > 0 {
+                    result_name.push_str(&" ".repeat(remaining_width));
+                }
                 None
             }
         } else {
@@ -872,6 +869,16 @@ impl Candidate {
             }
             None
         };
+
+        #[cfg(debug_assertions)]
+        {
+            let rendered_width = unicode_display_width(&result_name)
+                + description_part
+                    .as_deref()
+                    .map(unicode_display_width)
+                    .unwrap_or(0);
+            debug_assert_eq!(rendered_width, width);
+        }
 
         (result_name, description_part)
     }
@@ -1138,7 +1145,119 @@ mod tests {
             padding_count
         );
 
-        // Verify description is returned
-        assert_eq!(desc, Some("  Short description".to_string()));
+        let desc = desc.expect("description should be returned");
+        assert!(desc.starts_with("  Short description"));
+        assert_eq!(
+            unicode_display_width(&formatted) + unicode_display_width(&desc),
+            total_width
+        );
+    }
+
+    #[test]
+    fn test_description_candidates_fill_fixed_width() {
+        let candidates = vec![
+            Candidate::Item("src".to_string(), "(directory)".to_string()),
+            Candidate::Item("Cargo.toml".to_string(), "(file)".to_string()),
+            Candidate::Item("日本語ファイル.txt".to_string(), "(file)".to_string()),
+            Candidate::Command {
+                name: "git".to_string(),
+                description: "Version control".to_string(),
+            },
+        ];
+
+        let fixed_width = 32;
+        let max_name_width = 18;
+
+        for candidate in &candidates {
+            let (formatted, desc) = candidate.get_formatted_display(fixed_width, max_name_width);
+            let actual_width = unicode_display_width(&formatted)
+                + desc.as_deref().map(unicode_display_width).unwrap_or(0);
+
+            assert_eq!(
+                actual_width,
+                fixed_width,
+                "Candidate '{}' has combined width {} but expected {}",
+                candidate.get_display_name(),
+                actual_width,
+                fixed_width
+            );
+        }
+    }
+
+    #[test]
+    fn test_multicolumn_file_rows_keep_stable_cell_widths() {
+        let candidates = vec![
+            Candidate::Item("src".to_string(), "(directory)".to_string()),
+            Candidate::Item("target".to_string(), "(directory)".to_string()),
+            Candidate::Item("Cargo.toml".to_string(), "(file)".to_string()),
+            Candidate::Item(
+                "very_long_file_name_that_truncates.rs".to_string(),
+                "(file)".to_string(),
+            ),
+            Candidate::File {
+                path: "日本語ファイル.txt".to_string(),
+                is_dir: false,
+            },
+            Candidate::File {
+                path: "examples".to_string(),
+                is_dir: true,
+            },
+        ];
+
+        let mut display = CompletionDisplay::new_with_config(
+            candidates,
+            "$ ",
+            "ls ",
+            CompletionConfig {
+                max_items: 30,
+                ..CompletionConfig::default()
+            },
+        );
+        let layout = display.force_layout(120);
+
+        assert!(
+            layout.items_per_row >= 2,
+            "test requires at least two columns, got {}",
+            layout.items_per_row
+        );
+
+        for candidate in &display.candidates {
+            let (formatted, desc) =
+                candidate.get_formatted_display(layout.column_width, layout.max_name_width);
+            let content_width = unicode_display_width(&formatted)
+                + desc.as_deref().map(unicode_display_width).unwrap_or(0);
+
+            assert_eq!(
+                content_width,
+                layout.column_width,
+                "Candidate '{}' content width should match the column width",
+                candidate.get_display_name()
+            );
+        }
+
+        let cell_width = layout.column_width + 1;
+        let expected_starts: Vec<usize> = (0..layout.items_per_row)
+            .map(|col| col * (cell_width + 2))
+            .collect();
+
+        for row in 0..layout.total_rows {
+            let mut cursor = 0;
+            for (col, expected_start) in expected_starts.iter().enumerate() {
+                let index = row * layout.items_per_row + col;
+                if index >= display.candidates.len() {
+                    break;
+                }
+
+                assert_eq!(
+                    cursor, *expected_start,
+                    "row {row} col {col} should start at a stable table offset"
+                );
+
+                cursor += cell_width;
+                if col < layout.items_per_row - 1 && index + 1 < display.candidates.len() {
+                    cursor += 2;
+                }
+            }
+        }
     }
 }

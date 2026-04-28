@@ -438,8 +438,12 @@ impl FileServer {
 
         // Build full path and check if it's within base directory
         let full_path = base_dir.join(clean_path);
+        let Ok(canonical_base) = base_dir.canonicalize() else {
+            return false;
+        };
+
         match full_path.canonicalize() {
-            Ok(canonical) => canonical.starts_with(base_dir),
+            Ok(canonical) => canonical.starts_with(canonical_base),
             Err(_) => false,
         }
     }

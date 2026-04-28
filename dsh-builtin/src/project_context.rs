@@ -586,7 +586,7 @@ mod tests {
         fs::create_dir_all(&nested).unwrap();
 
         let context = resolve_project_context(&nested);
-        assert_eq!(context.project_root, dir.path());
+        assert_eq!(context.project_root, dir.path().canonicalize().unwrap());
         assert!(
             context
                 .project_markers

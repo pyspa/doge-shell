@@ -105,8 +105,9 @@ pub(crate) fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
 }
 
 pub(crate) fn tool_skills_dir() -> PathBuf {
-    dirs::config_dir()
-        .map(|p| p.join("dsh/skills"))
+    xdg::BaseDirectories::with_prefix("dsh")
+        .ok()
+        .map(|dirs| dirs.get_config_home().join("skills"))
         .unwrap_or_else(|| PathBuf::from(".config/dsh/skills"))
 }
 

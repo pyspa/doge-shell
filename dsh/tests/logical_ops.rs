@@ -23,6 +23,10 @@ fn run_dsh(lines: &[&str]) -> std::process::Output {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "macOS sandbox can deny child dsh tracing log initialization"
+)]
 fn logical_and_or_short_circuit_works() {
     let output = run_dsh(&[
         "false && echo SHOULD_NOT_PRINT_AND",

@@ -2,6 +2,10 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "macOS sandbox can deny child dsh tracing log initialization"
+)]
 fn test_smart_pipe_via_stdin() {
     let dsh_path = env!("CARGO_BIN_EXE_dsh");
 

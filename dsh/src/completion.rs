@@ -8,7 +8,6 @@ pub mod command;
 pub mod commands;
 pub mod context;
 pub mod display;
-pub mod floating;
 pub mod fuzzy;
 pub mod path;
 pub mod selection;

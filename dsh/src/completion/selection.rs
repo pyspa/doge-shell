@@ -155,11 +155,7 @@ pub async fn input_completion(
     prompt_text: &str,
     input_text: &str,
 ) -> CompletionSelection {
-    let framework = if repl.input_preferences.use_floating_completion {
-        CompletionFrameworkKind::Floating
-    } else {
-        default_completion_framework()
-    };
+    let framework = default_completion_framework();
     // Main fallback completion function that tries multiple completion sources in sequence:
     // 1. Lisp-based completion (custom completion definitions)
     // 2. Current context completion (path completion, command completion from PATH)

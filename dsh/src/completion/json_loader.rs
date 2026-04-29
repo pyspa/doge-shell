@@ -460,6 +460,41 @@ mod tests {
     }
 
     #[test]
+    fn test_load_option_value_type_fields() {
+        let loader = JsonCompletionLoader::new();
+        let completion = loader
+            .load_completion_from_content(
+                br#"
+                {
+                    "command": "kubectl",
+                    "global_options": [
+                        {
+                            "short": "-n",
+                            "long": "--namespace",
+                            "description": "Namespace",
+                            "takes_value": true,
+                            "value_type": {
+                                "type": "Choice",
+                                "data": ["default", "kube-system"]
+                            }
+                        }
+                    ]
+                }
+                "#,
+                "inline",
+            )
+            .unwrap();
+
+        let option = &completion.global_options[0];
+        assert!(option.takes_value);
+        assert!(matches!(
+            option.value_type(),
+            Some(crate::completion::command::ArgumentType::Choice(values))
+                if values == &vec!["default".to_string(), "kube-system".to_string()]
+        ));
+    }
+
+    #[test]
     fn test_load_invalid_json() {
         let temp_dir = TempDir::new().unwrap();
         let completion_file = temp_dir.path().join("invalid.json");
@@ -649,6 +684,8 @@ mod tests {
             short: Some("-f <FILE>".to_string()),
             long: None,
             description: None,
+            takes_value: false,
+            value_type: None,
             argument: None,
         };
         assert!(loader.validate_option(&option_with_short, "test").is_ok());
@@ -658,6 +695,8 @@ mod tests {
             short: None,
             long: Some("--type <TYPE>".to_string()),
             description: None,
+            takes_value: false,
+            value_type: None,
             argument: None,
         };
         assert!(loader.validate_option(&option_with_long, "test").is_ok());
@@ -667,6 +706,8 @@ mod tests {
             short: Some("-f <FILE>".to_string()),
             long: Some("--file <FILE>".to_string()),
             description: None,
+            takes_value: false,
+            value_type: None,
             argument: None,
         };
         assert!(loader.validate_option(&option_both, "test").is_ok());
@@ -676,6 +717,8 @@ mod tests {
             short: Some("--".to_string()), // Invalid: this is a long option prefix, not a short option
             long: None,
             description: None,
+            takes_value: false,
+            value_type: None,
             argument: None,
         };
         assert!(loader.validate_option(&invalid_short, "test").is_err());
@@ -685,6 +728,8 @@ mod tests {
             short: Some("-123".to_string()), // Should be valid now: starts with -
             long: None,
             description: None,
+            takes_value: false,
+            value_type: None,
             argument: None,
         };
         assert!(
@@ -698,6 +743,8 @@ mod tests {
             short: None,
             long: Some("--".to_string()), // Invalid: just -- without any content
             description: None,
+            takes_value: false,
+            value_type: None,
             argument: None,
         };
         assert!(loader.validate_option(&invalid_long, "test").is_err());
@@ -707,6 +754,8 @@ mod tests {
             short: None,
             long: Some("--123invalid".to_string()), // Should be valid now: starts with --
             description: None,
+            takes_value: false,
+            value_type: None,
             argument: None,
         };
         assert!(

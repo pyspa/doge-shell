@@ -26,9 +26,9 @@ impl SubCommandGenerator {
         if let Some(subcommand) = current_subcommand {
             // Nested subcommand candidates
             for sub in &subcommand.subcommands {
-                if sub.name.starts_with(&parsed.current_token) {
+                if let Some(text) = Self::matched_subcommand_text(sub, &parsed.current_token) {
                     candidates.push(CompletionCandidate::subcommand(
-                        sub.name.clone(),
+                        text,
                         sub.description.clone(),
                     ));
                 }
@@ -36,9 +36,10 @@ impl SubCommandGenerator {
         } else {
             // Match subcommands
             for subcommand in &command_completion.subcommands {
-                if subcommand.name.starts_with(&parsed.current_token) {
+                if let Some(text) = Self::matched_subcommand_text(subcommand, &parsed.current_token)
+                {
                     candidates.push(CompletionCandidate::subcommand(
-                        subcommand.name.clone(),
+                        text,
                         subcommand.description.clone(),
                     ));
                 }
@@ -81,7 +82,7 @@ impl SubCommandGenerator {
         for subcommand_name in subcommand_path {
             current_subcommand = current_subcommands
                 .iter()
-                .find(|sc| sc.name == *subcommand_name);
+                .find(|sc| sc.name == *subcommand_name || sc.aliases.contains(subcommand_name));
 
             if let Some(sc) = current_subcommand {
                 current_subcommands = &sc.subcommands;
@@ -91,5 +92,17 @@ impl SubCommandGenerator {
         }
 
         current_subcommand
+    }
+
+    fn matched_subcommand_text(subcommand: &SubCommand, current_token: &str) -> Option<String> {
+        if subcommand.name.starts_with(current_token) {
+            return Some(subcommand.name.clone());
+        }
+
+        subcommand
+            .aliases
+            .iter()
+            .find(|alias| alias.starts_with(current_token))
+            .cloned()
     }
 }

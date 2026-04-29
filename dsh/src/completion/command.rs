@@ -49,9 +49,32 @@ pub struct CommandOption {
     pub long: Option<String>,
     /// Option description
     pub description: Option<String>,
+    /// Whether this option expects a following value.
+    #[serde(default)]
+    pub takes_value: bool,
+    /// Option value type used by JSON completion definitions.
+    #[serde(default)]
+    pub value_type: Option<ArgumentType>,
     /// Option argument definition (if any)
     #[serde(default)]
     pub argument: Option<Argument>,
+}
+
+impl CommandOption {
+    pub fn matches_name(&self, name: &str) -> bool {
+        self.short.as_deref() == Some(name) || self.long.as_deref() == Some(name)
+    }
+
+    pub fn value_type(&self) -> Option<&ArgumentType> {
+        self.argument
+            .as_ref()
+            .and_then(|argument| argument.arg_type.as_ref())
+            .or(self.value_type.as_ref())
+    }
+
+    pub fn expects_value(&self) -> bool {
+        self.argument.is_some() || self.value_type.is_some() || self.takes_value
+    }
 }
 
 /// Argument definition

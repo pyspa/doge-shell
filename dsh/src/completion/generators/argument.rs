@@ -1,5 +1,5 @@
 use crate::completion::command::{
-    Argument, ArgumentType, CommandCompletionDatabase, CompletionCandidate,
+    Argument, ArgumentType, CommandCompletionDatabase, CompletionCandidate, SubCommand,
 };
 use crate::completion::context::ContextCorrector;
 use crate::completion::errors::GeneratorError;
@@ -53,7 +53,8 @@ impl<'a> ArgumentGenerator<'a> {
                 let mut current_subcommands = &command_completion.subcommands;
 
                 for sub_name in &parsed.subcommand_path {
-                    if let Some(sub) = current_subcommands.iter().find(|s| &s.name == sub_name) {
+                    if let Some(sub) = Self::find_matching_subcommand(current_subcommands, sub_name)
+                    {
                         current_arguments = &sub.arguments;
                         current_subcommands = &sub.subcommands;
                     } else {
@@ -115,9 +116,8 @@ impl<'a> ArgumentGenerator<'a> {
             // Find current subcommand to get its options
             let mut current_subcommands = &command_completion.subcommands;
             for subcommand_name in &parsed.subcommand_path {
-                if let Some(sc) = current_subcommands
-                    .iter()
-                    .find(|s| &s.name == subcommand_name)
+                if let Some(sc) =
+                    Self::find_matching_subcommand(current_subcommands, subcommand_name)
                 {
                     options.extend(&sc.options);
                     current_subcommands = &sc.subcommands;
@@ -126,11 +126,10 @@ impl<'a> ArgumentGenerator<'a> {
                 }
             }
 
-            if let Some(opt) = options.iter().find(|o| {
-                o.short.as_ref() == Some(option_name) || o.long.as_ref() == Some(option_name)
-            }) && let Some(ref arg) = opt.argument
+            if let Some(opt) = options.iter().find(|o| o.matches_name(option_name))
+                && let Some(arg_type) = opt.value_type()
             {
-                actual_value_type = arg.arg_type.as_ref();
+                actual_value_type = Some(arg_type);
             }
         }
 
@@ -272,6 +271,15 @@ impl<'a> ArgumentGenerator<'a> {
             arguments
                 .last()
                 .filter(|argument| argument.multiple && !arguments.is_empty())
+        })
+    }
+
+    fn find_matching_subcommand<'b>(
+        subcommands: &'b [SubCommand],
+        name: &str,
+    ) -> Option<&'b SubCommand> {
+        subcommands.iter().find(|subcommand| {
+            subcommand.name == name || subcommand.aliases.iter().any(|alias| alias == name)
         })
     }
 }

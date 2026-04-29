@@ -215,11 +215,47 @@ impl IntegratedCompletionEngine {
         // For dynamic completion, update command with resolved alias
         parsed.command = self.environment.read().resolve_alias(&parsed.command);
 
+        self.ensure_command_completion_loaded(&parsed.command);
+        {
+            let db_lock = self.command_completion.lock();
+            if db_lock.get_command(&parsed.command).is_some() {
+                parsed = CompletionGenerator::new(&db_lock).correct_parsed_command_line(&parsed);
+            }
+        }
+
         // Update args to use specified_arguments and options to use specified_options
         parsed.args = parsed.specified_arguments.clone();
         parsed.options = parsed.specified_options.clone();
 
         parsed
+    }
+
+    fn ensure_command_completion_loaded(&self, command_name: &str) {
+        if command_name.is_empty() {
+            return;
+        }
+
+        let Some(loader) = &self.loader else {
+            return;
+        };
+
+        let mut db = self.command_completion.lock();
+        if db.get_command(command_name).is_some() {
+            return;
+        }
+
+        debug!("Lazy loading completion for command: {}", command_name);
+        match loader.load_command_completion(command_name) {
+            Ok(Some(completion)) => {
+                db.add_command(completion);
+            }
+            Ok(None) => {
+                debug!("No completion definition found for {}", command_name);
+            }
+            Err(e) => {
+                warn!("Failed to load completion for {}: {}", command_name, e);
+            }
+        }
     }
 
     /// Execute integrated completion
@@ -272,7 +308,8 @@ impl IntegratedCompletionEngine {
         // 1. Project-aware dynamic completion
         let dynamic_batch = self.collect_dynamic_candidates(&request, &parsed_command_line);
         if !aggregator.extend(dynamic_batch) {
-            let results = aggregator.finalize(history);
+            let mut results = aggregator.finalize(history);
+            self.apply_inline_option_value_prefix(&parsed_command_line, &mut results.candidates);
             self.store_in_cache(request.input, &results.candidates, results.framework);
             return results;
         }
@@ -280,7 +317,8 @@ impl IntegratedCompletionEngine {
         // 2. JSON-based command completion
         let command_collection = self.collect_command_candidates(&request, &parsed_command_line);
         if !aggregator.extend(command_collection.batch) {
-            let results = aggregator.finalize(history);
+            let mut results = aggregator.finalize(history);
+            self.apply_inline_option_value_prefix(&parsed_command_line, &mut results.candidates);
             self.store_in_cache(request.input, &results.candidates, results.framework);
             return results;
         }
@@ -288,12 +326,14 @@ impl IntegratedCompletionEngine {
         // 3. External completer fallback
         let external_batch = self.collect_external_candidates(&request, &parsed_command_line);
         if !aggregator.extend(external_batch) {
-            let results = aggregator.finalize(history);
+            let mut results = aggregator.finalize(history);
+            self.apply_inline_option_value_prefix(&parsed_command_line, &mut results.candidates);
             self.store_in_cache(request.input, &results.candidates, results.framework);
             return results;
         }
 
-        let results = aggregator.finalize(history);
+        let mut results = aggregator.finalize(history);
+        self.apply_inline_option_value_prefix(&parsed_command_line, &mut results.candidates);
         self.store_in_cache(request.input, &results.candidates, results.framework);
         results
     }
@@ -308,26 +348,7 @@ impl IntegratedCompletionEngine {
             return CommandCollection::empty();
         }
 
-        // Check if we need to load completion for this command
-        if let Some(loader) = &self.loader {
-            let command_name = &parsed_command_line.command;
-            let mut db = self.command_completion.lock();
-
-            if db.get_command(command_name).is_none() {
-                debug!("Lazy loading completion for command: {}", command_name);
-                match loader.load_command_completion(command_name) {
-                    Ok(Some(completion)) => {
-                        db.add_command(completion);
-                    }
-                    Ok(None) => {
-                        debug!("No completion definition found for {}", command_name);
-                    }
-                    Err(e) => {
-                        warn!("Failed to load completion for {}: {}", command_name, e);
-                    }
-                }
-            }
-        }
+        self.ensure_command_completion_loaded(&parsed_command_line.command);
 
         let db_lock = self.command_completion.lock();
 
@@ -667,6 +688,22 @@ impl IntegratedCompletionEngine {
         self.framework_cache.read().get(key).copied()
     }
 
+    fn apply_inline_option_value_prefix(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        candidates: &mut [EnhancedCandidate],
+    ) {
+        let Some(prefix) = inline_option_value_prefix(parsed_command_line) else {
+            return;
+        };
+
+        for candidate in candidates {
+            if !candidate.text.starts_with(&prefix) {
+                candidate.text = format!("{}{}", prefix, candidate.text);
+            }
+        }
+    }
+
     /// Deduplication and sorting
     fn deduplicate_and_sort(
         &self,
@@ -741,6 +778,23 @@ impl IntegratedCompletionEngine {
         candidates.truncate(max_results);
         candidates
     }
+}
+
+fn inline_option_value_prefix(parsed_command_line: &ParsedCommandLine) -> Option<String> {
+    let parser::CompletionContext::OptionValue { option_name, .. } =
+        &parsed_command_line.completion_context
+    else {
+        return None;
+    };
+
+    parsed_command_line.raw_args.iter().rev().find_map(|token| {
+        let (name, value) = parser::split_inline_long_option(token)?;
+        if name == option_name && value == parsed_command_line.current_token {
+            Some(format!("{name}="))
+        } else {
+            None
+        }
+    })
 }
 
 pub(super) fn matches_prefix(current_token: &str, value: &str) -> bool {
@@ -1241,6 +1295,45 @@ mod tests {
                 .iter()
                 .any(|candidate| candidate.text == "dev-cluster"),
             "expected kubectl context completion"
+        );
+    }
+
+    #[tokio::test]
+    async fn kubectl_inline_context_option_value_uses_dynamic_provider() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+
+        let kubectl = bin_dir.join("kubectl");
+        fs::write(
+            &kubectl,
+            "#!/bin/sh\nif [ \"$1\" = \"config\" ] && [ \"$2\" = \"get-contexts\" ]; then\n  printf 'dev-cluster\\nprod-cluster\\n'\nfi\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&kubectl).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&kubectl, permissions).unwrap();
+
+        let environment = Environment::new();
+        {
+            let mut env = environment.write();
+            env.paths = vec![bin_dir.display().to_string()];
+            env.clear_command_cache();
+        }
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "kubectl --context=de";
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "--context=dev-cluster"),
+            "expected prefixed kubectl context completion"
         );
     }
 

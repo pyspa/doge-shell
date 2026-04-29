@@ -1,5 +1,26 @@
-use super::command::{ArgumentType, CommandCompletionDatabase};
-use super::parser::{CommandLineParser, CompletionContext, ParsedCommandLine};
+use super::command::{
+    ArgumentType, CommandCompletion, CommandCompletionDatabase, CommandOption, SubCommand,
+};
+use super::parser::{
+    CommandLineParser, CompletionContext, ParsedCommandLine, split_inline_long_option,
+};
+
+fn normalize_specified_option(
+    options: &[String],
+    raw_token: &str,
+    option_name: &str,
+) -> Vec<String> {
+    let mut normalized = options.to_vec();
+    for option in &mut normalized {
+        if option == raw_token {
+            *option = option_name.to_string();
+        }
+    }
+    if !normalized.iter().any(|option| option == option_name) {
+        normalized.push(option_name.to_string());
+    }
+    normalized
+}
 
 /// Responsible for correcting parsed command line based on completion database
 pub struct ContextCorrector<'a> {
@@ -24,8 +45,8 @@ impl<'a> ContextCorrector<'a> {
 
         // 1. Identify valid subcommand chain
         for (idx, sub_name) in parsed.subcommand_path.iter().enumerate() {
-            if let Some(sub) = current_subcommands.iter().find(|s| &s.name == sub_name) {
-                valid_subcommands.push(sub_name.clone());
+            if let Some(sub) = Self::find_matching_subcommand(current_subcommands, sub_name) {
+                valid_subcommands.push(sub.name.clone());
                 current_subcommands = &sub.subcommands;
             } else {
                 split_index = idx;
@@ -47,7 +68,7 @@ impl<'a> ContextCorrector<'a> {
                 // Check if it is a partial subcommand match
                 let is_partial_subcommand = current_subcommands
                     .iter()
-                    .any(|s| s.name.starts_with(first_invalid));
+                    .any(|s| Self::subcommand_starts_with(s, first_invalid));
 
                 // Check if it looks like an option
                 let is_option = first_invalid.starts_with('-');
@@ -111,6 +132,11 @@ impl<'a> ContextCorrector<'a> {
             return new_parsed;
         }
 
+        if let Some(corrected) = self.correct_option_value_context(&new_parsed, command_completion)
+        {
+            return corrected;
+        }
+
         // Special Case: Context is SubCommand (from parser heuristic), but the matched command
         // has NO subcommands (e.g., `sudo`). In this case, we should treat it as Argument context.
         if parsed.completion_context == CompletionContext::SubCommand
@@ -146,7 +172,7 @@ impl<'a> ContextCorrector<'a> {
                 let mut available_options = command_completion.global_options.clone();
                 let mut curr_subs = &command_completion.subcommands;
                 for sub_name in &new_parsed.subcommand_path {
-                    if let Some(sub) = curr_subs.iter().find(|s| &s.name == sub_name) {
+                    if let Some(sub) = Self::find_matching_subcommand(curr_subs, sub_name) {
                         available_options.extend(sub.options.clone());
                         curr_subs = &sub.subcommands;
                     } else {
@@ -160,7 +186,7 @@ impl<'a> ContextCorrector<'a> {
                     if let Some(opt) = available_options
                         .iter()
                         .find(|o| o.short.as_ref() == Some(&short_name))
-                        && opt.argument.is_some()
+                        && opt.expects_value()
                     {
                         // The last flag requires an argument, so the current token is its value
                         new_parsed.completion_context = CompletionContext::OptionValue {
@@ -176,7 +202,7 @@ impl<'a> ContextCorrector<'a> {
             if !current_subcommands.is_empty()
                 && current_subcommands
                     .iter()
-                    .any(|s| s.name.starts_with(&new_parsed.current_token))
+                    .any(|s| Self::subcommand_starts_with(s, &new_parsed.current_token))
             {
                 new_parsed.completion_context = CompletionContext::SubCommand;
             }
@@ -193,10 +219,7 @@ impl<'a> ContextCorrector<'a> {
             // But if it IS a valid subcommand, we should set context to SubCommand
             let is_current = token == &new_parsed.current_token;
 
-            if let Some(sub) = current_subcommands
-                .iter()
-                .find(|s| &s.name == token || s.aliases.contains(token))
-            {
+            if let Some(sub) = Self::find_matching_subcommand(current_subcommands, token) {
                 if is_current {
                     // The current token IS a valid subcommand (e.g. pacman -S|)
                     new_parsed.completion_context = CompletionContext::SubCommand;
@@ -204,11 +227,19 @@ impl<'a> ContextCorrector<'a> {
                     return new_parsed;
                 } else {
                     // It is a completed parent subcommand (e.g. pacman -S |package)
-                    valid_subcommands.push(token.clone());
+                    valid_subcommands.push(sub.name.clone());
                     current_subcommands = &sub.subcommands;
                     tokens_consumed += 1;
                     subcommands_found = true;
                 }
+            } else if is_current
+                && current_subcommands
+                    .iter()
+                    .any(|s| Self::subcommand_starts_with(s, token))
+            {
+                new_parsed.completion_context = CompletionContext::SubCommand;
+                new_parsed.subcommand_path = valid_subcommands.clone();
+                return new_parsed;
             } else {
                 // Token doesn't match any subcommand, stop scanning
                 break;
@@ -256,7 +287,7 @@ impl<'a> ContextCorrector<'a> {
             if new_parsed.current_token.starts_with('-')
                 && !current_subcommands
                     .iter()
-                    .any(|s| s.name == new_parsed.current_token)
+                    .any(|s| Self::subcommand_matches(s, &new_parsed.current_token))
             {
                 // e.g. pacman -S -y
                 // -y is not subcommand.
@@ -272,7 +303,177 @@ impl<'a> ContextCorrector<'a> {
             }
         }
 
+        if let Some(corrected) = self.correct_option_value_context(&new_parsed, command_completion)
+        {
+            return corrected;
+        }
+
         new_parsed
+    }
+
+    fn correct_option_value_context(
+        &self,
+        parsed: &ParsedCommandLine,
+        command_completion: &CommandCompletion,
+    ) -> Option<ParsedCommandLine> {
+        let options = self.collect_available_options(command_completion, &parsed.subcommand_path);
+
+        if let Some(raw_token) = Self::current_raw_token(parsed)
+            && let Some((option_name, value)) = split_inline_long_option(raw_token)
+        {
+            let mut corrected = parsed.clone();
+            corrected.current_token = value.to_string();
+            corrected.current_arg = Some(corrected.current_token.clone());
+
+            if let Some(option) = options
+                .iter()
+                .find(|option| option.matches_name(option_name))
+            {
+                if option.expects_value() {
+                    corrected.completion_context = CompletionContext::OptionValue {
+                        option_name: option_name.to_string(),
+                        value_type: option.value_type().cloned(),
+                    };
+                    corrected.specified_options = normalize_specified_option(
+                        &corrected.specified_options,
+                        raw_token,
+                        option_name,
+                    );
+                    corrected.options = corrected.specified_options.clone();
+                    return Some(corrected);
+                }
+
+                corrected.current_token = raw_token.to_string();
+                corrected.current_arg = Some(corrected.current_token.clone());
+                corrected.completion_context = CompletionContext::LongOption;
+                return Some(corrected);
+            }
+        }
+
+        if parsed.current_token.starts_with('-') {
+            return None;
+        }
+
+        let previous = Self::previous_raw_token(parsed)?;
+        let option = options
+            .into_iter()
+            .find(|option| option.matches_name(previous) && option.expects_value())?;
+
+        let mut corrected = parsed.clone();
+        corrected.completion_context = CompletionContext::OptionValue {
+            option_name: previous.to_string(),
+            value_type: option.value_type().cloned(),
+        };
+        Self::remove_current_value_from_arguments(&mut corrected);
+        Some(corrected)
+    }
+
+    fn remove_current_value_from_arguments(parsed: &mut ParsedCommandLine) {
+        if parsed.current_token.is_empty() {
+            return;
+        }
+
+        if let Some(pos) = parsed
+            .specified_arguments
+            .iter()
+            .rposition(|argument| argument == &parsed.current_token)
+        {
+            parsed.specified_arguments.remove(pos);
+            parsed.args = parsed.specified_arguments.clone();
+        }
+    }
+
+    fn current_raw_token(parsed: &ParsedCommandLine) -> Option<&str> {
+        let index = Self::current_raw_index(parsed)?;
+        parsed.raw_args.get(index).map(String::as_str)
+    }
+
+    fn current_raw_index(parsed: &ParsedCommandLine) -> Option<usize> {
+        if parsed.raw_args.is_empty() {
+            return None;
+        }
+
+        if parsed.current_token.is_empty()
+            && let Some(index) = parsed.raw_args.iter().rposition(|token| {
+                split_inline_long_option(token).is_some_and(|(_, value)| value.is_empty())
+            })
+        {
+            return Some(index);
+        }
+
+        if parsed.current_token.is_empty()
+            && let Some(index) = parsed.raw_args.iter().rposition(|token| token.is_empty())
+        {
+            return Some(index);
+        }
+
+        if !parsed.current_token.is_empty()
+            && let Some(index) = parsed.raw_args.iter().rposition(|token| {
+                token == &parsed.current_token
+                    || split_inline_long_option(token)
+                        .is_some_and(|(_, value)| value == parsed.current_token)
+            })
+        {
+            return Some(index);
+        }
+
+        Some(parsed.raw_args.len())
+    }
+
+    fn previous_raw_token(parsed: &ParsedCommandLine) -> Option<&str> {
+        if parsed.raw_args.is_empty() {
+            return None;
+        }
+
+        let current_index = Self::current_raw_index(parsed).unwrap_or(parsed.raw_args.len());
+
+        parsed
+            .raw_args
+            .get(current_index.checked_sub(1)?)
+            .map(String::as_str)
+    }
+
+    fn collect_available_options<'b>(
+        &self,
+        command_completion: &'b CommandCompletion,
+        subcommand_path: &[String],
+    ) -> Vec<&'b CommandOption> {
+        let mut options = Vec::new();
+        options.extend(&command_completion.global_options);
+
+        let mut current_subcommands = &command_completion.subcommands;
+        for subcommand_name in subcommand_path {
+            let Some(subcommand) =
+                Self::find_matching_subcommand(current_subcommands, subcommand_name)
+            else {
+                break;
+            };
+            options.extend(&subcommand.options);
+            current_subcommands = &subcommand.subcommands;
+        }
+
+        options
+    }
+
+    fn find_matching_subcommand<'b>(
+        subcommands: &'b [SubCommand],
+        name: &str,
+    ) -> Option<&'b SubCommand> {
+        subcommands
+            .iter()
+            .find(|subcommand| Self::subcommand_matches(subcommand, name))
+    }
+
+    fn subcommand_matches(subcommand: &SubCommand, name: &str) -> bool {
+        subcommand.name == name || subcommand.aliases.iter().any(|alias| alias == name)
+    }
+
+    fn subcommand_starts_with(subcommand: &SubCommand, prefix: &str) -> bool {
+        subcommand.name.starts_with(prefix)
+            || subcommand
+                .aliases
+                .iter()
+                .any(|alias| alias.starts_with(prefix))
     }
 
     pub fn find_command_with_args_arg(
@@ -338,7 +539,7 @@ impl<'a> ContextCorrector<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::completion::command::{CommandCompletion, SubCommand};
+    use crate::completion::command::{ArgumentType, CommandCompletion, CommandOption, SubCommand};
 
     #[test]
     fn test_correct_flag_like_subcommand() {
@@ -431,5 +632,169 @@ mod tests {
             "Expected SubCommand context for alias, got {:?}",
             corrected.completion_context
         );
+    }
+
+    #[test]
+    fn alias_subcommand_is_canonicalized_before_argument_completion() {
+        let mut db = CommandCompletionDatabase::new();
+        db.add_command(CommandCompletion {
+            command: "pacman".to_string(),
+            description: None,
+            global_options: vec![],
+            subcommands: vec![SubCommand {
+                name: "-S".to_string(),
+                description: None,
+                aliases: vec!["--sync".to_string()],
+                options: vec![],
+                arguments: vec![],
+                subcommands: vec![],
+            }],
+            arguments: vec![],
+        });
+
+        let parsed = CommandLineParser::new().parse("pacman --sync ", "pacman --sync ".len());
+        let corrected = ContextCorrector::new(&db).correct_parsed_command_line(&parsed);
+
+        assert_eq!(corrected.subcommand_path, vec!["-S".to_string()]);
+        assert!(matches!(
+            corrected.completion_context,
+            CompletionContext::Argument { arg_index: 0, .. }
+        ));
+    }
+
+    #[test]
+    fn option_value_context_uses_completion_definition() {
+        let mut db = CommandCompletionDatabase::new();
+        db.add_command(CommandCompletion {
+            command: "cargo".to_string(),
+            description: None,
+            global_options: vec![],
+            subcommands: vec![SubCommand {
+                name: "test".to_string(),
+                description: None,
+                aliases: vec![],
+                options: vec![CommandOption {
+                    short: Some("-p".to_string()),
+                    long: Some("--package".to_string()),
+                    description: None,
+                    takes_value: true,
+                    value_type: Some(ArgumentType::Choice(vec!["doge-shell".to_string()])),
+                    argument: None,
+                }],
+                arguments: vec![],
+                subcommands: vec![],
+            }],
+            arguments: vec![],
+        });
+
+        let parsed = CommandLineParser::new().parse("cargo test -p do", "cargo test -p do".len());
+        let corrected = ContextCorrector::new(&db).correct_parsed_command_line(&parsed);
+
+        assert!(matches!(
+            corrected.completion_context,
+            CompletionContext::OptionValue {
+                option_name,
+                value_type: Some(ArgumentType::Choice(_))
+            } if option_name == "-p"
+        ));
+        assert!(corrected.specified_arguments.is_empty());
+        assert!(corrected.args.is_empty());
+    }
+
+    #[test]
+    fn inline_long_option_value_uses_completion_definition() {
+        let mut db = CommandCompletionDatabase::new();
+        db.add_command(CommandCompletion {
+            command: "kubectl".to_string(),
+            description: None,
+            global_options: vec![CommandOption {
+                short: None,
+                long: Some("--context".to_string()),
+                description: None,
+                takes_value: true,
+                value_type: Some(ArgumentType::Choice(vec!["dev-cluster".to_string()])),
+                argument: None,
+            }],
+            subcommands: vec![],
+            arguments: vec![],
+        });
+
+        let parsed =
+            CommandLineParser::new().parse("kubectl --context=de", "kubectl --context=de".len());
+        let corrected = ContextCorrector::new(&db).correct_parsed_command_line(&parsed);
+
+        assert_eq!(corrected.current_token, "de");
+        assert!(matches!(
+            corrected.completion_context,
+            CompletionContext::OptionValue {
+                option_name,
+                value_type: Some(ArgumentType::Choice(_))
+            } if option_name == "--context"
+        ));
+        assert_eq!(corrected.raw_args, vec!["--context=de".to_string()]);
+        assert_eq!(corrected.specified_options, vec!["--context".to_string()]);
+    }
+
+    #[test]
+    fn separate_option_empty_value_uses_completion_definition() {
+        let mut db = CommandCompletionDatabase::new();
+        db.add_command(CommandCompletion {
+            command: "cargo".to_string(),
+            description: None,
+            global_options: vec![],
+            subcommands: vec![SubCommand {
+                name: "test".to_string(),
+                description: None,
+                aliases: vec![],
+                options: vec![CommandOption {
+                    short: Some("-p".to_string()),
+                    long: Some("--package".to_string()),
+                    description: None,
+                    takes_value: true,
+                    value_type: Some(ArgumentType::Choice(vec!["doge-shell".to_string()])),
+                    argument: None,
+                }],
+                arguments: vec![],
+                subcommands: vec![],
+            }],
+            arguments: vec![],
+        });
+
+        let parsed = CommandLineParser::new().parse("cargo test -p ", "cargo test -p ".len());
+        let corrected = ContextCorrector::new(&db).correct_parsed_command_line(&parsed);
+
+        assert_eq!(corrected.current_token, "");
+        assert!(matches!(
+            corrected.completion_context,
+            CompletionContext::OptionValue {
+                option_name,
+                value_type: Some(ArgumentType::Choice(_))
+            } if option_name == "-p"
+        ));
+    }
+
+    #[test]
+    fn inline_long_option_without_value_definition_does_not_use_value_provider() {
+        let mut db = CommandCompletionDatabase::new();
+        db.add_command(CommandCompletion {
+            command: "cmd".to_string(),
+            description: None,
+            global_options: vec![CommandOption {
+                short: None,
+                long: Some("--verbose".to_string()),
+                description: None,
+                takes_value: false,
+                value_type: None,
+                argument: None,
+            }],
+            subcommands: vec![],
+            arguments: vec![],
+        });
+
+        let parsed = CommandLineParser::new().parse("cmd --verbose=x", "cmd --verbose=x".len());
+        let corrected = ContextCorrector::new(&db).correct_parsed_command_line(&parsed);
+
+        assert_eq!(corrected.current_token, "--verbose=x");
+        assert_eq!(corrected.completion_context, CompletionContext::LongOption);
     }
 }

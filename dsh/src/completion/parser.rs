@@ -11,6 +11,19 @@ fn is_long_option_token(token: &str) -> bool {
     token.starts_with("--")
 }
 
+pub(crate) fn split_inline_long_option(token: &str) -> Option<(&str, &str)> {
+    if !is_long_option_token(token) {
+        return None;
+    }
+
+    let (name, value) = token.split_once('=')?;
+    if name.len() <= 2 {
+        return None;
+    }
+
+    Some((name, value))
+}
+
 #[derive(Debug, Clone)]
 struct TokenSpan {
     text: String,
@@ -302,12 +315,16 @@ impl CommandLineParser {
             }
 
             if is_option_token(token) {
-                specified_options.push(token.clone());
+                let option_name = split_inline_long_option(token)
+                    .map(|(name, _)| name)
+                    .unwrap_or(token);
+                specified_options.push(option_name.to_string());
 
                 // Check if next token is option value
-                if let Some(next_token) = tokens_queue.get(i + 1)
+                if split_inline_long_option(token).is_none()
+                    && let Some(next_token) = tokens_queue.get(i + 1)
                     && !is_option_token(next_token)
-                    && self.option_takes_value(token)
+                    && self.option_takes_value(option_name)
                 {
                     skip_next_option_value = true;
                 }
@@ -327,7 +344,7 @@ impl CommandLineParser {
                 .chain(tokens_queue.iter().cloned())
                 .collect();
 
-            let current_token = if cursor_token_index < all_tokens.len() {
+            let raw_current_token = if cursor_token_index < all_tokens.len() {
                 all_tokens[cursor_token_index].clone()
             } else {
                 String::new()
@@ -335,13 +352,21 @@ impl CommandLineParser {
 
             let context = self.determine_completion_context(CompletionContextParams {
                 cursor_token_index,
-                current_token: &current_token,
+                current_token: &raw_current_token,
                 subcommand_path: &subcommand_path,
                 _specified_options: &specified_options,
                 specified_arguments: &specified_arguments,
                 all_tokens: &all_tokens,
                 has_space_after_command,
             });
+
+            let current_token = if matches!(context, CompletionContext::OptionValue { .. })
+                && let Some((_, value)) = split_inline_long_option(&raw_current_token)
+            {
+                value.to_string()
+            } else {
+                raw_current_token
+            };
 
             (current_token, context)
         };
@@ -460,6 +485,13 @@ impl CommandLineParser {
     fn determine_completion_context(&self, params: CompletionContextParams) -> CompletionContext {
         if params.cursor_token_index == 0 {
             return CompletionContext::Command;
+        }
+
+        if let Some((option_name, _)) = split_inline_long_option(params.current_token) {
+            return CompletionContext::OptionValue {
+                option_name: option_name.to_string(),
+                value_type: None,
+            };
         }
 
         // If current token is an option
@@ -763,6 +795,57 @@ mod tests {
         } else {
             panic!("Expected OptionValue context");
         }
+    }
+
+    #[test]
+    fn test_parse_inline_long_option_value() {
+        let parser = CommandLineParser::new();
+        let result = parser.parse("kubectl --context=de", "kubectl --context=de".len());
+
+        assert_eq!(result.command, "kubectl");
+        assert_eq!(result.raw_args, vec!["--context=de".to_string()]);
+        assert_eq!(result.specified_options, vec!["--context".to_string()]);
+        assert_eq!(result.current_token, "de");
+        assert!(matches!(
+            result.completion_context,
+            CompletionContext::OptionValue { option_name, .. } if option_name == "--context"
+        ));
+    }
+
+    #[test]
+    fn test_parse_inline_long_option_empty_value() {
+        let parser = CommandLineParser::new();
+        let result = parser.parse("kubectl --context=", "kubectl --context=".len());
+
+        assert_eq!(result.raw_args, vec!["--context=".to_string()]);
+        assert_eq!(result.specified_options, vec!["--context".to_string()]);
+        assert_eq!(result.current_token, "");
+        assert!(matches!(
+            result.completion_context,
+            CompletionContext::OptionValue { option_name, .. } if option_name == "--context"
+        ));
+    }
+
+    #[test]
+    fn test_parse_invalid_inline_long_option_stays_option_like() {
+        let parser = CommandLineParser::new();
+        let result = parser.parse("cmd --=x", "cmd --=x".len());
+
+        assert_eq!(result.raw_args, vec!["--=x".to_string()]);
+        assert_eq!(result.specified_options, vec!["--=x".to_string()]);
+        assert_eq!(result.current_token, "--=x");
+        assert_eq!(result.completion_context, CompletionContext::LongOption);
+    }
+
+    #[test]
+    fn test_parse_short_attached_value_is_out_of_scope() {
+        let parser = CommandLineParser::new();
+        let result = parser.parse("cmd -x=y", "cmd -x=y".len());
+
+        assert_eq!(result.raw_args, vec!["-x=y".to_string()]);
+        assert_eq!(result.specified_options, vec!["-x=y".to_string()]);
+        assert_eq!(result.current_token, "-x=y");
+        assert_eq!(result.completion_context, CompletionContext::LongOption);
     }
 
     #[test]

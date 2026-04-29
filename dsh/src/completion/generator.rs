@@ -301,6 +301,8 @@ mod tests {
             short: None,
             long: Some("--unique-flag".to_string()),
             description: None,
+            takes_value: false,
+            value_type: None,
             argument: None,
         });
         db2.add_command(pacman);
@@ -436,12 +438,16 @@ mod tests {
                         short: Some("-m".to_string()),
                         long: Some("--message".to_string()),
                         description: None,
+                        takes_value: false,
+                        value_type: None,
                         argument: None,
                     },
                     CommandOption {
                         short: Some("-a".to_string()),
                         long: Some("--all".to_string()),
                         description: None,
+                        takes_value: false,
+                        value_type: None,
                         argument: None,
                     },
                 ],
@@ -537,12 +543,16 @@ mod tests {
                         short: Some("-A".to_string()),
                         long: Some("--all".to_string()),
                         description: None,
+                        takes_value: false,
+                        value_type: None,
                         argument: None,
                     },
                     CommandOption {
                         short: Some("-u".to_string()),
                         long: Some("--update".to_string()),
                         description: None,
+                        takes_value: false,
+                        value_type: None,
                         argument: None,
                     },
                 ],
@@ -924,6 +934,8 @@ mod tests {
                 short: Some("-o".to_string()),
                 long: Some("--option".to_string()),
                 description: None,
+                takes_value: false,
+                value_type: None,
                 argument: None,
             }],
             subcommands: vec![],
@@ -982,6 +994,125 @@ mod tests {
             texts_dash.contains(&"--option".to_string()),
             "Should show options when token starts with -"
         );
+    }
+
+    #[test]
+    fn subcommand_option_value_uses_value_type_choice() {
+        let mut db = CommandCompletionDatabase::new();
+        db.add_command(CommandCompletion {
+            command: "cargo".to_string(),
+            description: None,
+            global_options: vec![],
+            subcommands: vec![SubCommand {
+                name: "test".to_string(),
+                description: None,
+                aliases: vec![],
+                options: vec![CommandOption {
+                    short: Some("-p".to_string()),
+                    long: Some("--package".to_string()),
+                    description: Some("Package to test".to_string()),
+                    takes_value: true,
+                    value_type: Some(ArgumentType::Choice(vec![
+                        "doge-shell".to_string(),
+                        "dsh-builtin".to_string(),
+                    ])),
+                    argument: None,
+                }],
+                arguments: vec![],
+                subcommands: vec![],
+            }],
+            arguments: vec![],
+        });
+
+        let parsed = CommandLineParser::new().parse("cargo test -p dog", "cargo test -p dog".len());
+        let candidates = CompletionGenerator::new(&db)
+            .generate_candidates(&parsed)
+            .unwrap();
+        let names: Vec<String> = candidates
+            .into_iter()
+            .map(|candidate| candidate.text)
+            .collect();
+
+        assert_eq!(names, vec!["doge-shell".to_string()]);
+    }
+
+    #[test]
+    fn subcommand_option_value_uses_value_type_script() {
+        let mut db = CommandCompletionDatabase::new();
+        db.add_command(CommandCompletion {
+            command: "git".to_string(),
+            description: None,
+            global_options: vec![],
+            subcommands: vec![SubCommand {
+                name: "restore".to_string(),
+                description: None,
+                aliases: vec![],
+                options: vec![CommandOption {
+                    short: Some("-s".to_string()),
+                    long: Some("--source".to_string()),
+                    description: Some("Restore source".to_string()),
+                    takes_value: true,
+                    value_type: Some(ArgumentType::Script(
+                        "printf 'main\\nfeature\\n'".to_string(),
+                    )),
+                    argument: None,
+                }],
+                arguments: vec![],
+                subcommands: vec![],
+            }],
+            arguments: vec![],
+        });
+
+        let parsed = CommandLineParser::new()
+            .parse("git restore --source ma", "git restore --source ma".len());
+        let candidates = CompletionGenerator::new(&db)
+            .generate_candidates(&parsed)
+            .unwrap();
+        let names: Vec<String> = candidates
+            .into_iter()
+            .map(|candidate| candidate.text)
+            .collect();
+
+        assert_eq!(names, vec!["main".to_string()]);
+    }
+
+    #[test]
+    fn subcommand_alias_uses_canonical_argument_scope() {
+        let mut db = CommandCompletionDatabase::new();
+        db.add_command(CommandCompletion {
+            command: "pacman".to_string(),
+            description: None,
+            global_options: vec![],
+            subcommands: vec![SubCommand {
+                name: "-S".to_string(),
+                description: None,
+                aliases: vec!["--sync".to_string()],
+                options: vec![],
+                arguments: vec![Argument {
+                    name: "package".to_string(),
+                    description: None,
+                    multiple: true,
+                    arg_type: Some(ArgumentType::Choice(vec![
+                        "package-alpha".to_string(),
+                        "tool-beta".to_string(),
+                    ])),
+                }],
+                subcommands: vec![],
+            }],
+            arguments: vec![],
+        });
+
+        let parsed =
+            CommandLineParser::new().parse("pacman --sync pack", "pacman --sync pack".len());
+        let candidates = CompletionGenerator::new(&db)
+            .generate_candidates(&parsed)
+            .unwrap();
+        let names: Vec<String> = candidates
+            .into_iter()
+            .map(|candidate| candidate.text)
+            .collect();
+
+        assert_eq!(names, vec!["package-alpha".to_string()]);
     }
 
     fn create_complex_test_database() -> CommandCompletionDatabase {

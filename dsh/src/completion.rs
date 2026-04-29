@@ -21,6 +21,7 @@ pub mod generators;
 pub mod integrated;
 pub mod json_loader;
 pub mod parser;
+pub(crate) mod shell_path;
 mod ui;
 
 #[cfg(test)]

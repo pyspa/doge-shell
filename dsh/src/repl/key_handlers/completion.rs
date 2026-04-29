@@ -155,6 +155,10 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
         // If integrated engine returned candidates, show them with skim selector
         let completion_candidates: Vec<completion::Candidate> =
             repl.integrated_completion.to_candidates(engine_candidates);
+        let completion_candidates = completion::shell_path::format_candidates_for_token(
+            completion_candidates,
+            completion_query,
+        );
 
         let res = completion::select_completion_items_with_framework(
             completion_candidates,

@@ -94,7 +94,7 @@ impl OptionGenerator {
         for subcommand_name in subcommand_path {
             current_subcommand = current_subcommands
                 .iter()
-                .find(|sc| sc.name == *subcommand_name);
+                .find(|sc| sc.name == *subcommand_name || sc.aliases.contains(subcommand_name));
 
             if let Some(sc) = current_subcommand {
                 current_subcommands = &sc.subcommands;

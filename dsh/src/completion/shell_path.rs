@@ -30,7 +30,8 @@ impl ShellPathToken {
         Self { normalized, style }
     }
 
-    pub fn normalized(&self) -> &str {
+    #[cfg(test)]
+    fn normalized(&self) -> &str {
         &self.normalized
     }
 
@@ -101,7 +102,7 @@ fn detect_style(raw: &str) -> ShellPathStyle {
     ShellPathStyle::Plain
 }
 
-fn strip_wrapping_quote<'a>(raw: &'a str, quote: char, closed: bool) -> &'a str {
+fn strip_wrapping_quote(raw: &str, quote: char, closed: bool) -> &str {
     let inner = raw.strip_prefix(quote).unwrap_or(raw);
     if closed {
         inner.strip_suffix(quote).unwrap_or(inner)
@@ -208,6 +209,16 @@ mod tests {
     }
 
     #[test]
+    fn shell_path_token_preserves_single_quote_style() {
+        let token = ShellPathToken::from_raw(r#"'/tmp/dir with space/"#);
+        assert_eq!(token.normalized(), "/tmp/dir with space/");
+        assert_eq!(
+            token.encode("/tmp/dir with space/child"),
+            r#"'/tmp/dir with space/child"#
+        );
+    }
+
+    #[test]
     fn format_candidates_for_token_only_rewrites_path_candidates() {
         let items = vec![
             Candidate::File {
@@ -233,6 +244,32 @@ mod tests {
             Candidate::Command {
                 name: "git".to_string(),
                 description: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn format_candidates_for_token_preserves_quote_style() {
+        let items = vec![Candidate::File {
+            path: "/tmp/dir with space/child".to_string(),
+            is_dir: true,
+        }];
+
+        let double = format_candidates_for_token(items.clone(), Some(r#""/tmp/dir with space/"#));
+        assert_eq!(
+            double[0],
+            Candidate::File {
+                path: r#""/tmp/dir with space/child"#.to_string(),
+                is_dir: true,
+            }
+        );
+
+        let single = format_candidates_for_token(items, Some(r#"'/tmp/dir with space/"#));
+        assert_eq!(
+            single[0],
+            Candidate::File {
+                path: r#"'/tmp/dir with space/child"#.to_string(),
+                is_dir: true,
             }
         );
     }

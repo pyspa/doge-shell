@@ -1,4 +1,5 @@
-use crate::completion::{self, path_completion_prefix_strict};
+use crate::completion::path::path_completion_prefix_for_shell_token;
+use crate::completion::shell_token::{self, SeparatorMode};
 use crate::history::History;
 use dsh_openai::ChatGptClient;
 use parking_lot::Mutex as ParkingMutex;
@@ -300,33 +301,31 @@ impl SuggestionEngine {
     fn in_blocklist(&self, input: &str) -> bool {
         const AI_SUGGESTION_BLOCKLIST: &[&str] = &["gco"];
 
-        // Simple check: first word
-        let cmd = input.split_whitespace().next().unwrap_or("");
-        AI_SUGGESTION_BLOCKLIST.contains(&cmd)
+        first_command_token(input)
+            .is_some_and(|command| AI_SUGGESTION_BLOCKLIST.contains(&command.raw.as_str()))
     }
 
     fn completion_suggestion(&self, input: &str) -> Option<SuggestionState> {
-        let word = completion::last_word(input);
-        if word.is_empty() {
+        let cursor = input.chars().count();
+        let token =
+            shell_token::token_at_char_cursor(input, cursor, SeparatorMode::CompletionRange)?;
+        if token.raw.is_empty() || token.byte_end != input.len() {
             return None;
         }
 
-        // Determine context (is it a cd command?)
-        // Simple heuristic: if input starts with "cd " or contains " cd " before the last word
-        // Actually simplest is checking the first token.
-        let is_cd = input.trim_start().starts_with("cd ");
+        let is_cd = is_cd_path_context(input, &token);
 
-        // Use strict prefix completion
-        if let Ok(Some(completion)) = path_completion_prefix_strict(word, is_cd) {
-            // Strict prefix is already guaranteed by path_completion_prefix_strict
-            // But we should double check if the completion actually EXTENDS the word
-            if !completion.starts_with(word) {
+        if let Ok(Some(completion)) = path_completion_prefix_for_shell_token(&token.raw, is_cd) {
+            let full = format!(
+                "{}{}{}",
+                &input[..token.byte_start],
+                completion,
+                &input[token.byte_end..]
+            );
+
+            if full == input || !full.starts_with(input) {
                 return None;
             }
-
-            // Construct full command
-            let prefix_len = input.len().saturating_sub(word.len());
-            let full = format!("{}{}", &input[..prefix_len], completion);
 
             return Some(SuggestionState {
                 full,
@@ -433,6 +432,17 @@ fn collect_history_context(
     };
 
     history.get_recent_context(limit)
+}
+
+fn first_command_token(input: &str) -> Option<shell_token::ShellTokenSpan> {
+    shell_token::tokenize(input, SeparatorMode::Parser)
+        .into_iter()
+        .next()
+}
+
+fn is_cd_path_context(input: &str, token: &shell_token::ShellTokenSpan) -> bool {
+    first_command_token(input)
+        .is_some_and(|command| command.raw == "cd" && token.byte_start > command.byte_end)
 }
 
 const AI_SUGGESTION_SYSTEM_PROMPT: &str = r#"You are an inline completion engine for the doge-shell terminal.
@@ -1105,8 +1115,18 @@ mod tests {
             "Backend should not be called for gco args"
         );
 
-        // 3. Check that " echo" (with leading space) is NOT blocked (unless we strip it)
-        // logic says trim_start().split_whitespace().next() so " gco" should also be blocked
+        let result = engine.predict("gco\tmain", 8, None);
+        assert!(
+            result.is_empty(),
+            "gco with tab-separated args should be blocked"
+        );
+        assert_eq!(
+            recorder.calls().len(),
+            0,
+            "Backend should not be called for gco with tab-separated args"
+        );
+
+        // 3. Leading whitespace still leaves gco as the first command token.
         let result = engine.predict(" gco", 4, None);
         assert!(
             result.is_empty(),
@@ -1134,6 +1154,22 @@ mod tests {
             1,
             "Backend SHOULD be called for echo"
         );
+
+        assert!(!engine.in_blocklist(r#""gco" main"#));
+        assert!(!engine.in_blocklist("cmd | gco"));
+    }
+
+    #[test]
+    fn cd_command_token_itself_is_not_path_context() {
+        let input = "cd";
+        let token = shell_token::token_at_char_cursor(
+            input,
+            input.chars().count(),
+            SeparatorMode::CompletionRange,
+        )
+        .unwrap();
+
+        assert!(!is_cd_path_context(input, &token));
     }
 
     #[test]
@@ -1181,5 +1217,95 @@ mod tests {
             // given "ls src/sugg" matched something, "cd src/sugg" returning None
             // suggests that the matching item was NOT a directory. Correct.
         }
+    }
+
+    #[test]
+    fn completion_suggestion_preserves_escaped_path_style() {
+        let dir = tempfile::tempdir().unwrap();
+        let spaced = dir.path().join("dir with space");
+        std::fs::create_dir(&spaced).unwrap();
+        std::fs::File::create(spaced.join("foo.txt")).unwrap();
+
+        let engine = SuggestionEngine::new();
+        let raw_prefix = format!("{}/dir\\ with\\ space/fo", dir.path().display());
+        let expected = format!("ls {}/dir\\ with\\ space/foo.txt", dir.path().display());
+
+        let suggestion = engine
+            .completion_suggestion(&format!("ls {raw_prefix}"))
+            .unwrap();
+
+        assert_eq!(suggestion.full, expected);
+        assert_eq!(suggestion.source, SuggestionSource::Completion);
+    }
+
+    #[test]
+    fn completion_suggestion_preserves_quoted_path_style() {
+        let dir = tempfile::tempdir().unwrap();
+        let spaced = dir.path().join("dir with space");
+        std::fs::create_dir(&spaced).unwrap();
+        std::fs::File::create(spaced.join("foo.txt")).unwrap();
+
+        let engine = SuggestionEngine::new();
+        let input = format!("ls \"{}/dir with space/fo", dir.path().display());
+        let expected = format!("ls \"{}/dir with space/foo.txt", dir.path().display());
+
+        let suggestion = engine.completion_suggestion(&input).unwrap();
+
+        assert_eq!(suggestion.full, expected);
+        assert_eq!(suggestion.source, SuggestionSource::Completion);
+    }
+
+    #[test]
+    fn completion_suggestion_keeps_cd_directory_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let spaced = dir.path().join("dir with space");
+        std::fs::create_dir(&spaced).unwrap();
+        std::fs::File::create(spaced.join("foo.txt")).unwrap();
+        std::fs::create_dir(spaced.join("foodir")).unwrap();
+
+        let engine = SuggestionEngine::new();
+        let input = format!("cd {}/dir\\ with\\ space/fo", dir.path().display());
+        let expected = format!("cd {}/dir\\ with\\ space/foodir/", dir.path().display());
+
+        let suggestion = engine.completion_suggestion(&input).unwrap();
+
+        assert_eq!(suggestion.full, expected);
+        assert_eq!(suggestion.source, SuggestionSource::Completion);
+    }
+
+    #[test]
+    fn completion_suggestion_keeps_cd_directory_only_with_tab_separator() {
+        let dir = tempfile::tempdir().unwrap();
+        let spaced = dir.path().join("dir with space");
+        std::fs::create_dir(&spaced).unwrap();
+        std::fs::File::create(spaced.join("foo.txt")).unwrap();
+        std::fs::create_dir(spaced.join("foodir")).unwrap();
+
+        let engine = SuggestionEngine::new();
+        let input = format!("cd\t{}/dir\\ with\\ space/fo", dir.path().display());
+        let expected = format!("cd\t{}/dir\\ with\\ space/foodir/", dir.path().display());
+
+        let suggestion = engine.completion_suggestion(&input).unwrap();
+
+        assert_eq!(suggestion.full, expected);
+        assert_eq!(suggestion.source, SuggestionSource::Completion);
+    }
+
+    #[test]
+    fn completion_suggestion_keeps_cd_directory_only_with_leading_space() {
+        let dir = tempfile::tempdir().unwrap();
+        let spaced = dir.path().join("dir with space");
+        std::fs::create_dir(&spaced).unwrap();
+        std::fs::File::create(spaced.join("foo.txt")).unwrap();
+        std::fs::create_dir(spaced.join("foodir")).unwrap();
+
+        let engine = SuggestionEngine::new();
+        let input = format!(" cd {}/dir\\ with\\ space/fo", dir.path().display());
+        let expected = format!(" cd {}/dir\\ with\\ space/foodir/", dir.path().display());
+
+        let suggestion = engine.completion_suggestion(&input).unwrap();
+
+        assert_eq!(suggestion.full, expected);
+        assert_eq!(suggestion.source, SuggestionSource::Completion);
     }
 }

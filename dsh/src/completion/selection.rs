@@ -31,10 +31,6 @@ pub fn get_prompt_and_input_for_completion() -> (String, String) {
     ("$ ".to_string(), "".to_string())
 }
 
-pub fn last_word(s: &str) -> &str {
-    s.split_whitespace().last().unwrap_or("")
-}
-
 pub fn default_completion_framework() -> CompletionFrameworkKind {
     match std::env::var("DSH_COMPLETION_FRAMEWORK") {
         Ok(value) if value.eq_ignore_ascii_case("skim") => CompletionFrameworkKind::Skim,
@@ -576,23 +572,6 @@ mod tests {
         // Test no match
         let results_none = super::get_file_completions_with_filter_sync(dir_path, "", Some("xyz"));
         assert!(results_none.is_empty());
-    }
-
-    #[test]
-    fn test_last_word_basic() {
-        assert_eq!(last_word("git status"), "status");
-        assert_eq!(last_word("git"), "git");
-        assert_eq!(last_word("a b c d"), "d");
-    }
-
-    #[test]
-    fn test_last_word_whitespace_only() {
-        assert_eq!(last_word("   "), "");
-    }
-
-    #[test]
-    fn test_last_word_empty() {
-        assert_eq!(last_word(""), "");
     }
 
     #[test]

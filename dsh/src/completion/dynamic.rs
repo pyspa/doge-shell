@@ -822,6 +822,13 @@ mod tests {
         CommandLineParser::new().parse(input, input.len())
     }
 
+    fn write_executable_script(path: &Path, content: &str) {
+        fs::write(path, content).unwrap();
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+
     #[test]
     fn parse_compose_services_reads_top_level_service_names() {
         let dir = tempdir().unwrap();
@@ -987,5 +994,65 @@ volumes:
             "2",
             "git command should run again after ttl expiry"
         );
+    }
+
+    #[test]
+    fn external_completer_parses_filters_and_receives_context() {
+        let dir = tempdir().unwrap();
+        let script = dir.path().join("external-completer.sh");
+        write_executable_script(
+            &script,
+            "#!/bin/sh\n\
+             {\n\
+             printf 'input=%s\\n' \"$DSH_COMPLETION_INPUT\"\n\
+             printf 'cursor=%s\\n' \"$DSH_COMPLETION_CURSOR\"\n\
+             printf 'command=%s\\n' \"$DSH_COMPLETION_COMMAND\"\n\
+             printf 'token=%s\\n' \"$DSH_COMPLETION_CURRENT_TOKEN\"\n\
+             } > external-env.txt\n\
+             printf 'zzext-alpha\\tExternal alpha\\n'\n\
+             printf 'other-candidate\\tOther candidate\\n'\n",
+        );
+
+        let environment = Environment::new();
+        environment.write().variables.insert(
+            "DSH_EXTERNAL_COMPLETER".to_string(),
+            script.display().to_string(),
+        );
+        let provider = DynamicCompletionProvider::new(environment);
+        let input = "unknown-command zzext";
+
+        let candidates =
+            provider.collect_external_candidates(dir.path(), input, input.len(), &parsed(input));
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].text, "zzext-alpha");
+        assert_eq!(candidates[0].description.as_deref(), Some("External alpha"));
+        assert_eq!(candidates[0].candidate_type, CandidateType::Argument);
+        assert_eq!(candidates[0].priority, 200);
+
+        assert_eq!(
+            fs::read_to_string(dir.path().join("external-env.txt")).unwrap(),
+            "input=unknown-command zzext\ncursor=21\ncommand=unknown-command\ntoken=zzext\n"
+        );
+    }
+
+    #[test]
+    fn external_completer_failure_returns_empty_candidates() {
+        let dir = tempdir().unwrap();
+        let script = dir.path().join("external-completer-fails.sh");
+        write_executable_script(&script, "#!/bin/sh\nexit 42\n");
+
+        let environment = Environment::new();
+        environment.write().variables.insert(
+            "DSH_EXTERNAL_COMPLETER".to_string(),
+            script.display().to_string(),
+        );
+        let provider = DynamicCompletionProvider::new(environment);
+        let input = "unknown-command zzext";
+
+        let candidates =
+            provider.collect_external_candidates(dir.path(), input, input.len(), &parsed(input));
+
+        assert!(candidates.is_empty());
     }
 }

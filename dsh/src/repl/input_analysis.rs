@@ -1,6 +1,6 @@
 use super::Repl;
+use crate::completion::shell_token::{self, SeparatorMode};
 use crate::completion::{self as completion_lib};
-use crate::dirs;
 use crate::input::ColorType;
 use crate::parser::{self, Rule, ShellParser};
 use crate::terminal::renderer::TerminalRenderer;
@@ -58,14 +58,16 @@ pub(crate) fn analyze_input(
                                 }
                                 completion_full = Some(file);
                                 break;
-                            } else if let Ok(Some(dir)) =
-                                completion_lib::path_completion_prefix(word)
-                                && dirs::is_dir(&dir)
+                            } else if let Some(path_completion) =
+                                super::completion::complete_path_for_span(
+                                    input,
+                                    span.start(),
+                                    span.end(),
+                                    true,
+                                )
                             {
-                                if dir.len() >= input.len() && dir.starts_with(input) {
-                                    completion = Some(dir[input.len()..].to_string());
-                                }
-                                completion_full = Some(dir.to_string());
+                                completion = Some(path_completion.suffix);
+                                completion_full = Some(path_completion.full);
                                 break;
                             }
                         }
@@ -73,18 +75,16 @@ pub(crate) fn analyze_input(
                         // Completion logic for arguments
                         if current
                             && completion.is_none()
-                            && let Ok(Some(path)) = completion_lib::path_completion_prefix(word)
-                            && path.len() >= word.len()
-                            && path.starts_with(word)
+                            && let Some(path_completion) =
+                                super::completion::complete_path_for_span(
+                                    input,
+                                    span.start(),
+                                    span.end(),
+                                    false,
+                                )
                         {
-                            let part = path[word.len()..].to_string();
-                            completion = Some(part.clone());
-
-                            if let Some((pre, post)) = repl.input.split_current_pos() {
-                                completion_full = Some(pre.to_owned() + &part + post);
-                            } else {
-                                completion_full = Some(input.to_string() + &part);
-                            }
+                            completion = Some(path_completion.suffix);
+                            completion_full = Some(path_completion.full);
                             break;
                         }
                     }
@@ -98,19 +98,8 @@ pub(crate) fn analyze_input(
             let (mut color_ranges, can_execute) =
                 repl.compute_color_ranges_from_pairs(pairs, input);
 
-            // Apply visual improvements for valid paths
-            for (start, end, kind) in color_ranges.iter_mut() {
-                // Check if Argument is a valid path
-                if matches!(kind, ColorType::Argument) {
-                    let word = &input[*start..*end];
-                    // Clean up quotes if present for path check
-                    let clean_word = word.trim_matches(|c| c == '\'' || c == '"');
-                    let path = std::path::Path::new(clean_word);
-                    if completion_lib::is_path_cached(path) {
-                        *kind = ColorType::ValidPath;
-                    }
-                }
-            }
+            apply_cached_path_highlighting(input, &mut color_ranges);
+            append_cached_tail_path_highlighting(input, &mut color_ranges);
 
             InputAnalysis {
                 completion_full,
@@ -122,7 +111,9 @@ pub(crate) fn analyze_input(
         Err(err) => {
             // Parsing failed, highlight the error
             let mut ranges = Vec::new();
-            if let Some(token) = parser::highlight_error_token(input, err.location) {
+            if let Some(range) = cached_tail_argument_path_range(input) {
+                ranges.push(range);
+            } else if let Some(token) = parser::highlight_error_token(input, err.location) {
                 ranges.push((token.start, token.end, ColorType::Error));
             }
             InputAnalysis {
@@ -133,6 +124,63 @@ pub(crate) fn analyze_input(
             }
         }
     }
+}
+
+fn apply_cached_path_highlighting(input: &str, color_ranges: &mut [(usize, usize, ColorType)]) {
+    for (start, end, kind) in color_ranges.iter_mut() {
+        if is_path_like_argument_color(*kind)
+            && completion_lib::is_path_cached_for_shell_token(&input[*start..*end])
+        {
+            *kind = ColorType::ValidPath;
+        }
+    }
+}
+
+fn cached_tail_argument_path_range(input: &str) -> Option<(usize, usize, ColorType)> {
+    let cursor = input.chars().count();
+    let token = shell_token::token_at_char_cursor(input, cursor, SeparatorMode::CompletionRange)?;
+    if input[..token.byte_start].trim().is_empty() {
+        return None;
+    }
+    if completion_lib::is_path_cached_for_shell_token(&token.raw) {
+        Some((token.byte_start, token.byte_end, ColorType::ValidPath))
+    } else {
+        None
+    }
+}
+
+fn append_cached_tail_path_highlighting(
+    input: &str,
+    color_ranges: &mut Vec<(usize, usize, ColorType)>,
+) {
+    let Some((start, end, kind)) = cached_tail_argument_path_range(input) else {
+        return;
+    };
+    if color_ranges
+        .iter()
+        .any(|(range_start, range_end, _)| ranges_overlap(start, end, *range_start, *range_end))
+    {
+        return;
+    }
+
+    color_ranges.push((start, end, kind));
+    color_ranges.sort_by_key(|(start, _, _)| *start);
+}
+
+fn ranges_overlap(
+    left_start: usize,
+    left_end: usize,
+    right_start: usize,
+    right_end: usize,
+) -> bool {
+    left_start < right_end && right_start < left_end
+}
+
+fn is_path_like_argument_color(kind: ColorType) -> bool {
+    matches!(
+        kind,
+        ColorType::Argument | ColorType::SingleQuote | ColorType::DoubleQuote
+    )
 }
 
 use std::collections::HashMap;
@@ -204,4 +252,147 @@ pub(crate) async fn toggle_sudo(repl: &mut Repl<'_>) -> Result<()> {
     repl.print_input(&mut renderer, true, true);
     renderer.flush().ok();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::environment::Environment;
+    use crate::shell::Shell;
+
+    fn new_repl(shell: &mut Shell) -> Repl<'_> {
+        Repl::new(shell)
+    }
+
+    fn cache_spaced_file() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let spaced = dir.path().join("dir with space");
+        std::fs::create_dir(&spaced).unwrap();
+        std::fs::File::create(spaced.join("foo.txt")).unwrap();
+        completion_lib::path_completion_path_sync(spaced.clone()).unwrap();
+        (dir, spaced)
+    }
+
+    fn range_with_text<'a>(
+        analysis: &'a InputAnalysis,
+        input: &'a str,
+        raw: &str,
+    ) -> Option<(usize, usize, ColorType)> {
+        analysis
+            .color_ranges
+            .as_ref()?
+            .iter()
+            .copied()
+            .find(|(start, end, _)| &input[*start..*end] == raw)
+    }
+
+    #[tokio::test]
+    async fn argument_path_suggestion_preserves_escaped_token_style() {
+        let dir = tempfile::tempdir().unwrap();
+        let spaced = dir.path().join("dir with space");
+        std::fs::create_dir(&spaced).unwrap();
+        std::fs::File::create(spaced.join("foo.txt")).unwrap();
+
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = new_repl(&mut shell);
+
+        let input = format!("ls {}/dir\\ with\\ space/fo", dir.path().display());
+        let expected = format!("ls {}/dir\\ with\\ space/foo.txt", dir.path().display());
+        repl.input.reset(input.clone());
+
+        let analysis = analyze_input(&repl, &input, None);
+
+        assert_eq!(analysis.completion_full.as_deref(), Some(expected.as_str()));
+        assert_eq!(analysis.completion.as_deref(), Some("o.txt"));
+    }
+
+    #[tokio::test]
+    async fn command_path_suggestion_preserves_escaped_token_style() {
+        let dir = tempfile::tempdir().unwrap();
+        let spaced = dir.path().join("dir with space");
+        std::fs::create_dir(&spaced).unwrap();
+        std::fs::create_dir(spaced.join("foodir")).unwrap();
+
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = new_repl(&mut shell);
+
+        let input = format!("{}/dir\\ with\\ space/fo", dir.path().display());
+        let expected = format!("{}/dir\\ with\\ space/foodir/", dir.path().display());
+        repl.input.reset(input.clone());
+
+        let analysis = analyze_input(&repl, &input, None);
+
+        assert_eq!(analysis.completion_full.as_deref(), Some(expected.as_str()));
+        assert_eq!(analysis.completion.as_deref(), Some("odir/"));
+    }
+
+    #[tokio::test]
+    async fn valid_path_highlighting_decodes_escaped_argument_token() {
+        let (dir, _) = cache_spaced_file();
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = new_repl(&mut shell);
+
+        let raw = format!("{}/dir\\ with\\ space/foo.txt", dir.path().display());
+        let input = format!("ls {raw}");
+        repl.input.reset(input.clone());
+
+        let analysis = analyze_input(&repl, &input, None);
+        let range = range_with_text(&analysis, &input, &raw).unwrap();
+
+        assert!(matches!(range.2, ColorType::ValidPath));
+    }
+
+    #[tokio::test]
+    async fn valid_path_highlighting_decodes_quoted_argument_token() {
+        let (dir, _) = cache_spaced_file();
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = new_repl(&mut shell);
+
+        let raw = format!("\"{}/dir with space/foo.txt\"", dir.path().display());
+        let input = format!("ls {raw}");
+        repl.input.reset(input.clone());
+
+        let analysis = analyze_input(&repl, &input, None);
+        let range = range_with_text(&analysis, &input, &raw).unwrap();
+
+        assert!(matches!(range.2, ColorType::ValidPath));
+    }
+
+    #[tokio::test]
+    async fn valid_path_highlighting_decodes_unclosed_quoted_argument_token() {
+        let (dir, _) = cache_spaced_file();
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = new_repl(&mut shell);
+
+        let raw = format!("\"{}/dir with space/foo.txt", dir.path().display());
+        let input = format!("ls {raw}");
+        repl.input.reset(input.clone());
+
+        assert!(completion_lib::is_path_cached_for_shell_token(&raw));
+        let analysis = analyze_input(&repl, &input, None);
+        let range = range_with_text(&analysis, &input, &raw).unwrap();
+
+        assert!(matches!(range.2, ColorType::ValidPath));
+    }
+
+    #[tokio::test]
+    async fn valid_path_highlighting_leaves_non_path_argument_unchanged() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = new_repl(&mut shell);
+
+        let raw = "not-a-cached-path";
+        let input = format!("ls {raw}");
+        repl.input.reset(input.clone());
+
+        let analysis = analyze_input(&repl, &input, None);
+        let range = range_with_text(&analysis, &input, raw).unwrap();
+
+        assert!(matches!(range.2, ColorType::Argument));
+    }
 }

@@ -1,4 +1,5 @@
 use super::command::ArgumentType;
+use super::shell_token::{self, SeparatorMode, ShellTokenSpan};
 use std::collections::VecDeque;
 
 #[inline]
@@ -22,15 +23,6 @@ pub(crate) fn split_inline_long_option(token: &str) -> Option<(&str, &str)> {
     }
 
     Some((name, value))
-}
-
-#[derive(Debug, Clone)]
-struct TokenSpan {
-    text: String,
-    /// start position as byte index (inclusive)
-    start: usize,
-    /// end position as byte index (exclusive)
-    end: usize,
 }
 
 /// Command line parsing result for dynamic completion
@@ -109,7 +101,7 @@ impl CommandLineParser {
     /// Parse command line
     pub fn parse(&self, input: &str, cursor_pos: usize) -> ParsedCommandLine {
         let spans = self.tokenize_with_positions(input);
-        let mut tokens: Vec<String> = spans.iter().map(|s| s.text.clone()).collect();
+        let mut tokens: Vec<String> = spans.iter().map(|s| s.raw.clone()).collect();
         let (cursor_token_index, is_inside_token) =
             self.find_cursor_token_index(&spans, cursor_pos);
 
@@ -117,15 +109,15 @@ impl CommandLineParser {
         if is_inside_token {
             if cursor_token_index < tokens.len() {
                 let span = &spans[cursor_token_index];
-                let relative_pos = cursor_pos.saturating_sub(span.start);
-                if relative_pos < span.text.len() {
+                let relative_pos = cursor_pos.saturating_sub(span.byte_start);
+                if relative_pos < span.raw.len() {
                     // Start from relative_pos and backtrack to find a valid char boundary
                     // This handles cases where cursor is in the middle of a multibyte char
                     let mut safe_pos = relative_pos;
-                    while !span.text.is_char_boundary(safe_pos) && safe_pos > 0 {
+                    while !span.raw.is_char_boundary(safe_pos) && safe_pos > 0 {
                         safe_pos -= 1;
                     }
-                    tokens[cursor_token_index] = span.text[..safe_pos].to_string();
+                    tokens[cursor_token_index] = span.raw[..safe_pos].to_string();
                 }
             }
         } else {
@@ -143,7 +135,7 @@ impl CommandLineParser {
     fn tokenize(&self, input: &str) -> Vec<String> {
         self.tokenize_with_positions(input)
             .into_iter()
-            .map(|s| s.text)
+            .map(|s| s.raw)
             .collect()
     }
 
@@ -160,73 +152,26 @@ impl CommandLineParser {
         }
 
         let span = spans.get(index)?;
-        Some((span.text.clone(), cursor_pos.saturating_sub(span.start)))
+        Some((span.raw.clone(), cursor_pos.saturating_sub(span.byte_start)))
     }
 
     /// Split input string into tokens and keep their character spans.
-    fn tokenize_with_positions(&self, input: &str) -> Vec<TokenSpan> {
-        let mut spans = Vec::new();
-        let mut current_token = String::new();
-        let mut token_start: Option<usize> = None;
-        let mut in_quotes = false;
-        let mut quote_char = '"';
-
-        for (i, ch) in input.char_indices() {
-            match ch {
-                '"' | '\'' if !in_quotes => {
-                    in_quotes = true;
-                    quote_char = ch;
-                    if token_start.is_none() {
-                        token_start = Some(i);
-                    }
-                    current_token.push(ch);
-                }
-                ch if in_quotes && ch == quote_char => {
-                    in_quotes = false;
-                    current_token.push(ch);
-                }
-                ' ' | '\t' if !in_quotes => {
-                    if !current_token.is_empty() {
-                        let start = token_start.unwrap_or(i);
-                        spans.push(TokenSpan {
-                            text: current_token.clone(),
-                            start,
-                            end: i,
-                        });
-                        current_token.clear();
-                        token_start = None;
-                    }
-                }
-                _ => {
-                    if token_start.is_none() {
-                        token_start = Some(i);
-                    }
-                    current_token.push(ch);
-                }
-            }
-        }
-
-        if !current_token.is_empty() {
-            let start = token_start.unwrap_or(input.len());
-            let end = input.len();
-            spans.push(TokenSpan {
-                text: current_token,
-                start,
-                end,
-            });
-        }
-
-        spans
+    fn tokenize_with_positions(&self, input: &str) -> Vec<ShellTokenSpan> {
+        shell_token::tokenize(input, SeparatorMode::Parser)
     }
 
     /// Find token index corresponding to cursor position (byte index).
     /// Returns (index, is_inside_token)
     /// If is_inside_token is true, we are appending/modifying tokens[index].
     /// If is_inside_token is false, we are inserting *before* tokens[index] (gap).
-    fn find_cursor_token_index(&self, spans: &[TokenSpan], cursor_pos: usize) -> (usize, bool) {
+    fn find_cursor_token_index(
+        &self,
+        spans: &[ShellTokenSpan],
+        cursor_pos: usize,
+    ) -> (usize, bool) {
         for (i, span) in spans.iter().enumerate() {
-            if cursor_pos <= span.end {
-                if cursor_pos >= span.start {
+            if cursor_pos <= span.byte_end {
+                if cursor_pos >= span.byte_start {
                     // Inside or at the end of this token
                     return (i, true);
                 } else {
@@ -542,6 +487,13 @@ impl CommandLineParser {
             };
         }
 
+        if self.looks_like_path_argument(params.current_token) {
+            return CompletionContext::Argument {
+                arg_index: Self::argument_index(&params),
+                arg_type: None,
+            };
+        }
+
         // Subcommand or argument
         if params.subcommand_path.is_empty() || self.looks_like_subcommand(params.current_token) {
             // Only allow subcommand completion if there's a space after the command
@@ -553,21 +505,33 @@ impl CommandLineParser {
         } else {
             // If current token is an argument, calculate its index
             // Don't include current token (since it's the completion target)
-            let arg_index = params.specified_arguments.len().saturating_sub(
-                if params
-                    .specified_arguments
-                    .contains(&params.current_token.to_string())
-                {
-                    1
-                } else {
-                    0
-                },
-            );
             CompletionContext::Argument {
-                arg_index,
+                arg_index: Self::argument_index(&params),
                 arg_type: None, // In actual implementation, get from completion data
             }
         }
+    }
+
+    fn argument_index(params: &CompletionContextParams) -> usize {
+        params.specified_arguments.len().saturating_sub(
+            if params
+                .specified_arguments
+                .contains(&params.current_token.to_string())
+            {
+                1
+            } else {
+                0
+            },
+        )
+    }
+
+    fn looks_like_path_argument(&self, token: &str) -> bool {
+        token.contains('/')
+            || token.contains('\\')
+            || (token.contains('.')
+                && token
+                    .rfind('.')
+                    .is_some_and(|i| i > 0 && i < token.len() - 1))
     }
 
     /// Determine if option takes a value (simplified version)
@@ -991,6 +955,36 @@ mod tests {
         let parser = CommandLineParser::new();
         let tokens = parser.tokenize("cmd 'a b' \"c d\" e");
         assert_eq!(tokens, vec!["cmd", "'a b'", "\"c d\"", "e"]);
+    }
+
+    #[test]
+    fn test_tokenize_backslash_escaped_space() {
+        let parser = CommandLineParser::new();
+        let tokens = parser.tokenize(r#"cat dir\ with\ space/fo"#);
+        assert_eq!(tokens, vec!["cat", r#"dir\ with\ space/fo"#]);
+    }
+
+    #[test]
+    fn test_parse_backslash_escaped_path_argument() {
+        let parser = CommandLineParser::new();
+        let input = r#"cat dir\ with\ space/fo"#;
+        let result = parser.parse(input, input.len());
+
+        assert_eq!(result.current_token, r#"dir\ with\ space/fo"#);
+        assert_eq!(
+            result.completion_context,
+            CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: None
+            }
+        );
+    }
+
+    #[test]
+    fn test_tokenize_escaped_quote_does_not_enter_quote_state() {
+        let parser = CommandLineParser::new();
+        let tokens = parser.tokenize(r#"echo \"quoted tail"#);
+        assert_eq!(tokens, vec!["echo", r#"\"quoted"#, "tail"]);
     }
 
     // --- Group 2: looks_like_subcommand Heuristics ---

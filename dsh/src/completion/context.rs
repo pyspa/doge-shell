@@ -22,6 +22,29 @@ fn normalize_specified_option(
     normalized
 }
 
+fn split_attached_short_option_value<'a>(
+    raw_token: &'a str,
+    options: &[&CommandOption],
+) -> Option<(String, Option<ArgumentType>, &'a str)> {
+    if !raw_token.starts_with('-') || raw_token.starts_with("--") {
+        return None;
+    }
+
+    options.iter().find_map(|option| {
+        let short = option.short.as_deref()?;
+        if short.len() != 2 || !option.expects_value() || !raw_token.starts_with(short) {
+            return None;
+        }
+
+        let value = &raw_token[short.len()..];
+        if value.is_empty() || value.starts_with('=') {
+            return None;
+        }
+
+        Some((short.to_string(), option.value_type().cloned(), value))
+    })
+}
+
 /// Responsible for correcting parsed command line based on completion database
 pub struct ContextCorrector<'a> {
     database: &'a CommandCompletionDatabase,
@@ -348,6 +371,23 @@ impl<'a> ContextCorrector<'a> {
                 corrected.completion_context = CompletionContext::LongOption;
                 return Some(corrected);
             }
+        }
+
+        if let Some(raw_token) = Self::current_raw_token(parsed)
+            && let Some((option_name, value_type, value)) =
+                split_attached_short_option_value(raw_token, &options)
+        {
+            let mut corrected = parsed.clone();
+            corrected.current_token = value.to_string();
+            corrected.current_arg = Some(corrected.current_token.clone());
+            corrected.completion_context = CompletionContext::OptionValue {
+                option_name: option_name.clone(),
+                value_type,
+            };
+            corrected.specified_options =
+                normalize_specified_option(&corrected.specified_options, raw_token, &option_name);
+            corrected.options = corrected.specified_options.clone();
+            return Some(corrected);
         }
 
         if parsed.current_token.starts_with('-') {
@@ -733,6 +773,92 @@ mod tests {
         ));
         assert_eq!(corrected.raw_args, vec!["--context=de".to_string()]);
         assert_eq!(corrected.specified_options, vec!["--context".to_string()]);
+    }
+
+    #[test]
+    fn short_attached_option_value_uses_completion_definition() {
+        let mut db = CommandCompletionDatabase::new();
+        db.add_command(CommandCompletion {
+            command: "kubectl".to_string(),
+            description: None,
+            global_options: vec![CommandOption {
+                short: Some("-n".to_string()),
+                long: Some("--namespace".to_string()),
+                description: None,
+                takes_value: true,
+                value_type: Some(ArgumentType::Choice(vec!["dev-namespace".to_string()])),
+                argument: None,
+            }],
+            subcommands: vec![],
+            arguments: vec![],
+        });
+
+        let parsed = CommandLineParser::new().parse("kubectl -nde", "kubectl -nde".len());
+        let corrected = ContextCorrector::new(&db).correct_parsed_command_line(&parsed);
+
+        assert_eq!(corrected.current_token, "de");
+        assert!(matches!(
+            corrected.completion_context,
+            CompletionContext::OptionValue {
+                option_name,
+                value_type: Some(ArgumentType::Choice(_))
+            } if option_name == "-n"
+        ));
+        assert_eq!(corrected.raw_args, vec!["-nde".to_string()]);
+        assert_eq!(corrected.specified_options, vec!["-n".to_string()]);
+        assert_eq!(corrected.options, vec!["-n".to_string()]);
+    }
+
+    #[test]
+    fn short_attached_option_without_value_definition_does_not_use_value_provider() {
+        let mut db = CommandCompletionDatabase::new();
+        db.add_command(CommandCompletion {
+            command: "cmd".to_string(),
+            description: None,
+            global_options: vec![CommandOption {
+                short: Some("-v".to_string()),
+                long: Some("--verbose".to_string()),
+                description: None,
+                takes_value: false,
+                value_type: None,
+                argument: None,
+            }],
+            subcommands: vec![],
+            arguments: vec![],
+        });
+
+        let parsed = CommandLineParser::new().parse("cmd -vfoo", "cmd -vfoo".len());
+        let corrected = ContextCorrector::new(&db).correct_parsed_command_line(&parsed);
+
+        assert_eq!(corrected.current_token, "-vfoo");
+        assert_eq!(corrected.completion_context, CompletionContext::LongOption);
+        assert_eq!(corrected.specified_options, vec!["-vfoo".to_string()]);
+    }
+
+    #[test]
+    fn short_equals_option_value_stays_out_of_scope() {
+        let mut db = CommandCompletionDatabase::new();
+        db.add_command(CommandCompletion {
+            command: "cmd".to_string(),
+            description: None,
+            global_options: vec![CommandOption {
+                short: Some("-x".to_string()),
+                long: Some("--example".to_string()),
+                description: None,
+                takes_value: true,
+                value_type: Some(ArgumentType::Choice(vec!["value".to_string()])),
+                argument: None,
+            }],
+            subcommands: vec![],
+            arguments: vec![],
+        });
+
+        let parsed = CommandLineParser::new().parse("cmd -x=y", "cmd -x=y".len());
+        let corrected = ContextCorrector::new(&db).correct_parsed_command_line(&parsed);
+
+        assert_eq!(corrected.current_token, "-x=y");
+        assert_eq!(corrected.completion_context, CompletionContext::LongOption);
+        assert_eq!(corrected.specified_options, vec!["-x=y".to_string()]);
     }
 
     #[test]

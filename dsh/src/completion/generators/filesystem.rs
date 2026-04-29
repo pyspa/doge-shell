@@ -1,4 +1,5 @@
 use crate::completion::command::CompletionCandidate;
+use crate::completion::shell_path::normalize_path_token;
 use crate::completion::{Candidate, fuzzy_match_score, path_completion_path_sync};
 use anyhow::Result;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
@@ -18,7 +19,8 @@ impl FileSystemGenerator {
     ) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::with_capacity(32);
 
-        let (dir_path, file_prefix) = Self::split_dir_and_prefix(current_token);
+        let normalized_token = normalize_path_token(current_token);
+        let (dir_path, file_prefix) = Self::split_dir_and_prefix(&normalized_token);
 
         // Reuse legacy path listing cache for better performance.
         let listing = path_completion_path_sync(PathBuf::from(&dir_path)).unwrap_or_default();
@@ -76,7 +78,8 @@ impl FileSystemGenerator {
     pub fn generate_directory_candidates(current_token: &str) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::with_capacity(16);
 
-        let (dir_path, dir_prefix) = Self::split_dir_and_prefix(current_token);
+        let normalized_token = normalize_path_token(current_token);
+        let (dir_path, dir_prefix) = Self::split_dir_and_prefix(&normalized_token);
 
         let listing = path_completion_path_sync(PathBuf::from(&dir_path)).unwrap_or_default();
 
@@ -225,6 +228,73 @@ mod tests {
         assert!(
             apple.priority >= 1000,
             "Exact prefix should have at least +1000 bonus"
+        );
+    }
+
+    #[test]
+    fn file_candidates_decode_double_quoted_token() {
+        let dir = tempdir().unwrap();
+        let spaced_dir = dir.path().join("dir with space");
+        std::fs::create_dir(&spaced_dir).unwrap();
+        std::fs::write(spaced_dir.join("foo"), "").unwrap();
+
+        let token = format!(r#""{}/fo"#, spaced_dir.display());
+        let candidates =
+            FileSystemGenerator::generate_file_candidates(&token).expect("file candidates");
+        let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
+        let expected = spaced_dir.join("foo").to_string_lossy().to_string();
+
+        assert!(
+            texts.contains(&expected),
+            "expected decoded quoted path candidate {:?} in {:?}",
+            expected,
+            texts
+        );
+    }
+
+    #[test]
+    fn file_candidates_decode_backslash_escaped_token() {
+        let dir = tempdir().unwrap();
+        let spaced_dir = dir.path().join("dir with space");
+        std::fs::create_dir(&spaced_dir).unwrap();
+        std::fs::write(spaced_dir.join("foo"), "").unwrap();
+
+        let token = spaced_dir
+            .join("fo")
+            .to_string_lossy()
+            .replace(' ', r#"\ "#);
+        let candidates =
+            FileSystemGenerator::generate_file_candidates(&token).expect("file candidates");
+        let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
+        let expected = spaced_dir.join("foo").to_string_lossy().to_string();
+
+        assert!(
+            texts.contains(&expected),
+            "expected decoded escaped path candidate {:?} in {:?}",
+            expected,
+            texts
+        );
+    }
+
+    #[test]
+    fn directory_candidates_decode_single_quoted_token() {
+        let dir = tempdir().unwrap();
+        let spaced_dir = dir.path().join("dir with space");
+        let child_dir = spaced_dir.join("child dir");
+        std::fs::create_dir(&spaced_dir).unwrap();
+        std::fs::create_dir(&child_dir).unwrap();
+
+        let token = format!(r#"'{}/"#, spaced_dir.display());
+        let candidates =
+            FileSystemGenerator::generate_directory_candidates(&token).expect("dir candidates");
+        let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
+        let expected = child_dir.to_string_lossy().to_string();
+
+        assert!(
+            texts.contains(&expected),
+            "expected decoded single-quoted directory candidate {:?} in {:?}",
+            expected,
+            texts
         );
     }
 }

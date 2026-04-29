@@ -15,6 +15,11 @@ pub enum InteractiveAction {
         backspace_count: usize,
         text: String,
     },
+    ReplaceRange {
+        start: usize,
+        end: usize,
+        text: String,
+    },
     ReplaceAll {
         text: String,
     },

@@ -28,6 +28,20 @@ mod tests {
             _ => panic!("Expected Patch variant"),
         }
 
+        let replace_range = InteractiveAction::ReplaceRange {
+            start: 1,
+            end: 4,
+            text: "abc".to_string(),
+        };
+        match replace_range {
+            InteractiveAction::ReplaceRange { start, end, text } => {
+                assert_eq!(start, 1);
+                assert_eq!(end, 4);
+                assert_eq!(text, "abc");
+            }
+            _ => panic!("Expected ReplaceRange variant"),
+        }
+
         let replace = InteractiveAction::ReplaceAll {
             text: "replacement".to_string(),
         };

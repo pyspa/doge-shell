@@ -5,6 +5,7 @@ use super::dynamic::DynamicCompletionProvider;
 use super::framework::CompletionFrameworkKind;
 
 use super::generator::CompletionGenerator;
+use super::shell_token::{self, SeparatorMode};
 use crate::completion::generators::filesystem::FileSystemGenerator;
 
 use super::json_loader::JsonCompletionLoader;
@@ -83,10 +84,17 @@ impl CommandCollection {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompletionReplacementRange {
+    pub start: usize,
+    pub end: usize,
+}
+
 #[derive(Debug)]
 pub struct CompletionResult {
     pub candidates: Vec<EnhancedCandidate>,
     pub framework: CompletionFrameworkKind,
+    pub replacement_range: Option<CompletionReplacementRange>,
 }
 
 struct CandidateAggregator<'a> {
@@ -161,6 +169,7 @@ impl<'a> CandidateAggregator<'a> {
         CompletionResult {
             candidates,
             framework,
+            replacement_range: None,
         }
     }
 }
@@ -274,6 +283,10 @@ impl IntegratedCompletionEngine {
 
         let request = CompletionRequest::new(input, current_dir, max_results, cursor_pos);
 
+        let parsed_command_line = self.convert_to_parsed_command_line(input, cursor_pos);
+        let replacement_range =
+            completion_replacement_range(input, cursor_pos, &parsed_command_line);
+
         if !request.input.is_empty()
             && let Some(hit) = self.cache.lookup(request.input)
         {
@@ -291,11 +304,11 @@ impl IntegratedCompletionEngine {
                 return CompletionResult {
                     candidates: hit.candidates,
                     framework,
+                    replacement_range,
                 };
             }
         }
 
-        let parsed_command_line = self.convert_to_parsed_command_line(input, cursor_pos);
         let command_context = if !parsed_command_line.command.is_empty() {
             Some(parsed_command_line.command.clone())
         } else {
@@ -309,7 +322,7 @@ impl IntegratedCompletionEngine {
         let dynamic_batch = self.collect_dynamic_candidates(&request, &parsed_command_line);
         if !aggregator.extend(dynamic_batch) {
             let mut results = aggregator.finalize(history);
-            self.apply_inline_option_value_prefix(&parsed_command_line, &mut results.candidates);
+            results.replacement_range = replacement_range;
             self.store_in_cache(request.input, &results.candidates, results.framework);
             return results;
         }
@@ -318,7 +331,7 @@ impl IntegratedCompletionEngine {
         let command_collection = self.collect_command_candidates(&request, &parsed_command_line);
         if !aggregator.extend(command_collection.batch) {
             let mut results = aggregator.finalize(history);
-            self.apply_inline_option_value_prefix(&parsed_command_line, &mut results.candidates);
+            results.replacement_range = replacement_range;
             self.store_in_cache(request.input, &results.candidates, results.framework);
             return results;
         }
@@ -327,13 +340,13 @@ impl IntegratedCompletionEngine {
         let external_batch = self.collect_external_candidates(&request, &parsed_command_line);
         if !aggregator.extend(external_batch) {
             let mut results = aggregator.finalize(history);
-            self.apply_inline_option_value_prefix(&parsed_command_line, &mut results.candidates);
+            results.replacement_range = replacement_range;
             self.store_in_cache(request.input, &results.candidates, results.framework);
             return results;
         }
 
         let mut results = aggregator.finalize(history);
-        self.apply_inline_option_value_prefix(&parsed_command_line, &mut results.candidates);
+        results.replacement_range = replacement_range;
         self.store_in_cache(request.input, &results.candidates, results.framework);
         results
     }
@@ -688,22 +701,6 @@ impl IntegratedCompletionEngine {
         self.framework_cache.read().get(key).copied()
     }
 
-    fn apply_inline_option_value_prefix(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        candidates: &mut [EnhancedCandidate],
-    ) {
-        let Some(prefix) = inline_option_value_prefix(parsed_command_line) else {
-            return;
-        };
-
-        for candidate in candidates {
-            if !candidate.text.starts_with(&prefix) {
-                candidate.text = format!("{}{}", prefix, candidate.text);
-            }
-        }
-    }
-
     /// Deduplication and sorting
     fn deduplicate_and_sort(
         &self,
@@ -780,21 +777,66 @@ impl IntegratedCompletionEngine {
     }
 }
 
-fn inline_option_value_prefix(parsed_command_line: &ParsedCommandLine) -> Option<String> {
-    let parser::CompletionContext::OptionValue { option_name, .. } =
-        &parsed_command_line.completion_context
-    else {
-        return None;
-    };
+fn completion_replacement_range(
+    input: &str,
+    cursor_pos: usize,
+    parsed_command_line: &ParsedCommandLine,
+) -> Option<CompletionReplacementRange> {
+    let token_range = token_range_at_cursor(input, cursor_pos)?;
+    let token = slice_chars(input, token_range.start, token_range.end);
 
-    parsed_command_line.raw_args.iter().rev().find_map(|token| {
-        let (name, value) = parser::split_inline_long_option(token)?;
-        if name == option_name && value == parsed_command_line.current_token {
-            Some(format!("{name}="))
-        } else {
-            None
+    if let parser::CompletionContext::OptionValue { option_name, .. } =
+        &parsed_command_line.completion_context
+        && let Some(value_range) =
+            option_value_range_from_token(&token, token_range.start, option_name)
+    {
+        return Some(value_range);
+    }
+
+    Some(token_range)
+}
+
+fn option_value_range_from_token(
+    token: &str,
+    token_start: usize,
+    option_name: &str,
+) -> Option<CompletionReplacementRange> {
+    if option_name.starts_with("--") {
+        let prefix = format!("{option_name}=");
+        if token.starts_with(&prefix) {
+            let start = token_start + prefix.chars().count();
+            let end = token_start + token.chars().count();
+            return Some(CompletionReplacementRange { start, end });
         }
+    }
+
+    if option_name.len() == 2 && !option_name.starts_with("--") && token.starts_with(option_name) {
+        let value = &token[option_name.len()..];
+        if !value.is_empty() && !value.starts_with('=') {
+            let start = token_start + option_name.chars().count();
+            let end = token_start + token.chars().count();
+            return Some(CompletionReplacementRange { start, end });
+        }
+    }
+
+    None
+}
+
+fn token_range_at_cursor(input: &str, cursor_pos: usize) -> Option<CompletionReplacementRange> {
+    let token =
+        shell_token::token_at_char_cursor(input, cursor_pos, SeparatorMode::CompletionRange)?;
+    Some(CompletionReplacementRange {
+        start: token.char_start,
+        end: token.char_end,
     })
+}
+
+fn slice_chars(input: &str, start: usize, end: usize) -> String {
+    input
+        .chars()
+        .skip(start)
+        .take(end.saturating_sub(start))
+        .collect()
 }
 
 pub(super) fn matches_prefix(current_token: &str, value: &str) -> bool {
@@ -1028,6 +1070,158 @@ mod tests {
             }
             _ => panic!("Expected Command candidate"),
         }
+    }
+
+    #[test]
+    fn token_range_at_cursor_preserves_double_quoted_spaces() {
+        let input = r#"cat "dir with space/foo"#;
+        let cursor_before_last_o = r#"cat "dir with space/fo"#.chars().count();
+
+        assert_eq!(
+            token_range_at_cursor(input, cursor_before_last_o),
+            Some(CompletionReplacementRange { start: 4, end: 23 })
+        );
+        assert_eq!(
+            slice_chars(input, 4, 23),
+            r#""dir with space/foo"#.to_string()
+        );
+    }
+
+    #[test]
+    fn token_range_at_cursor_preserves_backslash_escaped_spaces() {
+        let input = r#"cat dir\ with\ space/foo"#;
+        let cursor_before_last_o = r#"cat dir\ with\ space/fo"#.chars().count();
+
+        assert_eq!(
+            token_range_at_cursor(input, cursor_before_last_o),
+            Some(CompletionReplacementRange { start: 4, end: 24 })
+        );
+        assert_eq!(
+            slice_chars(input, 4, 24),
+            r#"dir\ with\ space/foo"#.to_string()
+        );
+    }
+
+    #[test]
+    fn shell_token_range_supplies_raw_token_for_path_formatting() {
+        let input = r#"cat "dir with space/fo"#;
+        let range = token_range_at_cursor(input, input.chars().count()).unwrap();
+        let raw_token = slice_chars(input, range.start, range.end);
+        let candidates = vec![Candidate::File {
+            path: "dir with space/foo".to_string(),
+            is_dir: false,
+        }];
+
+        let formatted = crate::completion::shell_path::format_candidates_for_token(
+            candidates,
+            Some(&raw_token),
+        );
+
+        assert_eq!(
+            formatted[0],
+            Candidate::File {
+                path: r#""dir with space/foo"#.to_string(),
+                is_dir: false,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn quoted_path_completion_generates_and_formats_candidate() {
+        let dir = tempdir().unwrap();
+        let spaced_dir = dir.path().join("dir with space");
+        fs::create_dir(&spaced_dir).unwrap();
+        fs::write(spaced_dir.join("foo"), "").unwrap();
+
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = format!(r#"cat "{}/fo"#, spaced_dir.display());
+        let result = engine
+            .complete(&input, input.chars().count(), dir.path(), 50, None)
+            .await;
+        let expected = spaced_dir.join("foo").to_string_lossy().to_string();
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == expected),
+            "expected normalized file candidate {:?} in {:?}",
+            expected,
+            result.candidates
+        );
+
+        let range = result.replacement_range.expect("replacement range");
+        let raw_token = slice_chars(&input, range.start, range.end);
+        let formatted = crate::completion::shell_path::format_candidates_for_token(
+            engine.to_candidates(result.candidates),
+            Some(&raw_token),
+        );
+
+        assert!(
+            formatted.iter().any(|candidate| {
+                matches!(
+                    candidate,
+                    Candidate::File { path, is_dir: false }
+                        if path == &format!("\"{expected}")
+                )
+            }),
+            "expected quoted display candidate in {:?}",
+            formatted
+        );
+    }
+
+    #[tokio::test]
+    async fn escaped_path_completion_generates_and_formats_candidate() {
+        let dir = tempdir().unwrap();
+        let spaced_dir = dir.path().join("dir with space");
+        fs::create_dir(&spaced_dir).unwrap();
+        fs::write(spaced_dir.join("foo"), "").unwrap();
+
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let escaped_prefix = spaced_dir
+            .join("fo")
+            .to_string_lossy()
+            .replace(' ', r#"\ "#);
+        let input = format!("cat {escaped_prefix}");
+        let result = engine
+            .complete(&input, input.chars().count(), dir.path(), 50, None)
+            .await;
+        let expected = spaced_dir.join("foo").to_string_lossy().to_string();
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == expected),
+            "expected normalized file candidate {:?} in {:?}",
+            expected,
+            result.candidates
+        );
+
+        let range = result.replacement_range.expect("replacement range");
+        let raw_token = slice_chars(&input, range.start, range.end);
+        let formatted = crate::completion::shell_path::format_candidates_for_token(
+            engine.to_candidates(result.candidates),
+            Some(&raw_token),
+        );
+        let escaped_expected = expected.replace(' ', r#"\ "#);
+
+        assert!(
+            formatted.iter().any(|candidate| {
+                matches!(
+                    candidate,
+                    Candidate::File { path, is_dir: false } if path == &escaped_expected
+                )
+            }),
+            "expected escaped display candidate in {:?}",
+            formatted
+        );
     }
 
     #[tokio::test]
@@ -1296,6 +1490,10 @@ mod tests {
                 .any(|candidate| candidate.text == "dev-cluster"),
             "expected kubectl context completion"
         );
+        assert_eq!(
+            result.replacement_range,
+            Some(CompletionReplacementRange { start: 18, end: 20 })
+        );
     }
 
     #[tokio::test]
@@ -1332,34 +1530,66 @@ mod tests {
             result
                 .candidates
                 .iter()
-                .any(|candidate| candidate.text == "--context=dev-cluster"),
-            "expected prefixed kubectl context completion"
+                .any(|candidate| candidate.text == "dev-cluster"),
+            "expected clean kubectl context completion"
+        );
+        assert_eq!(
+            result.replacement_range,
+            Some(CompletionReplacementRange { start: 18, end: 20 })
+        );
+
+        let cached = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+
+        assert!(
+            cached
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "dev-cluster"),
+            "expected cached kubectl context completion"
+        );
+        assert_eq!(
+            cached.replacement_range,
+            Some(CompletionReplacementRange { start: 18, end: 20 })
+        );
+
+        let cursor_inside_value = "kubectl --context=d".len();
+        let middle = engine
+            .complete(input, cursor_inside_value, dir.path(), 50, None)
+            .await;
+        assert_eq!(
+            middle.replacement_range,
+            Some(CompletionReplacementRange { start: 18, end: 20 })
         );
     }
 
     #[tokio::test]
-    async fn external_completer_runs_as_fallback() {
+    async fn kubectl_short_attached_namespace_option_value_uses_dynamic_provider() {
         let dir = tempdir().unwrap();
-        let script = dir.path().join("external-completer.sh");
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+
+        let kubectl = bin_dir.join("kubectl");
         fs::write(
-            &script,
-            "#!/bin/sh\nprintf 'deploy\\tExternal completer\\n'\nprintf 'debug\\tExternal completer\\n'\n",
+            &kubectl,
+            "#!/bin/sh\nif [ \"$1\" = \"get\" ] && [ \"$2\" = \"namespaces\" ]; then\n  printf 'dev-namespace\\nprod-namespace\\n'\nfi\n",
         )
         .unwrap();
-        let mut permissions = fs::metadata(&script).unwrap().permissions();
+        let mut permissions = fs::metadata(&kubectl).unwrap().permissions();
         permissions.set_mode(0o755);
-        fs::set_permissions(&script, permissions).unwrap();
+        fs::set_permissions(&kubectl, permissions).unwrap();
 
         let environment = Environment::new();
-        environment.write().variables.insert(
-            "DSH_EXTERNAL_COMPLETER".to_string(),
-            script.display().to_string(),
-        );
-
+        {
+            let mut env = environment.write();
+            env.paths = vec![bin_dir.display().to_string()];
+            env.clear_command_cache();
+        }
         let mut engine = IntegratedCompletionEngine::new(environment);
         engine.initialize_command_completion().unwrap();
 
-        let input = "unknown-command de";
+        let input = "kubectl -nde";
         let result = engine
             .complete(input, input.len(), dir.path(), 50, None)
             .await;
@@ -1368,8 +1598,69 @@ mod tests {
             result
                 .candidates
                 .iter()
-                .any(|candidate| candidate.text == "deploy"),
+                .any(|candidate| candidate.text == "dev-namespace"),
+            "expected short attached kubectl namespace completion"
+        );
+        assert_eq!(
+            result.replacement_range,
+            Some(CompletionReplacementRange { start: 10, end: 12 })
+        );
+    }
+
+    #[tokio::test]
+    async fn replacement_range_uses_entire_token_under_cursor() {
+        let dir = tempdir().unwrap();
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "pm li";
+        let cursor_after_l = "pm l".len();
+        let result = engine
+            .complete(input, cursor_after_l, dir.path(), 50, None)
+            .await;
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "list"),
+            "expected pm subcommand completion"
+        );
+        assert_eq!(
+            result.replacement_range,
+            Some(CompletionReplacementRange { start: 3, end: 5 })
+        );
+    }
+
+    #[tokio::test]
+    async fn external_completer_runs_as_fallback() {
+        let dir = tempdir().unwrap();
+        let environment = Environment::new();
+        environment.write().variables.insert(
+            "DSH_EXTERNAL_COMPLETER".to_string(),
+            "printf 'zzint-alpha\\tExternal completer\\n'; printf 'unrelated-candidate\\tExternal completer\\n'"
+                .to_string(),
+        );
+
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "unknown-command zzint";
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "zzint-alpha"),
             "expected external completer fallback"
+        );
+        assert_eq!(
+            result.replacement_range,
+            Some(CompletionReplacementRange { start: 16, end: 21 })
         );
     }
 }

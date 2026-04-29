@@ -22,6 +22,7 @@ pub mod integrated;
 pub mod json_loader;
 pub mod parser;
 pub(crate) mod shell_path;
+pub(crate) mod shell_token;
 mod ui;
 
 #[cfg(test)]
@@ -41,7 +42,7 @@ pub use crate::completion::fuzzy::fuzzy_match_score;
 pub use crate::completion::path::*;
 pub use crate::completion::selection::{
     completion_for_z, default_completion_framework, get_prompt_and_input_for_completion,
-    input_completion, last_word, select_completion_items, select_completion_items_with_framework,
+    input_completion, select_completion_items, select_completion_items_with_framework,
 };
 pub use crate::completion::skim_adapter::{replace_space, select_item_with_skim};
 

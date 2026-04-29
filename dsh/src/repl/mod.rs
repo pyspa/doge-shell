@@ -1004,6 +1004,9 @@ impl<'a> Repl<'a> {
                                                     }
                                                     self.input.insert_str(&text);
                                                 },
+                                                InteractiveAction::ReplaceRange { start, end, text } => {
+                                                    self.input.replace_range_chars(start, end, &text);
+                                                },
                                                 InteractiveAction::ReplaceAll { text } => {
                                                     // Apply full replacement
                                                     self.input.reset(text);

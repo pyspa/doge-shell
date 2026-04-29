@@ -58,6 +58,14 @@ impl ShellPathToken {
     }
 }
 
+pub(crate) fn normalize_path_token(raw: &str) -> String {
+    ShellPathToken::from_raw(raw).normalized
+}
+
+pub(crate) fn format_path_for_token(path: &str, raw_token: &str) -> String {
+    ShellPathToken::from_raw(raw_token).encode(path)
+}
+
 pub fn format_candidates_for_token(
     candidates: Vec<Candidate>,
     raw_token: Option<&str>,
@@ -215,6 +223,42 @@ mod tests {
         assert_eq!(
             token.encode("/tmp/dir with space/child"),
             r#"'/tmp/dir with space/child"#
+        );
+    }
+
+    #[test]
+    fn normalize_path_token_decodes_supported_shell_styles() {
+        assert_eq!(
+            normalize_path_token(r#"/tmp/dir\ with\ space/fo"#),
+            "/tmp/dir with space/fo"
+        );
+        assert_eq!(
+            normalize_path_token(r#""/tmp/dir with space/fo"#),
+            "/tmp/dir with space/fo"
+        );
+        assert_eq!(
+            normalize_path_token(r#"'/tmp/dir with space/fo"#),
+            "/tmp/dir with space/fo"
+        );
+        assert_eq!(
+            normalize_path_token(r#""/tmp/dir with space/fo""#),
+            "/tmp/dir with space/fo"
+        );
+    }
+
+    #[test]
+    fn format_path_for_token_encodes_single_path_with_raw_style() {
+        assert_eq!(
+            format_path_for_token("/tmp/dir with space/foo", r#"/tmp/dir\ with\ space/fo"#),
+            r#"/tmp/dir\ with\ space/foo"#
+        );
+        assert_eq!(
+            format_path_for_token("/tmp/dir with space/foo", r#""/tmp/dir with space/fo"#),
+            r#""/tmp/dir with space/foo"#
+        );
+        assert_eq!(
+            format_path_for_token("/tmp/dir with space/foo", r#"'/tmp/dir with space/fo"#),
+            r#"'/tmp/dir with space/foo"#
         );
     }
 

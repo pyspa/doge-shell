@@ -1,5 +1,5 @@
-use crate::completion;
-use crate::dirs;
+use crate::completion::path::path_completion_prefix_for_shell_token;
+use crate::completion::shell_token::{self, SeparatorMode};
 use crate::environment::Environment;
 use crate::input::Input;
 use crate::parser::Rule;
@@ -83,28 +83,48 @@ pub fn complete_command_word(
         return Some(replace_range(input, span.start(), span.end(), &name));
     }
 
-    if let Ok(Some(path)) = completion::path_completion_prefix(word)
-        && dirs::is_dir(&path)
-        && path.len() > word.len()
-    {
-        return Some(replace_range(input, span.start(), span.end(), &path));
-    }
-
-    None
+    complete_path_for_span(input, span.start(), span.end(), true).map(|completion| completion.full)
 }
 
-pub fn complete_argument_word(input: &str, span: &pest::Span<'_>, word: &str) -> Option<String> {
-    let path = completion::path_completion_prefix(word).ok().flatten()?;
-    if path.len() <= word.len() || !path.starts_with(word) {
-        return None;
-    }
-    let suffix = &path[word.len()..];
+pub fn complete_argument_word(input: &str, span: &pest::Span<'_>, _word: &str) -> Option<String> {
+    complete_path_for_span(input, span.start(), span.end(), false).map(|completion| completion.full)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PathCompletion {
+    pub(super) full: String,
+    pub(super) suffix: String,
+}
+
+pub(super) fn complete_path_for_span(
+    input: &str,
+    span_start: usize,
+    span_end: usize,
+    only_dirs: bool,
+) -> Option<PathCompletion> {
+    let token = shell_token_for_byte_span(input, span_start, span_end)?;
+    let candidate = path_completion_prefix_for_shell_token(&token.raw, only_dirs)
+        .ok()
+        .flatten()?;
+    let suffix = candidate.strip_prefix(&token.raw)?;
     if suffix.is_empty() {
         return None;
     }
-    let mut result = input.to_string();
-    result.insert_str(span.end(), suffix);
-    Some(result)
+
+    Some(PathCompletion {
+        full: replace_range(input, token.byte_start, token.byte_end, &candidate),
+        suffix: suffix.to_string(),
+    })
+}
+
+fn shell_token_for_byte_span(
+    input: &str,
+    span_start: usize,
+    span_end: usize,
+) -> Option<shell_token::ShellTokenSpan> {
+    shell_token::tokenize(input, SeparatorMode::CompletionRange)
+        .into_iter()
+        .find(|token| token.byte_start <= span_start && span_end <= token.byte_end)
 }
 
 pub fn mcp_form_completion(input: &str) -> Option<String> {

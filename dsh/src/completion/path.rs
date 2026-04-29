@@ -2,6 +2,7 @@ use crate::completion::cache::CompletionCache;
 use crate::completion::fuzzy::fuzzy_match_score;
 #[cfg(not(test))]
 use crate::completion::notify_completion_update;
+use crate::completion::shell_path::{format_path_for_token, normalize_path_token};
 use crate::completion::{Candidate, MAX_RESULT};
 use anyhow::Result;
 use std::fs::read_dir;
@@ -179,6 +180,26 @@ pub fn path_completion_prefix_strict(input: &str, only_dirs: bool) -> Result<Opt
     Ok(candidates.first().cloned())
 }
 
+pub(crate) fn path_completion_prefix_for_shell_token(
+    raw_token: &str,
+    only_dirs: bool,
+) -> Result<Option<String>> {
+    if raw_token.is_empty() {
+        return Ok(None);
+    }
+
+    let normalized = normalize_path_token(raw_token);
+    let Some(candidate) = path_completion_prefix_strict(&normalized, only_dirs)? else {
+        return Ok(None);
+    };
+
+    if candidate.len() <= normalized.len() || !candidate.starts_with(&normalized) {
+        return Ok(None);
+    }
+
+    Ok(Some(format_path_for_token(&candidate, raw_token)))
+}
+
 fn path_is_dir(path: &PathBuf) -> Result<bool> {
     if let Ok(mut metadata) = path.metadata() {
         if metadata.is_symlink() {
@@ -306,6 +327,19 @@ pub fn is_path_cached(path: &Path) -> bool {
     false
 }
 
+pub(crate) fn is_path_cached_for_shell_token(raw_token: &str) -> bool {
+    if raw_token.is_empty() {
+        return false;
+    }
+
+    let normalized = normalize_path_token(raw_token);
+    if normalized.is_empty() {
+        return false;
+    }
+
+    is_path_cached(Path::new(&normalized))
+}
+
 // Synchronous helper moved out for clarity and reuse in background task
 fn scan_dir_candidates(path: PathBuf) -> Result<Vec<Candidate>> {
     let path_str = path.display().to_string();
@@ -353,7 +387,7 @@ fn scan_dir_candidates(path: PathBuf) -> Result<Vec<Candidate>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::File;
+    use std::fs::{self, File};
     use tempfile::tempdir;
 
     #[test]
@@ -394,5 +428,75 @@ mod tests {
             "Expected exact prefix match to have higher priority, got {}",
             val_ap
         );
+    }
+
+    #[test]
+    fn shell_token_path_prefix_preserves_escaped_space_style() {
+        let dir = tempdir().unwrap();
+        let spaced = dir.path().join("dir with space");
+        fs::create_dir(&spaced).unwrap();
+        File::create(spaced.join("foo.txt")).unwrap();
+
+        let raw_prefix = format!("{}/dir\\ with\\ space/fo", dir.path().display());
+        let expected = format!("{}/dir\\ with\\ space/foo.txt", dir.path().display());
+
+        assert_eq!(
+            path_completion_prefix_for_shell_token(&raw_prefix, false).unwrap(),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn shell_token_path_prefix_preserves_quote_style() {
+        let dir = tempdir().unwrap();
+        let spaced = dir.path().join("dir with space");
+        fs::create_dir(&spaced).unwrap();
+        File::create(spaced.join("foo.txt")).unwrap();
+
+        let raw_prefix = format!("\"{}/dir with space/fo", dir.path().display());
+        let expected = format!("\"{}/dir with space/foo.txt", dir.path().display());
+
+        assert_eq!(
+            path_completion_prefix_for_shell_token(&raw_prefix, false).unwrap(),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn shell_token_path_prefix_directory_only_filters_files() {
+        let dir = tempdir().unwrap();
+        let spaced = dir.path().join("dir with space");
+        fs::create_dir(&spaced).unwrap();
+        File::create(spaced.join("foo.txt")).unwrap();
+        fs::create_dir(spaced.join("foodir")).unwrap();
+
+        let raw_prefix = format!("'{}/dir with space/fo", dir.path().display());
+        let expected = format!("'{}/dir with space/foodir/", dir.path().display());
+
+        assert_eq!(
+            path_completion_prefix_for_shell_token(&raw_prefix, true).unwrap(),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn is_path_cached_for_shell_token_decodes_escaped_and_quoted_tokens() {
+        let dir = tempdir().unwrap();
+        let spaced = dir.path().join("dir with space");
+        fs::create_dir(&spaced).unwrap();
+        File::create(spaced.join("foo.txt")).unwrap();
+        path_completion_path_sync(spaced.clone()).unwrap();
+
+        let escaped = format!("{}/dir\\ with\\ space/foo.txt", dir.path().display());
+        let double = format!("\"{}/dir with space/foo.txt\"", dir.path().display());
+        let single = format!("'{}/dir with space/foo.txt'", dir.path().display());
+        let unclosed = format!("\"{}/dir with space/foo.txt", dir.path().display());
+        let missing = format!("\"{}/dir with space/missing.txt", dir.path().display());
+
+        assert!(is_path_cached_for_shell_token(&escaped));
+        assert!(is_path_cached_for_shell_token(&double));
+        assert!(is_path_cached_for_shell_token(&single));
+        assert!(is_path_cached_for_shell_token(&unclosed));
+        assert!(!is_path_cached_for_shell_token(&missing));
     }
 }

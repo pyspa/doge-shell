@@ -1,4 +1,5 @@
 use super::config::{ColorType, InputConfig};
+use crate::completion::shell_token::{self, SeparatorMode};
 use crate::parser::{self, Rule};
 use anyhow::Result;
 use crossterm::style::{Color, Stylize};
@@ -120,6 +121,30 @@ impl Input {
         // Incrementally update display width
         let added_width: usize = string.chars().map(|c| c.width().unwrap_or_default()).sum();
         self.cached_display_width += added_width;
+    }
+
+    pub fn replace_range_chars(&mut self, start: usize, end: usize, replacement: &str) -> bool {
+        if start > end || end > self.len() {
+            return false;
+        }
+
+        let start_byte = if start == self.len() {
+            self.input.len()
+        } else {
+            self.indices[start]
+        };
+        let end_byte = if end == self.len() {
+            self.input.len()
+        } else {
+            self.indices[end]
+        };
+
+        self.input.replace_range(start_byte..end_byte, replacement);
+        self.update_indices();
+        self.recalculate_display_width();
+        self.cursor = start + replacement.chars().count();
+        self.color_ranges = None;
+        true
     }
 
     pub fn backspace(&mut self) {
@@ -441,22 +466,16 @@ impl Input {
             return None;
         }
 
-        let chars: Vec<char> = self.input.chars().collect();
-        let mut start = self.cursor;
-
-        while start > 0 {
-            let ch = chars[start - 1];
-            if ch.is_whitespace() || matches!(ch, '|' | '&' | ';' | '(' | ')' | '<' | '>') {
-                break;
-            }
-            start -= 1;
+        let token = shell_token::token_at_char_cursor(
+            self.input.as_str(),
+            self.cursor,
+            SeparatorMode::CompletionRange,
+        )?;
+        if self.cursor <= token.char_start || token.raw.is_empty() {
+            return None;
         }
 
-        if start < self.cursor {
-            Some(chars[start..self.cursor].iter().collect())
-        } else {
-            None
-        }
+        Some(token.raw)
     }
 
     /// Get the current word at cursor position for abbreviation expansion
@@ -775,6 +794,41 @@ mod tests {
     }
 
     #[test]
+    fn test_replace_range_chars_ascii() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+        input.insert_str("git status");
+
+        assert!(input.replace_range_chars(4, 10, "stash"));
+        assert_eq!(input.as_str(), "git stash");
+        assert_eq!(input.cursor(), 9);
+    }
+
+    #[test]
+    fn test_replace_range_chars_multibyte() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+        input.insert_str("cmd あい うえ");
+
+        assert!(input.replace_range_chars(4, 6, "お"));
+        assert_eq!(input.as_str(), "cmd お うえ");
+        assert_eq!(input.cursor(), 5);
+        assert_eq!(input.cursor_pos(80, 0).0, 6);
+    }
+
+    #[test]
+    fn test_replace_range_chars_rejects_invalid_range() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+        input.insert_str("abc");
+
+        assert!(!input.replace_range_chars(3, 1, "x"));
+        assert!(!input.replace_range_chars(0, 4, "x"));
+        assert_eq!(input.as_str(), "abc");
+        assert_eq!(input.cursor(), 3);
+    }
+
+    #[test]
     fn test_unicode_width_calculation() {
         let config = InputConfig::default();
         let mut input = Input::new(config);
@@ -965,6 +1019,57 @@ mod tests {
         input.insert(' ');
         let fallback_after_space = input.get_completion_word_fallback();
         assert_eq!(fallback_after_space, None);
+    }
+
+    #[test]
+    fn test_completion_word_fallback_preserves_escaped_space_token() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+        input.reset(r#"cat dir\ with\ space/fo"#.to_string());
+
+        let fallback = input.get_completion_word_fallback();
+
+        assert_eq!(fallback.as_deref(), Some(r#"dir\ with\ space/fo"#));
+    }
+
+    #[test]
+    fn test_completion_word_fallback_preserves_quoted_tokens() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+        input.reset(r#"cat "dir with space/fo"#.to_string());
+
+        let fallback = input.get_completion_word_fallback();
+
+        assert_eq!(fallback.as_deref(), Some(r#""dir with space/fo"#));
+
+        input.reset(r#"cat 'dir with space/fo"#.to_string());
+        let single_quoted = input.get_completion_word_fallback();
+
+        assert_eq!(single_quoted.as_deref(), Some(r#"'dir with space/fo"#));
+    }
+
+    #[test]
+    fn test_completion_word_fallback_respects_operator_separator() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+        input.reset("cmd | foo".to_string());
+
+        let fallback = input.get_completion_word_fallback();
+
+        assert_eq!(fallback.as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn test_completion_word_fallback_returns_none_on_token_start() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+        input.reset("cmd | foo".to_string());
+        input.move_to_begin();
+        input.move_by(6);
+
+        let fallback = input.get_completion_word_fallback();
+
+        assert_eq!(fallback, None);
     }
 
     #[test]

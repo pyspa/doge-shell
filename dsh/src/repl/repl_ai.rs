@@ -1,8 +1,11 @@
 use super::AiEvent;
 use super::Repl;
 
+use crate::completion::shell_token::{self, SeparatorMode};
 use std::sync::Arc;
 use std::time::Instant;
+
+const AUTO_FIX_BLOCKLIST: &[&str] = &["gco"];
 
 pub fn get_directory_listing_content(path: &std::path::Path) -> Vec<String> {
     let mut files = Vec::new();
@@ -39,14 +42,7 @@ impl<'a> Repl<'a> {
             && self.input_preferences.auto_fix
             && let Some(service) = &self.ai_service
         {
-            // Check blocklist for auto-fix
-            const AUTO_FIX_BLOCKLIST: &[&str] = &["gco"];
-            let cmd_name = self
-                .last_command_string
-                .split_whitespace()
-                .next()
-                .unwrap_or("");
-            if AUTO_FIX_BLOCKLIST.contains(&cmd_name) {
+            if is_auto_fix_blocked(&self.last_command_string) {
                 return;
             }
             let service = service.clone();
@@ -198,11 +194,30 @@ impl<'a> Repl<'a> {
     }
 }
 
+fn is_auto_fix_blocked(input: &str) -> bool {
+    shell_token::tokenize(input, SeparatorMode::Parser)
+        .into_iter()
+        .next()
+        .is_some_and(|command| AUTO_FIX_BLOCKLIST.contains(&command.raw.as_str()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs::File;
     use tempfile::tempdir;
+
+    #[test]
+    fn auto_fix_blocklist_uses_shell_command_token() {
+        assert!(is_auto_fix_blocked("gco"));
+        assert!(is_auto_fix_blocked(" gco"));
+        assert!(is_auto_fix_blocked("gco\tmain"));
+
+        assert!(!is_auto_fix_blocked(r#""gco" main"#));
+        assert!(!is_auto_fix_blocked("cmd | gco"));
+        assert!(!is_auto_fix_blocked(""));
+        assert!(!is_auto_fix_blocked("   "));
+    }
 
     #[test]
     fn test_get_directory_listing_content() {

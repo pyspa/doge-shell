@@ -160,6 +160,10 @@ fn program_name(program: &str) -> String {
         .to_string()
 }
 
+fn is_path_qualified(program: &str) -> bool {
+    program.contains('/') || program.contains('\\') || Path::new(program).is_absolute()
+}
+
 fn invokes_string_eval(program: &str, args: &[String]) -> bool {
     let name = program_name(program);
     match name.as_str() {
@@ -180,8 +184,10 @@ fn allowlist_program_matches(entry_program: &str, program: &str) -> bool {
     let entry_name = program_name(entry_program);
     let target_name = program_name(program);
 
-    if entry_program.contains('/') {
+    if is_path_qualified(entry_program) {
         entry_program == program
+    } else if is_path_qualified(program) {
+        false
     } else {
         entry_name == target_name
     }
@@ -479,6 +485,14 @@ mod tests {
                 .unwrap_err()
                 .contains("does not allow shell operators")
         );
+
+        let result = run("{\"command\":\"ls $(pwd)\"}", &mut proxy);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("does not allow shell operators")
+        );
     }
 
     #[test]
@@ -495,6 +509,42 @@ mod tests {
         let result = run("{\"command\":\"bash -lc 'echo hi'\"}", &mut proxy);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("string-eval flags"));
+    }
+
+    #[test]
+    fn basename_allowlist_does_not_match_path_qualified_program() {
+        assert!(command_is_allowlisted(
+            "git",
+            &["status".to_string()],
+            &["git".to_string()]
+        ));
+        assert!(!command_is_allowlisted(
+            "/tmp/git",
+            &["status".to_string()],
+            &["git".to_string()]
+        ));
+        assert!(command_is_allowlisted(
+            "/tmp/git",
+            &["status".to_string()],
+            &["/tmp/git".to_string()]
+        ));
+    }
+
+    #[test]
+    fn run_rejects_path_qualified_spoofing_for_basename_allowlist() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "git");
+        let mut proxy = TestProxy {
+            allow: vec!["git".to_string()],
+            cwd: std::env::current_dir().unwrap(),
+            confirm_calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            confirm_result: true,
+        };
+
+        let result = run("{\"command\":\"/tmp/git status\"}", &mut proxy);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("is not permitted"));
     }
 
     #[test]

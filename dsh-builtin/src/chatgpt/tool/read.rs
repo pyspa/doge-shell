@@ -190,4 +190,24 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("outside allowed directories"));
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_read_file_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let base = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        fs::create_dir_all(base.path().join("inside")).unwrap();
+        fs::write(outside.path().join("secret.txt"), "secret").unwrap();
+        symlink(outside.path(), base.path().join("inside/link_out")).unwrap();
+        let mut proxy = NoopProxy {
+            cwd: base.path().to_path_buf(),
+        };
+
+        let result = run(r#"{"path": "inside/link_out/secret.txt"}"#, &mut proxy);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("outside allowed directories"));
+    }
 }

@@ -49,8 +49,17 @@ pub fn execute_tool_call(
         truncate_args(arguments)
     );
 
-    let result = if let Some(result) = mcp.execute_tool(name, arguments)? {
-        result
+    let result = if mcp.has_tool_binding(name) {
+        let confirm_msg = format!("AI wants to call MCP tool: `{name}`. \r\nProceed?");
+        if !proxy
+            .confirm_action(&confirm_msg)
+            .map_err(|e: anyhow::Error| e.to_string())?
+        {
+            return Ok("MCP tool execution cancelled by user.".to_string());
+        }
+
+        mcp.execute_tool(name, arguments)?
+            .ok_or_else(|| format!("chat: MCP tool binding `{name}` disappeared"))?
     } else {
         match name {
             edit::NAME => edit::run(arguments, proxy)?,
@@ -276,6 +285,9 @@ mod tests {
         fn get_lisp_var(&self, _key: &str) -> Option<String> {
             None
         }
+        fn confirm_action(&mut self, _message: &str) -> anyhow::Result<bool> {
+            Ok(false)
+        }
     }
 
     #[test]
@@ -322,6 +334,23 @@ mod tests {
         let result = execute_tool_call(&tool_call, &mcp, &mut proxy);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "chat: unsupported tool `unknown_tool`");
+    }
+
+    #[test]
+    fn execute_tool_call_requires_confirmation_for_mcp_tool() {
+        let mut proxy = NoopProxy;
+        let mut mcp = McpManager::default();
+        mcp.insert_test_tool_binding("mcp__test__tool");
+        let tool_call = serde_json::json!({
+            "function": {
+                "name": "mcp__test__tool",
+                "arguments": "{}"
+            }
+        });
+
+        let result = execute_tool_call(&tool_call, &mcp, &mut proxy).unwrap();
+
+        assert_eq!(result, "MCP tool execution cancelled by user.");
     }
 
     struct CwdProxy {

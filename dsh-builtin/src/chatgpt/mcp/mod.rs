@@ -535,6 +535,40 @@ impl McpManager {
         Ok(Some(json.to_string()))
     }
 
+    pub(crate) fn has_tool_binding(&self, function_name: &str) -> bool {
+        self.bindings.contains_key(function_name)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_test_tool_binding(&mut self, function_name: &str) {
+        let server_label = "test".to_string();
+        let tool_name = "tool".to_string();
+
+        if !self
+            .servers
+            .iter()
+            .any(|server| server.label == server_label)
+        {
+            self.servers.push(McpServer {
+                label: server_label.clone(),
+                description: None,
+                transport: McpTransport::Sse {
+                    url: "http://localhost.invalid/sse".to_string(),
+                },
+                tools: Vec::new(),
+            });
+        }
+
+        self.bindings.insert(
+            function_name.to_string(),
+            ToolBinding {
+                server_label,
+                tool_name,
+                function_name: function_name.to_string(),
+            },
+        );
+    }
+
     async fn build_from_servers(runtime_servers: Vec<McpServerConfig>) -> Result<Self> {
         let mut servers = Vec::new();
         let mut labels = HashSet::new();

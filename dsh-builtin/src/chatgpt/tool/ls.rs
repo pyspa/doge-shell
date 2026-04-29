@@ -32,6 +32,11 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
     let path_value = parsed.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
     let normalized_abs_path = super::resolve_tool_path(path_value, _proxy)?;
+    let current_dir = _proxy
+        .get_current_dir()
+        .map_err(|err| format!("chat: failed to get current working directory: {err}"))?;
+    let normalized_current_dir =
+        std::fs::canonicalize(&current_dir).unwrap_or_else(|_| super::normalize_path(&current_dir));
 
     if !normalized_abs_path.exists() {
         return Err(format!("chat: path `{path_value}` does not exist"));
@@ -41,9 +46,16 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
         return Err(format!("chat: path `{path_value}` is not a directory"));
     }
 
+    if super::gitignore::is_gitignored(&normalized_abs_path, &normalized_current_dir) {
+        return Err(format!(
+            "chat: ls tool path `{path_value}` is ignored by .gitignore"
+        ));
+    }
+
     let mut entries = fs::read_dir(&normalized_abs_path)
         .map_err(|err| format!("chat: failed to read directory `{path_value}`: {err}"))?
         .filter_map(|res| res.ok())
+        .filter(|entry| !super::gitignore::is_gitignored(&entry.path(), &normalized_current_dir))
         .collect::<Vec<_>>();
 
     entries.sort_by_key(|entry| entry.file_name());
@@ -206,5 +218,46 @@ mod tests {
         };
         let result = run(r#"{"path": ".."}"#, &mut proxy);
         assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ls_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let base = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        fs::create_dir_all(base.path().join("inside")).unwrap();
+        symlink(outside.path(), base.path().join("inside/link_out")).unwrap();
+        let mut proxy = NoopProxy {
+            cwd: base.path().to_path_buf(),
+        };
+
+        let result = run(r#"{"path":"inside/link_out"}"#, &mut proxy);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("outside allowed directories"));
+    }
+
+    #[test]
+    fn test_ls_hides_gitignored_entries_and_rejects_ignored_directory() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join(".gitignore"), "hidden.txt\nsecret/\n").unwrap();
+        fs::write(dir.path().join("visible.txt"), "ok").unwrap();
+        fs::write(dir.path().join("hidden.txt"), "secret").unwrap();
+        fs::create_dir(dir.path().join("secret")).unwrap();
+        fs::write(dir.path().join("secret/file.txt"), "secret").unwrap();
+        let mut proxy = NoopProxy {
+            cwd: dir.path().to_path_buf(),
+        };
+
+        let result = run("{}", &mut proxy).unwrap();
+        assert!(result.contains("visible.txt"));
+        assert!(!result.contains("hidden.txt"));
+        assert!(!result.contains("secret"));
+
+        let result = run(r#"{"path":"secret"}"#, &mut proxy);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("ignored by .gitignore"));
     }
 }

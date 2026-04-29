@@ -287,4 +287,42 @@ mod tests {
         assert!(result.contains("test.txt"));
         assert!(result.contains("hello world"));
     }
+
+    #[test]
+    fn test_search_rejects_parent_traversal() {
+        let dir = tempdir().unwrap();
+        let mut proxy = NoopProxy {
+            cwd: dir.path().to_path_buf(),
+        };
+
+        let result = run(
+            r#"{"query": "secret", "type": "content", "path": "../"}"#,
+            &mut proxy,
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("outside allowed directories"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_search_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let base = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        fs::create_dir_all(base.path().join("inside")).unwrap();
+        symlink(outside.path(), base.path().join("inside/link_out")).unwrap();
+        let mut proxy = NoopProxy {
+            cwd: base.path().to_path_buf(),
+        };
+
+        let result = run(
+            r#"{"query": "secret", "type": "content", "path": "inside/link_out"}"#,
+            &mut proxy,
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("outside allowed directories"));
+    }
 }

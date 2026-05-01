@@ -1,0 +1,4 @@
+interface:
+  display_name: "Doge Shell History Frecency"
+  short_description: "Inspect history, timing, and frecency ranking narrowly."
+  default_prompt: "Use $doge-shell-history-frecency to work on history or ranking behavior with minimal reading and validation."

@@ -4,8 +4,9 @@
 
 ## 基本方針
 - チャットは日本語で行う。
-- Python 実行は禁止。補助スクリプトは shell を使う。
+- 補助スクリプトは shell / Python のどちらを使ってもよい。
 - `Cargo.toml` と必要なら task map で範囲を絞り、`rg --files` / `rg -n` で当たりを付けてから必要なファイルだけ読む。
+- 該当する Skill がある場合は先に使い、詳細は必要になってから `references/` を読む。
 - `README.md` 全文を最初から読まない。ユーザー向け挙動、設定例、公開文書の更新時だけ必要箇所を開く。
 - 変更後は関係する最小コマンドで検証し、無関係なワークスペース全体テストは最後に限定する。
 
@@ -34,3 +35,4 @@
 - 導入や更新は `scripts/install-runtime-skills.sh` を使う。
 - 普段は必要な skill だけ install する。引数なしの全件 install は初期セットアップ時だけ使う。
 - Skill は frontmatter の `description` を短い要約兼トリガー文として書く。
+- `AGENTS.md` / `docs/ai/` / Skill を変更したら `scripts/check-ai-guidance.sh` を実行する。

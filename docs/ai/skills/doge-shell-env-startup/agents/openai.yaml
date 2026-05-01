@@ -1,0 +1,4 @@
+interface:
+  display_name: "Doge Shell Env Startup"
+  short_description: "Inspect environment, startup, direnv, and project context narrowly."
+  default_prompt: "Use $doge-shell-env-startup to work on environment or startup behavior with minimal reading and validation."

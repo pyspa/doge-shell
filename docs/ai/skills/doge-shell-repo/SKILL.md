@@ -1,6 +1,6 @@
 ---
 name: doge-shell-repo
-description: Use when working in the doge-shell repository. Routes to the right crate or narrower doge-shell skill, avoids broad reads, and chooses the smallest effective Rust validation command.
+description: Use when working in the doge-shell repository or doge-shell リポジトリ. Routes to the right crate or narrower doge-shell skill, avoids broad reads, and chooses the smallest effective Rust validation command.
 ---
 
 # Doge Shell Repo
@@ -13,4 +13,4 @@ description: Use when working in the doge-shell repository. Routes to the right 
 - Read [references/test-scope.md](references/test-scope.md) before choosing cargo commands.
 - Open `README.md` only for user-facing docs, config examples, or feature behavior that is described there.
 - Prefer the smallest test or check that proves the change.
-- Switch to a narrower skill when the task is clearly about completion, parser work, process/PTY, chat tools, investigation, or validation.
+- Switch to a narrower skill when the task is clearly about completion, parser work, process/PTY, prompt/terminal UI, environment/startup, history/frecency, safety policy, chat tools, investigation, or validation.

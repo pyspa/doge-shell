@@ -40,6 +40,33 @@ check_skill_frontmatter() {
     fi
 }
 
+check_skill_agent_config() {
+    skill_dir="$1"
+    skill_name=$(basename "$skill_dir")
+    agent_file="$skill_dir/agents/openai.yaml"
+
+    if [ ! -f "$agent_file" ]; then
+        fail "$skill_name missing agents/openai.yaml"
+        return
+    fi
+
+    if ! grep -q "^interface:" "$agent_file"; then
+        fail "$agent_file missing interface section"
+    fi
+
+    if ! grep -q "^[[:space:]]\\+display_name: .\\+" "$agent_file"; then
+        fail "$agent_file missing display_name"
+    fi
+
+    if ! grep -q "^[[:space:]]\\+short_description: .\\+" "$agent_file"; then
+        fail "$agent_file missing short_description"
+    fi
+
+    if ! grep -q "^[[:space:]]\\+default_prompt: .\\+" "$agent_file"; then
+        fail "$agent_file missing default_prompt"
+    fi
+}
+
 check_skill_references() {
     refs=$(grep -Rho '\$[[:alnum:]_-][[:alnum:]_-]*' "$source_root" 2>/dev/null | sed 's/^\$//' | sort -u || true)
     if [ -z "$refs" ]; then
@@ -97,14 +124,29 @@ check_bad_guidance() {
     fi
 }
 
+check_installer_dry_run() {
+    installer="$repo_root/scripts/install-runtime-skills.sh"
+
+    if [ ! -f "$installer" ]; then
+        fail "missing runtime skill installer: $installer"
+        return
+    fi
+
+    if ! bash "$installer" --dry-run --target codex >/dev/null; then
+        fail "runtime skill installer dry run failed"
+    fi
+}
+
 if [ -d "$source_root" ]; then
     while IFS= read -r skill_dir; do
         check_skill_frontmatter "$skill_dir"
+        check_skill_agent_config "$skill_dir"
     done < <(find "$source_root" -mindepth 1 -maxdepth 1 -type d | sort)
 
     check_skill_references
     check_markdown_links
     check_bad_guidance
+    check_installer_dry_run
 fi
 
 if [ "$failures" -gt 0 ]; then

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Doge Shell Safety Policy"
+  short_description: "Inspect safety, command policy, and execution guard paths narrowly."
+  default_prompt: "Use $doge-shell-safety-policy to work on safety or command policy behavior with minimal reading and validation."

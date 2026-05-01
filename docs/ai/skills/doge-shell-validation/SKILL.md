@@ -1,6 +1,6 @@
 ---
 name: doge-shell-validation
-description: Use for doge-shell validation planning or smallest-test selection. Chooses the narrowest cargo command from package names, task type, and crate boundaries.
+description: Use for doge-shell validation planning, smallest-test selection, 検証, 最小テスト, or cargo test selection. Chooses the narrowest cargo command from package names, task type, and crate boundaries.
 ---
 
 # Doge Shell Validation

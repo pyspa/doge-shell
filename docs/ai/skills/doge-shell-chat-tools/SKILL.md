@@ -1,6 +1,6 @@
 ---
 name: doge-shell-chat-tools
-description: Use for doge-shell chatgpt, MCP, serve, tool, runtime skill, doctor, or OpenAI client work. Narrows reads to builtin chat/MCP code and the OpenAI client crate.
+description: Use for doge-shell chatgpt, MCP, serve, tool, runtime skill, doctor, OpenAI client, チャット, ツール, スキル, or 診断 work. Narrows reads to builtin chat/MCP code and the OpenAI client crate.
 ---
 
 # Doge Shell Chat Tools

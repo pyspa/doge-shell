@@ -1,6 +1,6 @@
 ---
 name: doge-shell-parser-shell
-description: Use for doge-shell parser, AST, redirect, pipe, brace, or expansion work. Narrows reads to parser code and keeps validation inside the doge-shell package.
+description: Use for doge-shell parser, AST, redirect, pipe, brace, expansion, パーサ, リダイレクト, パイプ, ブレース, or 展開 work. Narrows reads to parser code and keeps validation inside the doge-shell package.
 ---
 
 # Doge Shell Parser Shell

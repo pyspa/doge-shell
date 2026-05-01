@@ -1,0 +1,4 @@
+interface:
+  display_name: "Doge Shell Prompt Terminal UI"
+  short_description: "Inspect prompt, terminal rendering, and layout narrowly."
+  default_prompt: "Use $doge-shell-prompt-terminal-ui to work on prompt or terminal UI behavior with minimal reading and validation."

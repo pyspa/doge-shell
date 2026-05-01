@@ -24,8 +24,8 @@
 
 ```bash
 scripts/install-runtime-skills.sh --list
-scripts/install-runtime-skills.sh --dry-run --target codex doge-shell-repo doge-shell-validation
-scripts/install-runtime-skills.sh --target codex doge-shell-repo doge-shell-validation
+scripts/install-runtime-skills.sh --dry-run --target codex doge-shell-repo doge-shell-validation doge-shell-investigation doge-shell-chat-tools
+scripts/install-runtime-skills.sh --target codex doge-shell-repo doge-shell-validation doge-shell-investigation doge-shell-chat-tools
 ```
 
 ## authoring ルール
@@ -34,3 +34,7 @@ scripts/install-runtime-skills.sh --target codex doge-shell-repo doge-shell-vali
 - バリエーションごとの詳細は `references/` に逃がす。
 - shell / Rust / reference で済むなら、新しい長文ドキュメントを増やさない。
 - 変更後は `scripts/check-ai-guidance.sh` で軽量 lint する。
+
+## 推奨 runtime Skill
+- 常用: `doge-shell-repo`, `doge-shell-validation`, `doge-shell-investigation`, `doge-shell-chat-tools`
+- 領域別: `doge-shell-parser-shell`, `doge-shell-process-pty`, `doge-shell-repl-completion`, `doge-shell-prompt-terminal-ui`, `doge-shell-env-startup`, `doge-shell-history-frecency`, `doge-shell-safety-policy`

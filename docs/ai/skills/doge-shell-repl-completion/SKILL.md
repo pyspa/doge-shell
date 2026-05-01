@@ -1,6 +1,6 @@
 ---
 name: doge-shell-repl-completion
-description: Use for doge-shell completion, ghost text, suggestion, skim, fuzzy, or TAB behavior. Narrows reads to repl and completion code and keeps validation inside the doge-shell package.
+description: Use for doge-shell completion, ghost text, suggestion, skim, fuzzy, TAB, 補完, 候補, サジェスト, or ゴーストテキスト behavior. Narrows reads to repl and completion code and keeps validation inside the doge-shell package.
 ---
 
 # Doge Shell REPL Completion

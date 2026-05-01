@@ -1,6 +1,6 @@
 ---
 name: doge-shell-process-pty
-description: Use for doge-shell process, PTY, job control, raw terminal, colored output, or stdout rendering bugs. Keeps reads around process and terminal boundaries.
+description: Use for doge-shell process, PTY, job control, raw terminal, colored output, stdout rendering, プロセス, ジョブ, raw mode, or 端末出力 bugs. Keeps reads around process and terminal boundaries.
 ---
 
 # Doge Shell Process PTY

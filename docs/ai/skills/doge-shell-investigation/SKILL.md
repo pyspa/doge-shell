@@ -1,6 +1,6 @@
 ---
 name: doge-shell-investigation
-description: Use for investigation, review, audit, or performance inspection in doge-shell. Keeps work read-only first, avoids broad tests early, and narrows likely files before editing.
+description: Use for investigation, review, audit, performance inspection, 調査, レビュー, 監査, or 性能確認 in doge-shell. Keeps work read-only first, avoids broad tests early, and narrows likely files before editing.
 ---
 
 # Doge Shell Investigation

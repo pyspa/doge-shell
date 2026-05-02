@@ -16,6 +16,13 @@ pub(crate) struct InputAnalysis {
     pub(crate) can_execute: bool,
 }
 
+/// Cached redraw only needs completion metadata; color ranges already live on
+/// `Input` until the input text changes.
+pub(crate) struct CachedInputAnalysis {
+    pub(crate) completion_full: Option<String>,
+    pub(crate) completion: Option<String>,
+}
+
 /// Analyze shell input for syntax highlighting and inline completion.
 ///
 /// This function parses the input via the Pest grammar, determines completion

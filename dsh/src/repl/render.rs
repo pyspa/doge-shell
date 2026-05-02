@@ -1,4 +1,5 @@
 use super::Repl;
+use super::input_analysis::{CachedInputAnalysis, InputAnalysis};
 use crate::input::{ColorType, display_width};
 use crate::parser::{self, HighlightKind, Rule};
 use anyhow::Result;
@@ -233,32 +234,18 @@ pub fn print_input(
         // Safe to use &mut repl now because input_string is owned
         completion = repl.get_completion_from_history(&input_string);
 
-        // Use cached analysis if input hasn't changed (fast path)
-        let analysis = if repl.last_analyzed_input == input_string {
-            if let Some(result) = repl.last_analysis_result.clone() {
-                result
-            } else {
-                let result = repl.analyze_input(&input_string, completion.clone());
-                repl.last_analyzed_input = input_string.clone();
-                repl.last_analysis_result = Some(result.clone());
-                result
-            }
+        if repl.last_analyzed_input == input_string
+            && let Some(analysis) = repl.last_analysis_result.as_ref()
+        {
+            let completion_full = analysis.completion_full.clone();
+            let analysis_completion = analysis.completion.clone();
+            apply_cached_analysis(repl, &mut completion, completion_full, analysis_completion);
         } else {
-            let result = repl.analyze_input(&input_string, completion.clone());
-            repl.last_analyzed_input = input_string.clone();
-            repl.last_analysis_result = Some(result.clone());
-            result
-        };
-
-        if let Some(c) = analysis.completion_full {
-            repl.input.completion = Some(c);
+            let analysis = repl.analyze_input(&input_string, completion.clone());
+            apply_fresh_analysis(repl, &mut completion, analysis);
+            repl.last_analyzed_input.clear();
+            repl.last_analyzed_input.push_str(&input_string);
         }
-        if let Some(suffix) = analysis.completion {
-            completion = Some(suffix);
-        }
-
-        repl.input.color_ranges = analysis.color_ranges;
-        repl.input.can_execute = analysis.can_execute;
     }
 
     if completion.is_none() {
@@ -310,41 +297,8 @@ pub fn print_input(
         queue!(out, MoveLeft(width as u16)).ok();
     }
 
-    // Hint for AI Smart Extensions
-    if repl.detect_smart_pipe().is_some() || repl.detect_generative_command().is_some() {
-        let hint = " ↹ Tab to expand";
-        let hint_width = display_width(hint);
-        // Only show if we have enough space (avoid overlapping with input)
-        let input_visual_end = repl.prompt_mark_width + repl.input.display_width();
-
-        if repl.columns > hint_width
-            && repl.columns.saturating_sub(hint_width) > input_visual_end + 2
-        {
-            let col = repl.columns - hint_width;
-            queue!(
-                out,
-                cursor::MoveToColumn(col as u16),
-                Print(hint.with(Color::DarkGrey))
-            )
-            .ok();
-        }
-    } else if repl.detect_ai_pipe().is_some() {
-        // Hint for AI Output Pipe
-        let hint = " ↵ Enter to analyze";
-        let hint_width = display_width(hint);
-        let input_visual_end = repl.prompt_mark_width + repl.input.display_width();
-
-        if repl.columns > hint_width
-            && repl.columns.saturating_sub(hint_width) > input_visual_end + 2
-        {
-            let col = repl.columns - hint_width;
-            queue!(
-                out,
-                cursor::MoveToColumn(col as u16),
-                Print(hint.with(Color::DarkGrey))
-            )
-            .ok();
-        }
+    if let Some(hint) = input_hint(&input_string) {
+        render_hint_if_room(repl, out, hint.text());
     }
 
     if ai_pending_now {
@@ -377,6 +331,122 @@ pub fn print_input(
         restore_cursor_position(repl, out, total_extra_lines);
     }
     queue!(out, cursor::Show).ok();
+}
+
+fn apply_cached_analysis(
+    repl: &mut Repl<'_>,
+    completion: &mut Option<String>,
+    completion_full: Option<String>,
+    analysis_completion: Option<String>,
+) {
+    if let Some(c) = completion_full {
+        repl.input.completion = Some(c);
+    }
+    if let Some(suffix) = analysis_completion {
+        *completion = Some(suffix);
+    }
+}
+
+fn apply_fresh_analysis(
+    repl: &mut Repl<'_>,
+    completion: &mut Option<String>,
+    analysis: InputAnalysis,
+) {
+    let InputAnalysis {
+        completion_full,
+        completion: analysis_completion,
+        color_ranges,
+        can_execute,
+    } = analysis;
+
+    if let Some(c) = completion_full.as_ref() {
+        repl.input.completion = Some(c.clone());
+    }
+    if let Some(suffix) = analysis_completion.as_ref() {
+        *completion = Some(suffix.clone());
+    }
+
+    repl.input.color_ranges = color_ranges;
+    repl.input.can_execute = can_execute;
+    repl.last_analysis_result = Some(CachedInputAnalysis {
+        completion_full,
+        completion: analysis_completion,
+    });
+}
+
+#[derive(Clone, Copy)]
+enum InputHint {
+    Expand,
+    Analyze,
+}
+
+impl InputHint {
+    fn text(self) -> &'static str {
+        match self {
+            Self::Expand => " ↹ Tab to expand",
+            Self::Analyze => " ↵ Enter to analyze",
+        }
+    }
+}
+
+fn input_hint(input: &str) -> Option<InputHint> {
+    if has_smart_pipe_query(input) || has_generative_query(input) {
+        Some(InputHint::Expand)
+    } else if has_ai_pipe_query(input) {
+        Some(InputHint::Analyze)
+    } else {
+        None
+    }
+}
+
+fn has_smart_pipe_query(input: &str) -> bool {
+    input
+        .rfind("|?")
+        .is_some_and(|idx| !input[idx + 2..].trim().is_empty())
+}
+
+fn has_generative_query(input: &str) -> bool {
+    input
+        .trim_start()
+        .strip_prefix("??")
+        .is_some_and(|query| !query.trim().is_empty())
+}
+
+fn has_ai_pipe_query(input: &str) -> bool {
+    let Some(idx) = input.rfind("|!") else {
+        return false;
+    };
+
+    let command = input[..idx].trim();
+    if command.is_empty() {
+        return false;
+    }
+
+    let query_part = input[idx + 2..].trim();
+    let query = if (query_part.starts_with('"') && query_part.ends_with('"')
+        || query_part.starts_with('\'') && query_part.ends_with('\''))
+        && query_part.len() > 1
+    {
+        &query_part[1..query_part.len() - 1]
+    } else {
+        query_part
+    };
+    !query.is_empty()
+}
+
+fn render_hint_if_room(repl: &Repl<'_>, out: &mut impl Write, hint: &'static str) {
+    let hint_width = display_width(hint);
+    let input_visual_end = repl.prompt_mark_width + repl.input.display_width();
+
+    if repl.columns > hint_width && repl.columns.saturating_sub(hint_width) > input_visual_end + 2 {
+        let col = repl.columns - hint_width;
+        queue!(
+            out,
+            cursor::MoveToColumn(col as u16),
+            Print(hint.with(Color::DarkGrey))
+        )
+        .ok();
+    }
 }
 
 /// Helper function to render the transient prompt

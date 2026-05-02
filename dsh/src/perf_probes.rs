@@ -26,8 +26,10 @@ pub fn run_default_probes(iterations: usize) -> Vec<ProbeResult> {
         probe_completion_cache_lookup(iterations),
         probe_history_search(iterations),
         runtime.block_on(probe_integrated_completion(iterations)),
+        runtime.block_on(probe_repl_analyze_input(iterations)),
         probe_prompt_render(iterations),
         runtime.block_on(probe_repl_print_input(iterations)),
+        runtime.block_on(probe_repl_print_input_reanalyze(iterations)),
     ]
 }
 
@@ -145,6 +147,59 @@ async fn probe_repl_print_input(iterations: usize) -> ProbeResult {
 
     ProbeResult {
         name: "repl_print_input",
+        iterations,
+        elapsed,
+    }
+}
+
+async fn probe_repl_print_input_reanalyze(iterations: usize) -> ProbeResult {
+    let environment = Environment::new();
+    let mut shell = Shell::new(environment);
+    shell.cmd_history = Some(Arc::new(ParkingMutex::new(History::new())));
+
+    let mut repl = Repl::new(&mut shell);
+    repl.columns = 120;
+    repl.input.reset("git status --short".to_string());
+
+    let elapsed = measure(iterations, || {
+        repl.last_analyzed_input.clear();
+        repl.last_analysis_result = None;
+        let mut out = Vec::with_capacity(512);
+        repl.print_input(&mut out, false, false);
+        black_box(out.len());
+    });
+
+    std::mem::forget(repl);
+
+    ProbeResult {
+        name: "repl_print_input_reanalyze",
+        iterations,
+        elapsed,
+    }
+}
+
+async fn probe_repl_analyze_input(iterations: usize) -> ProbeResult {
+    let environment = Environment::new();
+    let mut shell = Shell::new(environment);
+    shell.cmd_history = Some(Arc::new(ParkingMutex::new(History::new())));
+
+    let mut repl = Repl::new(&mut shell);
+    repl.columns = 120;
+    repl.input.reset("git status --short".to_string());
+
+    let elapsed = measure(iterations, || {
+        let analysis = repl.analyze_input(black_box("git status --short"), None);
+        black_box((
+            analysis.can_execute,
+            analysis.completion.as_ref().map(String::len),
+            analysis.color_ranges.as_ref().map(Vec::len),
+        ));
+    });
+
+    std::mem::forget(repl);
+
+    ProbeResult {
+        name: "repl_analyze_input",
         iterations,
         elapsed,
     }

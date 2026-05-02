@@ -62,7 +62,7 @@ mod input_analysis;
 pub mod macro_utils;
 mod repl_ai; // Extracted AI logic
 
-pub(crate) use input_analysis::InputAnalysis;
+pub(crate) use input_analysis::{CachedInputAnalysis, InputAnalysis};
 
 /// Format directory entries for AI context
 /// This is a pure function for testability
@@ -124,7 +124,7 @@ pub struct Repl<'a> {
     pub(crate) explanation_dirty: bool,
     /// Cache for syntax highlighting to avoid re-parsing unchanged input
     pub(crate) last_analyzed_input: String,
-    pub(crate) last_analysis_result: Option<InputAnalysis>,
+    pub(crate) last_analysis_result: Option<CachedInputAnalysis>,
     /// Handle to the background GitHub task, allowing cancellation on drop
     pub(crate) github_task: Option<tokio::task::JoinHandle<()>>,
     /// Y coordinate of the cursor in the previously drawn input to allow proper clearing backward
@@ -641,7 +641,7 @@ impl<'a> Repl<'a> {
         None
     }
 
-    fn analyze_input(&self, input: &str, completion: Option<String>) -> InputAnalysis {
+    pub(crate) fn analyze_input(&self, input: &str, completion: Option<String>) -> InputAnalysis {
         input_analysis::analyze_input(self, input, completion)
     }
 

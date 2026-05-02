@@ -30,6 +30,8 @@ pub mod input;
 pub mod lisp;
 // pub mod notebook;
 pub mod parser;
+#[doc(hidden)]
+pub mod perf_probes;
 pub mod process;
 pub mod prompt;
 pub mod proxy;

@@ -8,10 +8,11 @@ use dsh_builtin::project_context;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::RwLock;
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -42,6 +43,8 @@ pub use crate::prompt::context::PromptContext as Context; // just in case
 const BRANCH_MARK: &str = "🐾";
 const EXTERNAL_TOOL_BACKOFF_BASE: Duration = Duration::from_secs(5);
 const EXTERNAL_TOOL_BACKOFF_MAX: Duration = Duration::from_secs(300);
+static KUBECTL_AVAILABLE: OnceLock<bool> = OnceLock::new();
+static DOCKER_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
 impl ChangePwdHook for Arc<RwLock<Prompt>> {
     fn call(&self, pwd: &Path, _env: Arc<RwLock<Environment>>) -> Result<()> {
@@ -774,9 +777,9 @@ impl Prompt {
     }
 
     pub fn should_check_k8s(&self) -> bool {
-        self.k8s_context_cache.is_none() && self.k8s_check_backoff.should_check()
-        // Improve condition: check for env var KUBECONFIG or ~/.kube/config existence?
-        // For now, always check if not cached, async task handles file check efficiently.
+        self.k8s_context_cache.is_none()
+            && self.k8s_check_backoff.should_check()
+            && should_attempt_k8s_context_check()
     }
 
     pub fn should_check_aws(&self) -> bool {
@@ -784,7 +787,9 @@ impl Prompt {
     }
 
     pub fn should_check_docker(&self) -> bool {
-        self.docker_context_cache.is_none() && self.docker_check_backoff.should_check()
+        self.docker_context_cache.is_none()
+            && self.docker_check_backoff.should_check()
+            && should_attempt_docker_context_check()
     }
 
     pub fn mark_rust_check_failed(&mut self) {
@@ -1079,8 +1084,6 @@ pub async fn fetch_go_version_async() -> Option<String> {
 
 pub async fn fetch_k8s_info_async() -> Option<(String, Option<String>)> {
     use tokio::process::Command;
-    // Check for KUBECONFIG env var or default file existence roughly
-    // For speed, just try running kubectl config view --minify
     let output = Command::new("kubectl")
         .arg("config")
         .arg("view")
@@ -1113,8 +1116,7 @@ pub fn fetch_aws_profile() -> Option<String> {
 
 pub async fn fetch_docker_context_async() -> Option<String> {
     use tokio::process::Command;
-    // Check DOCKER_CONTEXT env var first
-    if let Ok(ctx) = std::env::var("DOCKER_CONTEXT") {
+    if let Some(ctx) = env_var_value("DOCKER_CONTEXT") {
         return Some(ctx);
     }
 
@@ -1131,4 +1133,44 @@ pub async fn fetch_docker_context_async() -> Option<String> {
     } else {
         None
     }
+}
+
+fn should_attempt_k8s_context_check() -> bool {
+    command_available_cached("kubectl", &KUBECTL_AVAILABLE) && kube_config_present()
+}
+
+fn should_attempt_docker_context_check() -> bool {
+    env_var_present("DOCKER_CONTEXT") || command_available_cached("docker", &DOCKER_AVAILABLE)
+}
+
+fn command_available_cached(command: &'static str, cache: &'static OnceLock<bool>) -> bool {
+    *cache.get_or_init(|| which::which(command).is_ok())
+}
+
+fn kube_config_present() -> bool {
+    kube_config_present_from(
+        std::env::var_os("KUBECONFIG").as_deref(),
+        dirs::home_dir().as_deref(),
+    )
+}
+
+fn kube_config_present_from(kubeconfig: Option<&OsStr>, home_dir: Option<&Path>) -> bool {
+    if let Some(value) = kubeconfig
+        && !value.to_string_lossy().trim().is_empty()
+    {
+        return std::env::split_paths(value).any(|path| path.exists());
+    }
+
+    home_dir.is_some_and(|home| home.join(".kube").join("config").exists())
+}
+
+fn env_var_present(name: &str) -> bool {
+    env_var_value(name).is_some()
+}
+
+fn env_var_value(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }

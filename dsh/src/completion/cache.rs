@@ -123,32 +123,9 @@ impl<T: CacheableCandidate> CompletionCache<T> {
     pub fn lookup(&self, input: &str) -> Option<CacheLookup<T>> {
         let now = Instant::now();
         let guard = self.entries.read();
-        let mut best_key: Option<&String> = None;
-        let mut best_exact = false;
 
-        for (key, entry) in guard.iter() {
-            if entry.is_expired(now) {
-                continue;
-            }
-
-            debug!("cache lookup key: {}, input: {}", key, input);
-            if input.starts_with(key.as_str()) {
-                let exact = key == input;
-
-                if best_key.map(|k| key.len() > k.len()).unwrap_or(true) {
-                    best_key = Some(key);
-                    best_exact = exact;
-                }
-
-                if exact {
-                    break;
-                }
-            }
-        }
-
-        debug!("best match key: {:?}", best_key);
-
-        let result = best_key.and_then(|key| {
+        let result = longest_live_prefix(input, &guard, now).and_then(|(key, best_exact)| {
+            debug!("best match key: {:?}", key);
             let entry = guard.get(key)?;
             let key_owned = key.to_string();
             let candidates = if best_exact {
@@ -186,6 +163,31 @@ impl<T: CacheableCandidate> CompletionCache<T> {
         let now = Instant::now();
         entries.retain(|_, entry| !entry.is_expired(now));
     }
+}
+
+fn longest_live_prefix<'a, T: CacheableCandidate>(
+    input: &'a str,
+    entries: &HashMap<String, CacheEntry<T>>,
+    now: Instant,
+) -> Option<(&'a str, bool)> {
+    if let Some(entry) = entries.get(input)
+        && !entry.is_expired(now)
+    {
+        return Some((input, true));
+    }
+
+    let mut end = input.len();
+    while let Some((index, _)) = input[..end].char_indices().next_back() {
+        end = index;
+        let key = &input[..end];
+        if let Some(entry) = entries.get(key)
+            && !entry.is_expired(now)
+        {
+            return Some((key, false));
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -238,6 +240,20 @@ mod tests {
         assert!(!result.exact);
         assert_eq!(result.candidates.len(), 1);
         assert_eq!(result.candidates[0].text, "add");
+    }
+
+    #[test]
+    fn cache_uses_longest_live_prefix() {
+        let cache = CompletionCache::new(Duration::from_secs(1));
+        cache.set("git ".to_string(), vec![candidate("add")]);
+        cache.set("git co".to_string(), vec![candidate("commit")]);
+
+        let result = cache.lookup("git com").unwrap();
+
+        assert!(!result.exact);
+        assert_eq!(result.key, "git co");
+        assert_eq!(result.candidates.len(), 1);
+        assert_eq!(result.candidates[0].text, "commit");
     }
 
     #[test]

@@ -4,6 +4,7 @@ use super::modules::PromptModule;
 use super::modules::execution_time::ExecutionTimeModule;
 use super::modules::exit_status::ExitStatusModule;
 use super::modules::nodejs::NodeModule;
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::time::Duration;
 use tempfile::tempdir;
@@ -250,4 +251,69 @@ fn prompt_detects_project_types_from_parent_directory() {
     prompt.set_current(&nested);
 
     assert!(prompt.needs_node_check());
+}
+
+#[test]
+fn kube_config_present_uses_existing_explicit_env() {
+    let dir = tempdir().unwrap();
+    let config = dir.path().join("kubeconfig");
+    std::fs::write(&config, "apiVersion: v1\n").unwrap();
+
+    assert!(super::kube_config_present_from(
+        Some(config.as_os_str()),
+        None
+    ));
+}
+
+#[test]
+fn kube_config_present_rejects_missing_explicit_env() {
+    assert!(!super::kube_config_present_from(
+        Some(OsStr::new("/missing/kubeconfig")),
+        None
+    ));
+}
+
+#[test]
+fn kube_config_present_uses_any_existing_env_path() {
+    let dir = tempdir().unwrap();
+    let missing = dir.path().join("missing");
+    let config = dir.path().join("kubeconfig");
+    std::fs::write(&config, "apiVersion: v1\n").unwrap();
+    let paths = std::env::join_paths([missing.as_os_str(), config.as_os_str()]).unwrap();
+
+    assert!(super::kube_config_present_from(
+        Some(paths.as_os_str()),
+        None
+    ));
+}
+
+#[test]
+fn kube_config_present_ignores_empty_env_without_home_config() {
+    assert!(!super::kube_config_present_from(
+        Some(OsStr::new(" ")),
+        None
+    ));
+}
+
+#[test]
+fn kube_config_present_falls_back_to_home_file() {
+    let dir = tempdir().unwrap();
+    let kube_dir = dir.path().join(".kube");
+    std::fs::create_dir_all(&kube_dir).unwrap();
+    std::fs::write(kube_dir.join("config"), "apiVersion: v1\n").unwrap();
+
+    assert!(super::kube_config_present_from(None, Some(dir.path())));
+}
+
+#[test]
+fn kube_config_present_empty_env_falls_back_to_home_file() {
+    let dir = tempdir().unwrap();
+    let kube_dir = dir.path().join(".kube");
+    std::fs::create_dir_all(&kube_dir).unwrap();
+    std::fs::write(kube_dir.join("config"), "apiVersion: v1\n").unwrap();
+
+    assert!(super::kube_config_present_from(
+        Some(OsStr::new("")),
+        Some(dir.path())
+    ));
 }

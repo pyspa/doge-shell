@@ -16,13 +16,15 @@ use anyhow::Result;
 use dsh_builtin::project;
 use dsh_types::mcp::McpTransport;
 use parking_lot::{Mutex, RwLock};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, warn};
 
 const DEFAULT_CACHE_TTL_MS: u64 = 3000;
+const HISTORY_BOOST_SCAN_LIMIT: usize = 2000;
+const HISTORY_BOOST_SCORE_CAP: u32 = 5000;
 
 #[derive(Debug, Clone, Copy)]
 struct CompletionRequest<'a> {
@@ -710,34 +712,13 @@ impl IntegratedCompletionEngine {
         command_context: Option<&str>,
     ) -> Vec<EnhancedCandidate> {
         // Boost priority based on history
-        if let Some(history_arc) = history {
-            let history = history_arc.lock();
-            for candidate in &mut candidates {
-                if matches!(
-                    candidate.candidate_type,
-                    CandidateType::File | CandidateType::Directory
-                ) {
+        if let Some(history_arc) = history
+            && let Some(history) = history_arc.try_lock()
+        {
+            let boosts = history_boost_scores(&candidates, &history, command_context);
+            for (candidate, score) in candidates.iter_mut().zip(boosts) {
+                if score == 0 {
                     continue;
-                }
-
-                // Simplified boosting for linear history
-                let mut score = 0;
-                for item in history.iter().rev().take(2000) {
-                    // Check recent 2000 explicitly
-                    if item.entry.contains(&candidate.text) {
-                        let mut item_score = 10;
-                        // Context-aware boosting
-                        if let Some(cmd) = command_context
-                            && (item.entry == *cmd
-                                || item.entry.starts_with(&(cmd.to_string() + " ")))
-                        {
-                            item_score += 500;
-                        }
-                        score += item_score;
-                        if score > 5000 {
-                            break;
-                        }
-                    }
                 }
                 candidate.priority = candidate.priority.saturating_add(score);
             }
@@ -775,6 +756,82 @@ impl IntegratedCompletionEngine {
         candidates.truncate(max_results);
         candidates
     }
+}
+
+fn history_boost_scores(
+    candidates: &[EnhancedCandidate],
+    history: &crate::history::History,
+    command_context: Option<&str>,
+) -> Vec<u32> {
+    let mut scores = vec![0; candidates.len()];
+    let mut candidate_indexes_by_token: HashMap<&str, Vec<usize>> = HashMap::new();
+
+    for (index, candidate) in candidates.iter().enumerate() {
+        if matches!(
+            candidate.candidate_type,
+            CandidateType::File | CandidateType::Directory
+        ) {
+            continue;
+        }
+
+        candidate_indexes_by_token
+            .entry(candidate.text.as_str())
+            .or_default()
+            .push(index);
+    }
+
+    if candidate_indexes_by_token.is_empty() {
+        return scores;
+    }
+
+    let command_prefix = command_context.map(|command| format!("{command} "));
+    let mut capped = vec![false; candidates.len()];
+    let mut capped_count = 0;
+    let target_count = candidate_indexes_by_token
+        .values()
+        .map(Vec::len)
+        .sum::<usize>();
+
+    for item in history.iter().rev().take(HISTORY_BOOST_SCAN_LIMIT) {
+        let context_bonus = if command_context.is_some_and(|command| item.entry == command)
+            || command_prefix
+                .as_ref()
+                .is_some_and(|prefix| item.entry.starts_with(prefix))
+        {
+            500
+        } else {
+            0
+        };
+
+        let mut tokens_seen = HashSet::new();
+        for token in item.entry.split_whitespace() {
+            if !tokens_seen.insert(token) {
+                continue;
+            }
+
+            let Some(indexes) = candidate_indexes_by_token.get(token) else {
+                continue;
+            };
+
+            for &index in indexes {
+                if capped[index] {
+                    continue;
+                }
+
+                scores[index] = scores[index].saturating_add(10 + context_bonus);
+                if scores[index] > HISTORY_BOOST_SCORE_CAP {
+                    capped[index] = true;
+                    capped_count += 1;
+                }
+            }
+        }
+
+        if capped_count == target_count {
+            break;
+        }
+    }
+
+    scores
 }
 
 fn completion_replacement_range(
@@ -1295,6 +1352,32 @@ mod tests {
 
         assert_eq!(file_candidate.priority, 0);
         assert!(arg_candidate.priority > 0);
+    }
+
+    #[test]
+    fn history_boost_does_not_leak_to_same_text_file_candidates() {
+        let mut history = crate::history::History::new();
+        history.add_test_entry("git checkout shared");
+
+        let candidates = vec![
+            EnhancedCandidate {
+                text: "shared".to_string(),
+                description: None,
+                candidate_type: CandidateType::File,
+                priority: 0,
+            },
+            EnhancedCandidate {
+                text: "shared".to_string(),
+                description: None,
+                candidate_type: CandidateType::Argument,
+                priority: 0,
+            },
+        ];
+
+        let scores = history_boost_scores(&candidates, &history, Some("git"));
+
+        assert_eq!(scores[0], 0);
+        assert!(scores[1] >= 500);
     }
 
     #[test]

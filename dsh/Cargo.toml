@@ -9,6 +9,10 @@ version = "0.0.1"
 path = "src/main.rs"
 name = "dsh"
 
+[[bench]]
+name = "latency"
+harness = false
+
 [features]
 default = ["i64", "f64"]
 bigint = ["num-bigint"]

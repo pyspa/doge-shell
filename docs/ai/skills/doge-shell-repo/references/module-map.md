@@ -15,7 +15,9 @@
 - process / PTY / jobs: `dsh/src/process/`, `dsh/src/shell/eval.rs`
 - environment and activation: `dsh/src/environment/`, `dsh/src/direnv.rs`
 - history and timing: `dsh/src/history/`, `dsh-frecency/src/`, `dsh/src/command_timing.rs`
-- command palette and AI actions: `dsh/src/command_palette/`, `dsh/src/ai_features/`
+- Lisp and config startup: `dsh/src/lisp/`, `dsh/src/lib.rs`, `dsh/src/main.rs`
+- command palette and AI actions: `dsh/src/command_palette/`, `dsh/src/ai_features/`, `dsh/src/argument_explainer.rs`
+- builtin commands: command-specific files under `dsh-builtin/src/`, `dsh/src/proxy/builtin/`
 - builtin chat: `dsh-builtin/src/chatgpt.rs`
 - builtin tools and skill loading: `dsh-builtin/src/chatgpt/tool/`, `dsh-builtin/src/chatgpt/skills.rs`
 - builtin serve / MCP: `dsh-builtin/src/serve/`, `dsh-builtin/src/mcp.rs`, `dsh-types/src/mcp.rs`
@@ -28,3 +30,5 @@
 - completion issue: `rg -n "completion|candidate|skim|generator" dsh/src`
 - PTY / process display: `rg -n "pty|PtyMonitor|raw mode|isatty|ANSI|job" dsh/src/process dsh/src/shell dsh/src/terminal`
 - project environment: `rg -n "direnv|environment|activation|project" dsh/src dsh-builtin/src`
+- Lisp/config issue: `rg -n "lisp|config\\.lisp|stdlib|include|reload" dsh/src/lisp dsh/src dsh-builtin/src`
+- builtin command issue: `rg -n "<command>|builtin|help|project|export|task|snippet" dsh-builtin/src dsh/src/proxy/builtin`

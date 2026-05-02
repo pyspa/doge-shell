@@ -1,0 +1,4 @@
+interface:
+  display_name: "Doge Shell Command Palette AI"
+  short_description: "Inspect command palette and shell-side AI actions narrowly."
+  default_prompt: "Use $doge-shell-command-palette-ai to work on command palette or AI action behavior with minimal reading and validation."

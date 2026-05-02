@@ -1,0 +1,4 @@
+interface:
+  display_name: "Doge Shell Lisp Config"
+  short_description: "Inspect Lisp, config loader, and startup paths narrowly."
+  default_prompt: "Use $doge-shell-lisp-config to work on Lisp or config startup behavior with minimal reading and validation."

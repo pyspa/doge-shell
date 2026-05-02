@@ -18,15 +18,15 @@
 - serve / MCP server / shared MCP types
   - Read: `dsh-builtin/src/serve/`, `dsh-builtin/src/mcp.rs`, `dsh-builtin/src/chatgpt/mcp/`, `dsh-types/src/mcp.rs`
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p dsh-types` when shared types change
-- builtin command / help / doctor
-  - Read: `dsh-builtin/src/`
-  - Validate: `cargo test -p dsh-builtin`
+- builtin command / help / doctor outside chat/MCP
+  - Read: command-specific files under `dsh-builtin/src/`, `dsh/src/proxy/builtin/`
+  - Validate: `cargo test -p dsh-builtin`; add `cargo test -p doge-shell` when proxy builtin behavior changes
 - safety / guard / command policy
   - Read: `dsh/src/safety/`
   - Validate: `cargo test -p doge-shell`
 - lisp / config loader / startup behavior
-  - Read: `dsh/src/lisp/`, `dsh/src/lib.rs`, `dsh/src/main.rs`
-  - Validate: `cargo test -p doge-shell`
+  - Read: `dsh/src/lisp/`, `dsh/src/lib.rs`, `dsh/src/main.rs`, `dsh-builtin/src/lisp.rs`, `dsh-builtin/src/include.rs`, `dsh-builtin/src/reload.rs`
+  - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-builtin` when builtin include/reload/lisp changes
 - environment / project context / direnv / path activation
   - Read: `dsh/src/environment/`, `dsh/src/direnv.rs`, `dsh-builtin/src/project_context.rs`
   - Validate: package for touched files; use `cargo test -p doge-shell` for `dsh/` and `cargo test -p dsh-builtin` for builtin project context
@@ -34,11 +34,11 @@
   - Read: `dsh/src/history/`, `dsh-frecency/src/`, `dsh/src/command_timing.rs`, `dsh-builtin/src/command_timing.rs`
   - Validate: package for touched files; use `cargo test -p dsh-frecency` for frecency changes
 - command palette / AI actions
-  - Read: `dsh/src/command_palette/`, `dsh/src/ai_features/`, `dsh-openai/src/`
+  - Read: `dsh/src/command_palette/`, `dsh/src/ai_features/`, `dsh/src/argument_explainer.rs`, `dsh-openai/src/`
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-openai` when client/config changes
 - AI guidance / Skills / runtime skill installer
   - Read: `AGENTS.md`, `docs/ai/`, `scripts/install-runtime-skills.sh`
-  - Validate: `scripts/check-ai-guidance.sh` and focused installer dry runs
+  - Validate: `scripts/check-ai-guidance.sh`, `scripts/install-runtime-skills.sh --list`, and focused installer `--dry-run` / `--status` checks
 - cross-crate integration
   - Read: affected crate entry points from `module-map.md`
   - Validate: `cargo test` or `cargo check --workspace` only when the behavior spans crates

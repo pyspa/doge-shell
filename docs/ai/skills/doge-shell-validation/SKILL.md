@@ -10,5 +10,6 @@ description: Use for doge-shell validation planning, smallest-test selection, æ¤
 - Read [../doge-shell-repo/references/task-map.md](../doge-shell-repo/references/task-map.md) when the change maps to a known subsystem.
 - Default to `cargo test -p doge-shell` for `dsh/` changes and `cargo test -p dsh-builtin` for builtin/chat changes.
 - Never run `cargo test -p dsh`; the `dsh/` directory is the Cargo package `doge-shell`.
-- For `AGENTS.md`, `docs/ai/`, or runtime skill installer guidance, run `scripts/check-ai-guidance.sh` plus a focused installer dry run instead of Rust tests.
+- Use `cargo test -p doge-shell --lib` as a fallback only when package-level `doge-shell` tests are blocked by known macOS sandbox child-process tracing failures and the change is library-scoped.
+- For `AGENTS.md`, `docs/ai/`, or runtime skill installer guidance, run `scripts/check-ai-guidance.sh`, `scripts/install-runtime-skills.sh --list`, and focused installer `--dry-run` / `--status` checks instead of Rust tests.
 - Use `cargo test` or `cargo check --workspace` only when the change clearly spans crates.

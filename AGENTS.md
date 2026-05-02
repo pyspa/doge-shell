@@ -34,5 +34,6 @@
 - runtime 配置先は `~/.codex/skills/` と `~/.config/dsh/skills/`。
 - 導入や更新は `scripts/install-runtime-skills.sh` を使う。
 - 普段は必要な skill だけ install する。引数なしの全件 install は初期セットアップ時だけ使う。
+- Codex runtime へ常時入れる Skill は原則 `doge-shell-repo` のみにし、領域別 Skill は `docs/ai/skills/<skill>/SKILL.md` を必要時に読む。
 - Skill は frontmatter の `description` を短い要約兼トリガー文として書く。
 - `AGENTS.md` / `docs/ai/` / Skill を変更したら `scripts/check-ai-guidance.sh` を実行する。

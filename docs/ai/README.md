@@ -20,12 +20,14 @@
 ## 導入
 - sample Skill の配置には `scripts/install-runtime-skills.sh` を使う。
 - `both` を指定すると Codex と doge-shell の両方へ入れる。
-- 普段は `--list` と `--dry-run` で対象を確認してから、必要な Skill だけ入れる。
+- 普段は `--list` / `--dry-run` / `--status` で対象を確認してから、必要な Skill だけ入れる。
+- Codex runtime は原則 `--profile codex-core` で `doge-shell-repo` だけ入れ、領域別 Skill は repo-local source を必要時に読む。
 
 ```bash
 scripts/install-runtime-skills.sh --list
-scripts/install-runtime-skills.sh --dry-run --target codex doge-shell-repo doge-shell-validation doge-shell-investigation doge-shell-chat-tools
-scripts/install-runtime-skills.sh --target codex doge-shell-repo doge-shell-validation doge-shell-investigation doge-shell-chat-tools
+scripts/install-runtime-skills.sh --dry-run --target codex --profile codex-core
+scripts/install-runtime-skills.sh --status --target codex --profile codex-core
+scripts/install-runtime-skills.sh --target codex --profile codex-core
 ```
 
 ## authoring ルール
@@ -36,5 +38,7 @@ scripts/install-runtime-skills.sh --target codex doge-shell-repo doge-shell-vali
 - 変更後は `scripts/check-ai-guidance.sh` で軽量 lint する。
 
 ## 推奨 runtime Skill
-- 常用: `doge-shell-repo`, `doge-shell-validation`, `doge-shell-investigation`, `doge-shell-chat-tools`
-- 領域別: `doge-shell-parser-shell`, `doge-shell-process-pty`, `doge-shell-repl-completion`, `doge-shell-prompt-terminal-ui`, `doge-shell-env-startup`, `doge-shell-history-frecency`, `doge-shell-safety-policy`
+- Codex 最小: `--profile codex-core` (`doge-shell-repo`)
+- Codex よく使う構成: `--profile codex-common` (`doge-shell-repo`, `doge-shell-validation`, `doge-shell-investigation`, `doge-shell-chat-tools`)
+- dsh runtime 用: `--profile dsh-common`
+- 領域別: `doge-shell-parser-shell`, `doge-shell-process-pty`, `doge-shell-repl-completion`, `doge-shell-prompt-terminal-ui`, `doge-shell-env-startup`, `doge-shell-lisp-config`, `doge-shell-history-frecency`, `doge-shell-command-palette-ai`, `doge-shell-builtin-commands`, `doge-shell-safety-policy`

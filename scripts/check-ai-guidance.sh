@@ -124,7 +124,61 @@ check_bad_guidance() {
     fi
 }
 
-check_installer_dry_run() {
+check_readme_skill_names() {
+    readme="$repo_root/docs/ai/README.md"
+
+    if [ ! -f "$readme" ]; then
+        fail "missing docs/ai/README.md"
+        return
+    fi
+
+    refs=$(grep -o '`\(doge-shell\|dsh\)-[[:alnum:]_-]*`' "$readme" 2>/dev/null | tr -d '`' | sort -u || true)
+    if [ -z "$refs" ]; then
+        return 0
+    fi
+
+    while IFS= read -r skill_name; do
+        [ -n "$skill_name" ] || continue
+        if [ ! -f "$source_root/$skill_name/SKILL.md" ]; then
+            fail "README references unknown skill: $skill_name"
+        fi
+    done <<EOF
+$refs
+EOF
+}
+
+check_repo_skill_paths() {
+    paths=$(grep -Rho 'docs/ai/skills/[[:alnum:]_-]*/SKILL\.md' "$repo_root/AGENTS.md" "$repo_root/docs/ai" 2>/dev/null | sort -u || true)
+    if [ -z "$paths" ]; then
+        return 0
+    fi
+
+    while IFS= read -r rel_path; do
+        [ -n "$rel_path" ] || continue
+        if [ ! -f "$repo_root/$rel_path" ]; then
+            fail "missing repo-local skill path: $rel_path"
+        fi
+    done <<EOF
+$paths
+EOF
+}
+
+expect_installer_list() {
+    profile="$1"
+    expected="$2"
+    installer="$repo_root/scripts/install-runtime-skills.sh"
+    actual=$(bash "$installer" --list --profile "$profile")
+
+    if [ "$actual" != "$expected" ]; then
+        echo "expected profile $profile:" >&2
+        echo "$expected" >&2
+        echo "actual profile $profile:" >&2
+        echo "$actual" >&2
+        fail "runtime skill profile mismatch: $profile"
+    fi
+}
+
+check_installer_profiles() {
     installer="$repo_root/scripts/install-runtime-skills.sh"
 
     if [ ! -f "$installer" ]; then
@@ -132,8 +186,28 @@ check_installer_dry_run() {
         return
     fi
 
-    if ! bash "$installer" --dry-run --target codex >/dev/null; then
+    expect_installer_list "codex-core" "doge-shell-repo"
+    expect_installer_list "codex-common" "doge-shell-repo
+doge-shell-validation
+doge-shell-investigation
+doge-shell-chat-tools"
+    expect_installer_list "dsh-common" "doge-shell-repo
+doge-shell-validation
+doge-shell-investigation
+doge-shell-chat-tools"
+
+    for profile in codex-core codex-common dsh-common; do
+        if ! grep -q -- "--profile $profile" "$repo_root/docs/ai/README.md"; then
+            fail "docs/ai/README.md does not mention installer profile: $profile"
+        fi
+    done
+
+    if ! bash "$installer" --dry-run --target codex --profile codex-core >/dev/null; then
         fail "runtime skill installer dry run failed"
+    fi
+
+    if ! bash "$installer" --status --target codex --profile codex-core >/dev/null; then
+        fail "runtime skill installer status check failed"
     fi
 }
 
@@ -146,7 +220,9 @@ if [ -d "$source_root" ]; then
     check_skill_references
     check_markdown_links
     check_bad_guidance
-    check_installer_dry_run
+    check_readme_skill_names
+    check_repo_skill_paths
+    check_installer_profiles
 fi
 
 if [ "$failures" -gt 0 ]; then

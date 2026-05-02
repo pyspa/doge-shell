@@ -1,0 +1,4 @@
+interface:
+  display_name: "Doge Shell Builtin Commands"
+  short_description: "Inspect builtin command and proxy builtin paths narrowly."
+  default_prompt: "Use $doge-shell-builtin-commands to work on builtin commands with minimal reading and validation."

@@ -13,4 +13,11 @@ description: Use when working in the doge-shell repository or doge-shell リポ�
 - Read [references/test-scope.md](references/test-scope.md) before choosing cargo commands.
 - Open `README.md` only for user-facing docs, config examples, or feature behavior that is described there.
 - Prefer the smallest test or check that proves the change.
-- Switch to a narrower skill when the task is clearly about completion, parser work, process/PTY, prompt/terminal UI, environment/startup, history/frecency, safety policy, chat tools, investigation, or validation.
+- Repo-local completion skill: [doge-shell-repl-completion](../doge-shell-repl-completion/SKILL.md).
+- Repo-local process skill: [doge-shell-process-pty](../doge-shell-process-pty/SKILL.md).
+- Repo-local Lisp/config skill: [doge-shell-lisp-config](../doge-shell-lisp-config/SKILL.md).
+- Repo-local command palette skill: [doge-shell-command-palette-ai](../doge-shell-command-palette-ai/SKILL.md).
+- Repo-local builtin command skill: [doge-shell-builtin-commands](../doge-shell-builtin-commands/SKILL.md).
+- Repo-local chat tool skill: [doge-shell-chat-tools](../doge-shell-chat-tools/SKILL.md).
+- Switch to a narrower skill when the task is clearly about completion, parser, process/PTY, prompt/terminal UI, environment/startup, Lisp/config, history/frecency, command palette/AI actions, builtin commands, safety policy, chat tools, investigation, validation, or skill authoring.
+- If a narrower skill is not installed in runtime, read its repo-local source at `docs/ai/skills/<skill>/SKILL.md` instead of installing every skill.

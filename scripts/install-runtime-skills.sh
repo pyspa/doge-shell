@@ -4,18 +4,26 @@ set -eu
 
 usage() {
     cat <<'EOF'
-Usage: scripts/install-runtime-skills.sh [--target codex|dsh|both] [skill-name ...]
+Usage: scripts/install-runtime-skills.sh [--target codex|dsh|both] [--profile name] [skill-name ...]
        scripts/install-runtime-skills.sh [codex|dsh|both]
-       scripts/install-runtime-skills.sh --list [skill-name ...]
+       scripts/install-runtime-skills.sh --list [--profile name] [skill-name ...]
+       scripts/install-runtime-skills.sh --status [--target codex|dsh|both] [--profile name]
 
 Installs sample runtime skills from docs/ai/skills/ into:
   codex -> ~/.codex/skills
   dsh   -> ~/.config/dsh/skills
   both  -> both destinations
 
+Profiles:
+  codex-core   doge-shell-repo
+  codex-common doge-shell-repo, doge-shell-validation, doge-shell-investigation, doge-shell-chat-tools
+  dsh-common   doge-shell-repo, doge-shell-validation, doge-shell-investigation, doge-shell-chat-tools
+
 Examples:
   scripts/install-runtime-skills.sh --list
-  scripts/install-runtime-skills.sh --dry-run --target codex doge-shell-repo
+  scripts/install-runtime-skills.sh --list --profile codex-core
+  scripts/install-runtime-skills.sh --dry-run --target codex --profile codex-core
+  scripts/install-runtime-skills.sh --status --target codex --profile codex-core
   scripts/install-runtime-skills.sh
   scripts/install-runtime-skills.sh --target codex doge-shell-repo
   scripts/install-runtime-skills.sh dsh
@@ -25,6 +33,8 @@ EOF
 mode="both"
 dry_run=0
 list_only=0
+status_only=0
+profile=""
 requested_skills=()
 
 while [ "$#" -gt 0 ]; do
@@ -44,6 +54,18 @@ while [ "$#" -gt 0 ]; do
         --list)
             list_only=1
             ;;
+        --status|--check-installed)
+            status_only=1
+            ;;
+        --profile)
+            if [ "$#" -lt 2 ]; then
+                usage >&2
+                exit 1
+            fi
+            profile="$2"
+            shift 2
+            continue
+            ;;
         codex|dsh|both)
             if [ "$mode" = "both" ] && [ "${#requested_skills[@]}" -eq 0 ]; then
                 mode="$1"
@@ -62,6 +84,11 @@ while [ "$#" -gt 0 ]; do
     shift
 done
 
+if [ -n "$profile" ] && [ "${#requested_skills[@]}" -gt 0 ]; then
+    echo "cannot combine --profile with explicit skill names" >&2
+    exit 1
+fi
+
 case "$mode" in
     codex|dsh|both)
         ;;
@@ -79,6 +106,25 @@ if [ ! -d "$source_root" ]; then
     echo "skill source not found: $source_root" >&2
     exit 1
 fi
+
+profile_skills() {
+    case "$1" in
+        codex-core)
+            printf '%s\n' doge-shell-repo
+            ;;
+        codex-common|dsh-common)
+            printf '%s\n' \
+                doge-shell-repo \
+                doge-shell-validation \
+                doge-shell-investigation \
+                doge-shell-chat-tools
+            ;;
+        *)
+            echo "unknown profile: $1" >&2
+            exit 1
+            ;;
+    esac
+}
 
 install_skill_dir() {
     skill_name="$1"
@@ -114,6 +160,14 @@ skill_list() {
         return
     fi
 
+    if [ -n "$profile" ]; then
+        profile_skills "$profile" | while IFS= read -r skill_name; do
+            validate_skill "$skill_name"
+            printf '%s\n' "$skill_name"
+        done
+        return
+    fi
+
     for skill_dir in "$source_root"/*; do
         if [ -d "$skill_dir" ] && [ -f "$skill_dir/SKILL.md" ]; then
             basename "$skill_dir"
@@ -128,8 +182,49 @@ install_selected() {
     done
 }
 
+status_skill_dir() {
+    skill_name="$1"
+    dest_root="$2"
+    target_label="$3"
+    src_dir="$source_root/$skill_name"
+    dest_dir="$dest_root/$skill_name"
+
+    validate_skill "$skill_name"
+
+    if [ ! -d "$dest_dir" ]; then
+        echo "missing $target_label $skill_name -> $dest_dir"
+        return
+    fi
+
+    if diff -qr "$src_dir" "$dest_dir" >/dev/null 2>&1; then
+        echo "ok $target_label $skill_name -> $dest_dir"
+    else
+        echo "stale $target_label $skill_name -> $dest_dir"
+    fi
+}
+
+status_selected() {
+    dest_root="$1"
+    target_label="$2"
+    while IFS= read -r skill_name; do
+        status_skill_dir "$skill_name" "$dest_root" "$target_label"
+    done
+}
+
 if [ "$list_only" -eq 1 ]; then
     skill_list
+    exit 0
+fi
+
+if [ "$status_only" -eq 1 ]; then
+    if [ "$mode" = "codex" ] || [ "$mode" = "both" ]; then
+        skill_list | status_selected "${CODEX_HOME:-$HOME/.codex}/skills" codex
+    fi
+
+    if [ "$mode" = "dsh" ] || [ "$mode" = "both" ]; then
+        skill_list | status_selected "${XDG_CONFIG_HOME:-$HOME/.config}/dsh/skills" dsh
+    fi
+
     exit 0
 fi
 

@@ -11,8 +11,11 @@ use std::fs::{self, File};
 use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration as StdDuration;
+use std::time::{Duration as StdDuration, Instant};
 use tracing::{debug, warn};
+
+pub const TIMING_SAVE_INTERVAL: StdDuration = StdDuration::from_secs(5);
+pub const TIMING_SAVE_RECORD_THRESHOLD: u64 = 10;
 
 /// Statistics for a single command
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +89,10 @@ pub struct CommandTiming {
     /// Flag to track if there are unsaved changes
     #[serde(skip)]
     dirty: bool,
+    #[serde(skip)]
+    dirty_records: u64,
+    #[serde(skip)]
+    last_saved_at: Option<Instant>,
 }
 
 impl CommandTiming {
@@ -95,6 +102,8 @@ impl CommandTiming {
             stats: HashMap::new(),
             collection_started: Some(Utc::now()),
             dirty: false,
+            dirty_records: 0,
+            last_saved_at: Some(Instant::now()),
         }
     }
 
@@ -107,8 +116,9 @@ impl CommandTiming {
         match File::open(path) {
             Ok(file) => {
                 let reader = BufReader::new(file);
-                match serde_json::from_reader(reader) {
-                    Ok(timing) => {
+                match serde_json::from_reader::<_, CommandTiming>(reader) {
+                    Ok(mut timing) => {
+                        timing.mark_clean();
                         debug!("Loaded command timing from {:?}", path);
                         Some(timing)
                     }
@@ -139,9 +149,28 @@ impl CommandTiming {
         let file = File::create(path)?;
         let writer = BufWriter::new(file);
         serde_json::to_writer_pretty(writer, self)?;
-        self.dirty = false;
+        self.mark_clean();
         debug!("Saved command timing to {:?}", path);
         Ok(())
+    }
+
+    /// Save timing data only when the debounce interval or record threshold is reached.
+    pub fn save_to_file_if_due(&mut self, path: &PathBuf) -> std::io::Result<bool> {
+        if !self.dirty {
+            return Ok(false);
+        }
+
+        let interval_elapsed = self
+            .last_saved_at
+            .is_none_or(|last_saved| last_saved.elapsed() >= TIMING_SAVE_INTERVAL);
+        let threshold_reached = self.dirty_records >= TIMING_SAVE_RECORD_THRESHOLD;
+
+        if interval_elapsed || threshold_reached {
+            self.save_to_file(path)?;
+            return Ok(true);
+        }
+
+        Ok(false)
     }
 
     /// Force save regardless of dirty flag
@@ -154,7 +183,7 @@ impl CommandTiming {
         let file = File::create(path)?;
         let writer = BufWriter::new(file);
         serde_json::to_writer_pretty(writer, self)?;
-        self.dirty = false;
+        self.mark_clean();
         debug!("Force saved command timing to {:?}", path);
         Ok(())
     }
@@ -173,11 +202,18 @@ impl CommandTiming {
             );
         }
         self.dirty = true;
+        self.dirty_records = self.dirty_records.saturating_add(1);
     }
 
     /// Check if there are unsaved changes
     pub fn is_dirty(&self) -> bool {
         self.dirty
+    }
+
+    fn mark_clean(&mut self) {
+        self.dirty = false;
+        self.dirty_records = 0;
+        self.last_saved_at = Some(Instant::now());
     }
 
     /// Get the top N slowest commands by average duration
@@ -259,7 +295,7 @@ pub type SharedCommandTiming = Arc<RwLock<CommandTiming>>;
 /// Create or load the shared timing instance
 pub fn create_shared_timing() -> SharedCommandTiming {
     let timing = if let Some(path) = get_timing_file_path() {
-        CommandTiming::load_from_file(&path).unwrap_or_default()
+        CommandTiming::load_from_file(&path).unwrap_or_else(CommandTiming::new)
     } else {
         CommandTiming::new()
     };
@@ -391,5 +427,24 @@ mod tests {
         let frequent = timing.top_frequent(2);
         assert_eq!(frequent[0].command, "common");
         assert_eq!(frequent[0].total_calls, 3);
+    }
+
+    #[test]
+    fn debounced_save_waits_until_threshold() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("timing.json");
+        let mut timing = CommandTiming::new();
+
+        timing.record("git", 0, StdDuration::from_millis(100));
+        assert!(!timing.save_to_file_if_due(&path).unwrap());
+        assert!(!path.exists());
+
+        for _ in 1..TIMING_SAVE_RECORD_THRESHOLD {
+            timing.record("git", 0, StdDuration::from_millis(100));
+        }
+
+        assert!(timing.save_to_file_if_due(&path).unwrap());
+        assert!(path.exists());
+        assert!(!timing.is_dirty());
     }
 }

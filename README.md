@@ -151,6 +151,7 @@ Organize and switch between workspaces efficiently with the integrated Project M
 - **`pm list`**: List registered projects (sorted by last access).
 - **`pm work <name>`**: Switch to a project and trigger hooks.
 - **`pm jump` / `pj`**: Interactively select and switch to a project.
+- **`pm activate`**: Apply safe project activation from `.env`, allowed `.envrc`, and `.venv`/`venv`.
 - **Hooks**: Define `*on-project-switch-hooks*` in Lisp to automate environment setup.
   - Automatically triggered when entering a project directory (via `pm work`, `pj`, or `cd`).
   - Sets `DSH_PROJECT` environment variable to the current project name.
@@ -220,7 +221,7 @@ The shell includes many built-in commands:
 | `mcp`               | Manage MCP servers (status, connect, disconnect)                                                                           |
 | `gpr`               | GitHub Pull Request checkout with interactive selection                                                                    |
 | `gwt`               | Git Worktree management (add, list, remove)                                                                                |
-| `pm`                | Project Manager (add, list, remove, work, jump)                                                                            |
+| `pm`                | Project Manager (add, list, remove, work, jump, activate)                                                                  |
 | `pj`                | Jump to a project (alias for `pm jump`)                                                                                    |
 | `help`              | Show help information                                                                                                      |
 | `comp-gen`          | Generate command completion using AI (`--stdout`, `--check`)                                                               |
@@ -624,7 +625,7 @@ doctor validate
 doctor --help
 ```
 
-`doctor` reports on configuration files, AI settings, MCP connection counters, project marker files, common developer runtimes found in `PATH`, runtime Skill drift, and focused validation commands for changed files.
+`doctor` reports on configuration files, AI settings, MCP connection counters, project marker files, common developer runtimes found in `PATH`, performance/cache state, runtime Skill drift, and focused validation commands for changed files.
 
 ### `include` Command
 

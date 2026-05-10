@@ -223,9 +223,16 @@ pub async fn run_shell() -> ExitCode {
     {
         let paths = shell.environment.read().paths.clone();
         let names_arc = std::sync::Arc::clone(&shell.environment.read().executable_names);
+        if let Some(names) = crate::environment::load_cached_executables(&paths) {
+            *names_arc.write() = names.clone();
+            let set: std::collections::BTreeSet<String> = names.into_iter().collect();
+            crate::completion::generator::set_global_system_commands(set);
+        }
         tokio::spawn(async move {
             let sorted = tokio::task::spawn_blocking(move || {
-                crate::environment::collect_executables(&paths)
+                let names = crate::environment::collect_executables(&paths);
+                let _ = crate::environment::save_cached_executables(&paths, &names);
+                names
             })
             .await
             .ok();

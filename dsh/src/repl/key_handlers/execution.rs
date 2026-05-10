@@ -149,9 +149,8 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
         if let Some(cmd_name) = command_timing::extract_command_name(&input_str) {
             let mut timing = repl.command_timing.write();
             timing.record(&cmd_name, exit_code, elapsed);
-            // Save immediately for real-time updates
             if let Some(path) = command_timing::get_timing_file_path()
-                && let Err(e) = timing.save_to_file(&path)
+                && let Err(e) = timing.save_to_file_if_due(&path)
             {
                 debug!("Failed to save command timing: {}", e);
             }
@@ -223,10 +222,8 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
         }
     }
 
-    // Synchronously refresh git status for accurate display after command execution
-    // This ensures the prompt always shows the correct git state immediately
     if repl.prompt.read().has_git_root() {
-        repl.prompt.write().refresh_git_status_sync();
+        repl.prompt.read().trigger_git_check();
     }
 
     // After command execution, show new prompt
@@ -295,9 +292,8 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
         repl.last_duration = Some(elapsed);
     }
 
-    // Synchronously refresh git status for accurate display after command execution
     if repl.prompt.read().has_git_root() {
-        repl.prompt.write().refresh_git_status_sync();
+        repl.prompt.read().trigger_git_check();
     }
 
     // After command execution, show new prompt

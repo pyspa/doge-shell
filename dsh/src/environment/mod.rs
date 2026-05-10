@@ -34,12 +34,16 @@ use dsh_builtin::McpManager;
 use dsh_types::mcp::McpServerConfig;
 use dsh_types::output_history::OutputHistory;
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::UNIX_EPOCH;
 
 use tracing::debug;
+
+const EXECUTABLE_CACHE_FILE: &str = "executable_names.json";
 
 /// Wrapper to force Send/Sync on types that are effectively confined to the main thread
 /// or not accessed in background threads (like autocompletion closures).
@@ -304,4 +308,76 @@ pub fn collect_executables(paths: &[String]) -> Vec<String> {
     let mut sorted: Vec<String> = names.into_iter().collect();
     sorted.sort();
     sorted
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct PathCacheSignature {
+    path: String,
+    exists: bool,
+    modified_secs: Option<u64>,
+    len: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ExecutableNamesCache {
+    version: u8,
+    paths: Vec<PathCacheSignature>,
+    names: Vec<String>,
+}
+
+fn executable_cache_signature(paths: &[String]) -> Vec<PathCacheSignature> {
+    paths
+        .iter()
+        .map(|path| {
+            let metadata = std::fs::metadata(path);
+            match metadata {
+                Ok(metadata) => PathCacheSignature {
+                    path: path.clone(),
+                    exists: true,
+                    modified_secs: metadata
+                        .modified()
+                        .ok()
+                        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                        .map(|duration| duration.as_secs()),
+                    len: metadata.len(),
+                },
+                Err(_) => PathCacheSignature {
+                    path: path.clone(),
+                    exists: false,
+                    modified_secs: None,
+                    len: 0,
+                },
+            }
+        })
+        .collect()
+}
+
+pub fn executable_cache_path() -> Result<PathBuf> {
+    get_data_file(EXECUTABLE_CACHE_FILE)
+}
+
+pub fn load_cached_executables(paths: &[String]) -> Option<Vec<String>> {
+    let path = executable_cache_path().ok()?;
+    let contents = std::fs::read_to_string(path).ok()?;
+    let cache: ExecutableNamesCache = serde_json::from_str(&contents).ok()?;
+    if cache.version == 1 && cache.paths == executable_cache_signature(paths) {
+        Some(cache.names)
+    } else {
+        None
+    }
+}
+
+pub fn save_cached_executables(paths: &[String], names: &[String]) -> Result<()> {
+    let cache = ExecutableNamesCache {
+        version: 1,
+        paths: executable_cache_signature(paths),
+        names: names.to_vec(),
+    };
+    let path = executable_cache_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let contents = serde_json::to_string(&cache)?;
+    std::fs::write(path, contents)?;
+    Ok(())
 }

@@ -11,7 +11,16 @@ use anyhow::{Context as _, Result};
 use dsh_builtin::ShellProxy;
 use dsh_types::{Context, mcp::McpServerConfig};
 use globmatch;
+use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
+
+fn canonical_or_original(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn is_same_direnv_root(requested: &Path, allowed: &Path) -> bool {
+    canonical_or_original(requested) == canonical_or_original(allowed)
+}
 
 impl ShellProxy for Shell {
     fn exit_shell(&mut self) {
@@ -147,6 +156,14 @@ impl ShellProxy for Shell {
         };
         debug!("set env {} {}", &key, masked);
         self.environment.write().set_system_env_var(key, value);
+    }
+
+    fn is_direnv_allowed(&self, path: &std::path::Path) -> bool {
+        self.environment
+            .read()
+            .direnv_roots
+            .iter()
+            .any(|root| is_same_direnv_root(path, Path::new(&root.path)))
     }
 
     fn unset_env_var(&mut self, key: &str) {
@@ -288,6 +305,17 @@ impl ShellProxy for Shell {
 
     fn get_current_dir(&self) -> Result<std::path::PathBuf> {
         std::env::current_dir().context("failed to get current directory")
+    }
+
+    fn command_history_len(&self) -> Option<usize> {
+        self.cmd_history
+            .as_ref()
+            .and_then(|history| history.try_lock())
+            .map(|history| history.iter().count())
+    }
+
+    fn executable_cache_len(&self) -> Option<usize> {
+        Some(self.environment.read().executable_names.read().len())
     }
 
     fn confirm_action(&mut self, message: &str) -> Result<bool> {
@@ -703,6 +731,26 @@ impl ShellProxy for Shell {
             },
             Err(_) => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn direnv_allowance_requires_exact_root_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let allowed = dir.path().join("repo");
+        let child = allowed.join("subproject");
+        fs::create_dir_all(&child).unwrap();
+
+        assert!(is_same_direnv_root(&allowed, &allowed));
+        assert!(
+            !is_same_direnv_root(&child, &allowed),
+            "allow-direnv should not implicitly trust nested project roots"
+        );
     }
 }
 

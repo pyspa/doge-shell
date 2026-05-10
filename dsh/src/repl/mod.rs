@@ -715,6 +715,11 @@ impl<'a> Repl<'a> {
                 _ = background_interval.tick() => {
                     // Save history every 30 seconds if there have been changes
                     self.save_history_periodic();
+                    if let Some(path) = command_timing::get_timing_file_path()
+                        && let Err(e) = self.command_timing.write().save_to_file_if_due(&path)
+                    {
+                        warn!("Failed to save command timing: {}", e);
+                    }
                     self.check_background_jobs(true).await?;
 
                     // Reload path history every 30 seconds to sync with other processes

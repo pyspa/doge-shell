@@ -49,7 +49,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     }
     if show_section(section, "performance") || show_section(section, "perf") {
         print_header(ctx, "performance");
-        check_performance(ctx);
+        check_performance(ctx, proxy);
     }
     if show_section(section, "skills") {
         print_header(ctx, "skills");
@@ -323,7 +323,39 @@ fn check_runtimes(ctx: &Context) {
     }
 }
 
-fn check_performance(ctx: &Context) {
+fn check_performance(ctx: &Context, proxy: &mut dyn ShellProxy) {
+    match proxy.command_history_len() {
+        Some(count) => {
+            let _ = ctx.write_stdout(&format!("ok history-loaded entries={count}"));
+        }
+        None => {
+            let _ = ctx.write_stdout("skip history-loaded unavailable");
+        }
+    }
+
+    match proxy.executable_cache_len() {
+        Some(count) => {
+            let _ = ctx.write_stdout(&format!("ok path-cache memory-entries={count}"));
+        }
+        None => {
+            let _ = ctx.write_stdout("skip path-cache memory-unavailable");
+        }
+    }
+
+    match executable_cache_file_info() {
+        Some((path, count)) => {
+            let _ = ctx.write_stdout(&format!(
+                "ok path-cache-file {} entries={count}",
+                path.display()
+            ));
+        }
+        None => {
+            let _ = ctx.write_stdout("skip path-cache-file missing");
+        }
+    }
+
+    let _ = ctx.write_stdout("ok timing-flush debounce interval=5s threshold=10");
+
     let timing_file = crate::command_timing::get_timing_file_path();
     match timing_file
         .as_ref()
@@ -381,6 +413,19 @@ fn check_performance(ctx: &Context) {
             skills_dir.display()
         ));
     }
+}
+
+fn executable_cache_file_info() -> Option<(PathBuf, usize)> {
+    let dirs = xdg::BaseDirectories::with_prefix("dsh").ok()?;
+    let path = dirs.place_data_file("executable_names.json").ok()?;
+    let contents = fs::read_to_string(&path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&contents).ok()?;
+    let count = value
+        .get("names")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    Some((path, count))
 }
 
 const CODEX_CORE_SKILLS: &[&str] = &["doge-shell-repo"];

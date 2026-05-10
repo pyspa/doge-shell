@@ -909,6 +909,7 @@ fn pm_subcommand_candidates(current_token: &str) -> Vec<EnhancedCandidate> {
         ("rm", "Alias for remove"),
         ("work", "Switch to a project"),
         ("jump", "Select a project interactively"),
+        ("activate", "Activate current project environment"),
     ];
 
     items

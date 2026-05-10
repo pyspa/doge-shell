@@ -101,6 +101,11 @@ pub trait ShellProxy {
     /// Sets an environment variable (exported to child processes)
     fn set_env_var(&mut self, key: String, value: String);
 
+    /// Returns true when a project root has been allow-listed for `.envrc` loading.
+    fn is_direnv_allowed(&self, _path: &std::path::Path) -> bool {
+        false
+    }
+
     /// Unsets an environment variable (removes it from child processes)
     fn unset_env_var(&mut self, key: &str);
 
@@ -138,6 +143,16 @@ pub trait ShellProxy {
 
     /// Gets the current working directory
     fn get_current_dir(&self) -> Result<std::path::PathBuf>;
+
+    /// Number of command history entries currently loaded in memory.
+    fn command_history_len(&self) -> Option<usize> {
+        None
+    }
+
+    /// Number of prewarmed PATH executable names currently loaded in memory.
+    fn executable_cache_len(&self) -> Option<usize> {
+        None
+    }
 
     /// Retrieves a variable from the Lisp environment
     fn get_lisp_var(&self, key: &str) -> Option<String>;

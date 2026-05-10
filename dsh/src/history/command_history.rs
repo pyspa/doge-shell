@@ -68,6 +68,8 @@ pub struct History {
     sender: Option<Sender<HistoryMsg>>,
     /// Cache of recent entries for fast prefix search (max 100 entries)
     recent_cache: Vec<String>,
+    /// Lowercase command text aligned with `histories` for allocation-free text search.
+    normalized_entries: Vec<String>,
 }
 
 #[allow(dead_code)]
@@ -88,6 +90,7 @@ impl History {
             search_word: None,
             sender: None,
             recent_cache: Vec::with_capacity(100),
+            normalized_entries: Vec::new(),
         }
     }
 
@@ -105,7 +108,20 @@ impl History {
             search_word: None,
             sender: None,
             recent_cache: Vec::with_capacity(100),
+            normalized_entries: Vec::new(),
         })
+    }
+
+    fn normalized_command(command: &str) -> String {
+        command.to_lowercase()
+    }
+
+    fn rebuild_normalized_entries(&mut self) {
+        self.normalized_entries = self
+            .histories
+            .iter()
+            .map(|entry| Self::normalized_command(&entry.entry))
+            .collect();
     }
 
     fn get(&self, index: usize) -> Option<String> {
@@ -230,6 +246,7 @@ impl History {
                 self.recent_cache.insert(0, entry.entry.clone());
             }
         }
+        self.rebuild_normalized_entries();
         Ok(min_timestamp)
     }
 
@@ -275,6 +292,7 @@ impl History {
     pub fn prepend(&mut self, mut entries: Vec<Entry>) {
         entries.append(&mut self.histories);
         self.histories = entries;
+        self.rebuild_normalized_entries();
         self.reset_index();
     }
 
@@ -361,6 +379,7 @@ impl History {
         }
 
         self.histories = new_histories;
+        self.rebuild_normalized_entries();
         self.reset_index();
 
         // Update recent cache after reload
@@ -474,12 +493,17 @@ impl History {
     pub fn write_batch(&mut self, entries: Vec<(String, i64)>) -> Result<()> {
         let context = get_current_context();
 
+        if self.normalized_entries.len() != self.histories.len() {
+            self.rebuild_normalized_entries();
+        }
+
         // 1. Update in-memory history immediately
         for (cmd, when) in &entries {
             let mut count = 1;
             if let Some(pos) = self.histories.iter().position(|e| e.entry == *cmd) {
                 count = self.histories[pos].count + 1;
                 self.histories.remove(pos);
+                self.normalized_entries.remove(pos);
             }
             self.histories.push(Entry {
                 entry: cmd.clone(),
@@ -492,6 +516,7 @@ impl History {
                 session_id: None,
                 hostname: None,
             });
+            self.normalized_entries.push(Self::normalized_command(cmd));
         }
         self.reset_index();
 
@@ -569,64 +594,71 @@ impl History {
     }
 
     pub fn search_entries(&self, query: &HistoryQuery) -> Vec<Entry> {
+        if query.limit == Some(0) {
+            return Vec::new();
+        }
+
         let normalized_text = query.text.as_ref().map(|text| text.to_lowercase());
-        let mut matched: Vec<Entry> = self
-            .histories
-            .iter()
-            .rev()
-            .filter(|entry| {
-                if let Some(text) = &normalized_text
-                    && !entry.entry.to_lowercase().contains(text)
-                {
-                    return false;
-                }
+        let cache_usable = self.normalized_entries.len() == self.histories.len();
+        let mut matched = Vec::new();
 
-                match query.status {
-                    HistoryStatusFilter::Any => {}
-                    HistoryStatusFilter::Success => {
-                        if entry.exit_code != Some(0) {
-                            return false;
-                        }
-                    }
-                    HistoryStatusFilter::Failure => {
-                        if entry.exit_code.is_none() || entry.exit_code == Some(0) {
-                            return false;
-                        }
+        for (index, entry) in self.histories.iter().enumerate().rev() {
+            if let Some(text) = &normalized_text {
+                let contains_text = if cache_usable {
+                    self.normalized_entries[index].contains(text)
+                } else {
+                    entry.entry.to_lowercase().contains(text)
+                };
+                if !contains_text {
+                    continue;
+                }
+            }
+
+            match query.status {
+                HistoryStatusFilter::Any => {}
+                HistoryStatusFilter::Success => {
+                    if entry.exit_code != Some(0) {
+                        continue;
                     }
                 }
-
-                if let Some(min_duration_ms) = query.min_duration_ms
-                    && entry.duration_ms.unwrap_or_default() < min_duration_ms
-                {
-                    return false;
-                }
-
-                match query.scope {
-                    HistoryScope::Global => {}
-                    HistoryScope::Session => {
-                        if entry.session_id.as_deref() != query.current_session_id.as_deref() {
-                            return false;
-                        }
-                    }
-                    HistoryScope::Cwd => {
-                        if entry.cwd.as_deref() != query.current_cwd.as_deref() {
-                            return false;
-                        }
-                    }
-                    HistoryScope::Project => {
-                        if entry.context.as_deref() != query.current_project.as_deref() {
-                            return false;
-                        }
+                HistoryStatusFilter::Failure => {
+                    if entry.exit_code.is_none() || entry.exit_code == Some(0) {
+                        continue;
                     }
                 }
+            }
 
-                true
-            })
-            .cloned()
-            .collect();
+            if let Some(min_duration_ms) = query.min_duration_ms
+                && entry.duration_ms.unwrap_or_default() < min_duration_ms
+            {
+                continue;
+            }
 
-        if let Some(limit) = query.limit {
-            matched.truncate(limit);
+            match query.scope {
+                HistoryScope::Global => {}
+                HistoryScope::Session => {
+                    if entry.session_id.as_deref() != query.current_session_id.as_deref() {
+                        continue;
+                    }
+                }
+                HistoryScope::Cwd => {
+                    if entry.cwd.as_deref() != query.current_cwd.as_deref() {
+                        continue;
+                    }
+                }
+                HistoryScope::Project => {
+                    if entry.context.as_deref() != query.current_project.as_deref() {
+                        continue;
+                    }
+                }
+            }
+
+            matched.push(entry.clone());
+            if let Some(limit) = query.limit
+                && matched.len() >= limit
+            {
+                break;
+            }
         }
 
         matched
@@ -651,6 +683,8 @@ impl History {
             session_id: None,
             hostname: None,
         });
+        self.normalized_entries
+            .push(Self::normalized_command(entry));
         self.size = self.histories.len();
         self.current_index = self.histories.len();
     }
@@ -725,5 +759,29 @@ mod tests {
         let results = history.search_entries(&query);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].entry, "cargo build");
+    }
+
+    #[test]
+    fn search_entries_uses_recent_order_and_limit() {
+        let mut history = History::new();
+        history
+            .write_batch(vec![
+                ("Git Status".to_string(), 1),
+                ("git commit".to_string(), 2),
+                ("cargo test".to_string(), 3),
+                ("git checkout main".to_string(), 4),
+            ])
+            .unwrap();
+
+        let query = HistoryQuery {
+            text: Some("GIT".to_string()),
+            limit: Some(2),
+            ..Default::default()
+        };
+
+        let results = history.search_entries(&query);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].entry, "git checkout main");
+        assert_eq!(results[1].entry, "git commit");
     }
 }

@@ -42,7 +42,8 @@ mod tests {
         }));
         assert!(commands.iter().any(|(name, desc)| {
             *name == "doctor"
-                && *desc == "Diagnose config, AI, MCP, project, runtime, and performance state"
+                && *desc
+                    == "Diagnose config, AI, MCP, project, runtime, skills, and dev validation state"
         }));
     }
 }

@@ -22,12 +22,14 @@
 - `both` を指定すると Codex と doge-shell の両方へ入れる。
 - 普段は `--list` / `--dry-run` / `--status` で対象を確認してから、必要な Skill だけ入れる。
 - Codex runtime は原則 `--profile codex-core` で `doge-shell-repo` だけ入れ、領域別 Skill は repo-local source を必要時に読む。
+- Skill を更新したら `--status` で stale を確認し、必要なら同じ profile を再インストールする。`doctor skills` でも Codex/dsh runtime の stale/missing を確認できる。
 
 ```bash
 scripts/install-runtime-skills.sh --list
 scripts/install-runtime-skills.sh --dry-run --target codex --profile codex-core
 scripts/install-runtime-skills.sh --status --target codex --profile codex-core
 scripts/install-runtime-skills.sh --target codex --profile codex-core
+doctor skills
 ```
 
 ## authoring ルール

@@ -3,18 +3,19 @@ use crate::project_context;
 use anyhow::Result;
 use dsh_types::{Context, ExitStatus};
 use regex::Regex;
+use serde::Serialize;
 use skim::prelude::*;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
-use tabled::Tabled;
+use tabled::{Table, Tabled};
 
 pub fn description() -> &'static str {
     "Run project-specific tasks (npm, cargo, make, deno, just, etc.)"
 }
 
-#[derive(Debug, Clone, Tabled)]
+#[derive(Debug, Clone, Serialize, Tabled)]
 struct Task {
     #[tabled(rename = "Source")]
     source: String,
@@ -24,7 +25,7 @@ struct Task {
     command: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TaskInfo {
     pub source: String,
     pub name: String,
@@ -55,9 +56,20 @@ impl SkimItem for Task {
 }
 
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
-    // If specific task is requested (e.g. task build)
-    // We need to find the task and run it.
-    // If no args, show selector.
+    let opts = match parse_options(&argv[1..]) {
+        Ok(opts) => opts,
+        Err(err) => {
+            let _ = ctx.write_stderr(&format!("task: {err}"));
+            let _ = ctx.write_stderr(help_text());
+            return ExitStatus::ExitedWith(1);
+        }
+    };
+
+    if opts.help {
+        let _ = ctx.write_stdout(help_text());
+        return ExitStatus::ExitedWith(0);
+    }
+
     let tasks = match detect_tasks(proxy) {
         Ok(t) => t,
         Err(e) => {
@@ -71,34 +83,54 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         return ExitStatus::ExitedWith(0);
     }
 
-    if argv.len() > 1 {
-        // Direct execution: task <name>
-        let target_name = &argv[1];
-        // Find task by name. If checks for multiple sources, priorities?
-        // or interactive disambiguation?
-        // Simple strategy: exact match on name.
-        let matched: Vec<&Task> = tasks.iter().filter(|t| &t.name == target_name).collect();
+    if opts.list || opts.json {
+        let filtered =
+            filtered_tasks_for_request(&tasks, opts.source.as_deref(), opts.target.as_deref());
+        return print_tasks(ctx, &filtered, opts.json);
+    }
 
-        if matched.is_empty() {
-            let _ = ctx.write_stderr(&format!("Task '{}' not found.\n", target_name));
-            return ExitStatus::ExitedWith(1);
-        } else if matched.len() == 1 {
-            return execute_task(ctx, matched[0], proxy);
-        } else {
-            // Multiple matches (e.g. build in npm and cargo)
-            let _ = ctx.write_stdout(&format!(
-                "Multiple tasks found for '{}'. Please select one:\n",
-                target_name
-            ));
-            // Fallthrough to selection but filtered?
-            // For now, let's just pick the first one or error.
-            // Let's execute the first one but warn.
-            let _ = ctx.write_stderr(&format!(
-                "Ambiguous task name, running from source: {}\n",
-                matched[0].source
-            ));
-            return execute_task(ctx, matched[0], proxy);
+    if let Some(target_name) = opts.target.as_deref() {
+        match select_task(&tasks, opts.source.as_deref(), target_name) {
+            TaskSelection::Selected(task) => return execute_task(ctx, task, proxy),
+            TaskSelection::NotFound { target, source } => {
+                if let Some(source) = source {
+                    let _ = ctx
+                        .write_stderr(&format!("Task '{target}' not found for source '{source}'."));
+                } else {
+                    let _ = ctx.write_stderr(&format!("Task '{target}' not found."));
+                }
+                return ExitStatus::ExitedWith(1);
+            }
+            TaskSelection::Ambiguous { target, matches } => {
+                let _ = ctx.write_stderr(&format!(
+                    "Task '{target}' is ambiguous. Use one of these qualified names:"
+                ));
+                for task in matches {
+                    let _ = ctx.write_stderr(&format!(
+                        "  task {}:{}    # {}",
+                        task.source, task.name, task.command
+                    ));
+                }
+                return ExitStatus::ExitedWith(1);
+            }
         }
+    }
+
+    let filtered = filtered_tasks(&tasks, opts.source.as_deref(), None);
+    if filtered.is_empty() {
+        if let Some(source) = opts.source {
+            let _ = ctx.write_stdout(&format!("No tasks detected for source '{source}'."));
+        } else {
+            let _ = ctx.write_stdout("No tasks detected in current directory.");
+        }
+        return ExitStatus::ExitedWith(0);
+    }
+
+    if !ctx.interactive {
+        let _ = ctx.write_stdout(
+            "Non-interactive mode; listing tasks. Use `task <source>:<name>` to run one.",
+        );
+        return print_tasks(ctx, &filtered, false);
     }
 
     // Interactive mode
@@ -118,7 +150,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     };
 
     let (tx, rx): (SkimItemSender, SkimItemReceiver) = unbounded();
-    for task in tasks {
+    for task in filtered.into_iter().cloned() {
         let _ = tx.send(vec![Arc::new(task)]);
     }
     drop(tx);
@@ -143,6 +175,171 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     } else {
         ExitStatus::ExitedWith(0)
     }
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct TaskOptions {
+    list: bool,
+    json: bool,
+    help: bool,
+    source: Option<String>,
+    target: Option<String>,
+}
+
+fn parse_options(args: &[String]) -> std::result::Result<TaskOptions, String> {
+    let mut opts = TaskOptions::default();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "-h" | "--help" | "help" => {
+                opts.help = true;
+            }
+            "-l" | "--list" | "list" => {
+                opts.list = true;
+            }
+            "--json" => {
+                opts.json = true;
+                opts.list = true;
+            }
+            "-s" | "--source" => {
+                index += 1;
+                let Some(source) = args.get(index) else {
+                    return Err("--source requires a source name".to_string());
+                };
+                opts.source = Some(source.clone());
+            }
+            value if value.starts_with('-') => {
+                return Err(format!("unknown option: {value}"));
+            }
+            value => {
+                if opts.target.is_some() {
+                    return Err(format!("unexpected argument: {value}"));
+                }
+                opts.target = Some(value.to_string());
+            }
+        }
+        index += 1;
+    }
+
+    Ok(opts)
+}
+
+fn help_text() -> &'static str {
+    concat!(
+        "Usage: task [--list|--json] [--source <source>] [<task>|<source>:<task>]\n",
+        "\n",
+        "Run or list project-specific tasks detected from package.json, Cargo.toml, Makefile, Justfile, mise, Taskfile, turbo, nx, and deno.\n",
+        "\n",
+        "Options:\n",
+        "  -l, --list            List detected tasks\n",
+        "      --json            List detected tasks as JSON\n",
+        "  -s, --source <source> Filter by task source\n",
+        "  -h, --help            Show this help\n",
+        "\n",
+        "Examples:\n",
+        "  task\n",
+        "  task --list\n",
+        "  task --source cargo build\n",
+        "  task cargo:build\n",
+    )
+}
+
+fn split_qualified_task(target: &str) -> Option<(&str, &str)> {
+    let (source, name) = target.split_once(':')?;
+    (!source.is_empty() && !name.is_empty()).then_some((source, name))
+}
+
+fn split_qualified_task_for_known_source<'a>(
+    tasks: &[Task],
+    source: Option<&'a str>,
+    target: &'a str,
+) -> (Option<&'a str>, &'a str) {
+    if source.is_none()
+        && let Some((candidate_source, name)) = split_qualified_task(target)
+        && tasks.iter().any(|task| task.source == candidate_source)
+    {
+        return (Some(candidate_source), name);
+    }
+
+    (source, target)
+}
+
+fn filtered_tasks<'a>(
+    tasks: &'a [Task],
+    source: Option<&str>,
+    target: Option<&str>,
+) -> Vec<&'a Task> {
+    tasks
+        .iter()
+        .filter(|task| source.is_none_or(|source| task.source == source))
+        .filter(|task| target.is_none_or(|target| task.name == target))
+        .collect()
+}
+
+fn filtered_tasks_for_request<'a>(
+    tasks: &'a [Task],
+    source: Option<&str>,
+    target: Option<&str>,
+) -> Vec<&'a Task> {
+    if let Some(target) = target {
+        let (source, target) = split_qualified_task_for_known_source(tasks, source, target);
+        filtered_tasks(tasks, source, Some(target))
+    } else {
+        filtered_tasks(tasks, source, None)
+    }
+}
+
+enum TaskSelection<'a> {
+    Selected(&'a Task),
+    Ambiguous {
+        target: String,
+        matches: Vec<&'a Task>,
+    },
+    NotFound {
+        target: String,
+        source: Option<String>,
+    },
+}
+
+fn select_task<'a>(tasks: &'a [Task], source: Option<&str>, target: &str) -> TaskSelection<'a> {
+    let (source, target) = split_qualified_task_for_known_source(tasks, source, target);
+    let matched = filtered_tasks(tasks, source, Some(target));
+    match matched.len() {
+        0 => TaskSelection::NotFound {
+            target: target.to_string(),
+            source: source.map(str::to_string),
+        },
+        1 => TaskSelection::Selected(matched[0]),
+        _ => TaskSelection::Ambiguous {
+            target: target.to_string(),
+            matches: matched,
+        },
+    }
+}
+
+fn print_tasks(ctx: &Context, tasks: &[&Task], json: bool) -> ExitStatus {
+    if json {
+        let rows: Vec<Task> = tasks.iter().map(|task| (*task).clone()).collect();
+        match serde_json::to_string_pretty(&rows) {
+            Ok(output) => {
+                let _ = ctx.write_stdout(&output);
+                return ExitStatus::ExitedWith(0);
+            }
+            Err(err) => {
+                let _ = ctx.write_stderr(&format!("task: failed to serialize tasks: {err}"));
+                return ExitStatus::ExitedWith(1);
+            }
+        }
+    }
+
+    if tasks.is_empty() {
+        let _ = ctx.write_stdout("No tasks matched.");
+        return ExitStatus::ExitedWith(0);
+    }
+
+    let rows: Vec<Task> = tasks.iter().map(|task| (*task).clone()).collect();
+    let _ = ctx.write_stdout(&Table::new(rows).to_string());
+    ExitStatus::ExitedWith(0)
 }
 
 fn execute_task(ctx: &Context, task: &Task, proxy: &mut dyn ShellProxy) -> ExitStatus {
@@ -416,5 +613,140 @@ mod tests {
                 .iter()
                 .any(|task| task.name == "dev" && task.source == "mise")
         );
+    }
+
+    #[test]
+    fn parse_options_preserves_task_name_literals() {
+        let args = vec![
+            "--source".to_string(),
+            "cargo".to_string(),
+            "build".to_string(),
+        ];
+        let opts = parse_options(&args).unwrap();
+        assert_eq!(opts.source.as_deref(), Some("cargo"));
+        assert_eq!(opts.target.as_deref(), Some("build"));
+
+        let args = vec!["npm:test".to_string()];
+        let opts = parse_options(&args).unwrap();
+        assert_eq!(opts.source.as_deref(), None);
+        assert_eq!(opts.target.as_deref(), Some("npm:test"));
+    }
+
+    #[test]
+    fn parse_options_allows_colon_task_names_with_source_filter() {
+        let args = vec![
+            "--source".to_string(),
+            "npm".to_string(),
+            "lint:fix".to_string(),
+        ];
+        let opts = parse_options(&args).unwrap();
+        assert_eq!(opts.source.as_deref(), Some("npm"));
+        assert_eq!(opts.target.as_deref(), Some("lint:fix"));
+    }
+
+    #[test]
+    fn select_task_reports_ambiguous_names() {
+        let tasks = vec![
+            Task {
+                source: "cargo".to_string(),
+                name: "test".to_string(),
+                command: "cargo test".to_string(),
+            },
+            Task {
+                source: "npm".to_string(),
+                name: "test".to_string(),
+                command: "npm run test".to_string(),
+            },
+        ];
+
+        match select_task(&tasks, None, "test") {
+            TaskSelection::Ambiguous { matches, .. } => assert_eq!(matches.len(), 2),
+            _ => panic!("expected ambiguous task selection"),
+        }
+
+        match select_task(&tasks, Some("cargo"), "test") {
+            TaskSelection::Selected(task) => assert_eq!(task.command, "cargo test"),
+            _ => panic!("expected source-qualified task selection"),
+        }
+    }
+
+    #[test]
+    fn select_task_supports_qualified_source_without_breaking_colon_task_names() {
+        let tasks = vec![
+            Task {
+                source: "cargo".to_string(),
+                name: "build".to_string(),
+                command: "cargo build".to_string(),
+            },
+            Task {
+                source: "npm".to_string(),
+                name: "lint:fix".to_string(),
+                command: "npm run lint:fix".to_string(),
+            },
+        ];
+
+        match select_task(&tasks, None, "cargo:build") {
+            TaskSelection::Selected(task) => assert_eq!(task.command, "cargo build"),
+            _ => panic!("expected known source-qualified task selection"),
+        }
+
+        match select_task(&tasks, None, "lint:fix") {
+            TaskSelection::Selected(task) => assert_eq!(task.command, "npm run lint:fix"),
+            _ => panic!("expected colon-containing task name to remain literal"),
+        }
+
+        match select_task(&tasks, Some("npm"), "lint:fix") {
+            TaskSelection::Selected(task) => assert_eq!(task.command, "npm run lint:fix"),
+            _ => panic!("expected source filter with colon-containing task name"),
+        }
+    }
+
+    #[test]
+    fn filtered_tasks_supports_source_and_target_filters() {
+        let tasks = vec![
+            Task {
+                source: "cargo".to_string(),
+                name: "build".to_string(),
+                command: "cargo build".to_string(),
+            },
+            Task {
+                source: "cargo".to_string(),
+                name: "test".to_string(),
+                command: "cargo test".to_string(),
+            },
+            Task {
+                source: "npm".to_string(),
+                name: "test".to_string(),
+                command: "npm run test".to_string(),
+            },
+        ];
+
+        let filtered = filtered_tasks(&tasks, Some("cargo"), Some("test"));
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].command, "cargo test");
+    }
+
+    #[test]
+    fn filtered_tasks_for_request_supports_known_source_qualifier() {
+        let tasks = vec![
+            Task {
+                source: "cargo".to_string(),
+                name: "build".to_string(),
+                command: "cargo build".to_string(),
+            },
+            Task {
+                source: "npm".to_string(),
+                name: "lint:fix".to_string(),
+                command: "npm run lint:fix".to_string(),
+            },
+        ];
+
+        let filtered = filtered_tasks_for_request(&tasks, None, Some("cargo:build"));
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].command, "cargo build");
+
+        let filtered = filtered_tasks_for_request(&tasks, None, Some("lint:fix"));
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].command, "npm run lint:fix");
     }
 }

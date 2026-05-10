@@ -1,18 +1,26 @@
 use crate::ShellProxy;
 use crate::project_context;
 use dsh_types::{Context, ExitStatus};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub fn description() -> &'static str {
-    "Diagnose config, AI, MCP, project, runtime, and performance state"
+    "Diagnose config, AI, MCP, project, runtime, skills, and dev validation state"
 }
 
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     let section = argv.get(1).map(|value| value.as_str());
     if matches!(section, Some("-h" | "--help" | "help")) {
         return print_help(ctx);
+    }
+    if section.is_some_and(|value| !is_known_section(value)) {
+        let _ = ctx.write_stderr(&format!(
+            "doctor: unknown section `{}`. Use `doctor --help`.",
+            section.unwrap_or_default()
+        ));
+        return ExitStatus::ExitedWith(1);
     }
 
     let current_dir = proxy
@@ -43,6 +51,14 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         print_header(ctx, "performance");
         check_performance(ctx);
     }
+    if show_section(section, "skills") {
+        print_header(ctx, "skills");
+        check_skills(ctx, proxy, &current_dir);
+    }
+    if show_section(section, "dev") || show_section(section, "validate") {
+        print_header(ctx, "dev");
+        check_dev(ctx, &current_dir);
+    }
 
     ExitStatus::ExitedWith(0)
 }
@@ -54,7 +70,7 @@ fn print_help(ctx: &Context) -> ExitStatus {
 
 fn help_text() -> &'static str {
     concat!(
-        "Usage: doctor [config|ai|mcp|project|runtime|performance]\n",
+        "Usage: doctor [config|ai|mcp|project|runtime|performance|skills|dev|validate]\n",
         "\n",
         "Run diagnostics for the current shell setup. Without a section, all checks run.\n",
         "\n",
@@ -65,12 +81,34 @@ fn help_text() -> &'static str {
         "  project  Detect project marker files in the current directory\n",
         "  runtime  Check common developer tools in PATH\n",
         "  performance  Show command timing and runtime skill scan state\n",
+        "  skills   Compare repo-local skills with expected runtime skills\n",
+        "  dev      Suggest validation commands from changed files\n",
+        "  validate Alias for dev\n",
         "\n",
         "Examples:\n",
         "  doctor\n",
         "  doctor ai\n",
         "  doctor project\n",
+        "  doctor skills\n",
+        "  doctor validate\n",
         "  doctor --help\n",
+    )
+}
+
+fn is_known_section(value: &str) -> bool {
+    matches!(
+        value,
+        "config"
+            | "ai"
+            | "mcp"
+            | "project"
+            | "runtime"
+            | "runtimes"
+            | "performance"
+            | "perf"
+            | "skills"
+            | "dev"
+            | "validate"
     )
 }
 
@@ -79,6 +117,7 @@ fn show_section(selected: Option<&str>, current: &str) -> bool {
         None => true,
         Some("runtime") if current == "runtimes" => true,
         Some("runtimes") if current == "runtime" => true,
+        Some("validate") if current == "dev" => true,
         Some(value) => value == current,
     }
 }
@@ -344,6 +383,328 @@ fn check_performance(ctx: &Context) {
     }
 }
 
+const CODEX_CORE_SKILLS: &[&str] = &["doge-shell-repo"];
+const DSH_COMMON_SKILLS: &[&str] = &[
+    "doge-shell-repo",
+    "doge-shell-validation",
+    "doge-shell-investigation",
+    "doge-shell-chat-tools",
+];
+
+fn check_skills(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path) {
+    let Some(repo_root) = find_repo_root(current_dir) else {
+        let _ = ctx.write_stdout("warn repo-root not-found for skill diagnostics");
+        return;
+    };
+    let source_root = repo_root.join("docs").join("ai").join("skills");
+    if !source_root.is_dir() {
+        let _ = ctx.write_stdout(&format!(
+            "warn canonical-skills missing {}",
+            source_root.display()
+        ));
+        return;
+    }
+
+    let canonical_count = count_skill_dirs(&source_root);
+    let _ = ctx.write_stdout(&format!(
+        "ok canonical-skills {} entries={canonical_count}",
+        source_root.display()
+    ));
+
+    let codex_root = proxy
+        .get_var("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|path| path.join(".codex")));
+    if let Some(root) = codex_root {
+        check_skill_profile(
+            ctx,
+            "codex",
+            "codex-core",
+            &source_root,
+            &root.join("skills"),
+            CODEX_CORE_SKILLS,
+        );
+    } else {
+        let _ = ctx.write_stdout("warn codex-runtime-skills unable-to-determine-home-dir");
+    }
+
+    if let Some(root) = dirs::config_dir().map(|path| path.join("dsh").join("skills")) {
+        check_skill_profile(
+            ctx,
+            "dsh",
+            "dsh-common",
+            &source_root,
+            &root,
+            DSH_COMMON_SKILLS,
+        );
+    } else {
+        let _ = ctx.write_stdout("warn dsh-runtime-skills unable-to-determine-config-dir");
+    }
+}
+
+fn check_skill_profile(
+    ctx: &Context,
+    target: &str,
+    profile: &str,
+    source_root: &Path,
+    dest_root: &Path,
+    expected_skills: &[&str],
+) {
+    let _ = ctx.write_stdout(&format!(
+        "ok {target}-profile {profile} root={}",
+        dest_root.display()
+    ));
+
+    let mut ok = 0;
+    let mut stale = 0;
+    let mut missing = 0;
+    for skill in expected_skills {
+        let source = source_root.join(skill);
+        let dest = dest_root.join(skill);
+        if !source.is_dir() {
+            let _ = ctx.write_stdout(&format!("warn {target} {skill} source-missing"));
+            continue;
+        }
+        if !dest.is_dir() {
+            missing += 1;
+            let _ = ctx.write_stdout(&format!("missing {target} {skill} -> {}", dest.display()));
+        } else if skill_dirs_match(&source, &dest) {
+            ok += 1;
+            let _ = ctx.write_stdout(&format!("ok {target} {skill} -> {}", dest.display()));
+        } else {
+            stale += 1;
+            let _ = ctx.write_stdout(&format!("stale {target} {skill} -> {}", dest.display()));
+        }
+    }
+
+    let extra = count_extra_skill_dirs(dest_root, expected_skills);
+    if extra > 0 {
+        let _ = ctx.write_stdout(&format!(
+            "warn {target}-runtime-skills extra entries={extra}"
+        ));
+    }
+    let state = if stale == 0 && missing == 0 {
+        "ok"
+    } else {
+        "warn"
+    };
+    let _ = ctx.write_stdout(&format!(
+        "{state} {target}-runtime-skills summary ok={ok} stale={stale} missing={missing}"
+    ));
+}
+
+fn check_dev(ctx: &Context, current_dir: &Path) {
+    let Some(repo_root) = find_repo_root(current_dir) else {
+        let _ = ctx.write_stdout("warn repo-root not-found for validation suggestions");
+        return;
+    };
+    let _ = ctx.write_stdout(&format!("ok repo-root {}", repo_root.display()));
+
+    let changed = changed_paths(&repo_root);
+    match changed {
+        Ok(paths) if paths.is_empty() => {
+            let _ = ctx.write_stdout("skip changed-files none");
+        }
+        Ok(paths) => {
+            let _ = ctx.write_stdout(&format!("ok changed-files {}", paths.len()));
+            for path in &paths {
+                let _ = ctx.write_stdout(&format!("ok changed {}", path.display()));
+            }
+            let commands = validation_commands_for_paths(&paths);
+            if commands.is_empty() {
+                let _ = ctx.write_stdout("skip validation no focused command for changed files");
+            } else {
+                for command in commands {
+                    let _ = ctx.write_stdout(&format!("ok validate {command}"));
+                }
+            }
+        }
+        Err(err) => {
+            let _ = ctx.write_stdout(&format!("warn changed-files unavailable {err}"));
+        }
+    }
+}
+
+fn find_repo_root(current_dir: &Path) -> Option<PathBuf> {
+    let cwd = current_dir
+        .canonicalize()
+        .unwrap_or_else(|_| current_dir.to_path_buf());
+    for ancestor in cwd.ancestors() {
+        if ancestor.join("Cargo.toml").is_file() && ancestor.join("docs").join("ai").is_dir() {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+    None
+}
+
+fn changed_paths(repo_root: &Path) -> std::result::Result<Vec<PathBuf>, String> {
+    let output = Command::new("git")
+        .args(["status", "--short"])
+        .current_dir(repo_root)
+        .output()
+        .map_err(|err| err.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(stderr.trim().to_string());
+    }
+    Ok(parse_git_status_short(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
+}
+
+fn parse_git_status_short(output: &str) -> Vec<PathBuf> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let path = line.get(3..)?.trim();
+            if path.is_empty() {
+                return None;
+            }
+            let path = path
+                .rsplit_once(" -> ")
+                .map(|(_, new_path)| new_path)
+                .unwrap_or(path);
+            Some(PathBuf::from(path.trim_matches('"')))
+        })
+        .collect()
+}
+
+fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
+    let mut commands = Vec::new();
+    let mut packages = BTreeSet::new();
+    let mut needs_workspace_check = false;
+    let mut needs_ai_guidance = false;
+    let mut has_rust = false;
+
+    for path in paths {
+        let text = path.to_string_lossy().replace('\\', "/");
+        if text.ends_with(".rs") {
+            has_rust = true;
+        }
+        if text == "Cargo.toml" || text == "Cargo.lock" {
+            needs_workspace_check = true;
+        }
+        if text == "AGENTS.md"
+            || text.starts_with("docs/ai/")
+            || text == "scripts/install-runtime-skills.sh"
+        {
+            needs_ai_guidance = true;
+        }
+
+        if text.starts_with("dsh-builtin/") {
+            packages.insert("dsh-builtin");
+        } else if text.starts_with("dsh-openai/") {
+            packages.insert("dsh-openai");
+        } else if text.starts_with("dsh-types/") {
+            packages.insert("dsh-types");
+        } else if text.starts_with("dsh-frecency/") {
+            packages.insert("dsh-frecency");
+        } else if text.starts_with("dsh/") {
+            packages.insert("doge-shell");
+        }
+    }
+
+    if has_rust {
+        add_command(&mut commands, "cargo fmt --check");
+    }
+    for package in [
+        "dsh-builtin",
+        "doge-shell",
+        "dsh-openai",
+        "dsh-types",
+        "dsh-frecency",
+    ] {
+        if packages.contains(package) {
+            add_command(&mut commands, &format!("cargo test -p {package}"));
+        }
+    }
+    if needs_workspace_check || packages.len() > 1 {
+        add_command(&mut commands, "cargo check --workspace");
+    }
+    if packages.contains("doge-shell") {
+        add_command(&mut commands, "cargo clippy -p doge-shell -- -D warnings");
+    }
+    if needs_ai_guidance {
+        add_command(&mut commands, "scripts/check-ai-guidance.sh");
+        add_command(&mut commands, "scripts/install-runtime-skills.sh --list");
+        add_command(
+            &mut commands,
+            "scripts/install-runtime-skills.sh --status --target codex --profile codex-core",
+        );
+    }
+
+    commands
+}
+
+fn add_command(commands: &mut Vec<String>, command: &str) {
+    if !commands.iter().any(|existing| existing == command) {
+        commands.push(command.to_string());
+    }
+}
+
+fn count_extra_skill_dirs(root: &Path, expected_skills: &[&str]) -> usize {
+    let expected = expected_skills.iter().copied().collect::<BTreeSet<_>>();
+    fs::read_dir(root)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    let path = entry.path();
+                    path.is_dir()
+                        && path.join("SKILL.md").is_file()
+                        && entry
+                            .file_name()
+                            .to_str()
+                            .is_some_and(|name| !expected.contains(name))
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+fn skill_dirs_match(source: &Path, dest: &Path) -> bool {
+    let Ok(source_files) = relative_files(source) else {
+        return false;
+    };
+    let Ok(dest_files) = relative_files(dest) else {
+        return false;
+    };
+    if source_files != dest_files {
+        return false;
+    }
+
+    source_files.into_iter().all(|relative| {
+        let source_path = source.join(&relative);
+        let dest_path = dest.join(&relative);
+        match (fs::read(source_path), fs::read(dest_path)) {
+            (Ok(left), Ok(right)) => left == right,
+            _ => false,
+        }
+    })
+}
+
+fn relative_files(root: &Path) -> std::io::Result<Vec<PathBuf>> {
+    fn visit(root: &Path, current: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
+        for entry in fs::read_dir(current)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                visit(root, &path, files)?;
+            } else if path.is_file()
+                && let Ok(relative) = path.strip_prefix(root)
+            {
+                files.push(relative.to_path_buf());
+            }
+        }
+        Ok(())
+    }
+
+    let mut files = Vec::new();
+    visit(root, root, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
 fn mask_secret(value: Option<String>) -> String {
     match value {
         Some(secret) if !secret.is_empty() => {
@@ -440,7 +801,16 @@ mod tests {
         assert!(help.contains("project"));
         assert!(help.contains("runtime"));
         assert!(help.contains("performance"));
+        assert!(help.contains("skills"));
+        assert!(help.contains("validate"));
         assert!(help.contains("doctor ai"));
+    }
+
+    #[test]
+    fn show_section_matches_new_aliases() {
+        assert!(show_section(Some("validate"), "dev"));
+        assert!(is_known_section("skills"));
+        assert!(!is_known_section("unknown"));
     }
 
     #[test]
@@ -478,5 +848,58 @@ mod tests {
         std::fs::write(plain_dir.join("README.md"), "# note").unwrap();
 
         assert_eq!(count_skill_dirs(dir.path()), 1);
+    }
+
+    #[test]
+    fn skill_dirs_match_detects_stale_runtime_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let dest = dir.path().join("dest");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(source.join("SKILL.md"), "# skill\n").unwrap();
+        std::fs::write(dest.join("SKILL.md"), "# skill\n").unwrap();
+
+        assert!(skill_dirs_match(&source, &dest));
+
+        std::fs::write(dest.join("SKILL.md"), "# stale\n").unwrap();
+        assert!(!skill_dirs_match(&source, &dest));
+    }
+
+    #[test]
+    fn parse_git_status_short_handles_renames() {
+        let paths = parse_git_status_short(
+            " M dsh-builtin/src/task.rs\nR  old/path.rs -> dsh/src/new_path.rs\n?? docs/ai/new.md\n",
+        );
+        assert_eq!(paths[0], PathBuf::from("dsh-builtin/src/task.rs"));
+        assert_eq!(paths[1], PathBuf::from("dsh/src/new_path.rs"));
+        assert_eq!(paths[2], PathBuf::from("docs/ai/new.md"));
+    }
+
+    #[test]
+    fn validation_commands_follow_changed_paths() {
+        let paths = vec![
+            PathBuf::from("dsh-builtin/src/task.rs"),
+            PathBuf::from("dsh/src/lib.rs"),
+            PathBuf::from("docs/ai/README.md"),
+        ];
+        let commands = validation_commands_for_paths(&paths);
+
+        assert!(commands.iter().any(|cmd| cmd == "cargo fmt --check"));
+        assert!(
+            commands
+                .iter()
+                .any(|cmd| cmd == "cargo test -p dsh-builtin")
+        );
+        assert!(commands.iter().any(|cmd| cmd == "cargo test -p doge-shell"));
+        assert!(commands.iter().any(|cmd| cmd == "cargo check --workspace"));
+        assert!(
+            commands
+                .iter()
+                .any(|cmd| cmd == "scripts/check-ai-guidance.sh")
+        );
+        assert!(commands.iter().any(|cmd| {
+            cmd == "scripts/install-runtime-skills.sh --status --target codex --profile codex-core"
+        }));
     }
 }

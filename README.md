@@ -225,7 +225,7 @@ The shell includes many built-in commands:
 | `help`              | Show help information                                                                                                      |
 | `comp-gen`          | Generate command completion using AI (`--stdout`, `--check`)                                                               |
 | `dashboard`         | Show integrated dashboard (System, Git, GitHub)                                                                            |
-| `doctor`            | Diagnose config, AI, MCP, project, and runtime state                                                                       |
+| `doctor`            | Diagnose config, AI, MCP, project, runtime, skills, and dev validation state                                               |
 | `ai-commit` / `aic` | Generate commit message using AI                                                                                           |
 | `tm`                | Search and retrieve past command outputs                                                                                   |
 | `trigger`           | Monitor file changes and execute commands (saves output to history)                                                        |
@@ -617,12 +617,14 @@ doctor
 # Focus on one area
 doctor ai
 doctor project
+doctor skills
+doctor validate
 
 # Show command help
 doctor --help
 ```
 
-`doctor` reports on configuration files, AI settings, MCP connection counters, project marker files, and common developer runtimes found in `PATH`.
+`doctor` reports on configuration files, AI settings, MCP connection counters, project marker files, common developer runtimes found in `PATH`, runtime Skill drift, and focused validation commands for changed files.
 
 ### `include` Command
 
@@ -792,10 +794,17 @@ For maintainers, concise AI/Skill authoring notes live in `docs/ai/README.md`.
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Make your changes
 4. Add tests if applicable
-5. Run tests (`cargo test`)
-6. Commit your changes (`git commit -m 'Add amazing feature'`)
-7. Push to the branch (`git push origin feature/amazing-feature`)
-8. Open a Pull Request
+5. Run the smallest relevant validation:
+   - `cargo test -p dsh-builtin` for built-in command, chat, MCP, doctor, task, or runtime Skill loading changes
+   - `cargo test -p doge-shell` for parser, REPL, completion, prompt, or shell behavior changes
+   - `cargo test -p dsh-openai`, `cargo test -p dsh-types`, or `cargo test -p dsh-frecency` for those crates
+   - `scripts/check-ai-guidance.sh` after changing `AGENTS.md`, `docs/ai/`, or runtime Skill installer guidance
+   - `doctor validate` can suggest the focused commands from your current `git status`
+6. Keep runtime Skill copies current when Skill guidance changes:
+   `scripts/install-runtime-skills.sh --status --target codex --profile codex-core`
+7. Commit your changes (`git commit -m 'Add amazing feature'`)
+8. Push to the branch (`git push origin feature/amazing-feature`)
+9. Open a Pull Request
 
 ## 📄 License
 

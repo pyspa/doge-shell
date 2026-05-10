@@ -18,9 +18,23 @@
 - serve / MCP server / shared MCP types
   - Read: `dsh-builtin/src/serve/`, `dsh-builtin/src/mcp.rs`, `dsh-builtin/src/chatgpt/mcp/`, `dsh-types/src/mcp.rs`
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p dsh-types` when shared types change
+- serve / static files / HTTP handlers / CORS / path validation
+  - Skill: `docs/ai/skills/doge-shell-serve-web/SKILL.md`
+  - Read: `dsh-builtin/src/serve/`
+  - Validate: `cargo test -p dsh-builtin`; add `cargo test -p dsh-types` only for shared wire-shape changes
 - builtin command / help / doctor outside chat/MCP
   - Read: command-specific files under `dsh-builtin/src/`, `dsh/src/proxy/builtin/`
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p doge-shell` when proxy builtin behavior changes
+- GitHub builtins / PR notification / git helpers
+  - Read: `dsh-builtin/src/g*.rs`, `dsh-builtin/src/github_client.rs`, `dsh-builtin/src/gh_notify.rs`, `dsh-builtin/src/commit_ai.rs`
+  - Validate: `cargo test -p dsh-builtin`
+- completion JSON generation / comp-gen
+  - Read: `dsh-builtin/src/comp_gen.rs`, `dsh/src/completion/json_loader.rs`, `dsh/src/completion/generators/`
+  - Validate: `cargo test -p dsh-builtin`; add `cargo test -p doge-shell` when runtime completion loading changes
+- notebook / markdown rendering / output history
+  - Skill: `docs/ai/skills/doge-shell-notebook-markdown/SKILL.md`
+  - Read: `dsh-builtin/src/notebook_play.rs`, `dsh-builtin/src/markdown.rs`, `dsh-builtin/src/out.rs`, `dsh-builtin/src/tm.rs`, `dsh-types/src/notebook.rs`, `dsh-types/src/output_history.rs`
+  - Validate: `cargo test -p dsh-builtin`; add `cargo test -p dsh-types` when shared data shapes change
 - safety / guard / command policy
   - Read: `dsh/src/safety/`
   - Validate: `cargo test -p doge-shell`
@@ -38,7 +52,10 @@
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-openai` when client/config changes
 - AI guidance / Skills / runtime skill installer
   - Read: `AGENTS.md`, `docs/ai/`, `scripts/install-runtime-skills.sh`
-  - Validate: `scripts/check-ai-guidance.sh`, `scripts/install-runtime-skills.sh --list`, and focused installer `--dry-run` / `--status` checks
+  - Validate: `doctor validate` when available, `scripts/check-ai-guidance.sh`, `scripts/install-runtime-skills.sh --list`, and focused installer `--dry-run` / `--status` checks
+- validation command selection / changed-file checks
+  - Read: `dsh-builtin/src/doctor.rs`, `docs/ai/skills/doge-shell-repo/references/test-scope.md`
+  - Validate: `cargo test -p dsh-builtin`; run proposed commands from `doctor validate` when available
 - cross-crate integration
   - Read: affected crate entry points from `module-map.md`
   - Validate: `cargo test` or `cargo check --workspace` only when the behavior spans crates

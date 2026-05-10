@@ -19,5 +19,7 @@ description: Use when working in the doge-shell repository or doge-shell リポ�
 - Repo-local command palette skill: [doge-shell-command-palette-ai](../doge-shell-command-palette-ai/SKILL.md).
 - Repo-local builtin command skill: [doge-shell-builtin-commands](../doge-shell-builtin-commands/SKILL.md).
 - Repo-local chat tool skill: [doge-shell-chat-tools](../doge-shell-chat-tools/SKILL.md).
-- Switch to a narrower skill when the task is clearly about completion, parser, process/PTY, prompt/terminal UI, environment/startup, Lisp/config, history/frecency, command palette/AI actions, builtin commands, safety policy, chat tools, investigation, validation, or skill authoring.
+- Repo-local serve/web skill: [doge-shell-serve-web](../doge-shell-serve-web/SKILL.md).
+- Repo-local notebook/markdown skill: [doge-shell-notebook-markdown](../doge-shell-notebook-markdown/SKILL.md).
+- Switch to a narrower skill when the task is clearly about completion, parser, process/PTY, prompt/terminal UI, environment/startup, Lisp/config, history/frecency, command palette/AI actions, builtin commands, serve/web, notebook/markdown, safety policy, chat tools, investigation, validation, or skill authoring.
 - If a narrower skill is not installed in runtime, read its repo-local source at `docs/ai/skills/<skill>/SKILL.md` instead of installing every skill.

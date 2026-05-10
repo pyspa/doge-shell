@@ -37,10 +37,11 @@ doctor skills
 - `SKILL.md` 本文には長い「when to use」を書かない。
 - バリエーションごとの詳細は `references/` に逃がす。
 - shell / Rust / reference で済むなら、新しい長文ドキュメントを増やさない。
+- 失敗しやすい実装パターンを見つけたら、`task-map.md` か該当 Skill の `references/` へ短く戻す。
 - 変更後は `scripts/check-ai-guidance.sh` で軽量 lint する。
 
 ## 推奨 runtime Skill
 - Codex 最小: `--profile codex-core` (`doge-shell-repo`)
 - Codex よく使う構成: `--profile codex-common` (`doge-shell-repo`, `doge-shell-validation`, `doge-shell-investigation`, `doge-shell-chat-tools`)
 - dsh runtime 用: `--profile dsh-common`
-- 領域別: `doge-shell-parser-shell`, `doge-shell-process-pty`, `doge-shell-repl-completion`, `doge-shell-prompt-terminal-ui`, `doge-shell-env-startup`, `doge-shell-lisp-config`, `doge-shell-history-frecency`, `doge-shell-command-palette-ai`, `doge-shell-builtin-commands`, `doge-shell-safety-policy`
+- 領域別: `doge-shell-parser-shell`, `doge-shell-process-pty`, `doge-shell-repl-completion`, `doge-shell-prompt-terminal-ui`, `doge-shell-env-startup`, `doge-shell-lisp-config`, `doge-shell-history-frecency`, `doge-shell-command-palette-ai`, `doge-shell-builtin-commands`, `doge-shell-serve-web`, `doge-shell-notebook-markdown`, `doge-shell-safety-policy`

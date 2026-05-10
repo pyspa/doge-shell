@@ -4,11 +4,17 @@
 
 ## 基本方針
 - チャットは日本語で行う。
-- 補助スクリプトは shell / Python のどちらを使ってもよい。
+- 補助スクリプトは shell / Python のどちらを使ってもよい。repo-tracked な生成・整形は、目的が明確なときだけ行う。
 - `Cargo.toml` と必要なら task map で範囲を絞り、`rg --files` / `rg -n` で当たりを付けてから必要なファイルだけ読む。
 - 該当する Skill がある場合は先に使い、詳細は必要になってから `references/` を読む。
 - `README.md` 全文を最初から読まない。ユーザー向け挙動、設定例、公開文書の更新時だけ必要箇所を開く。
 - 変更後は関係する最小コマンドで検証し、無関係なワークスペース全体テストは最後に限定する。
+
+## 作業タイプ別の最初の一手
+- 実装修正: `docs/ai/skills/doge-shell-repo/references/task-map.md` で入口と検証候補を確認する。
+- 検証選定: `doctor validate` が使える環境では提案を優先し、なければ `docs/ai/skills/doge-shell-repo/references/test-scope.md` で選ぶ。
+- AI guidance / Skill 変更: `scripts/check-ai-guidance.sh` と runtime Skill の `--status` を使う。
+- 失敗例の再発防止: 修正後に `task-map.md` か該当 Skill の `references/` へ短く戻す。
 
 ## 探索順
 1. `Cargo.toml` でクレート境界を確認する。
@@ -18,6 +24,7 @@
 5. 所有範囲が曖昧なら `docs/ai/skills/doge-shell-repo/references/module-map.md` を読む。
 
 ## 検証の最小単位
+- `doctor validate` が使える環境では変更ファイルに応じた候補を確認する。
 - `dsh-builtin` を触ったとき: `cargo test -p dsh-builtin`
 - `dsh` 本体を触ったとき: `cargo test -p doge-shell`
 - 複数クレートを跨いだときだけ: `cargo test`

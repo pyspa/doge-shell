@@ -1,0 +1,4 @@
+interface:
+  display_name: "Doge Shell Serve Web"
+  short_description: "Inspect serve, static file, and HTTP handler paths narrowly."
+  default_prompt: "Use $doge-shell-serve-web to work on serve and web handler behavior with minimal reading and validation."

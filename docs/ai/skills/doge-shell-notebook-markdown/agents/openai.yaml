@@ -1,0 +1,4 @@
+interface:
+  display_name: "Doge Shell Notebook Markdown"
+  short_description: "Inspect notebook, markdown, and output rendering paths narrowly."
+  default_prompt: "Use $doge-shell-notebook-markdown to work on notebook and markdown display behavior with minimal reading and validation."

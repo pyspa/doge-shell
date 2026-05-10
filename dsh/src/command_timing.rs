@@ -295,7 +295,7 @@ pub type SharedCommandTiming = Arc<RwLock<CommandTiming>>;
 /// Create or load the shared timing instance
 pub fn create_shared_timing() -> SharedCommandTiming {
     let timing = if let Some(path) = get_timing_file_path() {
-        CommandTiming::load_from_file(&path).unwrap_or_else(CommandTiming::new)
+        CommandTiming::load_from_file(&path).unwrap_or_default()
     } else {
         CommandTiming::new()
     };

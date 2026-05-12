@@ -318,6 +318,24 @@ impl ShellProxy for Shell {
         Some(self.environment.read().executable_names.read().len())
     }
 
+    fn completion_diagnostics(&self) -> Vec<String> {
+        crate::completion::dynamic::diagnostics_lines()
+    }
+
+    fn latency_probe_lines(&self, iterations: usize) -> Vec<String> {
+        crate::perf_probes::run_default_probes(iterations)
+            .into_iter()
+            .map(|result| {
+                let total_us = result.elapsed.as_micros();
+                let avg_ns = result.elapsed.as_nanos() / result.iterations.max(1) as u128;
+                format!(
+                    "latency {} total={}us avg={}ns iterations={}",
+                    result.name, total_us, avg_ns, result.iterations
+                )
+            })
+            .collect()
+    }
+
     fn confirm_action(&mut self, message: &str) -> Result<bool> {
         use std::io::stdin;
 

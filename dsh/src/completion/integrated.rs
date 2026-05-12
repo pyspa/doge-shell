@@ -288,8 +288,10 @@ impl IntegratedCompletionEngine {
         let parsed_command_line = self.convert_to_parsed_command_line(input, cursor_pos);
         let replacement_range =
             completion_replacement_range(input, cursor_pos, &parsed_command_line);
+        let uses_dynamic_completion = is_dynamic_completion_command(&parsed_command_line.command);
 
-        if !request.input.is_empty()
+        if !uses_dynamic_completion
+            && !request.input.is_empty()
             && let Some(hit) = self.cache.lookup(request.input)
         {
             debug!(
@@ -325,7 +327,9 @@ impl IntegratedCompletionEngine {
         if !aggregator.extend(dynamic_batch) {
             let mut results = aggregator.finalize(history);
             results.replacement_range = replacement_range;
-            self.store_in_cache(request.input, &results.candidates, results.framework);
+            if !uses_dynamic_completion {
+                self.store_in_cache(request.input, &results.candidates, results.framework);
+            }
             return results;
         }
 
@@ -334,7 +338,9 @@ impl IntegratedCompletionEngine {
         if !aggregator.extend(command_collection.batch) {
             let mut results = aggregator.finalize(history);
             results.replacement_range = replacement_range;
-            self.store_in_cache(request.input, &results.candidates, results.framework);
+            if !uses_dynamic_completion {
+                self.store_in_cache(request.input, &results.candidates, results.framework);
+            }
             return results;
         }
 
@@ -343,13 +349,17 @@ impl IntegratedCompletionEngine {
         if !aggregator.extend(external_batch) {
             let mut results = aggregator.finalize(history);
             results.replacement_range = replacement_range;
-            self.store_in_cache(request.input, &results.candidates, results.framework);
+            if !uses_dynamic_completion {
+                self.store_in_cache(request.input, &results.candidates, results.framework);
+            }
             return results;
         }
 
         let mut results = aggregator.finalize(history);
         results.replacement_range = replacement_range;
-        self.store_in_cache(request.input, &results.candidates, results.framework);
+        if !uses_dynamic_completion {
+            self.store_in_cache(request.input, &results.candidates, results.framework);
+        }
         results
     }
 
@@ -688,7 +698,7 @@ impl IntegratedCompletionEngine {
         candidates: &[EnhancedCandidate],
         framework: CompletionFrameworkKind,
     ) {
-        if key.is_empty() {
+        if key.is_empty() || candidates.is_empty() {
             return;
         }
         debug!("cache set for '{}'. len: {}", key, candidates.len());
@@ -900,6 +910,13 @@ pub(super) fn matches_prefix(current_token: &str, value: &str) -> bool {
     current_token.is_empty() || super::fuzzy_match_score(value, current_token).is_some()
 }
 
+fn is_dynamic_completion_command(command: &str) -> bool {
+    matches!(
+        command,
+        "task" | "pm" | "pj" | "mcp" | "git" | "docker" | "kubectl"
+    )
+}
+
 fn pm_subcommand_candidates(current_token: &str) -> Vec<EnhancedCandidate> {
     let items = [
         ("add", "Register a project"),
@@ -1072,6 +1089,30 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
+
+    async fn wait_for_candidate(
+        engine: &IntegratedCompletionEngine,
+        input: &str,
+        cwd: &Path,
+        expected: &str,
+    ) -> CompletionResult {
+        let start = std::time::Instant::now();
+        loop {
+            let result = engine.complete(input, input.len(), cwd, 50, None).await;
+            if result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == expected)
+            {
+                return result;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(2),
+                "timed out waiting for completion candidate {expected}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
 
     #[test]
     fn test_integrated_completion_engine_creation() {
@@ -1524,17 +1565,11 @@ mod tests {
         engine.initialize_command_completion().unwrap();
 
         let input = "git checkout feat";
-        let result = engine
+        let _ = engine
             .complete(input, input.len(), dir.path(), 50, None)
             .await;
 
-        assert!(
-            result
-                .candidates
-                .iter()
-                .any(|candidate| candidate.text == "feature/test-branch"),
-            "expected dynamic git branch completion"
-        );
+        let _ = wait_for_candidate(&engine, input, dir.path(), "feature/test-branch").await;
     }
 
     #[tokio::test]
@@ -1563,17 +1598,11 @@ mod tests {
         engine.initialize_command_completion().unwrap();
 
         let input = "kubectl --context de";
-        let result = engine
+        let _ = engine
             .complete(input, input.len(), dir.path(), 50, None)
             .await;
 
-        assert!(
-            result
-                .candidates
-                .iter()
-                .any(|candidate| candidate.text == "dev-cluster"),
-            "expected kubectl context completion"
-        );
+        let result = wait_for_candidate(&engine, input, dir.path(), "dev-cluster").await;
         assert_eq!(
             result.replacement_range,
             Some(CompletionReplacementRange { start: 18, end: 20 })
@@ -1606,17 +1635,11 @@ mod tests {
         engine.initialize_command_completion().unwrap();
 
         let input = "kubectl --context=de";
-        let result = engine
+        let _ = engine
             .complete(input, input.len(), dir.path(), 50, None)
             .await;
 
-        assert!(
-            result
-                .candidates
-                .iter()
-                .any(|candidate| candidate.text == "dev-cluster"),
-            "expected clean kubectl context completion"
-        );
+        let result = wait_for_candidate(&engine, input, dir.path(), "dev-cluster").await;
         assert_eq!(
             result.replacement_range,
             Some(CompletionReplacementRange { start: 18, end: 20 })
@@ -1674,17 +1697,11 @@ mod tests {
         engine.initialize_command_completion().unwrap();
 
         let input = "kubectl -nde";
-        let result = engine
+        let _ = engine
             .complete(input, input.len(), dir.path(), 50, None)
             .await;
 
-        assert!(
-            result
-                .candidates
-                .iter()
-                .any(|candidate| candidate.text == "dev-namespace"),
-            "expected short attached kubectl namespace completion"
-        );
+        let result = wait_for_candidate(&engine, input, dir.path(), "dev-namespace").await;
         assert_eq!(
             result.replacement_range,
             Some(CompletionReplacementRange { start: 10, end: 12 })

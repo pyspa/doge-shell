@@ -9,7 +9,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant, SystemTime};
 use tracing::warn;
 use wait_timeout::ChildExt;
@@ -41,6 +41,12 @@ struct CommandValueCacheEntry {
     cached_at: Instant,
 }
 
+#[derive(Debug, Clone)]
+struct ExternalCompletionCacheEntry {
+    candidates: Vec<EnhancedCandidate>,
+    cached_at: Instant,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum DynamicCommandCacheKind {
     GitBranch,
@@ -56,23 +62,73 @@ struct DynamicCommandCacheKey {
     scope_dir: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ExternalCompletionCacheKey {
+    command_template: String,
+    current_dir: PathBuf,
+    input: String,
+    cursor_pos: usize,
+    command: String,
+    current_token: String,
+    subcommand_path: String,
+}
+
 #[derive(Debug, Default)]
 struct ProjectDynamicCache {
     tasks: HashMap<PathBuf, TaskCacheEntry>,
     compose_services: HashMap<PathBuf, ComposeCacheEntry>,
     commands: HashMap<DynamicCommandCacheKey, CommandValueCacheEntry>,
+    command_pending: HashSet<DynamicCommandCacheKey>,
+    external: HashMap<ExternalCompletionCacheKey, ExternalCompletionCacheEntry>,
+    external_pending: HashSet<ExternalCompletionCacheKey>,
 }
 
 pub(crate) struct DynamicCompletionProvider {
     environment: Arc<RwLock<Environment>>,
-    cache: RwLock<ProjectDynamicCache>,
+    cache: Arc<RwLock<ProjectDynamicCache>>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct DynamicCompletionDiagnostics {
+    command_entries: usize,
+    command_pending: usize,
+    external_entries: usize,
+    external_pending: usize,
+    last_refresh: Option<Instant>,
+    last_external: Option<String>,
+}
+
+static DYNAMIC_COMPLETION_DIAGNOSTICS: LazyLock<RwLock<DynamicCompletionDiagnostics>> =
+    LazyLock::new(|| RwLock::new(DynamicCompletionDiagnostics::default()));
+
+pub(crate) fn diagnostics_lines() -> Vec<String> {
+    let diagnostics = DYNAMIC_COMPLETION_DIAGNOSTICS.read().clone();
+    let refresh = diagnostics
+        .last_refresh
+        .map(|instant| format!("{}ms-ago", instant.elapsed().as_millis()))
+        .unwrap_or_else(|| "never".to_string());
+    let external = diagnostics
+        .last_external
+        .unwrap_or_else(|| "none".to_string());
+
+    vec![
+        format!(
+            "completion-cache dynamic-command entries={} pending={}",
+            diagnostics.command_entries, diagnostics.command_pending
+        ),
+        format!(
+            "completion-cache external entries={} pending={} last={}",
+            diagnostics.external_entries, diagnostics.external_pending, external
+        ),
+        format!("completion-cache last-refresh {refresh}"),
+    ]
 }
 
 impl DynamicCompletionProvider {
     pub(crate) fn new(environment: Arc<RwLock<Environment>>) -> Self {
         Self {
             environment,
-            cache: RwLock::new(ProjectDynamicCache::default()),
+            cache: Arc::new(RwLock::new(ProjectDynamicCache::default())),
         }
     }
 
@@ -288,13 +344,21 @@ impl DynamicCompletionProvider {
             return Vec::new();
         };
 
-        match run_external_completer(
-            &command_template,
-            current_dir,
-            input,
+        let subcommand_path = parsed_command_line.subcommand_path.join(" ");
+        let key = ExternalCompletionCacheKey {
+            command_template: command_template.clone(),
+            current_dir: canonicalize_path(current_dir),
+            input: input.to_string(),
             cursor_pos,
-            parsed_command_line,
-        ) {
+            command: parsed_command_line.command.clone(),
+            current_token: parsed_command_line.current_token.clone(),
+            subcommand_path,
+        };
+
+        let loader_key = key.clone();
+        match self
+            .load_external_candidates(key, move || run_external_completer_for_key(&loader_key))
+        {
             Ok(candidates) => candidates,
             Err(err) => {
                 warn!("External completer failed: {}", err);
@@ -309,21 +373,25 @@ impl DynamicCompletionProvider {
         current_token: &str,
     ) -> Vec<EnhancedCandidate> {
         let scope_dir = project_context::find_project_root(current_dir);
+        let command_path = self.resolve_command_path("git");
         self.collect_cached_command_candidates(
             DynamicCommandCacheKind::GitBranch,
             scope_dir,
             current_token,
             "git branch",
-            || {
-                let Some(command_path) = self.resolve_command_path("git") else {
-                    return Ok(Vec::new());
-                };
+            {
+                let current_dir = current_dir.to_path_buf();
+                move || {
+                    let Some(command_path) = command_path else {
+                        return Ok(Vec::new());
+                    };
 
-                run_command_lines(
-                    &command_path,
-                    &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
-                    current_dir,
-                )
+                    run_command_lines(
+                        &command_path,
+                        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+                        &current_dir,
+                    )
+                }
             },
         )
     }
@@ -334,17 +402,21 @@ impl DynamicCompletionProvider {
         current_token: &str,
     ) -> Vec<EnhancedCandidate> {
         let scope_dir = project_context::find_project_root(current_dir);
+        let command_path = self.resolve_command_path("git");
         self.collect_cached_command_candidates(
             DynamicCommandCacheKind::GitRemote,
             scope_dir,
             current_token,
             "git remote",
-            || {
-                let Some(command_path) = self.resolve_command_path("git") else {
-                    return Ok(Vec::new());
-                };
+            {
+                let current_dir = current_dir.to_path_buf();
+                move || {
+                    let Some(command_path) = command_path else {
+                        return Ok(Vec::new());
+                    };
 
-                run_command_lines(&command_path, &["remote"], current_dir)
+                    run_command_lines(&command_path, &["remote"], &current_dir)
+                }
             },
         )
     }
@@ -355,24 +427,28 @@ impl DynamicCompletionProvider {
         current_token: &str,
     ) -> Vec<EnhancedCandidate> {
         let scope_dir = project_context::find_project_root(current_dir);
+        let command_path = self.resolve_command_path("git");
         self.collect_cached_command_candidates(
             DynamicCommandCacheKind::GitWorktree,
             scope_dir,
             current_token,
             "git worktree",
-            || {
-                let Some(command_path) = self.resolve_command_path("git") else {
-                    return Ok(Vec::new());
-                };
+            {
+                let current_dir = current_dir.to_path_buf();
+                move || {
+                    let Some(command_path) = command_path else {
+                        return Ok(Vec::new());
+                    };
 
-                Ok(run_command_lines(
-                    &command_path,
-                    &["worktree", "list", "--porcelain"],
-                    current_dir,
-                )?
-                .into_iter()
-                .filter_map(|line| line.strip_prefix("worktree ").map(str::to_string))
-                .collect())
+                    Ok(run_command_lines(
+                        &command_path,
+                        &["worktree", "list", "--porcelain"],
+                        &current_dir,
+                    )?
+                    .into_iter()
+                    .filter_map(|line| line.strip_prefix("worktree ").map(str::to_string))
+                    .collect())
+                }
             },
         )
     }
@@ -409,21 +485,25 @@ impl DynamicCompletionProvider {
         current_dir: &Path,
         current_token: &str,
     ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("kubectl");
         self.collect_cached_command_candidates(
             DynamicCommandCacheKind::KubectlContext,
             canonicalize_path(current_dir),
             current_token,
             "kubectl context",
-            || {
-                let Some(command_path) = self.resolve_command_path("kubectl") else {
-                    return Ok(Vec::new());
-                };
+            {
+                let current_dir = current_dir.to_path_buf();
+                move || {
+                    let Some(command_path) = command_path else {
+                        return Ok(Vec::new());
+                    };
 
-                run_command_lines(
-                    &command_path,
-                    &["config", "get-contexts", "-o", "name"],
-                    current_dir,
-                )
+                    run_command_lines(
+                        &command_path,
+                        &["config", "get-contexts", "-o", "name"],
+                        &current_dir,
+                    )
+                }
             },
         )
     }
@@ -433,26 +513,30 @@ impl DynamicCompletionProvider {
         current_dir: &Path,
         current_token: &str,
     ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("kubectl");
         self.collect_cached_command_candidates(
             DynamicCommandCacheKind::KubectlNamespace,
             canonicalize_path(current_dir),
             current_token,
             "kubectl namespace",
-            || {
-                let Some(command_path) = self.resolve_command_path("kubectl") else {
-                    return Ok(Vec::new());
-                };
+            {
+                let current_dir = current_dir.to_path_buf();
+                move || {
+                    let Some(command_path) = command_path else {
+                        return Ok(Vec::new());
+                    };
 
-                run_command_lines(
-                    &command_path,
-                    &[
-                        "get",
-                        "namespaces",
-                        "-o",
-                        "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}",
-                    ],
-                    current_dir,
-                )
+                    run_command_lines(
+                        &command_path,
+                        &[
+                            "get",
+                            "namespaces",
+                            "-o",
+                            "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}",
+                        ],
+                        &current_dir,
+                    )
+                }
             },
         )
     }
@@ -466,24 +550,33 @@ impl DynamicCompletionProvider {
         loader: F,
     ) -> Vec<EnhancedCandidate>
     where
-        F: FnOnce() -> Result<Vec<String>>,
+        F: FnOnce() -> Result<Vec<String>> + Send + 'static,
     {
-        match self.load_command_values(kind, scope_dir, loader) {
-            Ok(values) => values
-                .into_iter()
-                .filter(|value| matches_prefix(current_token, value))
-                .map(|value| EnhancedCandidate {
-                    text: value,
-                    description: Some(description.to_string()),
-                    candidate_type: CandidateType::Argument,
-                    priority: 130,
-                })
-                .collect(),
-            Err(err) => {
-                warn!("Failed to load {} completions: {}", description, err);
-                Vec::new()
-            }
-        }
+        self.load_command_values(kind, scope_dir, loader)
+            .into_iter()
+            .filter(|value| matches_prefix(current_token, value))
+            .map(|value| EnhancedCandidate {
+                text: value,
+                description: Some(description.to_string()),
+                candidate_type: CandidateType::Argument,
+                priority: 130,
+            })
+            .collect()
+    }
+
+    pub(crate) fn collect_probe_cached_command_candidates(
+        &self,
+        scope_dir: PathBuf,
+        current_token: &str,
+        values: Vec<String>,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_cached_command_candidates(
+            DynamicCommandCacheKind::GitBranch,
+            scope_dir,
+            current_token,
+            "latency probe",
+            move || Ok(values),
+        )
     }
 
     fn load_project_tasks(&self, current_dir: &Path) -> Result<Vec<task::TaskInfo>> {
@@ -561,31 +654,98 @@ impl DynamicCompletionProvider {
         kind: DynamicCommandCacheKind,
         scope_dir: PathBuf,
         loader: F,
-    ) -> Result<Vec<String>>
+    ) -> Vec<String>
     where
-        F: FnOnce() -> Result<Vec<String>>,
+        F: FnOnce() -> Result<Vec<String>> + Send + 'static,
     {
         let cache_key = DynamicCommandCacheKey { kind, scope_dir };
         let ttl = Duration::from_millis(DYNAMIC_COMMAND_CACHE_TTL_MS);
+        let mut start_refresh = false;
 
         {
-            let cache = self.cache.read();
-            if let Some(entry) = cache.commands.get(&cache_key)
-                && entry.cached_at.elapsed() < ttl
-            {
-                return Ok(entry.values.clone());
+            let mut cache = self.cache.write();
+            if let Some(entry) = cache.commands.get(&cache_key) {
+                let values = entry.values.clone();
+                if entry.cached_at.elapsed() >= ttl
+                    && cache.command_pending.insert(cache_key.clone())
+                {
+                    start_refresh = true;
+                }
+                update_diagnostics_from_cache(&cache, None);
+                drop(cache);
+                if start_refresh {
+                    spawn_command_refresh(self.cache.clone(), cache_key, loader);
+                }
+                return values;
             }
+
+            if cache.command_pending.insert(cache_key.clone()) {
+                start_refresh = true;
+            }
+            update_diagnostics_from_cache(&cache, None);
         }
 
-        let values = loader()?;
-        self.cache.write().commands.insert(
-            cache_key,
-            CommandValueCacheEntry {
-                values: values.clone(),
-                cached_at: Instant::now(),
-            },
-        );
-        Ok(values)
+        if start_refresh {
+            spawn_command_refresh(self.cache.clone(), cache_key, loader);
+        }
+        Vec::new()
+    }
+
+    fn load_external_candidates<F>(
+        &self,
+        cache_key: ExternalCompletionCacheKey,
+        loader: F,
+    ) -> Result<Vec<EnhancedCandidate>>
+    where
+        F: FnOnce() -> Result<Vec<EnhancedCandidate>> + Send + 'static,
+    {
+        let ttl = Duration::from_millis(DYNAMIC_COMMAND_CACHE_TTL_MS);
+        let mut start_refresh = false;
+
+        {
+            let mut cache = self.cache.write();
+            if let Some(entry) = cache.external.get(&cache_key) {
+                let candidates = entry.candidates.clone();
+                if entry.cached_at.elapsed() >= ttl
+                    && cache.external_pending.insert(cache_key.clone())
+                {
+                    start_refresh = true;
+                }
+                update_diagnostics_from_cache(&cache, None);
+                drop(cache);
+                if start_refresh {
+                    spawn_external_refresh(self.cache.clone(), cache_key, loader);
+                }
+                return Ok(candidates);
+            }
+
+            if !cache.external_pending.insert(cache_key.clone()) {
+                update_diagnostics_from_cache(&cache, None);
+                return Ok(Vec::new());
+            }
+            update_diagnostics_from_cache(&cache, Some("external initial-load".to_string()));
+        }
+
+        let result = loader();
+        let mut cache = self.cache.write();
+        cache.external_pending.remove(&cache_key);
+        match result {
+            Ok(candidates) => {
+                cache.external.insert(
+                    cache_key,
+                    ExternalCompletionCacheEntry {
+                        candidates: candidates.clone(),
+                        cached_at: Instant::now(),
+                    },
+                );
+                update_diagnostics_from_cache(&cache, Some("external ok".to_string()));
+                Ok(candidates)
+            }
+            Err(err) => {
+                update_diagnostics_from_cache(&cache, Some(format!("external error: {err}")));
+                Err(err)
+            }
+        }
     }
 
     fn resolve_command_path(&self, command_name: &str) -> Option<String> {
@@ -595,6 +755,83 @@ impl DynamicCompletionProvider {
 
 fn canonicalize_path(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn spawn_command_refresh<F>(
+    cache: Arc<RwLock<ProjectDynamicCache>>,
+    cache_key: DynamicCommandCacheKey,
+    loader: F,
+) where
+    F: FnOnce() -> Result<Vec<String>> + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let result = loader();
+        let mut cache = cache.write();
+        cache.command_pending.remove(&cache_key);
+        match result {
+            Ok(values) => {
+                cache.commands.insert(
+                    cache_key,
+                    CommandValueCacheEntry {
+                        values,
+                        cached_at: Instant::now(),
+                    },
+                );
+                update_diagnostics_from_cache(&cache, None);
+                crate::completion::notify_completion_update();
+            }
+            Err(err) => {
+                warn!("Dynamic command completion refresh failed: {}", err);
+                update_diagnostics_from_cache(&cache, None);
+            }
+        }
+    });
+}
+
+fn spawn_external_refresh<F>(
+    cache: Arc<RwLock<ProjectDynamicCache>>,
+    cache_key: ExternalCompletionCacheKey,
+    loader: F,
+) where
+    F: FnOnce() -> Result<Vec<EnhancedCandidate>> + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let result = loader();
+        let mut cache = cache.write();
+        cache.external_pending.remove(&cache_key);
+        match result {
+            Ok(candidates) => {
+                cache.external.insert(
+                    cache_key,
+                    ExternalCompletionCacheEntry {
+                        candidates,
+                        cached_at: Instant::now(),
+                    },
+                );
+                update_diagnostics_from_cache(&cache, Some("external refresh ok".to_string()));
+                crate::completion::notify_completion_update();
+            }
+            Err(err) => {
+                warn!("External completer refresh failed: {}", err);
+                update_diagnostics_from_cache(
+                    &cache,
+                    Some(format!("external refresh error: {err}")),
+                );
+            }
+        }
+    });
+}
+
+fn update_diagnostics_from_cache(cache: &ProjectDynamicCache, last_external: Option<String>) {
+    let mut diagnostics = DYNAMIC_COMPLETION_DIAGNOSTICS.write();
+    diagnostics.command_entries = cache.commands.len();
+    diagnostics.command_pending = cache.command_pending.len();
+    diagnostics.external_entries = cache.external.len();
+    diagnostics.external_pending = cache.external_pending.len();
+    diagnostics.last_refresh = Some(Instant::now());
+    if let Some(last_external) = last_external {
+        diagnostics.last_external = Some(last_external);
+    }
 }
 
 fn file_metadata_signature(path: &Path) -> FileMetadataSignature {
@@ -701,26 +938,18 @@ fn parse_compose_service_names(path: &Path) -> Result<Vec<String>> {
     Ok(names)
 }
 
-fn run_external_completer(
-    command_template: &str,
-    current_dir: &Path,
-    input: &str,
-    cursor_pos: usize,
-    parsed_command_line: &ParsedCommandLine,
+fn run_external_completer_for_key(
+    key: &ExternalCompletionCacheKey,
 ) -> Result<Vec<EnhancedCandidate>> {
-    let subcommand_path = parsed_command_line.subcommand_path.join(" ");
     let mut child = Command::new("sh")
         .arg("-c")
-        .arg(command_template)
-        .current_dir(current_dir)
-        .env("DSH_COMPLETION_INPUT", input)
-        .env("DSH_COMPLETION_CURSOR", cursor_pos.to_string())
-        .env("DSH_COMPLETION_COMMAND", &parsed_command_line.command)
-        .env(
-            "DSH_COMPLETION_CURRENT_TOKEN",
-            &parsed_command_line.current_token,
-        )
-        .env("DSH_COMPLETION_SUBCOMMAND_PATH", &subcommand_path)
+        .arg(&key.command_template)
+        .current_dir(&key.current_dir)
+        .env("DSH_COMPLETION_INPUT", &key.input)
+        .env("DSH_COMPLETION_CURSOR", key.cursor_pos.to_string())
+        .env("DSH_COMPLETION_COMMAND", &key.command)
+        .env("DSH_COMPLETION_CURRENT_TOKEN", &key.current_token)
+        .env("DSH_COMPLETION_SUBCOMMAND_PATH", &key.subcommand_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()?;
@@ -735,7 +964,7 @@ fn run_external_completer(
                 (line.trim(), None)
             };
 
-            if text.is_empty() || !matches_prefix(&parsed_command_line.current_token, text) {
+            if text.is_empty() || !matches_prefix(&key.current_token, text) {
                 return None;
             }
 
@@ -827,6 +1056,17 @@ mod tests {
         let mut permissions = fs::metadata(path).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(path, permissions).unwrap();
+    }
+
+    fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            if predicate() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        false
     }
 
     #[test]
@@ -958,12 +1198,18 @@ volumes:
         }
         let provider = DynamicCompletionProvider::new(environment);
 
-        let root_candidates = provider.collect_git_branch_candidates(&root, "fe");
+        let first_candidates = provider.collect_git_branch_candidates(&root, "fe");
         assert!(
-            root_candidates
+            first_candidates.is_empty(),
+            "first miss should return immediately while refreshing in background"
+        );
+
+        assert!(
+            wait_until(Duration::from_secs(2), || provider
+                .collect_git_branch_candidates(&root, "fe")
                 .iter()
-                .any(|candidate| candidate.text == "feature/cache"),
-            "expected git branch completion from fake git"
+                .any(|candidate| candidate.text == "feature/cache")),
+            "expected git branch completion from fake git after background refresh"
         );
 
         let nested_candidates = provider.collect_git_branch_candidates(&nested, "ma");
@@ -986,12 +1232,12 @@ volumes:
             refreshed_candidates
                 .iter()
                 .any(|candidate| candidate.text == "feature/cache"),
-            "expected git branch completion after ttl refresh"
+            "expected stale git branch completion while ttl refresh runs"
         );
 
-        assert_eq!(
-            fs::read_to_string(&counter).unwrap(),
-            "2",
+        assert!(
+            wait_until(Duration::from_secs(2), || fs::read_to_string(&counter)
+                .is_ok_and(|count| count == "2")),
             "git command should run again after ttl expiry"
         );
     }
@@ -1054,5 +1300,56 @@ volumes:
             provider.collect_external_candidates(dir.path(), input, input.len(), &parsed(input));
 
         assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn external_completer_returns_stale_candidates_while_refreshing() {
+        let dir = tempdir().unwrap();
+        let script = dir.path().join("external-completer-refresh.sh");
+        let counter = dir.path().join("external-count");
+        write_executable_script(
+            &script,
+            &format!(
+                "#!/bin/sh\n\
+                 count_file=\"{}\"\n\
+                 count=0\n\
+                 if [ -f \"$count_file\" ]; then count=$(cat \"$count_file\"); fi\n\
+                 count=$((count + 1))\n\
+                 printf '%s' \"$count\" > \"$count_file\"\n\
+                 if [ \"$count\" = \"1\" ]; then\n\
+                 printf 'zzext-alpha\\tExternal alpha\\n'\n\
+                 else\n\
+                 printf 'zzext-beta\\tExternal beta\\n'\n\
+                 fi\n",
+                counter.display()
+            ),
+        );
+
+        let environment = Environment::new();
+        environment.write().variables.insert(
+            "DSH_EXTERNAL_COMPLETER".to_string(),
+            script.display().to_string(),
+        );
+        let provider = DynamicCompletionProvider::new(environment);
+        let input = "unknown-command zzext";
+
+        let first =
+            provider.collect_external_candidates(dir.path(), input, input.len(), &parsed(input));
+        assert_eq!(first[0].text, "zzext-alpha");
+
+        std::thread::sleep(Duration::from_millis(DYNAMIC_COMMAND_CACHE_TTL_MS + 50));
+        let stale =
+            provider.collect_external_candidates(dir.path(), input, input.len(), &parsed(input));
+        assert_eq!(stale[0].text, "zzext-alpha");
+
+        assert!(
+            wait_until(Duration::from_secs(2), || fs::read_to_string(&counter)
+                .is_ok_and(|count| count == "2")),
+            "external completer should refresh in background"
+        );
+
+        let refreshed =
+            provider.collect_external_candidates(dir.path(), input, input.len(), &parsed(input));
+        assert_eq!(refreshed[0].text, "zzext-beta");
     }
 }

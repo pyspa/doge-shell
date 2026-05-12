@@ -154,6 +154,16 @@ pub trait ShellProxy {
         None
     }
 
+    /// Dynamic completion cache diagnostics, when the shell runtime exposes them.
+    fn completion_diagnostics(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Runs shell latency probes when supported by the runtime.
+    fn latency_probe_lines(&self, _iterations: usize) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Retrieves a variable from the Lisp environment
     fn get_lisp_var(&self, key: &str) -> Option<String>;
 

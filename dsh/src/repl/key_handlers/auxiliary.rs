@@ -18,7 +18,11 @@ pub(crate) async fn handle_open_command_palette(repl: &mut Repl<'_>) -> Result<R
     // Disable raw mode so Skim can handle terminal state correctly
     disable_raw_mode().ok();
 
-    CommandPalette::run(repl.shell, repl.input.as_str()).await?;
+    if let Some(replacement) = CommandPalette::run(repl.shell, repl.input.as_str()).await? {
+        repl.input.reset(replacement);
+        repl.input.completion = None;
+        repl.input.color_ranges = None;
+    }
 
     // Re-enable raw mode for the shell
     enable_raw_mode().ok();

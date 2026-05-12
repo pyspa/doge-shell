@@ -41,7 +41,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     }
     if show_section(section, "project") {
         print_header(ctx, "project");
-        check_project(ctx, &current_dir);
+        check_project(ctx, proxy, &current_dir);
     }
     if show_section(section, "runtime") || show_section(section, "runtimes") {
         print_header(ctx, "runtimes");
@@ -49,7 +49,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     }
     if show_section(section, "performance") || show_section(section, "perf") {
         print_header(ctx, "performance");
-        check_performance(ctx, proxy);
+        check_performance(ctx, proxy, argv.get(2..).unwrap_or(&[]));
     }
     if show_section(section, "skills") {
         print_header(ctx, "skills");
@@ -70,7 +70,7 @@ fn print_help(ctx: &Context) -> ExitStatus {
 
 fn help_text() -> &'static str {
     concat!(
-        "Usage: doctor [config|ai|mcp|project|runtime|performance|skills|dev|validate]\n",
+        "Usage: doctor [config|ai|mcp|project|runtime|performance|skills|dev|validate] [OPTIONS]\n",
         "\n",
         "Run diagnostics for the current shell setup. Without a section, all checks run.\n",
         "\n",
@@ -89,6 +89,7 @@ fn help_text() -> &'static str {
         "  doctor\n",
         "  doctor ai\n",
         "  doctor project\n",
+        "  doctor performance --latency --latency-iters 1000\n",
         "  doctor skills\n",
         "  doctor validate\n",
         "  doctor --help\n",
@@ -261,7 +262,7 @@ fn check_mcp(ctx: &Context, proxy: &mut dyn ShellProxy) {
     let _ = ctx.write_stdout(&format!("ok tools {tools}"));
 }
 
-fn check_project(ctx: &Context, current_dir: &Path) {
+fn check_project(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path) {
     let project = project_context::resolve_project_context(current_dir);
 
     let _ = ctx.write_stdout(&format!("ok cwd {}", current_dir.display()));
@@ -305,6 +306,10 @@ fn check_project(ctx: &Context, current_dir: &Path) {
             ));
         }
     }
+
+    for line in proxy.completion_diagnostics() {
+        let _ = ctx.write_stdout(&format!("ok {line}"));
+    }
 }
 
 fn check_runtimes(ctx: &Context) {
@@ -323,7 +328,7 @@ fn check_runtimes(ctx: &Context) {
     }
 }
 
-fn check_performance(ctx: &Context, proxy: &mut dyn ShellProxy) {
+fn check_performance(ctx: &Context, proxy: &mut dyn ShellProxy, args: &[String]) {
     match proxy.command_history_len() {
         Some(count) => {
             let _ = ctx.write_stdout(&format!("ok history-loaded entries={count}"));
@@ -354,7 +359,30 @@ fn check_performance(ctx: &Context, proxy: &mut dyn ShellProxy) {
         }
     }
 
+    let completion_diagnostics = proxy.completion_diagnostics();
+    if completion_diagnostics.is_empty() {
+        let _ = ctx.write_stdout("skip completion-cache unavailable");
+    } else {
+        for line in completion_diagnostics {
+            let _ = ctx.write_stdout(&format!("ok {line}"));
+        }
+    }
+
     let _ = ctx.write_stdout("ok timing-flush debounce interval=5s threshold=10");
+
+    if performance_latency_enabled(args) {
+        let iterations = performance_latency_iterations(args).unwrap_or(1_000);
+        let lines = proxy.latency_probe_lines(iterations);
+        if lines.is_empty() {
+            let _ = ctx.write_stdout("skip latency-probes unavailable");
+        } else {
+            for line in lines {
+                let _ = ctx.write_stdout(&format!("ok {line}"));
+            }
+        }
+    } else {
+        let _ = ctx.write_stdout("skip latency-probes pass --latency to run");
+    }
 
     let timing_file = crate::command_timing::get_timing_file_path();
     match timing_file
@@ -413,6 +441,20 @@ fn check_performance(ctx: &Context, proxy: &mut dyn ShellProxy) {
             skills_dir.display()
         ));
     }
+}
+
+fn performance_latency_enabled(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--latency")
+}
+
+fn performance_latency_iterations(args: &[String]) -> Option<usize> {
+    args.windows(2).find_map(|window| {
+        if window[0] == "--latency-iters" {
+            window[1].parse::<usize>().ok()
+        } else {
+            None
+        }
+    })
 }
 
 fn executable_cache_file_info() -> Option<(PathBuf, usize)> {
@@ -846,9 +888,23 @@ mod tests {
         assert!(help.contains("project"));
         assert!(help.contains("runtime"));
         assert!(help.contains("performance"));
+        assert!(help.contains("--latency"));
         assert!(help.contains("skills"));
         assert!(help.contains("validate"));
         assert!(help.contains("doctor ai"));
+    }
+
+    #[test]
+    fn performance_latency_options_are_detected() {
+        let args = vec![
+            "--latency".to_string(),
+            "--latency-iters".to_string(),
+            "250".to_string(),
+        ];
+        assert!(performance_latency_enabled(&args));
+        assert_eq!(performance_latency_iterations(&args), Some(250));
+        assert!(!performance_latency_enabled(&[]));
+        assert_eq!(performance_latency_iterations(&[]), None);
     }
 
     #[test]

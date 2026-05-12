@@ -127,7 +127,7 @@ impl SkimItem for StringItem {
 pub struct CommandPalette;
 
 impl CommandPalette {
-    pub async fn run(shell: &mut Shell, input: &str) -> Result<()> {
+    pub async fn run(shell: &mut Shell, input: &str) -> Result<Option<String>> {
         let actions = {
             let registry = REGISTRY.read();
             registry.get_all()
@@ -163,6 +163,10 @@ impl CommandPalette {
             let output = item.output().to_string(); // this is the name
             let action_name = output.as_str();
 
+            if action_name == "Search History" {
+                return actions::search_history::select_history_command(shell).await;
+            }
+
             // Re-acquire lock to get the action (we dropped it before running Skim)
             let action = {
                 let registry = REGISTRY.read();
@@ -173,7 +177,7 @@ impl CommandPalette {
                 action.execute(shell, input).await?;
             }
         };
-        Ok(())
+        Ok(None)
     }
 }
 

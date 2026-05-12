@@ -919,6 +919,9 @@ fn is_dynamic_completion_command(command: &str) -> bool {
 
 fn pm_subcommand_candidates(current_token: &str) -> Vec<EnhancedCandidate> {
     let items = [
+        ("init", "Register the current project root"),
+        ("status", "Show current project status"),
+        ("st", "Alias for status"),
         ("add", "Register a project"),
         ("list", "List registered projects"),
         ("ls", "Alias for list"),

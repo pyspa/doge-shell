@@ -61,6 +61,7 @@ arboard = "3.4"
 clap = { version="4", features = ["derive"] }
 globmatch = "0.3"
 regex = "1.11"
+shell-words = "1.1"
 pulldown-cmark = "0.13"
 csv = "1.3"
 

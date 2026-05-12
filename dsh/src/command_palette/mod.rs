@@ -17,6 +17,18 @@ pub trait Action: Send + Sync {
     fn name(&self) -> &str;
     /// Description of the action
     fn description(&self) -> &str;
+    /// Optional command usage hint shown in the palette.
+    fn usage(&self) -> Option<&str> {
+        None
+    }
+    /// Optional keyboard shortcut shown in the palette.
+    fn shortcut(&self) -> Option<&str> {
+        None
+    }
+    /// Optional related commands shown in the palette.
+    fn related(&self) -> Option<&str> {
+        None
+    }
     /// Icon for the action (emoji)
     fn icon(&self) -> &str {
         "🔹"
@@ -100,8 +112,20 @@ impl SkimItem for PaletteItem {
         let cat = self.action.category();
         let icon = self.action.icon();
         let name = self.action.name();
-        let desc = self.action.description();
-        Cow::Owned(format!("[{:<8}] {} {:<20} {}", cat, icon, name, desc))
+        let mut details = self.action.description().to_string();
+        if let Some(usage) = self.action.usage() {
+            details.push_str(" | use: ");
+            details.push_str(usage);
+        }
+        if let Some(shortcut) = self.action.shortcut() {
+            details.push_str(" | key: ");
+            details.push_str(shortcut);
+        }
+        if let Some(related) = self.action.related() {
+            details.push_str(" | related: ");
+            details.push_str(related);
+        }
+        Cow::Owned(format!("[{:<8}] {} {:<20} {}", cat, icon, name, details))
     }
 
     fn output(&self) -> Cow<'_, str> {

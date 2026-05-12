@@ -1,15 +1,17 @@
 use super::ShellProxy;
 use crate::project_context;
+use crate::task;
 use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
 use dsh_types::{Context, ExitStatus, Project};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 const PROJECTS_FILE: &str = "projects.json";
 
 pub fn description() -> &'static str {
-    "Manage projects (add, list, remove, work, activate)"
+    "Manage projects (init, status, add, list, remove, work, activate)"
 }
 
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
@@ -27,11 +29,29 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     }
 
     if argv.len() < 2 {
-        let _ = ctx.write_stderr("Usage: pm <add|list|remove|work|jump|activate> [args]");
+        let _ = ctx.write_stderr(help_text());
         return ExitStatus::ExitedWith(1);
     }
 
     match argv[1].as_str() {
+        "help" | "-h" | "--help" => {
+            let _ = ctx.write_stdout(help_text());
+            ExitStatus::ExitedWith(0)
+        }
+        "init" => match init(ctx, &argv[2..], proxy) {
+            Ok(_) => ExitStatus::ExitedWith(0),
+            Err(e) => {
+                let _ = ctx.write_stderr(&format!("pm init error: {}", e));
+                ExitStatus::ExitedWith(1)
+            }
+        },
+        "status" | "st" => match status(ctx, proxy) {
+            Ok(_) => ExitStatus::ExitedWith(0),
+            Err(e) => {
+                let _ = ctx.write_stderr(&format!("pm status error: {}", e));
+                ExitStatus::ExitedWith(1)
+            }
+        },
         "add" => match add(ctx, &argv[2..]) {
             Ok(_) => ExitStatus::ExitedWith(0),
             Err(e) => {
@@ -79,6 +99,30 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
             ExitStatus::ExitedWith(1)
         }
     }
+}
+
+fn help_text() -> &'static str {
+    concat!(
+        "Usage: pm <init|status|add|list|remove|work|jump|activate> [args]\n",
+        "\n",
+        "Subcommands:\n",
+        "  init [name]          Register the current project root and show onboarding status\n",
+        "  status               Show current project root, registration, activation, runtimes, and tasks\n",
+        "  add [path] [name]    Register a project path\n",
+        "  list | ls            List registered projects\n",
+        "  remove | rm <name>   Remove a project\n",
+        "  work <name>          Switch to a project\n",
+        "  jump                 Select and switch to a project interactively\n",
+        "  activate             Apply safe .env, allowed .envrc, and venv activation\n",
+        "\n",
+        "Aliases:\n",
+        "  pj [name]            Alias for pm jump\n",
+        "\n",
+        "Examples:\n",
+        "  pm init\n",
+        "  pm status\n",
+        "  pm activate\n",
+    )
 }
 
 fn get_config_path() -> Result<PathBuf> {
@@ -133,6 +177,173 @@ fn save_projects(projects: &[Project]) -> Result<()> {
     let content = serde_json::to_string_pretty(projects)?;
     fs::write(path, content)?;
     Ok(())
+}
+
+fn init(ctx: &Context, args: &[String], proxy: &mut dyn ShellProxy) -> Result<()> {
+    if args.len() > 1 {
+        return Err(anyhow::anyhow!("Usage: pm init [name]"));
+    }
+
+    let current_dir = proxy.get_current_dir()?;
+    let context = project_context::resolve_project_context(&current_dir);
+    let root = context.project_root.clone();
+    let name = args
+        .first()
+        .cloned()
+        .unwrap_or_else(|| project_name_from_path(&root));
+
+    let mut projects = load_projects()?;
+    if let Some(existing) = projects
+        .iter()
+        .find(|project| same_path(&project.path, &root))
+    {
+        let _ = ctx.write_stdout(&format!(
+            "Project '{}' is already registered at {}.",
+            existing.name,
+            existing.path.display()
+        ));
+    } else {
+        if projects.iter().any(|project| project.name == name) {
+            return Err(anyhow::anyhow!(
+                "Project name '{}' already exists. Use `pm init <name>` with another name.",
+                name
+            ));
+        }
+
+        projects.push(Project::new(name.clone(), root.clone()));
+        save_projects(&projects)?;
+        let _ = ctx.write_stdout(&format!(
+            "Project '{}' initialized at {}.",
+            name,
+            root.display()
+        ));
+    }
+
+    print_project_status(ctx, proxy, &context, &projects);
+    Ok(())
+}
+
+fn status(ctx: &Context, proxy: &mut dyn ShellProxy) -> Result<()> {
+    let current_dir = proxy.get_current_dir()?;
+    let context = project_context::resolve_project_context(&current_dir);
+    let projects = load_projects()?;
+    print_project_status(ctx, proxy, &context, &projects);
+    Ok(())
+}
+
+fn project_name_from_path(path: &Path) -> String {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("project")
+        .to_string()
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    let left = left.canonicalize().unwrap_or_else(|_| left.to_path_buf());
+    let right = right.canonicalize().unwrap_or_else(|_| right.to_path_buf());
+    left == right
+}
+
+fn print_project_status(
+    ctx: &Context,
+    proxy: &dyn ShellProxy,
+    context: &project_context::ProjectContext,
+    projects: &[Project],
+) {
+    let _ = ctx.write_stdout(&format!("cwd {}", context.cwd.display()));
+    let _ = ctx.write_stdout(&format!("root {}", context.project_root.display()));
+
+    if let Some(project) = projects
+        .iter()
+        .find(|project| same_path(&project.path, &context.project_root))
+    {
+        let _ = ctx.write_stdout(&format!(
+            "registered {} {}",
+            project.name,
+            project.path.display()
+        ));
+    } else {
+        let _ = ctx.write_stdout("registered no (run `pm init` to add this project)");
+    }
+
+    if context.project_markers.is_empty() {
+        let _ = ctx.write_stdout("markers none");
+    } else {
+        let _ = ctx.write_stdout(&format!("markers {}", context.project_markers.join(", ")));
+    }
+
+    if context.runtimes.is_empty() {
+        let _ = ctx.write_stdout("runtimes none");
+    } else {
+        for runtime in &context.runtimes {
+            let version = runtime.version.as_deref().unwrap_or("-");
+            let _ = ctx.write_stdout(&format!(
+                "runtime {} source={} version={} path={}",
+                runtime.name,
+                runtime.source,
+                version,
+                runtime.path.display()
+            ));
+        }
+    }
+
+    if context.activations.is_empty() {
+        let _ = ctx.write_stdout("activation none");
+    } else {
+        for activation in &context.activations {
+            let _ = ctx.write_stdout(&format!(
+                "activation {} {}",
+                activation.kind,
+                activation.path.display()
+            ));
+        }
+        if context.project_root.join(".envrc").exists()
+            && !proxy.is_direnv_allowed(&context.project_root)
+        {
+            let _ = ctx.write_stdout(
+                "activation envrc not-allowed; add an allow-direnv entry before trusting it",
+            );
+        }
+        let _ = ctx.write_stdout("activation hint run `pm activate`");
+    }
+
+    match task::summarize_tasks_in_dir_metadata_only(&context.project_root) {
+        Ok(summary) if summary.tasks.is_empty() && summary.deferred_sources.is_empty() => {
+            let _ = ctx.write_stdout("tasks none");
+        }
+        Ok(summary) => {
+            if !summary.tasks.is_empty() {
+                let counts = task_source_counts(&summary.tasks);
+                let counts = counts
+                    .into_iter()
+                    .map(|(source, count)| format!("{source}={count}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let _ = ctx.write_stdout(&format!(
+                    "tasks {} metadata-only ({counts})",
+                    summary.tasks.len()
+                ));
+            }
+            if !summary.deferred_sources.is_empty() {
+                let _ = ctx.write_stdout(&format!(
+                    "tasks dynamic-probe skipped sources={} (run `task --list` for full detection)",
+                    summary.deferred_sources.join(", ")
+                ));
+            }
+        }
+        Err(err) => {
+            let _ = ctx.write_stdout(&format!("tasks unavailable {err}"));
+        }
+    }
+}
+
+fn task_source_counts(tasks: &[task::TaskInfo]) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for task in tasks {
+        *counts.entry(task.source.clone()).or_insert(0) += 1;
+    }
+    counts
 }
 
 fn add(ctx: &Context, args: &[String]) -> Result<()> {
@@ -503,5 +714,44 @@ mod tests {
                 path_adds: vec!["./bin".to_string()],
             }
         );
+    }
+
+    #[test]
+    fn project_name_from_path_falls_back_to_project() {
+        assert_eq!(project_name_from_path(Path::new("/tmp/demo")), "demo");
+        assert_eq!(project_name_from_path(Path::new("/")), "project");
+    }
+
+    #[test]
+    fn task_source_counts_groups_by_source() {
+        let tasks = vec![
+            task::TaskInfo {
+                source: "cargo".to_string(),
+                name: "test".to_string(),
+                command: "cargo test".to_string(),
+            },
+            task::TaskInfo {
+                source: "cargo".to_string(),
+                name: "check".to_string(),
+                command: "cargo check".to_string(),
+            },
+            task::TaskInfo {
+                source: "npm".to_string(),
+                name: "build".to_string(),
+                command: "npm run build".to_string(),
+            },
+        ];
+
+        let counts = task_source_counts(&tasks);
+        assert_eq!(counts.get("cargo"), Some(&2));
+        assert_eq!(counts.get("npm"), Some(&1));
+    }
+
+    #[test]
+    fn help_text_mentions_onboarding_commands() {
+        let help = help_text();
+        assert!(help.contains("pm init"));
+        assert!(help.contains("status"));
+        assert!(help.contains("activate"));
     }
 }

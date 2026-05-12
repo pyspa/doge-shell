@@ -148,6 +148,8 @@ Seamlessly handle structured data (JSON, CSV, Tables) within the shell pipeline.
 Organize and switch between workspaces efficiently with the integrated Project Manager.
 
 - **`pm add [path] [name]`**: Register a project.
+- **`pm init [name]`**: Register the current project root and show onboarding status.
+- **`pm status`**: Show current project registration, activation, runtime, and task status.
 - **`pm list`**: List registered projects (sorted by last access).
 - **`pm work <name>`**: Switch to a project and trigger hooks.
 - **`pm jump` / `pj`**: Interactively select and switch to a project.
@@ -221,12 +223,12 @@ The shell includes many built-in commands:
 | `mcp`               | Manage MCP servers (status, connect, disconnect)                                                                           |
 | `gpr`               | GitHub Pull Request checkout with interactive selection                                                                    |
 | `gwt`               | Git Worktree management (add, list, remove)                                                                                |
-| `pm`                | Project Manager (add, list, remove, work, jump, activate)                                                                  |
+| `pm`                | Project Manager (init, status, add, list, remove, work, jump, activate)                                                    |
 | `pj`                | Jump to a project (alias for `pm jump`)                                                                                    |
-| `help`              | Show help information                                                                                                      |
+| `help`              | Show command details and search built-in commands                                                                          |
 | `comp-gen`          | Generate command completion using AI (`--stdout`, `--check`)                                                               |
 | `dashboard`         | Show integrated dashboard (System, Git, GitHub)                                                                            |
-| `doctor`            | Diagnose config, AI, MCP, project, runtime, skills, and dev validation state                                               |
+| `doctor`            | Diagnose config, AI, MCP, project, runtime, skills, setup, and dev validation state                                        |
 | `ai-commit` / `aic` | Generate commit message using AI                                                                                           |
 | `tm`                | Search and retrieve past command outputs                                                                                   |
 | `trigger`           | Monitor file changes and execute commands (saves output to history)                                                        |
@@ -576,6 +578,21 @@ echo "Hello, World!"
 
 This works with any command (external or built-in) as the shell automatically captures the standard output.
 
+### Command Output History
+
+Use `out` for direct access to captured output and `tm` for interactive fuzzy search with preview.
+
+```bash
+# Show the most recent captured stdout
+out
+
+# List captured outputs with previews
+out --list --limit 25
+
+# Clear captured output history
+out --clear
+```
+
 
 ### Import History
 
@@ -619,13 +636,37 @@ doctor
 doctor ai
 doctor project
 doctor skills
+doctor setup
+doctor fix
 doctor validate
 
 # Show command help
 doctor --help
 ```
 
-`doctor` reports on configuration files, AI settings, MCP connection counters, project marker files, common developer runtimes found in `PATH`, performance/cache state, runtime Skill drift, and focused validation commands for changed files.
+`doctor` reports on configuration files, AI settings, MCP connection counters, project marker files, common developer runtimes found in `PATH`, performance/cache state, runtime Skill drift, setup readiness, and focused validation commands for changed files. `doctor fix` creates safe missing setup files and directories such as `config.lisp`, runtime skills, and completion directories.
+
+### `help` Command
+
+Search built-in commands and show command-specific usage.
+
+```bash
+help
+help doctor
+help project
+help --search ai
+```
+
+### Project Onboarding
+
+Register the current project and inspect what dsh can activate or run.
+
+```bash
+pm init
+pm status
+pm activate
+task
+```
 
 ### `include` Command
 
@@ -659,10 +700,11 @@ Access all shell capabilities through a unified fuzzy-search interface, similar 
 
 - **Trigger**: Press `Alt+x` to open.
 - **Features**:
-  - Run internal commands (Clear Screen, Reload Config, etc.)
+  - Run internal commands and setup helpers (Doctor Setup/Fix, Project Init/Status, Output History, etc.)
   - Access AI features (Explain, Fix, etc.)
+  - Run `safe-run` against the current input or generate completion JSON for the current command name
   - Execute Git operations
-  - Extensible via `Action` trait and Lisp interface (coming soon)
+  - Extensible via the `Action` trait and Lisp `register-action`
 
 ## Command Suggestions
 

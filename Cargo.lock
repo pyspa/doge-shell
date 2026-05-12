@@ -1122,6 +1122,7 @@ dependencies = [
  "rust-embed",
  "serde",
  "serde_json",
+ "shell-words",
  "shellexpand",
  "skim",
  "tabled",

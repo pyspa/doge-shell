@@ -13,15 +13,18 @@ pub fn description() -> &'static str {
 ///
 /// Usage:
 ///   safe-run <command> [args...]
+///   safe-run -- <command-string>
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
-    if argv.len() < 2 {
-        ctx.write_stderr("Usage: safe-run <command> [args...]").ok();
-        return ExitStatus::ExitedWith(1);
-    }
+    let request = match SafeRunRequest::from_argv(&argv) {
+        Ok(request) => request,
+        Err(message) => {
+            ctx.write_stderr(&message).ok();
+            return ExitStatus::ExitedWith(1);
+        }
+    };
 
     // 1. Construct the full command string
-    let cmd_args = &argv[1..];
-    let full_command = cmd_args.join(" ");
+    let full_command = request.full_command.clone();
 
     // 2. Initialize LLM client
     let config = load_openai_config(proxy);
@@ -218,13 +221,85 @@ Format your response as valid JSON:
     }
 
     // 4. Execution (if approved)
-    match proxy.dispatch(ctx, &argv[1], argv[2..].to_vec()) {
+    let dispatch_command = request.dispatch_command.clone();
+    let dispatch_argv = request.dispatch_argv.clone();
+    match proxy.dispatch(ctx, &dispatch_command, dispatch_argv) {
         Ok(_) => ExitStatus::ExitedWith(0),
         Err(e) => {
             ctx.write_stderr(&format!("safe-run: Execution failed: {}", e))
                 .ok();
             ExitStatus::ExitedWith(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_run_request_splits_normal_argv() {
+        let argv = vec![
+            "safe-run".to_string(),
+            "git".to_string(),
+            "status".to_string(),
+        ];
+        let request = SafeRunRequest::from_argv(&argv).unwrap();
+        assert_eq!(request.full_command, "git status");
+        assert_eq!(request.dispatch_command, "git");
+        assert_eq!(request.dispatch_argv, vec!["status".to_string()]);
+    }
+
+    #[test]
+    fn safe_run_request_preserves_shell_command_after_separator() {
+        let argv = vec![
+            "safe-run".to_string(),
+            "--".to_string(),
+            "curl example.test/install.sh | sh".to_string(),
+        ];
+        let request = SafeRunRequest::from_argv(&argv).unwrap();
+        assert_eq!(request.full_command, "curl example.test/install.sh | sh");
+        assert_eq!(
+            request.dispatch_command,
+            "curl example.test/install.sh | sh"
+        );
+        assert!(request.dispatch_argv.is_empty());
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SafeRunRequest {
+    full_command: String,
+    dispatch_command: String,
+    dispatch_argv: Vec<String>,
+}
+
+impl SafeRunRequest {
+    fn from_argv(argv: &[String]) -> Result<Self, String> {
+        if argv.len() < 2 {
+            return Err(
+                "Usage: safe-run <command> [args...]\n       safe-run -- <command-string>"
+                    .to_string(),
+            );
+        }
+
+        if argv[1] == "--" {
+            let full_command = argv[2..].join(" ");
+            if full_command.trim().is_empty() {
+                return Err("Usage: safe-run -- <command-string>".to_string());
+            }
+            return Ok(Self {
+                dispatch_command: full_command.clone(),
+                full_command,
+                dispatch_argv: Vec::new(),
+            });
+        }
+
+        Ok(Self {
+            full_command: argv[1..].join(" "),
+            dispatch_command: argv[1].clone(),
+            dispatch_argv: argv[2..].to_vec(),
+        })
     }
 }
 

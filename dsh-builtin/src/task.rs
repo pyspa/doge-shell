@@ -5,6 +5,7 @@ use dsh_types::{Context, ExitStatus};
 use regex::Regex;
 use serde::Serialize;
 use skim::prelude::*;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -25,11 +26,17 @@ struct Task {
     command: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TaskInfo {
     pub source: String,
     pub name: String,
     pub command: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskDiscoverySummary {
+    pub tasks: Vec<TaskInfo>,
+    pub deferred_sources: Vec<String>,
 }
 
 impl From<TaskInfo> for Task {
@@ -367,10 +374,23 @@ fn detect_tasks(proxy: &dyn ShellProxy) -> Result<Vec<Task>> {
 }
 
 pub fn list_tasks_in_dir(current_dir: &Path) -> Result<Vec<TaskInfo>> {
-    detect_tasks_in_dir(current_dir)
+    Ok(detect_tasks_in_dir(current_dir, TaskDetectionMode::Full)?.tasks)
 }
 
-fn detect_tasks_in_dir(current_dir: &Path) -> Result<Vec<TaskInfo>> {
+pub fn summarize_tasks_in_dir_metadata_only(current_dir: &Path) -> Result<TaskDiscoverySummary> {
+    detect_tasks_in_dir(current_dir, TaskDetectionMode::MetadataOnly)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskDetectionMode {
+    Full,
+    MetadataOnly,
+}
+
+fn detect_tasks_in_dir(
+    current_dir: &Path,
+    mode: TaskDetectionMode,
+) -> Result<TaskDiscoverySummary> {
     let project_tasks = project_context::detect_task_names_in_dir(current_dir)?
         .into_iter()
         .map(|task| TaskInfo {
@@ -382,6 +402,7 @@ fn detect_tasks_in_dir(current_dir: &Path) -> Result<Vec<TaskInfo>> {
     let project = project_context::resolve_project_context(current_dir);
     let current_dir = project.project_root.as_path();
     let mut tasks = Vec::new();
+    let mut deferred_sources = Vec::new();
 
     tasks.extend(project_tasks);
 
@@ -415,27 +436,32 @@ fn detect_tasks_in_dir(current_dir: &Path) -> Result<Vec<TaskInfo>> {
 
     // 3. Makefile
     if current_dir.join("Makefile").exists() || current_dir.join("makefile").exists() {
-        // Use make -pRrq : to list targets
-        // Execution runs in current dir, or use -C? Command current_dir should work.
-        if let Ok(output) = Command::new("make")
-            .current_dir(current_dir)
-            .args(["-pRrq", ":"])
-            .output()
-        {
-            let content = String::from_utf8_lossy(&output.stdout);
-            for line in content.lines() {
-                if let Some(target) = line.strip_suffix(':')
-                    && !target.starts_with(['.', '#', '%'])
-                    && !target.contains('%')
-                    && !target.contains(' ')
+        match mode {
+            TaskDetectionMode::Full => {
+                // Use make -pRrq : to list targets. This can evaluate Makefile constructs,
+                // so passive diagnostics must use MetadataOnly mode instead.
+                if let Ok(output) = Command::new("make")
+                    .current_dir(current_dir)
+                    .args(["-pRrq", ":"])
+                    .output()
                 {
-                    tasks.push(TaskInfo {
-                        source: "make".to_string(),
-                        name: target.to_string(),
-                        command: format!("make {}", target),
-                    });
+                    let content = String::from_utf8_lossy(&output.stdout);
+                    for line in content.lines() {
+                        if let Some(target) = line.strip_suffix(':')
+                            && !target.starts_with(['.', '#', '%'])
+                            && !target.contains('%')
+                            && !target.contains(' ')
+                        {
+                            tasks.push(TaskInfo {
+                                source: "make".to_string(),
+                                name: target.to_string(),
+                                command: format!("make {}", target),
+                            });
+                        }
+                    }
                 }
             }
+            TaskDetectionMode::MetadataOnly => deferred_sources.push("make".to_string()),
         }
     }
 
@@ -472,24 +498,33 @@ fn detect_tasks_in_dir(current_dir: &Path) -> Result<Vec<TaskInfo>> {
         .iter()
         .any(|f| current_dir.join(f).exists());
     if justfile_exists {
-        // Try `just --summary`
-        if let Ok(output) = Command::new("just")
-            .current_dir(current_dir)
-            .arg("--summary")
-            .output()
-        {
-            let text = String::from_utf8_lossy(&output.stdout);
-            for name in text.split_whitespace() {
-                tasks.push(TaskInfo {
-                    source: "just".to_string(),
-                    name: name.to_string(),
-                    command: format!("just {}", name),
-                });
+        match mode {
+            TaskDetectionMode::Full => {
+                // Try `just --summary`. Keep this out of passive diagnostics because
+                // justfiles may invoke shell during evaluation.
+                if let Ok(output) = Command::new("just")
+                    .current_dir(current_dir)
+                    .arg("--summary")
+                    .output()
+                {
+                    let text = String::from_utf8_lossy(&output.stdout);
+                    for name in text.split_whitespace() {
+                        tasks.push(TaskInfo {
+                            source: "just".to_string(),
+                            name: name.to_string(),
+                            command: format!("just {}", name),
+                        });
+                    }
+                }
             }
+            TaskDetectionMode::MetadataOnly => deferred_sources.push("just".to_string()),
         }
     }
 
-    Ok(dedup_task_infos(tasks))
+    Ok(TaskDiscoverySummary {
+        tasks: dedup_task_infos(tasks),
+        deferred_sources: dedup_strings(deferred_sources),
+    })
 }
 
 fn detect_js_manager(path: &Path) -> String {
@@ -514,12 +549,23 @@ fn remove_jsonc_comments(json: &str) -> String {
 }
 
 fn dedup_task_infos(tasks: Vec<TaskInfo>) -> Vec<TaskInfo> {
-    let mut seen = std::collections::BTreeSet::new();
+    let mut seen = BTreeSet::new();
     let mut deduped = Vec::new();
     for task in tasks {
         let key = (task.source.clone(), task.name.clone(), task.command.clone());
         if seen.insert(key) {
             deduped.push(task);
+        }
+    }
+    deduped
+}
+
+fn dedup_strings(values: Vec<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut deduped = Vec::new();
+    for value in values {
+        if seen.insert(value.clone()) {
+            deduped.push(value);
         }
     }
     deduped
@@ -544,7 +590,7 @@ mod tests {
         let mut file = File::create(dir.path().join("package.json")).unwrap();
         file.write_all(package_json.as_bytes()).unwrap();
 
-        let tasks = detect_tasks_in_dir(dir.path()).unwrap();
+        let tasks = list_tasks_in_dir(dir.path()).unwrap();
         let start_task = tasks.iter().find(|t| t.name == "start").unwrap();
         assert_eq!(start_task.source, "npm");
         assert_eq!(start_task.command, "npm run start");
@@ -558,7 +604,7 @@ mod tests {
         let dir = tempdir().unwrap();
         File::create(dir.path().join("Cargo.toml")).unwrap();
 
-        let tasks = detect_tasks_in_dir(dir.path()).unwrap();
+        let tasks = list_tasks_in_dir(dir.path()).unwrap();
         assert!(
             tasks
                 .iter()
@@ -581,7 +627,7 @@ mod tests {
             .unwrap();
         File::create(dir.path().join("yarn.lock")).unwrap();
 
-        let tasks = detect_tasks_in_dir(dir.path()).unwrap();
+        let tasks = list_tasks_in_dir(dir.path()).unwrap();
         let task = tasks.first().unwrap();
         assert_eq!(task.source, "yarn");
         assert_eq!(task.command, "yarn run build");
@@ -602,7 +648,7 @@ mod tests {
         let nested = dir.path().join("src").join("nested");
         fs::create_dir_all(&nested).unwrap();
 
-        let tasks = detect_tasks_in_dir(&nested).unwrap();
+        let tasks = list_tasks_in_dir(&nested).unwrap();
         assert!(
             tasks
                 .iter()
@@ -612,6 +658,26 @@ mod tests {
             tasks
                 .iter()
                 .any(|task| task.name == "dev" && task.source == "mise")
+        );
+    }
+
+    #[test]
+    fn metadata_summary_does_not_execute_makefile() {
+        let dir = tempdir().unwrap();
+        let marker = dir.path().join("should-not-exist");
+        File::create(dir.path().join("Makefile"))
+            .unwrap()
+            .write_all(
+                format!("$(shell touch {})\nall:\n\t@echo all\n", marker.display()).as_bytes(),
+            )
+            .unwrap();
+
+        let summary = summarize_tasks_in_dir_metadata_only(dir.path()).unwrap();
+        assert!(summary.tasks.is_empty());
+        assert_eq!(summary.deferred_sources, vec!["make".to_string()]);
+        assert!(
+            !marker.exists(),
+            "metadata-only task summary must not invoke make"
         );
     }
 

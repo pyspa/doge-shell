@@ -363,6 +363,13 @@ impl ShellProxy for Shell {
         self.environment.read().output_history.get_all_entries()
     }
 
+    fn clear_output_history(&mut self) -> usize {
+        let mut environment = self.environment.write();
+        let removed = environment.output_history.len();
+        environment.output_history.clear();
+        removed
+    }
+
     fn capture_command(&mut self, _ctx: &Context, cmd: &str) -> Result<(i32, String, String)> {
         use std::process::{Command, Stdio};
 

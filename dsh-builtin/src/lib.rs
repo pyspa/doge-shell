@@ -182,6 +182,11 @@ pub trait ShellProxy {
         Vec::new()
     }
 
+    /// Clear output history and return the number of removed entries.
+    fn clear_output_history(&mut self) -> usize {
+        0
+    }
+
     fn capture_command(&mut self, _ctx: &Context, _cmd: &str) -> Result<(i32, String, String)> {
         // Default implementation returns error as this requires direct shell access
         Err(anyhow::anyhow!("capture_command not implemented"))

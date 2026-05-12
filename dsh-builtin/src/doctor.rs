@@ -1,5 +1,6 @@
 use crate::ShellProxy;
 use crate::project_context;
+use crate::task;
 use dsh_types::{Context, ExitStatus};
 use std::collections::BTreeSet;
 use std::fs;
@@ -7,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub fn description() -> &'static str {
-    "Diagnose config, AI, MCP, project, runtime, skills, and dev validation state"
+    "Diagnose config, AI, MCP, project, runtime, skills, setup, and dev validation state"
 }
 
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
@@ -26,6 +27,12 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     let current_dir = proxy
         .get_current_dir()
         .unwrap_or_else(|_| PathBuf::from("."));
+
+    if matches!(section, Some("setup" | "fix")) {
+        print_header(ctx, "setup");
+        check_setup(ctx, proxy, &current_dir, section == Some("fix"));
+        return ExitStatus::ExitedWith(0);
+    }
 
     if show_section(section, "config") {
         print_header(ctx, "config");
@@ -70,7 +77,7 @@ fn print_help(ctx: &Context) -> ExitStatus {
 
 fn help_text() -> &'static str {
     concat!(
-        "Usage: doctor [config|ai|mcp|project|runtime|performance|skills|dev|validate] [OPTIONS]\n",
+        "Usage: doctor [config|ai|mcp|project|runtime|performance|skills|setup|fix|dev|validate] [OPTIONS]\n",
         "\n",
         "Run diagnostics for the current shell setup. Without a section, all checks run.\n",
         "\n",
@@ -82,6 +89,8 @@ fn help_text() -> &'static str {
         "  runtime  Check common developer tools in PATH\n",
         "  performance  Show command timing and runtime skill scan state\n",
         "  skills   Compare repo-local skills with expected runtime skills\n",
+        "  setup    Show first-run setup state and recommended next steps\n",
+        "  fix      Create safe missing setup directories/files, then show setup state\n",
         "  dev      Suggest validation commands from changed files\n",
         "  validate Alias for dev\n",
         "\n",
@@ -91,6 +100,8 @@ fn help_text() -> &'static str {
         "  doctor project\n",
         "  doctor performance --latency --latency-iters 1000\n",
         "  doctor skills\n",
+        "  doctor setup\n",
+        "  doctor fix\n",
         "  doctor validate\n",
         "  doctor --help\n",
     )
@@ -108,6 +119,8 @@ fn is_known_section(value: &str) -> bool {
             | "performance"
             | "perf"
             | "skills"
+            | "setup"
+            | "fix"
             | "dev"
             | "validate"
     )
@@ -125,6 +138,166 @@ fn show_section(selected: Option<&str>, current: &str) -> bool {
 
 fn print_header(ctx: &Context, title: &str) {
     let _ = ctx.write_stdout(&format!("[{title}]"));
+}
+
+fn check_setup(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path, fix: bool) {
+    let Some(config_root) = dirs::config_dir().map(|path| path.join("dsh")) else {
+        let _ = ctx.write_stdout("warn config-root unable-to-determine-config-dir");
+        return;
+    };
+
+    ensure_setup_dir(ctx, &config_root, "config-root", fix);
+    ensure_setup_dir(ctx, &config_root.join("skills"), "runtime-skills", fix);
+    ensure_setup_dir(ctx, &config_root.join("completions"), "completion-dir", fix);
+    ensure_config_file(ctx, &config_root.join("config.lisp"), fix);
+
+    let api_key = proxy
+        .get_var("AI_CHAT_API_KEY")
+        .or_else(|| proxy.get_var("OPENAI_API_KEY"))
+        .or_else(|| proxy.get_var("OPEN_AI_API_KEY"));
+    if api_key
+        .as_ref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        let _ = ctx.write_stdout(&format!("ok ai-key {}", mask_secret(api_key)));
+    } else {
+        let _ = ctx.write_stdout(
+            "warn ai-key missing set AI_CHAT_API_KEY or OPENAI_API_KEY to enable AI features",
+        );
+    }
+
+    let mcp_count = proxy.list_mcp_servers().len();
+    if mcp_count == 0 {
+        let _ = ctx.write_stdout("skip mcp no configured servers");
+    } else {
+        let _ = ctx.write_stdout(&format!("ok mcp configured={mcp_count}"));
+    }
+
+    let project = project_context::resolve_project_context(current_dir);
+    let _ = ctx.write_stdout(&format!(
+        "ok project-root {}",
+        project.project_root.display()
+    ));
+    if project.project_markers.is_empty() {
+        let _ = ctx.write_stdout("warn project-markers none");
+    } else {
+        let _ = ctx.write_stdout(&format!(
+            "ok project-markers {}",
+            project.project_markers.join(", ")
+        ));
+    }
+
+    if project.activations.is_empty() {
+        let _ = ctx.write_stdout("skip activation no .env, .envrc, .venv, or venv found");
+    } else {
+        for activation in &project.activations {
+            let _ = ctx.write_stdout(&format!(
+                "ok activation {} {}",
+                activation.kind,
+                activation.path.display()
+            ));
+        }
+        if project.project_root.join(".envrc").exists()
+            && !proxy.is_direnv_allowed(&project.project_root)
+        {
+            let _ = ctx.write_stdout("warn envrc not allow-listed; use (allow-direnv \"<project-root>\") in config.lisp if trusted");
+        }
+        let _ = ctx.write_stdout("hint run `pm activate` to apply safe project activation");
+    }
+
+    match task::summarize_tasks_in_dir_metadata_only(&project.project_root) {
+        Ok(summary) if summary.tasks.is_empty() && summary.deferred_sources.is_empty() => {
+            let _ = ctx.write_stdout("skip tasks none detected");
+        }
+        Ok(summary) => {
+            if !summary.tasks.is_empty() {
+                let _ = ctx.write_stdout(&format!(
+                    "ok tasks metadata-detected={}",
+                    summary.tasks.len()
+                ));
+            }
+            if !summary.deferred_sources.is_empty() {
+                let _ = ctx.write_stdout(&format!(
+                    "skip tasks dynamic-probe sources={} run `task --list` for full detection",
+                    summary.deferred_sources.join(", ")
+                ));
+            }
+            let _ = ctx.write_stdout("hint run `task` to select a project task");
+        }
+        Err(err) => {
+            let _ = ctx.write_stdout(&format!("warn tasks unavailable {err}"));
+        }
+    }
+
+    let _ = ctx.write_stdout(
+        "hint run `help ai`, `help project`, or `help --search <keyword>` to discover commands",
+    );
+}
+
+fn ensure_setup_dir(ctx: &Context, path: &Path, label: &str, fix: bool) {
+    if path.is_dir() {
+        let _ = ctx.write_stdout(&format!("ok {label} {}", path.display()));
+        return;
+    }
+
+    if fix {
+        match fs::create_dir_all(path) {
+            Ok(()) => {
+                let _ = ctx.write_stdout(&format!("fixed {label} created {}", path.display()));
+            }
+            Err(err) => {
+                let _ = ctx.write_stdout(&format!("warn {label} create-failed {err}"));
+            }
+        }
+    } else {
+        let _ = ctx.write_stdout(&format!("warn {label} missing {}", path.display()));
+    }
+}
+
+fn ensure_config_file(ctx: &Context, path: &Path, fix: bool) {
+    if path.is_file() {
+        let _ = ctx.write_stdout(&format!("ok config {}", path.display()));
+        return;
+    }
+
+    if !fix {
+        let _ = ctx.write_stdout(&format!("warn config missing {}", path.display()));
+        return;
+    }
+
+    if let Some(parent) = path.parent()
+        && let Err(err) = fs::create_dir_all(parent)
+    {
+        let _ = ctx.write_stdout(&format!("warn config parent-create-failed {err}"));
+        return;
+    }
+
+    match fs::write(path, default_config_lisp()) {
+        Ok(()) => {
+            let _ = ctx.write_stdout(&format!("fixed config created {}", path.display()));
+        }
+        Err(err) => {
+            let _ = ctx.write_stdout(&format!("warn config create-failed {err}"));
+        }
+    }
+}
+
+fn default_config_lisp() -> &'static str {
+    concat!(
+        ";; doge-shell config.lisp\n",
+        ";; This file was created by `doctor fix`.\n",
+        "\n",
+        ";; Common aliases\n",
+        "(alias \"ll\" \"ls -alF\")\n",
+        "(alias \"la\" \"ls -A\")\n",
+        "\n",
+        ";; AI execute-tool allowlist for low-risk read-only commands.\n",
+        "(chat-execute-clear)\n",
+        "(chat-execute-add \"ls\" \"cat\" \"echo\" \"grep\" \"find\")\n",
+        "\n",
+        ";; Uncomment after reviewing a trusted project root with .envrc.\n",
+        ";; (allow-direnv \"/path/to/project\")\n",
+    )
 }
 
 fn check_config(ctx: &Context) {
@@ -890,8 +1063,11 @@ mod tests {
         assert!(help.contains("performance"));
         assert!(help.contains("--latency"));
         assert!(help.contains("skills"));
+        assert!(help.contains("setup"));
+        assert!(help.contains("fix"));
         assert!(help.contains("validate"));
         assert!(help.contains("doctor ai"));
+        assert!(help.contains("doctor setup"));
     }
 
     #[test]
@@ -911,7 +1087,17 @@ mod tests {
     fn show_section_matches_new_aliases() {
         assert!(show_section(Some("validate"), "dev"));
         assert!(is_known_section("skills"));
+        assert!(is_known_section("setup"));
+        assert!(is_known_section("fix"));
         assert!(!is_known_section("unknown"));
+    }
+
+    #[test]
+    fn default_config_lisp_contains_safe_setup_defaults() {
+        let config = default_config_lisp();
+        assert!(config.contains("chat-execute-clear"));
+        assert!(config.contains("chat-execute-add"));
+        assert!(config.contains("allow-direnv"));
     }
 
     #[test]

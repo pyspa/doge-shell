@@ -1,4 +1,5 @@
 use crate::ShellProxy;
+use crate::safety_policy;
 use serde_json::{Value, json};
 use std::fs;
 
@@ -47,15 +48,22 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
     let normalized_current_dir =
         std::fs::canonicalize(&current_dir).unwrap_or_else(|_| super::normalize_path(&current_dir));
 
-    // Check if the file is ignored by .gitignore
-    if super::gitignore::is_gitignored(&normalized_abs_path, &normalized_current_dir) {
-        return Err(format!(
-            "chat: read_file tool path `{path_value}` is ignored by .gitignore"
-        ));
+    super::reject_gitignored_path(&normalized_abs_path, &normalized_current_dir, path_value)?;
+
+    if let Some(reason) = super::sensitive_path_reason(&normalized_abs_path)
+        && !super::confirm_sensitive_access(_proxy, "read", path_value, reason)?
+    {
+        return Ok("read_file cancelled by user.".to_string());
     }
 
     let contents = fs::read_to_string(&normalized_abs_path)
         .map_err(|err| format!("chat: failed to read file `{path_value}`: {err}"))?;
+
+    if safety_policy::contains_sensitive_text(&contents)
+        && !super::confirm_sensitive_access(_proxy, "read", path_value, "sensitive content")?
+    {
+        return Ok("read_file cancelled by user.".to_string());
+    }
 
     Ok(contents)
 }
@@ -68,6 +76,8 @@ mod tests {
 
     struct NoopProxy {
         cwd: std::path::PathBuf,
+        confirm_calls: usize,
+        confirm_result: bool,
     }
     impl ShellProxy for NoopProxy {
         fn get_current_dir(&self) -> anyhow::Result<std::path::PathBuf> {
@@ -138,6 +148,10 @@ mod tests {
         fn get_job_count(&self) -> usize {
             0
         }
+        fn confirm_action(&mut self, _message: &str) -> anyhow::Result<bool> {
+            self.confirm_calls += 1;
+            Ok(self.confirm_result)
+        }
     }
 
     #[test]
@@ -146,9 +160,7 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         fs::write(&file_path, "Hello, world!").unwrap();
 
-        let mut proxy = NoopProxy {
-            cwd: dir.path().to_path_buf(),
-        };
+        let mut proxy = proxy(dir.path());
 
         let result = run(r#"{"path": "test.txt"}"#, &mut proxy).unwrap();
         assert_eq!(result, "Hello, world!");
@@ -157,9 +169,7 @@ mod tests {
     #[test]
     fn test_read_file_not_found() {
         let dir = tempdir().unwrap();
-        let mut proxy = NoopProxy {
-            cwd: dir.path().to_path_buf(),
-        };
+        let mut proxy = proxy(dir.path());
 
         let result = run(r#"{"path": "missing.txt"}"#, &mut proxy);
         assert!(result.is_err());
@@ -168,9 +178,7 @@ mod tests {
     #[test]
     fn test_read_file_absolute_path() {
         let dir = tempdir().unwrap();
-        let mut proxy = NoopProxy {
-            cwd: dir.path().to_path_buf(),
-        };
+        let mut proxy = proxy(dir.path());
         let result = run(r#"{"path": "/etc/passwd"}"#, &mut proxy);
         assert!(result.is_err());
         assert!(
@@ -183,9 +191,7 @@ mod tests {
     #[test]
     fn test_read_file_parent_traversal() {
         let dir = tempdir().unwrap();
-        let mut proxy = NoopProxy {
-            cwd: dir.path().to_path_buf(),
-        };
+        let mut proxy = proxy(dir.path());
         let result = run(r#"{"path": "../secret.txt"}"#, &mut proxy);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("outside allowed directories"));
@@ -201,13 +207,51 @@ mod tests {
         fs::create_dir_all(base.path().join("inside")).unwrap();
         fs::write(outside.path().join("secret.txt"), "secret").unwrap();
         symlink(outside.path(), base.path().join("inside/link_out")).unwrap();
-        let mut proxy = NoopProxy {
-            cwd: base.path().to_path_buf(),
-        };
+        let mut proxy = proxy(base.path());
 
         let result = run(r#"{"path": "inside/link_out/secret.txt"}"#, &mut proxy);
 
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("outside allowed directories"));
+    }
+
+    fn proxy(path: &std::path::Path) -> NoopProxy {
+        NoopProxy {
+            cwd: path.to_path_buf(),
+            confirm_calls: 0,
+            confirm_result: true,
+        }
+    }
+
+    #[test]
+    fn test_read_file_requires_confirmation_for_sensitive_path() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join(".env.local"), "APP_MODE=dev").unwrap();
+        let mut proxy = NoopProxy {
+            cwd: dir.path().to_path_buf(),
+            confirm_calls: 0,
+            confirm_result: false,
+        };
+
+        let result = run(r#"{"path": ".env.local"}"#, &mut proxy).unwrap();
+
+        assert_eq!(result, "read_file cancelled by user.");
+        assert_eq!(proxy.confirm_calls, 1);
+    }
+
+    #[test]
+    fn test_read_file_requires_confirmation_for_sensitive_content() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("config.txt"), "API_KEY=secret").unwrap();
+        let mut proxy = NoopProxy {
+            cwd: dir.path().to_path_buf(),
+            confirm_calls: 0,
+            confirm_result: false,
+        };
+
+        let result = run(r#"{"path": "config.txt"}"#, &mut proxy).unwrap();
+
+        assert_eq!(result, "read_file cancelled by user.");
+        assert_eq!(proxy.confirm_calls, 1);
     }
 }

@@ -1,6 +1,8 @@
 use crate::ShellProxy;
 use crate::project_context;
+use crate::safety_policy;
 use crate::task;
+use dsh_types::mcp::McpTransport;
 use dsh_types::{Context, ExitStatus};
 use std::collections::BTreeSet;
 use std::fs;
@@ -8,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub fn description() -> &'static str {
-    "Diagnose config, AI, MCP, project, runtime, skills, setup, and dev validation state"
+    "Diagnose config, AI, MCP, project, runtime, skills, safety, setup, and dev validation state"
 }
 
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
@@ -62,6 +64,10 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         print_header(ctx, "skills");
         check_skills(ctx, proxy, &current_dir);
     }
+    if show_section(section, "safety") {
+        print_header(ctx, "safety");
+        check_safety(ctx, proxy, &current_dir);
+    }
     if show_section(section, "dev") || show_section(section, "validate") {
         print_header(ctx, "dev");
         check_dev(ctx, &current_dir);
@@ -77,7 +83,7 @@ fn print_help(ctx: &Context) -> ExitStatus {
 
 fn help_text() -> &'static str {
     concat!(
-        "Usage: doctor [config|ai|mcp|project|runtime|performance|skills|setup|fix|dev|validate] [OPTIONS]\n",
+        "Usage: doctor [config|ai|mcp|project|runtime|performance|skills|safety|setup|fix|dev|validate] [OPTIONS]\n",
         "\n",
         "Run diagnostics for the current shell setup. Without a section, all checks run.\n",
         "\n",
@@ -89,6 +95,7 @@ fn help_text() -> &'static str {
         "  runtime  Check common developer tools in PATH\n",
         "  performance  Show command timing and runtime skill scan state\n",
         "  skills   Compare repo-local skills with expected runtime skills\n",
+        "  safety   Check AI tool, MCP, direnv, log, and allowlist safety posture\n",
         "  setup    Show first-run setup state and recommended next steps\n",
         "  fix      Create safe missing setup directories/files, then show setup state\n",
         "  dev      Suggest validation commands from changed files\n",
@@ -100,6 +107,7 @@ fn help_text() -> &'static str {
         "  doctor project\n",
         "  doctor performance --latency --latency-iters 1000\n",
         "  doctor skills\n",
+        "  doctor safety\n",
         "  doctor setup\n",
         "  doctor fix\n",
         "  doctor validate\n",
@@ -119,6 +127,7 @@ fn is_known_section(value: &str) -> bool {
             | "performance"
             | "perf"
             | "skills"
+            | "safety"
             | "setup"
             | "fix"
             | "dev"
@@ -753,6 +762,185 @@ fn check_skill_profile(
     ));
 }
 
+fn check_safety(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path) {
+    let allowlist = proxy.list_execute_allowlist();
+    if allowlist.is_empty() {
+        let _ = ctx.write_stdout("ok execute-allowlist empty");
+    } else {
+        for entry in &allowlist {
+            if is_risky_execute_allowlist_entry(entry) {
+                let _ = ctx.write_stdout(&format!("warn execute-allowlist risky `{entry}`"));
+            } else {
+                let _ = ctx.write_stdout(&format!("ok execute-allowlist `{entry}`"));
+            }
+        }
+    }
+
+    let servers = proxy.list_mcp_servers();
+    if servers.is_empty() {
+        let _ = ctx.write_stdout("ok mcp-servers none");
+    } else {
+        for server in servers {
+            match &server.transport {
+                McpTransport::Stdio { command, env, .. } => {
+                    if env.keys().any(|key| is_sensitive_env_name(key)) {
+                        let _ = ctx.write_stdout(&format!(
+                            "warn mcp {} stdio command={} sensitive-env",
+                            server.label, command
+                        ));
+                    } else {
+                        let _ = ctx.write_stdout(&format!(
+                            "ok mcp {} stdio command={}",
+                            server.label, command
+                        ));
+                    }
+                }
+                McpTransport::Sse { url } => {
+                    let _ = ctx.write_stdout(&format!(
+                        "warn mcp {} sse url={} unsupported-runtime",
+                        server.label, url
+                    ));
+                }
+                McpTransport::Http {
+                    url, auth_header, ..
+                } => {
+                    let scheme = if is_https_or_local_http_url(url) {
+                        "ok"
+                    } else {
+                        "warn"
+                    };
+                    let auth = if auth_header.is_some() { " auth" } else { "" };
+                    let _ = ctx.write_stdout(&format!(
+                        "{scheme} mcp {} http url={}{}",
+                        server.label, url, auth
+                    ));
+                }
+            }
+        }
+    }
+
+    if let Some(base_url) = proxy.get_var("AI_CHAT_BASE_URL") {
+        if is_https_or_local_http_url(&base_url) {
+            let _ = ctx.write_stdout(&format!("ok ai-base-url {base_url}"));
+        } else {
+            let _ = ctx.write_stdout(&format!("warn ai-base-url insecure {base_url}"));
+        }
+    } else {
+        let _ = ctx.write_stdout("ok ai-base-url default");
+    }
+
+    let project = project_context::resolve_project_context(current_dir);
+    let envrc = project.project_root.join(".envrc");
+    if envrc.exists() {
+        if proxy.is_direnv_allowed(&project.project_root) {
+            let _ = ctx.write_stdout(&format!("ok envrc allowed {}", envrc.display()));
+        } else {
+            let _ = ctx.write_stdout(&format!("warn envrc not-allowed {}", envrc.display()));
+        }
+    } else {
+        let _ = ctx.write_stdout("ok envrc missing");
+    }
+
+    if let Some(config_root) = dirs::config_dir().map(|path| path.join("dsh").join("skills")) {
+        if config_root.exists() {
+            let count = fs::read_dir(&config_root)
+                .map(|entries| entries.count())
+                .unwrap_or(0);
+            if count > 8 {
+                let _ = ctx.write_stdout(&format!(
+                    "warn runtime-skills footprint-high entries={count}"
+                ));
+            } else {
+                let _ = ctx.write_stdout(&format!("ok runtime-skills entries={count}"));
+            }
+        } else {
+            let _ = ctx.write_stdout("ok runtime-skills missing");
+        }
+    }
+
+    if let Some(repo_root) = find_repo_root(current_dir) {
+        match unignored_log_paths(&repo_root) {
+            Ok(paths) if paths.is_empty() => {
+                let _ = ctx.write_stdout("ok unignored-logs none");
+            }
+            Ok(paths) => {
+                for path in paths {
+                    let _ = ctx.write_stdout(&format!("warn unignored-log {}", path.display()));
+                }
+                let _ = ctx.write_stdout("warn unignored-logs consider adding *.log to .gitignore");
+            }
+            Err(err) => {
+                let _ = ctx.write_stdout(&format!("warn unignored-logs unavailable {err}"));
+            }
+        }
+    } else {
+        let _ = ctx.write_stdout("skip unignored-logs repo-root-not-found");
+    }
+}
+
+fn is_sensitive_env_name(key: &str) -> bool {
+    safety_policy::is_sensitive_key(key)
+}
+
+fn is_https_or_local_http_url(value: &str) -> bool {
+    if value.starts_with("https://") {
+        return true;
+    }
+
+    let Some(rest) = value.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .rsplit_once('@')
+        .map(|(_, host)| host)
+        .unwrap_or_else(|| rest.split(['/', '?', '#']).next().unwrap_or_default());
+
+    let host = if let Some(stripped) = authority.strip_prefix('[') {
+        stripped.split(']').next().unwrap_or_default()
+    } else {
+        authority.split(':').next().unwrap_or_default()
+    };
+
+    matches!(host, "localhost" | "127.0.0.1" | "::1")
+}
+
+fn is_risky_execute_allowlist_entry(entry: &str) -> bool {
+    let lower = entry.to_ascii_lowercase();
+    lower.contains('|')
+        || lower.contains(';')
+        || lower.contains("$(")
+        || lower.contains('`')
+        || lower.contains("rm -rf")
+        || lower.contains("rm -fr")
+        || lower.starts_with("sh")
+        || lower.starts_with("bash")
+        || lower.starts_with("zsh")
+        || lower.starts_with("python -c")
+        || lower.starts_with("node -e")
+}
+
+fn unignored_log_paths(repo_root: &Path) -> std::result::Result<Vec<PathBuf>, String> {
+    let output = Command::new("git")
+        .args(["status", "--short", "--untracked-files=all"])
+        .current_dir(repo_root)
+        .output()
+        .map_err(|err| err.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let path = line.get(3..)?.trim().trim_matches('"');
+            path.ends_with(".log").then(|| PathBuf::from(path))
+        })
+        .collect())
+}
+
 fn check_dev(ctx: &Context, current_dir: &Path) {
     let Some(repo_root) = find_repo_root(current_dir) else {
         let _ = ctx.write_stdout("warn repo-root not-found for validation suggestions");
@@ -1037,6 +1225,129 @@ fn count_skill_dirs(root: &Path) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dsh_types::mcp::{McpServerConfig, McpTransport};
+    use dsh_types::observed_output::{ObservedOutput, SharedOutputObserver};
+    use std::collections::HashMap;
+    use std::os::fd::IntoRawFd;
+    use std::process::Command as StdCommand;
+
+    struct TestProxy {
+        cwd: PathBuf,
+        vars: HashMap<String, String>,
+        allowlist: Vec<String>,
+        servers: Vec<McpServerConfig>,
+        direnv_allowed: bool,
+    }
+
+    impl ShellProxy for TestProxy {
+        fn exit_shell(&mut self) {}
+
+        fn get_github_status(&self) -> (usize, usize, usize) {
+            (0, 0, 0)
+        }
+
+        fn get_git_branch(&self) -> Option<String> {
+            None
+        }
+
+        fn get_job_count(&self) -> usize {
+            0
+        }
+
+        fn dispatch(
+            &mut self,
+            _ctx: &Context,
+            _cmd: &str,
+            _argv: Vec<String>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn save_path_history(&mut self, _path: &str) {}
+
+        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn insert_path(&mut self, _index: usize, _path: &str) {}
+
+        fn get_var(&mut self, key: &str) -> Option<String> {
+            self.vars.get(key).cloned()
+        }
+
+        fn set_var(&mut self, _key: String, _value: String) {}
+
+        fn set_env_var(&mut self, _key: String, _value: String) {}
+
+        fn is_direnv_allowed(&self, _path: &Path) -> bool {
+            self.direnv_allowed
+        }
+
+        fn unset_env_var(&mut self, _key: &str) {}
+
+        fn get_alias(&mut self, _name: &str) -> Option<String> {
+            None
+        }
+
+        fn set_alias(&mut self, _name: String, _command: String) {}
+
+        fn list_aliases(&mut self) -> HashMap<String, String> {
+            HashMap::new()
+        }
+
+        fn add_abbr(&mut self, _name: String, _expansion: String) {}
+
+        fn remove_abbr(&mut self, _name: &str) -> bool {
+            false
+        }
+
+        fn list_abbrs(&self) -> Vec<(String, String)> {
+            Vec::new()
+        }
+
+        fn get_abbr(&self, _name: &str) -> Option<String> {
+            None
+        }
+
+        fn list_mcp_servers(&mut self) -> Vec<McpServerConfig> {
+            self.servers.clone()
+        }
+
+        fn list_execute_allowlist(&mut self) -> Vec<String> {
+            self.allowlist.clone()
+        }
+
+        fn list_exported_vars(&self) -> Vec<(String, String)> {
+            Vec::new()
+        }
+
+        fn export_var(&mut self, _key: &str) -> bool {
+            false
+        }
+
+        fn set_and_export_var(&mut self, _key: String, _value: String) {}
+
+        fn get_current_dir(&self) -> anyhow::Result<PathBuf> {
+            Ok(self.cwd.clone())
+        }
+
+        fn get_lisp_var(&self, _key: &str) -> Option<String> {
+            None
+        }
+    }
+
+    fn observed_context() -> (Context, SharedOutputObserver) {
+        let mut ctx = Context::new_safe(nix::unistd::getpid(), nix::unistd::getpid(), false);
+        let observer = ObservedOutput::shared(8192);
+        ctx.output_observer = Some(observer.clone());
+        ctx.outfile = std::fs::File::create("/dev/null").unwrap().into_raw_fd();
+        ctx.errfile = std::fs::File::create("/dev/null").unwrap().into_raw_fd();
+        (ctx, observer)
+    }
+
+    fn observed_stdout(observer: &SharedOutputObserver) -> String {
+        observer.lock().unwrap().snapshot().stdout
+    }
 
     #[test]
     fn mask_secret_hides_prefix() {
@@ -1063,6 +1374,7 @@ mod tests {
         assert!(help.contains("performance"));
         assert!(help.contains("--latency"));
         assert!(help.contains("skills"));
+        assert!(help.contains("safety"));
         assert!(help.contains("setup"));
         assert!(help.contains("fix"));
         assert!(help.contains("validate"));
@@ -1087,6 +1399,7 @@ mod tests {
     fn show_section_matches_new_aliases() {
         assert!(show_section(Some("validate"), "dev"));
         assert!(is_known_section("skills"));
+        assert!(is_known_section("safety"));
         assert!(is_known_section("setup"));
         assert!(is_known_section("fix"));
         assert!(!is_known_section("unknown"));
@@ -1188,5 +1501,89 @@ mod tests {
         assert!(commands.iter().any(|cmd| {
             cmd == "scripts/install-runtime-skills.sh --status --target codex --profile codex-core"
         }));
+    }
+
+    #[test]
+    fn safety_helpers_flag_risky_allowlist_entries() {
+        assert!(is_risky_execute_allowlist_entry("bash"));
+        assert!(is_risky_execute_allowlist_entry("python -c"));
+        assert!(is_risky_execute_allowlist_entry("rm -rf /tmp/demo"));
+        assert!(!is_risky_execute_allowlist_entry("git status"));
+        assert!(is_sensitive_env_name("API_TOKEN"));
+        assert!(is_sensitive_env_name("PRIVATE_KEY"));
+        assert!(is_sensitive_env_name("GOOGLE_APPLICATION_CREDENTIALS"));
+        assert!(!is_sensitive_env_name("PATH"));
+    }
+
+    #[test]
+    fn safety_url_helper_rejects_localhost_prefix_spoofing() {
+        assert!(is_https_or_local_http_url("https://api.example.com/v1"));
+        assert!(is_https_or_local_http_url("http://localhost:8080/v1"));
+        assert!(is_https_or_local_http_url("http://127.0.0.1/v1"));
+        assert!(is_https_or_local_http_url("http://[::1]:8080/v1"));
+        assert!(!is_https_or_local_http_url("http://example.com/v1"));
+        assert!(!is_https_or_local_http_url("http://localhost.evil.com/v1"));
+        assert!(!is_https_or_local_http_url("http://127.0.0.1.evil.com/v1"));
+    }
+
+    #[test]
+    fn doctor_safety_reports_risky_posture() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("docs/ai")).unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "!debug.log\n").unwrap();
+        std::fs::write(dir.path().join(".envrc"), "export FOO=bar\n").unwrap();
+        std::fs::write(dir.path().join("debug.log"), "debug\n").unwrap();
+        let git_init = StdCommand::new("git")
+            .arg("init")
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(git_init.status.success());
+
+        let mut mcp_env = HashMap::new();
+        mcp_env.insert("API_TOKEN".to_string(), "secret".to_string());
+        let mut vars = HashMap::new();
+        vars.insert(
+            "AI_CHAT_BASE_URL".to_string(),
+            "http://example.com/v1".to_string(),
+        );
+        let mut proxy = TestProxy {
+            cwd: dir.path().to_path_buf(),
+            vars,
+            allowlist: vec!["bash".to_string(), "git status".to_string()],
+            servers: vec![McpServerConfig {
+                label: "local".to_string(),
+                description: None,
+                transport: McpTransport::Stdio {
+                    command: "node".to_string(),
+                    args: Vec::new(),
+                    env: mcp_env,
+                    cwd: None,
+                },
+            }],
+            direnv_allowed: false,
+        };
+        let (ctx, observer) = observed_context();
+
+        let status = command(
+            &ctx,
+            vec!["doctor".to_string(), "safety".to_string()],
+            &mut proxy,
+        );
+
+        assert_eq!(status, ExitStatus::ExitedWith(0));
+        let output = observed_stdout(&observer);
+        assert!(output.contains("[safety]"));
+        assert!(output.contains("warn execute-allowlist risky `bash`"));
+        assert!(output.contains("ok execute-allowlist `git status`"));
+        assert!(output.contains("warn mcp local stdio command=node sensitive-env"));
+        assert!(output.contains("warn ai-base-url insecure http://example.com/v1"));
+        assert!(output.contains("warn envrc not-allowed"));
+        assert!(output.contains("warn unignored-log debug.log"));
     }
 }

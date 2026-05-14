@@ -75,6 +75,22 @@ impl SafetyGuard {
         guard.register_checker("apt-get", Self::check_package_manager);
         guard.register_checker("yum", Self::check_package_manager);
         guard.register_checker("brew", Self::check_package_manager);
+        for cmd in &[
+            "sh",
+            "bash",
+            "zsh",
+            "fish",
+            "ksh",
+            "python",
+            "python3",
+            "perl",
+            "ruby",
+            "node",
+            "pwsh",
+            "powershell",
+        ] {
+            guard.register_checker(cmd, Self::check_string_eval);
+        }
         //guard.register_checker("systemctl", Self::check_system_modification);
         //guard.register_checker("service", Self::check_system_modification);
 
@@ -140,11 +156,15 @@ impl SafetyGuard {
                 }
             }
 
-            // Check individual command safety
-            // We assume basic args parsing from the job command string is needed or done elsewhere.
-            // Job struct has `process` but it might be complex to extract clean args.
-            // For now, we do a simple split. This is rough but covers most cases.
-            let parts: Vec<String> = job.cmd.split_whitespace().map(|s| s.to_string()).collect();
+            let parts = match Self::parse_command_tokens(&job.cmd) {
+                Ok(parts) => parts,
+                Err(err) => {
+                    return SafetyResult::Confirm(format!(
+                        "Command '{}' could not be parsed for safety checks ({err}). Proceed?",
+                        job.cmd
+                    ));
+                }
+            };
             if let Some(cmd) = parts.first() {
                 let args = if parts.len() > 1 { &parts[1..] } else { &[] };
                 let cmd_clean = Self::get_command_name(cmd);
@@ -241,8 +261,15 @@ impl SafetyGuard {
         // If it is a command execution tool, recursively apply command-level checks.
         if Self::is_mcp_command_execution_tool(tool_name) {
             if let Some(cmd_str) = Self::extract_mcp_command(args_json) {
-                let parts: Vec<String> =
-                    cmd_str.split_whitespace().map(|s| s.to_string()).collect();
+                let parts = match Self::parse_command_tokens(&cmd_str) {
+                    Ok(parts) => parts,
+                    Err(_) => {
+                        return SafetyResult::Confirm(format!(
+                            "MCP tool '{}' requested command execution, but arguments could not be parsed safely. Proceed?",
+                            tool_name
+                        ));
+                    }
+                };
                 if let Some(c) = parts.first() {
                     let a = if parts.len() > 1 { &parts[1..] } else { &[] };
                     return self.check_command(level, c, a, allowlist);
@@ -351,6 +378,10 @@ impl SafetyGuard {
             .and_then(|n| n.to_str())
             .unwrap_or(cmd)
             .to_string()
+    }
+
+    fn parse_command_tokens(command: &str) -> Result<Vec<String>, String> {
+        shell_words::split(command).map_err(|err| err.to_string())
     }
 
     fn is_network_tool(cmd: &str) -> bool {
@@ -570,6 +601,16 @@ impl SafetyGuard {
         None
     }
 
+    fn check_string_eval(args: &[String]) -> Option<String> {
+        if args.iter().any(|arg| {
+            arg == "-c" || arg == "-lc" || arg == "-e" || arg.eq_ignore_ascii_case("-command")
+        }) {
+            Some("String-eval command flag detected. Proceed?".to_string())
+        } else {
+            None
+        }
+    }
+
     pub fn check_system_modification(_args: &[String]) -> Option<String> {
         // systemctl/service are usually privileged.
         // Warn always.
@@ -784,6 +825,34 @@ mod tests {
         let jobs = vec![mock_job("curl google.com"), mock_job("grep title")];
 
         assert_eq!(guard.check_jobs(&jobs, &level, &[]), SafetyResult::Allowed);
+    }
+
+    #[test]
+    fn test_shell_words_tokenization_preserves_quoted_sensitive_path() {
+        let guard = SafetyGuard::new();
+        let level = SafetyLevel::Normal;
+        let jobs = vec![mock_job("cat '/home/user/.ssh/id_ed25519'")];
+
+        assert!(matches!(
+            guard.check_jobs(&jobs, &level, &[]),
+            SafetyResult::Confirm(msg) if msg.contains("SSH key")
+        ));
+    }
+
+    #[test]
+    fn test_string_eval_flags_are_confirmed() {
+        let guard = SafetyGuard::new();
+        let level = SafetyLevel::Normal;
+
+        assert!(matches!(
+            guard.check_command(
+                &level,
+                "bash",
+                &["-lc".to_string(), "echo hi".to_string()],
+                &[]
+            ),
+            SafetyResult::Confirm(msg) if msg.contains("String-eval")
+        ));
     }
 
     #[test]

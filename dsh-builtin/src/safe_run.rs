@@ -6,7 +6,7 @@ use serde_json::json;
 
 /// Built-in safe-run command description
 pub fn description() -> &'static str {
-    "Execute commands with LLM-based safety analysis"
+    "Execute commands with deterministic and LLM-based safety analysis"
 }
 
 /// Built-in safe-run command implementation
@@ -25,6 +25,23 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 
     // 1. Construct the full command string
     let full_command = request.full_command.clone();
+
+    if let Some(warning) = deterministic_command_warning(&full_command) {
+        ctx.write_stderr(&format!("safe-run: static warning: {warning}"))
+            .ok();
+        match proxy.confirm_action("Continue to AI safety analysis?") {
+            Ok(true) => {}
+            Ok(false) => {
+                ctx.write_stderr("Aborted.").ok();
+                return ExitStatus::ExitedWith(1);
+            }
+            Err(err) => {
+                ctx.write_stderr(&format!("Error getting confirmation: {}", err))
+                    .ok();
+                return ExitStatus::ExitedWith(1);
+            }
+        }
+    }
 
     // 2. Initialize LLM client
     let config = load_openai_config(proxy);
@@ -233,6 +250,31 @@ Format your response as valid JSON:
     }
 }
 
+fn deterministic_command_warning(command: &str) -> Option<&'static str> {
+    let lower = command.to_ascii_lowercase();
+    if lower.contains("curl ") && (lower.contains("| sh") || lower.contains("| bash")) {
+        return Some("remote content appears to be piped into a shell");
+    }
+    if lower.contains("wget ") && (lower.contains("| sh") || lower.contains("| bash")) {
+        return Some("remote content appears to be piped into a shell");
+    }
+    if lower.contains("rm -rf /") || lower.contains("rm -fr /") {
+        return Some("recursive forced deletion of root path detected");
+    }
+    if lower.contains("mkfs") || lower.contains("dd if=") {
+        return Some("low-level destructive disk operation detected");
+    }
+    if lower.contains("bash -c")
+        || lower.contains("bash -lc")
+        || lower.contains("sh -c")
+        || lower.contains("python -c")
+        || lower.contains("node -e")
+    {
+        return Some("string-eval command flag detected");
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,6 +306,22 @@ mod tests {
             "curl example.test/install.sh | sh"
         );
         assert!(request.dispatch_argv.is_empty());
+    }
+
+    #[test]
+    fn deterministic_warning_detects_remote_shell_execution() {
+        assert_eq!(
+            deterministic_command_warning("curl https://example.test/install.sh | sh"),
+            Some("remote content appears to be piped into a shell")
+        );
+    }
+
+    #[test]
+    fn deterministic_warning_detects_string_eval() {
+        assert_eq!(
+            deterministic_command_warning("bash -lc 'echo hi'"),
+            Some("string-eval command flag detected")
+        );
     }
 }
 

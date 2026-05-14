@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 fn create_test_env() -> (Rc<RefCell<Env>>, Arc<RwLock<Environment>>) {
     let shell_env = Environment::new();
+    shell_env.write().startup_mode = true;
     let env = Rc::new(RefCell::new(default_env(shell_env.clone())));
     (env, shell_env)
 }

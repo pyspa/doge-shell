@@ -20,9 +20,14 @@ const HELP_TOPICS: &[HelpTopic] = &[
     HelpTopic {
         name: "doctor",
         category: "setup",
-        summary: "Diagnose shell setup, AI, MCP, project, runtime, skills, and validation state.",
-        usage: "doctor [config|ai|mcp|project|runtime|performance|skills|setup|fix|dev|validate]",
-        examples: &["doctor setup", "doctor fix", "doctor validate"],
+        summary: "Diagnose shell setup, AI, MCP, project, runtime, skills, safety, and validation state.",
+        usage: "doctor [config|ai|mcp|project|runtime|performance|skills|safety|setup|fix|dev|validate]",
+        examples: &[
+            "doctor setup",
+            "doctor safety",
+            "doctor fix",
+            "doctor validate",
+        ],
         related: &["help", "pm", "comp-gen"],
     },
     HelpTopic {
@@ -37,8 +42,14 @@ const HELP_TOPICS: &[HelpTopic] = &[
         name: "pm",
         category: "project",
         summary: "Manage projects and apply safe project activation.",
-        usage: "pm <init|status|add|list|remove|work|jump|activate> [args]",
-        examples: &["pm init", "pm status", "pm add . doge-shell", "pj"],
+        usage: "pm <init|status|add|list|remove|work|jump|activate> [args] | pm activate --dry-run",
+        examples: &[
+            "pm init",
+            "pm status",
+            "pm activate --dry-run",
+            "pm add . doge-shell",
+            "pj",
+        ],
         related: &["project", "pj", "task", "doctor"],
     },
     HelpTopic {
@@ -109,7 +120,7 @@ const HELP_TOPICS: &[HelpTopic] = &[
     HelpTopic {
         name: "safe-run",
         category: "ai",
-        summary: "Analyze a command with AI safety checks before execution.",
+        summary: "Analyze a command with deterministic and AI safety checks before execution.",
         usage: "safe-run <command> [args...] | safe-run -- <command-string>",
         examples: &[
             "safe-run rm -rf tmp/",
@@ -353,7 +364,11 @@ mod tests {
         assert!(commands.iter().any(|(name, desc)| {
             *name == "doctor"
                 && *desc
-                    == "Diagnose config, AI, MCP, project, runtime, skills, setup, and dev validation state"
+                    == "Diagnose config, AI, MCP, project, runtime, skills, safety, setup, and dev validation state"
+        }));
+        assert!(commands.iter().any(|(name, desc)| {
+            *name == "safe-run"
+                && *desc == "Execute commands with deterministic and LLM-based safety analysis"
         }));
     }
 
@@ -361,7 +376,11 @@ mod tests {
     fn help_command_shows_detailed_topic() {
         let output = help_output(&["doctor".to_string()]).unwrap();
         assert!(output.contains("doctor setup"));
+        assert!(output.contains("doctor safety"));
         assert!(output.contains("doctor fix"));
+
+        let output = help_output(&["pm".to_string()]).unwrap();
+        assert!(output.contains("pm activate --dry-run"));
     }
 
     #[test]

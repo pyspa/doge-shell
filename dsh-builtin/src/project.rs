@@ -1,12 +1,13 @@
 use super::ShellProxy;
 use crate::project_context;
+use crate::safety_policy;
 use crate::task;
 use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
 use dsh_types::{Context, ExitStatus, Project};
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 const PROJECTS_FILE: &str = "projects.json";
 
@@ -113,7 +114,7 @@ fn help_text() -> &'static str {
         "  remove | rm <name>   Remove a project\n",
         "  work <name>          Switch to a project\n",
         "  jump                 Select and switch to a project interactively\n",
-        "  activate             Apply safe .env, allowed .envrc, and venv activation\n",
+        "  activate [--dry-run] Apply safe .env, allowed .envrc, and venv activation\n",
         "\n",
         "Aliases:\n",
         "  pj [name]            Alias for pm jump\n",
@@ -122,6 +123,7 @@ fn help_text() -> &'static str {
         "  pm init\n",
         "  pm status\n",
         "  pm activate\n",
+        "  pm activate --dry-run\n",
     )
 }
 
@@ -304,6 +306,9 @@ fn print_project_status(
             let _ = ctx.write_stdout(
                 "activation envrc not-allowed; add an allow-direnv entry before trusting it",
             );
+        }
+        if let Ok(summary) = activation_safety_summary(&context.project_root, proxy) {
+            let _ = ctx.write_stdout(&summary);
         }
         let _ = ctx.write_stdout("activation hint run `pm activate`");
     }
@@ -588,8 +593,14 @@ fn prepend_path(proxy: &mut dyn ShellProxy, root: &Path, path: &str) -> bool {
 }
 
 fn activate(ctx: &Context, args: &[String], proxy: &mut dyn ShellProxy) -> Result<()> {
-    if !args.is_empty() {
-        return Err(anyhow::anyhow!("Usage: pm activate"));
+    let dry_run = match args {
+        [] => false,
+        [flag] if flag == "--dry-run" => true,
+        _ => return Err(anyhow::anyhow!("Usage: pm activate [--dry-run]")),
+    };
+
+    if dry_run {
+        return activate_dry_run(ctx, proxy);
     }
 
     let current_dir = proxy.get_current_dir()?;
@@ -601,6 +612,14 @@ fn activate(ctx: &Context, args: &[String], proxy: &mut dyn ShellProxy) -> Resul
     if dotenv.exists() {
         let vars = parse_dotenv_file(&dotenv)?;
         for (key, value) in &vars {
+            if env_assignment_requires_confirmation(key, value)
+                && !proxy.confirm_action(&format!(
+                    "Apply sensitive or high-risk environment variable `{key}` from .env? \r\nProceed?"
+                ))?
+            {
+                applied.push(format!(".env skipped {key}"));
+                continue;
+            }
             proxy.set_env_var(key.clone(), value.clone());
         }
         if !vars.is_empty() {
@@ -613,9 +632,29 @@ fn activate(ctx: &Context, args: &[String], proxy: &mut dyn ShellProxy) -> Resul
         if proxy.is_direnv_allowed(&root) {
             let plan = parse_envrc_file(&envrc)?;
             for (key, value) in &plan.vars {
+                if env_assignment_requires_confirmation(key, value)
+                    && !proxy.confirm_action(&format!(
+                        "Apply sensitive or high-risk environment variable `{key}` from .envrc? \r\nProceed?"
+                    ))?
+                {
+                    applied.push(format!(".envrc skipped {key}"));
+                    continue;
+                }
                 proxy.set_env_var(key.clone(), value.clone());
             }
             for path in &plan.path_adds {
+                if activation_path_outside_root(&root, path)
+                    && !proxy.confirm_action(&format!(
+                        "Add PATH entry outside project root `{}` from .envrc? \r\nProceed?",
+                        display_activation_path(&root, path)
+                    ))?
+                {
+                    applied.push(format!(
+                        "path_add skipped {}",
+                        display_activation_path(&root, path)
+                    ));
+                    continue;
+                }
                 if prepend_path(proxy, &root, path) {
                     applied.push(format!("path_add {}", display_activation_path(&root, path)));
                 }
@@ -657,6 +696,172 @@ fn activate(ctx: &Context, args: &[String], proxy: &mut dyn ShellProxy) -> Resul
     Ok(())
 }
 
+fn activate_dry_run(ctx: &Context, proxy: &mut dyn ShellProxy) -> Result<()> {
+    let current_dir = proxy.get_current_dir()?;
+    let project = project_context::resolve_project_context(&current_dir);
+    let root = project.project_root;
+
+    let _ = ctx.write_stdout(&format!("activation dry-run root {}", root.display()));
+
+    let dotenv = root.join(".env");
+    if dotenv.exists() {
+        let vars = parse_dotenv_file(&dotenv)?;
+        if vars.is_empty() {
+            let _ = ctx.write_stdout(".env vars=0");
+        } else {
+            for (key, value) in vars {
+                let marker = if env_assignment_requires_confirmation(&key, &value) {
+                    " confirm"
+                } else {
+                    ""
+                };
+                let _ = ctx.write_stdout(&format!(
+                    ".env set {}={}{}",
+                    key,
+                    safety_policy::mask_env_value(&key, &value),
+                    marker
+                ));
+            }
+        }
+    } else {
+        let _ = ctx.write_stdout(".env missing");
+    }
+
+    let envrc = root.join(".envrc");
+    if envrc.exists() {
+        if proxy.is_direnv_allowed(&root) {
+            let plan = parse_envrc_file(&envrc)?;
+            for (key, value) in plan.vars {
+                let marker = if env_assignment_requires_confirmation(&key, &value) {
+                    " confirm"
+                } else {
+                    ""
+                };
+                let _ = ctx.write_stdout(&format!(
+                    ".envrc set {}={}{}",
+                    key,
+                    safety_policy::mask_env_value(&key, &value),
+                    marker
+                ));
+            }
+            for path in plan.path_adds {
+                let marker = if activation_path_outside_root(&root, &path) {
+                    " confirm-outside-root"
+                } else {
+                    ""
+                };
+                let _ = ctx.write_stdout(&format!(
+                    ".envrc path_add {}{}",
+                    display_activation_path(&root, &path),
+                    marker
+                ));
+            }
+        } else {
+            let _ = ctx.write_stdout(&format!(".envrc skipped {} not-allowed", envrc.display()));
+        }
+    } else {
+        let _ = ctx.write_stdout(".envrc missing");
+    }
+
+    if let Some(venv) = find_project_venv(&root) {
+        let _ = ctx.write_stdout(&format!("venv {}", venv.display()));
+        let bin = venv.join("bin");
+        if bin.is_dir() {
+            let _ = ctx.write_stdout(&format!("venv path_add {}", bin.display()));
+        }
+    } else {
+        let _ = ctx.write_stdout("venv missing");
+    }
+
+    if let Ok(summary) = activation_safety_summary(&root, proxy) {
+        let _ = ctx.write_stdout(&summary);
+    }
+
+    Ok(())
+}
+
+fn activation_safety_summary(root: &Path, proxy: &dyn ShellProxy) -> Result<String> {
+    let mut env_vars = 0usize;
+    let mut confirm_vars = 0usize;
+    let mut outside_paths = 0usize;
+
+    let dotenv = root.join(".env");
+    if dotenv.exists() {
+        let vars = parse_dotenv_file(&dotenv)?;
+        env_vars += vars.len();
+        confirm_vars += vars
+            .iter()
+            .filter(|(key, value)| env_assignment_requires_confirmation(key, value))
+            .count();
+    }
+
+    let envrc = root.join(".envrc");
+    let envrc_state = if envrc.exists() {
+        if proxy.is_direnv_allowed(root) {
+            let plan = parse_envrc_file(&envrc)?;
+            env_vars += plan.vars.len();
+            confirm_vars += plan
+                .vars
+                .iter()
+                .filter(|(key, value)| env_assignment_requires_confirmation(key, value))
+                .count();
+            outside_paths += plan
+                .path_adds
+                .iter()
+                .filter(|path| activation_path_outside_root(root, path))
+                .count();
+            "allowed"
+        } else {
+            "not-allowed"
+        }
+    } else {
+        "missing"
+    };
+
+    Ok(format!(
+        "activation safety env_vars={env_vars} confirm_vars={confirm_vars} envrc={envrc_state} outside_path_adds={outside_paths}"
+    ))
+}
+
+fn env_assignment_requires_confirmation(key: &str, value: &str) -> bool {
+    is_high_risk_env_key(key)
+        || safety_policy::is_sensitive_key(key)
+        || safety_policy::contains_sensitive_text(value)
+}
+
+fn is_high_risk_env_key(key: &str) -> bool {
+    matches!(
+        key,
+        "LD_PRELOAD"
+            | "LD_LIBRARY_PATH"
+            | "DYLD_INSERT_LIBRARIES"
+            | "PYTHONPATH"
+            | "PERL5LIB"
+            | "RUBYLIB"
+            | "NODE_OPTIONS"
+    )
+}
+
+fn activation_path_outside_root(root: &Path, path: &str) -> bool {
+    let root = lexical_normalize(root);
+    let normalized = lexical_normalize(&normalize_activation_path(&root, path));
+    !normalized.starts_with(&root)
+}
+
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
 fn jump(ctx: &Context, args: &[String], proxy: &mut dyn ShellProxy) -> Result<()> {
     // If exact name provided, delegate to work
     if !args.is_empty() {
@@ -684,7 +889,131 @@ fn jump(ctx: &Context, args: &[String], proxy: &mut dyn ShellProxy) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dsh_types::mcp::McpServerConfig;
+    use dsh_types::observed_output::ObservedOutput;
     use std::io::Write;
+    use std::os::fd::IntoRawFd;
+
+    struct TestProxy {
+        cwd: PathBuf,
+        direnv_allowed: bool,
+        set_env_calls: usize,
+        insert_path_calls: usize,
+    }
+
+    impl ShellProxy for TestProxy {
+        fn exit_shell(&mut self) {}
+
+        fn get_github_status(&self) -> (usize, usize, usize) {
+            (0, 0, 0)
+        }
+
+        fn get_git_branch(&self) -> Option<String> {
+            None
+        }
+
+        fn get_job_count(&self) -> usize {
+            0
+        }
+
+        fn dispatch(
+            &mut self,
+            _ctx: &Context,
+            _cmd: &str,
+            _argv: Vec<String>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn save_path_history(&mut self, _path: &str) {}
+
+        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn insert_path(&mut self, _index: usize, _path: &str) {
+            self.insert_path_calls += 1;
+        }
+
+        fn get_var(&mut self, _key: &str) -> Option<String> {
+            None
+        }
+
+        fn set_var(&mut self, _key: String, _value: String) {}
+
+        fn set_env_var(&mut self, _key: String, _value: String) {
+            self.set_env_calls += 1;
+        }
+
+        fn is_direnv_allowed(&self, _path: &Path) -> bool {
+            self.direnv_allowed
+        }
+
+        fn unset_env_var(&mut self, _key: &str) {}
+
+        fn get_alias(&mut self, _name: &str) -> Option<String> {
+            None
+        }
+
+        fn set_alias(&mut self, _name: String, _command: String) {}
+
+        fn list_aliases(&mut self) -> std::collections::HashMap<String, String> {
+            std::collections::HashMap::new()
+        }
+
+        fn add_abbr(&mut self, _name: String, _expansion: String) {}
+
+        fn remove_abbr(&mut self, _name: &str) -> bool {
+            false
+        }
+
+        fn list_abbrs(&self) -> Vec<(String, String)> {
+            Vec::new()
+        }
+
+        fn get_abbr(&self, _name: &str) -> Option<String> {
+            None
+        }
+
+        fn list_mcp_servers(&mut self) -> Vec<McpServerConfig> {
+            Vec::new()
+        }
+
+        fn list_execute_allowlist(&mut self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn list_exported_vars(&self) -> Vec<(String, String)> {
+            Vec::new()
+        }
+
+        fn export_var(&mut self, _key: &str) -> bool {
+            false
+        }
+
+        fn set_and_export_var(&mut self, _key: String, _value: String) {}
+
+        fn get_current_dir(&self) -> anyhow::Result<PathBuf> {
+            Ok(self.cwd.clone())
+        }
+
+        fn get_lisp_var(&self, _key: &str) -> Option<String> {
+            None
+        }
+    }
+
+    fn observed_context() -> (Context, dsh_types::observed_output::SharedOutputObserver) {
+        let mut ctx = Context::new_safe(nix::unistd::getpid(), nix::unistd::getpid(), false);
+        let observer = ObservedOutput::shared(8192);
+        ctx.output_observer = Some(observer.clone());
+        ctx.outfile = std::fs::File::create("/dev/null").unwrap().into_raw_fd();
+        ctx.errfile = std::fs::File::create("/dev/null").unwrap().into_raw_fd();
+        (ctx, observer)
+    }
+
+    fn observed_stdout(observer: &dsh_types::observed_output::SharedOutputObserver) -> String {
+        observer.lock().unwrap().snapshot().stdout
+    }
 
     #[test]
     fn dotenv_parser_accepts_export_and_quotes() {
@@ -723,6 +1052,24 @@ mod tests {
     }
 
     #[test]
+    fn activation_safety_detects_sensitive_env_and_outside_path() {
+        assert!(env_assignment_requires_confirmation("API_KEY", "abc123"));
+        assert!(env_assignment_requires_confirmation(
+            "LD_PRELOAD",
+            "/tmp/hook.so"
+        ));
+        assert!(!env_assignment_requires_confirmation("APP_MODE", "dev"));
+        assert!(activation_path_outside_root(
+            Path::new("/tmp/project"),
+            "../bin"
+        ));
+        assert!(!activation_path_outside_root(
+            Path::new("/tmp/project"),
+            "./bin"
+        ));
+    }
+
+    #[test]
     fn task_source_counts_groups_by_source() {
         let tasks = vec![
             task::TaskInfo {
@@ -753,5 +1100,51 @@ mod tests {
         assert!(help.contains("pm init"));
         assert!(help.contains("status"));
         assert!(help.contains("activate"));
+        assert!(help.contains("--dry-run"));
+    }
+
+    #[test]
+    fn activate_dry_run_masks_values_and_does_not_mutate_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), "{\"name\":\"demo\"}").unwrap();
+        std::fs::write(dir.path().join(".env"), "API_KEY=secret\nAPP_MODE=dev\n").unwrap();
+        std::fs::write(
+            dir.path().join(".envrc"),
+            "export SERVICE_TOKEN=token\npath_add ../bin\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join(".venv/bin")).unwrap();
+
+        let mut proxy = TestProxy {
+            cwd: dir.path().to_path_buf(),
+            direnv_allowed: true,
+            set_env_calls: 0,
+            insert_path_calls: 0,
+        };
+        let (ctx, observer) = observed_context();
+
+        let status = command(
+            &ctx,
+            vec![
+                "pm".to_string(),
+                "activate".to_string(),
+                "--dry-run".to_string(),
+            ],
+            &mut proxy,
+        );
+
+        assert_eq!(status, ExitStatus::ExitedWith(0));
+        assert_eq!(proxy.set_env_calls, 0);
+        assert_eq!(proxy.insert_path_calls, 0);
+
+        let output = observed_stdout(&observer);
+        assert!(output.contains(".env set API_KEY=*** confirm"));
+        assert!(output.contains(".env set APP_MODE=dev"));
+        assert!(output.contains(".envrc set SERVICE_TOKEN=*** confirm"));
+        assert!(output.contains("confirm-outside-root"));
+        assert!(output.contains("venv path_add"));
+        assert!(output.contains("activation safety env_vars=3 confirm_vars=2"));
+        assert!(!output.contains("secret"));
+        assert!(!output.contains("SERVICE_TOKEN=token"));
     }
 }

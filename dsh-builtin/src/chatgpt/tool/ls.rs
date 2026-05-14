@@ -1,4 +1,5 @@
 use crate::ShellProxy;
+use crate::safety_policy;
 use serde_json::{Value, json};
 use std::fs;
 
@@ -46,16 +47,32 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
         return Err(format!("chat: path `{path_value}` is not a directory"));
     }
 
-    if super::gitignore::is_gitignored(&normalized_abs_path, &normalized_current_dir) {
-        return Err(format!(
-            "chat: ls tool path `{path_value}` is ignored by .gitignore"
-        ));
+    super::reject_gitignored_path(&normalized_abs_path, &normalized_current_dir, path_value)?;
+
+    if let Some(reason) = super::sensitive_path_reason(&normalized_abs_path)
+        && !super::confirm_sensitive_access(_proxy, "list", path_value, reason)?
+    {
+        return Ok("ls cancelled by user.".to_string());
     }
 
+    let mut hidden_sensitive = 0usize;
     let mut entries = fs::read_dir(&normalized_abs_path)
         .map_err(|err| format!("chat: failed to read directory `{path_value}`: {err}"))?
         .filter_map(|res| res.ok())
-        .filter(|entry| !super::gitignore::is_gitignored(&entry.path(), &normalized_current_dir))
+        .filter_map(|entry| {
+            match super::reject_gitignored_path(
+                &entry.path(),
+                &normalized_current_dir,
+                &entry.file_name().to_string_lossy(),
+            ) {
+                Ok(()) if safety_policy::is_sensitive_path(&entry.path()) => {
+                    hidden_sensitive += 1;
+                    None
+                }
+                Ok(()) => Some(entry),
+                Err(_) => None,
+            }
+        })
         .collect::<Vec<_>>();
 
     entries.sort_by_key(|entry| entry.file_name());
@@ -89,6 +106,11 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
 
             output.push_str(&format!("{} {:>8} {}\n", type_char, size, name));
         }
+        if hidden_sensitive > 0 {
+            output.push_str(&format!(
+                "... ({hidden_sensitive} sensitive entries hidden)\n"
+            ));
+        }
     }
 
     Ok(output)
@@ -104,6 +126,8 @@ mod tests {
 
     struct NoopProxy {
         cwd: PathBuf,
+        confirm_calls: usize,
+        confirm_result: bool,
     }
     impl ShellProxy for NoopProxy {
         fn exit_shell(&mut self) {}
@@ -174,6 +198,10 @@ mod tests {
         fn get_current_dir(&self) -> anyhow::Result<PathBuf> {
             Ok(self.cwd.clone())
         }
+        fn confirm_action(&mut self, _message: &str) -> anyhow::Result<bool> {
+            self.confirm_calls += 1;
+            Ok(self.confirm_result)
+        }
     }
 
     #[test]
@@ -184,9 +212,7 @@ mod tests {
         fs::create_dir(dir.path().join("subdir")).unwrap();
 
         // env::set_current_dir(&dir).unwrap(); // REMOVED
-        let mut proxy = NoopProxy {
-            cwd: dir.path().to_path_buf(),
-        };
+        let mut proxy = proxy(dir.path().to_path_buf());
 
         let result = run("{}", &mut proxy).unwrap();
         assert!(result.contains("subdir"));
@@ -195,7 +221,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_ls_subdir() {
         let dir = tempdir().unwrap();
         let subdir = dir.path().join("subdir");
@@ -203,9 +228,7 @@ mod tests {
         fs::write(subdir.join("file.txt"), "content").unwrap();
 
         // env::set_current_dir(&dir).unwrap(); // REMOVED
-        let mut proxy = NoopProxy {
-            cwd: dir.path().to_path_buf(),
-        };
+        let mut proxy = proxy(dir.path().to_path_buf());
 
         let result = run(r#"{"path": "subdir"}"#, &mut proxy).unwrap();
         assert!(result.contains("file.txt"));
@@ -213,9 +236,7 @@ mod tests {
 
     #[test]
     fn test_ls_outside_workspace() {
-        let mut proxy = NoopProxy {
-            cwd: PathBuf::from("."),
-        };
+        let mut proxy = proxy(PathBuf::from("."));
         let result = run(r#"{"path": ".."}"#, &mut proxy);
         assert!(result.is_err());
     }
@@ -229,9 +250,7 @@ mod tests {
         let outside = tempdir().unwrap();
         fs::create_dir_all(base.path().join("inside")).unwrap();
         symlink(outside.path(), base.path().join("inside/link_out")).unwrap();
-        let mut proxy = NoopProxy {
-            cwd: base.path().to_path_buf(),
-        };
+        let mut proxy = proxy(base.path().to_path_buf());
 
         let result = run(r#"{"path":"inside/link_out"}"#, &mut proxy);
 
@@ -247,9 +266,7 @@ mod tests {
         fs::write(dir.path().join("hidden.txt"), "secret").unwrap();
         fs::create_dir(dir.path().join("secret")).unwrap();
         fs::write(dir.path().join("secret/file.txt"), "secret").unwrap();
-        let mut proxy = NoopProxy {
-            cwd: dir.path().to_path_buf(),
-        };
+        let mut proxy = proxy(dir.path().to_path_buf());
 
         let result = run("{}", &mut proxy).unwrap();
         assert!(result.contains("visible.txt"));
@@ -259,5 +276,27 @@ mod tests {
         let result = run(r#"{"path":"secret"}"#, &mut proxy);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("ignored by .gitignore"));
+    }
+
+    fn proxy(cwd: PathBuf) -> NoopProxy {
+        NoopProxy {
+            cwd,
+            confirm_calls: 0,
+            confirm_result: true,
+        }
+    }
+
+    #[test]
+    fn test_ls_hides_sensitive_entries() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("visible.txt"), "ok").unwrap();
+        fs::write(dir.path().join(".env.local"), "API_KEY=secret").unwrap();
+        let mut proxy = proxy(dir.path().to_path_buf());
+
+        let result = run("{}", &mut proxy).unwrap();
+
+        assert!(result.contains("visible.txt"));
+        assert!(!result.contains(".env.local"));
+        assert!(result.contains("sensitive entries hidden"));
     }
 }

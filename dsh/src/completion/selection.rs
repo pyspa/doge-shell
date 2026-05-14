@@ -6,6 +6,7 @@ use crate::completion::framework::{
 };
 use crate::completion::fuzzy::fuzzy_match_score;
 use crate::completion::skim_adapter::replace_space;
+use crate::history::FrecencyHistory;
 use crate::input::Input;
 use crate::lisp::Value;
 use crate::repl::Repl;
@@ -269,12 +270,30 @@ pub fn completion_for_z(
     input_text: &str,
     framework: CompletionFrameworkKind,
 ) -> CompletionSelection {
+    completion_for_z_with_path_history(
+        input,
+        repl.shell.path_history.as_ref(),
+        query,
+        prompt_text,
+        input_text,
+        framework,
+    )
+}
+
+pub(crate) fn completion_for_z_with_path_history(
+    input: &Input,
+    path_history: Option<&Arc<parking_lot::Mutex<FrecencyHistory>>>,
+    query: Option<&str>,
+    prompt_text: &str,
+    input_text: &str,
+    framework: CompletionFrameworkKind,
+) -> CompletionSelection {
     let line = input.as_str();
     if !line.trim_start().starts_with("z ") && line.trim() != "z" {
         return CompletionSelection::None;
     }
 
-    if let Some(ref history) = repl.shell.path_history {
+    if let Some(history) = path_history {
         let history = history.lock();
         let items = history.sorted(&SortMethod::Frecent);
 

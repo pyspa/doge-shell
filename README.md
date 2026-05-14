@@ -51,7 +51,8 @@ The Safety Guard protects against unintended execution of potentially destructiv
   - `Loose`: No restrictions.
   - `Normal` (Default): Requires confirmation for common dangerous commands (`rm`, `mv`, `cp`, `dd`, `mkfs`, `format`).
   - `Strict`: Requires confirmation for **all** commands.
-- **AI Tool Integration**: Automatically intercepts AI-generated commands and file modifications, requiring explicit user approval.
+- **AI Tool Integration**: Automatically intercepts AI-generated commands and file modifications, requiring explicit user approval. Chat tools keep workspace-root and path-traversal protections even in loose mode.
+- **Sensitive File Policy**: Chat `read_file`, `search`, `ls`, and `edit` respect `.gitignore`, fail closed when ignore policy cannot be evaluated, hide common secret paths, and redact secret-like content in search results.
 - **Lisp Configuration**: Dynamically change the safety level at any time.
   ```lisp
   (safety-level "strict") ; Enable confirmation for everything
@@ -71,6 +72,7 @@ Protection of sensitive information from history and display.
   - `redact`: Secrets are replaced with `***` before saving to history.
   - `none`: No filtering is applied.
 - **Session Secrets**: Store sensitive values that are only available during the current session and never persisted to disk.
+- **AI Search Redaction**: Secret-like values such as tokens, passwords, authorization headers, query tokens, and private key markers are masked before being returned from chat search results.
 - **Lisp Configuration**:
   ```lisp
   (secret-add-pattern "MY_.*_KEY") ; Add custom regex pattern
@@ -154,6 +156,7 @@ Organize and switch between workspaces efficiently with the integrated Project M
 - **`pm work <name>`**: Switch to a project and trigger hooks.
 - **`pm jump` / `pj`**: Interactively select and switch to a project.
 - **`pm activate`**: Apply safe project activation from `.env`, allowed `.envrc`, and `.venv`/`venv`.
+- **`pm activate --dry-run`**: Preview `.env`, allowed `.envrc`, venv, and PATH changes with sensitive values masked before applying them.
 - **Hooks**: Define `*on-project-switch-hooks*` in Lisp to automate environment setup.
   - Automatically triggered when entering a project directory (via `pm work`, `pj`, or `cd`).
   - Sets `DSH_PROJECT` environment variable to the current project name.
@@ -224,12 +227,12 @@ The shell includes many built-in commands:
 | `mcp`               | Manage MCP servers (status, connect, disconnect)                                                                           |
 | `gpr`               | GitHub Pull Request checkout with interactive selection                                                                    |
 | `gwt`               | Git Worktree management (add, list, remove)                                                                                |
-| `pm`                | Project Manager (init, status, add, list, remove, work, jump, activate)                                                    |
+| `pm`                | Project Manager (init, status, add, list, remove, work, jump, activate, activate --dry-run)                                |
 | `pj`                | Jump to a project (alias for `pm jump`)                                                                                    |
 | `help`              | Show command details and search built-in commands                                                                          |
 | `comp-gen`          | Generate command completion using AI (`--stdout`, `--check`)                                                               |
 | `dashboard`         | Show integrated dashboard (System, Git, GitHub)                                                                            |
-| `doctor`            | Diagnose config, AI, MCP, project, runtime, skills, setup, and dev validation state                                        |
+| `doctor`            | Diagnose config, AI, MCP, project, runtime, skills, safety, setup, and dev validation state                                |
 | `ai-commit` / `aic` | Generate commit message using AI                                                                                           |
 | `tm`                | Search and retrieve past command outputs                                                                                   |
 | `trigger`           | Monitor file changes and execute commands (saves output to history)                                                        |
@@ -237,7 +240,7 @@ The shell includes many built-in commands:
 | `eproject`          | Open current project in Emacs                                                                                              |
 | `eview`             | Pipe content to external editor                                                                                            |
 | `magit`             | Open Magit status for the current directory                                                                                |
-| `safe-run`          | Execute commands with AI-powered safety analysis                                                                           |
+| `safe-run`          | Execute commands with deterministic and AI-powered safety analysis                                                         |
 | `ai-watch`          | Explicitly watch a command with AI and save the summary to command blocks                                                  |
 
 ## 🧠 Lisp Functions
@@ -683,6 +686,7 @@ Register the current project and inspect what dsh can activate or run.
 ```bash
 pm init
 pm status
+pm activate --dry-run
 pm activate
 task
 ```
@@ -804,7 +808,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     ```
 
 7. **Safe Run (`safe-run`)**:
-    Execute commands with AI-powered safety analysis. Useful for auditing potential risky commands or inspecting output before piping.
+    Execute commands with deterministic prechecks and AI-powered safety analysis. Useful for auditing potential risky commands or inspecting output before piping.
 
     ```bash
     # Analyze and execute a command
@@ -814,6 +818,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     safe-run curl https://example.com/install.sh | sh
     ```
 
+    - **Static Precheck**: Obvious dangerous patterns such as remote-script execution are flagged before AI analysis.
     - **Analysis**: AI checks for destructive operations or malicious patterns.
     - **Content Inspection**: For pipe operations, you can inspect the captured output (preview shown on stderr) before allowing it to pass to the next command.
     - **Confirmation**: Required for execution.

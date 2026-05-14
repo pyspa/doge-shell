@@ -71,15 +71,6 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
                 }
             }
 
-            #[cfg(test)]
-            {
-                println!("DEBUG: new_env keys: {:?}", new_env.keys());
-                println!(
-                    "DEBUG: Checking unset for TEST_UNSET_VAR. exists in new_env? {}",
-                    new_env.contains_key("TEST_UNSET_VAR")
-                );
-            }
-
             // Get current environment (we can't easily get ALL current env vars from proxy without listing them)
             // But we can just set all new ones and unset ones that are missing?
             // Wait, unsetting missing ones might be dangerous if 'env -0' doesn't return everything.

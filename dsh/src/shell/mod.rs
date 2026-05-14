@@ -107,6 +107,7 @@ mod tests {
         async fn run_observed(command: &str) -> dsh_types::observed_output::ObservedOutputSnapshot {
             let environment = crate::environment::Environment::new();
             let mut shell = Shell::new(environment);
+            *shell.environment.read().safety_level.write() = crate::safety::SafetyLevel::Loose;
             let observer = ObservedOutput::shared(1024);
             let mut ctx = dsh_types::Context::new_safe(shell.pid, shell.pgid, true);
             ctx.interactive = false;

@@ -20,6 +20,7 @@ pub mod notebook;
 pub mod observed_output;
 pub mod output_history;
 pub mod project;
+pub mod safety_policy;
 pub mod snippet;
 pub use project::Project;
 

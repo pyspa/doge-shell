@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use super::mcp::McpManager;
 use crate::ShellProxy;
+use crate::safety_policy::{self, SafetyLevel};
 
 mod edit;
 mod execute;
@@ -43,10 +44,11 @@ pub fn execute_tool_call(
         .unwrap_or_default();
 
     // Log tool execution
+    let logged_arguments = redact_tool_arguments(arguments);
     eprintln!(
         "\x1b[36m🔧 [Tool] {} ({})\x1b[0m",
         name,
-        truncate_args(arguments)
+        truncate_args(&logged_arguments)
     );
 
     let result = if mcp.has_tool_binding(name) {
@@ -82,6 +84,10 @@ fn truncate_args(args: &str) -> String {
     } else {
         args.to_string()
     }
+}
+
+fn redact_tool_arguments(args: &str) -> String {
+    safety_policy::redact_sensitive_text(args)
 }
 
 fn truncate_output(output: String) -> String {
@@ -209,6 +215,45 @@ pub(crate) fn resolve_tool_path(
     ))
 }
 
+pub(crate) fn safety_level(proxy: &mut dyn ShellProxy) -> SafetyLevel {
+    proxy.safety_level()
+}
+
+pub(crate) fn reject_gitignored_path(
+    path: &Path,
+    base_dir: &Path,
+    user_path: &str,
+) -> Result<(), String> {
+    match gitignore::is_gitignored(path, base_dir) {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(format!(
+            "chat: tool path `{user_path}` is ignored by .gitignore"
+        )),
+        Err(err) => Err(format!("chat: failed to apply .gitignore policy: {err}")),
+    }
+}
+
+pub(crate) fn confirm_sensitive_access(
+    proxy: &mut dyn ShellProxy,
+    action: &str,
+    path_label: &str,
+    reason: &str,
+) -> Result<bool, String> {
+    if !safety_level(proxy).requires_confirmation_for_sensitive_access() {
+        return Ok(true);
+    }
+
+    let message =
+        format!("AI wants to {action} sensitive content `{path_label}` ({reason}). \r\nProceed?");
+    proxy
+        .confirm_action(&message)
+        .map_err(|err| format!("chat: confirmation failed: {err}"))
+}
+
+pub(crate) fn sensitive_path_reason(path: &Path) -> Option<&'static str> {
+    safety_policy::is_sensitive_path(path).then_some("sensitive path")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,6 +363,18 @@ mod tests {
         let truncated = truncate_output(s);
         assert_eq!(truncated.len(), (MAX_OUTPUT_LENGTH - 1) + 29); // 29 is length of "\n... (truncated 4 characters)"
         assert!(truncated.contains("... (truncated 4 characters)"));
+    }
+
+    #[test]
+    fn tool_argument_log_redacts_secret_like_values() {
+        let args =
+            r#"{"path":"config.txt","contents":"API_KEY=secret Authorization: Bearer token"}"#;
+        let redacted = redact_tool_arguments(args);
+
+        assert!(redacted.contains("API_KEY=***"));
+        assert!(redacted.contains("Authorization: Bearer ***"));
+        assert!(!redacted.contains("secret"));
+        assert!(!redacted.contains("token"));
     }
 
     #[test]

@@ -13,8 +13,10 @@ use rmcp::{
 use serde_json::{Map, Value, json};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs::OpenOptions;
 use std::hash::{Hash, Hasher};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::{
     sync::{Arc, RwLock},
     time::{Duration, Instant},
@@ -919,21 +921,9 @@ async fn list_tools_via_transport(transport: McpTransport) -> Result<Vec<Tool>> 
             env,
             cwd,
         } => {
-            let cmd_name = Path::new(&command)
-                .file_name()
-                .map(|s| s.to_string_lossy())
-                .unwrap_or_else(|| "unknown".into());
-            let log_filename = format!("mcp_server_{}.log", cmd_name);
-
-            // Use sh wrapper to force stderr redirection, bypassing rmcp's potential overrides
-            let mut cmd = Command::new("sh");
-            cmd.arg("-c");
-            cmd.arg(format!("exec \"$@\" 2>> \"{}\"", log_filename));
-            cmd.arg("--");
-            cmd.arg(&command);
-            for arg in &args {
-                cmd.arg(arg);
-            }
+            let mut cmd = Command::new(&command);
+            cmd.args(&args);
+            redirect_mcp_stderr(&mut cmd, &command);
 
             if let Some(dir) = cwd {
                 cmd.current_dir(dir);
@@ -985,21 +975,9 @@ async fn call_tool_via_transport(
             env,
             cwd,
         } => {
-            let cmd_name = Path::new(&command)
-                .file_name()
-                .map(|s| s.to_string_lossy())
-                .unwrap_or_else(|| "unknown".into());
-            let log_filename = format!("mcp_server_{}.log", cmd_name);
-
-            // Use sh wrapper to force stderr redirection, bypassing rmcp's potential overrides
-            let mut cmd = Command::new("sh");
-            cmd.arg("-c");
-            cmd.arg(format!("exec \"$@\" 2>> \"{}\"", log_filename));
-            cmd.arg("--");
-            cmd.arg(&command);
-            for arg in &args {
-                cmd.arg(arg);
-            }
+            let mut cmd = Command::new(&command);
+            cmd.args(&args);
+            redirect_mcp_stderr(&mut cmd, &command);
 
             if let Some(dir) = cwd {
                 cmd.current_dir(dir);
@@ -1088,9 +1066,66 @@ fn unique_name(base: &str, set: &mut HashSet<String>) -> String {
     }
 }
 
+fn redirect_mcp_stderr(cmd: &mut Command, command: &str) {
+    let Some(path) = mcp_server_log_path(command) else {
+        warn!(command, "failed to resolve MCP server stderr log path");
+        return;
+    };
+    match OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(file) => {
+            cmd.stderr(Stdio::from(file));
+        }
+        Err(err) => {
+            warn!(command, path = %path.display(), "failed to open MCP server stderr log: {err}");
+        }
+    }
+}
+
+fn mcp_server_log_path(command: &str) -> Option<PathBuf> {
+    BaseDirectories::with_prefix("dsh")
+        .ok()?
+        .place_cache_file(format!(
+            "mcp_server_{}.log",
+            sanitized_command_name(command)
+        ))
+        .ok()
+}
+
+fn sanitized_command_name(command: &str) -> String {
+    let name = Path::new(command)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("unknown");
+    let sanitized = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if sanitized.is_empty() {
+        "unknown".to_string()
+    } else {
+        sanitized
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_log_names_are_sanitized() {
+        assert_eq!(sanitized_command_name("/usr/bin/node"), "node");
+        assert_eq!(
+            sanitized_command_name("bad/name with spaces"),
+            "name_with_spaces"
+        );
+        assert_eq!(sanitized_command_name(""), "unknown");
+    }
 
     fn mock_server(label: &str) -> McpServer {
         McpServer {

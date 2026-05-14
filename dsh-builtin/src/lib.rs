@@ -1,7 +1,7 @@
 use anyhow::Result;
 use dsh_types::{
     Context, ExitStatus, command_block::CommandBlock, mcp::McpServerConfig,
-    output_history::OutputEntry,
+    output_history::OutputEntry, safety_policy::SafetyLevel,
 };
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -27,6 +27,7 @@ mod include;
 mod magit;
 mod markdown;
 mod safe_run;
+mod safety_policy;
 pub use chatgpt::execute_chat_message;
 pub use chatgpt::{McpConnectionStatus, McpManager, McpRuntimeStateSnapshot, McpServerStatus};
 mod bookmark;
@@ -172,9 +173,14 @@ pub trait ShellProxy {
     /// Retrieves a variable from the Lisp environment
     fn get_lisp_var(&self, key: &str) -> Option<String>;
 
+    /// Current shell safety level as a typed value.
+    fn safety_level(&mut self) -> SafetyLevel {
+        SafetyLevel::from_env_value(self.get_var("SAFETY_LEVEL"))
+    }
+
     /// Requests user confirmation for a potentially dangerous action
     fn confirm_action(&mut self, _message: &str) -> Result<bool> {
-        Ok(true)
+        Ok(false)
     }
 
     /// Checks if the current operation has been canceled (e.g. via Ctrl+C)
@@ -326,6 +332,109 @@ pub trait ShellProxy {
     /// Gets a directory alias path by name
     fn get_dir_alias(&self, _name: &str) -> Option<String> {
         None
+    }
+}
+
+#[cfg(test)]
+mod shell_proxy_tests {
+    use super::*;
+
+    struct DefaultProxy;
+
+    impl ShellProxy for DefaultProxy {
+        fn exit_shell(&mut self) {}
+
+        fn get_github_status(&self) -> (usize, usize, usize) {
+            (0, 0, 0)
+        }
+
+        fn get_git_branch(&self) -> Option<String> {
+            None
+        }
+
+        fn get_job_count(&self) -> usize {
+            0
+        }
+
+        fn dispatch(&mut self, _ctx: &Context, _cmd: &str, _argv: Vec<String>) -> Result<()> {
+            Ok(())
+        }
+
+        fn save_path_history(&mut self, _path: &str) {}
+
+        fn changepwd(&mut self, _path: &str) -> Result<()> {
+            Ok(())
+        }
+
+        fn insert_path(&mut self, _index: usize, _path: &str) {}
+
+        fn get_var(&mut self, _key: &str) -> Option<String> {
+            None
+        }
+
+        fn set_var(&mut self, _key: String, _value: String) {}
+
+        fn set_env_var(&mut self, _key: String, _value: String) {}
+
+        fn unset_env_var(&mut self, _key: &str) {}
+
+        fn get_alias(&mut self, _name: &str) -> Option<String> {
+            None
+        }
+
+        fn set_alias(&mut self, _name: String, _command: String) {}
+
+        fn list_aliases(&mut self) -> HashMap<String, String> {
+            HashMap::new()
+        }
+
+        fn add_abbr(&mut self, _name: String, _expansion: String) {}
+
+        fn remove_abbr(&mut self, _name: &str) -> bool {
+            false
+        }
+
+        fn list_abbrs(&self) -> Vec<(String, String)> {
+            Vec::new()
+        }
+
+        fn get_abbr(&self, _name: &str) -> Option<String> {
+            None
+        }
+
+        fn list_mcp_servers(&mut self) -> Vec<McpServerConfig> {
+            Vec::new()
+        }
+
+        fn list_execute_allowlist(&mut self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn list_exported_vars(&self) -> Vec<(String, String)> {
+            Vec::new()
+        }
+
+        fn export_var(&mut self, _key: &str) -> bool {
+            false
+        }
+
+        fn set_and_export_var(&mut self, _key: String, _value: String) {}
+
+        fn get_current_dir(&self) -> Result<std::path::PathBuf> {
+            Ok(std::env::current_dir()?)
+        }
+
+        fn get_lisp_var(&self, _key: &str) -> Option<String> {
+            None
+        }
+    }
+
+    #[test]
+    fn confirm_action_default_denies() {
+        let mut proxy = DefaultProxy;
+
+        assert!(!proxy.confirm_action("dangerous?").unwrap());
+        assert_eq!(proxy.safety_level(), SafetyLevel::Normal);
     }
 }
 

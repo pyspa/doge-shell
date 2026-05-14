@@ -1,4 +1,5 @@
 use crate::ShellProxy;
+use crate::safety_policy;
 use anyhow::Result;
 use serde_json::{Value, json};
 use std::fs;
@@ -56,11 +57,7 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
     let normalized_current_dir =
         std::fs::canonicalize(&current_dir).unwrap_or_else(|_| super::normalize_path(&current_dir));
 
-    if super::gitignore::is_gitignored(&normalized_abs_path, &normalized_current_dir) {
-        return Err(format!(
-            "chat: edit tool path `{path_value}` is ignored by .gitignore"
-        ));
-    }
+    super::reject_gitignored_path(&normalized_abs_path, &normalized_current_dir, path_value)?;
 
     if let Some(parent) = normalized_abs_path.parent()
         && !parent.as_os_str().is_empty()
@@ -70,7 +67,17 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
     }
 
     // Safety Guard: Request confirmation from user
-    let confirm_msg = format!("AI wants to write to file: `{}`. \r\nProceed?", path_value);
+    let sensitive_note = if safety_policy::is_sensitive_path(&normalized_abs_path)
+        || safety_policy::contains_sensitive_text(contents)
+    {
+        " Sensitive path or content detected."
+    } else {
+        ""
+    };
+    let confirm_msg = format!(
+        "AI wants to write to file: `{}`.{} \r\nProceed?",
+        path_value, sensitive_note
+    );
     if !proxy
         .confirm_action(&confirm_msg)
         .map_err(|e: anyhow::Error| e.to_string())?
@@ -237,5 +244,26 @@ mod tests {
         assert!(result.unwrap_err().contains("ignored by .gitignore"));
         assert_eq!(confirm_calls.load(Ordering::SeqCst), 0);
         assert!(!dir.path().join("secrets/out.txt").exists());
+    }
+
+    #[test]
+    fn edit_mentions_sensitive_content_in_confirmation() {
+        let dir = tempdir().unwrap();
+        let confirm_calls = Arc::new(AtomicUsize::new(0));
+        let mut proxy = TestProxy {
+            cwd: dir.path().to_path_buf(),
+            confirm_calls: confirm_calls.clone(),
+            confirm_result: false,
+        };
+
+        let result = run(
+            r#"{"path":"config.txt","contents":"API_KEY=secret"}"#,
+            &mut proxy,
+        )
+        .unwrap();
+
+        assert_eq!(result, "File modification cancelled by user.");
+        assert_eq!(confirm_calls.load(Ordering::SeqCst), 1);
+        assert!(!dir.path().join("config.txt").exists());
     }
 }

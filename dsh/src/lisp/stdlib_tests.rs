@@ -248,6 +248,7 @@ mod tests {
     #[test]
     fn lisp_mcp_helpers_add_servers() {
         let shell_env = Environment::new();
+        shell_env.write().startup_mode = true;
         let mut env = Env::new(shell_env.clone());
         crate::lisp::stdlib::register(&mut env);
 
@@ -310,6 +311,7 @@ mod tests {
     #[test]
     fn mcp_clear_resets_servers() {
         let shell_env = Environment::new();
+        shell_env.write().startup_mode = true;
         let mut env = Env::new(shell_env.clone());
         crate::lisp::stdlib::register(&mut env);
         let engine = Rc::new(RefCell::new(TestEngine {

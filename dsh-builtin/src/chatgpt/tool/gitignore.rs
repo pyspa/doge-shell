@@ -3,21 +3,23 @@ use std::path::Path;
 
 /// Check if a path should be ignored according to .gitignore rules.
 /// Returns true if the path is ignored and should NOT be accessed.
-pub fn is_gitignored(path: &Path, base_dir: &Path) -> bool {
+pub fn is_gitignored(path: &Path, base_dir: &Path) -> Result<bool, String> {
     // Build gitignore matcher from the base directory
     let gitignore_path = base_dir.join(".gitignore");
 
     if !gitignore_path.exists() {
         // No .gitignore file, allow access
-        return false;
+        return Ok(false);
     }
 
     let mut builder = GitignoreBuilder::new(base_dir);
 
     // Add the .gitignore file
-    if builder.add(&gitignore_path).is_some() {
-        // Error adding gitignore, allow access as fallback
-        return false;
+    if let Some(err) = builder.add(&gitignore_path) {
+        return Err(format!(
+            "failed to read .gitignore at {}: {err}",
+            gitignore_path.display()
+        ));
     }
 
     match builder.build() {
@@ -25,7 +27,7 @@ pub fn is_gitignored(path: &Path, base_dir: &Path) -> bool {
             // Check if the path itself matches any ignore pattern
             let is_dir = path.is_dir();
             if matches!(gitignore.matched(path, is_dir), ignore::Match::Ignore(_)) {
-                return true;
+                return Ok(true);
             }
 
             // Also check if any parent directory is ignored
@@ -37,18 +39,18 @@ pub fn is_gitignored(path: &Path, base_dir: &Path) -> bool {
                     if current != path {
                         // Check if this intermediate directory is ignored
                         if matches!(gitignore.matched(&current, true), ignore::Match::Ignore(_)) {
-                            return true;
+                            return Ok(true);
                         }
                     }
                 }
             }
 
-            false
+            Ok(false)
         }
-        Err(_) => {
-            // Failed to build gitignore, allow access as fallback
-            false
-        }
+        Err(err) => Err(format!(
+            "failed to build .gitignore matcher for {}: {err}",
+            gitignore_path.display()
+        )),
     }
 }
 
@@ -64,7 +66,7 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         fs::write(&file_path, "content").unwrap();
 
-        assert!(!is_gitignored(&file_path, dir.path()));
+        assert!(!is_gitignored(&file_path, dir.path()).unwrap());
     }
 
     #[test]
@@ -82,9 +84,9 @@ mod tests {
         let normal_file = dir.path().join("normal.txt");
         fs::write(&normal_file, "normal").unwrap();
 
-        assert!(is_gitignored(&secret_file, dir.path()));
-        assert!(is_gitignored(&env_file, dir.path()));
-        assert!(!is_gitignored(&normal_file, dir.path()));
+        assert!(is_gitignored(&secret_file, dir.path()).unwrap());
+        assert!(is_gitignored(&env_file, dir.path()).unwrap());
+        assert!(!is_gitignored(&normal_file, dir.path()).unwrap());
     }
 
     #[test]
@@ -99,7 +101,7 @@ mod tests {
         let file_in_node_modules = node_modules.join("package.json");
         fs::write(&file_in_node_modules, "{}").unwrap();
 
-        assert!(is_gitignored(&node_modules, dir.path()));
-        assert!(is_gitignored(&file_in_node_modules, dir.path()));
+        assert!(is_gitignored(&node_modules, dir.path()).unwrap());
+        assert!(is_gitignored(&file_in_node_modules, dir.path()).unwrap());
     }
 }

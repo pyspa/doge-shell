@@ -2,7 +2,7 @@
 //!
 //! Manages detection of sensitive information, redaction, and history skipping.
 
-use once_cell::sync::Lazy;
+use dsh_types::safety_policy;
 use parking_lot::RwLock;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
@@ -34,49 +34,6 @@ impl std::str::FromStr for SecretHistoryMode {
         }
     }
 }
-
-/// Default secret keyword patterns
-static DEFAULT_SENSITIVE_KEYWORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
-    [
-        "API_KEY",
-        "_KEY",
-        "TOKEN",
-        "SECRET",
-        "PASSWORD",
-        "PASSWD",
-        "PASSPHRASE",
-        "AUTH",
-        "COOKIE",
-        "SESSION",
-        "CREDENTIAL",
-        "PRIVATE",
-        "ACCESS_KEY",
-        "SECRET_KEY",
-    ]
-    .into_iter()
-    .collect()
-});
-
-/// Command patterns containing secret values (e.g., export API_KEY=xxx, VAR=value command)
-static ASSIGNMENT_PATTERN: Lazy<Option<Regex>> =
-    Lazy::new(|| Regex::new(r"(?i)\b([A-Z_][A-Z0-9_]*)=(\S+)").ok());
-
-/// Secret-like CLI options (e.g., --password xxx, --token=xxx, -p xxx)
-static OPTION_SECRET_PATTERN: Lazy<Option<Regex>> = Lazy::new(|| {
-    Regex::new(
-        r#"(?i)(--?(?:password|passwd|passphrase|token|secret|api[-_]?key|access[-_]?token)(?:\s+|=)|-p\s+)([^\s"']+|\"[^\"]*\"|'[^']*')"#,
-    )
-    .ok()
-});
-
-/// Authorization header style secrets (e.g., Authorization: Bearer xxx)
-static AUTH_BEARER_PATTERN: Lazy<Option<Regex>> =
-    Lazy::new(|| Regex::new(r#"(?i)(authorization\s*:\s*bearer\s+)([A-Za-z0-9._~+/=-]+)"#).ok());
-
-/// URL/query token style secrets (e.g., ?token=xxx&...)
-static QUERY_SECRET_PATTERN: Lazy<Option<Regex>> = Lazy::new(|| {
-    Regex::new(r#"(?i)([?&](?:token|access_token|api_key|apikey|auth|password)=)([^&\s]+)"#).ok()
-});
 
 /// Secret management
 #[derive(Debug)]
@@ -119,11 +76,8 @@ impl SecretManager {
     pub fn is_sensitive_key(&self, key: &str) -> bool {
         let key_upper = key.to_ascii_uppercase();
 
-        // Check default keywords
-        for keyword in DEFAULT_SENSITIVE_KEYWORDS.iter() {
-            if key_upper.contains(keyword) {
-                return true;
-            }
+        if safety_policy::is_sensitive_key(&key_upper) {
+            return true;
         }
 
         // Check additional keywords
@@ -147,15 +101,8 @@ impl SecretManager {
 
     /// Check if the command contains secrets
     pub fn is_sensitive_command(&self, cmd: &str) -> bool {
-        // Check assignment patterns (VAR=value)
-        if let Some(pattern) = ASSIGNMENT_PATTERN.as_ref() {
-            for cap in pattern.captures_iter(cmd) {
-                if let Some(var_name) = cap.get(1)
-                    && self.is_sensitive_key(var_name.as_str())
-                {
-                    return true;
-                }
-            }
+        if safety_policy::contains_sensitive_text_with(cmd, |key| self.is_sensitive_key(key)) {
+            return true;
         }
 
         // Check entire command with custom patterns
@@ -166,64 +113,12 @@ impl SecretManager {
             }
         }
 
-        OPTION_SECRET_PATTERN
-            .as_ref()
-            .is_some_and(|pattern| pattern.is_match(cmd))
-            || AUTH_BEARER_PATTERN
-                .as_ref()
-                .is_some_and(|pattern| pattern.is_match(cmd))
-            || QUERY_SECRET_PATTERN
-                .as_ref()
-                .is_some_and(|pattern| pattern.is_match(cmd))
+        false
     }
 
     /// Redact secret parts and return
     pub fn redact_command(&self, cmd: &str) -> String {
-        let mut result = cmd.to_string();
-
-        if let Some(pattern) = ASSIGNMENT_PATTERN.as_ref() {
-            result = pattern
-                .replace_all(&result, |caps: &regex::Captures<'_>| {
-                    let key = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                    if self.is_sensitive_key(key) {
-                        format!("{key}=***")
-                    } else {
-                        caps.get(0)
-                            .map(|m| m.as_str().to_string())
-                            .unwrap_or_default()
-                    }
-                })
-                .to_string();
-        }
-
-        if let Some(pattern) = OPTION_SECRET_PATTERN.as_ref() {
-            result = pattern
-                .replace_all(&result, |caps: &regex::Captures<'_>| {
-                    let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                    format!("{prefix}***")
-                })
-                .to_string();
-        }
-
-        if let Some(pattern) = AUTH_BEARER_PATTERN.as_ref() {
-            result = pattern
-                .replace_all(&result, |caps: &regex::Captures<'_>| {
-                    let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                    format!("{prefix}***")
-                })
-                .to_string();
-        }
-
-        if let Some(pattern) = QUERY_SECRET_PATTERN.as_ref() {
-            result = pattern
-                .replace_all(&result, |caps: &regex::Captures<'_>| {
-                    let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                    format!("{prefix}***")
-                })
-                .to_string();
-        }
-
-        result
+        safety_policy::redact_sensitive_text_with(cmd, |key| self.is_sensitive_key(key))
     }
 
     /// Determine if it should be saved to history, and redact if necessary

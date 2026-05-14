@@ -1,4 +1,5 @@
 use crate::ShellProxy;
+use crate::safety_policy;
 use ignore::WalkBuilder;
 use serde_json::{Value, json};
 use std::fs;
@@ -65,8 +66,17 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
         return Err(format!("chat: path `{path_value}` does not exist"));
     }
 
+    super::reject_gitignored_path(&normalized_abs_path, &normalized_current_dir, path_value)?;
+
+    if let Some(reason) = super::sensitive_path_reason(&normalized_abs_path)
+        && !super::confirm_sensitive_access(_proxy, "search", path_value, reason)?
+    {
+        return Ok("search cancelled by user.".to_string());
+    }
+
     let mut results = Vec::new();
     let max_results = 50;
+    let mut hidden_sensitive = 0usize;
 
     match search_type {
         "filename" => {
@@ -87,6 +97,10 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
                 }
 
                 if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+                if safety_policy::is_sensitive_path(entry.path()) {
+                    hidden_sensitive += 1;
                     continue;
                 }
 
@@ -126,6 +140,10 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
                 if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
                     continue;
                 }
+                if safety_policy::is_sensitive_path(entry.path()) {
+                    hidden_sensitive += 1;
+                    continue;
+                }
 
                 // Skip binary files (heuristic)
                 // For now, just try to read as text
@@ -137,11 +155,13 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
                         {
                             if let Ok(cwd_rel) = entry.path().strip_prefix(&normalized_current_dir)
                             {
+                                let line_content =
+                                    safety_policy::redact_sensitive_text(line_content.trim());
                                 results.push(format!(
                                     "{}:{}: {}",
                                     cwd_rel.display(),
                                     line_idx + 1,
-                                    line_content.trim()
+                                    line_content
                                 ));
                             }
                             break; // Only one match per file for now to avoid spam
@@ -169,6 +189,11 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
             output.push_str("... (results truncated)");
         }
     }
+    if hidden_sensitive > 0 {
+        output.push_str(&format!(
+            "\n... ({hidden_sensitive} sensitive paths hidden)"
+        ));
+    }
 
     Ok(output)
 }
@@ -183,6 +208,8 @@ mod tests {
 
     struct NoopProxy {
         cwd: std::path::PathBuf,
+        confirm_calls: usize,
+        confirm_result: bool,
     }
     impl ShellProxy for NoopProxy {
         fn get_current_dir(&self) -> anyhow::Result<std::path::PathBuf> {
@@ -253,6 +280,10 @@ mod tests {
         fn get_job_count(&self) -> usize {
             0
         }
+        fn confirm_action(&mut self, _message: &str) -> anyhow::Result<bool> {
+            self.confirm_calls += 1;
+            Ok(self.confirm_result)
+        }
     }
 
     #[test]
@@ -261,9 +292,7 @@ mod tests {
         let file_path = dir.path().join("test_file.rs");
         fs::write(&file_path, "content").unwrap();
 
-        let mut proxy = NoopProxy {
-            cwd: dir.path().to_path_buf(),
-        };
+        let mut proxy = proxy(dir.path());
 
         let result = run(
             r#"{"query": "test_file.rs", "type": "filename"}"#,
@@ -279,9 +308,7 @@ mod tests {
         let file_path = dir.path().join("test.txt");
         fs::write(&file_path, "hello world").unwrap();
 
-        let mut proxy = NoopProxy {
-            cwd: dir.path().to_path_buf(),
-        };
+        let mut proxy = proxy(dir.path());
 
         let result = run(r#"{"query": "world", "type": "content"}"#, &mut proxy).unwrap();
         assert!(result.contains("test.txt"));
@@ -291,9 +318,7 @@ mod tests {
     #[test]
     fn test_search_rejects_parent_traversal() {
         let dir = tempdir().unwrap();
-        let mut proxy = NoopProxy {
-            cwd: dir.path().to_path_buf(),
-        };
+        let mut proxy = proxy(dir.path());
 
         let result = run(
             r#"{"query": "secret", "type": "content", "path": "../"}"#,
@@ -313,9 +338,7 @@ mod tests {
         let outside = tempdir().unwrap();
         fs::create_dir_all(base.path().join("inside")).unwrap();
         symlink(outside.path(), base.path().join("inside/link_out")).unwrap();
-        let mut proxy = NoopProxy {
-            cwd: base.path().to_path_buf(),
-        };
+        let mut proxy = proxy(base.path());
 
         let result = run(
             r#"{"query": "secret", "type": "content", "path": "inside/link_out"}"#,
@@ -324,5 +347,45 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("outside allowed directories"));
+    }
+
+    fn proxy(path: &std::path::Path) -> NoopProxy {
+        NoopProxy {
+            cwd: path.to_path_buf(),
+            confirm_calls: 0,
+            confirm_result: true,
+        }
+    }
+
+    #[test]
+    fn test_search_redacts_sensitive_content_results() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("config.txt"),
+            "call me with Authorization: Bearer secret-token",
+        )
+        .unwrap();
+        let mut proxy = proxy(dir.path());
+
+        let result = run(
+            r#"{"query": "Authorization", "type": "content"}"#,
+            &mut proxy,
+        )
+        .unwrap();
+
+        assert!(result.contains("Authorization: Bearer ***"));
+        assert!(!result.contains("secret-token"));
+    }
+
+    #[test]
+    fn test_search_hides_sensitive_paths() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("deploy.key"), "API_KEY=secret").unwrap();
+        let mut proxy = proxy(dir.path());
+
+        let result = run(r#"{"query": "API_KEY", "type": "content"}"#, &mut proxy).unwrap();
+
+        assert!(!result.contains(".env.local"));
+        assert!(result.contains("sensitive paths hidden"));
     }
 }

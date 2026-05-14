@@ -3,6 +3,7 @@
 /target
 **/*.rs.bk
 **/target
+*.log
 *.org
 .env
 .envrc

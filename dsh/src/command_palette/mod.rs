@@ -191,6 +191,10 @@ impl CommandPalette {
                 return actions::search_history::select_history_command(shell).await;
             }
 
+            if action_name == "AI Watch Current Input" {
+                return Ok(crate::repl::ai_watch::wrap_current_input(input));
+            }
+
             // Re-acquire lock to get the action (we dropped it before running Skim)
             let action = {
                 let registry = REGISTRY.read();

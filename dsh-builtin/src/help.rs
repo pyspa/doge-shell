@@ -82,6 +82,19 @@ const HELP_TOPICS: &[HelpTopic] = &[
         related: &["out"],
     },
     HelpTopic {
+        name: "blocks",
+        category: "history",
+        summary: "List, inspect, rerun, and explain session command blocks.",
+        usage: "blocks [list|show|command|rerun|explain|clear] [args]",
+        examples: &[
+            "blocks",
+            "blocks list --failed",
+            "blocks show 2 --stderr",
+            "blocks explain 1",
+        ],
+        related: &["out", "tm", "history"],
+    },
+    HelpTopic {
         name: "history",
         category: "history",
         summary: "Search command history by text, scope, status, and duration.",
@@ -103,6 +116,17 @@ const HELP_TOPICS: &[HelpTopic] = &[
             "safe-run -- curl https://example.com/install.sh | sh",
         ],
         related: &["doctor", "chat_model"],
+    },
+    HelpTopic {
+        name: "ai-watch",
+        category: "ai",
+        summary: "Explicitly watch a command with AI and save the summary to command blocks.",
+        usage: "ai-watch [--goal <text>] -- <command>",
+        examples: &[
+            "ai-watch -- cargo test -p doge-shell",
+            "ai-watch --goal \"server ready を検出\" -- npm run dev",
+        ],
+        related: &["blocks", "safe-run", "doctor"],
     },
     HelpTopic {
         name: "comp-gen",

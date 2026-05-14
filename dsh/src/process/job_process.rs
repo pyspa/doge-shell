@@ -281,6 +281,14 @@ impl JobProcess {
     ) -> Result<(Pid, Option<Box<JobProcess>>)> {
         // has pipelines process ?
         let next_process = self.take_next();
+        let has_next_process = next_process.is_some();
+        let observe_foreground_external = ctx.output_observer.is_some()
+            && ctx.foreground
+            && matches!(self, JobProcess::Command(_))
+            && !has_next_process
+            && redirect.is_none()
+            && pty_slave.is_none()
+            && ctx.captured_out.is_none();
 
         let pipe_out = match next_process {
             Some(_) => {
@@ -289,10 +297,11 @@ impl JobProcess {
             None => {
                 // Automatic capture for non-interactive mode (e.g. smart pipe tests)
                 // We don't do this in interactive mode to preserve TTY (colors, etc.)
-                if !ctx.interactive
+                if (!ctx.interactive
                     && redirect.is_none()
                     && pty_slave.is_none()
-                    && ctx.captured_out.is_none()
+                    && ctx.captured_out.is_none())
+                    || observe_foreground_external
                 {
                     let (pout, pin) = pipe().context("failed pipe")?;
                     ctx.outfile = pin.into_raw_fd();
@@ -308,6 +317,15 @@ impl JobProcess {
                 }
             }
         };
+
+        if observe_foreground_external && ctx.errfile == STDERR_FILENO {
+            let (pout, pin) = pipe().context("failed stderr pipe")?;
+            ctx.errfile = pin.into_raw_fd();
+            let pout_raw = pout.into_raw_fd();
+            if let JobProcess::Command(p) = self {
+                p.cap_stderr = Some(pout_raw);
+            }
+        }
 
         if let Some(slave) = pty_slave {
             // PTY sets the "default" TTY fds.

@@ -370,6 +370,21 @@ impl ShellProxy for Shell {
         removed
     }
 
+    fn get_command_blocks(&self) -> Vec<dsh_types::command_block::CommandBlock> {
+        self.environment.read().command_blocks.get_all_blocks()
+    }
+
+    fn clear_command_blocks(&mut self) -> usize {
+        let mut environment = self.environment.write();
+        let removed = environment.command_blocks.len();
+        environment.command_blocks.clear();
+        removed
+    }
+
+    fn request_eval_command(&mut self, command: String) -> Result<()> {
+        self.request_eval_command(command)
+    }
+
     fn capture_command(&mut self, _ctx: &Context, cmd: &str) -> Result<(i32, String, String)> {
         use std::process::{Command, Stdio};
 

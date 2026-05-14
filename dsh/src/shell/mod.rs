@@ -16,8 +16,12 @@ use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction
 use nix::unistd::{Pid, getpid};
 use parking_lot::Mutex as ParkingMutex;
 use parking_lot::RwLock;
+use std::collections::VecDeque;
 use std::io::Write;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::{cell::RefCell, rc::Rc};
 use tracing::{debug, warn};
 
@@ -38,6 +42,18 @@ pub struct Shell {
     pub safety_guard: Arc<crate::safety::SafetyGuard>,
     pub github_status: Option<Arc<RwLock<crate::github::GitHubStatus>>>,
     pub session_id: String,
+    pending_eval_commands: VecDeque<String>,
+    pending_eval_drain_active: Arc<AtomicBool>,
+}
+
+pub struct PendingEvalDrainGuard {
+    active: Arc<AtomicBool>,
+}
+
+impl Drop for PendingEvalDrainGuard {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::SeqCst);
+    }
 }
 
 impl std::fmt::Debug for Shell {
@@ -46,6 +62,71 @@ impl std::fmt::Debug for Shell {
             .field("pid", &self.pid)
             .field("pgid", &self.pgid)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_eval_command_rejects_nested_drain() {
+        let environment = crate::environment::Environment::new();
+        let mut shell = Shell::new(environment);
+
+        shell
+            .request_eval_command("echo first".to_string())
+            .unwrap();
+        assert_eq!(
+            shell.pop_requested_eval_command().as_deref(),
+            Some("echo first")
+        );
+
+        let guard = shell.begin_pending_eval_drain().unwrap();
+        assert!(
+            shell
+                .request_eval_command("blocks rerun 1".to_string())
+                .is_err()
+        );
+        assert!(shell.pop_requested_eval_command().is_none());
+        drop(guard);
+
+        shell
+            .request_eval_command("echo after".to_string())
+            .unwrap();
+        assert_eq!(
+            shell.pop_requested_eval_command().as_deref(),
+            Some("echo after")
+        );
+    }
+
+    #[tokio::test]
+    async fn foreground_output_observer_captures_stdout_and_stderr() {
+        use dsh_types::observed_output::ObservedOutput;
+
+        async fn run_observed(command: &str) -> dsh_types::observed_output::ObservedOutputSnapshot {
+            let environment = crate::environment::Environment::new();
+            let mut shell = Shell::new(environment);
+            let observer = ObservedOutput::shared(1024);
+            let mut ctx = dsh_types::Context::new_safe(shell.pid, shell.pgid, true);
+            ctx.interactive = false;
+            ctx.output_observer = Some(observer.clone());
+
+            let exit_code = shell
+                .eval_str(&mut ctx, command.to_string(), false)
+                .await
+                .unwrap();
+            assert_eq!(exit_code, 0);
+            observer.lock().unwrap().snapshot()
+        }
+
+        let stdout = run_observed("printf hi").await;
+        assert_eq!(stdout.stdout, "hi");
+        assert_eq!(stdout.stderr, "");
+
+        let stderr = run_observed("sh -c 'printf err >&2'").await;
+        assert_eq!(stderr.stdout, "");
+        assert_eq!(stderr.stderr, "err");
     }
 }
 
@@ -78,7 +159,34 @@ impl Shell {
             safety_guard,
             github_status: None,
             session_id: xid::new().to_string(),
+            pending_eval_commands: VecDeque::new(),
+            pending_eval_drain_active: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn request_eval_command(&mut self, command: String) -> Result<()> {
+        if self.pending_eval_drain_active.load(Ordering::SeqCst) {
+            return Err(anyhow::anyhow!(
+                "nested command block rerun is not allowed in this version"
+            ));
+        }
+        self.pending_eval_commands.push_back(command);
+        Ok(())
+    }
+
+    pub fn pop_requested_eval_command(&mut self) -> Option<String> {
+        self.pending_eval_commands.pop_front()
+    }
+
+    pub fn begin_pending_eval_drain(&self) -> Result<PendingEvalDrainGuard> {
+        self.pending_eval_drain_active
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| {
+                anyhow::anyhow!("nested command block rerun is not allowed in this version")
+            })?;
+        Ok(PendingEvalDrainGuard {
+            active: Arc::clone(&self.pending_eval_drain_active),
+        })
     }
 
     pub fn get_next_job_id(&mut self) -> usize {

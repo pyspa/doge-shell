@@ -29,7 +29,7 @@ mod tests;
 // Re-export main types and functions for backward compatibility
 pub use analysis::{
     analyze_output, check_safety, diagnose_output, diagnose_output_with_history, explain_command,
-    explain_command_inline, send_followup_question, suggest_improvement,
+    explain_command_inline, send_followup_question, suggest_improvement, summarize_watch,
 };
 pub use command::{expand_smart_pipe, fix_command, run_generative_command};
 pub use directory::describe_directory;

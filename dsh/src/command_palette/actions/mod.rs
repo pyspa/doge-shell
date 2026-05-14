@@ -146,8 +146,26 @@ pub fn register_all(registry: &mut ActionRegistry) {
         "tm",
         BuiltinInvocation::Static(&[]),
     )));
+    registry.register(Arc::new(BuiltinCommandAction::new(
+        "List Command Blocks",
+        "List recent session command blocks",
+        "Shell",
+        "blocks list",
+        "blocks show, blocks explain",
+        "blocks",
+        BuiltinInvocation::Static(&["list"]),
+    )));
 
     // AI
+    registry.register(Arc::new(BuiltinCommandAction::new(
+        "AI Watch Current Input",
+        "Wrap the current input with ai-watch",
+        "AI",
+        "ai-watch -- <current input>",
+        "blocks, safe-run",
+        "help",
+        BuiltinInvocation::Static(&["ai-watch"]),
+    )));
     registry.register(Arc::new(BuiltinCommandAction::new(
         "Safe Run Current Input",
         "Analyze the current command before running it",

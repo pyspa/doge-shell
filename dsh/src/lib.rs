@@ -520,6 +520,7 @@ pub fn create_context_for_command(shell: &Shell) -> Context {
         outfile: stdout_fd,
         errfile: stderr_fd,
         captured_out: None,
+        output_observer: None,
         save_history: true,
         pid: None,
         pgid: None,

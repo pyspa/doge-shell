@@ -246,3 +246,44 @@ pub async fn analyze_output<S: AiService + ?Sized>(
 
     service.send_request(messages, Some(0.2)).await
 }
+
+/// Summarize an explicitly watched command execution.
+pub async fn summarize_watch<S: AiService + ?Sized>(
+    service: &S,
+    command: &str,
+    goal: Option<&str>,
+    output: &str,
+    exit_code: i32,
+    duration_ms: u64,
+) -> Result<String> {
+    let sanitized_command = SafetyGuard::sanitize_ai_input(command, 1000);
+    let sanitized_goal = goal.map(|goal| SafetyGuard::sanitize_ai_input(goal, 1000));
+    let sanitized_output = SafetyGuard::sanitize_ai_input(output, 5000);
+    let truncated_output = if sanitized_output.len() > 5000 {
+        format!("{}...(truncated)", &sanitized_output[..5000])
+    } else {
+        sanitized_output.to_string()
+    };
+
+    let system_prompt = "You are an ai-watch assistant embedded in a shell. \
+    Summarize the watched command execution concisely. \
+    Include: status, key evidence from output, and next action if useful. \
+    Do not claim to have executed anything. Do not propose destructive commands unless clearly necessary. \
+    If you suggest commands, put them in a bash code block. Respond in the user's language when possible.";
+
+    let query = format!(
+        "Command: `{}`\nGoal: {}\nExit code: {}\nDuration: {} ms\nOutput:\n```\n{}\n```",
+        sanitized_command,
+        sanitized_goal.as_deref().unwrap_or("(none)"),
+        exit_code,
+        duration_ms,
+        truncated_output
+    );
+
+    let messages = vec![
+        json!({"role": "system", "content": system_prompt}),
+        json!({"role": "user", "content": query}),
+    ];
+
+    service.send_request(messages, Some(0.2)).await
+}

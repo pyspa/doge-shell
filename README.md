@@ -219,6 +219,7 @@ The shell includes many built-in commands:
 | `reload`            | Reload shell configuration                                                                                                 |
 | `timing`            | Show command execution statistics                                                                                          |
 | `out`               | Display captured command output history                                                                                    |
+| `blocks`            | List, inspect, rerun, and explain session command blocks                                                                   |
 | `include`           | Execute a bash script and import environment variables                                                                     |
 | `mcp`               | Manage MCP servers (status, connect, disconnect)                                                                           |
 | `gpr`               | GitHub Pull Request checkout with interactive selection                                                                    |
@@ -237,6 +238,7 @@ The shell includes many built-in commands:
 | `eview`             | Pipe content to external editor                                                                                            |
 | `magit`             | Open Magit status for the current directory                                                                                |
 | `safe-run`          | Execute commands with AI-powered safety analysis                                                                           |
+| `ai-watch`          | Explicitly watch a command with AI and save the summary to command blocks                                                  |
 
 ## 🧠 Lisp Functions
 
@@ -593,6 +595,23 @@ out --list --limit 25
 out --clear
 ```
 
+### Command Blocks
+
+Every foreground interactive command is recorded as a session-local command block, including commands that produce no output. Blocks keep command text, cwd, exit code, duration, captured output references, and optional `ai-watch` summaries.
+
+```bash
+# List recent blocks
+blocks
+
+# Inspect a failed command
+blocks list --failed
+blocks show 1 --stderr
+
+# Reuse or explain a block
+blocks command 1
+blocks explain 1
+```
+
 
 ### Import History
 
@@ -692,6 +711,7 @@ include setup.sh
 - `Alt+Enter` - Execute command in background
 - `Alt+s` - Force AI suggestion
 - `Alt+[` / `Alt+]` - Rotate through suggestions
+- `Alt+w` - Wrap the current input with `ai-watch --`
 - `Alt+m` - Open Macro Recorder
 
 ## 💻 Command Palette
@@ -798,7 +818,17 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     - **Content Inspection**: For pipe operations, you can inspect the captured output (preview shown on stderr) before allowing it to pass to the next command.
     - **Confirmation**: Required for execution.
 
-8. **AI Response Language**:
+8. **AI Watch (`ai-watch`)**:
+    Explicitly run a command through the normal shell execution path, then ask AI to summarize the result and save it to `blocks`.
+
+    ```bash
+    ai-watch -- cargo test -p doge-shell
+    ai-watch --goal "server ready を検出" -- npm run dev
+    ```
+
+    Press `Alt+w` to wrap the current input as `ai-watch -- <current input>` without executing it.
+
+9. **AI Response Language**:
     Configure the language for AI chat responses.
 
     ```lisp

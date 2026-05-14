@@ -224,6 +224,10 @@ pub(crate) async fn handle_key_event(
         KeyAction::AiExplainCommand => {
             ai::handle_ai_explain_command(repl).await;
         }
+        KeyAction::AiWatchCurrentInput => {
+            ai::handle_ai_watch_current_input(repl);
+            reset_completion = true;
+        }
         KeyAction::TriggerCompletion => match completion::handle_trigger_completion(repl).await? {
             ReplControlFlow::Continue => {
                 reset_completion = true;
@@ -307,6 +311,7 @@ pub(crate) async fn handle_key_event(
             | KeyAction::HistoryPrevious
             | KeyAction::HistoryNext
             | KeyAction::HistorySearch
+            | KeyAction::AiWatchCurrentInput
     ) {
         repl.last_input_change_time = std::time::Instant::now();
         repl.current_ai_explanation = None;

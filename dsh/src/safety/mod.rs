@@ -708,7 +708,11 @@ impl SafetyGuard {
 
         // Truncate if too long
         if sanitized.len() > max_length {
-            sanitized.truncate(max_length);
+            let mut end = max_length;
+            while end > 0 && !sanitized.is_char_boundary(end) {
+                end -= 1;
+            }
+            sanitized.truncate(end);
             sanitized.push_str("...(truncated)");
         }
 
@@ -990,6 +994,12 @@ mod tests {
         let long_input = "x".repeat(200);
         let truncated = SafetyGuard::sanitize_ai_input(&long_input, 100);
         assert!(truncated.len() < 200);
+        assert!(truncated.ends_with("...(truncated)"));
+
+        // Truncation does not split multibyte characters
+        let multibyte = "あ".repeat(20);
+        let truncated = SafetyGuard::sanitize_ai_input(&multibyte, 10);
+        assert!(truncated.is_char_boundary(truncated.len()));
         assert!(truncated.ends_with("...(truncated)"));
 
         // Zero-width characters are removed

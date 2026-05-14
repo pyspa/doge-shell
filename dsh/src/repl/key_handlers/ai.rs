@@ -52,6 +52,16 @@ pub(crate) async fn handle_ai_smart_commit(repl: &mut Repl<'_>) -> Result<ReplCo
     Ok(ReplControlFlow::ExecuteCurrentInput)
 }
 
+pub(crate) fn handle_ai_watch_current_input(repl: &mut Repl<'_>) {
+    if let Some(next) = crate::repl::ai_watch::wrap_current_input(repl.input.as_str()) {
+        repl.input.reset(next);
+        repl.current_ai_explanation = None;
+        repl.pending_ai_explanation_input = None;
+        repl.last_explanation = None;
+        repl.suggestion_manager.clear();
+    }
+}
+
 pub(crate) async fn handle_ai_diagnose(repl: &mut Repl<'_>) -> Result<()> {
     let mut renderer = TerminalRenderer::new();
 

@@ -50,6 +50,7 @@ mod state;
 use state::*;
 mod cache;
 use cache::*;
+pub(crate) mod ai_watch;
 pub mod confirmation;
 mod handler;
 pub mod key_action;

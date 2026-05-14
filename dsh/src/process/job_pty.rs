@@ -76,7 +76,10 @@ pub async fn setup_pty(job: &mut Job, ctx: &mut Context) -> Result<Option<RawFd>
             match pty.try_clone() {
                 Ok(pty_clone) => {
                     let master_fd = pty_clone.master.into_raw_fd();
-                    let mut monitor = crate::process::io::PtyMonitor::new(master_fd)?;
+                    let mut monitor = crate::process::io::PtyMonitor::new(
+                        master_fd,
+                        ctx.output_observer.clone(),
+                    )?;
 
                     let output_task = tokio::spawn(async move {
                         monitor.process_output().await?;
@@ -240,6 +243,7 @@ mod tests {
             outfile: STDOUT_FILENO,
             errfile: STDERR_FILENO,
             captured_out: None,
+            output_observer: None,
             save_history: true,
             pid: None,
             pgid: None,

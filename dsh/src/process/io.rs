@@ -12,6 +12,7 @@ use tokio::{fs, io, time};
 use super::redirect::Redirect;
 use crate::terminal::renderer::TerminalRenderer;
 use dsh_types::Context;
+use dsh_types::observed_output::{ObservedStream, SharedOutputObserver};
 use libc::STDIN_FILENO;
 
 const MONITOR_TIMEOUT: u64 = 200;
@@ -33,10 +34,16 @@ pub struct OutputMonitor {
     // Cached renderer to avoid repeated allocations.
     // Safe to hold as it no longer holds StdoutLock persistently.
     pub(crate) renderer: TerminalRenderer,
+    observer: Option<SharedOutputObserver>,
+    observed_stream: ObservedStream,
 }
 
 impl OutputMonitor {
-    pub fn new(fd: RawFd) -> Self {
+    pub fn new(
+        fd: RawFd,
+        observer: Option<SharedOutputObserver>,
+        observed_stream: ObservedStream,
+    ) -> Self {
         let file = unsafe { fs::File::from_raw_fd(fd) };
         let reader = io::BufReader::new(file);
         OutputMonitor {
@@ -44,6 +51,8 @@ impl OutputMonitor {
             outputed: false,
             captured_output: String::new(),
             renderer: TerminalRenderer::new(),
+            observer,
+            observed_stream,
         }
     }
 
@@ -52,6 +61,11 @@ impl OutputMonitor {
         // Also capture the raw line (we might want to be careful about prefixes/newlines)
         // The line from read_line includes the newline character usually.
         self.captured_output.push_str(line);
+        if let Some(observer) = &self.observer
+            && let Ok(mut observer) = observer.lock()
+        {
+            observer.append(self.observed_stream, line);
+        }
     }
 
     fn flush_buffer(&mut self, buffer: &str) -> Result<()> {
@@ -124,6 +138,7 @@ pub struct PtyMonitor {
     pub captured_output: Vec<u8>,
     stdout_is_tty: bool,
     last_passthrough_byte: Option<u8>,
+    observer: Option<SharedOutputObserver>,
 }
 
 fn normalize_tty_newlines(data: &[u8], last_byte: &mut Option<u8>) -> Option<Vec<u8>> {
@@ -152,7 +167,7 @@ fn normalize_tty_newlines(data: &[u8], last_byte: &mut Option<u8>) -> Option<Vec
 }
 
 impl PtyMonitor {
-    pub fn new(fd: RawFd) -> Result<Self> {
+    pub fn new(fd: RawFd, observer: Option<SharedOutputObserver>) -> Result<Self> {
         let file = unsafe { std::fs::File::from_raw_fd(fd) };
 
         // Set non-blocking mode
@@ -168,6 +183,7 @@ impl PtyMonitor {
             stdout_is_tty: isatty(unsafe { BorrowedFd::borrow_raw(libc::STDOUT_FILENO) })
                 .unwrap_or(false),
             last_passthrough_byte: None,
+            observer,
         })
     }
 
@@ -224,6 +240,11 @@ impl PtyMonitor {
 
                     // Capture
                     self.captured_output.extend_from_slice(data);
+                    if let Some(observer) = &self.observer
+                        && let Ok(mut observer) = observer.lock()
+                    {
+                        observer.append(ObservedStream::Stdout, &String::from_utf8_lossy(data));
+                    }
                 }
                 Ok(Err(e)) => {
                     // Check for WouldBlock or EAGAIN (os error 11)

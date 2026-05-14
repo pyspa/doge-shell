@@ -290,12 +290,20 @@ impl Job {
 
         let (stdout, stderr) = process.get_cap_out();
         if let Some(stdout) = stdout {
-            let monitor = OutputMonitor::new(stdout);
+            let monitor = OutputMonitor::new(
+                stdout,
+                ctx.output_observer.clone(),
+                dsh_types::observed_output::ObservedStream::Stdout,
+            );
             self.monitors.push(monitor);
         }
 
         if let Some(stderr) = stderr {
-            let monitor = OutputMonitor::new(stderr);
+            let monitor = OutputMonitor::new(
+                stderr,
+                ctx.output_observer.clone(),
+                dsh_types::observed_output::ObservedStream::Stderr,
+            );
             self.monitors.push(monitor);
         }
 

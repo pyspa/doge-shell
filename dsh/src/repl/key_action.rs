@@ -55,6 +55,7 @@ pub enum KeyAction {
     AiDiagnose,
     ForceAiSuggestion,
     AiExplainCommand,
+    AiWatchCurrentInput,
     MacroRecord,
 
     // Others
@@ -198,6 +199,7 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
         (KeyCode::Char('e'), ALT) => KeyAction::AiExplainCommand,
         (KeyCode::Char('c'), ALT) => KeyAction::AiSmartCommit,
         (KeyCode::Char('d'), ALT) => KeyAction::AiDiagnose,
+        (KeyCode::Char('w'), ALT) => KeyAction::AiWatchCurrentInput,
         (KeyCode::Char('m'), ALT) => KeyAction::MacroRecord,
 
         // Tab: Completion
@@ -817,6 +819,15 @@ mod tests {
         assert_eq!(
             determine_key_action(&k, &ctx_default()),
             KeyAction::AiExplainCommand
+        );
+    }
+
+    #[test]
+    fn test_alt_w_is_ai_watch_current_input() {
+        let k = key(KeyCode::Char('w'), ALT);
+        assert_eq!(
+            determine_key_action(&k, &ctx_default()),
+            KeyAction::AiWatchCurrentInput
         );
     }
 }

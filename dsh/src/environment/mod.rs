@@ -31,6 +31,7 @@ use crate::suggestion::InputPreferences;
 use anyhow::Context as _;
 use anyhow::Result;
 use dsh_builtin::McpManager;
+use dsh_types::command_block::CommandBlockHistory;
 use dsh_types::mcp::McpServerConfig;
 use dsh_types::output_history::OutputHistory;
 use parking_lot::RwLock;
@@ -93,6 +94,8 @@ pub struct Environment {
     pub executable_names: Arc<RwLock<Vec<String>>>,
     /// Output history for $OUT[N] and $ERR[N] variables
     pub output_history: OutputHistory,
+    /// Session-local command blocks for richer execution records
+    pub command_blocks: CommandBlockHistory,
     pub ai_service: Option<Arc<dyn AiService + Send + Sync>>,
     /// Z command exclusion patterns
     pub z_exclude: Vec<String>,
@@ -162,6 +165,7 @@ impl Environment {
             command_cache: RwLock::new(HashMap::new()),
             executable_names: Arc::new(RwLock::new(Vec::new())),
             output_history: OutputHistory::new(),
+            command_blocks: CommandBlockHistory::new(),
             ai_service: None,
             z_exclude,
             startup_mode: false,
@@ -212,6 +216,7 @@ impl Environment {
             command_cache: RwLock::new(HashMap::new()),
             executable_names: Arc::new(RwLock::new(Vec::new())),
             output_history: OutputHistory::new(),
+            command_blocks: CommandBlockHistory::new(),
             ai_service: parent.read().ai_service.clone(),
             z_exclude: parent.read().z_exclude.clone(),
             startup_mode: false, // Extended environments (subshells) are not in startup mode

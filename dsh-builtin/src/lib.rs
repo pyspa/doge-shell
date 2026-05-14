@@ -1,5 +1,8 @@
 use anyhow::Result;
-use dsh_types::{Context, ExitStatus, mcp::McpServerConfig, output_history::OutputEntry};
+use dsh_types::{
+    Context, ExitStatus, command_block::CommandBlock, mcp::McpServerConfig,
+    output_history::OutputEntry,
+};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -8,9 +11,11 @@ use tracing::debug;
 // Builtin command modules
 mod abbr;
 mod add_path;
+mod ai_watch;
 
 mod alias;
 mod bg;
+mod blocks;
 pub mod cd;
 mod chatgpt;
 mod dashboard;
@@ -185,6 +190,21 @@ pub trait ShellProxy {
     /// Clear output history and return the number of removed entries.
     fn clear_output_history(&mut self) -> usize {
         0
+    }
+
+    /// Get the session-local command block history.
+    fn get_command_blocks(&self) -> Vec<CommandBlock> {
+        Vec::new()
+    }
+
+    /// Clear command block history and return the number of removed blocks.
+    fn clear_command_blocks(&mut self) -> usize {
+        0
+    }
+
+    /// Request that the interactive shell evaluate a command through the normal async path.
+    fn request_eval_command(&mut self, _command: String) -> Result<()> {
+        Err(anyhow::anyhow!("request_eval_command not implemented"))
     }
 
     fn capture_command(&mut self, _ctx: &Context, _cmd: &str) -> Result<(i32, String, String)> {
@@ -474,6 +494,13 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
                 safe_run::description(),
             )) as Box<dyn BuiltinCommandTrait>,
         );
+        builtin.insert(
+            "ai-watch",
+            Box::new(BuiltinCommandFn::new(
+                ai_watch::command,
+                ai_watch::description(),
+            )) as Box<dyn BuiltinCommandTrait>,
+        );
 
         builtin.insert(
             "comp-gen",
@@ -624,6 +651,13 @@ pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait
             "tm",
             Box::new(BuiltinCommandFn::new(tm::command, tm::description()))
                 as Box<dyn BuiltinCommandTrait>,
+        );
+        builtin.insert(
+            "blocks",
+            Box::new(BuiltinCommandFn::new(
+                blocks::command,
+                blocks::description(),
+            )) as Box<dyn BuiltinCommandTrait>,
         );
 
         // Dashboard command

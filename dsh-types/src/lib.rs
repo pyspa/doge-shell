@@ -14,8 +14,10 @@ use tracing::warn;
 
 pub mod terminal;
 pub use terminal::{ShellMode, TerminalState};
+pub mod command_block;
 pub mod mcp;
 pub mod notebook;
+pub mod observed_output;
 pub mod output_history;
 pub mod project;
 pub mod snippet;
@@ -71,6 +73,7 @@ pub struct Context {
     pub outfile: RawFd,
     pub errfile: RawFd,
     pub captured_out: Option<RawFd>,
+    pub output_observer: Option<observed_output::SharedOutputObserver>,
     pub save_history: bool,
     pub pid: Option<Pid>,
     pub pgid: Option<Pid>,
@@ -99,6 +102,7 @@ impl Context {
             outfile: STDOUT_FILENO,
             errfile: STDERR_FILENO,
             captured_out: None,
+            output_observer: None,
             save_history: true,
             pid: None,
             pgid: None,
@@ -151,6 +155,7 @@ impl Context {
             outfile: STDOUT_FILENO,
             errfile: STDERR_FILENO,
             captured_out: None,
+            output_observer: None,
             save_history: true,
             pid: None,
             pgid: None,
@@ -182,6 +187,7 @@ impl Debug for Context {
             .field("outfile", &self.outfile)
             .field("errfile", &self.errfile)
             .field("captured_out", &self.captured_out)
+            .field("output_observer", &self.output_observer.is_some())
             .field("pid", &self.pid)
             .field("pgid", &self.pgid)
             .field("process_count", &self.process_count)
@@ -191,6 +197,12 @@ impl Debug for Context {
 
 impl Context {
     pub fn write_stdout(&self, msg: &str) -> Result<()> {
+        if let Some(observer) = &self.output_observer
+            && let Ok(mut observer) = observer.lock()
+        {
+            observer.append(observed_output::ObservedStream::Stdout, msg);
+            observer.append(observed_output::ObservedStream::Stdout, "\n");
+        }
         let mut file = unsafe { File::from_raw_fd(self.outfile) };
         writeln!(&mut file, "{msg}")?;
         mem::forget(file);
@@ -198,6 +210,12 @@ impl Context {
     }
 
     pub fn write_stderr(&self, msg: &str) -> Result<()> {
+        if let Some(observer) = &self.output_observer
+            && let Ok(mut observer) = observer.lock()
+        {
+            observer.append(observed_output::ObservedStream::Stderr, msg);
+            observer.append(observed_output::ObservedStream::Stderr, "\n");
+        }
         let mut file = unsafe { File::from_raw_fd(self.errfile) };
         writeln!(&mut file, "{msg}")?;
         mem::forget(file);
@@ -209,6 +227,7 @@ impl Context {
         self.outfile = STDOUT_FILENO;
         self.errfile = STDERR_FILENO;
         self.captured_out = None;
+        self.output_observer = None;
         self.pid = None;
         self.pgid = None;
         self.process_count = 0;

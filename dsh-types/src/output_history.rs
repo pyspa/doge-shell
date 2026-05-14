@@ -18,6 +18,8 @@ const DEFAULT_MAX_TOTAL_SIZE: usize = 50 * 1024 * 1024;
 /// A single output history entry
 #[derive(Debug, Clone)]
 pub struct OutputEntry {
+    /// Monotonic session-local identifier for internal references
+    pub id: u64,
     /// The command that was executed
     pub command: String,
     /// Standard output from the command
@@ -34,6 +36,7 @@ impl OutputEntry {
     /// Create a new output entry
     pub fn new(command: String, stdout: String, stderr: String, exit_code: i32) -> Self {
         Self {
+            id: 0,
             command,
             stdout,
             stderr,
@@ -99,6 +102,8 @@ pub struct OutputHistory {
     total_size: usize,
     /// Maximum total size
     max_total_size: usize,
+    /// Next monotonic id to assign to pushed entries
+    next_id: u64,
 }
 
 impl Default for OutputHistory {
@@ -116,6 +121,7 @@ impl OutputHistory {
             max_size_per_entry: DEFAULT_MAX_SIZE_PER_ENTRY,
             total_size: 0,
             max_total_size: DEFAULT_MAX_TOTAL_SIZE,
+            next_id: 1,
         }
     }
 
@@ -131,6 +137,7 @@ impl OutputHistory {
             max_size_per_entry,
             total_size: 0,
             max_total_size,
+            next_id: 1,
         }
     }
 
@@ -139,6 +146,13 @@ impl OutputHistory {
     /// The entry is added to the front (index 1 = most recent)
     /// Older entries are evicted if necessary to maintain size limits
     pub fn push(&mut self, mut entry: OutputEntry) {
+        if entry.id == 0 {
+            entry.id = self.next_id;
+            self.next_id = self.next_id.saturating_add(1);
+        } else {
+            self.next_id = self.next_id.max(entry.id.saturating_add(1));
+        }
+
         // Truncate entry if it exceeds per-entry limit
         entry.truncate(self.max_size_per_entry);
         let entry_size = entry.size();
@@ -220,6 +234,23 @@ impl OutputHistory {
     pub fn get_all_entries(&self) -> Vec<OutputEntry> {
         self.entries.iter().cloned().collect()
     }
+
+    /// Latest assigned output id, or 0 when no output has been captured.
+    pub fn latest_id(&self) -> u64 {
+        self.next_id.saturating_sub(1)
+    }
+
+    /// Return entries with ids greater than the supplied id, oldest first.
+    pub fn entries_after_id(&self, id: u64) -> Vec<OutputEntry> {
+        let mut entries: Vec<_> = self
+            .entries
+            .iter()
+            .filter(|entry| entry.id > id)
+            .cloned()
+            .collect();
+        entries.sort_by_key(|entry| entry.id);
+        entries
+    }
 }
 
 /// Parse an output variable name like "$OUT[N]" or "OUT[N]"
@@ -287,6 +318,7 @@ mod tests {
         history.push(OutputEntry::new("cmd3".into(), "out3".into(), "".into(), 0));
 
         assert_eq!(history.len(), 3);
+        assert_eq!(history.get(1).map(|entry| entry.id), Some(3));
         assert_eq!(history.get_stdout(1), Some("out3")); // Most recent
         assert_eq!(history.get_stdout(2), Some("out2"));
         assert_eq!(history.get_stdout(3), Some("out1")); // Oldest
@@ -317,6 +349,26 @@ mod tests {
 
         assert!(history.is_empty());
         assert_eq!(history.total_size(), 0);
+        assert_eq!(history.latest_id(), 2);
+    }
+
+    #[test]
+    fn test_entries_after_id_are_oldest_first() {
+        let mut history = OutputHistory::new();
+
+        history.push(OutputEntry::new("cmd1".into(), "out1".into(), "".into(), 0));
+        let first_id = history.latest_id();
+        history.push(OutputEntry::new("cmd2".into(), "out2".into(), "".into(), 0));
+        history.push(OutputEntry::new("cmd3".into(), "out3".into(), "".into(), 0));
+
+        let entries = history.entries_after_id(first_id);
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.command.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cmd2", "cmd3"]
+        );
     }
 
     #[test]

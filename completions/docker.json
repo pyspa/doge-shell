@@ -181,10 +181,7 @@
         {
           "name": "image",
           "description": "Image name or ID",
-          "type": {
-            "type": "Script",
-            "data": "docker images --format '{{.Repository}}:{{.Tag}}' | grep -v '<none>'"
-          }
+          "type": { "type": "String" }
         },
         {
           "name": "command",
@@ -314,10 +311,7 @@
         {
           "name": "container",
           "description": "Container name or ID",
-          "type": {
-            "type": "Script",
-            "data": "docker ps --format '{{.Names}}'"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []
@@ -341,10 +335,7 @@
         {
           "name": "container",
           "description": "Container name or ID",
-          "type": {
-            "type": "Script",
-            "data": "docker ps -a --format '{{.Names}}' 2>/dev/null"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []
@@ -392,10 +383,7 @@
         {
           "name": "container",
           "description": "Container name or ID",
-          "type": {
-            "type": "Script",
-            "data": "docker ps --format '{{.Names}}' 2>/dev/null"
-          }
+          "type": { "type": "String" }
         },
         {
           "name": "command",
@@ -425,10 +413,7 @@
         {
           "name": "container",
           "description": "Container name or ID",
-          "type": {
-            "type": "Script",
-            "data": "docker ps --format '{{.Names}}' 2>/dev/null"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []
@@ -440,10 +425,7 @@
         {
           "name": "container",
           "description": "Container name or ID",
-          "type": {
-            "type": "Script",
-            "data": "docker ps -a --format '{{.Names}}'"
-          }
+          "type": { "type": "String" }
         }
       ]
     },
@@ -454,10 +436,7 @@
         {
           "name": "container",
           "description": "Container name or ID",
-          "type": {
-            "type": "Script",
-            "data": "docker ps -a --format '{{.Names}}'"
-          }
+          "type": { "type": "String" }
         }
       ]
     },
@@ -468,10 +447,7 @@
         {
           "name": "container",
           "description": "Container name or ID",
-          "type": {
-            "type": "Script",
-            "data": "docker ps --format '{{.Names}}'"
-          }
+          "type": { "type": "String" }
         }
       ]
     },
@@ -482,10 +458,7 @@
         {
           "name": "container",
           "description": "Container name or ID",
-          "type": {
-            "type": "Script",
-            "data": "docker ps -a --format '{{.Names}}'"
-          }
+          "type": { "type": "String" }
         }
       ]
     },
@@ -496,10 +469,7 @@
         {
           "name": "image",
           "description": "Image name or ID",
-          "type": {
-            "type": "Script",
-            "data": "docker images --format '{{.Repository}}:{{.Tag}}' | grep -v '<none>'"
-          }
+          "type": { "type": "String" }
         }
       ]
     },
@@ -521,10 +491,7 @@
             {
               "name": "service",
               "description": "Service name",
-              "type": {
-                "type": "Script",
-                "data": "docker compose config --services 2>/dev/null"
-              }
+              "type": { "type": "String" }
             }
           ]
         },
@@ -552,10 +519,7 @@
             {
               "name": "service",
               "description": "Service name",
-              "type": {
-                "type": "Script",
-                "data": "docker compose config --services 2>/dev/null"
-              }
+              "type": { "type": "String" }
             }
           ]
         },
@@ -567,10 +531,7 @@
             {
               "name": "service",
               "description": "Service name",
-              "type": {
-                "type": "Script",
-                "data": "docker compose config --services 2>/dev/null"
-              }
+              "type": { "type": "String" }
             }
           ]
         },
@@ -582,10 +543,7 @@
             {
               "name": "service",
               "description": "Service name",
-              "type": {
-                "type": "Script",
-                "data": "docker compose config --services 2>/dev/null"
-              }
+              "type": { "type": "String" }
             }
           ]
         },
@@ -597,10 +555,7 @@
             {
               "name": "service",
               "description": "Service name",
-              "type": {
-                "type": "Script",
-                "data": "docker compose config --services 2>/dev/null"
-              }
+              "type": { "type": "String" }
             }
           ]
         },
@@ -612,10 +567,7 @@
             {
               "name": "service",
               "description": "Service name",
-              "type": {
-                "type": "Script",
-                "data": "docker compose config --services 2>/dev/null"
-              }
+              "type": { "type": "String" }
             }
           ]
         },
@@ -627,10 +579,7 @@
             {
               "name": "service",
               "description": "Service name",
-              "type": {
-                "type": "Script",
-                "data": "docker compose config --services 2>/dev/null"
-              }
+              "type": { "type": "String" }
             }
           ]
         }
@@ -731,10 +680,7 @@
         {
           "name": "object",
           "description": "Name or ID",
-          "type": {
-            "type": "Script",
-            "data": "docker ps -a --format '{{.Names}}' && docker images --format '{{.Repository}}:{{.Tag}}'"
-          }
+          "type": { "type": "String" }
         }
       ]
     },
@@ -745,10 +691,7 @@
         {
           "name": "image",
           "description": "Image name",
-          "type": {
-            "type": "Script",
-            "data": "docker images --format '{{.Repository}}:{{.Tag}}'"
-          }
+          "type": { "type": "String" }
         }
       ]
     },
@@ -759,10 +702,7 @@
         {
           "name": "source",
           "description": "Source image",
-          "type": {
-            "type": "Script",
-            "data": "docker images --format '{{.Repository}}:{{.Tag}}'"
-          }
+          "type": { "type": "String" }
         },
         {
           "name": "target",

@@ -19,10 +19,7 @@
         {
           "name": "package",
           "description": "Package to uninstall",
-          "type": {
-            "type": "Script",
-            "data": "pip3 list --format=freeze 2>/dev/null | cut -d= -f1"
-          }
+          "type": { "type": "String" }
         }
       ]
     },
@@ -40,10 +37,7 @@
         {
           "name": "package",
           "description": "Package to show",
-          "type": {
-            "type": "Script",
-            "data": "pip3 list --format=freeze 2>/dev/null | cut -d= -f1"
-          }
+          "type": { "type": "String" }
         }
       ]
     },

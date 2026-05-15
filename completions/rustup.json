@@ -22,10 +22,7 @@
         {
           "name": "toolchain",
           "description": "Toolchain to set as default",
-          "type": {
-            "type": "Script",
-            "data": "rustup toolchain list 2>/dev/null | awk '{print $1}'"
-          }
+          "type": { "type": "String" }
         }
       ]
     },
@@ -42,10 +39,7 @@
             {
               "name": "toolchain",
               "description": "Toolchain to uninstall",
-              "type": {
-                "type": "Script",
-                "data": "rustup toolchain list 2>/dev/null | awk '{print $1}'"
-              }
+              "type": { "type": "String" }
             }
           ]
         },

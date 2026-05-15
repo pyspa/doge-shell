@@ -96,10 +96,7 @@
           "description": "Unit name to start",
           "required": true,
           "multiple": true,
-          "type": {
-            "type": "Script",
-            "data": "systemctl list-unit-files --no-pager --no-legend 2>/dev/null | awk '{print $1}'"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []
@@ -123,10 +120,7 @@
           "description": "Unit name to stop",
           "required": true,
           "multiple": true,
-          "type": {
-            "type": "Script",
-            "data": "systemctl list-units --state=running --no-pager --no-legend | awk '{print $1}'"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []
@@ -150,10 +144,7 @@
           "description": "Unit name to restart",
           "required": true,
           "multiple": true,
-          "type": {
-            "type": "Script",
-            "data": "systemctl list-units --state=running --no-pager --no-legend | awk '{print $1}'"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []
@@ -177,10 +168,7 @@
           "description": "Unit name to reload",
           "required": true,
           "multiple": true,
-          "type": {
-            "type": "Script",
-            "data": "systemctl list-units --state=running --no-pager --no-legend | awk '{print $1}'"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []
@@ -204,10 +192,7 @@
           "description": "Unit name to enable",
           "required": true,
           "multiple": true,
-          "type": {
-            "type": "Script",
-            "data": "systemctl list-unit-files --state=disabled --no-pager --no-legend 2>/dev/null | awk '{print $1}'"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []
@@ -231,10 +216,7 @@
           "description": "Unit name to disable",
           "required": true,
           "multiple": true,
-          "type": {
-            "type": "Script",
-            "data": "systemctl list-unit-files --state=enabled --no-pager --no-legend 2>/dev/null | awk '{print $1}'"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []
@@ -281,10 +263,7 @@
           "description": "Unit name to show status for",
           "required": false,
           "multiple": true,
-          "type": {
-            "type": "Script",
-            "data": "systemctl list-units --all --no-pager --no-legend | awk '{print $1}'"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []
@@ -447,10 +426,7 @@
           "description": "Unit name to mask",
           "required": true,
           "multiple": true,
-          "type": {
-            "type": "Script",
-            "data": "systemctl list-units --all --no-pager --no-legend | awk '{print $1}'"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []
@@ -466,10 +442,7 @@
           "description": "Unit name to unmask",
           "required": true,
           "multiple": true,
-          "type": {
-            "type": "Script",
-            "data": "systemctl list-units --all --no-pager --no-legend | awk '{print $1}'"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []

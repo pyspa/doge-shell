@@ -71,6 +71,86 @@ const DYNAMIC_PROVIDER_SPECS: &[DynamicProviderSpec] = &[
         collect: collect_kubectl_dynamic_candidates,
     },
     DynamicProviderSpec {
+        command: "cargo",
+        collect: collect_cargo_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "systemctl",
+        collect: collect_systemctl_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "journalctl",
+        collect: collect_journalctl_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "ssh",
+        collect: collect_ssh_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "scp",
+        collect: collect_scp_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "rsync",
+        collect: collect_rsync_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "tmux",
+        collect: collect_tmux_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "screen",
+        collect: collect_screen_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "pgrep",
+        collect: collect_pgrep_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "pkill",
+        collect: collect_pkill_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "pip",
+        collect: collect_pip_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "pip3",
+        collect: collect_pip3_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "rustup",
+        collect: collect_rustup_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "gh",
+        collect: collect_gh_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "nmcli",
+        collect: collect_nmcli_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "pacman",
+        collect: collect_pacman_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "mount",
+        collect: collect_mount_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "umount",
+        collect: collect_umount_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "modprobe",
+        collect: collect_modprobe_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "tcpdump",
+        collect: collect_tcpdump_dynamic_candidates,
+    },
+    DynamicProviderSpec {
         command: "npm",
         collect: collect_npm_dynamic_candidates,
     },
@@ -613,9 +693,120 @@ impl IntegratedCompletionEngine {
             "git" => self
                 .dynamic
                 .collect_git_candidates_cached(parsed_command_line, request.current_dir),
+            "docker" => self
+                .dynamic
+                .collect_docker_candidates_cached(parsed_command_line, request.current_dir),
             "kubectl" => self
                 .dynamic
                 .collect_kubectl_candidates_cached(parsed_command_line, request.current_dir),
+            "cargo" => self
+                .dynamic
+                .collect_cargo_candidates_cached(parsed_command_line, request.current_dir),
+            "systemctl" => self
+                .dynamic
+                .collect_systemctl_candidates_cached(parsed_command_line, request.current_dir),
+            "journalctl" => self
+                .dynamic
+                .collect_journalctl_candidates_cached(parsed_command_line, request.current_dir),
+            "ssh" => self.dynamic.collect_ssh_host_candidates_cached(
+                parsed_command_line,
+                request.current_dir,
+                "ssh",
+            ),
+            "scp" => self.dynamic.collect_ssh_host_candidates_cached(
+                parsed_command_line,
+                request.current_dir,
+                "scp",
+            ),
+            "rsync" => self.dynamic.collect_ssh_host_candidates_cached(
+                parsed_command_line,
+                request.current_dir,
+                "rsync",
+            ),
+            "tmux" => self
+                .dynamic
+                .collect_tmux_candidates_cached(parsed_command_line, request.current_dir),
+            "screen" => self
+                .dynamic
+                .collect_screen_candidates_cached(parsed_command_line, request.current_dir),
+            "pgrep" => self
+                .dynamic
+                .collect_process_name_candidates_cached(parsed_command_line, "pgrep"),
+            "pkill" => self
+                .dynamic
+                .collect_process_name_candidates_cached(parsed_command_line, "pkill"),
+            "pip" => self.dynamic.collect_pip_candidates_cached(
+                parsed_command_line,
+                request.current_dir,
+                "pip",
+            ),
+            "pip3" => self.dynamic.collect_pip_candidates_cached(
+                parsed_command_line,
+                request.current_dir,
+                "pip3",
+            ),
+            "rustup" => self
+                .dynamic
+                .collect_rustup_candidates_cached(parsed_command_line, request.current_dir),
+            "gh" => self
+                .dynamic
+                .collect_gh_candidates_cached(parsed_command_line, request.current_dir),
+            "nmcli" => self
+                .dynamic
+                .collect_nmcli_candidates_cached(parsed_command_line, request.current_dir),
+            "pacman" => self
+                .dynamic
+                .collect_pacman_candidates_cached(parsed_command_line, request.current_dir),
+            "mount" => self
+                .dynamic
+                .collect_mount_candidates_cached(parsed_command_line, request.current_dir),
+            "umount" => self
+                .dynamic
+                .collect_umount_candidates_cached(parsed_command_line, request.current_dir),
+            "modprobe" => self
+                .dynamic
+                .collect_modprobe_candidates_cached(parsed_command_line),
+            "tcpdump" => self
+                .dynamic
+                .collect_tcpdump_candidates_cached(parsed_command_line),
+            "npm" | "pnpm" => {
+                let completes_dependency = match parsed_command_line.command.as_str() {
+                    "pnpm" => {
+                        leading_completion_words_match(parsed_command_line, &["remove"])
+                            || leading_completion_words_match(parsed_command_line, &["update"])
+                            || leading_completion_words_match(parsed_command_line, &["why"])
+                    }
+                    _ => {
+                        leading_completion_words_match(parsed_command_line, &["uninstall"])
+                            || leading_completion_words_match(parsed_command_line, &["update"])
+                    }
+                };
+                if completes_dependency {
+                    self.dynamic.collect_js_dependency_candidates(
+                        parsed_command_line,
+                        request.current_dir,
+                        parsed_command_line.command.as_str(),
+                        true,
+                    )
+                } else {
+                    Vec::new()
+                }
+            }
+            "yarn" => {
+                if leading_completion_words_match(parsed_command_line, &["remove"])
+                    || leading_completion_words_match(parsed_command_line, &["why"])
+                    || leading_completion_words_match(parsed_command_line, &["upgrade"])
+                {
+                    self.dynamic.collect_js_dependency_candidates(
+                        parsed_command_line,
+                        request.current_dir,
+                        "yarn",
+                        true,
+                    )
+                } else {
+                    Vec::new()
+                }
+            }
             _ => Vec::new(),
         }
     }
@@ -1199,12 +1390,228 @@ fn collect_kubectl_dynamic_candidates(
         .collect_kubectl_candidates(parsed, request.current_dir)
 }
 
+fn collect_cargo_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_cargo_candidates(parsed, request.current_dir)
+}
+
+fn collect_systemctl_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_systemctl_candidates(parsed, request.current_dir)
+}
+
+fn collect_journalctl_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_journalctl_candidates(parsed, request.current_dir)
+}
+
+fn collect_ssh_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_ssh_host_candidates(parsed, request.current_dir, "ssh")
+}
+
+fn collect_scp_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_ssh_host_candidates(parsed, request.current_dir, "scp")
+}
+
+fn collect_rsync_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_ssh_host_candidates(parsed, request.current_dir, "rsync")
+}
+
+fn collect_tmux_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_tmux_candidates(parsed, request.current_dir)
+}
+
+fn collect_screen_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_screen_candidates(parsed, request.current_dir)
+}
+
+fn collect_pgrep_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    _request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_process_name_candidates(parsed, "pgrep")
+}
+
+fn collect_pkill_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    _request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_process_name_candidates(parsed, "pkill")
+}
+
+fn collect_pip_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_pip_candidates(parsed, request.current_dir, "pip")
+}
+
+fn collect_pip3_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_pip_candidates(parsed, request.current_dir, "pip3")
+}
+
+fn collect_rustup_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_rustup_candidates(parsed, request.current_dir)
+}
+
+fn collect_gh_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_gh_candidates(parsed, request.current_dir)
+}
+
+fn collect_nmcli_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_nmcli_candidates(parsed, request.current_dir)
+}
+
+fn collect_pacman_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_pacman_candidates(parsed, request.current_dir)
+}
+
+fn collect_mount_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_mount_candidates(parsed, request.current_dir)
+}
+
+fn collect_umount_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_umount_candidates(parsed, request.current_dir)
+}
+
+fn collect_modprobe_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    _request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine.dynamic.collect_modprobe_candidates(parsed)
+}
+
+fn collect_tcpdump_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    _request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine.dynamic.collect_tcpdump_candidates(parsed)
+}
+
 fn collect_npm_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
 ) -> Vec<EnhancedCandidate> {
-    engine.collect_package_run_candidates(parsed, request.current_dir)
+    let mut candidates = engine.collect_package_run_candidates(parsed, request.current_dir);
+    let completes_dependency = match parsed.command.as_str() {
+        "pnpm" => {
+            leading_completion_words_match(parsed, &["remove"])
+                || leading_completion_words_match(parsed, &["update"])
+                || leading_completion_words_match(parsed, &["why"])
+        }
+        _ => {
+            leading_completion_words_match(parsed, &["uninstall"])
+                || leading_completion_words_match(parsed, &["update"])
+        }
+    };
+    if completes_dependency {
+        candidates.extend(engine.dynamic.collect_js_dependency_candidates(
+            parsed,
+            request.current_dir,
+            parsed.command.as_str(),
+            false,
+        ));
+    }
+    candidates
 }
 
 fn collect_yarn_dynamic_candidates(
@@ -1212,7 +1619,19 @@ fn collect_yarn_dynamic_candidates(
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
 ) -> Vec<EnhancedCandidate> {
-    engine.collect_yarn_script_candidates(parsed, request.current_dir)
+    let mut candidates = engine.collect_yarn_script_candidates(parsed, request.current_dir);
+    if leading_completion_words_match(parsed, &["remove"])
+        || leading_completion_words_match(parsed, &["why"])
+        || leading_completion_words_match(parsed, &["upgrade"])
+    {
+        candidates.extend(engine.dynamic.collect_js_dependency_candidates(
+            parsed,
+            request.current_dir,
+            "yarn",
+            false,
+        ));
+    }
+    candidates
 }
 
 fn collect_deno_dynamic_candidates(
@@ -1459,6 +1878,25 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+    }
+
+    fn write_executable_script(path: &Path, content: &str) {
+        fs::write(path, content).unwrap();
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+
+    fn engine_with_path(bin_dir: &Path) -> IntegratedCompletionEngine {
+        let environment = Environment::new();
+        {
+            let mut env = environment.write();
+            env.paths = vec![bin_dir.display().to_string()];
+            env.clear_command_cache();
+        }
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+        engine
     }
 
     #[test]
@@ -2370,6 +2808,151 @@ mod tests {
         assert_eq!(
             result.replacement_range,
             Some(CompletionReplacementRange { start: 16, end: 21 })
+        );
+    }
+
+    #[tokio::test]
+    async fn dynamic_providers_complete_script_backed_command_values() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        fs::write(dir.path().join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
+
+        write_executable_script(
+            &bin_dir.join("cargo"),
+            r#"#!/bin/sh
+if [ "$1" = "metadata" ]; then
+cat <<'JSON'
+{"packages":[{"name":"app-core","targets":[{"name":"cli-tool","kind":["bin"]},{"name":"demo-example","kind":["example"]}]}]}
+JSON
+fi
+"#,
+        );
+        write_executable_script(
+            &bin_dir.join("systemctl"),
+            "#!/bin/sh\ncase \"$1\" in\nlist-unit-files) printf 'ssh.service enabled\\n';;\nlist-units) printf 'docker.service loaded active running Docker\\n';;\nesac\n",
+        );
+        write_executable_script(
+            &bin_dir.join("tmux"),
+            "#!/bin/sh\nif [ \"$1\" = \"list-sessions\" ]; then printf 'dev-session\\nprod-session\\n'; fi\n",
+        );
+        write_executable_script(
+            &bin_dir.join("gh"),
+            "#!/bin/sh\nif [ \"$1\" = \"pr\" ] && [ \"$2\" = \"list\" ]; then printf '123\\n124\\n'; fi\n",
+        );
+        write_executable_script(
+            &bin_dir.join("pip"),
+            "#!/bin/sh\nif [ \"$1\" = \"list\" ]; then printf 'requests==2.0.0\\npytest==8.0.0\\n'; fi\n",
+        );
+        write_executable_script(
+            &bin_dir.join("rustup"),
+            "#!/bin/sh\nif [ \"$1\" = \"toolchain\" ] && [ \"$2\" = \"list\" ]; then printf 'stable-x86_64-unknown-linux-gnu (default)\\nnightly-x86_64-unknown-linux-gnu\\n'; fi\n",
+        );
+        write_executable_script(
+            &bin_dir.join("nmcli"),
+            "#!/bin/sh\nif [ \"$4\" = \"connection\" ]; then printf 'home-wifi\\nwork-vpn\\n'; elif [ \"$4\" = \"device\" ] && [ \"$5\" = \"status\" ]; then printf 'wlan0:connected\\neth0:disconnected\\n'; fi\n",
+        );
+        write_executable_script(
+            &bin_dir.join("pacman"),
+            "#!/bin/sh\ncase \"$1\" in\n-Qq) printf 'pacman\\nparu\\n';;\n-Slq) printf 'ripgrep\\nrust\\n';;\nesac\n",
+        );
+        write_executable_script(
+            &bin_dir.join("docker"),
+            "#!/bin/sh\nif [ \"$1\" = \"ps\" ]; then printf 'app-container\\nworker-container\\n'; elif [ \"$1\" = \"images\" ]; then printf 'app-image:latest\\nbase-image:latest\\n'; fi\n",
+        );
+        write_executable_script(
+            &bin_dir.join("kubectl"),
+            "#!/bin/sh\nif [ \"$1\" = \"get\" ] && [ \"$2\" = \"pods\" ]; then printf 'web-0\\napi-0\\n'; fi\n",
+        );
+
+        let engine = engine_with_path(&bin_dir);
+
+        let cases = [
+            ("cargo build -p ap", "app-core"),
+            ("cargo run --bin cl", "cli-tool"),
+            ("systemctl start ss", "ssh.service"),
+            ("journalctl -u do", "docker.service"),
+            ("tmux attach -t de", "dev-session"),
+            ("gh pr view 12", "123"),
+            ("pip show req", "requests"),
+            ("rustup default sta", "stable-x86_64-unknown-linux-gnu"),
+            ("nmcli connection up ho", "home-wifi"),
+            ("nmcli device disconnect wl", "wlan0"),
+            ("pacman -R pa", "pacman"),
+            ("docker stop app", "app-container"),
+            ("docker inspect app-i", "app-image:latest"),
+            ("kubectl get pods we", "web-0"),
+        ];
+
+        for (input, expected) in cases {
+            let _ = engine
+                .complete(input, input.len(), dir.path(), 50, None)
+                .await;
+            let _ = wait_for_candidate(&engine, input, dir.path(), expected).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn js_dependency_completion_uses_package_json_without_script() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{"dependencies":{"react":"latest"},"devDependencies":{"vite":"latest"}}"#,
+        )
+        .unwrap();
+
+        let mut engine = IntegratedCompletionEngine::new(Environment::new());
+        engine.initialize_command_completion().unwrap();
+
+        let input = "npm uninstall rea";
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "react"),
+            "expected package.json dependency completion in {:?}",
+            result.candidates
+        );
+    }
+
+    #[tokio::test]
+    async fn ghost_completion_uses_cached_dynamic_values_only() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let counter = dir.path().join("tmux-count");
+        write_executable_script(
+            &bin_dir.join("tmux"),
+            &format!(
+                "#!/bin/sh\ncount_file=\"{}\"\ncount=0\nif [ -f \"$count_file\" ]; then count=$(cat \"$count_file\"); fi\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$count_file\"\nif [ \"$1\" = \"list-sessions\" ]; then printf 'dev-session\\n'; fi\n",
+                counter.display()
+            ),
+        );
+
+        let engine = engine_with_path(&bin_dir);
+        let input = "tmux attach -t de";
+
+        assert_eq!(
+            engine.ghost_completion(input, input.len(), dir.path(), None),
+            None
+        );
+        assert!(
+            !counter.exists(),
+            "ghost completion must not run uncached dynamic commands"
+        );
+
+        let _ = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+        let _ = wait_for_candidate(&engine, input, dir.path(), "dev-session").await;
+
+        assert_eq!(
+            engine.ghost_completion(input, input.len(), dir.path(), None),
+            Some("tmux attach -t dev-session".to_string())
         );
     }
 }

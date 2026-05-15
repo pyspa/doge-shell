@@ -32,10 +32,7 @@
             {
               "name": "number",
               "description": "PR number",
-              "type": {
-                "type": "Script",
-                "data": "gh pr list --json number --jq '.[].number' 2>/dev/null"
-              }
+              "type": { "type": "Number" }
             }
           ]
         },
@@ -46,10 +43,7 @@
             {
               "name": "number",
               "description": "PR number",
-              "type": {
-                "type": "Script",
-                "data": "gh pr list --json number --jq '.[].number' 2>/dev/null"
-              }
+              "type": { "type": "Number" }
             }
           ]
         },
@@ -81,10 +75,7 @@
             {
               "name": "number",
               "description": "Issue number",
-              "type": {
-                "type": "Script",
-                "data": "gh issue list --json number --jq '.[].number' 2>/dev/null"
-              }
+              "type": { "type": "Number" }
             }
           ]
         },
@@ -126,10 +117,7 @@
             {
               "name": "run_id",
               "description": "Run ID",
-              "type": {
-                "type": "Script",
-                "data": "gh run list --json databaseId --jq '.[].databaseId' 2>/dev/null | head -20"
-              }
+              "type": { "type": "Number" }
             }
           ]
         },

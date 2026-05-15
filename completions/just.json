@@ -56,10 +56,7 @@
     {
       "name": "recipe",
       "description": "Recipe to run",
-      "type": {
-        "type": "Script",
-        "data": "just --summary 2>/dev/null | tr ' ' '\\n'"
-      }
+      "type": { "type": "String" }
     }
   ]
 }

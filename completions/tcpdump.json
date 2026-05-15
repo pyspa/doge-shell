@@ -6,10 +6,7 @@
       "short": "-i",
       "description": "Interface to capture on",
       "takes_value": true,
-      "value_type": {
-        "type": "Script",
-        "data": "ip -o link show 2>/dev/null | awk -F': ' '{print $2}'"
-      }
+      "value_type": { "type": "Interface" }
     },
     {
       "short": "-c",

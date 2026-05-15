@@ -45,10 +45,7 @@
           "short": "-p",
           "description": "Package to build",
           "takes_value": true,
-          "value_type": {
-            "type": "Script",
-            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
-          }
+          "value_type": { "type": "String" }
         },
         {
           "long": "--workspace",
@@ -83,29 +80,20 @@
           "long": "--bin",
           "description": "Name of the bin target to run",
           "takes_value": true,
-          "value_type": {
-            "type": "Script",
-            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(t['name']) for p in json.load(sys.stdin)['packages'] for t in p['targets'] if 'bin' in t['kind']]\""
-          }
+          "value_type": { "type": "String" }
         },
         {
           "long": "--example",
           "description": "Name of the example target to run",
           "takes_value": true,
-          "value_type": {
-            "type": "Script",
-            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(t['name']) for p in json.load(sys.stdin)['packages'] for t in p['targets'] if 'example' in t['kind']]\""
-          }
+          "value_type": { "type": "String" }
         },
         {
           "long": "--package",
           "short": "-p",
           "description": "Package to run",
           "takes_value": true,
-          "value_type": {
-            "type": "Script",
-            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
-          }
+          "value_type": { "type": "String" }
         },
         {
           "long": "--jobs",
@@ -142,10 +130,7 @@
           "short": "-p",
           "description": "Package to test",
           "takes_value": true,
-          "value_type": {
-            "type": "Script",
-            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
-          }
+          "value_type": { "type": "String" }
         },
         {
           "long": "--workspace",
@@ -302,10 +287,7 @@
           "short": "-p",
           "description": "Package to check",
           "takes_value": true,
-          "value_type": {
-            "type": "Script",
-            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
-          }
+          "value_type": { "type": "String" }
         },
         {
           "long": "--all-targets",
@@ -335,10 +317,7 @@
           "short": "-p",
           "description": "Package to lint",
           "takes_value": true,
-          "value_type": {
-            "type": "Script",
-            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
-          }
+          "value_type": { "type": "String" }
         },
         {
           "long": "--workspace",
@@ -364,10 +343,7 @@
           "short": "-p",
           "description": "Package to format",
           "takes_value": true,
-          "value_type": {
-            "type": "Script",
-            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
-          }
+          "value_type": { "type": "String" }
         },
         {
           "long": "--all",
@@ -385,10 +361,7 @@
           "short": "-p",
           "description": "Package to benchmark",
           "takes_value": true,
-          "value_type": {
-            "type": "Script",
-            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
-          }
+          "value_type": { "type": "String" }
         },
         {
           "long": "--workspace",
@@ -416,10 +389,7 @@
           "short": "-p",
           "description": "Package to document",
           "takes_value": true,
-          "value_type": {
-            "type": "Script",
-            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
-          }
+          "value_type": { "type": "String" }
         },
         {
           "long": "--workspace",
@@ -445,10 +415,7 @@
           "short": "-p",
           "description": "Package to clean",
           "takes_value": true,
-          "value_type": {
-            "type": "Script",
-            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
-          }
+          "value_type": { "type": "String" }
         },
         {
           "long": "--target-dir",
@@ -466,10 +433,7 @@
           "short": "-p",
           "description": "Package to update",
           "takes_value": true,
-          "value_type": {
-            "type": "Script",
-            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
-          }
+          "value_type": { "type": "String" }
         },
         {
           "long": "--workspace",
@@ -495,10 +459,7 @@
           "short": "-p",
           "description": "Package to publish",
           "takes_value": true,
-          "value_type": {
-            "type": "Script",
-            "data": "cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c \"import sys, json; [print(p['name']) for p in json.load(sys.stdin)['packages']]\""
-          }
+          "value_type": { "type": "String" }
         },
         {
           "long": "--allow-dirty",

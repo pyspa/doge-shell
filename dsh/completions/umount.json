@@ -52,10 +52,7 @@
     {
       "name": "mountpoint",
       "description": "Mountpoint or device to unmount",
-      "type": {
-        "type": "Script",
-        "data": "findmnt -rno TARGET 2>/dev/null | grep -v '^/$' | head -50"
-      }
+      "type": { "type": "String" }
     }
   ],
   "subcommands": []

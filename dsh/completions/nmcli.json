@@ -75,10 +75,7 @@
             {
               "name": "connection",
               "description": "Connection name",
-              "type": {
-                "type": "Script",
-                "data": "nmcli -t -f NAME connection show 2>/dev/null"
-              }
+              "type": { "type": "String" }
             }
           ]
         },
@@ -89,10 +86,7 @@
             {
               "name": "connection",
               "description": "Connection name",
-              "type": {
-                "type": "Script",
-                "data": "nmcli -t -f NAME connection show --active 2>/dev/null"
-              }
+              "type": { "type": "String" }
             }
           ]
         },
@@ -103,10 +97,7 @@
             {
               "name": "connection",
               "description": "Connection name",
-              "type": {
-                "type": "Script",
-                "data": "nmcli -t -f NAME connection show 2>/dev/null"
-              }
+              "type": { "type": "String" }
             }
           ]
         },
@@ -117,10 +108,7 @@
             {
               "name": "connection",
               "description": "Connection name",
-              "type": {
-                "type": "Script",
-                "data": "nmcli -t -f NAME connection show 2>/dev/null"
-              }
+              "type": { "type": "String" }
             }
           ]
         },
@@ -149,10 +137,7 @@
             {
               "name": "device",
               "description": "Device name",
-              "type": {
-                "type": "Script",
-                "data": "nmcli -t -f DEVICE device 2>/dev/null"
-              }
+              "type": { "type": "String" }
             }
           ]
         },
@@ -163,10 +148,7 @@
             {
               "name": "device",
               "description": "Device name",
-              "type": {
-                "type": "Script",
-                "data": "nmcli -t -f DEVICE device 2>/dev/null"
-              }
+              "type": { "type": "String" }
             }
           ]
         },
@@ -177,10 +159,7 @@
             {
               "name": "device",
               "description": "Device name",
-              "type": {
-                "type": "Script",
-                "data": "nmcli -t -f DEVICE device status 2>/dev/null | grep connected | cut -d: -f1"
-              }
+              "type": { "type": "String" }
             }
           ]
         },

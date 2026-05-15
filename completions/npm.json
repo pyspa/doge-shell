@@ -102,10 +102,7 @@
         {
           "name": "script",
           "description": "Script name from package.json",
-          "type": {
-            "type": "Script",
-            "data": "node -p \"const s = require('./package.json').scripts; s ? Object.keys(s).join('\\n') : ''\" 2>/dev/null"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []
@@ -219,10 +216,7 @@
         {
           "name": "package",
           "description": "Package name(s)",
-          "type": {
-            "type": "Script",
-            "data": "node -p \"const p = require('./package.json'); [...Object.keys(p.dependencies || {}), ...Object.keys(p.devDependencies || {})].join('\\n')\" 2>/dev/null"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []

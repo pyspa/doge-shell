@@ -15,20 +15,14 @@
       "long": "--context",
       "description": "Context in kubeconfig",
       "takes_value": true,
-      "value_type": {
-        "type": "Script",
-        "data": "kubectl config get-contexts -o name 2>/dev/null"
-      }
+      "value_type": { "type": "String" }
     },
     {
       "long": "--namespace",
       "short": "-n",
       "description": "Namespace for operations",
       "takes_value": true,
-      "value_type": {
-        "type": "Script",
-        "data": "kubectl get namespaces -o custom-columns=':metadata.name' --no-headers 2>/dev/null"
-      }
+      "value_type": { "type": "String" }
     },
     {
       "long": "--dry-run",
@@ -113,18 +107,12 @@
         {
           "name": "resource",
           "description": "Resource type (pod, service, deployment, etc.)",
-          "type": {
-            "type": "Script",
-            "data": "kubectl api-resources --namespaced=true -o name 2>/dev/null | cut -d/ -f1"
-          }
+          "type": { "type": "String" }
         },
         {
           "name": "name",
           "description": "Resource name (optional)",
-          "type": {
-            "type": "Script",
-            "data": "kubectl get $ARG_0 -o custom-columns=\":metadata.name\" --no-headers"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []
@@ -178,18 +166,12 @@
         {
           "name": "file_or_type",
           "description": "Config file or resource type",
-          "type": {
-            "type": "Script",
-            "data": "kubectl api-resources --namespaced=true -o name 2>/dev/null | cut -d/ -f1"
-          }
+          "type": { "type": "String" }
         },
         {
           "name": "name",
           "description": "Resource name (optional)",
-          "type": {
-            "type": "Script",
-            "data": "kubectl get $ARG_0 -o custom-columns=\":metadata.name\" --no-headers"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []
@@ -217,18 +199,12 @@
         {
           "name": "resource",
           "description": "Resource type (pod, service, etc.)",
-          "type": {
-            "type": "Script",
-            "data": "kubectl api-resources --namespaced=true -o name 2>/dev/null | cut -d/ -f1"
-          }
+          "type": { "type": "String" }
         },
         {
           "name": "name",
           "description": "Resource name",
-          "type": {
-            "type": "Script",
-            "data": "kubectl get $ARG_0 -o custom-columns=\":metadata.name\" --no-headers"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []
@@ -268,18 +244,12 @@
         {
           "name": "type",
           "description": "Resource type if not using file",
-          "type": {
-            "type": "Script",
-            "data": "kubectl api-resources --namespaced=true -o name 2>/dev/null | cut -d/ -f1"
-          }
+          "type": { "type": "String" }
         },
         {
           "name": "name",
           "description": "Resource name (optional)",
-          "type": {
-            "type": "Script",
-            "data": "kubectl get $ARG_0 -o custom-columns=\":metadata.name\" --no-headers"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []
@@ -327,18 +297,12 @@
         {
           "name": "resource",
           "description": "Resource type (pod, service, etc.)",
-          "type": {
-            "type": "Script",
-            "data": "kubectl api-resources --namespaced=true -o name 2>/dev/null | cut -d/ -f1"
-          }
+          "type": { "type": "String" }
         },
         {
           "name": "name",
           "description": "Resource name(s)",
-          "type": {
-            "type": "Script",
-            "data": "kubectl get $ARG_0 -o custom-columns=\":metadata.name\" --no-headers"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []
@@ -391,10 +355,7 @@
         {
           "name": "pod",
           "description": "Pod name",
-          "type": {
-            "type": "Script",
-            "data": "kubectl get pods -o custom-columns=\":metadata.name\" --no-headers"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []
@@ -428,10 +389,7 @@
         {
           "name": "pod",
           "description": "Pod name",
-          "type": {
-            "type": "Script",
-            "data": "kubectl get pods -o custom-columns=\":metadata.name\" --no-headers"
-          }
+          "type": { "type": "String" }
         },
         {
           "name": "command",

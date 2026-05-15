@@ -52,10 +52,7 @@
           "short": "-t",
           "description": "Target session",
           "takes_value": true,
-          "value_type": {
-            "type": "Script",
-            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
-          }
+          "value_type": { "type": "String" }
         },
         {
           "short": "-d",
@@ -66,10 +63,7 @@
         {
           "name": "session",
           "description": "Session name",
-          "type": {
-            "type": "Script",
-            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
-          }
+          "type": { "type": "String" }
         }
       ]
     },
@@ -81,10 +75,7 @@
           "short": "-t",
           "description": "Target session",
           "takes_value": true,
-          "value_type": {
-            "type": "Script",
-            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
-          }
+          "value_type": { "type": "String" }
         },
         {
           "short": "-d",
@@ -95,10 +86,7 @@
         {
           "name": "session",
           "description": "Session name",
-          "type": {
-            "type": "Script",
-            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
-          }
+          "type": { "type": "String" }
         }
       ]
     },
@@ -109,10 +97,7 @@
         {
           "name": "session",
           "description": "Session name",
-          "type": {
-            "type": "Script",
-            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
-          }
+          "type": { "type": "String" }
         }
       ]
     },
@@ -128,10 +113,7 @@
           "short": "-t",
           "description": "Target session",
           "takes_value": true,
-          "value_type": {
-            "type": "Script",
-            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
-          }
+          "value_type": { "type": "String" }
         }
       ]
     },
@@ -147,20 +129,14 @@
           "short": "-t",
           "description": "Target session",
           "takes_value": true,
-          "value_type": {
-            "type": "Script",
-            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
-          }
+          "value_type": { "type": "String" }
         }
       ],
       "arguments": [
         {
           "name": "session",
           "description": "Session name",
-          "type": {
-            "type": "Script",
-            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
-          }
+          "type": { "type": "String" }
         }
       ]
     },
@@ -228,10 +204,7 @@
           "short": "-t",
           "description": "Target session",
           "takes_value": true,
-          "value_type": {
-            "type": "Script",
-            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
-          }
+          "value_type": { "type": "String" }
         }
       ],
       "arguments": [
@@ -249,10 +222,7 @@
           "short": "-t",
           "description": "Target session",
           "takes_value": true,
-          "value_type": {
-            "type": "Script",
-            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
-          }
+          "value_type": { "type": "String" }
         }
       ]
     },
@@ -278,10 +248,7 @@
           "short": "-t",
           "description": "Target pane",
           "takes_value": true,
-          "value_type": {
-            "type": "Script",
-            "data": "tmux list-sessions -F '#{session_name}' 2>/dev/null"
-          }
+          "value_type": { "type": "String" }
         }
       ]
     }

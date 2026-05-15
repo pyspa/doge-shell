@@ -79,18 +79,12 @@
     {
       "name": "source",
       "description": "Source file/dir or [user@]host:path",
-      "type": {
-        "type": "Script",
-        "data": "(cat ~/.ssh/known_hosts 2>/dev/null | cut -d' ' -f1 | cut -d',' -f1 | grep -v '^\\['; grep -E '^Host ' ~/.ssh/config 2>/dev/null | awk '{print $2}' | grep -v '*') | sort -u | sed 's/$/:/' 2>/dev/null"
-      }
+      "type": { "type": "String" }
     },
     {
       "name": "destination",
       "description": "Destination file/dir or [user@]host:path",
-      "type": {
-        "type": "Script",
-        "data": "(cat ~/.ssh/known_hosts 2>/dev/null | cut -d' ' -f1 | cut -d',' -f1 | grep -v '^\\['; grep -E '^Host ' ~/.ssh/config 2>/dev/null | awk '{print $2}' | grep -v '*') | sort -u | sed 's/$/:/' 2>/dev/null"
-      }
+      "type": { "type": "String" }
     }
   ]
 }

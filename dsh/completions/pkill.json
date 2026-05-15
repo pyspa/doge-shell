@@ -51,10 +51,7 @@
     {
       "name": "pattern",
       "description": "Process name pattern to match",
-      "type": {
-        "type": "Script",
-        "data": "ps -eo comm --no-headers | sort -u"
-      }
+      "type": { "type": "String" }
     }
   ]
 }

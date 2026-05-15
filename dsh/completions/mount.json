@@ -71,10 +71,7 @@
     {
       "name": "device",
       "description": "Device to mount",
-      "type": {
-        "type": "Script",
-        "data": "lsblk -rno NAME,TYPE 2>/dev/null | awk '$2==\"part\" || $2==\"disk\" {print \"/dev/\" $1}'"
-      }
+      "type": { "type": "String" }
     },
     {
       "name": "mountpoint",

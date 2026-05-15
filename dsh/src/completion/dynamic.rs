@@ -53,13 +53,30 @@ struct ExternalCompletionCacheEntry {
     cached_at: Instant,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CargoMetadataValueKind {
+    Package,
+    Bin,
+    Example,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SystemdUnitListKind {
+    All,
+    Running,
+    Enabled,
+    Disabled,
+    UnitFiles,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum DynamicCommandCacheKind {
     GitBranch,
     GitRemote,
     GitWorktree,
     KubectlContext,
     KubectlNamespace,
+    CommandValue { command: String, value_kind: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -290,13 +307,38 @@ impl DynamicCompletionProvider {
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
     ) -> Vec<EnhancedCandidate> {
-        if parsed_command_line
+        self.collect_docker_candidates_with_mode(parsed_command_line, current_dir, false)
+    }
+
+    pub(crate) fn collect_docker_candidates_cached(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_docker_candidates_with_mode(parsed_command_line, current_dir, true)
+    }
+
+    fn collect_docker_candidates_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let Some(primary) = parsed_command_line
             .subcommand_path
             .first()
             .map(String::as_str)
-            != Some("compose")
-        {
+        else {
             return Vec::new();
+        };
+
+        if primary != "compose" {
+            return self.collect_docker_object_candidates(
+                primary,
+                parsed_command_line,
+                current_dir,
+                cached_only,
+            );
         }
 
         let Some(command_name) = parsed_command_line
@@ -317,10 +359,63 @@ impl DynamicCompletionProvider {
 
                 if service_commands.contains(&command_name) {
                     let current_token = parsed_command_line.current_token.as_str();
-                    self.collect_compose_service_candidates(current_dir, current_token)
+                    if cached_only {
+                        self.collect_compose_service_candidates_cached(current_dir, current_token)
+                    } else {
+                        self.collect_compose_service_candidates(current_dir, current_token)
+                    }
                 } else {
                     Vec::new()
                 }
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn collect_docker_object_candidates(
+        &self,
+        subcommand: &str,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        match parsed_command_line.completion_context {
+            CompletionContext::SubCommand | CompletionContext::Argument { .. } => {}
+            _ => return Vec::new(),
+        }
+
+        match subcommand {
+            "run" | "rmi" | "push" | "tag" => self.collect_docker_image_candidates(
+                current_dir,
+                parsed_command_line.current_token.as_str(),
+                cached_only,
+            ),
+            "stop" | "restart" | "kill" | "logs" | "exec" | "attach" | "top" => self
+                .collect_docker_container_candidates(
+                    current_dir,
+                    parsed_command_line.current_token.as_str(),
+                    false,
+                    cached_only,
+                ),
+            "rm" | "start" => self.collect_docker_container_candidates(
+                current_dir,
+                parsed_command_line.current_token.as_str(),
+                true,
+                cached_only,
+            ),
+            "inspect" => {
+                let mut candidates = self.collect_docker_container_candidates(
+                    current_dir,
+                    parsed_command_line.current_token.as_str(),
+                    true,
+                    cached_only,
+                );
+                candidates.extend(self.collect_docker_image_candidates(
+                    current_dir,
+                    parsed_command_line.current_token.as_str(),
+                    cached_only,
+                ));
+                candidates
             }
             _ => Vec::new(),
         }
@@ -369,12 +464,894 @@ impl DynamicCompletionProvider {
                     .collect::<Vec<_>>();
                 if path.len() >= 2 && path[0] == "config" && path[1] == "use-context" {
                     self.collect_kubectl_context_candidates(current_dir, current_token, cached_only)
+                } else if matches!(
+                    path.first().copied(),
+                    Some("get" | "describe" | "delete" | "edit" | "create" | "apply")
+                ) {
+                    match parsed_command_line.completion_context {
+                        CompletionContext::Argument { arg_index, .. } if arg_index >= 1 => {
+                            let resource = parsed_command_line
+                                .specified_arguments
+                                .first()
+                                .filter(|resource| resource.as_str() != current_token)
+                                .map(String::as_str);
+                            if let Some(resource) = resource {
+                                self.collect_kubectl_resource_name_candidates(
+                                    current_dir,
+                                    resource,
+                                    current_token,
+                                    cached_only,
+                                )
+                            } else {
+                                Vec::new()
+                            }
+                        }
+                        _ => self.collect_kubectl_resource_type_candidates(
+                            current_dir,
+                            current_token,
+                            cached_only,
+                        ),
+                    }
+                } else if matches!(path.first().copied(), Some("logs" | "exec")) {
+                    self.collect_kubectl_pod_candidates(current_dir, current_token, cached_only)
                 } else {
                     Vec::new()
                 }
             }
             _ => Vec::new(),
         }
+    }
+
+    pub(crate) fn collect_cargo_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_cargo_candidates_with_mode(parsed_command_line, current_dir, false)
+    }
+
+    pub(crate) fn collect_cargo_candidates_cached(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_cargo_candidates_with_mode(parsed_command_line, current_dir, true)
+    }
+
+    fn collect_cargo_candidates_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let CompletionContext::OptionValue { option_name, .. } =
+            &parsed_command_line.completion_context
+        else {
+            return Vec::new();
+        };
+
+        let (kind, description) = match option_name.as_str() {
+            "-p" | "--package" => (CargoMetadataValueKind::Package, "cargo package"),
+            "--bin" => (CargoMetadataValueKind::Bin, "cargo binary target"),
+            "--example" => (CargoMetadataValueKind::Example, "cargo example target"),
+            _ => return Vec::new(),
+        };
+
+        self.collect_cargo_metadata_candidates(
+            current_dir,
+            parsed_command_line.current_token.as_str(),
+            kind,
+            description,
+            cached_only,
+        )
+    }
+
+    pub(crate) fn collect_systemctl_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_systemctl_candidates_with_mode(parsed_command_line, current_dir, false)
+    }
+
+    pub(crate) fn collect_systemctl_candidates_cached(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_systemctl_candidates_with_mode(parsed_command_line, current_dir, true)
+    }
+
+    fn collect_systemctl_candidates_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        if !matches!(
+            parsed_command_line.completion_context,
+            CompletionContext::SubCommand | CompletionContext::Argument { .. }
+        ) {
+            return Vec::new();
+        }
+
+        let Some(subcommand) = parsed_command_line
+            .subcommand_path
+            .first()
+            .map(String::as_str)
+        else {
+            return Vec::new();
+        };
+        let kind = match subcommand {
+            "start" => SystemdUnitListKind::UnitFiles,
+            "stop" | "restart" | "reload" => SystemdUnitListKind::Running,
+            "enable" => SystemdUnitListKind::Disabled,
+            "disable" => SystemdUnitListKind::Enabled,
+            "status" | "is-active" | "is-enabled" | "mask" | "unmask" => SystemdUnitListKind::All,
+            _ => return Vec::new(),
+        };
+
+        self.collect_systemd_unit_candidates(
+            current_dir,
+            parsed_command_line.current_token.as_str(),
+            kind,
+            "systemd unit",
+            cached_only,
+        )
+    }
+
+    pub(crate) fn collect_journalctl_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_journalctl_candidates_with_mode(parsed_command_line, current_dir, false)
+    }
+
+    pub(crate) fn collect_journalctl_candidates_cached(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_journalctl_candidates_with_mode(parsed_command_line, current_dir, true)
+    }
+
+    fn collect_journalctl_candidates_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let CompletionContext::OptionValue { option_name, .. } =
+            &parsed_command_line.completion_context
+        else {
+            return Vec::new();
+        };
+        if !matches!(option_name.as_str(), "-u" | "--unit") {
+            return Vec::new();
+        }
+
+        self.collect_systemd_unit_candidates(
+            current_dir,
+            parsed_command_line.current_token.as_str(),
+            SystemdUnitListKind::All,
+            "systemd unit",
+            cached_only,
+        )
+    }
+
+    pub(crate) fn collect_ssh_host_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        command_name: &str,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_ssh_host_candidates_with_mode(
+            parsed_command_line,
+            current_dir,
+            command_name,
+            false,
+        )
+    }
+
+    pub(crate) fn collect_ssh_host_candidates_cached(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        command_name: &str,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_ssh_host_candidates_with_mode(
+            parsed_command_line,
+            current_dir,
+            command_name,
+            true,
+        )
+    }
+
+    fn collect_ssh_host_candidates_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        _current_dir: &Path,
+        command_name: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        if !matches!(
+            parsed_command_line.completion_context,
+            CompletionContext::SubCommand | CompletionContext::Argument { .. }
+        ) {
+            return Vec::new();
+        }
+        let current_token = parsed_command_line.current_token.as_str();
+        if current_token.contains(':') {
+            return Vec::new();
+        }
+
+        let scope = ssh_config_scope();
+        let loader = move || Ok(load_ssh_hosts());
+        let values = self.load_or_lookup_command_values(
+            command_name,
+            "ssh-host",
+            scope,
+            cached_only,
+            loader,
+        );
+        let user_prefix = current_token
+            .rsplit_once('@')
+            .map(|(user, _)| user.to_string());
+        let host_token = current_token
+            .rsplit_once('@')
+            .map_or(current_token, |(_, host)| host);
+
+        values
+            .into_iter()
+            .filter(|host| matches_prefix(host_token, host))
+            .map(|host| {
+                let text =
+                    format_ssh_host_candidate_text(command_name, user_prefix.as_deref(), host);
+                EnhancedCandidate {
+                    text,
+                    description: Some("ssh host".to_string()),
+                    candidate_type: CandidateType::Argument,
+                    priority: 130,
+                }
+            })
+            .collect()
+    }
+
+    pub(crate) fn collect_tmux_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_tmux_candidates_with_mode(parsed_command_line, current_dir, false)
+    }
+
+    pub(crate) fn collect_tmux_candidates_cached(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_tmux_candidates_with_mode(parsed_command_line, current_dir, true)
+    }
+
+    fn collect_tmux_candidates_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let completes_session = match &parsed_command_line.completion_context {
+            CompletionContext::OptionValue { option_name, .. } => option_name == "-t",
+            CompletionContext::SubCommand | CompletionContext::Argument { .. } => matches!(
+                parsed_command_line
+                    .subcommand_path
+                    .first()
+                    .map(String::as_str),
+                Some("attach-session" | "attach" | "a" | "kill-session")
+            ),
+            _ => false,
+        };
+        if !completes_session {
+            return Vec::new();
+        }
+
+        let command_path = self.resolve_command_path("tmux");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "tmux",
+            "session",
+            canonicalize_path(&current_dir),
+            parsed_command_line.current_token.as_str(),
+            "tmux session",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                run_command_lines(
+                    &command_path,
+                    &["list-sessions", "-F", "#{session_name}"],
+                    &current_dir,
+                )
+            },
+        )
+    }
+
+    pub(crate) fn collect_screen_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_screen_candidates_with_mode(parsed_command_line, current_dir, false)
+    }
+
+    pub(crate) fn collect_screen_candidates_cached(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_screen_candidates_with_mode(parsed_command_line, current_dir, true)
+    }
+
+    fn collect_screen_candidates_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        if !matches!(
+            parsed_command_line.completion_context,
+            CompletionContext::OptionValue { .. }
+                | CompletionContext::SubCommand
+                | CompletionContext::Argument { .. }
+        ) {
+            return Vec::new();
+        }
+
+        let command_path = self.resolve_command_path("screen");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "screen",
+            "session",
+            canonicalize_path(&current_dir),
+            parsed_command_line.current_token.as_str(),
+            "screen session",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parse_screen_sessions(&run_command_lines(
+                    &command_path,
+                    &["-ls"],
+                    &current_dir,
+                )?))
+            },
+        )
+    }
+
+    pub(crate) fn collect_process_name_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        command_name: &str,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_process_name_candidates_with_mode(parsed_command_line, command_name, false)
+    }
+
+    pub(crate) fn collect_process_name_candidates_cached(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        command_name: &str,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_process_name_candidates_with_mode(parsed_command_line, command_name, true)
+    }
+
+    fn collect_process_name_candidates_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        command_name: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        if !matches!(
+            parsed_command_line.completion_context,
+            CompletionContext::SubCommand | CompletionContext::Argument { .. }
+        ) {
+            return Vec::new();
+        }
+        self.collect_cached_value_candidates(
+            command_name,
+            "process-name",
+            PathBuf::from("/proc"),
+            parsed_command_line.current_token.as_str(),
+            "process name",
+            cached_only,
+            || Ok(load_process_names()),
+        )
+    }
+
+    pub(crate) fn collect_pip_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        command_name: &str,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_pip_candidates_with_mode(parsed_command_line, current_dir, command_name, false)
+    }
+
+    pub(crate) fn collect_pip_candidates_cached(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        command_name: &str,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_pip_candidates_with_mode(parsed_command_line, current_dir, command_name, true)
+    }
+
+    fn collect_pip_candidates_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        command_name: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        if !matches!(
+            parsed_command_line
+                .subcommand_path
+                .first()
+                .map(String::as_str),
+            Some("show" | "uninstall")
+        ) || !matches!(
+            parsed_command_line.completion_context,
+            CompletionContext::SubCommand | CompletionContext::Argument { .. }
+        ) {
+            return Vec::new();
+        }
+
+        let command_path = self.resolve_command_path(command_name);
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            command_name,
+            "installed-package",
+            canonicalize_path(&current_dir),
+            parsed_command_line.current_token.as_str(),
+            "installed python package",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parse_pip_freeze_packages(&run_command_lines(
+                    &command_path,
+                    &["list", "--format=freeze"],
+                    &current_dir,
+                )?))
+            },
+        )
+    }
+
+    pub(crate) fn collect_rustup_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_rustup_candidates_with_mode(parsed_command_line, current_dir, false)
+    }
+
+    pub(crate) fn collect_rustup_candidates_cached(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_rustup_candidates_with_mode(parsed_command_line, current_dir, true)
+    }
+
+    fn collect_rustup_candidates_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let path = parsed_command_line
+            .subcommand_path
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let completes_toolchain =
+            matches!(path.as_slice(), ["default"] | ["toolchain", "uninstall"]);
+        if !completes_toolchain {
+            return Vec::new();
+        }
+        let command_path = self.resolve_command_path("rustup");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "rustup",
+            "toolchain",
+            canonicalize_path(&current_dir),
+            parsed_command_line.current_token.as_str(),
+            "rustup toolchain",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parse_first_fields(&run_command_lines(
+                    &command_path,
+                    &["toolchain", "list"],
+                    &current_dir,
+                )?))
+            },
+        )
+    }
+
+    pub(crate) fn collect_gh_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_gh_candidates_with_mode(parsed_command_line, current_dir, false)
+    }
+
+    pub(crate) fn collect_gh_candidates_cached(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_gh_candidates_with_mode(parsed_command_line, current_dir, true)
+    }
+
+    fn collect_gh_candidates_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let path = parsed_command_line
+            .subcommand_path
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let (value_kind, args, description) = match path.as_slice() {
+            [
+                "pr",
+                "view" | "checkout" | "close" | "merge" | "ready" | "diff" | "comment",
+            ] => (
+                "pr-number",
+                vec!["pr", "list", "--json", "number", "--jq", ".[].number"],
+                "GitHub pull request",
+            ),
+            ["issue", "view" | "close" | "reopen" | "comment"] => (
+                "issue-number",
+                vec!["issue", "list", "--json", "number", "--jq", ".[].number"],
+                "GitHub issue",
+            ),
+            ["run", "view" | "watch" | "download" | "rerun" | "cancel"] => (
+                "run-id",
+                vec![
+                    "run",
+                    "list",
+                    "--json",
+                    "databaseId",
+                    "--jq",
+                    ".[].databaseId",
+                ],
+                "GitHub Actions run",
+            ),
+            _ => return Vec::new(),
+        };
+        let command_path = self.resolve_command_path("gh");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "gh",
+            value_kind,
+            project_context::find_project_root(&current_dir),
+            parsed_command_line.current_token.as_str(),
+            description,
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                run_command_lines(&command_path, &args, &current_dir)
+            },
+        )
+    }
+
+    pub(crate) fn collect_nmcli_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_nmcli_candidates_with_mode(parsed_command_line, current_dir, false)
+    }
+
+    pub(crate) fn collect_nmcli_candidates_cached(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_nmcli_candidates_with_mode(parsed_command_line, current_dir, true)
+    }
+
+    fn collect_nmcli_candidates_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let path = parsed_command_line
+            .subcommand_path
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let (kind, args, description) = match path.as_slice() {
+            ["connection", "up" | "modify" | "delete"] => (
+                "connection",
+                vec!["-t", "-f", "NAME", "connection", "show"],
+                "NetworkManager connection",
+            ),
+            ["connection", "down"] => (
+                "active-connection",
+                vec!["-t", "-f", "NAME", "connection", "show", "--active"],
+                "active NetworkManager connection",
+            ),
+            ["device", "show" | "connect"] => (
+                "device",
+                vec!["-t", "-f", "DEVICE", "device"],
+                "NetworkManager device",
+            ),
+            ["device", "disconnect"] => (
+                "connected-device",
+                vec!["-t", "-f", "DEVICE,STATE", "device", "status"],
+                "connected NetworkManager device",
+            ),
+            _ => return Vec::new(),
+        };
+        let command_path = self.resolve_command_path("nmcli");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "nmcli",
+            kind,
+            canonicalize_path(&current_dir),
+            parsed_command_line.current_token.as_str(),
+            description,
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                let lines = run_command_lines(&command_path, &args, &current_dir)?;
+                if kind == "connected-device" {
+                    Ok(parse_nmcli_connected_devices(&lines))
+                } else {
+                    Ok(parse_nmcli_first_field(&lines))
+                }
+            },
+        )
+    }
+
+    pub(crate) fn collect_pacman_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_pacman_candidates_with_mode(parsed_command_line, current_dir, false)
+    }
+
+    pub(crate) fn collect_pacman_candidates_cached(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_pacman_candidates_with_mode(parsed_command_line, current_dir, true)
+    }
+
+    fn collect_pacman_candidates_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let subcommand = parsed_command_line
+            .subcommand_path
+            .first()
+            .map(String::as_str)
+            .or_else(|| parsed_command_line.raw_args.first().map(String::as_str));
+        let (kind, args, description) = match subcommand {
+            Some("-S") => ("sync-package", vec!["-Slq"], "pacman sync package"),
+            Some("-R") => ("installed-package", vec!["-Qq"], "installed pacman package"),
+            _ => return Vec::new(),
+        };
+        let command_path = self.resolve_command_path("pacman");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "pacman",
+            kind,
+            canonicalize_path(&current_dir),
+            parsed_command_line.current_token.as_str(),
+            description,
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                run_command_lines(&command_path, &args, &current_dir)
+            },
+        )
+    }
+
+    pub(crate) fn collect_mount_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_mount_candidates_with_mode(parsed_command_line, current_dir, false)
+    }
+
+    pub(crate) fn collect_mount_candidates_cached(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_mount_candidates_with_mode(parsed_command_line, current_dir, true)
+    }
+
+    fn collect_mount_candidates_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        if !matches!(
+            parsed_command_line.completion_context,
+            CompletionContext::SubCommand | CompletionContext::Argument { .. }
+        ) {
+            return Vec::new();
+        }
+        let command_path = self.resolve_command_path("lsblk");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "mount",
+            "block-device",
+            canonicalize_path(&current_dir),
+            parsed_command_line.current_token.as_str(),
+            "block device",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parse_lsblk_devices(&run_command_lines(
+                    &command_path,
+                    &["-rno", "NAME,TYPE"],
+                    &current_dir,
+                )?))
+            },
+        )
+    }
+
+    pub(crate) fn collect_umount_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_umount_candidates_with_mode(parsed_command_line, current_dir, false)
+    }
+
+    pub(crate) fn collect_umount_candidates_cached(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_umount_candidates_with_mode(parsed_command_line, current_dir, true)
+    }
+
+    fn collect_umount_candidates_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        if !matches!(
+            parsed_command_line.completion_context,
+            CompletionContext::SubCommand | CompletionContext::Argument { .. }
+        ) {
+            return Vec::new();
+        }
+        let command_path = self.resolve_command_path("findmnt");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "umount",
+            "mount-target",
+            canonicalize_path(&current_dir),
+            parsed_command_line.current_token.as_str(),
+            "mount target",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(
+                    run_command_lines(&command_path, &["-rno", "TARGET"], &current_dir)?
+                        .into_iter()
+                        .filter(|target| target != "/")
+                        .collect(),
+                )
+            },
+        )
+    }
+
+    pub(crate) fn collect_modprobe_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_modprobe_candidates_with_mode(parsed_command_line, false)
+    }
+
+    pub(crate) fn collect_modprobe_candidates_cached(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_modprobe_candidates_with_mode(parsed_command_line, true)
+    }
+
+    fn collect_modprobe_candidates_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        if !matches!(
+            parsed_command_line.completion_context,
+            CompletionContext::SubCommand | CompletionContext::Argument { .. }
+        ) {
+            return Vec::new();
+        }
+        self.collect_cached_value_candidates(
+            "modprobe",
+            "kernel-module",
+            PathBuf::from("/lib/modules"),
+            parsed_command_line.current_token.as_str(),
+            "kernel module",
+            cached_only,
+            || Ok(load_kernel_module_names()),
+        )
+    }
+
+    pub(crate) fn collect_tcpdump_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_tcpdump_candidates_with_mode(parsed_command_line, false)
+    }
+
+    pub(crate) fn collect_tcpdump_candidates_cached(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_tcpdump_candidates_with_mode(parsed_command_line, true)
+    }
+
+    fn collect_tcpdump_candidates_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let CompletionContext::OptionValue { option_name, .. } =
+            &parsed_command_line.completion_context
+        else {
+            return Vec::new();
+        };
+        if option_name != "-i" {
+            return Vec::new();
+        }
+        self.collect_cached_value_candidates(
+            "tcpdump",
+            "interface",
+            PathBuf::from("/sys/class/net"),
+            parsed_command_line.current_token.as_str(),
+            "network interface",
+            cached_only,
+            || Ok(load_network_interfaces()),
+        )
     }
 
     pub(crate) fn collect_project_task_candidates(
@@ -541,6 +1518,119 @@ impl DynamicCompletionProvider {
         )
     }
 
+    fn collect_cached_value_candidates<F>(
+        &self,
+        command_name: &str,
+        value_kind: &str,
+        scope_dir: PathBuf,
+        current_token: &str,
+        description: &str,
+        cached_only: bool,
+        loader: F,
+    ) -> Vec<EnhancedCandidate>
+    where
+        F: FnOnce() -> Result<Vec<String>> + Send + 'static,
+    {
+        self.load_or_lookup_command_values(command_name, value_kind, scope_dir, cached_only, loader)
+            .into_iter()
+            .filter(|value| matches_prefix(current_token, value))
+            .map(|value| EnhancedCandidate {
+                text: value,
+                description: Some(description.to_string()),
+                candidate_type: CandidateType::Argument,
+                priority: 130,
+            })
+            .collect()
+    }
+
+    fn load_or_lookup_command_values<F>(
+        &self,
+        command_name: &str,
+        value_kind: &str,
+        scope_dir: PathBuf,
+        cached_only: bool,
+        loader: F,
+    ) -> Vec<String>
+    where
+        F: FnOnce() -> Result<Vec<String>> + Send + 'static,
+    {
+        let kind = DynamicCommandCacheKind::CommandValue {
+            command: command_name.to_string(),
+            value_kind: value_kind.to_string(),
+        };
+        if cached_only {
+            self.lookup_command_values(kind, scope_dir)
+        } else {
+            self.load_command_values(kind, scope_dir, loader)
+        }
+    }
+
+    fn collect_docker_image_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("docker");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "docker",
+            "image",
+            canonicalize_path(&current_dir),
+            current_token,
+            "docker image",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(run_command_lines(
+                    &command_path,
+                    &["images", "--format", "{{.Repository}}:{{.Tag}}"],
+                    &current_dir,
+                )?
+                .into_iter()
+                .filter(|image| !image.contains("<none>"))
+                .collect())
+            },
+        )
+    }
+
+    fn collect_docker_container_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        include_stopped: bool,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("docker");
+        let current_dir = current_dir.to_path_buf();
+        let value_kind = if include_stopped {
+            "container-all"
+        } else {
+            "container-running"
+        };
+        self.collect_cached_value_candidates(
+            "docker",
+            value_kind,
+            canonicalize_path(&current_dir),
+            current_token,
+            "docker container",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                let args: &[&str] = if include_stopped {
+                    &["ps", "-a", "--format", "{{.Names}}"]
+                } else {
+                    &["ps", "--format", "{{.Names}}"]
+                };
+                run_command_lines(&command_path, args, &current_dir)
+            },
+        )
+    }
+
     fn collect_compose_service_candidates(
         &self,
         current_dir: &Path,
@@ -566,6 +1656,252 @@ impl DynamicCompletionProvider {
                 Vec::new()
             }
         }
+    }
+
+    fn collect_compose_service_candidates_cached(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+    ) -> Vec<EnhancedCandidate> {
+        let Some(compose_file) = find_compose_file(current_dir) else {
+            return Vec::new();
+        };
+        let cache_key = canonicalize_path(&compose_file);
+        let signature = file_metadata_signature(&cache_key);
+        self.lookup_compose_cache(&cache_key, &signature)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|service| matches_prefix(current_token, service))
+            .map(|service| EnhancedCandidate {
+                text: service,
+                description: Some(format!("compose service ({})", cache_key.display())),
+                candidate_type: CandidateType::Argument,
+                priority: 125,
+            })
+            .collect()
+    }
+
+    fn collect_cargo_metadata_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        kind: CargoMetadataValueKind,
+        description: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("cargo");
+        let current_dir = current_dir.to_path_buf();
+        let scope_dir = project_context::find_project_root(&current_dir);
+        let value_kind = match kind {
+            CargoMetadataValueKind::Package => "package",
+            CargoMetadataValueKind::Bin => "bin",
+            CargoMetadataValueKind::Example => "example",
+        };
+        self.collect_cached_value_candidates(
+            "cargo",
+            value_kind,
+            scope_dir,
+            current_token,
+            description,
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                let output = run_command_stdout(
+                    &command_path,
+                    &["metadata", "--no-deps", "--format-version", "1"],
+                    &current_dir,
+                )?;
+                Ok(parse_cargo_metadata_values(&output, kind))
+            },
+        )
+    }
+
+    fn collect_systemd_unit_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        kind: SystemdUnitListKind,
+        description: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("systemctl");
+        let current_dir = current_dir.to_path_buf();
+        let value_kind = match kind {
+            SystemdUnitListKind::All => "unit-all",
+            SystemdUnitListKind::Running => "unit-running",
+            SystemdUnitListKind::Enabled => "unit-enabled",
+            SystemdUnitListKind::Disabled => "unit-disabled",
+            SystemdUnitListKind::UnitFiles => "unit-files",
+        };
+        self.collect_cached_value_candidates(
+            "systemctl",
+            value_kind,
+            canonicalize_path(&current_dir),
+            current_token,
+            description,
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                let args: Vec<&str> = match kind {
+                    SystemdUnitListKind::All => {
+                        vec!["list-units", "--all", "--no-pager", "--no-legend"]
+                    }
+                    SystemdUnitListKind::Running => {
+                        vec!["list-units", "--state=running", "--no-pager", "--no-legend"]
+                    }
+                    SystemdUnitListKind::Enabled => vec![
+                        "list-unit-files",
+                        "--state=enabled",
+                        "--no-pager",
+                        "--no-legend",
+                    ],
+                    SystemdUnitListKind::Disabled => vec![
+                        "list-unit-files",
+                        "--state=disabled",
+                        "--no-pager",
+                        "--no-legend",
+                    ],
+                    SystemdUnitListKind::UnitFiles => {
+                        vec!["list-unit-files", "--no-pager", "--no-legend"]
+                    }
+                };
+                Ok(parse_first_fields(&run_command_lines(
+                    &command_path,
+                    &args,
+                    &current_dir,
+                )?))
+            },
+        )
+    }
+
+    fn collect_kubectl_resource_type_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("kubectl");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "kubectl",
+            "resource-type",
+            canonicalize_path(&current_dir),
+            current_token,
+            "kubectl resource",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(run_command_lines(
+                    &command_path,
+                    &["api-resources", "--namespaced=true", "-o", "name"],
+                    &current_dir,
+                )?
+                .into_iter()
+                .filter_map(|resource| resource.split('/').next().map(str::to_string))
+                .collect())
+            },
+        )
+    }
+
+    fn collect_kubectl_resource_name_candidates(
+        &self,
+        current_dir: &Path,
+        resource: &str,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("kubectl");
+        let current_dir = current_dir.to_path_buf();
+        let resource = resource.to_string();
+        self.collect_cached_value_candidates(
+            "kubectl",
+            &format!("resource-name:{resource}"),
+            canonicalize_path(&current_dir),
+            current_token,
+            "kubectl resource name",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                run_command_lines(
+                    &command_path,
+                    &[
+                        "get",
+                        &resource,
+                        "-o",
+                        "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}",
+                    ],
+                    &current_dir,
+                )
+            },
+        )
+    }
+
+    fn collect_kubectl_pod_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("kubectl");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "kubectl",
+            "pod",
+            canonicalize_path(&current_dir),
+            current_token,
+            "kubectl pod",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                run_command_lines(
+                    &command_path,
+                    &[
+                        "get",
+                        "pods",
+                        "-o",
+                        "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}",
+                    ],
+                    &current_dir,
+                )
+            },
+        )
+    }
+
+    pub(crate) fn collect_js_dependency_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        command_name: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        if !matches!(
+            parsed_command_line.completion_context,
+            CompletionContext::SubCommand | CompletionContext::Argument { .. }
+        ) {
+            return Vec::new();
+        }
+
+        let project_root = project_context::find_project_root(current_dir);
+        let package_json = project_root.join("package.json");
+        self.collect_cached_value_candidates(
+            command_name,
+            "package-json-dependency",
+            project_root,
+            parsed_command_line.current_token.as_str(),
+            "package.json dependency",
+            cached_only,
+            move || Ok(load_package_json_dependencies(&package_json)),
+        )
     }
 
     fn collect_kubectl_context_candidates(
@@ -1147,6 +2483,17 @@ fn run_external_completer_for_key(
         .collect())
 }
 
+fn run_command_stdout(command_path: &str, args: &[&str], current_dir: &Path) -> Result<String> {
+    let mut child = Command::new(command_path)
+        .args(args)
+        .current_dir(current_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    wait_and_collect_stdout(&mut child)
+}
+
 fn run_command_lines(command_path: &str, args: &[&str], current_dir: &Path) -> Result<Vec<String>> {
     let mut child = Command::new(command_path)
         .args(args)
@@ -1158,7 +2505,7 @@ fn run_command_lines(command_path: &str, args: &[&str], current_dir: &Path) -> R
     wait_and_collect_lines(&mut child)
 }
 
-fn wait_and_collect_lines(child: &mut std::process::Child) -> Result<Vec<String>> {
+fn wait_and_collect_stdout(child: &mut std::process::Child) -> Result<String> {
     let mut stdout = child
         .stdout
         .take()
@@ -1174,22 +2521,349 @@ fn wait_and_collect_lines(child: &mut std::process::Child) -> Result<Vec<String>
             let output = reader_thread
                 .join()
                 .map_err(|_| anyhow::anyhow!("Stdout reader thread panicked"))??;
-            if !status.success() {
-                return Ok(Vec::new());
+            if status.success() {
+                Ok(output)
+            } else {
+                Ok(String::new())
             }
-
-            Ok(output
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .map(str::to_string)
-                .collect())
         }
         None => {
             let _ = child.kill();
             let _ = child.wait();
             let _ = reader_thread.join();
-            Ok(Vec::new())
+            Ok(String::new())
+        }
+    }
+}
+
+fn wait_and_collect_lines(child: &mut std::process::Child) -> Result<Vec<String>> {
+    Ok(wait_and_collect_stdout(child)?
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+fn dedup_sorted(mut values: Vec<String>) -> Vec<String> {
+    values.retain(|value| !value.trim().is_empty());
+    values.sort();
+    values.dedup();
+    values
+}
+
+fn parse_first_fields(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .filter_map(|line| line.split_whitespace().next().map(str::to_string))
+            .collect(),
+    )
+}
+
+fn parse_cargo_metadata_values(output: &str, kind: CargoMetadataValueKind) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(output) else {
+        return Vec::new();
+    };
+
+    let mut values = Vec::new();
+    let Some(packages) = value
+        .get("packages")
+        .and_then(|packages| packages.as_array())
+    else {
+        return Vec::new();
+    };
+
+    for package in packages {
+        match kind {
+            CargoMetadataValueKind::Package => {
+                if let Some(name) = package.get("name").and_then(|name| name.as_str()) {
+                    values.push(name.to_string());
+                }
+            }
+            CargoMetadataValueKind::Bin | CargoMetadataValueKind::Example => {
+                let Some(targets) = package
+                    .get("targets")
+                    .and_then(|targets| targets.as_array())
+                else {
+                    continue;
+                };
+                let expected_kind = match kind {
+                    CargoMetadataValueKind::Bin => "bin",
+                    CargoMetadataValueKind::Example => "example",
+                    CargoMetadataValueKind::Package => unreachable!(),
+                };
+                for target in targets {
+                    let Some(kinds) = target.get("kind").and_then(|kinds| kinds.as_array()) else {
+                        continue;
+                    };
+                    let has_kind = kinds
+                        .iter()
+                        .any(|target_kind| target_kind.as_str() == Some(expected_kind));
+                    if has_kind
+                        && let Some(name) = target.get("name").and_then(|name| name.as_str())
+                    {
+                        values.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    dedup_sorted(values)
+}
+
+fn ssh_config_scope() -> PathBuf {
+    dirs::home_dir()
+        .map(|home| home.join(".ssh"))
+        .unwrap_or_else(|| PathBuf::from(".ssh"))
+}
+
+fn load_ssh_hosts() -> Vec<String> {
+    let mut values = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        values.extend(parse_ssh_config_hosts(
+            &fs::read_to_string(home.join(".ssh").join("config")).unwrap_or_default(),
+        ));
+        values.extend(parse_known_hosts(
+            &fs::read_to_string(home.join(".ssh").join("known_hosts")).unwrap_or_default(),
+        ));
+    }
+    dedup_sorted(values)
+}
+
+fn parse_ssh_config_hosts(contents: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') || trimmed.is_empty() {
+            continue;
+        }
+        let mut parts = trimmed.split_whitespace();
+        if !parts
+            .next()
+            .is_some_and(|keyword| keyword.eq_ignore_ascii_case("host"))
+        {
+            continue;
+        }
+        for host in parts {
+            if host.contains('*') || host.contains('?') || host.starts_with('!') {
+                continue;
+            }
+            values.push(host.to_string());
+        }
+    }
+    dedup_sorted(values)
+}
+
+fn parse_known_hosts(contents: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') || trimmed.is_empty() || trimmed.starts_with('|') {
+            continue;
+        }
+        let fields = trimmed.split_whitespace().collect::<Vec<_>>();
+        let host_field = if fields.first().is_some_and(|field| field.starts_with('@')) {
+            fields.get(1).copied()
+        } else {
+            fields.first().copied()
+        };
+        let Some(host_field) = host_field else {
+            continue;
+        };
+        for host in host_field.split(',') {
+            let host = if let Some(rest) = host.strip_prefix('[') {
+                rest.split(']').next().unwrap_or(rest)
+            } else {
+                host.split(':').next().unwrap_or(host)
+            };
+            if !host.is_empty() && !host.starts_with('|') {
+                values.push(host.to_string());
+            }
+        }
+    }
+    dedup_sorted(values)
+}
+
+fn format_ssh_host_candidate_text(
+    command_name: &str,
+    user_prefix: Option<&str>,
+    host: String,
+) -> String {
+    let mut text = if let Some(user) = user_prefix {
+        format!("{user}@{host}")
+    } else {
+        host
+    };
+    if command_name == "rsync" {
+        text.push(':');
+    }
+    text
+}
+
+fn parse_screen_sessions(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .flat_map(|line| line.split_whitespace())
+            .filter(|field| {
+                field.split_once('.').is_some_and(|(pid, name)| {
+                    !name.is_empty() && pid.chars().all(|ch| ch.is_ascii_digit())
+                })
+            })
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+fn load_process_names() -> Vec<String> {
+    let mut values = Vec::new();
+    if let Ok(entries) = fs::read_dir("/proc") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !file_name.chars().all(|ch| ch.is_ascii_digit()) {
+                continue;
+            }
+            if let Ok(comm) = fs::read_to_string(path.join("comm")) {
+                values.push(comm.trim().to_string());
+            }
+        }
+    }
+    dedup_sorted(values)
+}
+
+fn parse_pip_freeze_packages(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .filter_map(|line| line.split("==").next().map(str::to_string))
+            .collect(),
+    )
+}
+
+fn parse_nmcli_first_field(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .filter_map(|line| {
+                let first = line.split(':').next()?;
+                if first.is_empty() {
+                    None
+                } else {
+                    Some(first.to_string())
+                }
+            })
+            .collect(),
+    )
+}
+
+fn parse_nmcli_connected_devices(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .filter_map(|line| {
+                let (device, state) = line.split_once(':')?;
+                if !device.is_empty() && state == "connected" {
+                    Some(device.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect(),
+    )
+}
+
+fn parse_lsblk_devices(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .filter_map(|line| {
+                let mut fields = line.split_whitespace();
+                let name = fields.next()?;
+                let kind = fields.next()?;
+                if matches!(kind, "disk" | "part") {
+                    Some(format!("/dev/{name}"))
+                } else {
+                    None
+                }
+            })
+            .collect(),
+    )
+}
+
+fn load_package_json_dependencies(package_json: &Path) -> Vec<String> {
+    let Ok(contents) = fs::read_to_string(package_json) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return Vec::new();
+    };
+    let mut values = Vec::new();
+    for key in [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies",
+    ] {
+        if let Some(object) = value.get(key).and_then(|value| value.as_object()) {
+            values.extend(object.keys().cloned());
+        }
+    }
+    dedup_sorted(values)
+}
+
+fn load_network_interfaces() -> Vec<String> {
+    fs::read_dir("/sys/class/net")
+        .map(|entries| {
+            dedup_sorted(
+                entries
+                    .flatten()
+                    .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+                    .collect(),
+            )
+        })
+        .unwrap_or_default()
+}
+
+fn load_kernel_module_names() -> Vec<String> {
+    let release = run_command_lines("uname", &["-r"], Path::new("/"))
+        .ok()
+        .and_then(|lines| lines.into_iter().next());
+    let root = release
+        .map(|release| PathBuf::from("/lib/modules").join(release).join("kernel"))
+        .filter(|path| path.exists())
+        .unwrap_or_else(|| PathBuf::from("/lib/modules"));
+    let mut values = Vec::new();
+    collect_kernel_module_names(&root, &mut values);
+    dedup_sorted(values)
+}
+
+fn collect_kernel_module_names(dir: &Path, values: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_kernel_module_names(&path, values);
+            continue;
+        }
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let module_name = file_name
+            .strip_suffix(".ko")
+            .or_else(|| file_name.strip_suffix(".ko.xz"))
+            .or_else(|| file_name.strip_suffix(".ko.zst"));
+        if let Some(module_name) = module_name {
+            values.push(module_name.replace('-', "_"));
         }
     }
 }
@@ -1236,6 +2910,210 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         false
+    }
+
+    #[test]
+    fn parse_cargo_metadata_values_extracts_packages_and_targets() {
+        let metadata = r#"{
+          "packages": [
+            {
+              "name": "app",
+              "targets": [
+                { "name": "app", "kind": ["bin"] },
+                { "name": "demo", "kind": ["example"] },
+                { "name": "app", "kind": ["lib"] }
+              ]
+            },
+            {
+              "name": "lib",
+              "targets": [
+                { "name": "tool", "kind": ["bin"] }
+              ]
+            }
+          ]
+        }"#;
+
+        assert_eq!(
+            parse_cargo_metadata_values(metadata, CargoMetadataValueKind::Package),
+            vec!["app".to_string(), "lib".to_string()]
+        );
+        assert_eq!(
+            parse_cargo_metadata_values(metadata, CargoMetadataValueKind::Bin),
+            vec!["app".to_string(), "tool".to_string()]
+        );
+        assert_eq!(
+            parse_cargo_metadata_values(metadata, CargoMetadataValueKind::Example),
+            vec!["demo".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_ssh_hosts_filters_patterns_and_known_host_ports() {
+        let config_hosts = parse_ssh_config_hosts(
+            "Host dev prod-*\n  HostName example.com\nHost staging\nHost !blocked wildcard?\n",
+        );
+        assert_eq!(config_hosts, vec!["dev".to_string(), "staging".to_string()]);
+
+        let known_hosts = parse_known_hosts(
+            "github.com,140.82.112.3 ssh-ed25519 AAA\n[dev.local]:2222 ssh-rsa BBB\n|1|hashed entry\n",
+        );
+        assert_eq!(
+            known_hosts,
+            vec![
+                "140.82.112.3".to_string(),
+                "dev.local".to_string(),
+                "github.com".to_string()
+            ]
+        );
+
+        assert_eq!(
+            format_ssh_host_candidate_text("ssh", Some("alice"), "dev".to_string()),
+            "alice@dev"
+        );
+        assert_eq!(
+            format_ssh_host_candidate_text("rsync", Some("alice"), "dev".to_string()),
+            "alice@dev:"
+        );
+        assert_eq!(
+            format_ssh_host_candidate_text("rsync", None, "dev".to_string()),
+            "dev:"
+        );
+    }
+
+    #[test]
+    fn command_value_parsers_normalize_common_command_outputs() {
+        let unit_lines = vec![
+            "ssh.service enabled".to_string(),
+            "docker.service loaded active running Docker".to_string(),
+            "ssh.service enabled".to_string(),
+        ];
+        assert_eq!(
+            parse_first_fields(&unit_lines),
+            vec!["docker.service".to_string(), "ssh.service".to_string()]
+        );
+
+        assert_eq!(
+            parse_screen_sessions(&[
+                "There is a screen on:".to_string(),
+                "\t1234.dev-session\t(Detached)".to_string(),
+                "1 Socket in /run/screen/S-user.".to_string(),
+            ]),
+            vec!["1234.dev-session".to_string()]
+        );
+
+        assert_eq!(
+            parse_pip_freeze_packages(&[
+                "requests==2.32.0".to_string(),
+                "pytest==8.0.0".to_string(),
+            ]),
+            vec!["pytest".to_string(), "requests".to_string()]
+        );
+
+        assert_eq!(
+            parse_nmcli_first_field(&[
+                "home-wifi:802-11-wireless".to_string(),
+                "eth0:ethernet".to_string(),
+            ]),
+            vec!["eth0".to_string(), "home-wifi".to_string()]
+        );
+
+        assert_eq!(
+            parse_nmcli_connected_devices(&[
+                "wlan0:connected".to_string(),
+                "eth0:disconnected".to_string(),
+                "lo:unmanaged".to_string(),
+            ]),
+            vec!["wlan0".to_string()]
+        );
+
+        assert_eq!(
+            parse_lsblk_devices(&[
+                "sda disk".to_string(),
+                "sda1 part".to_string(),
+                "sr0 rom".to_string(),
+            ]),
+            vec!["/dev/sda".to_string(), "/dev/sda1".to_string()]
+        );
+    }
+
+    #[test]
+    fn package_json_dependency_parser_collects_all_dependency_groups() {
+        let dir = tempdir().unwrap();
+        let package_json = dir.path().join("package.json");
+        fs::write(
+            &package_json,
+            r#"{
+                "dependencies": { "react": "latest" },
+                "devDependencies": { "vite": "latest" },
+                "optionalDependencies": { "fsevents": "latest" },
+                "peerDependencies": { "@types/react": "latest" }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            load_package_json_dependencies(&package_json),
+            vec![
+                "@types/react".to_string(),
+                "fsevents".to_string(),
+                "react".to_string(),
+                "vite".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn dynamic_command_cache_is_scoped_by_command_and_kind() {
+        let provider = DynamicCompletionProvider::new(Environment::new());
+        let scope = PathBuf::from("/tmp/dsh-cache-scope");
+
+        let first = provider.collect_cached_value_candidates(
+            "alpha",
+            "value",
+            scope.clone(),
+            "o",
+            "test",
+            false,
+            || Ok(vec!["one".to_string()]),
+        );
+        let second = provider.collect_cached_value_candidates(
+            "beta",
+            "value",
+            scope.clone(),
+            "t",
+            "test",
+            false,
+            || Ok(vec!["two".to_string()]),
+        );
+        let different_kind = provider.collect_cached_value_candidates(
+            "alpha",
+            "other",
+            scope,
+            "t",
+            "test",
+            false,
+            || Ok(vec!["three".to_string()]),
+        );
+
+        assert_eq!(first[0].text, "one");
+        assert_eq!(second[0].text, "two");
+        assert_eq!(different_kind[0].text, "three");
+    }
+
+    #[test]
+    fn cached_only_dynamic_values_do_not_run_loader_on_miss() {
+        let provider = DynamicCompletionProvider::new(Environment::new());
+        let candidates = provider.collect_cached_value_candidates(
+            "ghost",
+            "value",
+            PathBuf::from("/tmp/dsh-cached-only"),
+            "",
+            "test",
+            true,
+            || panic!("cached-only lookup must not invoke loader"),
+        );
+
+        assert!(candidates.is_empty());
     }
 
     #[test]

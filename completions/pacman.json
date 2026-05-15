@@ -182,10 +182,7 @@
           "description": "Package name to install",
           "required": false,
           "multiple": true,
-          "type": {
-            "type": "Script",
-            "data": "pacman -Slq | sort -u"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []
@@ -244,10 +241,7 @@
           "description": "Package name to remove",
           "required": true,
           "multiple": true,
-          "type": {
-            "type": "Script",
-            "data": "pacman -Qq | sort -u"
-          }
+          "type": { "type": "String" }
         }
       ],
       "subcommands": []

@@ -1,24 +1,21 @@
 use super::integrated::{CandidateType, EnhancedCandidate, matches_prefix};
 use super::parser::{CompletionContext, ParsedCommandLine};
 use super::shell_path::normalize_path_token;
+use super::subprocess;
 use crate::environment::Environment;
 use anyhow::Result;
 use dsh_builtin::{project_context, task};
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::Read;
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant, SystemTime};
 use tracing::warn;
-use wait_timeout::ChildExt;
 
 const DYNAMIC_COMMAND_CACHE_TTL_MS: u64 = 1000;
 const COMPLETION_COMMAND_TIMEOUT: Duration = Duration::from_millis(1500);
+const EXTERNAL_COMPLETION_CACHE_LIMIT: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FileMetadataSignature {
@@ -118,6 +115,7 @@ struct ProjectDynamicCache {
     command_pending: HashSet<DynamicCommandCacheKey>,
     external: HashMap<ExternalCompletionCacheKey, ExternalCompletionCacheEntry>,
     external_pending: HashSet<ExternalCompletionCacheKey>,
+    external_pruned_total: usize,
 }
 
 pub(crate) struct DynamicCompletionProvider {
@@ -131,6 +129,8 @@ struct DynamicCompletionDiagnostics {
     command_pending: usize,
     external_entries: usize,
     external_pending: usize,
+    external_fish_entries: usize,
+    external_pruned_total: usize,
     last_refresh: Option<Instant>,
     last_external: Option<String>,
     provider_lines: Vec<String>,
@@ -155,8 +155,13 @@ pub(crate) fn diagnostics_lines() -> Vec<String> {
             diagnostics.command_entries, diagnostics.command_pending
         ),
         format!(
-            "completion-cache external entries={} pending={} last={}",
-            diagnostics.external_entries, diagnostics.external_pending, external
+            "completion-cache external entries={} pending={} fish={} limit={} pruned={} last={}",
+            diagnostics.external_entries,
+            diagnostics.external_pending,
+            diagnostics.external_fish_entries,
+            EXTERNAL_COMPLETION_CACHE_LIMIT,
+            diagnostics.external_pruned_total,
+            external
         ),
         format!("completion-cache last-refresh {refresh}"),
     ];
@@ -207,23 +212,7 @@ impl DynamicCompletionProvider {
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
     ) -> Vec<EnhancedCandidate> {
-        let current_token = parsed_command_line.current_token.as_str();
-        match self.load_project_tasks(current_dir) {
-            Ok(tasks) => tasks
-                .into_iter()
-                .filter(|task| matches_prefix(current_token, &task.name))
-                .map(|task| EnhancedCandidate {
-                    text: task.name,
-                    description: Some(format_task_description(&task.source, &task.command)),
-                    candidate_type: CandidateType::Argument,
-                    priority: 90,
-                })
-                .collect(),
-            Err(e) => {
-                warn!("Failed to load task completions: {}", e);
-                Vec::new()
-            }
-        }
+        self.collect_task_candidates_with_mode(parsed_command_line, current_dir, false)
     }
 
     pub(crate) fn collect_declared_dynamic_candidates(
@@ -337,7 +326,7 @@ impl DynamicCompletionProvider {
             ),
             "project.task" => {
                 if cached_only {
-                    Vec::new()
+                    self.collect_task_candidates_with_mode(parsed_command_line, current_dir, true)
                 } else {
                     self.collect_task_candidates(parsed_command_line, current_dir)
                 }
@@ -356,6 +345,37 @@ impl DynamicCompletionProvider {
                 Vec::new()
             }
         }
+    }
+
+    fn collect_task_candidates_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let current_token = parsed_command_line.current_token.as_str();
+        let tasks = if cached_only {
+            self.lookup_project_tasks(current_dir)
+        } else {
+            match self.load_project_tasks(current_dir) {
+                Ok(tasks) => tasks,
+                Err(e) => {
+                    warn!("Failed to load task completions: {}", e);
+                    return Vec::new();
+                }
+            }
+        };
+
+        tasks
+            .into_iter()
+            .filter(|task| matches_prefix(current_token, &task.name))
+            .map(|task| EnhancedCandidate {
+                text: task.name,
+                description: Some(format_task_description(&task.source, &task.command)),
+                candidate_type: CandidateType::Argument,
+                priority: 90,
+            })
+            .collect()
     }
 
     pub(crate) fn collect_fish_fallback_candidates(
@@ -2579,6 +2599,17 @@ impl DynamicCompletionProvider {
         Ok(tasks)
     }
 
+    fn lookup_project_tasks(&self, current_dir: &Path) -> Vec<task::TaskInfo> {
+        let project_root = project_context::find_project_root(current_dir);
+        let cache_key = TaskCacheKey {
+            project_root: project_root.clone(),
+            sources: Vec::new(),
+        };
+        let signature = task_completion_signature(&project_root);
+        self.lookup_task_cache(&cache_key, &signature)
+            .unwrap_or_default()
+    }
+
     fn load_project_tasks_for_sources(
         &self,
         current_dir: &Path,
@@ -2780,7 +2811,8 @@ impl DynamicCompletionProvider {
         cache.external_pending.remove(&cache_key);
         match result {
             Ok(candidates) => {
-                cache.external.insert(
+                insert_external_cache_entry(
+                    &mut cache,
                     cache_key,
                     ExternalCompletionCacheEntry {
                         candidates: candidates.clone(),
@@ -2863,7 +2895,8 @@ fn spawn_external_refresh<F>(
         cache.external_pending.remove(&cache_key);
         match result {
             Ok(candidates) => {
-                cache.external.insert(
+                insert_external_cache_entry(
+                    &mut cache,
                     cache_key,
                     ExternalCompletionCacheEntry {
                         candidates,
@@ -2884,12 +2917,50 @@ fn spawn_external_refresh<F>(
     });
 }
 
+fn insert_external_cache_entry(
+    cache: &mut ProjectDynamicCache,
+    cache_key: ExternalCompletionCacheKey,
+    entry: ExternalCompletionCacheEntry,
+) {
+    cache.external.insert(cache_key, entry);
+    prune_external_cache(cache);
+}
+
+fn prune_external_cache(cache: &mut ProjectDynamicCache) {
+    let overflow = cache
+        .external
+        .len()
+        .saturating_sub(EXTERNAL_COMPLETION_CACHE_LIMIT);
+    if overflow == 0 {
+        return;
+    }
+
+    let mut keys = cache
+        .external
+        .iter()
+        .map(|(key, entry)| (key.clone(), entry.cached_at))
+        .collect::<Vec<_>>();
+    keys.sort_by_key(|(_, cached_at)| *cached_at);
+
+    for (key, _) in keys.into_iter().take(overflow) {
+        if cache.external.remove(&key).is_some() {
+            cache.external_pruned_total += 1;
+        }
+    }
+}
+
 fn update_diagnostics_from_cache(cache: &ProjectDynamicCache, last_external: Option<String>) {
     let mut diagnostics = DYNAMIC_COMPLETION_DIAGNOSTICS.write();
     diagnostics.command_entries = cache.commands.len();
     diagnostics.command_pending = cache.command_pending.len();
     diagnostics.external_entries = cache.external.len();
     diagnostics.external_pending = cache.external_pending.len();
+    diagnostics.external_fish_entries = cache
+        .external
+        .keys()
+        .filter(|key| key.command_template.starts_with("fish-fallback:"))
+        .count();
+    diagnostics.external_pruned_total = cache.external_pruned_total;
     diagnostics.last_refresh = Some(Instant::now());
     diagnostics.provider_lines = provider_diagnostics_lines(cache);
     if let Some(last_external) = last_external {
@@ -3075,21 +3146,16 @@ fn parse_compose_service_names(path: &Path) -> Result<Vec<String>> {
 fn run_external_completer_for_key(
     key: &ExternalCompletionCacheKey,
 ) -> Result<Vec<EnhancedCandidate>> {
-    let mut command = completion_command("sh");
+    let mut command = subprocess::shell_command(&key.command_template);
     command
-        .arg("-c")
-        .arg(&key.command_template)
         .current_dir(&key.current_dir)
         .env("DSH_COMPLETION_INPUT", &key.input)
         .env("DSH_COMPLETION_CURSOR", key.cursor_pos.to_string())
         .env("DSH_COMPLETION_COMMAND", &key.command)
         .env("DSH_COMPLETION_CURRENT_TOKEN", &key.current_token)
-        .env("DSH_COMPLETION_SUBCOMMAND_PATH", &key.subcommand_path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let mut child = command.spawn()?;
+        .env("DSH_COMPLETION_SUBCOMMAND_PATH", &key.subcommand_path);
 
-    let lines = wait_and_collect_lines(&mut child)?;
+    let lines = collect_command_lines(command)?;
     Ok(lines
         .into_iter()
         .filter_map(|line| parse_external_completion_line(&line, &key.current_token))
@@ -3100,18 +3166,15 @@ fn run_fish_completer_for_key(
     command_path: &str,
     key: &ExternalCompletionCacheKey,
 ) -> Result<Vec<EnhancedCandidate>> {
-    let mut command = completion_command(command_path);
+    let mut command = subprocess::command(command_path);
     command
         .arg("-c")
         .arg("complete -C \"$argv[1]\"")
         .arg("--")
         .arg(&key.input)
-        .current_dir(&key.current_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let mut child = command.spawn()?;
+        .current_dir(&key.current_dir);
 
-    let lines = wait_and_collect_lines(&mut child)?;
+    let lines = collect_command_lines(command)?;
     Ok(lines
         .into_iter()
         .filter_map(|line| parse_fish_completion_line(&line, &key.current_token))
@@ -3254,87 +3317,26 @@ fn matches_fish_prefix(current_token: &str, text: &str) -> bool {
 }
 
 fn run_command_stdout(command_path: &str, args: &[&str], current_dir: &Path) -> Result<String> {
-    let mut command = completion_command(command_path);
-    command
-        .args(args)
-        .current_dir(current_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let mut child = command.spawn()?;
-
-    wait_and_collect_stdout(&mut child)
+    let mut command = subprocess::command(command_path);
+    command.args(args).current_dir(current_dir);
+    subprocess::collect_stdout(command, COMPLETION_COMMAND_TIMEOUT)
 }
 
 fn run_command_lines(command_path: &str, args: &[&str], current_dir: &Path) -> Result<Vec<String>> {
-    let mut command = completion_command(command_path);
-    command
-        .args(args)
-        .current_dir(current_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let mut child = command.spawn()?;
-
-    wait_and_collect_lines(&mut child)
+    let mut command = subprocess::command(command_path);
+    command.args(args).current_dir(current_dir);
+    collect_command_lines(command)
 }
 
-fn completion_command(program: &str) -> Command {
-    let mut command = Command::new(program);
-    #[cfg(unix)]
-    {
-        command.process_group(0);
-    }
-    command
-}
-
-fn terminate_completion_child(child: &mut Child) {
-    #[cfg(unix)]
-    {
-        let _ = nix::sys::signal::killpg(
-            nix::unistd::Pid::from_raw(child.id() as i32),
-            nix::sys::signal::Signal::SIGKILL,
-        );
-    }
-    let _ = child.kill();
-}
-
-fn wait_and_collect_stdout(child: &mut Child) -> Result<String> {
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| anyhow::anyhow!("Child stdout not captured"))?;
-    let reader_thread = std::thread::spawn(move || {
-        let mut buf = String::new();
-        stdout.read_to_string(&mut buf)?;
-        Ok::<String, std::io::Error>(buf)
-    });
-
-    match child.wait_timeout(COMPLETION_COMMAND_TIMEOUT)? {
-        Some(status) => {
-            let output = reader_thread
-                .join()
-                .map_err(|_| anyhow::anyhow!("Stdout reader thread panicked"))??;
-            if status.success() {
-                Ok(output)
-            } else {
-                Ok(String::new())
-            }
-        }
-        None => {
-            terminate_completion_child(child);
-            let _ = child.wait();
-            let _ = reader_thread.join();
-            Ok(String::new())
-        }
-    }
-}
-
-fn wait_and_collect_lines(child: &mut std::process::Child) -> Result<Vec<String>> {
-    Ok(wait_and_collect_stdout(child)?
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(str::to_string)
-        .collect())
+fn collect_command_lines(command: std::process::Command) -> Result<Vec<String>> {
+    Ok(
+        subprocess::collect_stdout(command, COMPLETION_COMMAND_TIMEOUT)?
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
 }
 
 fn dedup_sorted(mut values: Vec<String>) -> Vec<String> {
@@ -4100,6 +4102,31 @@ volumes:
     }
 
     #[test]
+    fn project_task_cached_only_reuses_existing_cache_without_loading() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("Taskfile.yml"),
+            "version: '3'\ntasks:\n  build:\n    cmds:\n      - cargo build\n",
+        )
+        .unwrap();
+
+        let provider = DynamicCompletionProvider::new(Environment::new());
+        assert!(
+            provider
+                .collect_task_candidates_with_mode(&parsed("bun run bu"), dir.path(), true)
+                .is_empty(),
+            "cached-only task completion should not load on miss"
+        );
+
+        let loaded = provider.collect_task_candidates(&parsed("bun run bu"), dir.path());
+        assert!(loaded.iter().any(|candidate| candidate.text == "build"));
+
+        let cached =
+            provider.collect_task_candidates_with_mode(&parsed("bun run bu"), dir.path(), true);
+        assert!(cached.iter().any(|candidate| candidate.text == "build"));
+    }
+
+    #[test]
     fn compose_service_cache_refreshes_when_compose_file_changes() {
         let dir = tempdir().unwrap();
         let nested = dir.path().join("services").join("api");
@@ -4474,8 +4501,46 @@ volumes:
             "external completer should refresh in background"
         );
 
-        let refreshed =
-            provider.collect_external_candidates(dir.path(), input, input.len(), &parsed(input));
-        assert_eq!(refreshed[0].text, "zzext-beta");
+        assert!(
+            wait_until(Duration::from_secs(2), || {
+                provider
+                    .collect_external_candidates(dir.path(), input, input.len(), &parsed(input))
+                    .first()
+                    .is_some_and(|candidate| candidate.text == "zzext-beta")
+            }),
+            "external completer should expose refreshed candidates after background refresh"
+        );
+    }
+
+    #[test]
+    fn external_completion_cache_prunes_oldest_entries() {
+        let dir = tempdir().unwrap();
+        let script = dir.path().join("external-completer-cache.sh");
+        write_executable_script(
+            &script,
+            "#!/bin/sh\nprintf '%s-candidate\\n' \"$DSH_COMPLETION_CURRENT_TOKEN\"\n",
+        );
+
+        let environment = Environment::new();
+        environment.write().variables.insert(
+            "DSH_EXTERNAL_COMPLETER".to_string(),
+            script.display().to_string(),
+        );
+        let provider = DynamicCompletionProvider::new(environment);
+
+        for index in 0..(EXTERNAL_COMPLETION_CACHE_LIMIT + 3) {
+            let input = format!("unknown-command zz{index}");
+            let candidates = provider.collect_external_candidates(
+                dir.path(),
+                &input,
+                input.len(),
+                &parsed(&input),
+            );
+            assert_eq!(candidates[0].text, format!("zz{index}-candidate"));
+        }
+
+        let cache = provider.cache.read();
+        assert_eq!(cache.external.len(), EXTERNAL_COMPLETION_CACHE_LIMIT);
+        assert_eq!(cache.external_pruned_total, 3);
     }
 }

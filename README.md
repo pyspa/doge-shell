@@ -718,6 +718,10 @@ include setup.sh
 - `Alt+w` - Wrap the current input with `ai-watch --`
 - `Alt+m` - Open Macro Recorder
 
+### Fish Completion Fallback
+
+Set `DSH_COMPLETION_FISH_FALLBACK=1` to let TAB completion call `fish -c 'complete -C ...'` when `fish` is available in `PATH`. This fallback is off by default, runs with a timeout, is cached with other external completion results, and is merged below built-in JSON and project-aware dynamic candidates.
+
 ## 💻 Command Palette
 
 Access all shell capabilities through a unified fuzzy-search interface, similar to VS Code's Command Palette.

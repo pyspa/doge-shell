@@ -2938,6 +2938,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ghost_completion_uses_cached_json_declared_project_tasks() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "scripts": { "build": "bun build ./src/index.ts", "test": "bun test" } }"#,
+        )
+        .unwrap();
+
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "bun run bu";
+        assert_eq!(
+            engine.ghost_completion(input, input.len(), dir.path(), None),
+            None
+        );
+
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "build"),
+            "expected bun script completion in {:?}",
+            result.candidates
+        );
+
+        assert_eq!(
+            engine.ghost_completion(input, input.len(), dir.path(), None),
+            Some("bun run build".to_string())
+        );
+    }
+
+    #[tokio::test]
     async fn deno_task_completes_deno_tasks() {
         let dir = tempdir().unwrap();
         fs::write(

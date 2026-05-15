@@ -319,7 +319,24 @@ impl ShellProxy for Shell {
     }
 
     fn completion_diagnostics(&self) -> Vec<String> {
-        crate::completion::dynamic::diagnostics_lines()
+        let mut lines = crate::completion::dynamic::diagnostics_lines();
+        let environment = self.environment.read();
+        let fish_enabled = environment
+            .get_var("DSH_COMPLETION_FISH_FALLBACK")
+            .is_some_and(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            });
+        let fish_path = environment
+            .lookup("fish")
+            .unwrap_or_else(|| "missing".to_string());
+        lines.push(format!(
+            "completion-cache fish-fallback enabled={} fish-path={}",
+            fish_enabled, fish_path
+        ));
+        lines
     }
 
     fn latency_probe_lines(&self, iterations: usize) -> Vec<String> {

@@ -23,6 +23,7 @@ pub mod json_loader;
 pub mod parser;
 pub(crate) mod shell_path;
 pub(crate) mod shell_token;
+pub(crate) mod subprocess;
 mod ui;
 
 #[cfg(test)]

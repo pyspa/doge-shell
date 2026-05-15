@@ -400,6 +400,25 @@ fn validate_argument_type(value: &Value, path: &str) -> Result<()> {
         }
     }
 
+    if type_name == "Dynamic" {
+        let data = obj
+            .get("data")
+            .with_context(|| format!("{path}.data is required for Dynamic"))?;
+        let data_obj = data
+            .as_object()
+            .with_context(|| format!("{path}.data must be an object"))?;
+        let provider = data_obj
+            .get("provider")
+            .with_context(|| format!("{path}.data.provider is required"))?;
+        require_non_empty_string(provider, &format!("{path}.data.provider"))?;
+        if let Some(scope) = data_obj.get("scope")
+            && !scope.is_null()
+            && scope.as_str().is_none()
+        {
+            bail!("{path}.data.scope must be a string or null");
+        }
+    }
+
     Ok(())
 }
 
@@ -468,6 +487,25 @@ mod tests {
         }
         "#;
         assert!(validate_completion_json(json, "foo").is_err());
+    }
+
+    #[test]
+    fn validate_completion_allows_dynamic_type() {
+        let json = r#"
+        {
+          "command": "foo",
+          "arguments": [
+            {
+              "name": "branch",
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "git.branch", "scope": "project" }
+              }
+            }
+          ]
+        }
+        "#;
+        assert!(validate_completion_json(json, "foo").is_ok());
     }
 
     #[test]

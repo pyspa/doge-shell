@@ -45,6 +45,15 @@ struct ComposeCacheEntry {
 struct CommandValueCacheEntry {
     values: Vec<String>,
     cached_at: Instant,
+    last_load_duration: Option<Duration>,
+    last_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct CommandValueErrorEntry {
+    recorded_at: Instant,
+    last_load_duration: Duration,
+    error: String,
 }
 
 #[derive(Debug, Clone)]
@@ -101,6 +110,7 @@ struct ProjectDynamicCache {
     tasks: HashMap<TaskCacheKey, TaskCacheEntry>,
     compose_services: HashMap<PathBuf, ComposeCacheEntry>,
     commands: HashMap<DynamicCommandCacheKey, CommandValueCacheEntry>,
+    command_errors: HashMap<DynamicCommandCacheKey, CommandValueErrorEntry>,
     command_pending: HashSet<DynamicCommandCacheKey>,
     external: HashMap<ExternalCompletionCacheKey, ExternalCompletionCacheEntry>,
     external_pending: HashSet<ExternalCompletionCacheKey>,
@@ -119,6 +129,7 @@ struct DynamicCompletionDiagnostics {
     external_pending: usize,
     last_refresh: Option<Instant>,
     last_external: Option<String>,
+    provider_lines: Vec<String>,
 }
 
 static DYNAMIC_COMPLETION_DIAGNOSTICS: LazyLock<RwLock<DynamicCompletionDiagnostics>> =
@@ -134,7 +145,7 @@ pub(crate) fn diagnostics_lines() -> Vec<String> {
         .last_external
         .unwrap_or_else(|| "none".to_string());
 
-    vec![
+    let mut lines = vec![
         format!(
             "completion-cache dynamic-command entries={} pending={}",
             diagnostics.command_entries, diagnostics.command_pending
@@ -144,7 +155,28 @@ pub(crate) fn diagnostics_lines() -> Vec<String> {
             diagnostics.external_entries, diagnostics.external_pending, external
         ),
         format!("completion-cache last-refresh {refresh}"),
-    ]
+    ];
+    lines.extend(diagnostics.provider_lines);
+    lines
+}
+
+pub(crate) fn is_known_declared_dynamic_provider(provider: &str) -> bool {
+    matches!(
+        provider,
+        "git.branch"
+            | "git.checkout_target"
+            | "git.changed_path"
+            | "git.push_branch"
+            | "git.remote"
+            | "git.remote_branch"
+            | "git.revision"
+            | "git.stash"
+            | "git.tag"
+            | "git.worktree"
+            | "project.task"
+            | "ssh.host"
+            | "system.process_pid"
+    )
 }
 
 impl DynamicCompletionProvider {
@@ -179,6 +211,72 @@ impl DynamicCompletionProvider {
         }
     }
 
+    pub(crate) fn collect_declared_dynamic_candidates(
+        &self,
+        provider: &str,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let current_token = parsed_command_line.current_token.as_str();
+        match provider {
+            "git.branch" => {
+                self.collect_git_branch_candidates(current_dir, current_token, cached_only)
+            }
+            "git.checkout_target" => {
+                self.collect_git_checkout_target_candidates(current_dir, current_token, cached_only)
+            }
+            "git.changed_path" => {
+                self.collect_git_changed_path_candidates(current_dir, current_token, cached_only)
+            }
+            "git.push_branch" => self.collect_git_push_branch_candidates(
+                current_dir,
+                selected_git_remote(parsed_command_line),
+                current_token,
+                cached_only,
+            ),
+            "git.remote" => {
+                self.collect_git_remote_candidates(current_dir, current_token, cached_only)
+            }
+            "git.remote_branch" => self.collect_git_remote_branch_candidates(
+                current_dir,
+                selected_git_remote(parsed_command_line),
+                current_token,
+                cached_only,
+            ),
+            "git.revision" => {
+                self.collect_git_revision_candidates(current_dir, current_token, cached_only)
+            }
+            "git.stash" => {
+                self.collect_git_stash_candidates(current_dir, current_token, cached_only)
+            }
+            "git.tag" => self.collect_git_tag_candidates(current_dir, current_token, cached_only),
+            "git.worktree" => {
+                self.collect_git_worktree_candidates(current_dir, current_token, cached_only)
+            }
+            "project.task" => {
+                if cached_only {
+                    Vec::new()
+                } else {
+                    self.collect_task_candidates(parsed_command_line, current_dir)
+                }
+            }
+            "ssh.host" => self.collect_ssh_host_candidates_with_mode(
+                parsed_command_line,
+                current_dir,
+                parsed_command_line.command.as_str(),
+                cached_only,
+            ),
+            "system.process_pid" => {
+                self.collect_process_pid_candidates(parsed_command_line, cached_only)
+            }
+            _ => {
+                warn!("Unknown dynamic completion provider: {provider}");
+                Vec::new()
+            }
+        }
+    }
+
     pub(crate) fn collect_git_candidates(
         &self,
         parsed_command_line: &ParsedCommandLine,
@@ -208,96 +306,124 @@ impl DynamicCompletionProvider {
         let inferred_subcommand_arg_index =
             parsed_command_line.subcommand_path.len().saturating_sub(2);
 
-        match parsed_command_line.completion_context {
-            CompletionContext::Argument { arg_index, .. } => match primary_subcommand.as_str() {
-                "checkout" | "switch" | "merge" | "rebase" => {
-                    self.collect_git_branch_candidates(current_dir, current_token, cached_only)
+        match &parsed_command_line.completion_context {
+            CompletionContext::OptionValue { option_name, .. } => {
+                if primary_subcommand == "restore"
+                    && matches!(option_name.as_str(), "-s" | "--source")
+                {
+                    self.collect_git_revision_candidates(current_dir, current_token, cached_only)
+                } else {
+                    Vec::new()
                 }
-                "push" | "pull" | "fetch" => {
-                    if arg_index == 0 {
+            }
+            CompletionContext::Argument { arg_index, .. } => self.collect_git_argument_candidates(
+                primary_subcommand,
+                *arg_index,
+                parsed_command_line,
+                current_dir,
+                current_token,
+                cached_only,
+            ),
+            CompletionContext::SubCommand => self.collect_git_argument_candidates(
+                primary_subcommand,
+                inferred_subcommand_arg_index,
+                parsed_command_line,
+                current_dir,
+                current_token,
+                cached_only,
+            ),
+            _ => Vec::new(),
+        }
+    }
+
+    fn collect_git_argument_candidates(
+        &self,
+        primary_subcommand: &str,
+        arg_index: usize,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        match primary_subcommand {
+            "checkout" => {
+                self.collect_git_checkout_target_candidates(current_dir, current_token, cached_only)
+            }
+            "switch" | "merge" | "rebase" => {
+                self.collect_git_branch_candidates(current_dir, current_token, cached_only)
+            }
+            "add" | "restore" => {
+                self.collect_git_changed_path_candidates(current_dir, current_token, cached_only)
+            }
+            "push" => {
+                if arg_index == 0 {
+                    self.collect_git_remote_candidates(current_dir, current_token, cached_only)
+                } else {
+                    self.collect_git_push_branch_candidates(
+                        current_dir,
+                        selected_git_remote(parsed_command_line),
+                        current_token,
+                        cached_only,
+                    )
+                }
+            }
+            "pull" | "fetch" => {
+                if arg_index == 0 {
+                    self.collect_git_remote_candidates(current_dir, current_token, cached_only)
+                } else {
+                    self.collect_git_remote_branch_candidates(
+                        current_dir,
+                        selected_git_remote(parsed_command_line),
+                        current_token,
+                        cached_only,
+                    )
+                }
+            }
+            "log" | "diff" | "show" | "reset" => {
+                self.collect_git_revision_candidates(current_dir, current_token, cached_only)
+            }
+            "branch" => self.collect_git_branch_candidates(current_dir, current_token, cached_only),
+            "tag" => self.collect_git_tag_candidates(current_dir, current_token, cached_only),
+            "stash" => {
+                let secondary = parsed_command_line
+                    .subcommand_path
+                    .get(1)
+                    .map(String::as_str)
+                    .unwrap_or("");
+                if matches!(secondary, "pop" | "apply" | "drop") {
+                    self.collect_git_stash_candidates(current_dir, current_token, cached_only)
+                } else {
+                    Vec::new()
+                }
+            }
+            "remote" => {
+                let secondary = parsed_command_line
+                    .subcommand_path
+                    .get(1)
+                    .map(String::as_str)
+                    .unwrap_or("");
+                match secondary {
+                    "remove" | "rename" | "show" | "get-url" | "set-url" => {
                         self.collect_git_remote_candidates(current_dir, current_token, cached_only)
-                    } else {
+                    }
+                    _ => Vec::new(),
+                }
+            }
+            "worktree" => {
+                let secondary = parsed_command_line
+                    .subcommand_path
+                    .get(1)
+                    .map(String::as_str)
+                    .unwrap_or("");
+                match secondary {
+                    "remove" | "move" | "lock" | "unlock" | "repair" => self
+                        .collect_git_worktree_candidates(current_dir, current_token, cached_only),
+                    "add" if arg_index > 0 => {
                         self.collect_git_branch_candidates(current_dir, current_token, cached_only)
                     }
+                    _ => Vec::new(),
                 }
-                "remote" => {
-                    let secondary = parsed_command_line
-                        .subcommand_path
-                        .get(1)
-                        .map(String::as_str)
-                        .unwrap_or("");
-                    match secondary {
-                        "remove" | "rename" | "show" | "get-url" | "set-url" => self
-                            .collect_git_remote_candidates(current_dir, current_token, cached_only),
-                        _ => Vec::new(),
-                    }
-                }
-                "worktree" => {
-                    let secondary = parsed_command_line
-                        .subcommand_path
-                        .get(1)
-                        .map(String::as_str)
-                        .unwrap_or("");
-                    match secondary {
-                        "remove" | "move" | "lock" | "unlock" | "repair" => self
-                            .collect_git_worktree_candidates(
-                                current_dir,
-                                current_token,
-                                cached_only,
-                            ),
-                        "add" if arg_index > 0 => self.collect_git_branch_candidates(
-                            current_dir,
-                            current_token,
-                            cached_only,
-                        ),
-                        _ => Vec::new(),
-                    }
-                }
-                _ => Vec::new(),
-            },
-            CompletionContext::SubCommand => match primary_subcommand.as_str() {
-                "checkout" | "switch" | "merge" | "rebase" => {
-                    self.collect_git_branch_candidates(current_dir, current_token, cached_only)
-                }
-                "push" | "pull" | "fetch" => {
-                    if inferred_subcommand_arg_index == 0 {
-                        self.collect_git_remote_candidates(current_dir, current_token, cached_only)
-                    } else {
-                        self.collect_git_branch_candidates(current_dir, current_token, cached_only)
-                    }
-                }
-                "remote" => {
-                    let secondary = parsed_command_line
-                        .subcommand_path
-                        .get(1)
-                        .map(String::as_str)
-                        .unwrap_or("");
-                    match secondary {
-                        "remove" | "rename" | "show" | "get-url" | "set-url" => self
-                            .collect_git_remote_candidates(current_dir, current_token, cached_only),
-                        _ => Vec::new(),
-                    }
-                }
-                "worktree" => {
-                    let secondary = parsed_command_line
-                        .subcommand_path
-                        .get(1)
-                        .map(String::as_str)
-                        .unwrap_or("");
-                    match secondary {
-                        "remove" | "move" | "lock" | "unlock" | "repair" => self
-                            .collect_git_worktree_candidates(
-                                current_dir,
-                                current_token,
-                                cached_only,
-                            ),
-                        "add" if inferred_subcommand_arg_index > 0 => self
-                            .collect_git_branch_candidates(current_dir, current_token, cached_only),
-                        _ => Vec::new(),
-                    }
-                }
-                _ => Vec::new(),
-            },
+            }
             _ => Vec::new(),
         }
     }
@@ -866,6 +992,30 @@ impl DynamicCompletionProvider {
             "process name",
             cached_only,
             || Ok(load_process_names()),
+        )
+    }
+
+    fn collect_process_pid_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        if !matches!(
+            parsed_command_line.completion_context,
+            CompletionContext::OptionValue { .. }
+                | CompletionContext::SubCommand
+                | CompletionContext::Argument { .. }
+        ) {
+            return Vec::new();
+        }
+        self.collect_cached_value_candidates(
+            "system",
+            "process-pid",
+            PathBuf::from("/proc"),
+            parsed_command_line.current_token.as_str(),
+            "process id",
+            cached_only,
+            || Ok(load_process_ids()),
         )
     }
 
@@ -1518,6 +1668,269 @@ impl DynamicCompletionProvider {
         )
     }
 
+    fn collect_git_checkout_target_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let scope_dir = project_context::find_project_root(current_dir);
+        let command_path = self.resolve_command_path("git");
+        self.collect_cached_value_candidates(
+            "git",
+            "checkout-target",
+            scope_dir,
+            current_token,
+            "git branch",
+            cached_only,
+            {
+                let current_dir = current_dir.to_path_buf();
+                move || {
+                    let Some(command_path) = command_path else {
+                        return Ok(Vec::new());
+                    };
+                    let mut values = run_command_lines(
+                        &command_path,
+                        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+                        &current_dir,
+                    )?;
+                    values.extend(parse_git_remote_branches(
+                        &run_command_lines(
+                            &command_path,
+                            &["for-each-ref", "--format=%(refname:short)", "refs/remotes"],
+                            &current_dir,
+                        )?,
+                        None,
+                    ));
+                    Ok(dedup_sorted(values))
+                }
+            },
+        )
+    }
+
+    fn collect_git_remote_branch_candidates(
+        &self,
+        current_dir: &Path,
+        remote: Option<&str>,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let scope_dir = project_context::find_project_root(current_dir);
+        let command_path = self.resolve_command_path("git");
+        let remote = remote.map(str::to_string);
+        let value_kind = format!(
+            "remote-branch:{}",
+            remote
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .unwrap_or("*")
+        );
+        self.collect_cached_value_candidates(
+            "git",
+            &value_kind,
+            scope_dir,
+            current_token,
+            "git remote branch",
+            cached_only,
+            {
+                let current_dir = current_dir.to_path_buf();
+                move || {
+                    let Some(command_path) = command_path else {
+                        return Ok(Vec::new());
+                    };
+                    Ok(parse_git_remote_branches(
+                        &run_command_lines(
+                            &command_path,
+                            &["for-each-ref", "--format=%(refname:short)", "refs/remotes"],
+                            &current_dir,
+                        )?,
+                        remote.as_deref(),
+                    ))
+                }
+            },
+        )
+    }
+
+    fn collect_git_push_branch_candidates(
+        &self,
+        current_dir: &Path,
+        remote: Option<&str>,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let scope_dir = project_context::find_project_root(current_dir);
+        let command_path = self.resolve_command_path("git");
+        let remote = remote.map(str::to_string);
+        let value_kind = format!(
+            "push-branch:{}",
+            remote
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .unwrap_or("*")
+        );
+        self.collect_cached_value_candidates(
+            "git",
+            &value_kind,
+            scope_dir,
+            current_token,
+            "git branch",
+            cached_only,
+            {
+                let current_dir = current_dir.to_path_buf();
+                move || {
+                    let Some(command_path) = command_path else {
+                        return Ok(Vec::new());
+                    };
+                    let mut values = run_command_lines(
+                        &command_path,
+                        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+                        &current_dir,
+                    )?;
+                    values.extend(parse_git_remote_branches(
+                        &run_command_lines(
+                            &command_path,
+                            &["for-each-ref", "--format=%(refname:short)", "refs/remotes"],
+                            &current_dir,
+                        )?,
+                        remote.as_deref(),
+                    ));
+                    Ok(dedup_sorted(values))
+                }
+            },
+        )
+    }
+
+    fn collect_git_revision_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let scope_dir = project_context::find_project_root(current_dir);
+        let command_path = self.resolve_command_path("git");
+        self.collect_cached_value_candidates(
+            "git",
+            "revision",
+            scope_dir,
+            current_token,
+            "git revision",
+            cached_only,
+            {
+                let current_dir = current_dir.to_path_buf();
+                move || {
+                    let Some(command_path) = command_path else {
+                        return Ok(Vec::new());
+                    };
+                    let mut values = run_command_lines(
+                        &command_path,
+                        &[
+                            "for-each-ref",
+                            "--format=%(refname:short)",
+                            "refs/heads",
+                            "refs/tags",
+                        ],
+                        &current_dir,
+                    )?;
+                    values.extend([
+                        "HEAD".to_string(),
+                        "FETCH_HEAD".to_string(),
+                        "ORIG_HEAD".to_string(),
+                    ]);
+                    Ok(dedup_sorted(values))
+                }
+            },
+        )
+    }
+
+    fn collect_git_tag_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let scope_dir = project_context::find_project_root(current_dir);
+        let command_path = self.resolve_command_path("git");
+        self.collect_cached_value_candidates(
+            "git",
+            "tag",
+            scope_dir,
+            current_token,
+            "git tag",
+            cached_only,
+            {
+                let current_dir = current_dir.to_path_buf();
+                move || {
+                    let Some(command_path) = command_path else {
+                        return Ok(Vec::new());
+                    };
+                    run_command_lines(&command_path, &["tag"], &current_dir)
+                }
+            },
+        )
+    }
+
+    fn collect_git_stash_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let scope_dir = project_context::find_project_root(current_dir);
+        let command_path = self.resolve_command_path("git");
+        self.collect_cached_value_candidates(
+            "git",
+            "stash",
+            scope_dir,
+            current_token,
+            "git stash",
+            cached_only,
+            {
+                let current_dir = current_dir.to_path_buf();
+                move || {
+                    let Some(command_path) = command_path else {
+                        return Ok(Vec::new());
+                    };
+                    Ok(parse_git_stash_refs(&run_command_lines(
+                        &command_path,
+                        &["stash", "list"],
+                        &current_dir,
+                    )?))
+                }
+            },
+        )
+    }
+
+    fn collect_git_changed_path_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let scope_dir = project_context::find_project_root(current_dir);
+        let command_path = self.resolve_command_path("git");
+        self.collect_cached_value_candidates(
+            "git",
+            "changed-path",
+            scope_dir,
+            current_token,
+            "git changed path",
+            cached_only,
+            {
+                let current_dir = current_dir.to_path_buf();
+                move || {
+                    let Some(command_path) = command_path else {
+                        return Ok(Vec::new());
+                    };
+                    Ok(parse_git_status_porcelain_paths(&run_command_stdout(
+                        &command_path,
+                        &["status", "--porcelain", "-z"],
+                        &current_dir,
+                    )?))
+                }
+            },
+        )
+    }
+
     fn collect_cached_value_candidates<F>(
         &self,
         command_name: &str,
@@ -2149,16 +2562,21 @@ impl DynamicCompletionProvider {
             update_diagnostics_from_cache(&cache, None);
         }
 
+        let load_started = Instant::now();
         let result = loader();
+        let load_duration = load_started.elapsed();
         let mut cache = self.cache.write();
         cache.command_pending.remove(&cache_key);
         match result {
             Ok(values) => {
+                cache.command_errors.remove(&cache_key);
                 cache.commands.insert(
                     cache_key,
                     CommandValueCacheEntry {
                         values: values.clone(),
                         cached_at: Instant::now(),
+                        last_load_duration: Some(load_duration),
+                        last_error: None,
                     },
                 );
                 update_diagnostics_from_cache(&cache, None);
@@ -2166,6 +2584,14 @@ impl DynamicCompletionProvider {
             }
             Err(err) => {
                 warn!("Dynamic command completion initial load failed: {}", err);
+                cache.command_errors.insert(
+                    cache_key,
+                    CommandValueErrorEntry {
+                        recorded_at: Instant::now(),
+                        last_load_duration: load_duration,
+                        error: err.to_string(),
+                    },
+                );
                 update_diagnostics_from_cache(&cache, None);
                 Vec::new()
             }
@@ -2260,16 +2686,21 @@ fn spawn_command_refresh<F>(
     F: FnOnce() -> Result<Vec<String>> + Send + 'static,
 {
     std::thread::spawn(move || {
+        let load_started = Instant::now();
         let result = loader();
+        let load_duration = load_started.elapsed();
         let mut cache = cache.write();
         cache.command_pending.remove(&cache_key);
         match result {
             Ok(values) => {
+                cache.command_errors.remove(&cache_key);
                 cache.commands.insert(
                     cache_key,
                     CommandValueCacheEntry {
                         values,
                         cached_at: Instant::now(),
+                        last_load_duration: Some(load_duration),
+                        last_error: None,
                     },
                 );
                 update_diagnostics_from_cache(&cache, None);
@@ -2277,6 +2708,14 @@ fn spawn_command_refresh<F>(
             }
             Err(err) => {
                 warn!("Dynamic command completion refresh failed: {}", err);
+                cache.command_errors.insert(
+                    cache_key,
+                    CommandValueErrorEntry {
+                        recorded_at: Instant::now(),
+                        last_load_duration: load_duration,
+                        error: err.to_string(),
+                    },
+                );
                 update_diagnostics_from_cache(&cache, None);
             }
         }
@@ -2324,8 +2763,70 @@ fn update_diagnostics_from_cache(cache: &ProjectDynamicCache, last_external: Opt
     diagnostics.external_entries = cache.external.len();
     diagnostics.external_pending = cache.external_pending.len();
     diagnostics.last_refresh = Some(Instant::now());
+    diagnostics.provider_lines = provider_diagnostics_lines(cache);
     if let Some(last_external) = last_external {
         diagnostics.last_external = Some(last_external);
+    }
+}
+
+fn provider_diagnostics_lines(cache: &ProjectDynamicCache) -> Vec<String> {
+    let mut keys = cache
+        .commands
+        .keys()
+        .chain(cache.command_errors.keys())
+        .chain(cache.command_pending.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    keys.sort_by(|a, b| {
+        dynamic_cache_kind_label(&a.kind)
+            .cmp(&dynamic_cache_kind_label(&b.kind))
+            .then_with(|| a.scope_dir.cmp(&b.scope_dir))
+    });
+    keys.dedup();
+    keys.into_iter()
+        .take(12)
+        .map(|key| {
+            let entry = cache.commands.get(&key);
+            let error = cache.command_errors.get(&key);
+            let pending = cache.command_pending.contains(&key);
+            let values = entry.map(|entry| entry.values.len()).unwrap_or(0);
+            let age = entry
+                .map(|entry| format!("{}ms", entry.cached_at.elapsed().as_millis()))
+                .or_else(|| error.map(|entry| format!("{}ms", entry.recorded_at.elapsed().as_millis())))
+                .unwrap_or_else(|| "none".to_string());
+            let duration = entry
+                .and_then(|entry| entry.last_load_duration)
+                .or_else(|| error.map(|entry| entry.last_load_duration))
+                .map(|duration| format!("{}ms", duration.as_millis()))
+                .unwrap_or_else(|| "unknown".to_string());
+            let error_text = entry
+                .and_then(|entry| entry.last_error.clone())
+                .or_else(|| error.map(|entry| truncate_string(&entry.error, 80)))
+                .unwrap_or_else(|| "none".to_string());
+            format!(
+                "completion-cache provider {} values={} pending={} age={} last-duration={} error={}",
+                dynamic_cache_kind_label(&key.kind),
+                values,
+                pending,
+                age,
+                duration,
+                error_text
+            )
+        })
+        .collect()
+}
+
+fn dynamic_cache_kind_label(kind: &DynamicCommandCacheKind) -> String {
+    match kind {
+        DynamicCommandCacheKind::GitBranch => "git.branch".to_string(),
+        DynamicCommandCacheKind::GitRemote => "git.remote".to_string(),
+        DynamicCommandCacheKind::GitWorktree => "git.worktree".to_string(),
+        DynamicCommandCacheKind::KubectlContext => "kubectl.context".to_string(),
+        DynamicCommandCacheKind::KubectlNamespace => "kubectl.namespace".to_string(),
+        DynamicCommandCacheKind::CommandValue {
+            command,
+            value_kind,
+        } => format!("{command}.{value_kind}"),
     }
 }
 
@@ -2462,25 +2963,89 @@ fn run_external_completer_for_key(
     let lines = wait_and_collect_lines(&mut child)?;
     Ok(lines
         .into_iter()
-        .filter_map(|line| {
-            let (text, description) = if let Some((text, description)) = line.split_once('\t') {
-                (text.trim(), Some(description.trim().to_string()))
-            } else {
-                (line.trim(), None)
-            };
-
-            if text.is_empty() || !matches_prefix(&key.current_token, text) {
-                return None;
-            }
-
-            Some(EnhancedCandidate {
-                text: text.to_string(),
-                description,
-                candidate_type: CandidateType::Argument,
-                priority: 200,
-            })
-        })
+        .filter_map(|line| parse_external_completion_line(&line, &key.current_token))
         .collect())
+}
+
+fn parse_external_completion_line(line: &str, current_token: &str) -> Option<EnhancedCandidate> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if trimmed.starts_with('{')
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed)
+        && let Some(object) = value.as_object()
+    {
+        let text = object.get("text").and_then(|value| value.as_str())?;
+        let replacement = object
+            .get("replacement")
+            .and_then(|value| value.as_str())
+            .unwrap_or(text)
+            .trim();
+        if replacement.is_empty() || !matches_prefix(current_token, replacement) {
+            return None;
+        }
+
+        let mut description = object
+            .get("description")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        if description.is_none() && replacement != text {
+            description = Some(text.to_string());
+        }
+
+        let candidate_type = object
+            .get("type")
+            .and_then(|value| value.as_str())
+            .and_then(parse_external_candidate_type)
+            .unwrap_or(CandidateType::Argument);
+        let priority = object
+            .get("priority")
+            .and_then(|value| value.as_u64())
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(200);
+
+        return Some(EnhancedCandidate {
+            text: replacement.to_string(),
+            description,
+            candidate_type,
+            priority,
+        });
+    }
+
+    let (text, description) = if let Some((text, description)) = trimmed.split_once('\t') {
+        (text.trim(), Some(description.trim().to_string()))
+    } else {
+        (trimmed, None)
+    };
+
+    if text.is_empty() || !matches_prefix(current_token, text) {
+        return None;
+    }
+
+    Some(EnhancedCandidate {
+        text: text.to_string(),
+        description,
+        candidate_type: CandidateType::Argument,
+        priority: 200,
+    })
+}
+
+fn parse_external_candidate_type(value: &str) -> Option<CandidateType> {
+    match value {
+        "subcommand" | "SubCommand" => Some(CandidateType::SubCommand),
+        "short-option" | "short_option" | "ShortOption" => Some(CandidateType::ShortOption),
+        "long-option" | "long_option" | "LongOption" => Some(CandidateType::LongOption),
+        "argument" | "Argument" => Some(CandidateType::Argument),
+        "file" | "File" => Some(CandidateType::File),
+        "directory" | "Directory" => Some(CandidateType::Directory),
+        "process" | "Process" => Some(CandidateType::Process),
+        "generic" | "Generic" => Some(CandidateType::Generic),
+        _ => None,
+    }
 }
 
 fn run_command_stdout(command_path: &str, args: &[&str], current_dir: &Path) -> Result<String> {
@@ -2559,6 +3124,74 @@ fn parse_first_fields(lines: &[String]) -> Vec<String> {
             .filter_map(|line| line.split_whitespace().next().map(str::to_string))
             .collect(),
     )
+}
+
+fn selected_git_remote(parsed_command_line: &ParsedCommandLine) -> Option<&str> {
+    parsed_command_line
+        .specified_arguments
+        .first()
+        .map(String::as_str)
+        .filter(|remote| !remote.is_empty())
+        .filter(|remote| *remote != parsed_command_line.current_token)
+}
+
+fn parse_git_remote_branches(lines: &[String], remote: Option<&str>) -> Vec<String> {
+    let mut values = Vec::new();
+    for line in lines {
+        if line.ends_with("/HEAD") || line == "HEAD" {
+            continue;
+        }
+        let Some((candidate_remote, branch)) = line.split_once('/') else {
+            continue;
+        };
+        if branch.is_empty() {
+            continue;
+        }
+        if let Some(remote) = remote
+            && !remote.is_empty()
+            && candidate_remote != remote
+        {
+            continue;
+        }
+        values.push(branch.to_string());
+    }
+    dedup_sorted(values)
+}
+
+fn parse_git_stash_refs(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .filter_map(|line| line.split(':').next().map(str::to_string))
+            .collect(),
+    )
+}
+
+fn parse_git_status_porcelain_paths(output: &str) -> Vec<String> {
+    let records = output
+        .split('\0')
+        .filter(|record| !record.is_empty())
+        .collect::<Vec<_>>();
+    let mut values = Vec::new();
+    let mut index = 0;
+    while index < records.len() {
+        let record = records[index];
+        if record.len() < 4 {
+            index += 1;
+            continue;
+        }
+        let status = &record[..2];
+        let path = record[3..].trim();
+        if !path.is_empty() {
+            values.push(path.to_string());
+        }
+        if status.contains('R') || status.contains('C') {
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+    dedup_sorted(values)
 }
 
 fn parse_cargo_metadata_values(output: &str, kind: CargoMetadataValueKind) -> Vec<String> {
@@ -2733,6 +3366,25 @@ fn load_process_names() -> Vec<String> {
             }
             if let Ok(comm) = fs::read_to_string(path.join("comm")) {
                 values.push(comm.trim().to_string());
+            }
+        }
+    }
+    dedup_sorted(values)
+}
+
+fn load_process_ids() -> Vec<String> {
+    let mut values = Vec::new();
+    if let Ok(entries) = fs::read_dir("/proc") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if file_name.chars().all(|ch| ch.is_ascii_digit()) {
+                values.push(file_name.to_string());
             }
         }
     }
@@ -3034,6 +3686,29 @@ mod tests {
             ]),
             vec!["/dev/sda".to_string(), "/dev/sda1".to_string()]
         );
+
+        assert_eq!(
+            parse_git_remote_branches(
+                &[
+                    "origin/main".to_string(),
+                    "upstream/dev".to_string(),
+                    "origin/HEAD".to_string(),
+                ],
+                Some("origin"),
+            ),
+            vec!["main".to_string()]
+        );
+        assert_eq!(
+            parse_git_stash_refs(&[
+                "stash@{0}: WIP on main".to_string(),
+                "stash@{1}: On dev".to_string(),
+            ]),
+            vec!["stash@{0}".to_string(), "stash@{1}".to_string()]
+        );
+        assert_eq!(
+            parse_git_status_porcelain_paths(" M src/lib.rs\0R  src/new.rs\0src/old.rs\0"),
+            vec!["src/lib.rs".to_string(), "src/new.rs".to_string()]
+        );
     }
 
     #[test]
@@ -3320,6 +3995,34 @@ volumes:
         assert_eq!(
             fs::read_to_string(dir.path().join("external-env.txt")).unwrap(),
             "input=unknown-command zzext\ncursor=21\ncommand=unknown-command\ntoken=zzext\n"
+        );
+    }
+
+    #[test]
+    fn external_completer_parses_jsonl_candidates_and_legacy_fallback() {
+        let json_candidate = parse_external_completion_line(
+            r#"{"text":"display alpha","description":"JSON alpha","type":"long-option","priority":240,"replacement":"--alpha"}"#,
+            "--al",
+        )
+        .unwrap();
+        assert_eq!(json_candidate.text, "--alpha");
+        assert_eq!(json_candidate.description.as_deref(), Some("JSON alpha"));
+        assert_eq!(json_candidate.candidate_type, CandidateType::LongOption);
+        assert_eq!(json_candidate.priority, 240);
+
+        let invalid_json_candidate = parse_external_completion_line("{not-json", "{not").unwrap();
+        assert_eq!(invalid_json_candidate.text, "{not-json");
+        assert_eq!(
+            invalid_json_candidate.candidate_type,
+            CandidateType::Argument
+        );
+
+        let legacy_candidate =
+            parse_external_completion_line("zzext-alpha\tExternal alpha", "zz").unwrap();
+        assert_eq!(legacy_candidate.text, "zzext-alpha");
+        assert_eq!(
+            legacy_candidate.description.as_deref(),
+            Some("External alpha")
         );
     }
 

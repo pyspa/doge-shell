@@ -94,8 +94,11 @@
           "name": "branch",
           "description": "Branch to switch to",
           "type": {
-            "type": "Script",
-            "data": "git branch --format='%(refname:short)'"
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.branch",
+              "scope": "project"
+            }
           }
         }
       ]
@@ -108,8 +111,11 @@
           "name": "branch_or_file",
           "description": "Branch to checkout",
           "type": {
-            "type": "Script",
-            "data": "(git branch --format='%(refname:short)'; git branch -r --format='%(refname:short)' | cut -d/ -f2- | grep -v '^HEAD$') | sort -u"
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.checkout_target",
+              "scope": "project"
+            }
           }
         }
       ]
@@ -122,8 +128,11 @@
           "name": "file",
           "description": "Files to add",
           "type": {
-            "type": "Script",
-            "data": "git status --porcelain 2>/dev/null | awk '{if(NF==3){print $3}else{print $2}}'"
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.changed_path",
+              "scope": "project"
+            }
           }
         }
       ],
@@ -167,16 +176,22 @@
           "name": "remote",
           "description": "Remote repository",
           "type": {
-            "type": "Script",
-            "data": "git remote"
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.remote",
+              "scope": "project"
+            }
           }
         },
         {
           "name": "branch",
           "description": "Branch to push",
           "type": {
-            "type": "Script",
-            "data": "remote=\"$ARG_0\"; [ -z \"$remote\" ] && remote=\"*\"; (git branch --format='%(refname:short)'; git branch -r --format='%(refname:short)' --list \"$remote/*\" | cut -d/ -f2- | grep -v '^HEAD$') | sort -u"
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.push_branch",
+              "scope": "project"
+            }
           }
         }
       ]
@@ -189,16 +204,22 @@
           "name": "remote",
           "description": "Remote repository",
           "type": {
-            "type": "Script",
-            "data": "git remote"
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.remote",
+              "scope": "project"
+            }
           }
         },
         {
           "name": "branch",
           "description": "Branch to pull",
           "type": {
-            "type": "Script",
-            "data": "remote=\"$ARG_0\"; [ -z \"$remote\" ] && remote=\"*\"; git branch -r --format='%(refname:short)' --list \"$remote/*\" | cut -d/ -f2- | grep -v '^HEAD$'"
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.remote_branch",
+              "scope": "project"
+            }
           }
         }
       ]
@@ -211,16 +232,22 @@
           "name": "remote",
           "description": "Remote repository",
           "type": {
-            "type": "Script",
-            "data": "git remote"
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.remote",
+              "scope": "project"
+            }
           }
         },
         {
           "name": "branch",
           "description": "Branch to fetch",
           "type": {
-            "type": "Script",
-            "data": "remote=\"$ARG_0\"; [ -z \"$remote\" ] && remote=\"*\"; git branch -r --format='%(refname:short)' --list \"$remote/*\" | cut -d/ -f2- | grep -v '^HEAD$'"
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.remote_branch",
+              "scope": "project"
+            }
           }
         }
       ]
@@ -233,8 +260,11 @@
           "name": "branch",
           "description": "Branch to merge",
           "type": {
-            "type": "Script",
-            "data": "git branch --format='%(refname:short)'"
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.branch",
+              "scope": "project"
+            }
           }
         }
       ]
@@ -247,8 +277,11 @@
           "name": "branch",
           "description": "Branch to rebase onto",
           "type": {
-            "type": "Script",
-            "data": "git branch --format='%(refname:short)'"
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.branch",
+              "scope": "project"
+            }
           }
         }
       ]
@@ -262,8 +295,11 @@
           "description": "Revision to show",
           "required": false,
           "type": {
-            "type": "Script",
-            "data": "git branch --format='%(refname:short)'"
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.revision",
+              "scope": "project"
+            }
           }
         }
       ]
@@ -277,8 +313,11 @@
           "description": "Revision or file",
           "required": false,
           "type": {
-            "type": "Script",
-            "data": "git branch --format='%(refname:short)'"
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.revision",
+              "scope": "project"
+            }
           }
         }
       ]
@@ -292,8 +331,11 @@
           "description": "Object to show",
           "required": true,
           "type": {
-            "type": "Script",
-            "data": "git branch --format='%(refname:short)'"
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.revision",
+              "scope": "project"
+            }
           }
         }
       ]
@@ -307,8 +349,11 @@
           "description": "Commit to reset to",
           "required": false,
           "type": {
-            "type": "Script",
-            "data": "git branch --format='%(refname:short)'"
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.revision",
+              "scope": "project"
+            }
           }
         }
       ]
@@ -322,8 +367,11 @@
           "description": "Branch name",
           "required": false,
           "type": {
-            "type": "Script",
-            "data": "git branch --format='%(refname:short)'"
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.branch",
+              "scope": "project"
+            }
           }
         }
       ]
@@ -337,8 +385,11 @@
           "description": "Tag name",
           "required": false,
           "type": {
-            "type": "Script",
-            "data": "git tag"
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.tag",
+              "scope": "project"
+            }
           }
         }
       ]
@@ -360,8 +411,11 @@
               "name": "stash",
               "description": "Stash to pop",
               "type": {
-                "type": "Script",
-                "data": "git stash list | awk -F: '{print $1}'"
+                "type": "Dynamic",
+                "data": {
+                  "provider": "git.stash",
+                  "scope": "project"
+                }
               }
             }
           ]
@@ -374,8 +428,11 @@
               "name": "stash",
               "description": "Stash to apply",
               "type": {
-                "type": "Script",
-                "data": "git stash list | awk -F: '{print $1}'"
+                "type": "Dynamic",
+                "data": {
+                  "provider": "git.stash",
+                  "scope": "project"
+                }
               }
             }
           ]
@@ -388,8 +445,11 @@
               "name": "stash",
               "description": "Stash to drop",
               "type": {
-                "type": "Script",
-                "data": "git stash list | awk -F: '{print $1}'"
+                "type": "Dynamic",
+                "data": {
+                  "provider": "git.stash",
+                  "scope": "project"
+                }
               }
             }
           ]
@@ -406,8 +466,11 @@
           "description": "Restore from the given tree-ish",
           "takes_value": true,
           "value_type": {
-            "type": "Script",
-            "data": "git branch --format='%(refname:short)'"
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.revision",
+              "scope": "project"
+            }
           }
         },
         {
@@ -431,8 +494,11 @@
           "name": "pathspec",
           "description": "Files to restore",
           "type": {
-            "type": "Script",
-            "data": "git status --porcelain 2>/dev/null | awk '{if(NF==3){print $3}else{print $2}}'"
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.changed_path",
+              "scope": "project"
+            }
           }
         }
       ]
@@ -456,8 +522,11 @@
               "name": "branch",
               "description": "Branch to checkout",
               "type": {
-                "type": "Script",
-                "data": "git branch --format='%(refname:short)'"
+                "type": "Dynamic",
+                "data": {
+                  "provider": "git.branch",
+                  "scope": "project"
+                }
               }
             }
           ]
@@ -474,8 +543,11 @@
               "name": "worktree",
               "description": "Worktree to remove",
               "type": {
-                "type": "Script",
-                "data": "git worktree list --porcelain 2>/dev/null | grep '^worktree' | cut -d' ' -f2"
+                "type": "Dynamic",
+                "data": {
+                  "provider": "git.worktree",
+                  "scope": "project"
+                }
               }
             }
           ]
@@ -502,8 +574,11 @@
               "name": "name",
               "description": "Remote to remove",
               "type": {
-                "type": "Script",
-                "data": "git remote"
+                "type": "Dynamic",
+                "data": {
+                  "provider": "git.remote",
+                  "scope": "project"
+                }
               }
             }
           ]
@@ -520,8 +595,11 @@
               "name": "remote",
               "description": "Remote to show",
               "type": {
-                "type": "Script",
-                "data": "git remote"
+                "type": "Dynamic",
+                "data": {
+                  "provider": "git.remote",
+                  "scope": "project"
+                }
               }
             }
           ]

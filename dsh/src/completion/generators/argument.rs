@@ -41,6 +41,8 @@ impl<'a> ArgumentGenerator<'a> {
 
         // Get actual argument type
         let actual_arg_type = arg_type;
+        let mut actual_arg_type_is_dynamic =
+            matches!(actual_arg_type, Some(ArgumentType::Dynamic { .. }));
 
         if let Some(arg_type) = actual_arg_type {
             candidates.extend(self.generate_candidates_for_type(arg_type, parsed)?);
@@ -66,12 +68,13 @@ impl<'a> ArgumentGenerator<'a> {
                     Self::resolve_argument_definition(current_arguments, arg_index)
                     && let Some(ref arg_type) = arg_def.arg_type
                 {
+                    actual_arg_type_is_dynamic = matches!(arg_type, ArgumentType::Dynamic { .. });
                     candidates.extend(self.generate_candidates_for_type(arg_type, parsed)?);
                 }
             }
 
             // Default to file completion if no candidates generated yet
-            if candidates.is_empty() {
+            if candidates.is_empty() && !actual_arg_type_is_dynamic {
                 candidates.extend(
                     FileSystemGenerator::generate_file_candidates(&parsed.current_token)
                         .map_err(GeneratorError::Other)?,
@@ -138,7 +141,8 @@ impl<'a> ArgumentGenerator<'a> {
         }
 
         // Fallback: file completion
-        if candidates.is_empty() {
+        if candidates.is_empty() && !matches!(actual_value_type, Some(ArgumentType::Dynamic { .. }))
+        {
             candidates.extend(
                 FileSystemGenerator::generate_file_candidates(&parsed.current_token)
                     .map_err(GeneratorError::Other)?,
@@ -248,6 +252,7 @@ impl<'a> ArgumentGenerator<'a> {
             ArgumentType::Script(command) => {
                 ScriptGenerator::default().generate_script_candidates(command, parsed)
             }
+            ArgumentType::Dynamic { .. } => Ok(Vec::new()),
             ArgumentType::Process => {
                 ProcessGenerator::new().generate_candidates(&parsed.current_token)
             }

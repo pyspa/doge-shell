@@ -1,5 +1,7 @@
 use super::cache::CompletionCache;
-use super::command::{CommandCompletionDatabase, CompletionCandidate};
+use super::command::{
+    ArgumentType, CommandCompletionDatabase, CommandOption, CompletionCandidate, SubCommand,
+};
 use super::dynamic::DynamicCompletionProvider;
 
 use super::framework::CompletionFrameworkKind;
@@ -11,6 +13,7 @@ use crate::completion::generators::filesystem::FileSystemGenerator;
 use super::json_loader::JsonCompletionLoader;
 use super::parser::{self, CommandLineParser, ParsedCommandLine};
 use crate::completion::display::Candidate;
+use crate::completion::generators::argument::ArgumentGenerator;
 use crate::environment::Environment;
 use anyhow::Result;
 use dsh_builtin::project;
@@ -530,7 +533,9 @@ impl IntegratedCompletionEngine {
             completion_replacement_range(input, cursor_pos, &parsed_command_line)?;
 
         let mut candidates = self.collect_dynamic_candidates_cached(&request, &parsed_command_line);
-        candidates.extend(self.collect_command_candidates_for_ghost(&parsed_command_line));
+        candidates.extend(
+            self.collect_command_candidates_for_ghost(&parsed_command_line, request.current_dir),
+        );
 
         let command_context = if parsed_command_line.command.is_empty() {
             None
@@ -671,17 +676,51 @@ impl IntegratedCompletionEngine {
         request: &CompletionRequest,
         parsed_command_line: &parser::ParsedCommandLine,
     ) -> CandidateBatch {
-        let candidates = DYNAMIC_PROVIDER_SPECS
+        let mut candidates = DYNAMIC_PROVIDER_SPECS
             .iter()
             .find(|provider| provider.command == parsed_command_line.command)
             .map(|provider| (provider.collect)(self, request, parsed_command_line))
             .unwrap_or_default();
+        candidates.extend(self.collect_declared_dynamic_candidates(
+            request,
+            parsed_command_line,
+            false,
+        ));
 
         if candidates.is_empty() {
             CandidateBatch::empty()
         } else {
             CandidateBatch::inclusive_with_framework(candidates, CompletionFrameworkKind::Skim)
         }
+    }
+
+    fn collect_declared_dynamic_candidates(
+        &self,
+        request: &CompletionRequest,
+        parsed_command_line: &parser::ParsedCommandLine,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let Some(ArgumentType::Dynamic { provider, .. }) =
+            self.argument_type_for_completion_context(parsed_command_line)
+        else {
+            return Vec::new();
+        };
+
+        self.dynamic.collect_declared_dynamic_candidates(
+            &provider,
+            parsed_command_line,
+            request.current_dir,
+            cached_only,
+        )
+    }
+
+    fn argument_type_for_completion_context(
+        &self,
+        parsed_command_line: &parser::ParsedCommandLine,
+    ) -> Option<ArgumentType> {
+        self.ensure_command_completion_loaded(&parsed_command_line.command);
+        let db_lock = self.command_completion.lock();
+        argument_type_for_completion_context(&db_lock, parsed_command_line)
     }
 
     fn collect_dynamic_candidates_cached(
@@ -814,11 +853,17 @@ impl IntegratedCompletionEngine {
     fn collect_command_candidates_for_ghost(
         &self,
         parsed_command_line: &parser::ParsedCommandLine,
+        current_dir: &Path,
     ) -> Vec<EnhancedCandidate> {
         match parsed_command_line.completion_context {
             parser::CompletionContext::SubCommand
             | parser::CompletionContext::ShortOption
             | parser::CompletionContext::LongOption => {}
+            parser::CompletionContext::Argument { .. }
+            | parser::CompletionContext::OptionValue { .. } => {
+                return self
+                    .collect_safe_value_candidates_for_ghost(parsed_command_line, current_dir);
+            }
             _ => return Vec::new(),
         }
 
@@ -839,6 +884,44 @@ impl IntegratedCompletionEngine {
                 Vec::new()
             }
         }
+    }
+
+    fn collect_safe_value_candidates_for_ghost(
+        &self,
+        parsed_command_line: &parser::ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.ensure_command_completion_loaded(&parsed_command_line.command);
+        let db_lock = self.command_completion.lock();
+        let Some(arg_type) = argument_type_for_completion_context(&db_lock, parsed_command_line)
+        else {
+            return Vec::new();
+        };
+
+        if let ArgumentType::Dynamic { provider, .. } = arg_type {
+            drop(db_lock);
+            return self.dynamic.collect_declared_dynamic_candidates(
+                &provider,
+                parsed_command_line,
+                current_dir,
+                true,
+            );
+        }
+
+        if !is_ghost_safe_argument_type(&arg_type) {
+            return Vec::new();
+        }
+
+        let generator = ArgumentGenerator::new(&db_lock);
+        generator
+            .generate_candidates_for_type(&arg_type, parsed_command_line)
+            .map(|candidates| {
+                candidates
+                    .into_iter()
+                    .map(|candidate| self.convert_to_enhanced_candidate(candidate))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn collect_pm_candidates(
@@ -1236,6 +1319,122 @@ fn history_boost_scores(
     }
 
     scores
+}
+
+fn argument_type_for_completion_context(
+    database: &CommandCompletionDatabase,
+    parsed: &ParsedCommandLine,
+) -> Option<ArgumentType> {
+    match &parsed.completion_context {
+        parser::CompletionContext::Argument {
+            arg_type: Some(arg_type),
+            ..
+        } => Some(arg_type.clone()),
+        parser::CompletionContext::Argument { arg_index, .. } => {
+            let command_completion = database.get_command(&parsed.command)?;
+            let arguments =
+                arguments_for_subcommand_path(command_completion, &parsed.subcommand_path);
+            resolve_argument_definition(arguments, *arg_index)
+                .and_then(|argument| argument.arg_type.clone())
+        }
+        parser::CompletionContext::OptionValue {
+            option_name,
+            value_type: Some(value_type),
+        } => {
+            let command_completion = database.get_command(&parsed.command)?;
+            let option_value_type = option_for_subcommand_path(
+                command_completion,
+                &parsed.subcommand_path,
+                option_name,
+            )
+            .and_then(CommandOption::value_type)
+            .cloned();
+            option_value_type.or_else(|| Some(value_type.clone()))
+        }
+        parser::CompletionContext::OptionValue {
+            option_name,
+            value_type: None,
+        } => {
+            let command_completion = database.get_command(&parsed.command)?;
+            option_for_subcommand_path(command_completion, &parsed.subcommand_path, option_name)
+                .and_then(CommandOption::value_type)
+                .cloned()
+        }
+        _ => None,
+    }
+}
+
+fn arguments_for_subcommand_path<'a>(
+    command_completion: &'a super::command::CommandCompletion,
+    path: &[String],
+) -> &'a [super::command::Argument] {
+    let mut arguments = &command_completion.arguments;
+    let mut subcommands = &command_completion.subcommands;
+
+    for name in path {
+        let Some(subcommand) = find_matching_subcommand(subcommands, name) else {
+            break;
+        };
+        arguments = &subcommand.arguments;
+        subcommands = &subcommand.subcommands;
+    }
+
+    arguments
+}
+
+fn option_for_subcommand_path<'a>(
+    command_completion: &'a super::command::CommandCompletion,
+    path: &[String],
+    option_name: &str,
+) -> Option<&'a CommandOption> {
+    let mut options = command_completion.global_options.iter().collect::<Vec<_>>();
+    let mut subcommands = &command_completion.subcommands;
+
+    for name in path {
+        let Some(subcommand) = find_matching_subcommand(subcommands, name) else {
+            break;
+        };
+        options.extend(subcommand.options.iter());
+        subcommands = &subcommand.subcommands;
+    }
+
+    options
+        .into_iter()
+        .find(|option| option.matches_name(option_name))
+}
+
+fn resolve_argument_definition(
+    arguments: &[super::command::Argument],
+    arg_index: usize,
+) -> Option<&super::command::Argument> {
+    arguments.get(arg_index).or_else(|| {
+        arguments
+            .last()
+            .filter(|argument| argument.multiple && !arguments.is_empty())
+    })
+}
+
+fn find_matching_subcommand<'a>(
+    subcommands: &'a [SubCommand],
+    name: &str,
+) -> Option<&'a SubCommand> {
+    subcommands.iter().find(|subcommand| {
+        subcommand.name == name || subcommand.aliases.iter().any(|alias| alias == name)
+    })
+}
+
+fn is_ghost_safe_argument_type(arg_type: &ArgumentType) -> bool {
+    matches!(
+        arg_type,
+        ArgumentType::Choice(_)
+            | ArgumentType::Environment
+            | ArgumentType::Process
+            | ArgumentType::User
+            | ArgumentType::Group
+            | ArgumentType::Signal
+            | ArgumentType::Interface
+            | ArgumentType::Dynamic { .. }
+    )
 }
 
 fn completion_replacement_range(
@@ -2520,6 +2719,19 @@ mod tests {
         assert_eq!(ghost.as_deref(), Some("cargo build"));
     }
 
+    #[test]
+    fn ghost_completion_uses_json_choice_option_values() {
+        let dir = tempdir().unwrap();
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "ps --sort=me";
+        let ghost = engine.ghost_completion(input, input.len(), dir.path(), None);
+
+        assert_eq!(ghost.as_deref(), Some("ps --sort=mem"));
+    }
+
     #[tokio::test]
     async fn ghost_completion_uses_cached_kubectl_context() {
         let dir = tempdir().unwrap();
@@ -2552,6 +2764,43 @@ mod tests {
 
         let ghost = engine.ghost_completion(input, input.len(), dir.path(), None);
         assert_eq!(ghost.as_deref(), Some("kubectl --context=dev-cluster"));
+    }
+
+    #[tokio::test]
+    async fn ghost_completion_uses_cached_json_declared_dynamic_values_only() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let counter = dir.path().join("git-count");
+        write_executable_script(
+            &bin_dir.join("git"),
+            &format!(
+                "#!/bin/sh\ncount_file=\"{}\"\ncount=0\nif [ -f \"$count_file\" ]; then count=$(cat \"$count_file\"); fi\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$count_file\"\nif [ \"$1\" = \"stash\" ] && [ \"$2\" = \"list\" ]; then printf 'stash@{{0}}: WIP on main\\n'; fi\n",
+                counter.display()
+            ),
+        );
+
+        let engine = engine_with_path(&bin_dir);
+        let input = "git stash pop stash";
+
+        assert_eq!(
+            engine.ghost_completion(input, input.len(), dir.path(), None),
+            None
+        );
+        assert!(
+            !counter.exists(),
+            "ghost completion must not run uncached JSON-declared dynamic providers"
+        );
+
+        let _ = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+        let _ = wait_for_candidate(&engine, input, dir.path(), "stash@{0}").await;
+
+        assert_eq!(
+            engine.ghost_completion(input, input.len(), dir.path(), None),
+            Some("git stash pop stash@{0}".to_string())
+        );
     }
 
     #[tokio::test]
@@ -2829,6 +3078,30 @@ fi
 "#,
         );
         write_executable_script(
+            &bin_dir.join("git"),
+            r#"#!/bin/sh
+args="$*"
+if [ "$1" = "for-each-ref" ]; then
+  case "$args" in
+    *"refs/heads"*"refs/remotes"*) printf 'main\norigin/release\norigin/HEAD\n' ;;
+    *"refs/remotes"*) printf 'origin/main\norigin/release\nupstream/dev\norigin/HEAD\n' ;;
+    *"refs/heads"*"refs/tags"*) printf 'main\nv1.0.0\n' ;;
+    *"refs/heads"*) printf 'main\nfeature/demo\n' ;;
+  esac
+elif [ "$1" = "remote" ]; then
+  printf 'origin\nupstream\n'
+elif [ "$1" = "tag" ]; then
+  printf 'v1.0.0\n'
+elif [ "$1" = "stash" ] && [ "$2" = "list" ]; then
+  printf 'stash@{0}: WIP on main\nstash@{1}: On dev\n'
+elif [ "$1" = "status" ]; then
+  printf ' M src/lib.rs\0?? README.md\0'
+elif [ "$1" = "worktree" ] && [ "$2" = "list" ]; then
+  printf 'worktree /tmp/demo-worktree\nHEAD abc123\n'
+fi
+"#,
+        );
+        write_executable_script(
             &bin_dir.join("systemctl"),
             "#!/bin/sh\ncase \"$1\" in\nlist-unit-files) printf 'ssh.service enabled\\n';;\nlist-units) printf 'docker.service loaded active running Docker\\n';;\nesac\n",
         );
@@ -2870,6 +3143,14 @@ fi
         let cases = [
             ("cargo build -p ap", "app-core"),
             ("cargo run --bin cl", "cli-tool"),
+            ("git switch fe", "feature/demo"),
+            ("git checkout rel", "release"),
+            ("git push origin fe", "feature/demo"),
+            ("git pull origin ma", "main"),
+            ("git tag v1", "v1.0.0"),
+            ("git stash pop stash", "stash@{0}"),
+            ("git add RE", "README.md"),
+            ("git worktree remove demo", "/tmp/demo-worktree"),
             ("systemctl start ss", "ssh.service"),
             ("journalctl -u do", "docker.service"),
             ("tmux attach -t de", "dev-session"),

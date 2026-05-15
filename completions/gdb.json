@@ -8,8 +8,7 @@
       "description": "Attach to process ID",
       "takes_value": true,
       "value_type": {
-        "type": "Script",
-        "data": "ps -eo pid,comm --no-headers | awk '{print $1 \" \" $2}'"
+        "type": "Process"
       }
     },
     {

@@ -120,6 +120,14 @@ pub enum ArgumentType {
     Regex,
     /// Script to execute for dynamic completion
     Script(String),
+    /// Cached dynamic provider declared by JSON completion definitions
+    Dynamic {
+        /// Stable provider id (for example, "git.branch")
+        provider: String,
+        /// Optional provider scope hint
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+    },
     /// System process (PID)
     Process,
     /// Command with arguments (delegates completion to the command)
@@ -329,5 +337,13 @@ mod tests {
             }
             _ => panic!("Deserialization failed"),
         }
+
+        let dynamic_type = ArgumentType::Dynamic {
+            provider: "git.branch".to_string(),
+            scope: Some("project".to_string()),
+        };
+        let json = serde_json::to_string(&dynamic_type).unwrap();
+        let deserialized: ArgumentType = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, dynamic_type);
     }
 }

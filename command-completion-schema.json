@@ -355,6 +355,32 @@
         },
         {
           "type": "object",
+          "title": "Dynamic Type",
+          "required": ["type", "data"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["Dynamic"]
+            },
+            "data": {
+              "type": "object",
+              "required": ["provider"],
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "description": "Stable dynamic completion provider id"
+                },
+                "scope": {
+                  "type": ["string", "null"],
+                  "description": "Optional scope hint for the provider"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "type": "object",
           "title": "Script Type",
           "required": ["type", "data"],
           "properties": {

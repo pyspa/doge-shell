@@ -847,6 +847,54 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_argument_resolved_from_json_does_not_fallback_to_files() {
+        let temp = tempdir().unwrap();
+        std::fs::write(temp.path().join("matching-file"), "").unwrap();
+        let current_token = temp.path().join("matching").to_string_lossy().to_string();
+
+        let mut db = CommandCompletionDatabase::new();
+        db.add_command(CommandCompletion {
+            command: "dynarg".to_string(),
+            description: None,
+            subcommands: vec![],
+            global_options: vec![],
+            arguments: vec![Argument {
+                name: "value".to_string(),
+                description: None,
+                multiple: false,
+                arg_type: Some(ArgumentType::Dynamic {
+                    provider: "unknown.provider".to_string(),
+                    scope: None,
+                }),
+            }],
+        });
+        let generator = CompletionGenerator::new(&db);
+
+        let parsed = ParsedCommandLine {
+            command: "dynarg".to_string(),
+            subcommand_path: vec![],
+            args: vec![],
+            options: vec![],
+            current_token,
+            current_arg: None,
+            completion_context: CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: None,
+            },
+            specified_options: vec![],
+            specified_arguments: vec![],
+            raw_args: vec![],
+            cursor_index: 0,
+        };
+
+        let candidates = generator.generate_candidates(&parsed).unwrap();
+        assert!(
+            candidates.is_empty(),
+            "Dynamic arguments should not fall back to filesystem candidates"
+        );
+    }
+
+    #[test]
     fn test_script_execution_variable_substitution() {
         let mut db = CommandCompletionDatabase::new();
         // We use printf to avoid newline issues and control output exactly

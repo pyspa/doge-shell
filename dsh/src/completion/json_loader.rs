@@ -1,4 +1,4 @@
-use super::command::{CommandCompletion, CommandCompletionDatabase};
+use super::command::{ArgumentType, CommandCompletion, CommandCompletionDatabase};
 use crate::shell::APP_NAME;
 use anyhow::{Context, Result};
 use rust_embed::RustEmbed;
@@ -268,7 +268,19 @@ impl JsonCompletionLoader {
         if argument.name.is_empty() {
             anyhow::bail!("Argument name cannot be empty in '{}'", context);
         }
+        self.validate_argument_type(argument.arg_type.as_ref(), context);
         Ok(())
+    }
+
+    fn validate_argument_type(&self, arg_type: Option<&ArgumentType>, context: &str) {
+        if let Some(ArgumentType::Dynamic { provider, .. }) = arg_type
+            && !super::dynamic::is_known_declared_dynamic_provider(provider)
+        {
+            warn!(
+                "Unknown dynamic completion provider '{}' in '{}'",
+                provider, context
+            );
+        }
     }
 
     /// Validate subcommand
@@ -295,6 +307,11 @@ impl JsonCompletionLoader {
         // Validate options
         for option in &subcommand.options {
             self.validate_option(option, &format!("{} {}", parent_command, subcommand.name))?;
+        }
+
+        // Validate arguments
+        for argument in &subcommand.arguments {
+            self.validate_argument(argument, &format!("{} {}", parent_command, subcommand.name))?;
         }
 
         // Validate nested subcommands
@@ -331,6 +348,11 @@ impl JsonCompletionLoader {
                 anyhow::bail!("Invalid long option format '{}' in '{}'", long, context);
             }
         }
+
+        if let Some(argument) = &option.argument {
+            self.validate_argument(argument, context)?;
+        }
+        self.validate_argument_type(option.value_type.as_ref(), context);
 
         Ok(())
     }
@@ -667,6 +689,7 @@ mod tests {
             "Group",
             "Signal",
             "Interface",
+            "Dynamic",
         ] {
             assert!(
                 schema.to_string().contains(&format!(r#""{type_name}""#)),
@@ -1263,7 +1286,7 @@ mod tests {
         assert!(switch_sub.is_some(), "git switch subcommand not found");
         let switch_sub = switch_sub.unwrap();
 
-        // Verify argument type is Script
+        // Verify argument type is Dynamic
         assert!(
             !switch_sub.arguments.is_empty(),
             "git switch has no arguments"
@@ -1271,17 +1294,44 @@ mod tests {
         let branch_arg = &switch_sub.arguments[0];
 
         match &branch_arg.arg_type {
-            Some(ArgumentType::Script(script)) => {
-                assert!(
-                    script.contains("git branch"),
-                    "Script content mismatch: {}",
-                    script
-                );
+            Some(ArgumentType::Dynamic { provider, scope }) => {
+                assert_eq!(provider, "git.branch");
+                assert_eq!(scope.as_deref(), Some("project"));
             }
             _ => panic!(
-                "Expected Script argument type for git switch, found {:?}",
+                "Expected Dynamic argument type for git switch, found {:?}",
                 branch_arg.arg_type
             ),
+        }
+    }
+
+    #[test]
+    fn embedded_completion_definitions_do_not_use_script_type() {
+        let embedded_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("completions");
+        for entry in fs::read_dir(&embedded_dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let contents = fs::read_to_string(&path).unwrap();
+            let value: serde_json::Value = serde_json::from_str(&contents).unwrap();
+            assert!(
+                !json_contains_script_type(&value),
+                "built-in completion must not use Script: {}",
+                path.display()
+            );
+        }
+    }
+
+    fn json_contains_script_type(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Object(object) => {
+                object.get("type").and_then(serde_json::Value::as_str) == Some("Script")
+                    || object.values().any(json_contains_script_type)
+            }
+            serde_json::Value::Array(values) => values.iter().any(json_contains_script_type),
+            _ => false,
         }
     }
 }

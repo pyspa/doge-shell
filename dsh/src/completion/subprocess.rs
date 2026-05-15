@@ -218,6 +218,13 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn script_command(path: &Path) -> std::process::Command {
+        let mut command = command("sh");
+        command.arg(path);
+        command
+    }
+
+    #[cfg(unix)]
     #[test]
     fn timeout_kills_descendants_in_process_group() {
         let dir = tempdir().unwrap();
@@ -228,7 +235,7 @@ mod tests {
             "#!/bin/sh\n(sleep 2; printf survived > survived.txt) &\nwait\n",
         );
 
-        let mut command = command(script.to_str().unwrap());
+        let mut command = script_command(&script);
         command.current_dir(dir.path());
         let started = Instant::now();
         let output = collect_stdout(command, Duration::from_millis(300)).unwrap();
@@ -249,7 +256,7 @@ mod tests {
         let script = dir.path().join("background-stdout.sh");
         write_executable_script(&script, "#!/bin/sh\n(sleep 4; printf late) &\nexit 0\n");
 
-        let mut command = command(script.to_str().unwrap());
+        let mut command = script_command(&script);
         command.current_dir(dir.path());
         let started = Instant::now();
         let output = collect_stdout(command, Duration::from_millis(1500)).unwrap();

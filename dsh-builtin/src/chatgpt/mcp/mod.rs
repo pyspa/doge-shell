@@ -82,8 +82,8 @@ struct McpToolCache {
 
 impl McpToolCache {
     fn load() -> Self {
-        if let Ok(dirs) = BaseDirectories::with_prefix("dsh")
-            && let Some(path) = dirs.find_cache_file("mcp_tools.json")
+        let dirs = BaseDirectories::with_prefix("dsh");
+        if let Some(path) = dirs.find_cache_file("mcp_tools.json")
             && let Ok(file) = std::fs::File::open(path)
             && let Ok(cache) = serde_json::from_reader(file)
         {
@@ -93,8 +93,8 @@ impl McpToolCache {
     }
 
     fn save(&self) {
-        if let Ok(dirs) = BaseDirectories::with_prefix("dsh")
-            && let Ok(path) = dirs.place_cache_file("mcp_tools.json")
+        let dirs = BaseDirectories::with_prefix("dsh");
+        if let Ok(path) = dirs.place_cache_file("mcp_tools.json")
             && let Ok(file) = std::fs::File::create(path)
         {
             let _ = serde_json::to_writer(file, self);
@@ -1092,7 +1092,6 @@ fn mcp_server_stderr(command: &str) -> Stdio {
 
 fn mcp_server_log_path(command: &str) -> Option<PathBuf> {
     BaseDirectories::with_prefix("dsh")
-        .ok()?
         .place_cache_file(format!(
             "mcp_server_{}.log",
             sanitized_command_name(command)

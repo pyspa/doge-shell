@@ -83,7 +83,7 @@ num-traits = "0.2"
 rust-embed = "8.5"
 rusqlite = { version = "0.39", features = ["bundled"] }
 tempfile = "3.0"
-which = "6.0"
+which = "8.0"
 wait-timeout = "0.2"
 glob = "0.3"
 

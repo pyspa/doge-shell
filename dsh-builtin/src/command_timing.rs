@@ -146,7 +146,7 @@ impl CommandTiming {
 
 /// Get the path to the timing data file
 pub fn get_timing_file_path() -> Option<PathBuf> {
-    let xdg_dir = xdg::BaseDirectories::with_prefix("dsh").ok()?;
+    let xdg_dir = xdg::BaseDirectories::with_prefix("dsh");
     xdg_dir.place_data_file("timing.json").ok()
 }
 

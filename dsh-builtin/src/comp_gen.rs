@@ -234,7 +234,7 @@ fn save_completion_json(command_name: &str, json: &str) -> Result<std::path::Pat
     // The environment uses "doge-shell" or "dsh"?
     // dsh/src/shell/mod.rs: pub const APP_NAME: &str = "dsh";
     // So "dsh" is likely correct for XDG prefix.
-    let xdg_dirs = xdg::BaseDirectories::with_prefix("dsh")?;
+    let xdg_dirs = xdg::BaseDirectories::with_prefix("dsh");
 
     // Ensure completions directory exists
     // place_config_file creates the directory structure if missing

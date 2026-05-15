@@ -302,8 +302,7 @@ fn resolve_allowlist_path() -> Result<Option<PathBuf>, String> {
         return Ok(Some(PathBuf::from(path)));
     }
 
-    let xdg_dirs = BaseDirectories::with_prefix(CONFIG_DIR_PREFIX)
-        .map_err(|err| format!("chat: failed to determine config directory: {err}"))?;
+    let xdg_dirs = BaseDirectories::with_prefix(CONFIG_DIR_PREFIX);
 
     Ok(xdg_dirs.find_config_file(EXECUTE_TOOL_CONFIG_FILE))
 }

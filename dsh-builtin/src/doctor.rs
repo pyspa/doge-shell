@@ -640,7 +640,7 @@ fn performance_latency_iterations(args: &[String]) -> Option<usize> {
 }
 
 fn executable_cache_file_info() -> Option<(PathBuf, usize)> {
-    let dirs = xdg::BaseDirectories::with_prefix("dsh").ok()?;
+    let dirs = xdg::BaseDirectories::with_prefix("dsh");
     let path = dirs.place_data_file("executable_names.json").ok()?;
     let contents = fs::read_to_string(&path).ok()?;
     let value: serde_json::Value = serde_json::from_str(&contents).ok()?;

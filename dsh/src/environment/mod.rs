@@ -245,8 +245,7 @@ impl std::fmt::Debug for Environment {
 
 /// Get the path to a configuration file.
 pub fn get_config_file(name: &str) -> Result<PathBuf> {
-    let xdg_dir =
-        xdg::BaseDirectories::with_prefix(APP_NAME).context("failed get xdg directory")?;
+    let xdg_dir = xdg::BaseDirectories::with_prefix(APP_NAME);
     xdg_dir.place_config_file(name).context("failed get path")
 }
 
@@ -254,8 +253,7 @@ pub fn get_config_file(name: &str) -> Result<PathBuf> {
 pub fn get_data_file(name: &str) -> Result<PathBuf> {
     #[cfg(test)]
     ensure_test_data_dir();
-    let xdg_dir =
-        xdg::BaseDirectories::with_prefix(APP_NAME).context("failed get xdg directory")?;
+    let xdg_dir = xdg::BaseDirectories::with_prefix(APP_NAME);
     xdg_dir.place_data_file(name).context("failed get path")
 }
 
@@ -263,8 +261,7 @@ pub fn get_data_file(name: &str) -> Result<PathBuf> {
 pub fn get_state_file(name: &str) -> Result<PathBuf> {
     #[cfg(test)]
     ensure_test_data_dir();
-    let xdg_dir =
-        xdg::BaseDirectories::with_prefix(APP_NAME).context("failed get xdg directory")?;
+    let xdg_dir = xdg::BaseDirectories::with_prefix(APP_NAME);
     xdg_dir.place_state_file(name).context("failed get path")
 }
 

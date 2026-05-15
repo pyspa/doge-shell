@@ -41,8 +41,7 @@ impl<'a> ArgumentGenerator<'a> {
 
         // Get actual argument type
         let actual_arg_type = arg_type;
-        let mut actual_arg_type_is_dynamic =
-            matches!(actual_arg_type, Some(ArgumentType::Dynamic { .. }));
+        let mut resolved_arg_type = actual_arg_type.cloned();
 
         if let Some(arg_type) = actual_arg_type {
             candidates.extend(self.generate_candidates_for_type(arg_type, parsed)?);
@@ -68,13 +67,13 @@ impl<'a> ArgumentGenerator<'a> {
                     Self::resolve_argument_definition(current_arguments, arg_index)
                     && let Some(ref arg_type) = arg_def.arg_type
                 {
-                    actual_arg_type_is_dynamic = matches!(arg_type, ArgumentType::Dynamic { .. });
+                    resolved_arg_type = Some(arg_type.clone());
                     candidates.extend(self.generate_candidates_for_type(arg_type, parsed)?);
                 }
             }
 
             // Default to file completion if no candidates generated yet
-            if candidates.is_empty() && !actual_arg_type_is_dynamic {
+            if candidates.is_empty() && resolved_arg_type.is_none() {
                 candidates.extend(
                     FileSystemGenerator::generate_file_candidates(&parsed.current_token)
                         .map_err(GeneratorError::Other)?,
@@ -141,8 +140,7 @@ impl<'a> ArgumentGenerator<'a> {
         }
 
         // Fallback: file completion
-        if candidates.is_empty() && !matches!(actual_value_type, Some(ArgumentType::Dynamic { .. }))
-        {
+        if candidates.is_empty() && actual_value_type.is_none() {
             candidates.extend(
                 FileSystemGenerator::generate_file_candidates(&parsed.current_token)
                     .map_err(GeneratorError::Other)?,
@@ -286,5 +284,95 @@ impl<'a> ArgumentGenerator<'a> {
         subcommands.iter().find(|subcommand| {
             subcommand.name == name || subcommand.aliases.iter().any(|alias| alias == name)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::completion::command::{Argument, CommandCompletion, CompletionType};
+    use tempfile::tempdir;
+
+    fn parsed_argument(command: &str, current_token: String) -> ParsedCommandLine {
+        ParsedCommandLine {
+            command: command.to_string(),
+            subcommand_path: vec![],
+            raw_args: vec![current_token.clone()],
+            args: vec![current_token.clone()],
+            options: vec![],
+            current_token: current_token.clone(),
+            current_arg: Some(current_token),
+            completion_context: CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: None,
+            },
+            specified_options: vec![],
+            specified_arguments: vec![],
+            cursor_index: 0,
+        }
+    }
+
+    fn db_with_argument_type(arg_type: Option<ArgumentType>) -> CommandCompletionDatabase {
+        let mut db = CommandCompletionDatabase::new();
+        db.add_command(CommandCompletion {
+            command: "cmd".to_string(),
+            description: None,
+            global_options: vec![],
+            subcommands: vec![],
+            arguments: vec![Argument {
+                name: "value".to_string(),
+                description: None,
+                multiple: false,
+                arg_type,
+            }],
+        });
+        db
+    }
+
+    #[test]
+    fn explicit_scalar_argument_types_do_not_fallback_to_files() {
+        let temp = tempdir().unwrap();
+        std::fs::write(temp.path().join("alpha.txt"), "").unwrap();
+        let token = temp.path().join("alp").to_string_lossy().to_string();
+
+        for arg_type in [
+            ArgumentType::String,
+            ArgumentType::Number,
+            ArgumentType::Url,
+            ArgumentType::Regex,
+        ] {
+            let db = db_with_argument_type(Some(arg_type));
+            let parsed = parsed_argument("cmd", token.clone());
+            let candidates = ArgumentGenerator::new(&db)
+                .generate_argument_candidates(&parsed, None, |_| Ok(Vec::new()))
+                .unwrap();
+
+            assert!(
+                candidates.is_empty(),
+                "explicit scalar type should not fallback to file candidates: {candidates:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn untyped_argument_still_fallbacks_to_files() {
+        let temp = tempdir().unwrap();
+        let file = temp.path().join("alpha.txt");
+        std::fs::write(&file, "").unwrap();
+        let token = temp.path().join("alp").to_string_lossy().to_string();
+
+        let db = db_with_argument_type(None);
+        let parsed = parsed_argument("cmd", token);
+        let candidates = ArgumentGenerator::new(&db)
+            .generate_argument_candidates(&parsed, None, |_| Ok(Vec::new()))
+            .unwrap();
+
+        assert!(
+            candidates.iter().any(|candidate| {
+                candidate.completion_type == CompletionType::File
+                    && candidate.text == file.to_string_lossy()
+            }),
+            "untyped argument should keep file fallback: {candidates:?}"
+        );
     }
 }

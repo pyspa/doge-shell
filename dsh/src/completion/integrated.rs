@@ -2341,6 +2341,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pytest_string_option_value_does_not_fallback_to_files_but_next_arg_does() {
+        let dir = tempdir().unwrap();
+        let test_file = dir.path().join("tests_alpha.py");
+        fs::write(&test_file, "").unwrap();
+        let file_prefix = dir.path().join("tests_").to_string_lossy().to_string();
+
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let option_value_input = format!("pytest -k {file_prefix}");
+        let option_value_result = engine
+            .complete(
+                &option_value_input,
+                option_value_input.len(),
+                dir.path(),
+                50,
+                None,
+            )
+            .await;
+        assert!(
+            !option_value_result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == test_file.to_string_lossy()),
+            "String option values must not fallback to file candidates: {:?}",
+            option_value_result.candidates
+        );
+
+        let positional_input = format!("pytest -k expr {file_prefix}");
+        let positional_result = engine
+            .complete(
+                &positional_input,
+                positional_input.len(),
+                dir.path(),
+                50,
+                None,
+            )
+            .await;
+        assert!(
+            positional_result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == test_file.to_string_lossy()),
+            "positional pytest arguments should still complete files: {:?}",
+            positional_result.candidates
+        );
+    }
+
+    #[tokio::test]
+    async fn double_dash_allows_following_file_argument_completion() {
+        let dir = tempdir().unwrap();
+        let test_file = dir.path().join("alpha.py");
+        fs::write(&test_file, "").unwrap();
+        let file_prefix = dir.path().join("alp").to_string_lossy().to_string();
+
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = format!("pytest -- {file_prefix}");
+        let result = engine
+            .complete(&input, input.len(), dir.path(), 50, None)
+            .await;
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == test_file.to_string_lossy()),
+            "expected file after -- to complete as positional argument: {:?}",
+            result.candidates
+        );
+    }
+
+    #[tokio::test]
     async fn json_completion_filters_by_current_token() {
         let environment = Environment::new();
         let mut engine = IntegratedCompletionEngine::new(environment);

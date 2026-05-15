@@ -45,6 +45,12 @@ fn split_attached_short_option_value<'a>(
     })
 }
 
+fn is_separate_value_option(raw_token: &str, options: &[&CommandOption]) -> bool {
+    options
+        .iter()
+        .any(|option| option.matches_name(raw_token) && option.expects_value())
+}
+
 /// Responsible for correcting parsed command line based on completion database
 pub struct ContextCorrector<'a> {
     database: &'a CommandCompletionDatabase,
@@ -152,8 +158,11 @@ impl<'a> ContextCorrector<'a> {
                     arg_type: None,
                 };
             }
+            self.remove_known_option_values_from_arguments(&mut new_parsed, command_completion);
             return new_parsed;
         }
+
+        self.remove_known_option_values_from_arguments(&mut new_parsed, command_completion);
 
         if let Some(corrected) = self.correct_option_value_context(&new_parsed, command_completion)
         {
@@ -326,6 +335,8 @@ impl<'a> ContextCorrector<'a> {
             }
         }
 
+        self.remove_known_option_values_from_arguments(&mut new_parsed, command_completion);
+
         if let Some(corrected) = self.correct_option_value_context(&new_parsed, command_completion)
         {
             return corrected;
@@ -408,6 +419,138 @@ impl<'a> ContextCorrector<'a> {
         Some(corrected)
     }
 
+    fn remove_known_option_values_from_arguments(
+        &self,
+        parsed: &mut ParsedCommandLine,
+        command_completion: &CommandCompletion,
+    ) {
+        let options = self.collect_available_options(command_completion, &parsed.subcommand_path);
+        let arguments = Self::specified_arguments_without_known_option_values(parsed, &options);
+
+        if arguments == parsed.specified_arguments {
+            return;
+        }
+
+        parsed.specified_arguments = arguments;
+        parsed.args = parsed.specified_arguments.clone();
+        Self::recalculate_argument_context(parsed);
+    }
+
+    fn specified_arguments_without_known_option_values(
+        parsed: &ParsedCommandLine,
+        options: &[&CommandOption],
+    ) -> Vec<String> {
+        let mut rebuilt = Vec::with_capacity(parsed.specified_arguments.len());
+        let mut specified_index = 0;
+        let mut raw_index = 0;
+        let mut skip_next_redirect_target = false;
+        let mut end_of_options = false;
+
+        while raw_index < parsed.raw_args.len() {
+            let token = parsed.raw_args[raw_index].as_str();
+
+            if skip_next_redirect_target {
+                skip_next_redirect_target = false;
+                raw_index += 1;
+                continue;
+            }
+
+            if !end_of_options && Self::is_redirect_operator(token) {
+                skip_next_redirect_target = true;
+                raw_index += 1;
+                continue;
+            }
+
+            if !end_of_options && token == "--" {
+                end_of_options = true;
+                raw_index += 1;
+                continue;
+            }
+
+            if !end_of_options && Self::is_inline_long_option_value(token, options) {
+                raw_index += 1;
+                continue;
+            }
+
+            if !end_of_options && split_attached_short_option_value(token, options).is_some() {
+                raw_index += 1;
+                continue;
+            }
+
+            if !end_of_options
+                && is_separate_value_option(token, options)
+                && let Some(value) = parsed.raw_args.get(raw_index + 1)
+                && !Self::looks_like_known_option(value, options)
+            {
+                if parsed
+                    .specified_arguments
+                    .get(specified_index)
+                    .is_some_and(|argument| argument == value)
+                {
+                    specified_index += 1;
+                }
+                raw_index += 2;
+                continue;
+            }
+
+            if parsed
+                .specified_arguments
+                .get(specified_index)
+                .is_some_and(|argument| argument == token)
+            {
+                rebuilt.push(token.to_string());
+                specified_index += 1;
+            }
+
+            raw_index += 1;
+        }
+
+        rebuilt.extend(
+            parsed
+                .specified_arguments
+                .iter()
+                .skip(specified_index)
+                .cloned(),
+        );
+        rebuilt
+    }
+
+    fn is_inline_long_option_value(token: &str, options: &[&CommandOption]) -> bool {
+        if let Some((option_name, _)) = split_inline_long_option(token) {
+            return options
+                .iter()
+                .any(|option| option.matches_name(option_name) && option.expects_value());
+        }
+        false
+    }
+
+    fn looks_like_known_option(token: &str, options: &[&CommandOption]) -> bool {
+        if let Some((option_name, _)) = split_inline_long_option(token) {
+            return options
+                .iter()
+                .any(|option| option.matches_name(option_name));
+        }
+
+        options.iter().any(|option| option.matches_name(token))
+            || split_attached_short_option_value(token, options).is_some()
+    }
+
+    fn is_redirect_operator(token: &str) -> bool {
+        if matches!(token, ">" | ">>" | "<" | "&>" | "&>>") {
+            return true;
+        }
+
+        if let Some(prefix) = token.strip_suffix(">>") {
+            return prefix.is_empty() || prefix.chars().all(|c| c.is_ascii_digit());
+        }
+
+        if let Some(prefix) = token.strip_suffix('>') {
+            return prefix.is_empty() || prefix.chars().all(|c| c.is_ascii_digit());
+        }
+
+        false
+    }
+
     fn remove_current_value_from_arguments(parsed: &mut ParsedCommandLine) {
         if parsed.current_token.is_empty() {
             return;
@@ -421,6 +564,25 @@ impl<'a> ContextCorrector<'a> {
             parsed.specified_arguments.remove(pos);
             parsed.args = parsed.specified_arguments.clone();
         }
+    }
+
+    fn recalculate_argument_context(parsed: &mut ParsedCommandLine) {
+        let CompletionContext::Argument { arg_type, .. } = &parsed.completion_context else {
+            return;
+        };
+
+        let current_is_counted = parsed
+            .specified_arguments
+            .iter()
+            .any(|argument| argument == &parsed.current_token);
+        let arg_index = parsed
+            .specified_arguments
+            .len()
+            .saturating_sub(usize::from(current_is_counted));
+        parsed.completion_context = CompletionContext::Argument {
+            arg_index,
+            arg_type: arg_type.clone(),
+        };
     }
 
     fn current_raw_token(parsed: &ParsedCommandLine) -> Option<&str> {
@@ -739,6 +901,111 @@ mod tests {
         ));
         assert!(corrected.specified_arguments.is_empty());
         assert!(corrected.args.is_empty());
+    }
+
+    #[test]
+    fn known_option_value_is_removed_before_positional_argument_index() {
+        let mut db = CommandCompletionDatabase::new();
+        db.add_command(CommandCompletion {
+            command: "pytest".to_string(),
+            description: None,
+            global_options: vec![CommandOption {
+                short: Some("-k".to_string()),
+                long: None,
+                description: None,
+                takes_value: true,
+                value_type: Some(ArgumentType::String),
+                argument: None,
+            }],
+            subcommands: vec![],
+            arguments: vec![crate::completion::command::Argument {
+                name: "path".to_string(),
+                description: None,
+                multiple: true,
+                arg_type: None,
+            }],
+        });
+
+        let parsed =
+            CommandLineParser::new().parse("pytest -k expr tests", "pytest -k expr tests".len());
+        let corrected = ContextCorrector::new(&db).correct_parsed_command_line(&parsed);
+
+        assert_eq!(corrected.specified_arguments, vec!["tests".to_string()]);
+        assert_eq!(corrected.args, vec!["tests".to_string()]);
+        assert!(matches!(
+            corrected.completion_context,
+            CompletionContext::Argument { arg_index: 0, .. }
+        ));
+    }
+
+    #[test]
+    fn known_option_value_removal_preserves_same_text_positional_argument() {
+        let mut db = CommandCompletionDatabase::new();
+        db.add_command(CommandCompletion {
+            command: "cmd".to_string(),
+            description: None,
+            global_options: vec![CommandOption {
+                short: Some("-k".to_string()),
+                long: None,
+                description: None,
+                takes_value: true,
+                value_type: Some(ArgumentType::String),
+                argument: None,
+            }],
+            subcommands: vec![],
+            arguments: vec![crate::completion::command::Argument {
+                name: "path".to_string(),
+                description: None,
+                multiple: true,
+                arg_type: None,
+            }],
+        });
+
+        let parsed =
+            CommandLineParser::new().parse("cmd foo -k foo bar", "cmd foo -k foo bar".len());
+        let corrected = ContextCorrector::new(&db).correct_parsed_command_line(&parsed);
+
+        assert_eq!(
+            corrected.specified_arguments,
+            vec!["foo".to_string(), "bar".to_string()]
+        );
+        assert!(matches!(
+            corrected.completion_context,
+            CompletionContext::Argument { arg_index: 1, .. }
+        ));
+    }
+
+    #[test]
+    fn known_option_value_is_removed_before_empty_positional_argument() {
+        let mut db = CommandCompletionDatabase::new();
+        db.add_command(CommandCompletion {
+            command: "pytest".to_string(),
+            description: None,
+            global_options: vec![CommandOption {
+                short: Some("-k".to_string()),
+                long: None,
+                description: None,
+                takes_value: true,
+                value_type: Some(ArgumentType::String),
+                argument: None,
+            }],
+            subcommands: vec![],
+            arguments: vec![crate::completion::command::Argument {
+                name: "path".to_string(),
+                description: None,
+                multiple: true,
+                arg_type: None,
+            }],
+        });
+
+        let parsed = CommandLineParser::new().parse("pytest -k expr ", "pytest -k expr ".len());
+        let corrected = ContextCorrector::new(&db).correct_parsed_command_line(&parsed);
+
+        assert_eq!(corrected.specified_arguments, vec!["".to_string()]);
+        assert!(matches!(
+            corrected.completion_context,
+            CompletionContext::Argument { arg_index: 0, .. }
+        ));
     }
 
     #[test]

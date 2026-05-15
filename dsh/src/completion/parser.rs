@@ -61,6 +61,7 @@ struct CompletionContextParams<'a> {
     specified_arguments: &'a [String],
     all_tokens: &'a [String],
     has_space_after_command: bool,
+    after_end_of_options: bool,
 }
 
 /// Completion context (which part is currently being completed)
@@ -243,6 +244,7 @@ impl CommandLineParser {
         // Parse options and arguments
         let mut skip_next_option_value = false;
         let mut skip_next_redirect_target = false;
+        let mut end_of_options = false;
         for (i, token) in tokens_queue.iter().enumerate() {
             if skip_next_option_value {
                 skip_next_option_value = false;
@@ -251,6 +253,16 @@ impl CommandLineParser {
 
             if skip_next_redirect_target {
                 skip_next_redirect_target = false;
+                continue;
+            }
+
+            if end_of_options {
+                specified_arguments.push(token.clone());
+                continue;
+            }
+
+            if token == "--" {
+                end_of_options = true;
                 continue;
             }
 
@@ -294,6 +306,10 @@ impl CommandLineParser {
             } else {
                 String::new()
             };
+            let after_end_of_options = all_tokens
+                .iter()
+                .take(cursor_token_index)
+                .any(|token| token == "--");
 
             let context = self.determine_completion_context(CompletionContextParams {
                 cursor_token_index,
@@ -303,6 +319,7 @@ impl CommandLineParser {
                 specified_arguments: &specified_arguments,
                 all_tokens: &all_tokens,
                 has_space_after_command,
+                after_end_of_options,
             });
 
             let current_token = if matches!(context, CompletionContext::OptionValue { .. })
@@ -430,6 +447,13 @@ impl CommandLineParser {
     fn determine_completion_context(&self, params: CompletionContextParams) -> CompletionContext {
         if params.cursor_token_index == 0 {
             return CompletionContext::Command;
+        }
+
+        if params.after_end_of_options {
+            return CompletionContext::Argument {
+                arg_index: Self::argument_index(&params),
+                arg_type: None,
+            };
         }
 
         if let Some((option_name, _)) = split_inline_long_option(params.current_token) {
@@ -838,6 +862,41 @@ mod tests {
         assert_eq!(result.subcommand_path, vec!["add"]);
         assert_eq!(result.current_token, "--");
         assert_eq!(result.completion_context, CompletionContext::LongOption);
+    }
+
+    #[test]
+    fn test_parse_after_double_dash_as_argument() {
+        let parser = CommandLineParser::new();
+        let result = parser.parse("git add -- -file", "git add -- -file".len());
+
+        assert_eq!(result.command, "git");
+        assert_eq!(result.subcommand_path, vec!["add"]);
+        assert!(result.specified_options.is_empty());
+        assert_eq!(result.specified_arguments, vec!["-file".to_string()]);
+        assert_eq!(result.current_token, "-file");
+        assert_eq!(
+            result.completion_context,
+            CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: None
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_trailing_gap_after_double_dash_as_argument() {
+        let parser = CommandLineParser::new();
+        let result = parser.parse("git add -- ", "git add -- ".len());
+
+        assert_eq!(result.raw_args, vec!["--".to_string(), "".to_string()]);
+        assert_eq!(result.specified_arguments, vec!["".to_string()]);
+        assert_eq!(
+            result.completion_context,
+            CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: None
+            }
+        );
     }
 
     #[test]

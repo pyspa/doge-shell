@@ -1,0 +1,20 @@
+{
+  "command": "git-lfs",
+  "description": "Git Large File Storage",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "short": "-v", "long": "--version", "description": "Show version" }
+  ],
+  "subcommands": [
+    { "name": "install", "description": "Install Git LFS hooks" },
+    { "name": "uninstall", "description": "Remove Git LFS hooks" },
+    { "name": "track", "description": "Track file patterns", "arguments": [{ "name": "pattern", "description": "Path pattern", "type": { "type": "String" } }] },
+    { "name": "untrack", "description": "Stop tracking file patterns", "arguments": [{ "name": "pattern", "description": "Path pattern", "type": { "type": "String" } }] },
+    { "name": "ls-files", "description": "Show LFS tracked files" },
+    { "name": "status", "description": "Show LFS status" },
+    { "name": "fetch", "description": "Fetch LFS objects", "arguments": [{ "name": "remote", "description": "Git remote", "type": { "type": "Dynamic", "data": { "provider": "git.remote" } } }] },
+    { "name": "pull", "description": "Fetch and checkout LFS objects" },
+    { "name": "push", "description": "Push LFS objects", "arguments": [{ "name": "remote", "description": "Git remote", "type": { "type": "Dynamic", "data": { "provider": "git.remote" } } }] },
+    { "name": "migrate", "description": "Import or export Git history with LFS" }
+  ]
+}

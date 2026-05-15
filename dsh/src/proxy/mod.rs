@@ -791,6 +791,11 @@ impl ShellProxy for Shell {
     }
 }
 
+// Re-export for backward compatibility
+pub use builtin::jobs::parse_job_spec;
+pub use builtin::reload::format_reload_error;
+pub use builtin::z::parse_z_args;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -810,8 +815,3 @@ mod tests {
         );
     }
 }
-
-// Re-export for backward compatibility
-pub use builtin::jobs::parse_job_spec;
-pub use builtin::reload::format_reload_error;
-pub use builtin::z::parse_z_args;

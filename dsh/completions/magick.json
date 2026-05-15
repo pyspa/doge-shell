@@ -1,0 +1,23 @@
+{
+  "command": "magick",
+  "description": "ImageMagick image conversion and editing",
+  "global_options": [
+    { "short": "-help", "description": "Show help" },
+    { "short": "-version", "description": "Show version" },
+    { "short": "-verbose", "description": "Print detailed information" },
+    { "short": "-resize", "description": "Resize geometry", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-crop", "description": "Crop geometry", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-quality", "description": "Compression quality", "takes_value": true, "value_type": { "type": "Number" } },
+    { "short": "-format", "description": "Output format string", "takes_value": true, "value_type": { "type": "String" } }
+  ],
+  "subcommands": [
+    { "name": "convert", "description": "Convert between image formats" },
+    { "name": "identify", "description": "Describe image format and attributes", "arguments": [{ "name": "image", "description": "Image file", "type": { "type": "File", "data": {} } }] },
+    { "name": "mogrify", "description": "Transform images in place", "arguments": [{ "name": "image", "description": "Image file", "type": { "type": "File", "data": {} } }] },
+    { "name": "montage", "description": "Create composite image thumbnails" },
+    { "name": "composite", "description": "Composite images together" }
+  ],
+  "arguments": [
+    { "name": "image", "description": "Input or output image", "type": { "type": "File", "data": {} } }
+  ]
+}

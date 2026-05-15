@@ -1,4 +1,5 @@
 use super::job::Job;
+use super::job_process::JobProcess;
 use super::state::ProcessState;
 use crate::process::wait::{is_job_completed, is_job_stopped};
 use crate::shell::SHELL_TERMINAL;
@@ -6,11 +7,18 @@ use anyhow::{Context, Result};
 use nix::sys::signal::Signal;
 use nix::sys::signal::killpg;
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
-use nix::unistd::{isatty, tcsetpgrp};
+use nix::unistd::{Pid, getpid, isatty, tcsetpgrp};
 use std::os::fd::BorrowedFd;
 use std::time::Duration;
 use tokio::time;
 use tracing::{debug, error};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KnownWaitResult {
+    State(Pid, ProcessState),
+    StillAlive,
+    NoChildren,
+}
 
 pub async fn put_in_foreground(job: &mut Job, no_hang: bool, cont: bool) -> Result<()> {
     debug!(
@@ -174,16 +182,18 @@ pub fn wait_job_sync(job: &mut Job, no_hang: bool) -> Result<()> {
 pub fn wait_process_sync(job: &mut Job) -> Result<()> {
     let mut send_killpg = false;
     loop {
-        let (pid, state) = match waitpid(None, Some(WaitPidFlag::WUNTRACED)) {
-            Ok(WaitStatus::Exited(pid, status)) => {
-                (pid, ProcessState::Completed(status as u8, None))
+        let (pid, state) = match wait_known_processes(job, WaitPidFlag::WUNTRACED) {
+            Ok(KnownWaitResult::State(pid, state)) => (pid, state),
+            Ok(KnownWaitResult::StillAlive) => {
+                std::thread::sleep(Duration::from_millis(50));
+                continue;
             }
-            Ok(WaitStatus::Signaled(pid, signal, _)) => {
-                (pid, ProcessState::Completed(1, Some(signal)))
-            }
-            Ok(WaitStatus::Stopped(pid, signal)) => (pid, ProcessState::Stopped(pid, signal)),
-            Err(nix::errno::Errno::ECHILD) | Ok(WaitStatus::StillAlive) => {
+            Ok(KnownWaitResult::NoChildren) | Err(nix::errno::Errno::ECHILD) => {
                 break;
+            }
+            Err(nix::errno::Errno::EINTR) => {
+                debug!("⏳ WAIT: waitpid interrupted by signal (EINTR), continuing");
+                continue;
             }
             status => {
                 error!("unexpected waitpid event: {:?}", status);
@@ -282,28 +292,18 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
 
         check_background_all_output(job).await?;
 
-        let (pid, state) = match tokio::task::spawn_blocking(|| {
-            waitpid(None, Some(WaitPidFlag::WUNTRACED | WaitPidFlag::WNOHANG))
+        let wait_pids = job_wait_pids(job);
+        let (pid, state) = match tokio::task::spawn_blocking(move || {
+            wait_known_pids(&wait_pids, WaitPidFlag::WUNTRACED | WaitPidFlag::WNOHANG)
         })
         .await
         {
-            Ok(Ok(WaitStatus::Exited(pid, status))) => {
-                debug!("wait_job exited {:?} {:?}", pid, status);
-                (pid, ProcessState::Completed(status as u8, None))
-            }
-            Ok(Ok(WaitStatus::Signaled(pid, signal, _))) => {
-                debug!("wait_job signaled {:?} {:?}", pid, signal);
-                (pid, ProcessState::Completed(1, Some(signal)))
-            }
-            Ok(Ok(WaitStatus::Stopped(pid, signal))) => {
-                debug!("wait_job stopped {:?} {:?}", pid, signal);
-                (pid, ProcessState::Stopped(pid, signal))
-            }
-            Ok(Ok(WaitStatus::StillAlive)) => {
+            Ok(Ok(KnownWaitResult::State(pid, state))) => (pid, state),
+            Ok(Ok(KnownWaitResult::StillAlive)) => {
                 time::sleep(Duration::from_millis(100)).await;
                 continue;
             }
-            Ok(Err(nix::errno::Errno::ECHILD)) => {
+            Ok(Ok(KnownWaitResult::NoChildren)) | Ok(Err(nix::errno::Errno::ECHILD)) => {
                 check_background_all_output(job).await?;
                 break;
             }
@@ -386,36 +386,25 @@ pub fn wait_process_no_hang_sync(job: &mut Job) -> Result<()> {
 
         debug!("waitpid loop iteration...");
 
-        let (pid, state) = match waitpid(None, Some(WaitPidFlag::WUNTRACED | WaitPidFlag::WNOHANG))
-        {
-            Ok(WaitStatus::Exited(pid, status)) => {
-                debug!("wait_job exited {:?} {:?}", pid, status);
-                (pid, ProcessState::Completed(status as u8, None))
-            }
-            Ok(WaitStatus::Signaled(pid, signal, _)) => {
-                debug!("wait_job signaled {:?} {:?}", pid, signal);
-                (pid, ProcessState::Completed(1, Some(signal)))
-            }
-            Ok(WaitStatus::Stopped(pid, signal)) => {
-                debug!("wait_job stopped {:?} {:?}", pid, signal);
-                (pid, ProcessState::Stopped(pid, signal))
-            }
-            Ok(WaitStatus::StillAlive) => {
-                std::thread::sleep(Duration::from_millis(100));
-                continue;
-            }
-            Err(nix::errno::Errno::ECHILD) => {
-                break;
-            }
-            Err(nix::errno::Errno::EINTR) => {
-                debug!("⏳ WAIT: waitpid interrupted by signal (EINTR), continuing");
-                continue;
-            }
-            status => {
-                error!("unexpected waitpid event: {:?}", status);
-                break;
-            }
-        };
+        let (pid, state) =
+            match wait_known_processes(job, WaitPidFlag::WUNTRACED | WaitPidFlag::WNOHANG) {
+                Ok(KnownWaitResult::State(pid, state)) => (pid, state),
+                Ok(KnownWaitResult::StillAlive) => {
+                    std::thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+                Ok(KnownWaitResult::NoChildren) | Err(nix::errno::Errno::ECHILD) => {
+                    break;
+                }
+                Err(nix::errno::Errno::EINTR) => {
+                    debug!("⏳ WAIT: waitpid interrupted by signal (EINTR), continuing");
+                    continue;
+                }
+                status => {
+                    error!("unexpected waitpid event: {:?}", status);
+                    break;
+                }
+            };
 
         job.set_process_state(pid, state);
 
@@ -468,6 +457,103 @@ pub fn wait_process_no_hang_sync(job: &mut Job) -> Result<()> {
     Ok(())
 }
 
+fn wait_known_processes(job: &Job, flags: WaitPidFlag) -> nix::Result<KnownWaitResult> {
+    let wait_pids = job_wait_pids(job);
+    wait_known_pids(&wait_pids, flags)
+}
+
+fn wait_known_pids(pids: &[Pid], flags: WaitPidFlag) -> nix::Result<KnownWaitResult> {
+    if pids.is_empty() {
+        return Ok(KnownWaitResult::NoChildren);
+    }
+
+    let mut saw_alive = false;
+    let mut saw_child = false;
+    for pid in pids {
+        match waitpid(*pid, Some(flags | WaitPidFlag::WNOHANG)) {
+            Ok(WaitStatus::Exited(pid, status)) => {
+                debug!("wait_job exited {:?} {:?}", pid, status);
+                return Ok(KnownWaitResult::State(
+                    pid,
+                    ProcessState::Completed(status as u8, None),
+                ));
+            }
+            Ok(WaitStatus::Signaled(pid, signal, _)) => {
+                debug!("wait_job signaled {:?} {:?}", pid, signal);
+                return Ok(KnownWaitResult::State(
+                    pid,
+                    ProcessState::Completed(1, Some(signal)),
+                ));
+            }
+            Ok(WaitStatus::Stopped(pid, signal)) => {
+                debug!("wait_job stopped {:?} {:?}", pid, signal);
+                return Ok(KnownWaitResult::State(
+                    pid,
+                    ProcessState::Stopped(pid, signal),
+                ));
+            }
+            Ok(WaitStatus::StillAlive) => {
+                saw_child = true;
+                saw_alive = true;
+            }
+            Err(nix::errno::Errno::ECHILD) => {}
+            Err(nix::errno::Errno::EINTR) => return Err(nix::errno::Errno::EINTR),
+            status => {
+                error!(
+                    "unexpected waitpid event for known pid {}: {:?}",
+                    pid, status
+                );
+            }
+        }
+    }
+
+    if saw_alive || saw_child {
+        Ok(KnownWaitResult::StillAlive)
+    } else {
+        Ok(KnownWaitResult::NoChildren)
+    }
+}
+
+fn job_wait_pids(job: &Job) -> Vec<Pid> {
+    let current_pid = getpid();
+    let mut pids = Vec::new();
+    if let Some(process) = &job.process {
+        collect_process_wait_pids(process, current_pid, &mut pids);
+    }
+    if pids.is_empty()
+        && let Some(pid) = job.pid
+        && pid != current_pid
+    {
+        pids.push(pid);
+    }
+    pids.sort_unstable_by_key(|pid| pid.as_raw());
+    pids.dedup();
+    pids
+}
+
+fn collect_process_wait_pids(process: &JobProcess, current_pid: Pid, pids: &mut Vec<Pid>) {
+    match process {
+        JobProcess::Builtin(process) => {
+            if let Some(pid) = process.pid
+                && pid != current_pid
+            {
+                pids.push(pid);
+            }
+            if let Some(next) = &process.next {
+                collect_process_wait_pids(next, current_pid, pids);
+            }
+        }
+        JobProcess::Command(process) => {
+            if let Some(pid) = process.pid {
+                pids.push(pid);
+            }
+            if let Some(next) = &process.next {
+                collect_process_wait_pids(next, current_pid, pids);
+            }
+        }
+    }
+}
+
 pub async fn check_background_output(job: &mut Job) -> Result<()> {
     let mut i = 0;
     while i < job.monitors.len() {
@@ -490,4 +576,41 @@ pub async fn check_background_all_output(job: &mut Job) -> Result<()> {
     }
     debug!("check_background_all_output completed");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::process::process::Process;
+    use nix::unistd::getpgrp;
+    use std::process::{Command as StdCommand, Stdio};
+
+    #[test]
+    fn job_wait_does_not_reap_unrelated_completion_child() {
+        let unrelated = StdCommand::new("sh")
+            .arg("-c")
+            .arg("printf unrelated")
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn unrelated child");
+        let mut job_child = StdCommand::new("sh")
+            .arg("-c")
+            .arg("sleep 0.05")
+            .spawn()
+            .expect("spawn job child");
+
+        let mut job = Job::new("test".to_string(), getpgrp());
+        let job_pid = Pid::from_raw(job_child.id() as i32);
+        let mut process = Process::new("sh".to_string(), vec![]);
+        process.pid = Some(job_pid);
+        job.pid = Some(job_pid);
+        job.set_process(JobProcess::Command(process));
+
+        wait_process_no_hang_sync(&mut job).expect("wait job");
+
+        let output = unrelated.wait_with_output().expect("wait unrelated child");
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "unrelated");
+        let _ = job_child.wait();
+    }
 }

@@ -1,0 +1,39 @@
+{
+  "command": "ffmpeg",
+  "description": "Convert, record, and stream audio/video",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "long": "-version", "description": "Show version" },
+    { "short": "-y", "description": "Overwrite output files" },
+    { "short": "-n", "description": "Do not overwrite output files" },
+    {
+      "short": "-v",
+      "long": "-loglevel",
+      "description": "Set logging level",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": ["quiet", "panic", "fatal", "error", "warning", "info", "verbose", "debug", "trace"]
+      }
+    },
+    {
+      "short": "-i",
+      "description": "Input file or stream",
+      "takes_value": true,
+      "value_type": { "type": "File", "data": {} }
+    },
+    { "short": "-f", "description": "Force input or output format", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-ss", "description": "Seek to timestamp", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-t", "description": "Limit duration", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-codec", "description": "Set codec", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-c", "description": "Set codec", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-filter_complex", "description": "Complex filter graph", "takes_value": true, "value_type": { "type": "String" } }
+  ],
+  "arguments": [
+    {
+      "name": "output",
+      "description": "Output file",
+      "type": { "type": "File", "data": {} }
+    }
+  ]
+}

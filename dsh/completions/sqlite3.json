@@ -1,0 +1,26 @@
+{
+  "command": "sqlite3",
+  "description": "SQLite command line client",
+  "global_options": [
+    { "short": "-help", "description": "Show help" },
+    { "short": "-version", "description": "Show version" },
+    { "short": "-readonly", "description": "Open database read-only" },
+    { "short": "-csv", "description": "Set output mode to CSV" },
+    { "short": "-json", "description": "Set output mode to JSON" },
+    { "short": "-header", "description": "Turn headers on" },
+    { "short": "-init", "description": "Read commands from file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+    { "short": "-cmd", "description": "Run command before input", "takes_value": true, "value_type": { "type": "String" } }
+  ],
+  "arguments": [
+    {
+      "name": "database",
+      "description": "SQLite database file",
+      "type": { "type": "File", "data": { "extensions": ["db", "sqlite", "sqlite3"] } }
+    },
+    {
+      "name": "sql",
+      "description": "SQL statement",
+      "type": { "type": "String" }
+    }
+  ]
+}

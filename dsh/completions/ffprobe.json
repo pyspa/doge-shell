@@ -1,0 +1,22 @@
+{
+  "command": "ffprobe",
+  "description": "Inspect multimedia streams",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "long": "-version", "description": "Show version" },
+    { "short": "-v", "long": "-loglevel", "description": "Set logging level", "takes_value": true, "value_type": { "type": "Choice", "data": ["quiet", "error", "warning", "info", "verbose", "debug"] } },
+    { "long": "-show_format", "description": "Show container format information" },
+    { "long": "-show_streams", "description": "Show stream information" },
+    { "long": "-show_packets", "description": "Show packet information" },
+    { "long": "-show_frames", "description": "Show frame information" },
+    { "long": "-of", "description": "Set output format", "takes_value": true, "value_type": { "type": "Choice", "data": ["default", "compact", "csv", "flat", "ini", "json", "xml"] } },
+    { "long": "-select_streams", "description": "Select streams", "takes_value": true, "value_type": { "type": "String" } }
+  ],
+  "arguments": [
+    {
+      "name": "input",
+      "description": "Input media file",
+      "type": { "type": "File", "data": {} }
+    }
+  ]
+}

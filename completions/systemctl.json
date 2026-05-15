@@ -96,7 +96,7 @@
           "description": "Unit name to start",
           "required": true,
           "multiple": true,
-          "type": { "type": "String" }
+          "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit" } }
         }
       ],
       "subcommands": []
@@ -120,7 +120,7 @@
           "description": "Unit name to stop",
           "required": true,
           "multiple": true,
-          "type": { "type": "String" }
+          "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit" } }
         }
       ],
       "subcommands": []
@@ -144,7 +144,7 @@
           "description": "Unit name to restart",
           "required": true,
           "multiple": true,
-          "type": { "type": "String" }
+          "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit" } }
         }
       ],
       "subcommands": []
@@ -168,7 +168,7 @@
           "description": "Unit name to reload",
           "required": true,
           "multiple": true,
-          "type": { "type": "String" }
+          "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit" } }
         }
       ],
       "subcommands": []
@@ -192,7 +192,7 @@
           "description": "Unit name to enable",
           "required": true,
           "multiple": true,
-          "type": { "type": "String" }
+          "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit" } }
         }
       ],
       "subcommands": []
@@ -216,7 +216,7 @@
           "description": "Unit name to disable",
           "required": true,
           "multiple": true,
-          "type": { "type": "String" }
+          "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit" } }
         }
       ],
       "subcommands": []
@@ -263,7 +263,7 @@
           "description": "Unit name to show status for",
           "required": false,
           "multiple": true,
-          "type": { "type": "String" }
+          "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit" } }
         }
       ],
       "subcommands": []
@@ -280,7 +280,8 @@
           "required": true,
           "multiple": true,
           "type": {
-            "type": "String"
+            "type": "Dynamic",
+            "data": { "provider": "systemctl.unit" }
           }
         }
       ],
@@ -298,7 +299,8 @@
           "required": true,
           "multiple": true,
           "type": {
-            "type": "String"
+            "type": "Dynamic",
+            "data": { "provider": "systemctl.unit" }
           }
         }
       ],
@@ -426,7 +428,7 @@
           "description": "Unit name to mask",
           "required": true,
           "multiple": true,
-          "type": { "type": "String" }
+          "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit" } }
         }
       ],
       "subcommands": []
@@ -442,7 +444,7 @@
           "description": "Unit name to unmask",
           "required": true,
           "multiple": true,
-          "type": { "type": "String" }
+          "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit" } }
         }
       ],
       "subcommands": []

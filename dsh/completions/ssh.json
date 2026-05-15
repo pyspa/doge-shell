@@ -72,7 +72,7 @@
     {
       "name": "destination",
       "description": "Remote host to connect to",
-      "type": { "type": "String" }
+      "type": { "type": "Dynamic", "data": { "provider": "ssh.host" } }
     }
   ],
   "subcommands": []

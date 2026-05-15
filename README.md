@@ -230,7 +230,7 @@ The shell includes many built-in commands:
 | `pm`                | Project Manager (init, status, add, list, remove, work, jump, activate, activate --dry-run)                                |
 | `pj`                | Jump to a project (alias for `pm jump`)                                                                                    |
 | `help`              | Show command details and search built-in commands                                                                          |
-| `comp-gen`          | Generate command completion using AI (`--stdout`, `--check`)                                                               |
+| `comp-gen`          | Generate or audit command completion JSON (`--stdout`, `--check`, `--audit`, `--list-dynamic-providers`)                  |
 | `dashboard`         | Show integrated dashboard (System, Git, GitHub)                                                                            |
 | `doctor`            | Diagnose config, AI, MCP, project, runtime, skills, safety, setup, and dev validation state                                |
 | `ai-commit` / `aic` | Generate commit message using AI                                                                                           |

@@ -1,0 +1,23 @@
+{
+  "command": "redis-cli",
+  "description": "Redis command line client",
+  "global_options": [
+    { "short": "-h", "description": "Server hostname", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-p", "description": "Server port", "takes_value": true, "value_type": { "type": "Number" } },
+    { "short": "-n", "description": "Database number", "takes_value": true, "value_type": { "type": "Number" } },
+    { "short": "-a", "description": "Password", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--user", "description": "ACL username", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--tls", "description": "Establish a secure TLS connection" },
+    { "long": "--raw", "description": "Use raw formatting" },
+    { "long": "--scan", "description": "Scan keys" }
+  ],
+  "subcommands": [
+    { "name": "GET", "description": "Get key value", "arguments": [{ "name": "key", "description": "Key", "type": { "type": "String" } }] },
+    { "name": "SET", "description": "Set key value", "arguments": [{ "name": "key", "description": "Key", "type": { "type": "String" } }, { "name": "value", "description": "Value", "type": { "type": "String" } }] },
+    { "name": "DEL", "description": "Delete keys", "arguments": [{ "name": "key", "description": "Key", "multiple": true, "type": { "type": "String" } }] },
+    { "name": "HGET", "description": "Get hash field" },
+    { "name": "HSET", "description": "Set hash field" },
+    { "name": "PUBLISH", "description": "Publish message" },
+    { "name": "SUBSCRIBE", "description": "Subscribe to channels" }
+  ]
+}

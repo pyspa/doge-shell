@@ -49,7 +49,7 @@
         {
           "name": "script",
           "description": "Script to run",
-          "type": { "type": "String" }
+          "type": { "type": "Dynamic", "data": { "provider": "project.task" } }
         }
       ]
     },

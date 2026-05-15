@@ -52,7 +52,7 @@
           "short": "-t",
           "description": "Target session",
           "takes_value": true,
-          "value_type": { "type": "String" }
+          "value_type": { "type": "Dynamic", "data": { "provider": "tmux.session" } }
         },
         {
           "short": "-d",
@@ -63,7 +63,7 @@
         {
           "name": "session",
           "description": "Session name",
-          "type": { "type": "String" }
+          "type": { "type": "Dynamic", "data": { "provider": "tmux.session" } }
         }
       ]
     },
@@ -75,7 +75,7 @@
           "short": "-t",
           "description": "Target session",
           "takes_value": true,
-          "value_type": { "type": "String" }
+          "value_type": { "type": "Dynamic", "data": { "provider": "tmux.session" } }
         },
         {
           "short": "-d",
@@ -86,7 +86,7 @@
         {
           "name": "session",
           "description": "Session name",
-          "type": { "type": "String" }
+          "type": { "type": "Dynamic", "data": { "provider": "tmux.session" } }
         }
       ]
     },
@@ -97,7 +97,7 @@
         {
           "name": "session",
           "description": "Session name",
-          "type": { "type": "String" }
+          "type": { "type": "Dynamic", "data": { "provider": "tmux.session" } }
         }
       ]
     },
@@ -113,7 +113,7 @@
           "short": "-t",
           "description": "Target session",
           "takes_value": true,
-          "value_type": { "type": "String" }
+          "value_type": { "type": "Dynamic", "data": { "provider": "tmux.session" } }
         }
       ]
     },
@@ -129,14 +129,14 @@
           "short": "-t",
           "description": "Target session",
           "takes_value": true,
-          "value_type": { "type": "String" }
+          "value_type": { "type": "Dynamic", "data": { "provider": "tmux.session" } }
         }
       ],
       "arguments": [
         {
           "name": "session",
           "description": "Session name",
-          "type": { "type": "String" }
+          "type": { "type": "Dynamic", "data": { "provider": "tmux.session" } }
         }
       ]
     },
@@ -204,7 +204,7 @@
           "short": "-t",
           "description": "Target session",
           "takes_value": true,
-          "value_type": { "type": "String" }
+          "value_type": { "type": "Dynamic", "data": { "provider": "tmux.session" } }
         }
       ],
       "arguments": [
@@ -222,7 +222,7 @@
           "short": "-t",
           "description": "Target session",
           "takes_value": true,
-          "value_type": { "type": "String" }
+          "value_type": { "type": "Dynamic", "data": { "provider": "tmux.session" } }
         }
       ]
     },

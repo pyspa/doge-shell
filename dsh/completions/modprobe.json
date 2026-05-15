@@ -62,7 +62,7 @@
     {
       "name": "module",
       "description": "Kernel module name",
-      "type": { "type": "String" }
+      "type": { "type": "Dynamic", "data": { "provider": "kernel.module" } }
     }
   ],
   "subcommands": []

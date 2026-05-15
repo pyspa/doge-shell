@@ -15,6 +15,7 @@ use tracing::warn;
 pub mod terminal;
 pub use terminal::{ShellMode, TerminalState};
 pub mod command_block;
+pub mod completion;
 pub mod mcp;
 pub mod notebook;
 pub mod observed_output;

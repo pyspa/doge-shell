@@ -3153,9 +3153,24 @@ mod tests {
         engine.initialize_command_completion().unwrap();
 
         let input = "git che";
-        let result = engine
-            .complete(input, input.len(), dir.path(), 200, None)
-            .await;
+        let started = std::time::Instant::now();
+        let result = loop {
+            let result = engine
+                .complete(input, input.len(), dir.path(), 200, None)
+                .await;
+            if result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "che-fish-only")
+            {
+                break result;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "expected unique fish fallback candidate to be merged"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
 
         let checkout = result
             .candidates
@@ -3166,14 +3181,12 @@ mod tests {
             checkout.description.as_deref(),
             Some("Switch branches or restore working tree files")
         );
-        assert!(
-            result
-                .candidates
-                .iter()
-                .any(|candidate| candidate.text == "che-fish-only"
-                    && candidate.description.as_deref() == Some("Fish only")),
-            "expected unique fish fallback candidate to be merged"
-        );
+        let fish_candidate = result
+            .candidates
+            .iter()
+            .find(|candidate| candidate.text == "che-fish-only")
+            .unwrap();
+        assert_eq!(fish_candidate.description.as_deref(), Some("Fish only"));
     }
 
     #[tokio::test]

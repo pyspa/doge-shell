@@ -65,72 +65,6 @@ impl std::fmt::Debug for Shell {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn request_eval_command_rejects_nested_drain() {
-        let environment = crate::environment::Environment::new();
-        let mut shell = Shell::new(environment);
-
-        shell
-            .request_eval_command("echo first".to_string())
-            .unwrap();
-        assert_eq!(
-            shell.pop_requested_eval_command().as_deref(),
-            Some("echo first")
-        );
-
-        let guard = shell.begin_pending_eval_drain().unwrap();
-        assert!(
-            shell
-                .request_eval_command("blocks rerun 1".to_string())
-                .is_err()
-        );
-        assert!(shell.pop_requested_eval_command().is_none());
-        drop(guard);
-
-        shell
-            .request_eval_command("echo after".to_string())
-            .unwrap();
-        assert_eq!(
-            shell.pop_requested_eval_command().as_deref(),
-            Some("echo after")
-        );
-    }
-
-    #[tokio::test]
-    async fn foreground_output_observer_captures_stdout_and_stderr() {
-        use dsh_types::observed_output::ObservedOutput;
-
-        async fn run_observed(command: &str) -> dsh_types::observed_output::ObservedOutputSnapshot {
-            let environment = crate::environment::Environment::new();
-            let mut shell = Shell::new(environment);
-            *shell.environment.read().safety_level.write() = crate::safety::SafetyLevel::Loose;
-            let observer = ObservedOutput::shared(1024);
-            let mut ctx = dsh_types::Context::new_safe(shell.pid, shell.pgid, true);
-            ctx.interactive = false;
-            ctx.output_observer = Some(observer.clone());
-
-            let exit_code = shell
-                .eval_str(&mut ctx, command.to_string(), false)
-                .await
-                .unwrap();
-            assert_eq!(exit_code, 0);
-            observer.lock().unwrap().snapshot()
-        }
-
-        let stdout = run_observed("printf hi").await;
-        assert_eq!(stdout.stdout, "hi");
-        assert_eq!(stdout.stderr, "");
-
-        let stderr = run_observed("sh -c 'printf err >&2'").await;
-        assert_eq!(stderr.stdout, "");
-        assert_eq!(stderr.stderr, "err");
-    }
-}
-
 impl Drop for Shell {
     fn drop(&mut self) {
         let _ = self.kill_wait_jobs();
@@ -405,5 +339,71 @@ impl Shell {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_eval_command_rejects_nested_drain() {
+        let environment = crate::environment::Environment::new();
+        let mut shell = Shell::new(environment);
+
+        shell
+            .request_eval_command("echo first".to_string())
+            .unwrap();
+        assert_eq!(
+            shell.pop_requested_eval_command().as_deref(),
+            Some("echo first")
+        );
+
+        let guard = shell.begin_pending_eval_drain().unwrap();
+        assert!(
+            shell
+                .request_eval_command("blocks rerun 1".to_string())
+                .is_err()
+        );
+        assert!(shell.pop_requested_eval_command().is_none());
+        drop(guard);
+
+        shell
+            .request_eval_command("echo after".to_string())
+            .unwrap();
+        assert_eq!(
+            shell.pop_requested_eval_command().as_deref(),
+            Some("echo after")
+        );
+    }
+
+    #[tokio::test]
+    async fn foreground_output_observer_captures_stdout_and_stderr() {
+        use dsh_types::observed_output::ObservedOutput;
+
+        async fn run_observed(command: &str) -> dsh_types::observed_output::ObservedOutputSnapshot {
+            let environment = crate::environment::Environment::new();
+            let mut shell = Shell::new(environment);
+            *shell.environment.read().safety_level.write() = crate::safety::SafetyLevel::Loose;
+            let observer = ObservedOutput::shared(1024);
+            let mut ctx = dsh_types::Context::new_safe(shell.pid, shell.pgid, true);
+            ctx.interactive = false;
+            ctx.output_observer = Some(observer.clone());
+
+            let exit_code = shell
+                .eval_str(&mut ctx, command.to_string(), false)
+                .await
+                .unwrap();
+            assert_eq!(exit_code, 0);
+            observer.lock().unwrap().snapshot()
+        }
+
+        let stdout = run_observed("printf hi").await;
+        assert_eq!(stdout.stdout, "hi");
+        assert_eq!(stdout.stderr, "");
+
+        let stderr = run_observed("sh -c 'printf err >&2'").await;
+        assert_eq!(stderr.stdout, "");
+        assert_eq!(stderr.stderr, "err");
     }
 }

@@ -5,6 +5,7 @@ use super::subprocess;
 use crate::environment::Environment;
 use anyhow::Result;
 use dsh_builtin::{project_context, task};
+use dsh_types::completion::is_known_dynamic_completion_provider;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -16,6 +17,7 @@ use tracing::warn;
 const DYNAMIC_COMMAND_CACHE_TTL_MS: u64 = 1000;
 const COMPLETION_COMMAND_TIMEOUT: Duration = Duration::from_millis(1500);
 const EXTERNAL_COMPLETION_CACHE_LIMIT: usize = 128;
+const JS_PROJECT_TASK_SOURCES: &[&str] = &["npm", "pnpm", "yarn", "bun"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FileMetadataSignature {
@@ -77,6 +79,14 @@ enum SystemdUnitListKind {
     Enabled,
     Disabled,
     UnitFiles,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NmcliCompletionSpec<'a> {
+    kind: &'a str,
+    args: &'a [&'a str],
+    description: &'a str,
+    parser: fn(&[String]) -> Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -155,12 +165,13 @@ pub(crate) fn diagnostics_lines() -> Vec<String> {
             diagnostics.command_entries, diagnostics.command_pending
         ),
         format!(
-            "completion-cache external entries={} pending={} fish={} limit={} pruned={} last={}",
+            "completion-cache external entries={} pending={} fish={} limit={} pruned={} timeout={}ms last={}",
             diagnostics.external_entries,
             diagnostics.external_pending,
             diagnostics.external_fish_entries,
             EXTERNAL_COMPLETION_CACHE_LIMIT,
             diagnostics.external_pruned_total,
+            COMPLETION_COMMAND_TIMEOUT.as_millis(),
             external
         ),
         format!("completion-cache last-refresh {refresh}"),
@@ -170,33 +181,7 @@ pub(crate) fn diagnostics_lines() -> Vec<String> {
 }
 
 pub(crate) fn is_known_declared_dynamic_provider(provider: &str) -> bool {
-    matches!(
-        provider,
-        "cargo.bin"
-            | "cargo.example"
-            | "cargo.package"
-            | "docker.compose_service"
-            | "docker.container"
-            | "docker.image"
-            | "git.branch"
-            | "git.checkout_target"
-            | "git.changed_path"
-            | "git.push_branch"
-            | "git.remote"
-            | "git.remote_branch"
-            | "git.revision"
-            | "git.stash"
-            | "git.tag"
-            | "git.worktree"
-            | "js.dependency"
-            | "kubectl.context"
-            | "kubectl.namespace"
-            | "kubectl.resource_name"
-            | "kubectl.resource_type"
-            | "project.task"
-            | "ssh.host"
-            | "system.process_pid"
-    )
+    is_known_dynamic_completion_provider(provider)
 }
 
 impl DynamicCompletionProvider {
@@ -269,10 +254,19 @@ impl DynamicCompletionProvider {
                 cached_only,
             ),
             "docker.compose_service" => {
+                let compose_file = selected_docker_compose_file(parsed_command_line, current_dir);
                 if cached_only {
-                    self.collect_compose_service_candidates_cached(current_dir, current_token)
+                    self.collect_compose_service_candidates_cached(
+                        current_dir,
+                        current_token,
+                        compose_file.as_deref(),
+                    )
                 } else {
-                    self.collect_compose_service_candidates(current_dir, current_token)
+                    self.collect_compose_service_candidates(
+                        current_dir,
+                        current_token,
+                        compose_file.as_deref(),
+                    )
                 }
             }
             "kubectl.context" => {
@@ -287,16 +281,37 @@ impl DynamicCompletionProvider {
                 cached_only,
             ),
             "kubectl.resource_name" => scope
+                .or_else(|| {
+                    split_kubectl_resource_name_token(current_token).map(|(resource, _)| resource)
+                })
                 .or_else(|| selected_kubectl_resource(parsed_command_line))
                 .map(|resource| {
-                    self.collect_kubectl_resource_name_candidates(
+                    self.collect_kubectl_resource_name_candidates_for_token(
                         current_dir,
                         resource,
                         current_token,
+                        selected_kubectl_namespace(parsed_command_line),
                         cached_only,
                     )
                 })
                 .unwrap_or_default(),
+            "systemctl.unit" => {
+                let kind = systemctl_unit_kind_for_context(parsed_command_line);
+                self.collect_systemd_unit_candidates(
+                    current_dir,
+                    current_token,
+                    kind,
+                    "systemd unit",
+                    cached_only,
+                )
+            }
+            "systemctl.unit_file" => self.collect_systemd_unit_candidates(
+                current_dir,
+                current_token,
+                SystemdUnitListKind::UnitFiles,
+                "systemd unit file",
+                cached_only,
+            ),
             "cargo.package" => self.collect_cargo_metadata_candidates(
                 current_dir,
                 current_token,
@@ -325,7 +340,14 @@ impl DynamicCompletionProvider {
                 cached_only,
             ),
             "project.task" => {
-                if cached_only {
+                if let Some(sources) = declared_project_task_sources(parsed_command_line) {
+                    self.collect_project_task_candidates_for_sources_with_mode(
+                        parsed_command_line,
+                        current_dir,
+                        sources,
+                        cached_only,
+                    )
+                } else if cached_only {
                     self.collect_task_candidates_with_mode(parsed_command_line, current_dir, true)
                 } else {
                     self.collect_task_candidates(parsed_command_line, current_dir)
@@ -340,6 +362,60 @@ impl DynamicCompletionProvider {
             "system.process_pid" => {
                 self.collect_process_pid_candidates(parsed_command_line, cached_only)
             }
+            "tmux.session" => {
+                self.collect_tmux_session_candidates(current_dir, current_token, cached_only)
+            }
+            "screen.session" => {
+                self.collect_screen_session_candidates(current_dir, current_token, cached_only)
+            }
+            "nmcli.connection" => self.collect_nmcli_value_candidates(
+                current_dir,
+                current_token,
+                NmcliCompletionSpec {
+                    kind: "connection",
+                    args: &["-t", "-f", "NAME", "connection", "show"],
+                    description: "NetworkManager connection",
+                    parser: parse_nmcli_first_field,
+                },
+                cached_only,
+            ),
+            "nmcli.device" => self.collect_nmcli_value_candidates(
+                current_dir,
+                current_token,
+                NmcliCompletionSpec {
+                    kind: "device",
+                    args: &["-t", "-f", "DEVICE", "device"],
+                    description: "NetworkManager device",
+                    parser: parse_nmcli_first_field,
+                },
+                cached_only,
+            ),
+            "rustup.toolchain" => {
+                self.collect_rustup_toolchain_candidates(current_dir, current_token, cached_only)
+            }
+            "pip.installed_package" => self.collect_pip_installed_package_candidates(
+                current_dir,
+                parsed_command_line.command.as_str(),
+                current_token,
+                cached_only,
+            ),
+            "pacman.package" => self.collect_pacman_package_candidates(
+                current_dir,
+                current_token,
+                matches!(
+                    parsed_command_line
+                        .subcommand_path
+                        .first()
+                        .map(String::as_str)
+                        .or_else(|| parsed_command_line.raw_args.first().map(String::as_str)),
+                    Some("-S")
+                ),
+                cached_only,
+            ),
+            "mount.mountpoint" => {
+                self.collect_mountpoint_candidates(current_dir, current_token, cached_only)
+            }
+            "kernel.module" => self.collect_kernel_module_candidates(current_token, cached_only),
             _ => {
                 warn!("Unknown dynamic completion provider: {provider}");
                 Vec::new()
@@ -615,11 +691,7 @@ impl DynamicCompletionProvider {
             );
         }
 
-        let Some(command_name) = parsed_command_line
-            .subcommand_path
-            .get(1)
-            .map(String::as_str)
-        else {
+        let Some(command_name) = selected_docker_compose_command(parsed_command_line) else {
             return Vec::new();
         };
 
@@ -633,10 +705,20 @@ impl DynamicCompletionProvider {
 
                 if service_commands.contains(&command_name) {
                     let current_token = parsed_command_line.current_token.as_str();
+                    let compose_file =
+                        selected_docker_compose_file(parsed_command_line, current_dir);
                     if cached_only {
-                        self.collect_compose_service_candidates_cached(current_dir, current_token)
+                        self.collect_compose_service_candidates_cached(
+                            current_dir,
+                            current_token,
+                            compose_file.as_deref(),
+                        )
                     } else {
-                        self.collect_compose_service_candidates(current_dir, current_token)
+                        self.collect_compose_service_candidates(
+                            current_dir,
+                            current_token,
+                            compose_file.as_deref(),
+                        )
                     }
                 } else {
                     Vec::new()
@@ -731,42 +813,46 @@ impl DynamicCompletionProvider {
                 _ => Vec::new(),
             },
             CompletionContext::SubCommand | CompletionContext::Argument { .. } => {
-                let path = parsed_command_line
-                    .subcommand_path
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>();
-                if path.len() >= 2 && path[0] == "config" && path[1] == "use-context" {
+                let words = kubectl_positional_words(parsed_command_line);
+                if words.len() >= 2 && words[0] == "config" && words[1] == "use-context" {
                     self.collect_kubectl_context_candidates(current_dir, current_token, cached_only)
                 } else if matches!(
-                    path.first().copied(),
+                    words.first().copied(),
                     Some("get" | "describe" | "delete" | "edit" | "create" | "apply")
                 ) {
-                    match parsed_command_line.completion_context {
-                        CompletionContext::Argument { arg_index, .. } if arg_index >= 1 => {
-                            let resource = parsed_command_line
-                                .specified_arguments
-                                .first()
-                                .filter(|resource| resource.as_str() != current_token)
-                                .map(String::as_str);
-                            if let Some(resource) = resource {
-                                self.collect_kubectl_resource_name_candidates(
-                                    current_dir,
-                                    resource,
-                                    current_token,
-                                    cached_only,
-                                )
-                            } else {
-                                Vec::new()
-                            }
+                    let namespace = selected_kubectl_namespace(parsed_command_line);
+                    if let Some((resource, _)) = split_kubectl_resource_name_token(current_token) {
+                        self.collect_kubectl_resource_name_candidates_for_token(
+                            current_dir,
+                            resource,
+                            current_token,
+                            namespace,
+                            cached_only,
+                        )
+                    } else if let Some(resource) = selected_kubectl_resource(parsed_command_line) {
+                        if resource == current_token {
+                            self.collect_kubectl_resource_type_candidates(
+                                current_dir,
+                                current_token,
+                                cached_only,
+                            )
+                        } else {
+                            self.collect_kubectl_resource_name_candidates_for_token(
+                                current_dir,
+                                resource,
+                                current_token,
+                                namespace,
+                                cached_only,
+                            )
                         }
-                        _ => self.collect_kubectl_resource_type_candidates(
+                    } else {
+                        self.collect_kubectl_resource_type_candidates(
                             current_dir,
                             current_token,
                             cached_only,
-                        ),
+                        )
                     }
-                } else if matches!(path.first().copied(), Some("logs" | "exec")) {
+                } else if matches!(words.first().copied(), Some("logs" | "exec")) {
                     self.collect_kubectl_pod_candidates(current_dir, current_token, cached_only)
                 } else {
                     Vec::new()
@@ -856,12 +942,8 @@ impl DynamicCompletionProvider {
         else {
             return Vec::new();
         };
-        let kind = match subcommand {
-            "start" => SystemdUnitListKind::UnitFiles,
-            "stop" | "restart" | "reload" => SystemdUnitListKind::Running,
-            "enable" => SystemdUnitListKind::Disabled,
-            "disable" => SystemdUnitListKind::Enabled,
-            "status" | "is-active" | "is-enabled" | "mask" | "unmask" => SystemdUnitListKind::All,
+        let kind = match systemctl_unit_kind_for_subcommand(subcommand) {
+            Some(kind) => kind,
             _ => return Vec::new(),
         };
 
@@ -1029,25 +1111,10 @@ impl DynamicCompletionProvider {
             return Vec::new();
         }
 
-        let command_path = self.resolve_command_path("tmux");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "tmux",
-            "session",
-            canonicalize_path(&current_dir),
+        self.collect_tmux_session_candidates(
+            current_dir,
             parsed_command_line.current_token.as_str(),
-            "tmux session",
             cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                run_command_lines(
-                    &command_path,
-                    &["list-sessions", "-F", "#{session_name}"],
-                    &current_dir,
-                )
-            },
         )
     }
 
@@ -1082,25 +1149,10 @@ impl DynamicCompletionProvider {
             return Vec::new();
         }
 
-        let command_path = self.resolve_command_path("screen");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "screen",
-            "session",
-            canonicalize_path(&current_dir),
+        self.collect_screen_session_candidates(
+            current_dir,
             parsed_command_line.current_token.as_str(),
-            "screen session",
             cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(parse_screen_sessions(&run_command_lines(
-                    &command_path,
-                    &["-ls"],
-                    &current_dir,
-                )?))
-            },
         )
     }
 
@@ -1205,25 +1257,11 @@ impl DynamicCompletionProvider {
             return Vec::new();
         }
 
-        let command_path = self.resolve_command_path(command_name);
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
+        self.collect_pip_installed_package_candidates(
+            current_dir,
             command_name,
-            "installed-package",
-            canonicalize_path(&current_dir),
             parsed_command_line.current_token.as_str(),
-            "installed python package",
             cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(parse_pip_freeze_packages(&run_command_lines(
-                    &command_path,
-                    &["list", "--format=freeze"],
-                    &current_dir,
-                )?))
-            },
         )
     }
 
@@ -1259,25 +1297,10 @@ impl DynamicCompletionProvider {
         if !completes_toolchain {
             return Vec::new();
         }
-        let command_path = self.resolve_command_path("rustup");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "rustup",
-            "toolchain",
-            canonicalize_path(&current_dir),
+        self.collect_rustup_toolchain_candidates(
+            current_dir,
             parsed_command_line.current_token.as_str(),
-            "rustup toolchain",
             cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(parse_first_fields(&run_command_lines(
-                    &command_path,
-                    &["toolchain", "list"],
-                    &current_dir,
-                )?))
-            },
         )
     }
 
@@ -1404,26 +1427,22 @@ impl DynamicCompletionProvider {
             ),
             _ => return Vec::new(),
         };
-        let command_path = self.resolve_command_path("nmcli");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "nmcli",
+        let parser = if kind == "connected-device" {
+            parse_nmcli_connected_devices
+        } else {
+            parse_nmcli_first_field
+        };
+        let spec = NmcliCompletionSpec {
             kind,
-            canonicalize_path(&current_dir),
-            parsed_command_line.current_token.as_str(),
+            args: &args,
             description,
+            parser,
+        };
+        self.collect_nmcli_value_candidates(
+            current_dir,
+            parsed_command_line.current_token.as_str(),
+            spec,
             cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                let lines = run_command_lines(&command_path, &args, &current_dir)?;
-                if kind == "connected-device" {
-                    Ok(parse_nmcli_connected_devices(&lines))
-                } else {
-                    Ok(parse_nmcli_first_field(&lines))
-                }
-            },
         )
     }
 
@@ -1454,26 +1473,16 @@ impl DynamicCompletionProvider {
             .first()
             .map(String::as_str)
             .or_else(|| parsed_command_line.raw_args.first().map(String::as_str));
-        let (kind, args, description) = match subcommand {
-            Some("-S") => ("sync-package", vec!["-Slq"], "pacman sync package"),
-            Some("-R") => ("installed-package", vec!["-Qq"], "installed pacman package"),
+        let sync = match subcommand {
+            Some("-S") => true,
+            Some("-R") => false,
             _ => return Vec::new(),
         };
-        let command_path = self.resolve_command_path("pacman");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "pacman",
-            kind,
-            canonicalize_path(&current_dir),
+        self.collect_pacman_package_candidates(
+            current_dir,
             parsed_command_line.current_token.as_str(),
-            description,
+            sync,
             cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                run_command_lines(&command_path, &args, &current_dir)
-            },
         )
     }
 
@@ -1555,26 +1564,10 @@ impl DynamicCompletionProvider {
         ) {
             return Vec::new();
         }
-        let command_path = self.resolve_command_path("findmnt");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "umount",
-            "mount-target",
-            canonicalize_path(&current_dir),
+        self.collect_mountpoint_candidates(
+            current_dir,
             parsed_command_line.current_token.as_str(),
-            "mount target",
             cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(
-                    run_command_lines(&command_path, &["-rno", "TARGET"], &current_dir)?
-                        .into_iter()
-                        .filter(|target| target != "/")
-                        .collect(),
-                )
-            },
         )
     }
 
@@ -1603,11 +1596,226 @@ impl DynamicCompletionProvider {
         ) {
             return Vec::new();
         }
+        self.collect_kernel_module_candidates(
+            parsed_command_line.current_token.as_str(),
+            cached_only,
+        )
+    }
+
+    fn collect_tmux_session_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("tmux");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "tmux",
+            "session",
+            canonicalize_path(&current_dir),
+            current_token,
+            "tmux session",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                run_command_lines(
+                    &command_path,
+                    &["list-sessions", "-F", "#{session_name}"],
+                    &current_dir,
+                )
+            },
+        )
+    }
+
+    fn collect_screen_session_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("screen");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "screen",
+            "session",
+            canonicalize_path(&current_dir),
+            current_token,
+            "screen session",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parse_screen_sessions(&run_command_lines(
+                    &command_path,
+                    &["-ls"],
+                    &current_dir,
+                )?))
+            },
+        )
+    }
+
+    fn collect_nmcli_value_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        spec: NmcliCompletionSpec<'_>,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("nmcli");
+        let current_dir = current_dir.to_path_buf();
+        let args = spec
+            .args
+            .iter()
+            .map(|arg| arg.to_string())
+            .collect::<Vec<_>>();
+        self.collect_cached_value_candidates(
+            "nmcli",
+            spec.kind,
+            canonicalize_path(&current_dir),
+            current_token,
+            spec.description,
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+                let lines = run_command_lines(&command_path, &args, &current_dir)?;
+                Ok((spec.parser)(&lines))
+            },
+        )
+    }
+
+    fn collect_rustup_toolchain_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("rustup");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "rustup",
+            "toolchain",
+            canonicalize_path(&current_dir),
+            current_token,
+            "rustup toolchain",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parse_first_fields(&run_command_lines(
+                    &command_path,
+                    &["toolchain", "list"],
+                    &current_dir,
+                )?))
+            },
+        )
+    }
+
+    fn collect_pip_installed_package_candidates(
+        &self,
+        current_dir: &Path,
+        command_name: &str,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path(command_name);
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            command_name,
+            "installed-package",
+            canonicalize_path(&current_dir),
+            current_token,
+            "installed python package",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parse_pip_freeze_packages(&run_command_lines(
+                    &command_path,
+                    &["list", "--format=freeze"],
+                    &current_dir,
+                )?))
+            },
+        )
+    }
+
+    fn collect_pacman_package_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        sync: bool,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let (kind, args, description) = if sync {
+            ("sync-package", vec!["-Slq"], "pacman sync package")
+        } else {
+            ("installed-package", vec!["-Qq"], "installed pacman package")
+        };
+        let command_path = self.resolve_command_path("pacman");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "pacman",
+            kind,
+            canonicalize_path(&current_dir),
+            current_token,
+            description,
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                run_command_lines(&command_path, &args, &current_dir)
+            },
+        )
+    }
+
+    fn collect_mountpoint_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("findmnt");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "umount",
+            "mount-target",
+            canonicalize_path(&current_dir),
+            current_token,
+            "mount target",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(
+                    run_command_lines(&command_path, &["-rno", "TARGET"], &current_dir)?
+                        .into_iter()
+                        .filter(|target| target != "/")
+                        .collect(),
+                )
+            },
+        )
+    }
+
+    fn collect_kernel_module_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
         self.collect_cached_value_candidates(
             "modprobe",
             "kernel-module",
             PathBuf::from("/lib/modules"),
-            parsed_command_line.current_token.as_str(),
+            current_token,
             "kernel module",
             cached_only,
             || Ok(load_kernel_module_names()),
@@ -1658,6 +1866,21 @@ impl DynamicCompletionProvider {
         current_dir: &Path,
         sources: &[&str],
     ) -> Vec<EnhancedCandidate> {
+        self.collect_project_task_candidates_for_sources_with_mode(
+            parsed_command_line,
+            current_dir,
+            sources,
+            false,
+        )
+    }
+
+    fn collect_project_task_candidates_for_sources_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        sources: &[&str],
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
         let current_token = parsed_command_line.current_token.as_str();
         match parsed_command_line.completion_context {
             CompletionContext::Command
@@ -1666,23 +1889,29 @@ impl DynamicCompletionProvider {
             _ => return Vec::new(),
         }
 
-        match self.load_project_tasks_for_sources(current_dir, sources) {
-            Ok(tasks) => tasks
-                .into_iter()
-                .filter(|task| sources.contains(&task.source.as_str()))
-                .filter(|task| matches_prefix(current_token, &task.name))
-                .map(|task| EnhancedCandidate {
-                    text: task.name,
-                    description: Some(format_task_description(&task.source, &task.command)),
-                    candidate_type: CandidateType::Argument,
-                    priority: 125,
-                })
-                .collect(),
-            Err(err) => {
-                warn!("Failed to load project task completions: {}", err);
-                Vec::new()
+        let tasks = if cached_only {
+            self.lookup_project_tasks_for_sources(current_dir, sources)
+        } else {
+            match self.load_project_tasks_for_sources(current_dir, sources) {
+                Ok(tasks) => tasks,
+                Err(err) => {
+                    warn!("Failed to load project task completions: {}", err);
+                    return Vec::new();
+                }
             }
-        }
+        };
+
+        tasks
+            .into_iter()
+            .filter(|task| sources.contains(&task.source.as_str()))
+            .filter(|task| matches_prefix(current_token, &task.name))
+            .map(|task| EnhancedCandidate {
+                text: task.name,
+                description: Some(format_task_description(&task.source, &task.command)),
+                candidate_type: CandidateType::Argument,
+                priority: 125,
+            })
+            .collect()
     }
 
     pub(crate) fn collect_external_candidates(
@@ -2079,6 +2308,7 @@ impl DynamicCompletionProvider {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn collect_cached_value_candidates<F>(
         &self,
         command_name: &str,
@@ -2196,8 +2426,9 @@ impl DynamicCompletionProvider {
         &self,
         current_dir: &Path,
         current_token: &str,
+        compose_file_override: Option<&Path>,
     ) -> Vec<EnhancedCandidate> {
-        match self.load_compose_services(current_dir) {
+        match self.load_compose_services(current_dir, compose_file_override) {
             Ok(Some((compose_file, services))) => services
                 .into_iter()
                 .filter(|service| matches_prefix(current_token, service))
@@ -2223,19 +2454,24 @@ impl DynamicCompletionProvider {
         &self,
         current_dir: &Path,
         current_token: &str,
+        compose_file_override: Option<&Path>,
     ) -> Vec<EnhancedCandidate> {
-        let Some(compose_file) = find_compose_file(current_dir) else {
-            return Vec::new();
+        let compose_file = if let Some(path) = compose_file_override {
+            canonicalize_path(path)
+        } else {
+            let Some(compose_file) = find_compose_file(current_dir) else {
+                return Vec::new();
+            };
+            canonicalize_path(&compose_file)
         };
-        let cache_key = canonicalize_path(&compose_file);
-        let signature = file_metadata_signature(&cache_key);
-        self.lookup_compose_cache(&cache_key, &signature)
+        let signature = file_metadata_signature(&compose_file);
+        self.lookup_compose_cache(&compose_file, &signature)
             .unwrap_or_default()
             .into_iter()
             .filter(|service| matches_prefix(current_token, service))
             .map(|service| EnhancedCandidate {
                 text: service,
-                description: Some(format!("compose service ({})", cache_key.display())),
+                description: Some(format!("compose service ({})", compose_file.display())),
                 candidate_type: CandidateType::Argument,
                 priority: 125,
             })
@@ -2375,14 +2611,20 @@ impl DynamicCompletionProvider {
         current_dir: &Path,
         resource: &str,
         current_token: &str,
+        namespace: Option<&str>,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
         let command_path = self.resolve_command_path("kubectl");
         let current_dir = current_dir.to_path_buf();
         let resource = resource.to_string();
+        let namespace = namespace.map(str::to_string);
+        let value_kind = namespace
+            .as_deref()
+            .map(|namespace| format!("resource-name:{namespace}:{resource}"))
+            .unwrap_or_else(|| format!("resource-name:{resource}"));
         self.collect_cached_value_candidates(
             "kubectl",
-            &format!("resource-name:{resource}"),
+            &value_kind,
             canonicalize_path(&current_dir),
             current_token,
             "kubectl resource name",
@@ -2391,17 +2633,52 @@ impl DynamicCompletionProvider {
                 let Some(command_path) = command_path else {
                     return Ok(Vec::new());
                 };
-                run_command_lines(
-                    &command_path,
-                    &[
-                        "get",
-                        &resource,
-                        "-o",
-                        "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}",
-                    ],
-                    &current_dir,
-                )
+                let mut args = vec!["get"];
+                if let Some(namespace) = namespace.as_deref() {
+                    args.push("-n");
+                    args.push(namespace);
+                }
+                args.push(&resource);
+                args.push("-o");
+                args.push("jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}");
+                run_command_lines(&command_path, &args, &current_dir)
             },
+        )
+    }
+
+    fn collect_kubectl_resource_name_candidates_for_token(
+        &self,
+        current_dir: &Path,
+        resource: &str,
+        current_token: &str,
+        namespace: Option<&str>,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        if let Some((token_resource, name_prefix)) =
+            split_kubectl_resource_name_token(current_token)
+        {
+            return self
+                .collect_kubectl_resource_name_candidates(
+                    current_dir,
+                    token_resource,
+                    name_prefix,
+                    namespace,
+                    cached_only,
+                )
+                .into_iter()
+                .map(|mut candidate| {
+                    candidate.text = format!("{token_resource}/{}", candidate.text);
+                    candidate
+                })
+                .collect();
+        }
+
+        self.collect_kubectl_resource_name_candidates(
+            current_dir,
+            resource,
+            current_token,
+            namespace,
+            cached_only,
         )
     }
 
@@ -2637,6 +2914,21 @@ impl DynamicCompletionProvider {
         Ok(tasks)
     }
 
+    fn lookup_project_tasks_for_sources(
+        &self,
+        current_dir: &Path,
+        sources: &[&str],
+    ) -> Vec<task::TaskInfo> {
+        let project_root = project_context::find_project_root(current_dir);
+        let cache_key = TaskCacheKey {
+            project_root: project_root.clone(),
+            sources: normalized_task_sources(sources),
+        };
+        let signature = task_completion_signature(&project_root);
+        self.lookup_task_cache(&cache_key, &signature)
+            .unwrap_or_default()
+    }
+
     fn lookup_task_cache(
         &self,
         cache_key: &TaskCacheKey,
@@ -2651,9 +2943,18 @@ impl DynamicCompletionProvider {
         }
     }
 
-    fn load_compose_services(&self, current_dir: &Path) -> Result<Option<(PathBuf, Vec<String>)>> {
-        let Some(compose_file) = find_compose_file(current_dir) else {
-            return Ok(None);
+    fn load_compose_services(
+        &self,
+        current_dir: &Path,
+        compose_file_override: Option<&Path>,
+    ) -> Result<Option<(PathBuf, Vec<String>)>> {
+        let compose_file = if let Some(path) = compose_file_override {
+            path.to_path_buf()
+        } else {
+            let Some(compose_file) = find_compose_file(current_dir) else {
+                return Ok(None);
+            };
+            compose_file
         };
         let cache_key = canonicalize_path(&compose_file);
         let signature = file_metadata_signature(&cache_key);
@@ -2811,15 +3112,19 @@ impl DynamicCompletionProvider {
         cache.external_pending.remove(&cache_key);
         match result {
             Ok(candidates) => {
-                insert_external_cache_entry(
-                    &mut cache,
-                    cache_key,
-                    ExternalCompletionCacheEntry {
-                        candidates: candidates.clone(),
-                        cached_at: Instant::now(),
-                    },
-                );
-                update_diagnostics_from_cache(&cache, Some("external ok".to_string()));
+                if candidates.is_empty() {
+                    update_diagnostics_from_cache(&cache, Some("external empty".to_string()));
+                } else {
+                    insert_external_cache_entry(
+                        &mut cache,
+                        cache_key,
+                        ExternalCompletionCacheEntry {
+                            candidates: candidates.clone(),
+                            cached_at: Instant::now(),
+                        },
+                    );
+                    update_diagnostics_from_cache(&cache, Some("external ok".to_string()));
+                }
                 Ok(candidates)
             }
             Err(err) => {
@@ -2895,16 +3200,23 @@ fn spawn_external_refresh<F>(
         cache.external_pending.remove(&cache_key);
         match result {
             Ok(candidates) => {
-                insert_external_cache_entry(
-                    &mut cache,
-                    cache_key,
-                    ExternalCompletionCacheEntry {
-                        candidates,
-                        cached_at: Instant::now(),
-                    },
-                );
-                update_diagnostics_from_cache(&cache, Some("external refresh ok".to_string()));
-                crate::completion::notify_completion_update();
+                if candidates.is_empty() {
+                    update_diagnostics_from_cache(
+                        &cache,
+                        Some("external refresh empty".to_string()),
+                    );
+                } else {
+                    insert_external_cache_entry(
+                        &mut cache,
+                        cache_key,
+                        ExternalCompletionCacheEntry {
+                            candidates,
+                            cached_at: Instant::now(),
+                        },
+                    );
+                    update_diagnostics_from_cache(&cache, Some("external refresh ok".to_string()));
+                    crate::completion::notify_completion_update();
+                }
             }
             Err(err) => {
                 warn!("External completer refresh failed: {}", err);
@@ -3087,6 +3399,107 @@ fn find_compose_file(current_dir: &Path) -> Option<PathBuf> {
             .map(|name| dir.join(name))
             .find(|path| path.exists())
     })
+}
+
+fn selected_docker_compose_command(parsed_command_line: &ParsedCommandLine) -> Option<&str> {
+    let mut after_compose = false;
+    let mut skip_next_value = false;
+
+    for token in completion_words(parsed_command_line) {
+        if skip_next_value {
+            skip_next_value = false;
+            continue;
+        }
+
+        if !after_compose {
+            if token == "compose" {
+                after_compose = true;
+            }
+            continue;
+        }
+
+        if docker_compose_option_takes_value(token) {
+            skip_next_value = true;
+            continue;
+        }
+
+        if is_inline_docker_compose_option_value(token) || token.starts_with('-') {
+            continue;
+        }
+
+        return Some(token);
+    }
+
+    None
+}
+
+fn selected_docker_compose_file(
+    parsed_command_line: &ParsedCommandLine,
+    current_dir: &Path,
+) -> Option<PathBuf> {
+    let mut after_compose = false;
+    let words = completion_words(parsed_command_line);
+
+    for (index, token) in words.iter().enumerate() {
+        if !after_compose {
+            if *token == "compose" {
+                after_compose = true;
+            }
+            continue;
+        }
+
+        if *token == "-f" || *token == "--file" {
+            let Some(value) = words.get(index + 1).copied() else {
+                continue;
+            };
+            return compose_file_path_from_token(current_dir, value);
+        }
+
+        if let Some(value) = token
+            .strip_prefix("--file=")
+            .or_else(|| token.strip_prefix("-f="))
+        {
+            return compose_file_path_from_token(current_dir, value);
+        }
+    }
+
+    None
+}
+
+fn compose_file_path_from_token(current_dir: &Path, token: &str) -> Option<PathBuf> {
+    if token.is_empty() || token.starts_with('-') {
+        return None;
+    }
+
+    let path = PathBuf::from(normalize_path_token(token));
+    Some(if path.is_absolute() {
+        path
+    } else {
+        current_dir.join(path)
+    })
+}
+
+fn docker_compose_option_takes_value(token: &str) -> bool {
+    matches!(
+        token,
+        "-f" | "--file"
+            | "-p"
+            | "--project-name"
+            | "--profile"
+            | "--env-file"
+            | "--project-directory"
+            | "--parallel"
+    )
+}
+
+fn is_inline_docker_compose_option_value(token: &str) -> bool {
+    token.starts_with("--file=")
+        || token.starts_with("-f=")
+        || token.starts_with("--project-name=")
+        || token.starts_with("--profile=")
+        || token.starts_with("--env-file=")
+        || token.starts_with("--project-directory=")
+        || token.starts_with("--parallel=")
 }
 
 fn parse_compose_service_names(path: &Path) -> Result<Vec<String>> {
@@ -3364,14 +3777,161 @@ fn selected_git_remote(parsed_command_line: &ParsedCommandLine) -> Option<&str> 
         .filter(|remote| *remote != parsed_command_line.current_token)
 }
 
-fn selected_kubectl_resource(parsed_command_line: &ParsedCommandLine) -> Option<&str> {
+fn completion_words(parsed_command_line: &ParsedCommandLine) -> Vec<&str> {
     parsed_command_line
-        .specified_arguments
+        .subcommand_path
         .iter()
-        .find(|argument| {
-            argument.as_str() != parsed_command_line.current_token && !argument.starts_with('-')
-        })
+        .chain(parsed_command_line.raw_args.iter())
         .map(String::as_str)
+        .collect()
+}
+
+fn kubectl_positional_words(parsed_command_line: &ParsedCommandLine) -> Vec<&str> {
+    let mut positionals = Vec::new();
+    let mut skip_next_value = false;
+
+    for token in completion_words(parsed_command_line) {
+        if skip_next_value {
+            skip_next_value = false;
+            continue;
+        }
+
+        if kubectl_option_takes_value(token) {
+            skip_next_value = true;
+            continue;
+        }
+
+        if is_inline_kubectl_option_value(token) || token.starts_with('-') {
+            continue;
+        }
+
+        positionals.push(token);
+    }
+
+    positionals
+}
+
+fn selected_kubectl_resource(parsed_command_line: &ParsedCommandLine) -> Option<&str> {
+    let current_token = parsed_command_line.current_token.as_str();
+    let words = kubectl_positional_words(parsed_command_line);
+    let command = words.first().copied()?;
+    if !matches!(
+        command,
+        "get" | "describe" | "delete" | "edit" | "create" | "apply"
+    ) {
+        return None;
+    }
+
+    let resource = words.get(1).copied()?;
+    if resource == current_token || resource.contains('/') {
+        return None;
+    }
+
+    Some(resource)
+}
+
+fn selected_kubectl_namespace(parsed_command_line: &ParsedCommandLine) -> Option<&str> {
+    let words = completion_words(parsed_command_line);
+    for (index, token) in words.iter().enumerate() {
+        if *token == "-n" || *token == "--namespace" {
+            let Some(value) = words.get(index + 1).copied() else {
+                continue;
+            };
+            if !value.is_empty() && !value.starts_with('-') {
+                return Some(value);
+            }
+        }
+
+        if let Some(value) = token
+            .strip_prefix("--namespace=")
+            .or_else(|| token.strip_prefix("-n="))
+            .or_else(|| token.strip_prefix("-n").filter(|value| !value.is_empty()))
+            && !value.is_empty()
+        {
+            return Some(value);
+        }
+    }
+
+    None
+}
+
+fn split_kubectl_resource_name_token(token: &str) -> Option<(&str, &str)> {
+    let (resource, name_prefix) = token.split_once('/')?;
+    if resource.is_empty() {
+        return None;
+    }
+    Some((resource, name_prefix))
+}
+
+fn kubectl_option_takes_value(token: &str) -> bool {
+    matches!(
+        token,
+        "-n" | "--namespace"
+            | "--context"
+            | "--kubeconfig"
+            | "-o"
+            | "--output"
+            | "-l"
+            | "--selector"
+            | "--field-selector"
+            | "-f"
+            | "--filename"
+            | "-k"
+            | "--kustomize"
+            | "--as"
+            | "--as-group"
+            | "--cluster"
+            | "--server"
+            | "--token"
+            | "--user"
+    )
+}
+
+fn is_inline_kubectl_option_value(token: &str) -> bool {
+    token.starts_with("--namespace=")
+        || token.starts_with("-n=")
+        || (token.starts_with("-n") && token.len() > 2)
+        || token.starts_with("--context=")
+        || token.starts_with("--kubeconfig=")
+        || token.starts_with("--output=")
+        || token.starts_with("--selector=")
+        || token.starts_with("--field-selector=")
+        || token.starts_with("--filename=")
+        || token.starts_with("--kustomize=")
+        || token.starts_with("--as=")
+        || token.starts_with("--as-group=")
+        || token.starts_with("--cluster=")
+        || token.starts_with("--server=")
+        || token.starts_with("--token=")
+        || token.starts_with("--user=")
+}
+
+fn systemctl_unit_kind_for_context(parsed_command_line: &ParsedCommandLine) -> SystemdUnitListKind {
+    parsed_command_line
+        .subcommand_path
+        .first()
+        .and_then(|subcommand| systemctl_unit_kind_for_subcommand(subcommand))
+        .unwrap_or(SystemdUnitListKind::All)
+}
+
+fn systemctl_unit_kind_for_subcommand(subcommand: &str) -> Option<SystemdUnitListKind> {
+    match subcommand {
+        "start" => Some(SystemdUnitListKind::UnitFiles),
+        "stop" | "restart" | "reload" => Some(SystemdUnitListKind::Running),
+        "enable" => Some(SystemdUnitListKind::Disabled),
+        "disable" => Some(SystemdUnitListKind::Enabled),
+        "status" | "is-active" | "is-enabled" | "mask" | "unmask" => Some(SystemdUnitListKind::All),
+        _ => None,
+    }
+}
+
+fn declared_project_task_sources(
+    parsed_command_line: &ParsedCommandLine,
+) -> Option<&'static [&'static str]> {
+    match parsed_command_line.command.as_str() {
+        "npm" | "pnpm" | "yarn" | "bun" => Some(JS_PROJECT_TASK_SOURCES),
+        _ => None,
+    }
 }
 
 fn input_prefix_at_cursor(input: &str, cursor_pos: usize) -> String {
@@ -4138,7 +4698,7 @@ volumes:
         .unwrap();
 
         let provider = DynamicCompletionProvider::new(Environment::new());
-        let api_candidates = provider.collect_compose_service_candidates(&nested, "ap");
+        let api_candidates = provider.collect_compose_service_candidates(&nested, "ap", None);
 
         assert!(
             api_candidates
@@ -4154,12 +4714,93 @@ volumes:
         )
         .unwrap();
 
-        let worker_candidates = provider.collect_compose_service_candidates(&nested, "wo");
+        let worker_candidates = provider.collect_compose_service_candidates(&nested, "wo", None);
         assert!(
             worker_candidates
                 .iter()
                 .any(|candidate| candidate.text == "worker"),
             "expected compose cache invalidation after file change"
+        );
+    }
+
+    #[test]
+    fn docker_compose_service_completion_uses_explicit_file_option() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("compose.yaml"),
+            "services:\n  api:\n    image: example/api\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("compose.dev.yml"),
+            "services:\n  worker:\n    image: example/worker\n",
+        )
+        .unwrap();
+
+        let provider = DynamicCompletionProvider::new(Environment::new());
+        let candidates = provider.collect_docker_candidates(
+            &parsed("docker compose -f compose.dev.yml up wo"),
+            dir.path(),
+        );
+
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate.text == "worker"),
+            "expected service completion from docker compose -f file"
+        );
+        assert!(
+            candidates.iter().all(|candidate| candidate.text != "api"),
+            "explicit compose file should take precedence over ancestor defaults"
+        );
+    }
+
+    #[test]
+    fn kubectl_resource_name_completion_respects_namespace_and_resource_name_token() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let kubectl = bin_dir.join("kubectl");
+        write_executable_script(
+            &kubectl,
+            "#!/bin/sh\n\
+             printf '%s\\n' \"$@\" > kubectl-args.txt\n\
+             resource=''\n\
+             if [ \"$1\" = get ] && [ \"$2\" = -n ]; then\n\
+               resource=\"$4\"\n\
+             elif [ \"$1\" = get ]; then\n\
+               resource=\"$2\"\n\
+             fi\n\
+             case \"$resource\" in\n\
+               pod|pods) printf 'api\\nworker\\n' ;;\n\
+             esac\n",
+        );
+        let environment = Environment::new();
+        {
+            let mut env = environment.write();
+            env.paths = vec![bin_dir.display().to_string()];
+            env.clear_command_cache();
+        }
+        let provider = DynamicCompletionProvider::new(environment);
+
+        let names =
+            provider.collect_kubectl_candidates(&parsed("kubectl get -n prod pods ap"), dir.path());
+        assert!(
+            names.iter().any(|candidate| candidate.text == "api"),
+            "expected resource names to be queried inside the selected namespace"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("kubectl-args.txt")).unwrap(),
+            "get\n-n\nprod\npods\n-o\njsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}\n"
+        );
+
+        let resource_name =
+            provider.collect_kubectl_candidates(&parsed("kubectl get pods/ap"), dir.path());
+        assert!(
+            resource_name
+                .iter()
+                .any(|candidate| candidate.text == "pods/api"),
+            "expected resource/name token completion to preserve the resource prefix"
         );
     }
 
@@ -4530,13 +5171,14 @@ volumes:
 
         for index in 0..(EXTERNAL_COMPLETION_CACHE_LIMIT + 3) {
             let input = format!("unknown-command zz{index}");
-            let candidates = provider.collect_external_candidates(
-                dir.path(),
-                &input,
-                input.len(),
-                &parsed(&input),
+            let expected = format!("zz{index}-candidate");
+            assert!(
+                wait_until(Duration::from_secs(2), || provider
+                    .collect_external_candidates(dir.path(), &input, input.len(), &parsed(&input))
+                    .first()
+                    .is_some_and(|candidate| candidate.text == expected)),
+                "external cache prune setup should load candidate for {input}"
             );
-            assert_eq!(candidates[0].text, format!("zz{index}-candidate"));
         }
 
         let cache = provider.cache.read();

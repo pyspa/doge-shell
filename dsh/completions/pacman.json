@@ -182,7 +182,7 @@
           "description": "Package name to install",
           "required": false,
           "multiple": true,
-          "type": { "type": "String" }
+          "type": { "type": "Dynamic", "data": { "provider": "pacman.package" } }
         }
       ],
       "subcommands": []
@@ -241,7 +241,7 @@
           "description": "Package name to remove",
           "required": true,
           "multiple": true,
-          "type": { "type": "String" }
+          "type": { "type": "Dynamic", "data": { "provider": "pacman.package" } }
         }
       ],
       "subcommands": []
@@ -465,7 +465,8 @@
           "required": false,
           "multiple": true,
           "type": {
-            "type": "String"
+            "type": "Dynamic",
+            "data": { "provider": "pacman.package" }
           }
         }
       ],
@@ -516,7 +517,8 @@
           "required": false,
           "multiple": true,
           "type": {
-            "type": "String"
+            "type": "Dynamic",
+            "data": { "provider": "pacman.package" }
           }
         }
       ],
@@ -536,7 +538,8 @@
           "required": false,
           "multiple": true,
           "type": {
-            "type": "String"
+            "type": "Dynamic",
+            "data": { "provider": "pacman.package" }
           }
         }
       ],

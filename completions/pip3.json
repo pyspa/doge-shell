@@ -19,7 +19,7 @@
         {
           "name": "package",
           "description": "Package to uninstall",
-          "type": { "type": "String" }
+          "type": { "type": "Dynamic", "data": { "provider": "pip.installed_package" } }
         }
       ]
     },
@@ -37,7 +37,7 @@
         {
           "name": "package",
           "description": "Package to show",
-          "type": { "type": "String" }
+          "type": { "type": "Dynamic", "data": { "provider": "pip.installed_package" } }
         }
       ]
     },

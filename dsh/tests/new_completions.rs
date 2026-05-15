@@ -139,7 +139,7 @@ fn test_git_completion_with_real_json() {
 }
 
 #[test]
-fn test_pacman_completion_keeps_multiple_package_arguments() {
+fn test_pacman_completion_uses_dynamic_package_arguments() {
     let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repo_root = root_dir.parent().unwrap();
     let completions_dir = repo_root.join("completions");
@@ -167,8 +167,14 @@ fn test_pacman_completion_keeps_multiple_package_arguments() {
         .expect("missing pacman -S package arg");
     assert!(sync_arg.multiple, "pacman -S package arg must be multiple");
     assert!(
-        matches!(sync_arg.arg_type, Some(ArgumentType::String)),
-        "built-in pacman completion must keep package args as String; Script is reserved for authored runtime definitions"
+        matches!(
+            sync_arg.arg_type,
+            Some(ArgumentType::Dynamic {
+                ref provider,
+                ..
+            }) if provider == "pacman.package"
+        ),
+        "pacman -S package arg should use reusable dynamic package candidates"
     );
 
     let remove_arg = remove
@@ -180,7 +186,13 @@ fn test_pacman_completion_keeps_multiple_package_arguments() {
         "pacman -R package arg must be multiple"
     );
     assert!(
-        matches!(remove_arg.arg_type, Some(ArgumentType::String)),
-        "built-in pacman completion must keep package args as String; Script is reserved for authored runtime definitions"
+        matches!(
+            remove_arg.arg_type,
+            Some(ArgumentType::Dynamic {
+                ref provider,
+                ..
+            }) if provider == "pacman.package"
+        ),
+        "pacman -R package arg should use reusable dynamic package candidates"
     );
 }

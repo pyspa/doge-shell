@@ -52,7 +52,7 @@
     {
       "name": "mountpoint",
       "description": "Mountpoint or device to unmount",
-      "type": { "type": "String" }
+      "type": { "type": "Dynamic", "data": { "provider": "mount.mountpoint" } }
     }
   ],
   "subcommands": []

@@ -22,7 +22,7 @@
         {
           "name": "toolchain",
           "description": "Toolchain to set as default",
-          "type": { "type": "String" }
+          "type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
         }
       ]
     },
@@ -39,7 +39,7 @@
             {
               "name": "toolchain",
               "description": "Toolchain to uninstall",
-              "type": { "type": "String" }
+              "type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
             }
           ]
         },

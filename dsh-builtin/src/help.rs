@@ -142,12 +142,14 @@ const HELP_TOPICS: &[HelpTopic] = &[
     HelpTopic {
         name: "comp-gen",
         category: "ai",
-        summary: "Generate a JSON completion definition for an installed command using AI.",
-        usage: "comp-gen [--stdout] [--check] <command>",
+        summary: "Generate or audit JSON completion definitions.",
+        usage: "comp-gen [--stdout] [--check] <command> | comp-gen --audit [completion-dir] | comp-gen --list-dynamic-providers",
         examples: &[
             "comp-gen rg",
             "comp-gen --check rg",
             "comp-gen --stdout just",
+            "comp-gen --audit dsh/completions",
+            "comp-gen --list-dynamic-providers",
         ],
         related: &["doctor", "help"],
     },

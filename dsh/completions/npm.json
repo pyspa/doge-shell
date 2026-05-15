@@ -102,7 +102,7 @@
         {
           "name": "script",
           "description": "Script name from package.json",
-          "type": { "type": "String" }
+          "type": { "type": "Dynamic", "data": { "provider": "project.task" } }
         }
       ],
       "subcommands": []

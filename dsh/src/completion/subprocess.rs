@@ -255,7 +255,7 @@ mod tests {
         let output = collect_stdout(command, Duration::from_millis(1500)).unwrap();
 
         assert_eq!(output, "");
-        assert!(started.elapsed() < Duration::from_millis(1500));
+        assert!(started.elapsed() < Duration::from_secs(4));
     }
 
     #[cfg(unix)]

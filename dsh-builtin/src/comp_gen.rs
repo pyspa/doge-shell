@@ -1,8 +1,12 @@
 use crate::ShellProxy;
 use anyhow::{Context as _, Result, bail};
+use dsh_types::completion::{DYNAMIC_COMPLETION_PROVIDERS, is_known_dynamic_completion_provider};
 use dsh_types::{Context, ExitStatus};
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
+use std::fs;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Description for the comp-gen command
@@ -13,6 +17,8 @@ pub fn description() -> &'static str {
 /// comp-gen command implementation
 ///
 /// Usage: comp-gen [--stdout] [--check] <command_name>
+///        comp-gen --list-dynamic-providers
+///        comp-gen --audit [completion-dir]
 ///
 /// This command fetches the help text for the specified command (using `man` or `--help`),
 /// sends it to the AI service to generate a JSON completion definition,
@@ -24,13 +30,37 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     }
 
     let args = &argv[1..];
-    let (options, command_name) = match parse_args(args) {
+    let action = match parse_args(args) {
         Ok(parsed) => parsed,
         Err(e) => {
             ctx.write_stderr(&format!("Error: {:#}\n", e)).ok();
             ctx.write_stderr(usage()).ok();
             return ExitStatus::ExitedWith(1);
         }
+    };
+
+    let CompGenAction::Generate {
+        options,
+        command_name,
+    } = action
+    else {
+        return match action {
+            CompGenAction::ListDynamicProviders => {
+                ctx.write_stdout(&dynamic_provider_list()).ok();
+                ExitStatus::ExitedWith(0)
+            }
+            CompGenAction::Audit { dir } => match audit_completion_dir(&dir) {
+                Ok(output) => {
+                    ctx.write_stdout(&output).ok();
+                    ExitStatus::ExitedWith(0)
+                }
+                Err(e) => {
+                    ctx.write_stderr(&format!("Error: {:#}", e)).ok();
+                    ExitStatus::ExitedWith(1)
+                }
+            },
+            CompGenAction::Generate { .. } => unreachable!(),
+        };
     };
 
     let log_to_stderr = options.stdout;
@@ -66,52 +96,102 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CompGenOptions {
     stdout: bool,
     check_only: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CompGenAction {
+    Generate {
+        options: CompGenOptions,
+        command_name: String,
+    },
+    ListDynamicProviders,
+    Audit {
+        dir: PathBuf,
+    },
+}
+
 fn usage() -> &'static str {
     r#"Usage: comp-gen [--stdout] [--check] <command>
+       comp-gen --list-dynamic-providers
+       comp-gen --audit [completion-dir]
 
 Options:
-  --stdout   Print generated JSON to stdout instead of saving
-  --check    Validate generated JSON and exit (no save)
-  -h, --help Show this help message
+  --stdout                  Print generated JSON to stdout instead of saving
+  --check                   Validate generated JSON and exit (no save)
+  --list-dynamic-providers  Print known Dynamic provider ids
+  --audit [completion-dir]  Summarize JSON command/type/provider coverage
+  -h, --help                Show this help message
 
 Notes:
-  --stdout and --check are mutually exclusive.
+  --stdout and --check are mutually exclusive. Script argument types are rejected
+  for generated JSON; handwritten runtime definitions may still use Script.
 "#
 }
 
-fn parse_args(args: &[String]) -> Result<(CompGenOptions, String)> {
+fn parse_args(args: &[String]) -> Result<CompGenAction> {
     let mut options = CompGenOptions {
         stdout: false,
         check_only: false,
     };
     let mut command_name: Option<String> = None;
+    let mut list_dynamic_providers = false;
+    let mut audit_dir: Option<PathBuf> = None;
+    let mut audit_dir_explicit = false;
 
     for arg in args {
         match arg.as_str() {
             "--stdout" => options.stdout = true,
             "--check" => options.check_only = true,
+            "--list-dynamic-providers" => list_dynamic_providers = true,
+            "--audit" => {
+                if audit_dir.is_some() {
+                    bail!("--audit may only be specified once");
+                }
+                audit_dir = Some(PathBuf::from("completions"));
+                audit_dir_explicit = false;
+            }
             "-h" | "--help" => {}
             _ if arg.starts_with('-') => bail!("Unknown option: {}", arg),
             _ => {
-                if command_name.is_some() {
-                    bail!("Only one command may be specified");
+                if audit_dir.is_some() && !audit_dir_explicit {
+                    audit_dir = Some(PathBuf::from(arg));
+                    audit_dir_explicit = true;
+                } else {
+                    if command_name.is_some() {
+                        bail!("Only one command may be specified");
+                    }
+                    command_name = Some(arg.clone());
                 }
-                command_name = Some(arg.clone());
             }
         }
     }
 
-    let command_name = command_name.context("Missing required <command> argument")?;
+    let mode_count = usize::from(list_dynamic_providers) + usize::from(audit_dir.is_some());
+    if mode_count > 1 {
+        bail!("Only one listing/audit mode may be specified");
+    }
+    if mode_count > 0 && (options.stdout || options.check_only || command_name.is_some()) {
+        bail!("Listing/audit modes cannot be combined with generation options or <command>");
+    }
     if options.stdout && options.check_only {
         bail!("--stdout and --check cannot be used together");
     }
-    Ok((options, command_name))
+    if list_dynamic_providers {
+        return Ok(CompGenAction::ListDynamicProviders);
+    }
+    if let Some(dir) = audit_dir {
+        return Ok(CompGenAction::Audit { dir });
+    }
+
+    let command_name = command_name.context("Missing required <command> argument")?;
+    Ok(CompGenAction::Generate {
+        options,
+        command_name,
+    })
 }
 
 fn generate_completion(
@@ -202,6 +282,137 @@ fn log(ctx: &Context, to_stderr: bool, message: &str) {
         let _ = ctx.write_stderr(message);
     } else {
         let _ = ctx.write_stdout(message);
+    }
+}
+
+fn dynamic_provider_list() -> String {
+    DYNAMIC_COMPLETION_PROVIDERS.join("\n")
+}
+
+#[derive(Debug, Default)]
+struct CompletionAudit {
+    command_count: usize,
+    string_count: usize,
+    dynamic_count: usize,
+    unknown_providers: BTreeMap<String, usize>,
+}
+
+fn audit_completion_dir(dir: &Path) -> Result<String> {
+    let mut audit = CompletionAudit::default();
+    let mut entries = fs::read_dir(dir)
+        .with_context(|| format!("Failed to read completion dir '{}'", dir.display()))?
+        .collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let json = fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read '{}'", path.display()))?;
+        let value: Value = serde_json::from_str(&json)
+            .with_context(|| format!("Invalid JSON in '{}'", path.display()))?;
+        audit.command_count += 1;
+        audit_command_value(&value, &mut audit);
+    }
+
+    let mut lines = vec![
+        format!("commands={}", audit.command_count),
+        format!("string_types={}", audit.string_count),
+        format!("dynamic_types={}", audit.dynamic_count),
+        format!("unknown_providers={}", audit.unknown_providers.len()),
+    ];
+    for (provider, count) in audit.unknown_providers {
+        lines.push(format!("unknown_provider {provider} count={count}"));
+    }
+    Ok(lines.join("\n"))
+}
+
+fn audit_command_value(value: &Value, audit: &mut CompletionAudit) {
+    let Some(obj) = value.as_object() else {
+        return;
+    };
+    if let Some(options) = obj.get("global_options").and_then(Value::as_array) {
+        for option in options {
+            audit_option_value(option, audit);
+        }
+    }
+    if let Some(arguments) = obj.get("arguments").and_then(Value::as_array) {
+        for argument in arguments {
+            audit_argument_value(argument, audit);
+        }
+    }
+    if let Some(subcommands) = obj.get("subcommands").and_then(Value::as_array) {
+        for subcommand in subcommands {
+            audit_subcommand_value(subcommand, audit);
+        }
+    }
+}
+
+fn audit_subcommand_value(value: &Value, audit: &mut CompletionAudit) {
+    let Some(obj) = value.as_object() else {
+        return;
+    };
+    if let Some(options) = obj.get("options").and_then(Value::as_array) {
+        for option in options {
+            audit_option_value(option, audit);
+        }
+    }
+    if let Some(arguments) = obj.get("arguments").and_then(Value::as_array) {
+        for argument in arguments {
+            audit_argument_value(argument, audit);
+        }
+    }
+    if let Some(subcommands) = obj.get("subcommands").and_then(Value::as_array) {
+        for subcommand in subcommands {
+            audit_subcommand_value(subcommand, audit);
+        }
+    }
+}
+
+fn audit_option_value(value: &Value, audit: &mut CompletionAudit) {
+    let Some(obj) = value.as_object() else {
+        return;
+    };
+    if let Some(value_type) = obj.get("value_type") {
+        audit_argument_type_value(value_type, audit);
+    }
+    if let Some(argument) = obj.get("argument") {
+        audit_argument_value(argument, audit);
+    }
+}
+
+fn audit_argument_value(value: &Value, audit: &mut CompletionAudit) {
+    let Some(obj) = value.as_object() else {
+        return;
+    };
+    if let Some(arg_type) = obj.get("type") {
+        audit_argument_type_value(arg_type, audit);
+    }
+}
+
+fn audit_argument_type_value(value: &Value, audit: &mut CompletionAudit) {
+    let Some(type_name) = value.get("type").and_then(Value::as_str) else {
+        return;
+    };
+    match type_name {
+        "String" => audit.string_count += 1,
+        "Dynamic" => {
+            audit.dynamic_count += 1;
+            let provider = value
+                .get("data")
+                .and_then(|data| data.get("provider"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if !is_known_dynamic_completion_provider(provider) {
+                *audit
+                    .unknown_providers
+                    .entry(provider.to_string())
+                    .or_insert(0) += 1;
+            }
+        }
+        _ => {}
     }
 }
 
@@ -434,7 +645,10 @@ fn validate_argument_type(value: &Value, path: &str) -> Result<()> {
         let provider = data_obj
             .get("provider")
             .with_context(|| format!("{path}.data.provider is required"))?;
-        require_non_empty_string(provider, &format!("{path}.data.provider"))?;
+        let provider = require_non_empty_string(provider, &format!("{path}.data.provider"))?;
+        if !is_known_dynamic_completion_provider(provider) {
+            bail!("{path}.data.provider has unknown Dynamic provider '{provider}'");
+        }
         if let Some(scope) = data_obj.get("scope")
             && !scope.is_null()
             && scope.as_str().is_none()
@@ -448,7 +662,11 @@ fn validate_argument_type(value: &Value, path: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_args, validate_completion_json};
+    use super::{
+        CompGenAction, audit_completion_dir, dynamic_provider_list, parse_args,
+        validate_completion_json,
+    };
+    use std::fs;
 
     #[test]
     fn validate_completion_allows_minimal() {
@@ -594,6 +812,25 @@ mod tests {
     }
 
     #[test]
+    fn validate_completion_rejects_unknown_dynamic_provider() {
+        let json = r#"
+        {
+          "command": "foo",
+          "arguments": [
+            {
+              "name": "branch",
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "git.unknown" }
+              }
+            }
+          ]
+        }
+        "#;
+        assert!(validate_completion_json(json, "foo").is_err());
+    }
+
+    #[test]
     fn validate_completion_requires_type_object() {
         let json = r#"
         {
@@ -609,19 +846,51 @@ mod tests {
     #[test]
     fn parse_args_accepts_stdout() {
         let args = vec!["--stdout".to_string(), "git".to_string()];
-        let (options, command) = parse_args(&args).unwrap();
+        let action = parse_args(&args).unwrap();
+        let CompGenAction::Generate {
+            options,
+            command_name,
+        } = action
+        else {
+            panic!("expected generate action");
+        };
         assert!(options.stdout);
         assert!(!options.check_only);
-        assert_eq!(command, "git");
+        assert_eq!(command_name, "git");
     }
 
     #[test]
     fn parse_args_accepts_check() {
         let args = vec!["--check".to_string(), "cargo".to_string()];
-        let (options, command) = parse_args(&args).unwrap();
+        let action = parse_args(&args).unwrap();
+        let CompGenAction::Generate {
+            options,
+            command_name,
+        } = action
+        else {
+            panic!("expected generate action");
+        };
         assert!(!options.stdout);
         assert!(options.check_only);
-        assert_eq!(command, "cargo");
+        assert_eq!(command_name, "cargo");
+    }
+
+    #[test]
+    fn parse_args_accepts_list_dynamic_providers() {
+        let args = vec!["--list-dynamic-providers".to_string()];
+        assert_eq!(
+            parse_args(&args).unwrap(),
+            CompGenAction::ListDynamicProviders
+        );
+    }
+
+    #[test]
+    fn parse_args_accepts_audit_dir() {
+        let args = vec!["--audit".to_string(), "dsh/completions".to_string()];
+        assert!(matches!(
+            parse_args(&args).unwrap(),
+            CompGenAction::Audit { dir } if dir == std::path::Path::new("dsh/completions")
+        ));
     }
 
     #[test]
@@ -638,5 +907,39 @@ mod tests {
             "git".to_string(),
         ];
         assert!(parse_args(&args).is_err());
+    }
+
+    #[test]
+    fn dynamic_provider_list_includes_reusable_providers() {
+        let output = dynamic_provider_list();
+        assert!(output.lines().any(|line| line == "git.branch"));
+        assert!(output.lines().any(|line| line == "systemctl.unit"));
+        assert!(output.lines().any(|line| line == "kernel.module"));
+    }
+
+    #[test]
+    fn audit_completion_dir_counts_string_dynamic_and_unknown_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("foo.json"),
+            r#"
+            {
+              "command": "foo",
+              "arguments": [
+                { "name": "plain", "type": { "type": "String" } },
+                { "name": "branch", "type": { "type": "Dynamic", "data": { "provider": "git.branch" } } },
+                { "name": "bad", "type": { "type": "Dynamic", "data": { "provider": "bad.provider" } } }
+              ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let output = audit_completion_dir(dir.path()).unwrap();
+        assert!(output.contains("commands=1"));
+        assert!(output.contains("string_types=1"));
+        assert!(output.contains("dynamic_types=2"));
+        assert!(output.contains("unknown_providers=1"));
+        assert!(output.contains("unknown_provider bad.provider count=1"));
     }
 }

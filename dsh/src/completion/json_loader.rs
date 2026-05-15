@@ -710,6 +710,33 @@ mod tests {
     }
 
     #[test]
+    fn command_completion_schema_uses_shared_dynamic_provider_list() {
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../../../command-completion-schema.json")).unwrap();
+        let dynamic_type = schema
+            .pointer("/definitions/ArgumentType/oneOf")
+            .and_then(serde_json::Value::as_array)
+            .unwrap()
+            .iter()
+            .find(|entry| {
+                entry.get("title").and_then(serde_json::Value::as_str) == Some("Dynamic Type")
+            })
+            .unwrap();
+        let schema_providers = dynamic_type
+            .pointer("/properties/data/properties/provider/enum")
+            .and_then(serde_json::Value::as_array)
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            schema_providers,
+            dsh_types::completion::DYNAMIC_COMPLETION_PROVIDERS
+        );
+    }
+
+    #[test]
     fn root_completion_mirror_matches_embedded_completion_source() {
         let embedded_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("completions");
         let mirror_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../completions");

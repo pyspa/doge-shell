@@ -23,13 +23,13 @@
       "short": "-d",
       "description": "Detach the elsewhere running screen (and reattach here)",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": { "type": "Dynamic", "data": { "provider": "screen.session" } }
     },
     {
       "short": "-D",
       "description": "Detach and logout remote (and reattach here)",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": { "type": "Dynamic", "data": { "provider": "screen.session" } }
     },
     {
       "short": "-dmS",
@@ -83,13 +83,13 @@
       "short": "-r",
       "description": "Reattach to a detached screen process",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": { "type": "Dynamic", "data": { "provider": "screen.session" } }
     },
     {
       "short": "-R",
       "description": "Reattach if possible, otherwise start a new session",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": { "type": "Dynamic", "data": { "provider": "screen.session" } }
     },
     {
       "short": "-s",
@@ -119,7 +119,7 @@
       "short": "-x",
       "description": "Attach to a not detached screen (Multi display mode)",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": { "type": "Dynamic", "data": { "provider": "screen.session" } }
     },
     {
       "short": "-X",
@@ -130,7 +130,7 @@
     {
       "name": "session",
       "description": "Session name to attach",
-      "type": { "type": "String" }
+      "type": { "type": "Dynamic", "data": { "provider": "screen.session" } }
     }
   ],
   "subcommands": []

@@ -68,17 +68,15 @@ impl BuiltinProcess {
     }
 
     pub fn set_state(&mut self, pid: Pid, state: ProcessState) -> bool {
+        if let Some(self_pid) = self.pid
+            && self_pid == pid
+        {
+            self.state = state;
+            return true;
+        }
+
         if let Some(ref mut next) = self.next {
-            if next.set_state_pid(pid, state) {
-                return true;
-            }
-            // Check if this process matches the PID
-            if let Some(self_pid) = self.pid
-                && self_pid == pid
-            {
-                self.state = state;
-                return true;
-            }
+            return next.set_state_pid(pid, state);
         }
         false
     }

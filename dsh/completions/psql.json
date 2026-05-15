@@ -1,0 +1,19 @@
+{
+  "command": "psql",
+  "description": "PostgreSQL interactive terminal",
+  "global_options": [
+    { "short": "-?", "long": "--help", "description": "Show help" },
+    { "short": "-V", "long": "--version", "description": "Show version" },
+    { "short": "-h", "long": "--host", "description": "Database server host", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-p", "long": "--port", "description": "Database server port", "takes_value": true, "value_type": { "type": "Number" } },
+    { "short": "-U", "long": "--username", "description": "Database user", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-d", "long": "--dbname", "description": "Database name", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-f", "long": "--file", "description": "Execute commands from file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["sql"] } } },
+    { "short": "-c", "long": "--command", "description": "Run one command and exit", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-A", "long": "--no-align", "description": "Unaligned table output mode" },
+    { "short": "-t", "long": "--tuples-only", "description": "Print rows only" }
+  ],
+  "arguments": [
+    { "name": "dbname", "description": "Database name", "type": { "type": "String" } }
+  ]
+}

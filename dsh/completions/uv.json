@@ -1,0 +1,37 @@
+{
+  "command": "uv",
+  "description": "Fast Python package and project manager",
+  "global_options": [
+    { "short": "-q", "long": "--quiet", "description": "Do not print output" },
+    { "short": "-v", "long": "--verbose", "description": "Use verbose output" },
+    { "long": "--directory", "description": "Change to directory before running", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "long": "--project", "description": "Run within project directory", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    {
+      "name": "run",
+      "description": "Run a command or script",
+      "options": [
+        { "long": "--with", "description": "Run with additional packages" },
+        { "long": "--env-file", "description": "Load environment from file", "takes_value": true, "value_type": { "type": "File", "data": {} } }
+      ],
+      "arguments": [{ "name": "command", "description": "Command to run", "type": { "type": "Command" } }]
+    },
+    { "name": "sync", "description": "Sync the project environment" },
+    { "name": "lock", "description": "Update lockfile" },
+    { "name": "add", "description": "Add dependencies", "arguments": [{ "name": "package", "description": "Package requirement", "multiple": true }] },
+    { "name": "remove", "description": "Remove dependencies", "arguments": [{ "name": "package", "description": "Package name", "multiple": true }] },
+    { "name": "pip", "description": "Manage Python packages with a pip-compatible interface" },
+    {
+      "name": "tool",
+      "description": "Run and install tools",
+      "subcommands": [
+        { "name": "run", "description": "Run a tool" },
+        { "name": "install", "description": "Install a tool" },
+        { "name": "list", "description": "List installed tools" },
+        { "name": "upgrade", "description": "Upgrade installed tools" }
+      ]
+    }
+  ]
+}

@@ -334,19 +334,16 @@ impl JsonCompletionLoader {
             );
         }
 
-        if let Some(ref short) = option.short {
-            // Short options must start with exactly one dash, followed by at least one non-whitespace, non-dash character
-            if !short.starts_with('-') || short.starts_with("--") {
-                anyhow::bail!("Invalid short option format '{}' in '{}'", short, context);
-            }
+        if let Some(ref short) = option.short
+            && !valid_short_option(short)
+        {
+            anyhow::bail!("Invalid short option format '{}' in '{}'", short, context);
         }
 
-        if let Some(ref long) = option.long {
-            // Long options usually start with --, but some commands (like go, java) use -
-            // So we just ensure it starts with - and has some content, and is not just "--"
-            if !long.starts_with("-") || long.len() < 2 || long == "--" {
-                anyhow::bail!("Invalid long option format '{}' in '{}'", long, context);
-            }
+        if let Some(ref long) = option.long
+            && !valid_long_option(long)
+        {
+            anyhow::bail!("Invalid long option format '{}' in '{}'", long, context);
         }
 
         if let Some(argument) = &option.argument {
@@ -479,6 +476,20 @@ impl JsonCompletionLoader {
         debug!("Total available completions: {}", result.len());
         Ok(result)
     }
+}
+
+fn option_base(option: &str) -> &str {
+    option.split_whitespace().next().unwrap_or("")
+}
+
+fn valid_short_option(option: &str) -> bool {
+    let base = option_base(option);
+    base.starts_with('-') && !base.starts_with("--") && base.len() > 1
+}
+
+fn valid_long_option(option: &str) -> bool {
+    let base = option_base(option);
+    base.starts_with('-') && base.len() > 1 && base != "--"
 }
 
 impl Default for JsonCompletionLoader {
@@ -773,9 +784,9 @@ mod tests {
         let loader = JsonCompletionLoader::with_dirs(vec![temp_dir.path().to_path_buf()]);
         let completions = loader.list_available_completions().unwrap();
 
-        // Should include both embedded completions and filesystem completions
-        // The exact number depends on what's in the completions/ directory
-        assert_eq!(completions.len(), 138);
+        // Should include both embedded completions and filesystem completions.
+        // The exact number grows as built-in command definitions are added.
+        assert!(completions.len() >= 5);
         assert!(completions.contains(&"git".to_string()));
         assert!(completions.contains(&"cargo".to_string()));
         assert!(completions.contains(&"docker".to_string()));
@@ -951,7 +962,7 @@ mod tests {
         };
         assert!(loader.validate_option(&option_both, "test").is_ok());
 
-        // Test invalid short option (only option that should fail is -- or just -)
+        // Test invalid short options (short must start with a single dash and have content)
         let invalid_short = crate::completion::command::CommandOption {
             short: Some("--".to_string()), // Invalid: this is a long option prefix, not a short option
             long: None,
@@ -961,6 +972,16 @@ mod tests {
             argument: None,
         };
         assert!(loader.validate_option(&invalid_short, "test").is_err());
+
+        let invalid_bare_short = crate::completion::command::CommandOption {
+            short: Some("-".to_string()),
+            long: None,
+            description: None,
+            takes_value: false,
+            value_type: None,
+            argument: None,
+        };
+        assert!(loader.validate_option(&invalid_bare_short, "test").is_err());
 
         // Test that valid short option like -123 is now accepted
         let valid_short_with_number = crate::completion::command::CommandOption {
@@ -977,6 +998,20 @@ mod tests {
                 .is_ok()
         );
 
+        let valid_short_with_attached_value = crate::completion::command::CommandOption {
+            short: Some("-ofile".to_string()),
+            long: None,
+            description: None,
+            takes_value: false,
+            value_type: None,
+            argument: None,
+        };
+        assert!(
+            loader
+                .validate_option(&valid_short_with_attached_value, "test")
+                .is_ok()
+        );
+
         // Test invalid long option (should still fail)
         let invalid_long = crate::completion::command::CommandOption {
             short: None,
@@ -987,6 +1022,30 @@ mod tests {
             argument: None,
         };
         assert!(loader.validate_option(&invalid_long, "test").is_err());
+
+        let invalid_long_with_placeholder = crate::completion::command::CommandOption {
+            short: None,
+            long: Some("-- <ARG>".to_string()),
+            description: None,
+            takes_value: false,
+            value_type: None,
+            argument: None,
+        };
+        assert!(
+            loader
+                .validate_option(&invalid_long_with_placeholder, "test")
+                .is_err()
+        );
+
+        let invalid_bare_long = crate::completion::command::CommandOption {
+            short: None,
+            long: Some("-".to_string()),
+            description: None,
+            takes_value: false,
+            value_type: None,
+            argument: None,
+        };
+        assert!(loader.validate_option(&invalid_bare_long, "test").is_err());
 
         // Test that long option starting with -- and containing numbers is now valid
         let valid_long_with_number = crate::completion::command::CommandOption {
@@ -1000,6 +1059,20 @@ mod tests {
         assert!(
             loader
                 .validate_option(&valid_long_with_number, "test")
+                .is_ok()
+        );
+
+        let valid_single_dash_long = crate::completion::command::CommandOption {
+            short: None,
+            long: Some("-Xmx".to_string()),
+            description: None,
+            takes_value: false,
+            value_type: None,
+            argument: None,
+        };
+        assert!(
+            loader
+                .validate_option(&valid_single_dash_long, "test")
                 .is_ok()
         );
     }

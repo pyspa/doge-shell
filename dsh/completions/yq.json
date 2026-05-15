@@ -1,0 +1,33 @@
+{
+  "command": "yq",
+  "description": "YAML, JSON, XML, CSV and TOML processor",
+  "global_options": [
+    { "short": "-o", "long": "--output-format", "description": "Output format", "takes_value": true, "value_type": { "type": "Choice", "data": ["yaml", "json", "props", "xml", "csv", "tsv"] } },
+    { "short": "-p", "long": "--input-format", "description": "Input format", "takes_value": true, "value_type": { "type": "Choice", "data": ["auto", "yaml", "json", "xml", "csv", "tsv", "toml"] } },
+    { "short": "-i", "long": "--inplace", "description": "Update file in place" },
+    { "short": "-r", "long": "--unwrapScalar", "description": "Unwrap scalar values" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    {
+      "name": "eval",
+      "description": "Apply expression to each document",
+      "arguments": [
+        { "name": "expression", "description": "yq expression" },
+        { "name": "file", "description": "Input file", "required": false, "multiple": true, "type": { "type": "File", "data": {} } }
+      ]
+    },
+    {
+      "name": "eval-all",
+      "description": "Apply expression after loading all documents",
+      "arguments": [
+        { "name": "expression", "description": "yq expression" },
+        { "name": "file", "description": "Input file", "required": false, "multiple": true, "type": { "type": "File", "data": {} } }
+      ]
+    }
+  ],
+  "arguments": [
+    { "name": "expression", "description": "yq expression", "required": false },
+    { "name": "file", "description": "Input file", "required": false, "multiple": true, "type": { "type": "File", "data": {} } }
+  ]
+}

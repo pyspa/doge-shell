@@ -280,6 +280,16 @@ fn validate_options_array(value: &Value, path: &str) -> Result<()> {
         if short.is_none() && long.is_none() {
             bail!("{option_path} must have at least one of 'short' or 'long'");
         }
+        if let Some(short) = short
+            && !valid_short_option(short)
+        {
+            bail!("{option_path}.short has invalid option format '{short}'");
+        }
+        if let Some(long) = long
+            && !valid_long_option(long)
+        {
+            bail!("{option_path}.long has invalid option format '{long}'");
+        }
         if let Some(takes_value) = obj.get("takes_value")
             && !takes_value.is_boolean()
         {
@@ -293,6 +303,20 @@ fn validate_options_array(value: &Value, path: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn option_base(option: &str) -> &str {
+    option.split_whitespace().next().unwrap_or("")
+}
+
+fn valid_short_option(option: &str) -> bool {
+    let base = option_base(option);
+    base.starts_with('-') && !base.starts_with("--") && base.len() > 1
+}
+
+fn valid_long_option(option: &str) -> bool {
+    let base = option_base(option);
+    base.starts_with('-') && base.len() > 1 && base != "--"
 }
 
 fn validate_arguments_array(value: &Value, path: &str) -> Result<()> {
@@ -455,6 +479,67 @@ mod tests {
         }
         "#;
         assert!(validate_completion_json(json, "foo").is_err());
+    }
+
+    #[test]
+    fn validate_completion_aligns_runtime_option_formats() {
+        let json = r#"
+        {
+          "command": "foo",
+          "global_options": [
+            { "short": "-f <FILE>" },
+            { "short": "-123" },
+            { "short": "-ofile" },
+            { "long": "--123invalid" },
+            { "long": "--type <TYPE>" },
+            { "long": "-Xmx" }
+          ]
+        }
+        "#;
+        assert!(validate_completion_json(json, "foo").is_ok());
+    }
+
+    #[test]
+    fn validate_completion_rejects_bare_option_markers() {
+        let bare_short = r#"
+        {
+          "command": "foo",
+          "global_options": [
+            { "short": "-" }
+          ]
+        }
+        "#;
+        assert!(validate_completion_json(bare_short, "foo").is_err());
+
+        let long_prefix_as_short = r#"
+        {
+          "command": "foo",
+          "global_options": [
+            { "short": "--verbose" }
+          ]
+        }
+        "#;
+        assert!(validate_completion_json(long_prefix_as_short, "foo").is_err());
+
+        let bare_long = r#"
+        {
+          "command": "foo",
+          "global_options": [
+            { "long": "--" }
+          ]
+        }
+        "#;
+        assert!(validate_completion_json(bare_long, "foo").is_err());
+
+        let bare_long_with_placeholder = r#"
+        {
+          "command": "foo",
+          "global_options": [
+            { "long": "-- <ARG>" }
+          ]
+        }
+        "#;
+        assert!(validate_completion_json(bare_long_with_placeholder, "foo").is_err());
     }
 
     #[test]

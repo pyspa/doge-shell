@@ -45,7 +45,10 @@
           "short": "-p",
           "description": "Package to build",
           "takes_value": true,
-          "value_type": { "type": "String" }
+          "value_type": {
+            "type": "Dynamic",
+            "data": { "provider": "cargo.package" }
+          }
         },
         {
           "long": "--workspace",
@@ -80,20 +83,29 @@
           "long": "--bin",
           "description": "Name of the bin target to run",
           "takes_value": true,
-          "value_type": { "type": "String" }
+          "value_type": {
+            "type": "Dynamic",
+            "data": { "provider": "cargo.bin" }
+          }
         },
         {
           "long": "--example",
           "description": "Name of the example target to run",
           "takes_value": true,
-          "value_type": { "type": "String" }
+          "value_type": {
+            "type": "Dynamic",
+            "data": { "provider": "cargo.example" }
+          }
         },
         {
           "long": "--package",
           "short": "-p",
           "description": "Package to run",
           "takes_value": true,
-          "value_type": { "type": "String" }
+          "value_type": {
+            "type": "Dynamic",
+            "data": { "provider": "cargo.package" }
+          }
         },
         {
           "long": "--jobs",
@@ -130,7 +142,10 @@
           "short": "-p",
           "description": "Package to test",
           "takes_value": true,
-          "value_type": { "type": "String" }
+          "value_type": {
+            "type": "Dynamic",
+            "data": { "provider": "cargo.package" }
+          }
         },
         {
           "long": "--workspace",
@@ -287,7 +302,10 @@
           "short": "-p",
           "description": "Package to check",
           "takes_value": true,
-          "value_type": { "type": "String" }
+          "value_type": {
+            "type": "Dynamic",
+            "data": { "provider": "cargo.package" }
+          }
         },
         {
           "long": "--all-targets",
@@ -317,7 +335,10 @@
           "short": "-p",
           "description": "Package to lint",
           "takes_value": true,
-          "value_type": { "type": "String" }
+          "value_type": {
+            "type": "Dynamic",
+            "data": { "provider": "cargo.package" }
+          }
         },
         {
           "long": "--workspace",
@@ -343,7 +364,10 @@
           "short": "-p",
           "description": "Package to format",
           "takes_value": true,
-          "value_type": { "type": "String" }
+          "value_type": {
+            "type": "Dynamic",
+            "data": { "provider": "cargo.package" }
+          }
         },
         {
           "long": "--all",
@@ -361,7 +385,10 @@
           "short": "-p",
           "description": "Package to benchmark",
           "takes_value": true,
-          "value_type": { "type": "String" }
+          "value_type": {
+            "type": "Dynamic",
+            "data": { "provider": "cargo.package" }
+          }
         },
         {
           "long": "--workspace",
@@ -389,7 +416,10 @@
           "short": "-p",
           "description": "Package to document",
           "takes_value": true,
-          "value_type": { "type": "String" }
+          "value_type": {
+            "type": "Dynamic",
+            "data": { "provider": "cargo.package" }
+          }
         },
         {
           "long": "--workspace",
@@ -415,7 +445,10 @@
           "short": "-p",
           "description": "Package to clean",
           "takes_value": true,
-          "value_type": { "type": "String" }
+          "value_type": {
+            "type": "Dynamic",
+            "data": { "provider": "cargo.package" }
+          }
         },
         {
           "long": "--target-dir",
@@ -433,7 +466,10 @@
           "short": "-p",
           "description": "Package to update",
           "takes_value": true,
-          "value_type": { "type": "String" }
+          "value_type": {
+            "type": "Dynamic",
+            "data": { "provider": "cargo.package" }
+          }
         },
         {
           "long": "--workspace",
@@ -459,7 +495,10 @@
           "short": "-p",
           "description": "Package to publish",
           "takes_value": true,
-          "value_type": { "type": "String" }
+          "value_type": {
+            "type": "Dynamic",
+            "data": { "provider": "cargo.package" }
+          }
         },
         {
           "long": "--allow-dirty",

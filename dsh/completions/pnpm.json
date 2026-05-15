@@ -19,12 +19,28 @@
         {
           "name": "package",
           "description": "Package to remove",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "js.dependency" }
+          }
         }
       ]
     },
     { "name": "install", "description": "Install all dependencies" },
-    { "name": "update", "description": "Update packages" },
+    {
+      "name": "update",
+      "description": "Update packages",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "Package to update",
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "js.dependency" }
+          }
+        }
+      ]
+    },
     { "name": "init", "description": "Initialize a new package" },
     {
       "name": "run",
@@ -43,7 +59,20 @@
     { "name": "publish", "description": "Publish package" },
     { "name": "list", "description": "List installed packages" },
     { "name": "outdated", "description": "List outdated packages" },
-    { "name": "why", "description": "Show why a package is installed" },
+    {
+      "name": "why",
+      "description": "Show why a package is installed",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "Package to explain",
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "js.dependency" }
+          }
+        }
+      ]
+    },
     { "name": "store", "description": "Manage store",
       "subcommands": [
         { "name": "status", "description": "Show store status" },

@@ -1,0 +1,26 @@
+{
+  "command": "mise",
+  "description": "Development tool version and task manager",
+  "global_options": [
+    { "short": "-C", "long": "--cd", "description": "Change directory before running", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "short": "-v", "long": "--verbose", "description": "Increase verbosity" },
+    { "short": "-q", "long": "--quiet", "description": "Decrease verbosity" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "install", "description": "Install tool versions" },
+    { "name": "use", "description": "Use tool version in config" },
+    { "name": "list", "description": "List installed versions" },
+    { "name": "current", "description": "Show current tool versions" },
+    { "name": "exec", "description": "Execute command with tool versions", "arguments": [{ "name": "command", "description": "Command to execute", "type": { "type": "Command" } }] },
+    {
+      "name": "run",
+      "description": "Run a project task",
+      "arguments": [
+        { "name": "task", "description": "Task name", "type": { "type": "Dynamic", "data": { "provider": "project.task" } } }
+      ]
+    },
+    { "name": "tasks", "description": "List project tasks" },
+    { "name": "plugins", "description": "Manage plugins" }
+  ]
+}

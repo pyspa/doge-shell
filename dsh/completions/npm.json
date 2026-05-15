@@ -216,7 +216,10 @@
         {
           "name": "package",
           "description": "Package name(s)",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "js.dependency" }
+          }
         }
       ],
       "subcommands": []
@@ -243,7 +246,11 @@
       "arguments": [
         {
           "name": "package",
-          "description": "Specific package (optional)"
+          "description": "Specific package (optional)",
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "js.dependency" }
+          }
         }
       ],
       "subcommands": []

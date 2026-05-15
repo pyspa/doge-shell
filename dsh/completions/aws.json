@@ -1,0 +1,23 @@
+{
+  "command": "aws",
+  "description": "AWS CLI",
+  "global_options": [
+    { "long": "--profile", "description": "Use a specific profile", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--region", "description": "Use a specific region", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--output", "description": "Output format", "takes_value": true, "value_type": { "type": "Choice", "data": ["json", "yaml", "yaml-stream", "text", "table"] } },
+    { "long": "--endpoint-url", "description": "Override command endpoint", "takes_value": true, "value_type": { "type": "Url" } },
+    { "long": "--no-cli-pager", "description": "Disable pager" },
+    { "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "s3", "description": "High-level S3 commands", "subcommands": [{ "name": "ls", "description": "List buckets or objects" }, { "name": "cp", "description": "Copy files" }, { "name": "sync", "description": "Sync directories" }, { "name": "rm", "description": "Delete objects" }, { "name": "mv", "description": "Move objects" }] },
+    { "name": "s3api", "description": "Low-level S3 API commands" },
+    { "name": "ec2", "description": "EC2 service commands" },
+    { "name": "eks", "description": "EKS service commands", "subcommands": [{ "name": "update-kubeconfig", "description": "Write kubeconfig for cluster" }, { "name": "list-clusters", "description": "List EKS clusters" }, { "name": "describe-cluster", "description": "Describe an EKS cluster" }] },
+    { "name": "cloudformation", "description": "CloudFormation service commands" },
+    { "name": "lambda", "description": "Lambda service commands" },
+    { "name": "sts", "description": "Security Token Service commands", "subcommands": [{ "name": "get-caller-identity", "description": "Show current identity" }, { "name": "assume-role", "description": "Assume an IAM role" }] },
+    { "name": "iam", "description": "IAM service commands" },
+    { "name": "logs", "description": "CloudWatch Logs commands" }
+  ]
+}

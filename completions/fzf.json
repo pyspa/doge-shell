@@ -1,0 +1,16 @@
+{
+  "command": "fzf",
+  "description": "Command-line fuzzy finder",
+  "global_options": [
+    { "long": "--query", "short": "-q", "description": "Start query", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--filter", "short": "-f", "description": "Filter mode query", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--multi", "short": "-m", "description": "Enable multi-select" },
+    { "long": "--prompt", "description": "Input prompt", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--preview", "description": "Preview command", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--bind", "description": "Key binding", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--height", "description": "Display height", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--tmux", "description": "Open in tmux popup" },
+    { "long": "--version", "description": "Show version" },
+    { "long": "--help", "description": "Show help" }
+  ]
+}

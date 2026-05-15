@@ -1,0 +1,28 @@
+{
+  "command": "asdf",
+  "description": "Extendable version manager",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "long": "--version", "description": "Show version" }
+  ],
+  "subcommands": [
+    {
+      "name": "plugin",
+      "description": "Manage plugins",
+      "subcommands": [
+        { "name": "add", "description": "Add plugin" },
+        { "name": "list", "description": "List plugins" },
+        { "name": "remove", "description": "Remove plugin" },
+        { "name": "update", "description": "Update plugin" }
+      ]
+    },
+    { "name": "install", "description": "Install a tool version" },
+    { "name": "uninstall", "description": "Uninstall a tool version" },
+    { "name": "list", "description": "List installed versions" },
+    { "name": "list-all", "description": "List all available versions" },
+    { "name": "global", "description": "Set global version" },
+    { "name": "local", "description": "Set local version" },
+    { "name": "current", "description": "Show current versions" },
+    { "name": "where", "description": "Show install path" }
+  ]
+}

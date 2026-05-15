@@ -1,0 +1,19 @@
+{
+  "command": "helm",
+  "description": "Kubernetes package manager",
+  "global_options": [
+    { "short": "-n", "long": "--namespace", "description": "Namespace scope", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "kubectl.namespace" } } },
+    { "long": "--kube-context", "description": "Kubernetes context", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "kubectl.context" } } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "repo", "description": "Manage chart repositories", "subcommands": [{ "name": "add", "description": "Add chart repository" }, { "name": "list", "description": "List repositories" }, { "name": "update", "description": "Update repository cache" }, { "name": "remove", "description": "Remove chart repository" }] },
+    { "name": "search", "description": "Search for charts", "subcommands": [{ "name": "repo", "description": "Search repositories" }, { "name": "hub", "description": "Search Artifact Hub" }] },
+    { "name": "install", "description": "Install a chart", "arguments": [{ "name": "release", "description": "Release name" }, { "name": "chart", "description": "Chart reference or path", "type": { "type": "File", "data": {} } }] },
+    { "name": "upgrade", "description": "Upgrade a release", "arguments": [{ "name": "release", "description": "Release name" }, { "name": "chart", "description": "Chart reference or path", "type": { "type": "File", "data": {} } }] },
+    { "name": "uninstall", "description": "Uninstall releases", "arguments": [{ "name": "release", "description": "Release name", "multiple": true }] },
+    { "name": "list", "description": "List releases" },
+    { "name": "status", "description": "Show release status", "arguments": [{ "name": "release", "description": "Release name" }] },
+    { "name": "template", "description": "Render chart templates locally" }
+  ]
+}

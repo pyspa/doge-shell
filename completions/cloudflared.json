@@ -1,0 +1,29 @@
+{
+  "command": "cloudflared",
+  "description": "Cloudflare Tunnel client",
+  "global_options": [
+    { "long": "--config", "description": "Config file path", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["yml", "yaml", "json"] } } },
+    { "long": "--origincert", "description": "Origin certificate path", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+    { "long": "--loglevel", "description": "Log level", "takes_value": true, "value_type": { "type": "Choice", "data": ["debug", "info", "warn", "error", "fatal"] } },
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "short": "-v", "long": "--version", "description": "Show version" }
+  ],
+  "subcommands": [
+    {
+      "name": "tunnel",
+      "description": "Manage Cloudflare tunnels",
+      "subcommands": [
+        { "name": "login", "description": "Authenticate with Cloudflare" },
+        { "name": "create", "description": "Create tunnel" },
+        { "name": "list", "description": "List tunnels" },
+        { "name": "run", "description": "Run tunnel" },
+        { "name": "route", "description": "Manage tunnel routes" },
+        { "name": "delete", "description": "Delete tunnel" }
+      ]
+    },
+    { "name": "access", "description": "Cloudflare Access commands" },
+    { "name": "service", "description": "Install or uninstall service" },
+    { "name": "update", "description": "Update cloudflared" },
+    { "name": "proxy-dns", "description": "Run DNS over HTTPS proxy" }
+  ]
+}

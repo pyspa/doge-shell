@@ -15,14 +15,20 @@
       "long": "--context",
       "description": "Context in kubeconfig",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "Dynamic",
+        "data": { "provider": "kubectl.context" }
+      }
     },
     {
       "long": "--namespace",
       "short": "-n",
       "description": "Namespace for operations",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "Dynamic",
+        "data": { "provider": "kubectl.namespace" }
+      }
     },
     {
       "long": "--dry-run",
@@ -107,12 +113,18 @@
         {
           "name": "resource",
           "description": "Resource type (pod, service, deployment, etc.)",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "kubectl.resource_type" }
+          }
         },
         {
           "name": "name",
           "description": "Resource name (optional)",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "kubectl.resource_name" }
+          }
         }
       ],
       "subcommands": []
@@ -124,12 +136,16 @@
         {
           "long": "--filename",
           "short": "-f",
-          "description": "Filename, directory, or URL for config"
+          "description": "Filename, directory, or URL for config",
+          "takes_value": true,
+          "value_type": { "type": "File", "data": {} }
         },
         {
           "long": "--kustomize",
           "short": "-k",
-          "description": "Process directory with Kustomize"
+          "description": "Process directory with Kustomize",
+          "takes_value": true,
+          "value_type": { "type": "Directory" }
         },
         {
           "long": "--recursive",
@@ -166,12 +182,18 @@
         {
           "name": "file_or_type",
           "description": "Config file or resource type",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "kubectl.resource_type" }
+          }
         },
         {
           "name": "name",
           "description": "Resource name (optional)",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "kubectl.resource_name" }
+          }
         }
       ],
       "subcommands": []
@@ -183,7 +205,9 @@
         {
           "long": "--filename",
           "short": "-f",
-          "description": "Filename for config"
+          "description": "Filename for config",
+          "takes_value": true,
+          "value_type": { "type": "File", "data": {} }
         },
         {
           "long": "--recursive",
@@ -199,12 +223,18 @@
         {
           "name": "resource",
           "description": "Resource type (pod, service, etc.)",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "kubectl.resource_type" }
+          }
         },
         {
           "name": "name",
           "description": "Resource name",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "kubectl.resource_name" }
+          }
         }
       ],
       "subcommands": []
@@ -216,7 +246,9 @@
         {
           "long": "--filename",
           "short": "-f",
-          "description": "Filename or directory for config"
+          "description": "Filename or directory for config",
+          "takes_value": true,
+          "value_type": { "type": "File", "data": {} }
         },
         {
           "long": "--dry-run",
@@ -244,12 +276,18 @@
         {
           "name": "type",
           "description": "Resource type if not using file",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "kubectl.resource_type" }
+          }
         },
         {
           "name": "name",
           "description": "Resource name (optional)",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "kubectl.resource_name" }
+          }
         }
       ],
       "subcommands": []
@@ -261,7 +299,9 @@
         {
           "long": "--filename",
           "short": "-f",
-          "description": "Filename or directory for resources to delete"
+          "description": "Filename or directory for resources to delete",
+          "takes_value": true,
+          "value_type": { "type": "File", "data": {} }
         },
         {
           "long": "--selector",
@@ -297,12 +337,18 @@
         {
           "name": "resource",
           "description": "Resource type (pod, service, etc.)",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "kubectl.resource_type" }
+          }
         },
         {
           "name": "name",
           "description": "Resource name(s)",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "kubectl.resource_name" }
+          }
         }
       ],
       "subcommands": []
@@ -355,7 +401,10 @@
         {
           "name": "pod",
           "description": "Pod name",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "kubectl.resource_name", "scope": "pod" }
+          }
         }
       ],
       "subcommands": []
@@ -389,7 +438,10 @@
         {
           "name": "pod",
           "description": "Pod name",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "kubectl.resource_name", "scope": "pod" }
+          }
         },
         {
           "name": "command",

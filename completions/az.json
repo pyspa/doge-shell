@@ -1,0 +1,21 @@
+{
+  "command": "az",
+  "description": "Azure CLI",
+  "global_options": [
+    { "long": "--subscription", "description": "Azure subscription", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--output", "short": "-o", "description": "Output format", "takes_value": true, "value_type": { "type": "Choice", "data": ["json", "jsonc", "yaml", "table", "tsv", "none"] } },
+    { "long": "--query", "description": "JMESPath query string", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--debug", "description": "Increase logging verbosity" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "login", "description": "Log in to Azure" },
+    { "name": "account", "description": "Manage Azure subscriptions", "subcommands": [{ "name": "show", "description": "Show current subscription" }, { "name": "list", "description": "List subscriptions" }, { "name": "set", "description": "Set active subscription" }] },
+    { "name": "group", "description": "Manage resource groups" },
+    { "name": "vm", "description": "Manage virtual machines" },
+    { "name": "aks", "description": "Manage Azure Kubernetes Service" },
+    { "name": "storage", "description": "Manage storage accounts" },
+    { "name": "webapp", "description": "Manage web apps" },
+    { "name": "functionapp", "description": "Manage function apps" }
+  ]
+}

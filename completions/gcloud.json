@@ -1,0 +1,21 @@
+{
+  "command": "gcloud",
+  "description": "Google Cloud CLI",
+  "global_options": [
+    { "long": "--project", "description": "Google Cloud project ID", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--account", "description": "Google account", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--configuration", "description": "Named gcloud configuration", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--format", "description": "Output format", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "auth", "description": "Manage credentials", "subcommands": [{ "name": "login", "description": "Log in" }, { "name": "list", "description": "List credentialed accounts" }, { "name": "activate-service-account", "description": "Use service account credentials" }] },
+    { "name": "config", "description": "Manage CLI configuration", "subcommands": [{ "name": "set", "description": "Set property" }, { "name": "get-value", "description": "Get property" }, { "name": "list", "description": "List properties" }, { "name": "configurations", "description": "Manage named configurations" }] },
+    { "name": "projects", "description": "Manage projects" },
+    { "name": "compute", "description": "Compute Engine commands" },
+    { "name": "container", "description": "Kubernetes Engine commands" },
+    { "name": "run", "description": "Cloud Run commands" },
+    { "name": "functions", "description": "Cloud Functions commands" },
+    { "name": "storage", "description": "Cloud Storage commands" }
+  ]
+}

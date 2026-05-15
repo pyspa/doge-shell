@@ -1,0 +1,40 @@
+{
+  "command": "terraform",
+  "description": "Infrastructure as code CLI",
+  "global_options": [
+    { "short": "-chdir", "description": "Switch to a different working directory", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "long": "--help", "description": "Show help" },
+    { "long": "--version", "description": "Show version" }
+  ],
+  "subcommands": [
+    { "name": "init", "description": "Prepare working directory" },
+    {
+      "name": "plan",
+      "description": "Show execution plan",
+      "options": [
+        { "short": "-out", "description": "Write plan to file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "short": "-var-file", "description": "Load variable file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["tfvars"] } } },
+        { "short": "-target", "description": "Resource address to target" },
+        { "short": "-destroy", "description": "Create destroy plan" }
+      ]
+    },
+    {
+      "name": "apply",
+      "description": "Apply changes",
+      "arguments": [{ "name": "plan", "description": "Saved plan file", "required": false, "type": { "type": "File", "data": {} } }]
+    },
+    { "name": "destroy", "description": "Destroy managed infrastructure" },
+    { "name": "validate", "description": "Validate configuration" },
+    { "name": "fmt", "description": "Rewrite Terraform files to canonical format" },
+    {
+      "name": "workspace",
+      "description": "Manage workspaces",
+      "subcommands": [
+        { "name": "list", "description": "List workspaces" },
+        { "name": "new", "description": "Create workspace" },
+        { "name": "select", "description": "Select workspace" },
+        { "name": "delete", "description": "Delete workspace" }
+      ]
+    }
+  ]
+}

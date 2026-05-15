@@ -508,6 +508,19 @@ impl IntegratedCompletionEngine {
             return results;
         }
 
+        // 4. Optional fish-compatible fallback. This is deliberately lower priority than
+        // project-aware dynamic and JSON completion, but it can supply broad fish-style
+        // candidates for commands without built-in definitions.
+        let fish_batch = self.collect_fish_fallback_candidates(&request, &parsed_command_line);
+        if !aggregator.extend(fish_batch) {
+            let mut results = aggregator.finalize(history);
+            results.replacement_range = replacement_range;
+            if !uses_dynamic_completion {
+                self.store_in_cache(request.input, &results.candidates, results.framework);
+            }
+            return results;
+        }
+
         let mut results = aggregator.finalize(history);
         results.replacement_range = replacement_range;
         if !uses_dynamic_completion {
@@ -700,7 +713,7 @@ impl IntegratedCompletionEngine {
         parsed_command_line: &parser::ParsedCommandLine,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let Some(ArgumentType::Dynamic { provider, .. }) =
+        let Some(ArgumentType::Dynamic { provider, scope }) =
             self.argument_type_for_completion_context(parsed_command_line)
         else {
             return Vec::new();
@@ -708,6 +721,7 @@ impl IntegratedCompletionEngine {
 
         self.dynamic.collect_declared_dynamic_candidates(
             &provider,
+            scope.as_deref(),
             parsed_command_line,
             request.current_dir,
             cached_only,
@@ -898,10 +912,11 @@ impl IntegratedCompletionEngine {
             return Vec::new();
         };
 
-        if let ArgumentType::Dynamic { provider, .. } = arg_type {
+        if let ArgumentType::Dynamic { provider, scope } = arg_type {
             drop(db_lock);
             return self.dynamic.collect_declared_dynamic_candidates(
                 &provider,
+                scope.as_deref(),
                 parsed_command_line,
                 current_dir,
                 true,
@@ -1131,6 +1146,24 @@ impl IntegratedCompletionEngine {
         parsed_command_line: &ParsedCommandLine,
     ) -> CandidateBatch {
         let candidates = self.dynamic.collect_external_candidates(
+            request.current_dir,
+            request.input,
+            request.cursor_pos,
+            parsed_command_line,
+        );
+        if candidates.is_empty() {
+            return CandidateBatch::empty();
+        }
+
+        CandidateBatch::inclusive_with_framework(candidates, CompletionFrameworkKind::Skim)
+    }
+
+    fn collect_fish_fallback_candidates(
+        &self,
+        request: &CompletionRequest,
+        parsed_command_line: &ParsedCommandLine,
+    ) -> CandidateBatch {
+        let candidates = self.dynamic.collect_fish_fallback_candidates(
             request.current_dir,
             request.input,
             request.cursor_pos,
@@ -3058,6 +3091,51 @@ mod tests {
         assert_eq!(
             result.replacement_range,
             Some(CompletionReplacementRange { start: 16, end: 21 })
+        );
+    }
+
+    #[tokio::test]
+    async fn fish_fallback_merges_below_json_candidates() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        write_executable_script(
+            &bin_dir.join("fish"),
+            "#!/bin/sh\nprintf 'checkout\\tFish checkout\\nche-fish-only\\tFish only\\n'\n",
+        );
+
+        let environment = Environment::new();
+        {
+            let mut env = environment.write();
+            env.paths = vec![bin_dir.display().to_string()];
+            env.variables
+                .insert("DSH_COMPLETION_FISH_FALLBACK".to_string(), "1".to_string());
+            env.clear_command_cache();
+        }
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "git che";
+        let result = engine
+            .complete(input, input.len(), dir.path(), 200, None)
+            .await;
+
+        let checkout = result
+            .candidates
+            .iter()
+            .find(|candidate| candidate.text == "checkout")
+            .expect("expected git checkout from JSON completion");
+        assert_eq!(
+            checkout.description.as_deref(),
+            Some("Switch branches or restore working tree files")
+        );
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "che-fish-only"
+                    && candidate.description.as_deref() == Some("Fish only")),
+            "expected unique fish fallback candidate to be merged"
         );
     }
 

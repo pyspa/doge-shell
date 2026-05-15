@@ -1,0 +1,21 @@
+{
+  "command": "pytest",
+  "description": "Python test runner",
+  "global_options": [
+    { "short": "-q", "long": "--quiet", "description": "Decrease verbosity" },
+    { "short": "-v", "long": "--verbose", "description": "Increase verbosity" },
+    { "short": "-k", "description": "Only run tests matching expression", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-m", "description": "Only run tests matching marker expression", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-x", "long": "--exitfirst", "description": "Exit after first failure" },
+    { "long": "--maxfail", "description": "Exit after N failures", "takes_value": true, "value_type": { "type": "Number" } },
+    { "long": "--lf", "description": "Run last failures" },
+    { "long": "--ff", "description": "Run failures first" },
+    { "long": "--pdb", "description": "Start debugger on failure" },
+    { "long": "--cov", "description": "Measure coverage for package or path", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--cov-report", "description": "Coverage report type", "takes_value": true, "value_type": { "type": "Choice", "data": ["term", "term-missing", "html", "xml", "json"] } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [
+    { "name": "testpath", "description": "Test file or directory", "required": false, "multiple": true, "type": { "type": "File", "data": {} } }
+  ]
+}

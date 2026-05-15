@@ -1,5 +1,6 @@
 use super::integrated::{CandidateType, EnhancedCandidate, matches_prefix};
 use super::parser::{CompletionContext, ParsedCommandLine};
+use super::shell_path::normalize_path_token;
 use crate::environment::Environment;
 use anyhow::Result;
 use dsh_builtin::{project_context, task};
@@ -7,14 +8,17 @@ use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant, SystemTime};
 use tracing::warn;
 use wait_timeout::ChildExt;
 
 const DYNAMIC_COMMAND_CACHE_TTL_MS: u64 = 1000;
+const COMPLETION_COMMAND_TIMEOUT: Duration = Duration::from_millis(1500);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FileMetadataSignature {
@@ -163,7 +167,13 @@ pub(crate) fn diagnostics_lines() -> Vec<String> {
 pub(crate) fn is_known_declared_dynamic_provider(provider: &str) -> bool {
     matches!(
         provider,
-        "git.branch"
+        "cargo.bin"
+            | "cargo.example"
+            | "cargo.package"
+            | "docker.compose_service"
+            | "docker.container"
+            | "docker.image"
+            | "git.branch"
             | "git.checkout_target"
             | "git.changed_path"
             | "git.push_branch"
@@ -173,6 +183,11 @@ pub(crate) fn is_known_declared_dynamic_provider(provider: &str) -> bool {
             | "git.stash"
             | "git.tag"
             | "git.worktree"
+            | "js.dependency"
+            | "kubectl.context"
+            | "kubectl.namespace"
+            | "kubectl.resource_name"
+            | "kubectl.resource_type"
             | "project.task"
             | "ssh.host"
             | "system.process_pid"
@@ -214,6 +229,7 @@ impl DynamicCompletionProvider {
     pub(crate) fn collect_declared_dynamic_candidates(
         &self,
         provider: &str,
+        scope: Option<&str>,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
         cached_only: bool,
@@ -254,6 +270,71 @@ impl DynamicCompletionProvider {
             "git.worktree" => {
                 self.collect_git_worktree_candidates(current_dir, current_token, cached_only)
             }
+            "docker.image" => {
+                self.collect_docker_image_candidates(current_dir, current_token, cached_only)
+            }
+            "docker.container" => self.collect_docker_container_candidates(
+                current_dir,
+                current_token,
+                scope != Some("running"),
+                cached_only,
+            ),
+            "docker.compose_service" => {
+                if cached_only {
+                    self.collect_compose_service_candidates_cached(current_dir, current_token)
+                } else {
+                    self.collect_compose_service_candidates(current_dir, current_token)
+                }
+            }
+            "kubectl.context" => {
+                self.collect_kubectl_context_candidates(current_dir, current_token, cached_only)
+            }
+            "kubectl.namespace" => {
+                self.collect_kubectl_namespace_candidates(current_dir, current_token, cached_only)
+            }
+            "kubectl.resource_type" => self.collect_kubectl_resource_type_candidates(
+                current_dir,
+                current_token,
+                cached_only,
+            ),
+            "kubectl.resource_name" => scope
+                .or_else(|| selected_kubectl_resource(parsed_command_line))
+                .map(|resource| {
+                    self.collect_kubectl_resource_name_candidates(
+                        current_dir,
+                        resource,
+                        current_token,
+                        cached_only,
+                    )
+                })
+                .unwrap_or_default(),
+            "cargo.package" => self.collect_cargo_metadata_candidates(
+                current_dir,
+                current_token,
+                CargoMetadataValueKind::Package,
+                "cargo package",
+                cached_only,
+            ),
+            "cargo.bin" => self.collect_cargo_metadata_candidates(
+                current_dir,
+                current_token,
+                CargoMetadataValueKind::Bin,
+                "cargo binary target",
+                cached_only,
+            ),
+            "cargo.example" => self.collect_cargo_metadata_candidates(
+                current_dir,
+                current_token,
+                CargoMetadataValueKind::Example,
+                "cargo example target",
+                cached_only,
+            ),
+            "js.dependency" => self.collect_js_dependency_candidates(
+                parsed_command_line,
+                current_dir,
+                parsed_command_line.command.as_str(),
+                cached_only,
+            ),
             "project.task" => {
                 if cached_only {
                     Vec::new()
@@ -275,6 +356,53 @@ impl DynamicCompletionProvider {
                 Vec::new()
             }
         }
+    }
+
+    pub(crate) fn collect_fish_fallback_candidates(
+        &self,
+        current_dir: &Path,
+        input: &str,
+        cursor_pos: usize,
+        parsed_command_line: &ParsedCommandLine,
+    ) -> Vec<EnhancedCandidate> {
+        if !self.fish_fallback_enabled() {
+            return Vec::new();
+        }
+
+        let Some(command_path) = self.resolve_command_path("fish") else {
+            return Vec::new();
+        };
+
+        let subcommand_path = parsed_command_line.subcommand_path.join(" ");
+        let input_prefix = input_prefix_at_cursor(input, cursor_pos);
+        let command_template = format!("fish-fallback:{command_path}");
+        let key = ExternalCompletionCacheKey {
+            command_template,
+            current_dir: canonicalize_path(current_dir),
+            input: input_prefix,
+            cursor_pos,
+            command: parsed_command_line.command.clone(),
+            current_token: parsed_command_line.current_token.clone(),
+            subcommand_path,
+        };
+
+        let loader_key = key.clone();
+        match self.load_external_candidates(key, move || {
+            run_fish_completer_for_key(&command_path, &loader_key)
+        }) {
+            Ok(candidates) => candidates,
+            Err(err) => {
+                warn!("Fish completion fallback failed: {}", err);
+                Vec::new()
+            }
+        }
+    }
+
+    fn fish_fallback_enabled(&self) -> bool {
+        self.environment
+            .read()
+            .get_var("DSH_COMPLETION_FISH_FALLBACK")
+            .is_some_and(|value| env_truthy(&value))
     }
 
     pub(crate) fn collect_git_candidates(
@@ -2947,7 +3075,8 @@ fn parse_compose_service_names(path: &Path) -> Result<Vec<String>> {
 fn run_external_completer_for_key(
     key: &ExternalCompletionCacheKey,
 ) -> Result<Vec<EnhancedCandidate>> {
-    let mut child = Command::new("sh")
+    let mut command = completion_command("sh");
+    command
         .arg("-c")
         .arg(&key.command_template)
         .current_dir(&key.current_dir)
@@ -2957,13 +3086,35 @@ fn run_external_completer_for_key(
         .env("DSH_COMPLETION_CURRENT_TOKEN", &key.current_token)
         .env("DSH_COMPLETION_SUBCOMMAND_PATH", &key.subcommand_path)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
+        .stderr(Stdio::null());
+    let mut child = command.spawn()?;
 
     let lines = wait_and_collect_lines(&mut child)?;
     Ok(lines
         .into_iter()
         .filter_map(|line| parse_external_completion_line(&line, &key.current_token))
+        .collect())
+}
+
+fn run_fish_completer_for_key(
+    command_path: &str,
+    key: &ExternalCompletionCacheKey,
+) -> Result<Vec<EnhancedCandidate>> {
+    let mut command = completion_command(command_path);
+    command
+        .arg("-c")
+        .arg("complete -C \"$argv[1]\"")
+        .arg("--")
+        .arg(&key.input)
+        .current_dir(&key.current_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = command.spawn()?;
+
+    let lines = wait_and_collect_lines(&mut child)?;
+    Ok(lines
+        .into_iter()
+        .filter_map(|line| parse_fish_completion_line(&line, &key.current_token))
         .collect())
 }
 
@@ -3022,7 +3173,7 @@ fn parse_external_completion_line(line: &str, current_token: &str) -> Option<Enh
         (trimmed, None)
     };
 
-    if text.is_empty() || !matches_prefix(current_token, text) {
+    if text.is_empty() || !matches_fish_prefix(current_token, text) {
         return None;
     }
 
@@ -3048,29 +3199,105 @@ fn parse_external_candidate_type(value: &str) -> Option<CandidateType> {
     }
 }
 
+fn parse_fish_completion_line(line: &str, current_token: &str) -> Option<EnhancedCandidate> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let (text, description) = if let Some((text, description)) = trimmed.split_once('\t') {
+        (text.trim(), Some(description.trim().to_string()))
+    } else {
+        (trimmed, None)
+    };
+
+    if text.is_empty() || !matches_fish_prefix(current_token, text) {
+        return None;
+    }
+
+    let candidate_type = if text.ends_with('/') {
+        CandidateType::Directory
+    } else if text.starts_with("--") {
+        CandidateType::LongOption
+    } else if text.starts_with('-') {
+        CandidateType::ShortOption
+    } else {
+        CandidateType::Argument
+    };
+
+    Some(EnhancedCandidate {
+        text: text.to_string(),
+        description,
+        candidate_type,
+        // Keep fish as a broad, low-priority fallback so built-in JSON and
+        // project-aware dynamic providers win when both sources know a value.
+        priority: 35,
+    })
+}
+
+fn matches_fish_prefix(current_token: &str, text: &str) -> bool {
+    if matches_prefix(current_token, text) || text.starts_with(current_token) {
+        return true;
+    }
+
+    let quote_stripped = current_token.trim_start_matches(['\'', '"']);
+    if quote_stripped != current_token
+        && (matches_prefix(quote_stripped, text) || text.starts_with(quote_stripped))
+    {
+        return true;
+    }
+
+    let normalized_current_token = normalize_path_token(current_token);
+    normalized_current_token != current_token
+        && (matches_prefix(&normalized_current_token, text)
+            || text.starts_with(&normalized_current_token))
+}
+
 fn run_command_stdout(command_path: &str, args: &[&str], current_dir: &Path) -> Result<String> {
-    let mut child = Command::new(command_path)
+    let mut command = completion_command(command_path);
+    command
         .args(args)
         .current_dir(current_dir)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
+        .stderr(Stdio::null());
+    let mut child = command.spawn()?;
 
     wait_and_collect_stdout(&mut child)
 }
 
 fn run_command_lines(command_path: &str, args: &[&str], current_dir: &Path) -> Result<Vec<String>> {
-    let mut child = Command::new(command_path)
+    let mut command = completion_command(command_path);
+    command
         .args(args)
         .current_dir(current_dir)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
+        .stderr(Stdio::null());
+    let mut child = command.spawn()?;
 
     wait_and_collect_lines(&mut child)
 }
 
-fn wait_and_collect_stdout(child: &mut std::process::Child) -> Result<String> {
+fn completion_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(unix)]
+    {
+        command.process_group(0);
+    }
+    command
+}
+
+fn terminate_completion_child(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let _ = nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(child.id() as i32),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+    }
+    let _ = child.kill();
+}
+
+fn wait_and_collect_stdout(child: &mut Child) -> Result<String> {
     let mut stdout = child
         .stdout
         .take()
@@ -3081,7 +3308,7 @@ fn wait_and_collect_stdout(child: &mut std::process::Child) -> Result<String> {
         Ok::<String, std::io::Error>(buf)
     });
 
-    match child.wait_timeout(Duration::from_millis(1500))? {
+    match child.wait_timeout(COMPLETION_COMMAND_TIMEOUT)? {
         Some(status) => {
             let output = reader_thread
                 .join()
@@ -3093,7 +3320,7 @@ fn wait_and_collect_stdout(child: &mut std::process::Child) -> Result<String> {
             }
         }
         None => {
-            let _ = child.kill();
+            terminate_completion_child(child);
             let _ = child.wait();
             let _ = reader_thread.join();
             Ok(String::new())
@@ -3133,6 +3360,27 @@ fn selected_git_remote(parsed_command_line: &ParsedCommandLine) -> Option<&str> 
         .map(String::as_str)
         .filter(|remote| !remote.is_empty())
         .filter(|remote| *remote != parsed_command_line.current_token)
+}
+
+fn selected_kubectl_resource(parsed_command_line: &ParsedCommandLine) -> Option<&str> {
+    parsed_command_line
+        .specified_arguments
+        .iter()
+        .find(|argument| {
+            argument.as_str() != parsed_command_line.current_token && !argument.starts_with('-')
+        })
+        .map(String::as_str)
+}
+
+fn input_prefix_at_cursor(input: &str, cursor_pos: usize) -> String {
+    input.chars().take(cursor_pos).collect()
+}
+
+fn env_truthy(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
 
 fn parse_git_remote_branches(lines: &[String], remote: Option<&str>) -> Vec<String> {
@@ -4023,6 +4271,140 @@ volumes:
         assert_eq!(
             legacy_candidate.description.as_deref(),
             Some("External alpha")
+        );
+    }
+
+    #[test]
+    fn fish_fallback_parses_tab_descriptions_and_low_priority() {
+        let candidate = parse_fish_completion_line("checkout\tSwitch branches", "che").unwrap();
+        assert_eq!(candidate.text, "checkout");
+        assert_eq!(candidate.description.as_deref(), Some("Switch branches"));
+        assert_eq!(candidate.candidate_type, CandidateType::Argument);
+        assert_eq!(candidate.priority, 35);
+
+        let option = parse_fish_completion_line("--help\tShow help", "--he").unwrap();
+        assert_eq!(option.candidate_type, CandidateType::LongOption);
+
+        assert!(matches_fish_prefix("'zz", "zz/"));
+        let quoted_path = parse_fish_completion_line("zz/\tQuoted path", "'zz").unwrap();
+        assert_eq!(quoted_path.candidate_type, CandidateType::Directory);
+        assert_eq!(quoted_path.description.as_deref(), Some("Quoted path"));
+
+        assert!(parse_fish_completion_line("checkout\tSwitch branches", "zz").is_none());
+    }
+
+    #[test]
+    fn fish_fallback_requires_flag_and_fish_command() {
+        let dir = tempdir().unwrap();
+        let provider = DynamicCompletionProvider::new(Environment::new());
+        let input = "git che";
+        assert!(
+            provider
+                .collect_fish_fallback_candidates(dir.path(), input, input.len(), &parsed(input))
+                .is_empty(),
+            "fish fallback is opt-in"
+        );
+
+        let environment = Environment::new();
+        {
+            let mut env = environment.write();
+            env.paths = vec![];
+            env.variables
+                .insert("DSH_COMPLETION_FISH_FALLBACK".to_string(), "1".to_string());
+            env.clear_command_cache();
+        }
+        let provider = DynamicCompletionProvider::new(environment);
+        assert!(
+            provider
+                .collect_fish_fallback_candidates(dir.path(), input, input.len(), &parsed(input))
+                .is_empty(),
+            "enabled fallback still needs fish on PATH"
+        );
+    }
+
+    #[test]
+    fn fish_fallback_runs_with_cursor_prefix_and_timeout() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let fish = bin_dir.join("fish");
+        write_executable_script(
+            &fish,
+            "#!/bin/sh\nprintf '%s\\n' \"$4\" > fish-input.txt\nprintf 'zzfish-alpha\\tFish alpha\\n'\n",
+        );
+
+        let environment = Environment::new();
+        {
+            let mut env = environment.write();
+            env.paths = vec![bin_dir.display().to_string()];
+            env.variables.insert(
+                "DSH_COMPLETION_FISH_FALLBACK".to_string(),
+                "true".to_string(),
+            );
+            env.clear_command_cache();
+        }
+        let provider = DynamicCompletionProvider::new(environment);
+        let input = "unknown zzfish trailing";
+        let cursor = "unknown zzfish".len();
+
+        let parsed_at_cursor = CommandLineParser::new().parse(input, cursor);
+        let candidates =
+            provider.collect_fish_fallback_candidates(dir.path(), input, cursor, &parsed_at_cursor);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].text, "zzfish-alpha");
+        assert_eq!(candidates[0].description.as_deref(), Some("Fish alpha"));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("fish-input.txt")).unwrap(),
+            "unknown zzfish\n"
+        );
+
+        let slow_dir = tempdir().unwrap();
+        let slow_bin = slow_dir.path().join("bin");
+        fs::create_dir_all(&slow_bin).unwrap();
+        write_executable_script(
+            &slow_bin.join("fish"),
+            "#!/bin/sh\nsleep 2\nprintf 'late\\n'\n",
+        );
+        let slow_environment = Environment::new();
+        {
+            let mut env = slow_environment.write();
+            env.paths = vec![slow_bin.display().to_string()];
+            env.variables
+                .insert("DSH_COMPLETION_FISH_FALLBACK".to_string(), "1".to_string());
+            env.clear_command_cache();
+        }
+        let slow_provider = DynamicCompletionProvider::new(slow_environment);
+        let started = Instant::now();
+        let slow_candidates = slow_provider.collect_fish_fallback_candidates(
+            slow_dir.path(),
+            "slow la",
+            "slow la".len(),
+            &parsed("slow la"),
+        );
+        assert!(slow_candidates.is_empty());
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn timed_out_completion_command_kills_stdout_holding_descendants() {
+        let dir = tempdir().unwrap();
+        let script = dir.path().join("holds-stdout.sh");
+        let survived = dir.path().join("survived.txt");
+        write_executable_script(
+            &script,
+            "#!/bin/sh\n(sleep 2; printf survived > survived.txt) &\nwait\n",
+        );
+
+        let started = Instant::now();
+        let output = run_command_stdout(script.to_str().unwrap(), &[], dir.path()).unwrap();
+
+        assert_eq!(output, "");
+        assert!(started.elapsed() < Duration::from_secs(3));
+        std::thread::sleep(Duration::from_millis(1200));
+        assert!(
+            !survived.exists(),
+            "timeout should kill descendant processes that inherited stdout"
         );
     }
 

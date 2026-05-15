@@ -1,0 +1,29 @@
+{
+  "command": "poetry",
+  "description": "Python dependency and packaging manager",
+  "global_options": [
+    { "short": "-q", "long": "--quiet", "description": "Do not output messages" },
+    { "short": "-v", "long": "--verbose", "description": "Increase verbosity" },
+    { "short": "-C", "long": "--directory", "description": "Working directory", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "install", "description": "Install project dependencies" },
+    { "name": "update", "description": "Update dependencies" },
+    { "name": "lock", "description": "Lock dependencies" },
+    { "name": "add", "description": "Add dependency", "arguments": [{ "name": "package", "description": "Package requirement", "multiple": true }] },
+    { "name": "remove", "description": "Remove dependency", "arguments": [{ "name": "package", "description": "Package name", "multiple": true }] },
+    { "name": "run", "description": "Run a command in the virtualenv", "arguments": [{ "name": "command", "description": "Command to run", "type": { "type": "Command" } }] },
+    { "name": "shell", "description": "Spawn a shell in the virtualenv" },
+    {
+      "name": "env",
+      "description": "Manage virtual environments",
+      "subcommands": [
+        { "name": "info", "description": "Display environment info" },
+        { "name": "list", "description": "List environments" },
+        { "name": "use", "description": "Use a Python executable", "arguments": [{ "name": "python", "description": "Python executable" }] },
+        { "name": "remove", "description": "Remove an environment" }
+      ]
+    }
+  ]
+}

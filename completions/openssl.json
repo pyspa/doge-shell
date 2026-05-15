@@ -1,0 +1,32 @@
+{
+  "command": "openssl",
+  "description": "OpenSSL command line tool",
+  "global_options": [
+    { "long": "--help", "description": "Show help" },
+    { "long": "--version", "description": "Show version" }
+  ],
+  "subcommands": [
+    { "name": "version", "description": "Print OpenSSL version" },
+    {
+      "name": "req",
+      "description": "Certificate request and generation",
+      "options": [
+        { "long": "-new", "description": "Create new certificate request" },
+        { "long": "-x509", "description": "Output self-signed certificate" },
+        { "long": "-key", "description": "Private key file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "long": "-out", "description": "Output file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "long": "-config", "description": "Configuration file", "takes_value": true, "value_type": { "type": "File", "data": {} } }
+      ]
+    },
+    { "name": "x509", "description": "Certificate display and signing" },
+    { "name": "genrsa", "description": "Generate RSA private key" },
+    { "name": "rsa", "description": "Process RSA keys" },
+    { "name": "ecparam", "description": "EC parameter manipulation" },
+    { "name": "pkey", "description": "Public or private key processing" },
+    { "name": "pkcs12", "description": "PKCS#12 file utility" },
+    { "name": "s_client", "description": "SSL/TLS client" },
+    { "name": "dgst", "description": "Message digests" },
+    { "name": "enc", "description": "Symmetric cipher routines" },
+    { "name": "rand", "description": "Generate pseudo-random bytes" }
+  ]
+}

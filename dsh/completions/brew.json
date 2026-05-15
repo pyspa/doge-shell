@@ -1,0 +1,71 @@
+{
+  "command": "brew",
+  "description": "Homebrew package manager",
+  "global_options": [
+    { "short": "-v", "long": "--verbose", "description": "Print more output" },
+    { "short": "-q", "long": "--quiet", "description": "Make some output quieter" },
+    { "long": "--version", "description": "Print Homebrew version" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    {
+      "name": "install",
+      "description": "Install a formula or cask",
+      "options": [
+        { "long": "--cask", "description": "Treat all named arguments as casks" },
+        { "long": "--formula", "description": "Treat all named arguments as formulae" },
+        { "long": "--HEAD", "description": "Install HEAD version" },
+        { "long": "--build-from-source", "description": "Compile from source" }
+      ],
+      "arguments": [
+        { "name": "formula_or_cask", "description": "Formula or cask name", "multiple": true }
+      ]
+    },
+    {
+      "name": "uninstall",
+      "description": "Uninstall a formula or cask",
+      "options": [
+        { "long": "--cask", "description": "Treat all named arguments as casks" },
+        { "long": "--formula", "description": "Treat all named arguments as formulae" },
+        { "long": "--force", "description": "Delete all installed versions" },
+        { "long": "--zap", "description": "Remove files associated with a cask" }
+      ],
+      "arguments": [
+        { "name": "formula_or_cask", "description": "Installed formula or cask", "multiple": true }
+      ]
+    },
+    { "name": "update", "description": "Fetch latest Homebrew and formulae" },
+    {
+      "name": "upgrade",
+      "description": "Upgrade outdated formulae and casks",
+      "arguments": [
+        { "name": "formula_or_cask", "description": "Optional formula or cask", "required": false, "multiple": true }
+      ]
+    },
+    { "name": "list", "description": "List installed formulae and casks" },
+    {
+      "name": "search",
+      "description": "Search formulae and casks",
+      "arguments": [
+        { "name": "text", "description": "Search text or regex" }
+      ]
+    },
+    {
+      "name": "info",
+      "description": "Display information about formulae or casks",
+      "arguments": [
+        { "name": "formula_or_cask", "description": "Formula or cask name", "multiple": true }
+      ]
+    },
+    {
+      "name": "services",
+      "description": "Manage background services",
+      "subcommands": [
+        { "name": "list", "description": "List services" },
+        { "name": "start", "description": "Start a service", "arguments": [{ "name": "formula", "description": "Formula service" }] },
+        { "name": "stop", "description": "Stop a service", "arguments": [{ "name": "formula", "description": "Formula service" }] },
+        { "name": "restart", "description": "Restart a service", "arguments": [{ "name": "formula", "description": "Formula service" }] }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "command": "mypy",
+  "description": "Optional static typing for Python",
+  "global_options": [
+    { "long": "--config-file", "description": "Use configuration file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["ini", "toml", "cfg"] } } },
+    { "long": "--strict", "description": "Enable strict checking options" },
+    { "long": "--ignore-missing-imports", "description": "Ignore missing imports" },
+    { "long": "--install-types", "description": "Install missing stub packages" },
+    { "long": "--non-interactive", "description": "Install stubs non-interactively" },
+    { "long": "--python-version", "description": "Python version to target", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--platform", "description": "Target platform", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [
+    { "name": "module_or_path", "description": "Module, package, file, or directory", "required": false, "multiple": true, "type": { "type": "File", "data": {} } }
+  ]
+}

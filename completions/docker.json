@@ -19,7 +19,9 @@
     {
       "long": "--config",
       "short": "-c",
-      "description": "Location of client config files"
+      "description": "Location of client config files",
+      "takes_value": true,
+      "value_type": { "type": "Directory" }
     }
   ],
   "subcommands": [
@@ -35,7 +37,9 @@
         {
           "long": "--file",
           "short": "-f",
-          "description": "Name of the Dockerfile"
+          "description": "Name of the Dockerfile",
+          "takes_value": true,
+          "value_type": { "type": "File", "data": {} }
         },
         {
           "long": "--no-cache",
@@ -74,7 +78,8 @@
       "arguments": [
         {
           "name": "context",
-          "description": "Build context path (default: current directory)"
+          "description": "Build context path (default: current directory)",
+          "type": { "type": "Directory" }
         }
       ],
       "subcommands": []
@@ -181,7 +186,10 @@
         {
           "name": "image",
           "description": "Image name or ID",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.image" }
+          }
         },
         {
           "name": "command",
@@ -311,7 +319,10 @@
         {
           "name": "container",
           "description": "Container name or ID",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.container", "scope": "running" }
+          }
         }
       ],
       "subcommands": []
@@ -335,7 +346,10 @@
         {
           "name": "container",
           "description": "Container name or ID",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.container" }
+          }
         }
       ],
       "subcommands": []
@@ -383,7 +397,10 @@
         {
           "name": "container",
           "description": "Container name or ID",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.container", "scope": "running" }
+          }
         },
         {
           "name": "command",
@@ -413,7 +430,10 @@
         {
           "name": "container",
           "description": "Container name or ID",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.container", "scope": "running" }
+          }
         }
       ],
       "subcommands": []
@@ -425,7 +445,10 @@
         {
           "name": "container",
           "description": "Container name or ID",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.container" }
+          }
         }
       ]
     },
@@ -436,7 +459,10 @@
         {
           "name": "container",
           "description": "Container name or ID",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.container" }
+          }
         }
       ]
     },
@@ -447,7 +473,10 @@
         {
           "name": "container",
           "description": "Container name or ID",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.container", "scope": "running" }
+          }
         }
       ]
     },
@@ -458,7 +487,10 @@
         {
           "name": "container",
           "description": "Container name or ID",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.container", "scope": "running" }
+          }
         }
       ]
     },
@@ -469,7 +501,10 @@
         {
           "name": "image",
           "description": "Image name or ID",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.image" }
+          }
         }
       ]
     },
@@ -491,7 +526,10 @@
             {
               "name": "service",
               "description": "Service name",
-              "type": { "type": "String" }
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "docker.compose_service" }
+              }
             }
           ]
         },
@@ -519,7 +557,10 @@
             {
               "name": "service",
               "description": "Service name",
-              "type": { "type": "String" }
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "docker.compose_service" }
+              }
             }
           ]
         },
@@ -531,7 +572,10 @@
             {
               "name": "service",
               "description": "Service name",
-              "type": { "type": "String" }
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "docker.compose_service" }
+              }
             }
           ]
         },
@@ -543,7 +587,10 @@
             {
               "name": "service",
               "description": "Service name",
-              "type": { "type": "String" }
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "docker.compose_service" }
+              }
             }
           ]
         },
@@ -555,7 +602,10 @@
             {
               "name": "service",
               "description": "Service name",
-              "type": { "type": "String" }
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "docker.compose_service" }
+              }
             }
           ]
         },
@@ -567,7 +617,10 @@
             {
               "name": "service",
               "description": "Service name",
-              "type": { "type": "String" }
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "docker.compose_service" }
+              }
             }
           ]
         },
@@ -579,7 +632,10 @@
             {
               "name": "service",
               "description": "Service name",
-              "type": { "type": "String" }
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "docker.compose_service" }
+              }
             }
           ]
         }
@@ -691,7 +747,10 @@
         {
           "name": "image",
           "description": "Image name",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.image" }
+          }
         }
       ]
     },
@@ -702,7 +761,10 @@
         {
           "name": "source",
           "description": "Source image",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.image" }
+          }
         },
         {
           "name": "target",

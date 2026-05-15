@@ -1,0 +1,17 @@
+{
+  "command": "ssh-keygen",
+  "description": "Generate and manage SSH authentication keys",
+  "global_options": [
+    { "short": "-t", "description": "Key type", "takes_value": true, "value_type": { "type": "Choice", "data": ["ed25519", "rsa", "ecdsa", "dsa"] } },
+    { "short": "-f", "description": "Key file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+    { "short": "-N", "description": "New passphrase", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-C", "description": "Comment", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-b", "description": "Number of bits", "takes_value": true, "value_type": { "type": "Number" } },
+    { "short": "-p", "description": "Change passphrase" },
+    { "short": "-y", "description": "Read private key and print public key" },
+    { "short": "-l", "description": "Show fingerprint" },
+    { "short": "-R", "description": "Remove host from known_hosts", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-H", "description": "Hash known_hosts file" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "command": "ruff",
+  "description": "Python linter and formatter",
+  "global_options": [
+    { "short": "-v", "long": "--verbose", "description": "Increase verbosity" },
+    { "short": "-q", "long": "--quiet", "description": "Decrease verbosity" },
+    { "long": "--config", "description": "Path to configuration file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["toml"] } } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    {
+      "name": "check",
+      "description": "Run Ruff linter",
+      "options": [
+        { "long": "--fix", "description": "Apply fixes" },
+        { "long": "--unsafe-fixes", "description": "Apply unsafe fixes" },
+        { "long": "--select", "description": "Rule codes to enable" },
+        { "long": "--ignore", "description": "Rule codes to ignore" },
+        { "long": "--watch", "description": "Run in watch mode" }
+      ],
+      "arguments": [{ "name": "path", "description": "File or directory", "required": false, "multiple": true, "type": { "type": "File", "data": {} } }]
+    },
+    {
+      "name": "format",
+      "description": "Run Ruff formatter",
+      "options": [
+        { "long": "--check", "description": "Do not write files" },
+        { "long": "--diff", "description": "Print diff instead of writing files" }
+      ],
+      "arguments": [{ "name": "path", "description": "File or directory", "required": false, "multiple": true, "type": { "type": "File", "data": {} } }]
+    },
+    { "name": "rule", "description": "Explain a rule" },
+    { "name": "server", "description": "Run language server" }
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "command": "bun",
+  "description": "Bun JavaScript runtime and package manager",
+  "global_options": [
+    { "short": "-v", "long": "--version", "description": "Print version" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "install", "description": "Install dependencies" },
+    {
+      "name": "add",
+      "description": "Add dependencies",
+      "options": [
+        { "short": "-d", "long": "--dev", "description": "Add to devDependencies" },
+        { "short": "-p", "long": "--peer", "description": "Add to peerDependencies" },
+        { "short": "-g", "long": "--global", "description": "Install globally" }
+      ],
+      "arguments": [{ "name": "package", "description": "Package to add", "multiple": true }]
+    },
+    {
+      "name": "remove",
+      "description": "Remove dependencies",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "Package to remove",
+          "multiple": true,
+          "type": { "type": "Dynamic", "data": { "provider": "js.dependency" } }
+        }
+      ]
+    },
+    {
+      "name": "run",
+      "description": "Run a package script",
+      "arguments": [
+        {
+          "name": "script",
+          "description": "Script or task name",
+          "type": { "type": "Dynamic", "data": { "provider": "project.task" } }
+        }
+      ]
+    },
+    { "name": "test", "description": "Run tests" },
+    { "name": "x", "description": "Execute a package binary" },
+    { "name": "create", "description": "Create a new project from a template" },
+    { "name": "upgrade", "description": "Upgrade Bun" }
+  ]
+}

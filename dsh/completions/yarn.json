@@ -19,12 +19,28 @@
         {
           "name": "package",
           "description": "Package to remove",
-          "type": { "type": "String" }
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "js.dependency" }
+          }
         }
       ]
     },
     { "name": "install", "description": "Install all dependencies" },
-    { "name": "upgrade", "description": "Upgrade packages" },
+    {
+      "name": "upgrade",
+      "description": "Upgrade packages",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "Package to upgrade",
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "js.dependency" }
+          }
+        }
+      ]
+    },
     { "name": "upgrade-interactive", "description": "Interactive upgrade" },
     { "name": "init", "description": "Initialize a new package" },
     { "name": "run", "description": "Run a script",
@@ -41,7 +57,20 @@
     { "name": "start", "description": "Run start script" },
     { "name": "publish", "description": "Publish package" },
     { "name": "info", "description": "Show package information" },
-    { "name": "why", "description": "Show why a package is installed" },
+    {
+      "name": "why",
+      "description": "Show why a package is installed",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "Package to explain",
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "js.dependency" }
+          }
+        }
+      ]
+    },
     { "name": "list", "description": "List installed packages" },
     { "name": "outdated", "description": "List outdated packages" },
     { "name": "cache", "description": "Manage cache",

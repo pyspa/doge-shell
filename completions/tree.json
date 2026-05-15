@@ -69,7 +69,8 @@
       "takes_value": true,
       "description": "Output to file instead of stdout",
       "value_type": {
-        "type": "File"
+        "type": "File",
+        "data": {}
       }
     },
     {
@@ -121,11 +122,11 @@
     {
       "name": "directory",
       "description": "Directory to list",
-      "arg_type": {
-        "type": "Directory"
-      },
       "multiple": true,
-      "required": false
+      "required": false,
+      "type": {
+        "type": "Directory"
+      }
     }
   ]
 }

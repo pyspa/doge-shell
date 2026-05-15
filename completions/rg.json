@@ -54,13 +54,24 @@
       "long": "--glob",
       "description": "Include or exclude files with GLOB.",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "long": "--type",
       "description": "Only search files matching TYPE (e.g., 'rust', 'py'). See 'rg --type-list'.",
       "takes_value": true,
-      "value_type": { "type": "Choice", "data": ["rust", "python", "json", "md", "html"] }
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "rust",
+          "python",
+          "json",
+          "md",
+          "html"
+        ]
+      }
     },
     {
       "long": "--type-list",
@@ -72,27 +83,35 @@
       "long": "--after-context",
       "description": "Show NUM lines of context after each match.",
       "takes_value": true,
-      "value_type": { "type": "Number" }
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
       "short": "-B",
       "long": "--before-context",
       "description": "Show NUM lines of context before each match.",
       "takes_value": true,
-      "value_type": { "type": "Number" }
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
       "short": "-C",
       "long": "--context",
       "description": "Show NUM lines of context before and after each match.",
       "takes_value": true,
-      "value_type": { "type": "Number" }
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
       "long": "--context-separator",
       "description": "The string used to separate non-contiguous context lines.",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "long": "--json",
@@ -125,33 +144,48 @@
       "long": "--max-columns",
       "description": "The maximum number of columns to read from each file.",
       "takes_value": true,
-      "value_type": { "type": "Number" }
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
       "long": "--color",
       "description": "When to use color in output (always, never, auto).",
       "takes_value": true,
-      "value_type": { "type": "Choice", "data": ["always", "never", "auto"] }
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "always",
+          "never",
+          "auto"
+        ]
+      }
     },
     {
       "short": "-r",
       "long": "--replace",
       "description": "Replace matches with STRING.",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "long": "--max-filesize",
       "description": "Ignore files larger than SIZE (e.g., '10m' for 10MB).",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "short": "-j",
       "long": "--threads",
       "description": "Number of threads to use.",
       "takes_value": true,
-      "value_type": { "type": "Number" }
+      "value_type": {
+        "type": "Number"
+      }
     }
   ],
   "subcommands": [],
@@ -160,13 +194,17 @@
       "name": "PATTERN",
       "description": "The search pattern (regular expression).",
       "required": true,
-      "arg_type": { "type": "Regex" }
+      "type": {
+        "type": "Regex"
+      }
     },
     {
       "name": "PATH",
       "description": "Path(s) to search (directories or files).",
       "multiple": true,
-      "arg_type": { "type": "Directory" }
+      "type": {
+        "type": "Directory"
+      }
     }
   ]
 }

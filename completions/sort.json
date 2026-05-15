@@ -22,21 +22,28 @@
       "long": "--key",
       "description": "Sort via a key; KEYDEF gives location and type",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "short": "-t",
       "long": "--field-separator",
       "description": "Use SEP instead of non-blank to blank transition",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "short": "-o",
       "long": "--output",
       "description": "Write result to FILE instead of standard output",
       "takes_value": true,
-      "value_type": { "type": "File" }
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "short": "-b",
@@ -102,7 +109,9 @@
       "long": "--parallel",
       "description": "Change the number of sorts run concurrently to N",
       "takes_value": true,
-      "value_type": { "type": "Number" }
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
       "long": "--help",

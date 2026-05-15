@@ -29,6 +29,12 @@ struct TaskCacheEntry {
     tasks: Vec<task::TaskInfo>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct TaskCacheKey {
+    project_root: PathBuf,
+    sources: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 struct ComposeCacheEntry {
     signature: FileMetadataSignature,
@@ -75,7 +81,7 @@ struct ExternalCompletionCacheKey {
 
 #[derive(Debug, Default)]
 struct ProjectDynamicCache {
-    tasks: HashMap<PathBuf, TaskCacheEntry>,
+    tasks: HashMap<TaskCacheKey, TaskCacheEntry>,
     compose_services: HashMap<PathBuf, ComposeCacheEntry>,
     commands: HashMap<DynamicCommandCacheKey, CommandValueCacheEntry>,
     command_pending: HashSet<DynamicCommandCacheKey>,
@@ -161,6 +167,23 @@ impl DynamicCompletionProvider {
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
     ) -> Vec<EnhancedCandidate> {
+        self.collect_git_candidates_with_mode(parsed_command_line, current_dir, false)
+    }
+
+    pub(crate) fn collect_git_candidates_cached(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_git_candidates_with_mode(parsed_command_line, current_dir, true)
+    }
+
+    fn collect_git_candidates_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
         let Some(primary_subcommand) = parsed_command_line.subcommand_path.first() else {
             return Vec::new();
         };
@@ -171,13 +194,13 @@ impl DynamicCompletionProvider {
         match parsed_command_line.completion_context {
             CompletionContext::Argument { arg_index, .. } => match primary_subcommand.as_str() {
                 "checkout" | "switch" | "merge" | "rebase" => {
-                    self.collect_git_branch_candidates(current_dir, current_token)
+                    self.collect_git_branch_candidates(current_dir, current_token, cached_only)
                 }
                 "push" | "pull" | "fetch" => {
                     if arg_index == 0 {
-                        self.collect_git_remote_candidates(current_dir, current_token)
+                        self.collect_git_remote_candidates(current_dir, current_token, cached_only)
                     } else {
-                        self.collect_git_branch_candidates(current_dir, current_token)
+                        self.collect_git_branch_candidates(current_dir, current_token, cached_only)
                     }
                 }
                 "remote" => {
@@ -187,9 +210,8 @@ impl DynamicCompletionProvider {
                         .map(String::as_str)
                         .unwrap_or("");
                     match secondary {
-                        "remove" | "rename" | "show" | "get-url" | "set-url" => {
-                            self.collect_git_remote_candidates(current_dir, current_token)
-                        }
+                        "remove" | "rename" | "show" | "get-url" | "set-url" => self
+                            .collect_git_remote_candidates(current_dir, current_token, cached_only),
                         _ => Vec::new(),
                     }
                 }
@@ -200,12 +222,17 @@ impl DynamicCompletionProvider {
                         .map(String::as_str)
                         .unwrap_or("");
                     match secondary {
-                        "remove" | "move" | "lock" | "unlock" | "repair" => {
-                            self.collect_git_worktree_candidates(current_dir, current_token)
-                        }
-                        "add" if arg_index > 0 => {
-                            self.collect_git_branch_candidates(current_dir, current_token)
-                        }
+                        "remove" | "move" | "lock" | "unlock" | "repair" => self
+                            .collect_git_worktree_candidates(
+                                current_dir,
+                                current_token,
+                                cached_only,
+                            ),
+                        "add" if arg_index > 0 => self.collect_git_branch_candidates(
+                            current_dir,
+                            current_token,
+                            cached_only,
+                        ),
                         _ => Vec::new(),
                     }
                 }
@@ -213,13 +240,13 @@ impl DynamicCompletionProvider {
             },
             CompletionContext::SubCommand => match primary_subcommand.as_str() {
                 "checkout" | "switch" | "merge" | "rebase" => {
-                    self.collect_git_branch_candidates(current_dir, current_token)
+                    self.collect_git_branch_candidates(current_dir, current_token, cached_only)
                 }
                 "push" | "pull" | "fetch" => {
                     if inferred_subcommand_arg_index == 0 {
-                        self.collect_git_remote_candidates(current_dir, current_token)
+                        self.collect_git_remote_candidates(current_dir, current_token, cached_only)
                     } else {
-                        self.collect_git_branch_candidates(current_dir, current_token)
+                        self.collect_git_branch_candidates(current_dir, current_token, cached_only)
                     }
                 }
                 "remote" => {
@@ -229,9 +256,8 @@ impl DynamicCompletionProvider {
                         .map(String::as_str)
                         .unwrap_or("");
                     match secondary {
-                        "remove" | "rename" | "show" | "get-url" | "set-url" => {
-                            self.collect_git_remote_candidates(current_dir, current_token)
-                        }
+                        "remove" | "rename" | "show" | "get-url" | "set-url" => self
+                            .collect_git_remote_candidates(current_dir, current_token, cached_only),
                         _ => Vec::new(),
                     }
                 }
@@ -242,12 +268,14 @@ impl DynamicCompletionProvider {
                         .map(String::as_str)
                         .unwrap_or("");
                     match secondary {
-                        "remove" | "move" | "lock" | "unlock" | "repair" => {
-                            self.collect_git_worktree_candidates(current_dir, current_token)
-                        }
-                        "add" if inferred_subcommand_arg_index > 0 => {
-                            self.collect_git_branch_candidates(current_dir, current_token)
-                        }
+                        "remove" | "move" | "lock" | "unlock" | "repair" => self
+                            .collect_git_worktree_candidates(
+                                current_dir,
+                                current_token,
+                                cached_only,
+                            ),
+                        "add" if inferred_subcommand_arg_index > 0 => self
+                            .collect_git_branch_candidates(current_dir, current_token, cached_only),
                         _ => Vec::new(),
                     }
                 }
@@ -303,13 +331,34 @@ impl DynamicCompletionProvider {
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
     ) -> Vec<EnhancedCandidate> {
+        self.collect_kubectl_candidates_with_mode(parsed_command_line, current_dir, false)
+    }
+
+    pub(crate) fn collect_kubectl_candidates_cached(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_kubectl_candidates_with_mode(parsed_command_line, current_dir, true)
+    }
+
+    fn collect_kubectl_candidates_with_mode(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
         let current_token = parsed_command_line.current_token.as_str();
         match &parsed_command_line.completion_context {
             CompletionContext::OptionValue { option_name, .. } => match option_name.as_str() {
-                "--context" => self.collect_kubectl_context_candidates(current_dir, current_token),
-                "-n" | "--namespace" => {
-                    self.collect_kubectl_namespace_candidates(current_dir, current_token)
+                "--context" => {
+                    self.collect_kubectl_context_candidates(current_dir, current_token, cached_only)
                 }
+                "-n" | "--namespace" => self.collect_kubectl_namespace_candidates(
+                    current_dir,
+                    current_token,
+                    cached_only,
+                ),
                 _ => Vec::new(),
             },
             CompletionContext::SubCommand | CompletionContext::Argument { .. } => {
@@ -319,12 +368,45 @@ impl DynamicCompletionProvider {
                     .map(String::as_str)
                     .collect::<Vec<_>>();
                 if path.len() >= 2 && path[0] == "config" && path[1] == "use-context" {
-                    self.collect_kubectl_context_candidates(current_dir, current_token)
+                    self.collect_kubectl_context_candidates(current_dir, current_token, cached_only)
                 } else {
                     Vec::new()
                 }
             }
             _ => Vec::new(),
+        }
+    }
+
+    pub(crate) fn collect_project_task_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        sources: &[&str],
+    ) -> Vec<EnhancedCandidate> {
+        let current_token = parsed_command_line.current_token.as_str();
+        match parsed_command_line.completion_context {
+            CompletionContext::Command
+            | CompletionContext::SubCommand
+            | CompletionContext::Argument { .. } => {}
+            _ => return Vec::new(),
+        }
+
+        match self.load_project_tasks_for_sources(current_dir, sources) {
+            Ok(tasks) => tasks
+                .into_iter()
+                .filter(|task| sources.contains(&task.source.as_str()))
+                .filter(|task| matches_prefix(current_token, &task.name))
+                .map(|task| EnhancedCandidate {
+                    text: task.name,
+                    description: Some(format_task_description(&task.source, &task.command)),
+                    candidate_type: CandidateType::Argument,
+                    priority: 125,
+                })
+                .collect(),
+            Err(err) => {
+                warn!("Failed to load project task completions: {}", err);
+                Vec::new()
+            }
         }
     }
 
@@ -371,6 +453,7 @@ impl DynamicCompletionProvider {
         &self,
         current_dir: &Path,
         current_token: &str,
+        cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
         let scope_dir = project_context::find_project_root(current_dir);
         let command_path = self.resolve_command_path("git");
@@ -379,6 +462,7 @@ impl DynamicCompletionProvider {
             scope_dir,
             current_token,
             "git branch",
+            cached_only,
             {
                 let current_dir = current_dir.to_path_buf();
                 move || {
@@ -400,6 +484,7 @@ impl DynamicCompletionProvider {
         &self,
         current_dir: &Path,
         current_token: &str,
+        cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
         let scope_dir = project_context::find_project_root(current_dir);
         let command_path = self.resolve_command_path("git");
@@ -408,6 +493,7 @@ impl DynamicCompletionProvider {
             scope_dir,
             current_token,
             "git remote",
+            cached_only,
             {
                 let current_dir = current_dir.to_path_buf();
                 move || {
@@ -425,6 +511,7 @@ impl DynamicCompletionProvider {
         &self,
         current_dir: &Path,
         current_token: &str,
+        cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
         let scope_dir = project_context::find_project_root(current_dir);
         let command_path = self.resolve_command_path("git");
@@ -433,6 +520,7 @@ impl DynamicCompletionProvider {
             scope_dir,
             current_token,
             "git worktree",
+            cached_only,
             {
                 let current_dir = current_dir.to_path_buf();
                 move || {
@@ -484,6 +572,7 @@ impl DynamicCompletionProvider {
         &self,
         current_dir: &Path,
         current_token: &str,
+        cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
         let command_path = self.resolve_command_path("kubectl");
         self.collect_cached_command_candidates(
@@ -491,6 +580,7 @@ impl DynamicCompletionProvider {
             canonicalize_path(current_dir),
             current_token,
             "kubectl context",
+            cached_only,
             {
                 let current_dir = current_dir.to_path_buf();
                 move || {
@@ -512,6 +602,7 @@ impl DynamicCompletionProvider {
         &self,
         current_dir: &Path,
         current_token: &str,
+        cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
         let command_path = self.resolve_command_path("kubectl");
         self.collect_cached_command_candidates(
@@ -519,6 +610,7 @@ impl DynamicCompletionProvider {
             canonicalize_path(current_dir),
             current_token,
             "kubectl namespace",
+            cached_only,
             {
                 let current_dir = current_dir.to_path_buf();
                 move || {
@@ -547,12 +639,19 @@ impl DynamicCompletionProvider {
         scope_dir: PathBuf,
         current_token: &str,
         description: &str,
+        cached_only: bool,
         loader: F,
     ) -> Vec<EnhancedCandidate>
     where
         F: FnOnce() -> Result<Vec<String>> + Send + 'static,
     {
-        self.load_command_values(kind, scope_dir, loader)
+        let values = if cached_only {
+            self.lookup_command_values(kind, scope_dir)
+        } else {
+            self.load_command_values(kind, scope_dir, loader)
+        };
+
+        values
             .into_iter()
             .filter(|value| matches_prefix(current_token, value))
             .map(|value| EnhancedCandidate {
@@ -575,21 +674,53 @@ impl DynamicCompletionProvider {
             scope_dir,
             current_token,
             "latency probe",
+            false,
             move || Ok(values),
         )
     }
 
     fn load_project_tasks(&self, current_dir: &Path) -> Result<Vec<task::TaskInfo>> {
         let project_root = project_context::find_project_root(current_dir);
+        let cache_key = TaskCacheKey {
+            project_root: project_root.clone(),
+            sources: Vec::new(),
+        };
         let signature = task_completion_signature(&project_root);
 
-        if let Some(tasks) = self.lookup_task_cache(&project_root, &signature) {
+        if let Some(tasks) = self.lookup_task_cache(&cache_key, &signature) {
             return Ok(tasks);
         }
 
         let tasks = task::list_tasks_in_dir(&project_root)?;
         self.cache.write().tasks.insert(
-            project_root,
+            cache_key,
+            TaskCacheEntry {
+                signature,
+                tasks: tasks.clone(),
+            },
+        );
+        Ok(tasks)
+    }
+
+    fn load_project_tasks_for_sources(
+        &self,
+        current_dir: &Path,
+        sources: &[&str],
+    ) -> Result<Vec<task::TaskInfo>> {
+        let project_root = project_context::find_project_root(current_dir);
+        let cache_key = TaskCacheKey {
+            project_root: project_root.clone(),
+            sources: normalized_task_sources(sources),
+        };
+        let signature = task_completion_signature(&project_root);
+
+        if let Some(tasks) = self.lookup_task_cache(&cache_key, &signature) {
+            return Ok(tasks);
+        }
+
+        let tasks = task::list_tasks_in_dir_for_sources(&project_root, sources)?;
+        self.cache.write().tasks.insert(
+            cache_key,
             TaskCacheEntry {
                 signature,
                 tasks: tasks.clone(),
@@ -600,11 +731,11 @@ impl DynamicCompletionProvider {
 
     fn lookup_task_cache(
         &self,
-        project_root: &Path,
+        cache_key: &TaskCacheKey,
         signature: &[FileMetadataSignature],
     ) -> Option<Vec<task::TaskInfo>> {
         let cache = self.cache.read();
-        let entry = cache.tasks.get(project_root)?;
+        let entry = cache.tasks.get(cache_key)?;
         if entry.signature == signature {
             Some(entry.tasks.clone())
         } else {
@@ -660,17 +791,13 @@ impl DynamicCompletionProvider {
     {
         let cache_key = DynamicCommandCacheKey { kind, scope_dir };
         let ttl = Duration::from_millis(DYNAMIC_COMMAND_CACHE_TTL_MS);
-        let mut start_refresh = false;
 
         {
             let mut cache = self.cache.write();
             if let Some(entry) = cache.commands.get(&cache_key) {
                 let values = entry.values.clone();
-                if entry.cached_at.elapsed() >= ttl
-                    && cache.command_pending.insert(cache_key.clone())
-                {
-                    start_refresh = true;
-                }
+                let start_refresh = entry.cached_at.elapsed() >= ttl
+                    && cache.command_pending.insert(cache_key.clone());
                 update_diagnostics_from_cache(&cache, None);
                 drop(cache);
                 if start_refresh {
@@ -679,16 +806,48 @@ impl DynamicCompletionProvider {
                 return values;
             }
 
-            if cache.command_pending.insert(cache_key.clone()) {
-                start_refresh = true;
+            if !cache.command_pending.insert(cache_key.clone()) {
+                update_diagnostics_from_cache(&cache, None);
+                return Vec::new();
             }
             update_diagnostics_from_cache(&cache, None);
         }
 
-        if start_refresh {
-            spawn_command_refresh(self.cache.clone(), cache_key, loader);
+        let result = loader();
+        let mut cache = self.cache.write();
+        cache.command_pending.remove(&cache_key);
+        match result {
+            Ok(values) => {
+                cache.commands.insert(
+                    cache_key,
+                    CommandValueCacheEntry {
+                        values: values.clone(),
+                        cached_at: Instant::now(),
+                    },
+                );
+                update_diagnostics_from_cache(&cache, None);
+                values
+            }
+            Err(err) => {
+                warn!("Dynamic command completion initial load failed: {}", err);
+                update_diagnostics_from_cache(&cache, None);
+                Vec::new()
+            }
         }
-        Vec::new()
+    }
+
+    fn lookup_command_values(
+        &self,
+        kind: DynamicCommandCacheKind,
+        scope_dir: PathBuf,
+    ) -> Vec<String> {
+        let cache_key = DynamicCommandCacheKey { kind, scope_dir };
+        self.cache
+            .read()
+            .commands
+            .get(&cache_key)
+            .map(|entry| entry.values.clone())
+            .unwrap_or_default()
     }
 
     fn load_external_candidates<F>(
@@ -866,6 +1025,16 @@ fn task_completion_signature(project_root: &Path) -> Vec<FileMetadataSignature> 
     .into_iter()
     .map(|name| file_metadata_signature(&project_root.join(name)))
     .collect()
+}
+
+fn normalized_task_sources(sources: &[&str]) -> Vec<String> {
+    let mut sources = sources
+        .iter()
+        .map(|source| (*source).to_string())
+        .collect::<Vec<_>>();
+    sources.sort();
+    sources.dedup();
+    sources
 }
 
 fn find_compose_file(current_dir: &Path) -> Option<PathBuf> {
@@ -1198,21 +1367,15 @@ volumes:
         }
         let provider = DynamicCompletionProvider::new(environment);
 
-        let first_candidates = provider.collect_git_branch_candidates(&root, "fe");
+        let first_candidates = provider.collect_git_branch_candidates(&root, "fe", false);
         assert!(
-            first_candidates.is_empty(),
-            "first miss should return immediately while refreshing in background"
-        );
-
-        assert!(
-            wait_until(Duration::from_secs(2), || provider
-                .collect_git_branch_candidates(&root, "fe")
+            first_candidates
                 .iter()
-                .any(|candidate| candidate.text == "feature/cache")),
-            "expected git branch completion from fake git after background refresh"
+                .any(|candidate| candidate.text == "feature/cache"),
+            "first miss should synchronously fetch git branch completion"
         );
 
-        let nested_candidates = provider.collect_git_branch_candidates(&nested, "ma");
+        let nested_candidates = provider.collect_git_branch_candidates(&nested, "ma", false);
         assert!(
             nested_candidates
                 .iter()
@@ -1227,7 +1390,7 @@ volumes:
         );
 
         std::thread::sleep(Duration::from_millis(DYNAMIC_COMMAND_CACHE_TTL_MS + 50));
-        let refreshed_candidates = provider.collect_git_branch_candidates(&nested, "fe");
+        let refreshed_candidates = provider.collect_git_branch_candidates(&nested, "fe", false);
         assert!(
             refreshed_candidates
                 .iter()

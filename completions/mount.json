@@ -40,12 +40,48 @@
     {
       "short": "-t",
       "long": "--types",
-      "description": "Limit the set of filesystem types"
+      "description": "Limit the set of filesystem types",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "ext4",
+          "ext3",
+          "ext2",
+          "xfs",
+          "btrfs",
+          "ntfs",
+          "vfat",
+          "exfat",
+          "iso9660",
+          "nfs",
+          "cifs",
+          "tmpfs",
+          "squashfs"
+        ]
+      }
     },
     {
       "short": "-v",
       "long": "--verbose",
       "description": "Verbose mode"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "device",
+      "description": "Device to mount",
+      "type": {
+        "type": "Script",
+        "data": "lsblk -rno NAME,TYPE 2>/dev/null | awk '$2==\"part\" || $2==\"disk\" {print \"/dev/\" $1}'"
+      }
+    },
+    {
+      "name": "mountpoint",
+      "description": "Mount point directory",
+      "type": {
+        "type": "Directory"
+      }
     }
   ],
   "subcommands": []

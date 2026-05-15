@@ -65,7 +65,7 @@
     {
       "name": "group",
       "description": "Group name",
-      "arg_type": {
+      "type": {
         "type": "String"
       }
     }

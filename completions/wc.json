@@ -31,7 +31,10 @@
       "long": "--files0-from",
       "description": "Read input from the files specified by NUL-terminated names in file F",
       "takes_value": true,
-      "value_type": { "type": "File" }
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "long": "--total",
@@ -39,7 +42,12 @@
       "takes_value": true,
       "value_type": {
         "type": "Choice",
-        "data": ["auto", "always", "only", "never"]
+        "data": [
+          "auto",
+          "always",
+          "only",
+          "never"
+        ]
       }
     },
     {

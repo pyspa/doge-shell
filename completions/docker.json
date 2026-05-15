@@ -343,7 +343,7 @@
           "description": "Container name or ID",
           "type": {
             "type": "Script",
-            "data": "docker ps --format '{{.Names}}'"
+            "data": "docker ps -a --format '{{.Names}}' 2>/dev/null"
           }
         }
       ],
@@ -394,12 +394,41 @@
           "description": "Container name or ID",
           "type": {
             "type": "Script",
-            "data": "docker ps --format '{{.Names}}'"
+            "data": "docker ps --format '{{.Names}}' 2>/dev/null"
           }
         },
         {
           "name": "command",
           "description": "Command to execute"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "attach",
+      "description": "Attach local standard input, output, and error streams to a running container",
+      "options": [
+        {
+          "long": "--detach-keys",
+          "description": "Override the key sequence for detaching a container"
+        },
+        {
+          "long": "--no-stdin",
+          "description": "Do not attach STDIN"
+        },
+        {
+          "long": "--sig-proxy",
+          "description": "Proxy all received signals to the process"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container name or ID",
+          "type": {
+            "type": "Script",
+            "data": "docker ps --format '{{.Names}}' 2>/dev/null"
+          }
         }
       ],
       "subcommands": []

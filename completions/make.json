@@ -17,7 +17,8 @@
       "description": "Read FILE as a makefile",
       "takes_value": true,
       "value_type": {
-        "type": "File"
+        "type": "File",
+        "data": {}
       }
     },
     {

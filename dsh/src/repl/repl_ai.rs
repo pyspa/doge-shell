@@ -79,17 +79,42 @@ impl<'a> Repl<'a> {
         let current_input = self.input.to_string();
         let cursor_pos = self.input.cursor();
 
-        // Check history first in predict() now handles this more strictly,
-        // but it still needs to return states.
-        let mut candidates =
-            self.suggestion_manager
-                .engine
-                .predict(current_input.as_str(), cursor_pos, history_ref);
+        // History stays first. Integrated JSON/dynamic ghost text should beat
+        // generic path lookahead, and AI remains the final fallback.
+        let mut candidates = self.suggestion_manager.engine.predict_history(
+            current_input.as_str(),
+            cursor_pos,
+            history_ref,
+        );
 
-        // If no candidates from history/cache, try AI with full context
+        if candidates.is_empty() {
+            let current_dir = self.prompt.read().current_path().to_path_buf();
+            if let Some(full) = self.integrated_completion.ghost_completion(
+                current_input.as_str(),
+                cursor_pos,
+                &current_dir,
+                history_ref,
+            ) {
+                candidates.push(crate::suggestion::SuggestionState {
+                    full,
+                    source: crate::suggestion::SuggestionSource::Completion,
+                });
+            }
+        }
+
+        if candidates.is_empty()
+            && let Some(extra) = super::completion::completion_suggestion(
+                &self.input,
+                current_input.as_str(),
+                &self.shell.environment,
+            )
+        {
+            candidates.push(extra);
+        }
+
+        // If no deterministic candidates are available, try AI with full context.
         if candidates.is_empty() && self.input_preferences.ai_backfill {
             let (cwd, files) = {
-                // Try to use cache or empty
                 self.trigger_file_context_update();
                 let cache = self.file_context_cache.read();
                 (
@@ -107,19 +132,6 @@ impl<'a> Repl<'a> {
                 Some(self.last_status),
             ) {
                 candidates.push(state);
-            }
-        }
-
-        if let Some(extra) = super::completion::completion_suggestion(
-            &self.input,
-            current_input.as_str(),
-            &self.shell.environment,
-        ) {
-            let duplicate = candidates
-                .iter()
-                .any(|state| state.full == extra.full && state.source == extra.source);
-            if !duplicate {
-                candidates.push(extra);
             }
         }
 

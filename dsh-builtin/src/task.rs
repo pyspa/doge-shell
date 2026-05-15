@@ -374,11 +374,18 @@ fn detect_tasks(proxy: &dyn ShellProxy) -> Result<Vec<Task>> {
 }
 
 pub fn list_tasks_in_dir(current_dir: &Path) -> Result<Vec<TaskInfo>> {
-    Ok(detect_tasks_in_dir(current_dir, TaskDetectionMode::Full)?.tasks)
+    Ok(detect_tasks_in_dir(current_dir, TaskDetectionMode::Full, None)?.tasks)
+}
+
+pub fn list_tasks_in_dir_for_sources(
+    current_dir: &Path,
+    sources: &[&str],
+) -> Result<Vec<TaskInfo>> {
+    Ok(detect_tasks_in_dir(current_dir, TaskDetectionMode::Full, Some(sources))?.tasks)
 }
 
 pub fn summarize_tasks_in_dir_metadata_only(current_dir: &Path) -> Result<TaskDiscoverySummary> {
-    detect_tasks_in_dir(current_dir, TaskDetectionMode::MetadataOnly)
+    detect_tasks_in_dir(current_dir, TaskDetectionMode::MetadataOnly, None)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -390,15 +397,21 @@ enum TaskDetectionMode {
 fn detect_tasks_in_dir(
     current_dir: &Path,
     mode: TaskDetectionMode,
+    source_filter: Option<&[&str]>,
 ) -> Result<TaskDiscoverySummary> {
-    let project_tasks = project_context::detect_task_names_in_dir(current_dir)?
-        .into_iter()
-        .map(|task| TaskInfo {
-            source: task.source,
-            name: task.name,
-            command: task.command,
-        })
-        .collect::<Vec<_>>();
+    let project_tasks = if any_source_enabled(source_filter, &["mise", "taskfile", "turbo", "nx"]) {
+        project_context::detect_task_names_in_dir(current_dir)?
+            .into_iter()
+            .filter(|task| source_enabled(source_filter, &task.source))
+            .map(|task| TaskInfo {
+                source: task.source,
+                name: task.name,
+                command: task.command,
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     let project = project_context::resolve_project_context(current_dir);
     let current_dir = project.project_root.as_path();
     let mut tasks = Vec::new();
@@ -407,23 +420,26 @@ fn detect_tasks_in_dir(
     tasks.extend(project_tasks);
 
     // 1. package.json (npm, yarn, pnpm, bun)
-    if let Ok(content) = fs::read_to_string(current_dir.join("package.json"))
+    if any_source_enabled(source_filter, &["npm", "pnpm", "yarn", "bun"])
+        && let Ok(content) = fs::read_to_string(current_dir.join("package.json"))
         && let Ok(json) = serde_json::from_str::<serde_json::Value>(&content)
         && let Some(scripts) = json.get("scripts").and_then(|s| s.as_object())
     {
         let manager = detect_js_manager(current_dir);
-        for name in scripts.keys() {
-            tasks.push(TaskInfo {
-                source: manager.clone(),
-                name: name.clone(),
-                // e.g. "npm run build"
-                command: format!("{} run {}", manager, name),
-            });
+        if source_enabled(source_filter, &manager) {
+            for name in scripts.keys() {
+                tasks.push(TaskInfo {
+                    source: manager.clone(),
+                    name: name.clone(),
+                    // e.g. "npm run build"
+                    command: format!("{} run {}", manager, name),
+                });
+            }
         }
     }
 
     // 2. Cargo.toml
-    if current_dir.join("Cargo.toml").exists() {
+    if source_enabled(source_filter, "cargo") && current_dir.join("Cargo.toml").exists() {
         // Standard cargo commands
         for cmd in ["build", "run", "test", "check", "clippy", "fmt", "doc"] {
             tasks.push(TaskInfo {
@@ -435,7 +451,9 @@ fn detect_tasks_in_dir(
     }
 
     // 3. Makefile
-    if current_dir.join("Makefile").exists() || current_dir.join("makefile").exists() {
+    if source_enabled(source_filter, "make")
+        && (current_dir.join("Makefile").exists() || current_dir.join("makefile").exists())
+    {
         match mode {
             TaskDetectionMode::Full => {
                 // Use make -pRrq : to list targets. This can evaluate Makefile constructs,
@@ -477,6 +495,7 @@ fn detect_tasks_in_dir(
     };
 
     if let Some(path) = deno_path
+        && source_enabled(source_filter, "deno")
         && let Ok(content) = fs::read_to_string(&path)
     {
         let clean_content = remove_jsonc_comments(&content);
@@ -497,7 +516,7 @@ fn detect_tasks_in_dir(
     let justfile_exists = ["Justfile", "justfile", ".justfile"]
         .iter()
         .any(|f| current_dir.join(f).exists());
-    if justfile_exists {
+    if source_enabled(source_filter, "just") && justfile_exists {
         match mode {
             TaskDetectionMode::Full => {
                 // Try `just --summary`. Keep this out of passive diagnostics because
@@ -525,6 +544,14 @@ fn detect_tasks_in_dir(
         tasks: dedup_task_infos(tasks),
         deferred_sources: dedup_strings(deferred_sources),
     })
+}
+
+fn source_enabled(source_filter: Option<&[&str]>, source: &str) -> bool {
+    source_filter.is_none_or(|sources| sources.contains(&source))
+}
+
+fn any_source_enabled(source_filter: Option<&[&str]>, sources: &[&str]) -> bool {
+    source_filter.is_none_or(|filter| sources.iter().any(|source| filter.contains(source)))
 }
 
 fn detect_js_manager(path: &Path) -> String {
@@ -658,6 +685,33 @@ mod tests {
             tasks
                 .iter()
                 .any(|task| task.name == "dev" && task.source == "mise")
+        );
+    }
+
+    #[test]
+    fn source_scoped_task_detection_does_not_execute_makefile_for_npm() {
+        let dir = tempdir().unwrap();
+        let marker = dir.path().join("should-not-exist");
+        File::create(dir.path().join("package.json"))
+            .unwrap()
+            .write_all(br#"{ "scripts": { "build": "echo build" } }"#)
+            .unwrap();
+        File::create(dir.path().join("Makefile"))
+            .unwrap()
+            .write_all(
+                format!("$(shell touch {})\nall:\n\t@echo all\n", marker.display()).as_bytes(),
+            )
+            .unwrap();
+
+        let tasks = list_tasks_in_dir_for_sources(dir.path(), &["npm"]).unwrap();
+        assert!(
+            tasks
+                .iter()
+                .any(|task| task.source == "npm" && task.name == "build")
+        );
+        assert!(
+            !marker.exists(),
+            "npm-scoped task detection must not invoke make"
         );
     }
 

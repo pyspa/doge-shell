@@ -923,7 +923,6 @@ async fn list_tools_via_transport(transport: McpTransport) -> Result<Vec<Tool>> 
         } => {
             let mut cmd = Command::new(&command);
             cmd.args(&args);
-            redirect_mcp_stderr(&mut cmd, &command);
 
             if let Some(dir) = cwd {
                 cmd.current_dir(dir);
@@ -932,7 +931,7 @@ async fn list_tools_via_transport(transport: McpTransport) -> Result<Vec<Tool>> 
                 cmd.env(key, value);
             }
 
-            let service = ().serve(TokioChildProcess::new(cmd)?).await?;
+            let service = ().serve(spawn_mcp_stdio_transport(cmd, &command)?).await?;
             let ListToolsResult { tools, .. } = service.list_tools(None).await?;
             let _ = service.cancel().await;
             Ok(tools)
@@ -977,7 +976,6 @@ async fn call_tool_via_transport(
         } => {
             let mut cmd = Command::new(&command);
             cmd.args(&args);
-            redirect_mcp_stderr(&mut cmd, &command);
 
             if let Some(dir) = cwd {
                 cmd.current_dir(dir);
@@ -986,7 +984,7 @@ async fn call_tool_via_transport(
                 cmd.env(key, value);
             }
 
-            let service = ().serve(TokioChildProcess::new(cmd)?).await?;
+            let service = ().serve(spawn_mcp_stdio_transport(cmd, &command)?).await?;
             let mut params = CallToolRequestParams::new(tool_name.to_string());
             params.arguments = arguments;
             let response = service.call_tool(params).await?;
@@ -1066,17 +1064,28 @@ fn unique_name(base: &str, set: &mut HashSet<String>) -> String {
     }
 }
 
-fn redirect_mcp_stderr(cmd: &mut Command, command: &str) {
+fn spawn_mcp_stdio_transport(cmd: Command, command: &str) -> std::io::Result<TokioChildProcess> {
+    let (transport, _) = spawn_mcp_stdio_transport_with_stderr(cmd, mcp_server_stderr(command))?;
+    Ok(transport)
+}
+
+fn spawn_mcp_stdio_transport_with_stderr(
+    cmd: Command,
+    stderr: Stdio,
+) -> std::io::Result<(TokioChildProcess, Option<tokio::process::ChildStderr>)> {
+    TokioChildProcess::builder(cmd).stderr(stderr).spawn()
+}
+
+fn mcp_server_stderr(command: &str) -> Stdio {
     let Some(path) = mcp_server_log_path(command) else {
         warn!(command, "failed to resolve MCP server stderr log path");
-        return;
+        return Stdio::null();
     };
     match OpenOptions::new().create(true).append(true).open(&path) {
-        Ok(file) => {
-            cmd.stderr(Stdio::from(file));
-        }
+        Ok(file) => Stdio::from(file),
         Err(err) => {
             warn!(command, path = %path.display(), "failed to open MCP server stderr log: {err}");
+            Stdio::null()
         }
     }
 }
@@ -1116,6 +1125,7 @@ fn sanitized_command_name(command: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncReadExt;
 
     #[test]
     fn mcp_log_names_are_sanitized() {
@@ -1125,6 +1135,24 @@ mod tests {
             "name_with_spaces"
         );
         assert_eq!(sanitized_command_name(""), "unknown");
+    }
+
+    #[tokio::test]
+    async fn mcp_stdio_transport_uses_configured_stderr() {
+        let marker = "dsh-mcp-stderr-regression";
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", &format!("printf '{marker}\\n' >&2")]);
+
+        let (_transport, stderr) =
+            spawn_mcp_stdio_transport_with_stderr(cmd, Stdio::piped()).unwrap();
+        let mut stderr = stderr.expect("stderr should be piped by the MCP transport builder");
+        let mut output = String::new();
+        tokio::time::timeout(Duration::from_secs(1), stderr.read_to_string(&mut output))
+            .await
+            .expect("stderr read should finish")
+            .expect("stderr should be readable");
+
+        assert!(output.contains(marker));
     }
 
     fn mock_server(label: &str) -> McpServer {

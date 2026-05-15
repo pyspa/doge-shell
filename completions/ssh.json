@@ -15,7 +15,8 @@
       "description": "Selects a file from which the identity (private key) for public key authentication is read",
       "takes_value": true,
       "value_type": {
-        "type": "File"
+        "type": "File",
+        "data": {}
       }
     },
     {

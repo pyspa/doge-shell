@@ -32,7 +32,8 @@
       "takes_value": true,
       "description": "Use the group of given reference file",
       "value_type": {
-        "type": "File"
+        "type": "File",
+        "data": {}
       }
     },
     {
@@ -66,17 +67,18 @@
     {
       "name": "group",
       "description": "Group name or ID",
-      "arg_type": {
-        "type": "String"
+      "type": {
+        "type": "Group"
       }
     },
     {
       "name": "files",
       "description": "Files to change",
-      "arg_type": {
-        "type": "File"
-      },
-      "multiple": true
+      "multiple": true,
+      "type": {
+        "type": "File",
+        "data": {}
+      }
     }
   ]
 }

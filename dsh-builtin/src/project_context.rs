@@ -23,6 +23,8 @@ const PROJECT_MARKERS: &[&str] = &[
     "go.mod",
     "Taskfile.yml",
     "Taskfile.yaml",
+    "deno.json",
+    "deno.jsonc",
     "Justfile",
     "justfile",
     ".justfile",
@@ -653,6 +655,27 @@ mod tests {
             tasks
                 .iter()
                 .any(|task| task.source == "nx" && task.name == "test")
+        );
+    }
+
+    #[test]
+    fn treats_deno_config_as_project_root_marker() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("deno.json"),
+            "{\"tasks\":{\"build\":\"deno run build.ts\"}}",
+        )
+        .unwrap();
+        let nested = dir.path().join("src").join("cli");
+        fs::create_dir_all(&nested).unwrap();
+
+        let context = resolve_project_context(&nested);
+        assert_eq!(context.project_root, dir.path().canonicalize().unwrap());
+        assert!(
+            context
+                .project_markers
+                .iter()
+                .any(|marker| marker == "deno.json")
         );
     }
 

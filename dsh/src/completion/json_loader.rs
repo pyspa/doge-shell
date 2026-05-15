@@ -8,14 +8,18 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use tracing::{debug, warn};
 
-/// Embedded completion assets using rust-embed
-/// This embeds all JSON files from the completions/ directory at compile time
+/// Embedded completion assets using rust-embed.
+///
+/// `dsh/completions/` is the canonical built-in source. User config completion
+/// directories are checked before embedded assets so generated definitions can
+/// override built-ins; local dev fallback directories are checked after embedded.
 #[derive(RustEmbed)]
 #[folder = "completions/"]
 struct CompletionAssets;
 
 pub struct JsonCompletionLoader {
-    completion_dirs: Vec<PathBuf>,
+    override_dirs: Vec<PathBuf>,
+    fallback_dirs: Vec<PathBuf>,
 }
 
 /// Global cache for the loaded completion database
@@ -24,17 +28,30 @@ static COMPLETION_DATABASE_CACHE: OnceLock<Arc<CommandCompletionDatabase>> = Onc
 impl JsonCompletionLoader {
     pub fn new() -> Self {
         Self {
-            completion_dirs: Self::get_default_completion_dirs(),
+            override_dirs: Self::get_default_override_dirs(),
+            fallback_dirs: Self::get_default_fallback_dirs(),
         }
     }
 
     pub fn with_dirs(dirs: Vec<PathBuf>) -> Self {
         Self {
-            completion_dirs: dirs,
+            override_dirs: dirs,
+            fallback_dirs: Vec::new(),
         }
     }
 
-    fn get_default_completion_dirs() -> Vec<PathBuf> {
+    #[cfg(test)]
+    fn with_override_and_fallback_dirs(
+        override_dirs: Vec<PathBuf>,
+        fallback_dirs: Vec<PathBuf>,
+    ) -> Self {
+        Self {
+            override_dirs,
+            fallback_dirs,
+        }
+    }
+
+    fn get_default_override_dirs() -> Vec<PathBuf> {
         let mut dirs = Vec::new();
 
         if let Some(config_dir) = dirs::config_dir() {
@@ -49,11 +66,17 @@ impl JsonCompletionLoader {
             dirs.push(home_config_dir);
         }
 
+        debug!("Initialized override completion directories: {:?}", dirs);
+        dirs
+    }
+
+    fn get_default_fallback_dirs() -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
         let local_dir = PathBuf::from("./completions");
-        debug!("Adding local completion dir: {:?}", local_dir);
+        debug!("Adding local fallback completion dir: {:?}", local_dir);
         dirs.push(local_dir);
 
-        debug!("Initialized completion directories: {:?}", dirs);
+        debug!("Initialized fallback completion directories: {:?}", dirs);
         dirs
     }
 
@@ -312,11 +335,21 @@ impl JsonCompletionLoader {
         Ok(())
     }
 
-    /// Load completion data for specific command
+    /// Load completion data for specific command.
+    ///
+    /// Filesystem directories are intentionally checked before embedded assets:
+    /// `comp-gen` writes to the user config directory and must be able to
+    /// override an existing built-in definition such as `git.json`.
     pub fn load_command_completion(&self, command_name: &str) -> Result<Option<CommandCompletion>> {
         let filename = format!("{command_name}.json");
 
-        // First, try to load from embedded resources
+        debug!("Checking override filesystem directories for: {}", filename);
+        if let Some(completion) =
+            self.load_command_completion_from_dirs(command_name, &filename, &self.override_dirs)?
+        {
+            return Ok(Some(completion));
+        }
+
         debug!("Checking embedded resources for: {}", filename);
         if let Some(file_data) = CompletionAssets::get(&filename) {
             debug!("Found embedded completion for: {}", command_name);
@@ -339,10 +372,25 @@ impl JsonCompletionLoader {
             debug!("No embedded completion found for: {}", command_name);
         }
 
-        // Fallback to filesystem directories
-        debug!("Checking filesystem directories for: {}", filename);
-        for dir in &self.completion_dirs {
-            let path = dir.join(&filename);
+        debug!("Checking fallback filesystem directories for: {}", filename);
+        if let Some(completion) =
+            self.load_command_completion_from_dirs(command_name, &filename, &self.fallback_dirs)?
+        {
+            return Ok(Some(completion));
+        }
+
+        debug!("No completion found for command: {}", command_name);
+        Ok(None)
+    }
+
+    fn load_command_completion_from_dirs(
+        &self,
+        command_name: &str,
+        filename: &str,
+        dirs: &[PathBuf],
+    ) -> Result<Option<CommandCompletion>> {
+        for dir in dirs {
+            let path = dir.join(filename);
             if path.exists() {
                 debug!("Found filesystem completion at: {:?}", path);
                 match self.load_completion_file(&path) {
@@ -363,7 +411,6 @@ impl JsonCompletionLoader {
             }
         }
 
-        debug!("No completion found for command: {}", command_name);
         Ok(None)
     }
 
@@ -384,8 +431,8 @@ impl JsonCompletionLoader {
         }
 
         // Then, collect from filesystem directories
-        debug!("Collecting completions from filesystem directories...");
-        for dir in &self.completion_dirs {
+        debug!("Collecting completions from override filesystem directories...");
+        for dir in self.override_dirs.iter().chain(self.fallback_dirs.iter()) {
             if !dir.exists() {
                 continue;
             }
@@ -492,6 +539,175 @@ mod tests {
             Some(crate::completion::command::ArgumentType::Choice(values))
                 if values == &vec!["default".to_string(), "kube-system".to_string()]
         ));
+    }
+
+    #[test]
+    fn filesystem_completion_overrides_embedded_completion() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(
+            temp_dir.path().join("git.json"),
+            r#"
+            {
+                "command": "git",
+                "description": "User override",
+                "subcommands": [
+                    {
+                        "name": "custom-user-subcommand",
+                        "description": "Only in user config"
+                    }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loader = JsonCompletionLoader::with_dirs(vec![temp_dir.path().to_path_buf()]);
+        let completion = loader.load_command_completion("git").unwrap().unwrap();
+
+        assert_eq!(completion.description.as_deref(), Some("User override"));
+        assert!(
+            completion
+                .subcommands
+                .iter()
+                .any(|subcommand| subcommand.name == "custom-user-subcommand")
+        );
+    }
+
+    #[test]
+    fn fallback_completion_does_not_override_embedded_completion() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(
+            temp_dir.path().join("git.json"),
+            r#"
+            {
+                "command": "git",
+                "description": "Fallback override",
+                "subcommands": [
+                    {
+                        "name": "fallback-only-subcommand",
+                        "description": "Only in fallback"
+                    }
+                ]
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loader = JsonCompletionLoader::with_override_and_fallback_dirs(
+            Vec::new(),
+            vec![temp_dir.path().to_path_buf()],
+        );
+        let completion = loader.load_command_completion("git").unwrap().unwrap();
+
+        assert_ne!(completion.description.as_deref(), Some("Fallback override"));
+        assert!(
+            !completion
+                .subcommands
+                .iter()
+                .any(|subcommand| subcommand.name == "fallback-only-subcommand")
+        );
+    }
+
+    #[test]
+    fn fallback_completion_loads_when_embedded_missing() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(
+            temp_dir.path().join("local-only-command.json"),
+            r#"
+            {
+                "command": "local-only-command",
+                "description": "Fallback-only completion"
+            }
+            "#,
+        )
+        .unwrap();
+
+        let loader = JsonCompletionLoader::with_override_and_fallback_dirs(
+            Vec::new(),
+            vec![temp_dir.path().to_path_buf()],
+        );
+        let completion = loader
+            .load_command_completion("local-only-command")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            completion.description.as_deref(),
+            Some("Fallback-only completion")
+        );
+    }
+
+    #[test]
+    fn command_completion_schema_matches_runtime_field_names() {
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../../../command-completion-schema.json")).unwrap();
+        let properties = schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .unwrap();
+        assert!(properties.contains_key("arguments"));
+
+        let argument_properties = schema
+            .pointer("/definitions/Argument/properties")
+            .and_then(serde_json::Value::as_object)
+            .unwrap();
+        assert!(argument_properties.contains_key("type"));
+        assert!(!argument_properties.contains_key("arg_type"));
+
+        let option_properties = schema
+            .pointer("/definitions/CommandOption/properties")
+            .and_then(serde_json::Value::as_object)
+            .unwrap();
+        assert!(option_properties.contains_key("argument"));
+
+        for type_name in [
+            "Process",
+            "CommandWithArgs",
+            "User",
+            "Group",
+            "Signal",
+            "Interface",
+        ] {
+            assert!(
+                schema.to_string().contains(&format!(r#""{type_name}""#)),
+                "schema should include runtime ArgumentType::{type_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn root_completion_mirror_matches_embedded_completion_source() {
+        let embedded_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("completions");
+        let mirror_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../completions");
+        if !mirror_dir.exists() {
+            return;
+        }
+
+        let mut embedded_files = Vec::new();
+        for entry in fs::read_dir(&embedded_dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) == Some("json") {
+                embedded_files.push(path);
+            }
+        }
+        embedded_files.sort();
+
+        for embedded_path in embedded_files {
+            let file_name = embedded_path.file_name().unwrap();
+            let mirror_path = mirror_dir.join(file_name);
+            assert!(
+                mirror_path.exists(),
+                "root completion mirror is missing {}",
+                file_name.to_string_lossy()
+            );
+            assert_eq!(
+                fs::read(&embedded_path).unwrap(),
+                fs::read(&mirror_path).unwrap(),
+                "root completion mirror differs for {}",
+                file_name.to_string_lossy()
+            );
+        }
     }
 
     #[test]

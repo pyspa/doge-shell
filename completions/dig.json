@@ -56,21 +56,29 @@
     {
       "name": "name",
       "description": "Domain name to query",
-      "arg_type": {
+      "required": false,
+      "type": {
         "type": "String"
-      },
-      "required": false
+      }
     },
     {
       "name": "type",
       "description": "Query type (A, AAAA, MX, etc.)",
-      "arg_type": {
+      "required": false,
+      "type": {
         "type": "Choice",
         "data": [
-          "A", "AAAA", "CNAME", "MX", "NS", "PTR", "SOA", "TXT", "ANY"
+          "A",
+          "AAAA",
+          "CNAME",
+          "MX",
+          "NS",
+          "PTR",
+          "SOA",
+          "TXT",
+          "ANY"
         ]
-      },
-      "required": false
+      }
     }
   ]
 }

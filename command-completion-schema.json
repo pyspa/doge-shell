@@ -28,6 +28,13 @@
       "items": {
         "$ref": "#/definitions/SubCommand"
       }
+    },
+    "arguments": {
+      "type": "array",
+      "description": "Arguments accepted by the command itself",
+      "items": {
+        "$ref": "#/definitions/Argument"
+      }
     }
   },
   "additionalProperties": false,
@@ -68,6 +75,10 @@
         "value_type": {
           "$ref": "#/definitions/ArgumentType",
           "description": "Type of value this option takes"
+        },
+        "argument": {
+          "$ref": "#/definitions/Argument",
+          "description": "Argument definition for this option value"
         }
       },
       "oneOf": [
@@ -151,7 +162,7 @@
           "description": "Whether multiple values can be provided for this argument",
           "default": false
         },
-        "arg_type": {
+        "type": {
           "$ref": "#/definitions/ArgumentType",
           "description": "Type of value this argument expects"
         }
@@ -273,6 +284,72 @@
             "type": {
               "type": "string",
               "enum": ["Regex"]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "title": "Process Type",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["Process"]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "title": "Command With Args Type",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["CommandWithArgs"]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "title": "User Type",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["User"]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "title": "Group Type",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["Group"]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "title": "Signal Type",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["Signal"]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "title": "Interface Type",
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["Interface"]
             }
           }
         },

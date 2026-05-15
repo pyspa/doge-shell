@@ -7,27 +7,36 @@
       "long": "--field-separator",
       "description": "Use fs for the input field separator",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "short": "-v",
       "long": "--assign",
       "description": "Assign the value val to the variable var before execution",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "short": "-f",
       "long": "--file",
       "description": "Read the AWK program source from the file",
       "takes_value": true,
-      "value_type": { "type": "File" }
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "short": "-W",
       "description": "Specify implementation-specific options",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "short": "-b",
@@ -49,21 +58,29 @@
       "long": "--dump-variables",
       "description": "Print a sorted list of global variables to file",
       "takes_value": true,
-      "value_type": { "type": "File" }
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "short": "-e",
       "long": "--source",
       "description": "Use program-text as AWK program source code",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "short": "-E",
       "long": "--exec",
       "description": "Similar to -f, but preprocessor and command line variable assignment disabled",
       "takes_value": true,
-      "value_type": { "type": "File" }
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "short": "-g",
@@ -75,14 +92,20 @@
       "long": "--include",
       "description": "Load an awk source library",
       "takes_value": true,
-      "value_type": { "type": "File" }
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "short": "-l",
       "long": "--load",
       "description": "Load a gawk extension from the shared library",
       "takes_value": true,
-      "value_type": { "type": "File" }
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "short": "-M",
@@ -104,7 +127,10 @@
       "long": "--pretty-print",
       "description": "Output a pretty-printed version of the program",
       "takes_value": true,
-      "value_type": { "type": "File" }
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "short": "-O",
@@ -116,7 +142,10 @@
       "long": "--profile",
       "description": "Enable profiling of the AWK program",
       "takes_value": true,
-      "value_type": { "type": "File" }
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "short": "-P",

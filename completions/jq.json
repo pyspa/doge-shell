@@ -71,7 +71,9 @@
       "value_type": {
         "type": "File",
         "data": {
-          "extensions": ["jq"]
+          "extensions": [
+            "jq"
+          ]
         }
       }
     },
@@ -107,14 +109,16 @@
     {
       "name": "files",
       "description": "Input files",
-      "arg_type": {
+      "multiple": true,
+      "required": false,
+      "type": {
         "type": "File",
         "data": {
-          "extensions": ["json"]
+          "extensions": [
+            "json"
+          ]
         }
-      },
-      "multiple": true,
-      "required": false
+      }
     }
   ]
 }

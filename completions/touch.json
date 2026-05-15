@@ -16,7 +16,9 @@
       "long": "--date",
       "description": "Parse STRING and use it instead of current time",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "short": "-m",
@@ -27,13 +29,18 @@
       "long": "--reference",
       "description": "Use this file's times instead of current time",
       "takes_value": true,
-      "value_type": { "type": "File" }
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "short": "-t",
       "description": "Use [[CC]YY]MMDDhhmm[.ss] instead of current time",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "short": "-h",

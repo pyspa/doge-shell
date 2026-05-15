@@ -288,6 +288,9 @@ fn validate_options_array(value: &Value, path: &str) -> Result<()> {
         if let Some(value_type) = obj.get("value_type") {
             validate_argument_type(value_type, &format!("{option_path}.value_type"))?;
         }
+        if let Some(argument) = obj.get("argument") {
+            validate_argument_object(argument, &format!("{option_path}.argument"))?;
+        }
     }
     Ok(())
 }
@@ -298,26 +301,31 @@ fn validate_arguments_array(value: &Value, path: &str) -> Result<()> {
         .with_context(|| format!("{path} must be an array"))?;
     for (idx, arg) in args.iter().enumerate() {
         let arg_path = format!("{path}[{idx}]");
-        let obj = arg
-            .as_object()
-            .with_context(|| format!("{arg_path} must be an object"))?;
-        let name_value = obj
-            .get("name")
-            .with_context(|| format!("{arg_path}.name is required"))?;
-        require_non_empty_string(name_value, &format!("{arg_path}.name"))?;
-        if let Some(arg_type) = obj.get("type") {
-            validate_argument_type(arg_type, &format!("{arg_path}.type"))?;
-        }
-        if let Some(required) = obj.get("required")
-            && !required.is_boolean()
-        {
-            bail!("{arg_path}.required must be boolean");
-        }
-        if let Some(multiple) = obj.get("multiple")
-            && !multiple.is_boolean()
-        {
-            bail!("{arg_path}.multiple must be boolean");
-        }
+        validate_argument_object(arg, &arg_path)?;
+    }
+    Ok(())
+}
+
+fn validate_argument_object(value: &Value, path: &str) -> Result<()> {
+    let obj = value
+        .as_object()
+        .with_context(|| format!("{path} must be an object"))?;
+    let name_value = obj
+        .get("name")
+        .with_context(|| format!("{path}.name is required"))?;
+    require_non_empty_string(name_value, &format!("{path}.name"))?;
+    if let Some(arg_type) = obj.get("type") {
+        validate_argument_type(arg_type, &format!("{path}.type"))?;
+    }
+    if let Some(required) = obj.get("required")
+        && !required.is_boolean()
+    {
+        bail!("{path}.required must be boolean");
+    }
+    if let Some(multiple) = obj.get("multiple")
+        && !multiple.is_boolean()
+    {
+        bail!("{path}.multiple must be boolean");
     }
     Ok(())
 }
@@ -437,6 +445,25 @@ mod tests {
           "command": "foo",
           "arguments": [
             { "name": "x", "type": { "type": "Script", "data": "echo hi" } }
+          ]
+        }
+        "#;
+        assert!(validate_completion_json(json, "foo").is_err());
+    }
+
+    #[test]
+    fn validate_completion_rejects_option_argument_script_type() {
+        let json = r#"
+        {
+          "command": "foo",
+          "global_options": [
+            {
+              "long": "--branch",
+              "argument": {
+                "name": "branch",
+                "type": { "type": "Script", "data": "git branch" }
+              }
+            }
           ]
         }
         "#;

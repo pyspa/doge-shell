@@ -25,6 +25,76 @@ use tracing::{debug, warn};
 const DEFAULT_CACHE_TTL_MS: u64 = 3000;
 const HISTORY_BOOST_SCAN_LIMIT: usize = 2000;
 const HISTORY_BOOST_SCORE_CAP: u32 = 5000;
+const JS_TASK_SOURCES: &[&str] = &["npm", "pnpm", "yarn", "bun"];
+const DENO_TASK_SOURCES: &[&str] = &["deno"];
+const JUST_TASK_SOURCES: &[&str] = &["just"];
+const MAKE_TASK_SOURCES: &[&str] = &["make"];
+
+type DynamicProviderFn = for<'a> fn(
+    &IntegratedCompletionEngine,
+    &CompletionRequest<'a>,
+    &ParsedCommandLine,
+) -> Vec<EnhancedCandidate>;
+
+struct DynamicProviderSpec {
+    command: &'static str,
+    collect: DynamicProviderFn,
+}
+
+const DYNAMIC_PROVIDER_SPECS: &[DynamicProviderSpec] = &[
+    DynamicProviderSpec {
+        command: "task",
+        collect: collect_task_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "pm",
+        collect: collect_pm_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "pj",
+        collect: collect_pj_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "mcp",
+        collect: collect_mcp_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "git",
+        collect: collect_git_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "docker",
+        collect: collect_docker_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "kubectl",
+        collect: collect_kubectl_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "npm",
+        collect: collect_npm_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "pnpm",
+        collect: collect_npm_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "yarn",
+        collect: collect_yarn_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "deno",
+        collect: collect_deno_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "just",
+        collect: collect_just_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "make",
+        collect: collect_make_dynamic_candidates,
+    },
+];
 
 #[derive(Debug, Clone, Copy)]
 struct CompletionRequest<'a> {
@@ -363,6 +433,47 @@ impl IntegratedCompletionEngine {
         results
     }
 
+    pub fn ghost_completion(
+        &self,
+        input: &str,
+        cursor_pos: usize,
+        current_dir: &Path,
+        history: Option<&Arc<parking_lot::Mutex<crate::history::History>>>,
+    ) -> Option<String> {
+        if input.is_empty() || cursor_pos != input.chars().count() {
+            return None;
+        }
+
+        let request = CompletionRequest::new(input, current_dir, 10, cursor_pos);
+        let parsed_command_line = self.convert_to_parsed_command_line(input, cursor_pos);
+        let replacement_range =
+            completion_replacement_range(input, cursor_pos, &parsed_command_line)?;
+
+        let mut candidates = self.collect_dynamic_candidates_cached(&request, &parsed_command_line);
+        candidates.extend(self.collect_command_candidates_for_ghost(&parsed_command_line));
+
+        let command_context = if parsed_command_line.command.is_empty() {
+            None
+        } else {
+            Some(parsed_command_line.command.as_str())
+        };
+
+        let candidates = self.deduplicate_and_sort(candidates, 10, history, command_context);
+        let candidate = candidates.first()?;
+        let full = replace_char_range(
+            input,
+            replacement_range.start,
+            replacement_range.end,
+            &candidate.text,
+        );
+
+        if full == input || !full.starts_with(input) {
+            return None;
+        }
+
+        Some(full)
+    }
+
     fn collect_command_candidates(
         &self,
         request: &CompletionRequest,
@@ -480,29 +591,62 @@ impl IntegratedCompletionEngine {
         request: &CompletionRequest,
         parsed_command_line: &parser::ParsedCommandLine,
     ) -> CandidateBatch {
-        let candidates = match parsed_command_line.command.as_str() {
-            "task" => self
-                .dynamic
-                .collect_task_candidates(parsed_command_line, request.current_dir),
-            "pm" => self.collect_pm_candidates(parsed_command_line),
-            "pj" => self.collect_pj_candidates(parsed_command_line),
-            "mcp" => self.collect_mcp_candidates(parsed_command_line),
-            "git" => self
-                .dynamic
-                .collect_git_candidates(parsed_command_line, request.current_dir),
-            "docker" => self
-                .dynamic
-                .collect_docker_candidates(parsed_command_line, request.current_dir),
-            "kubectl" => self
-                .dynamic
-                .collect_kubectl_candidates(parsed_command_line, request.current_dir),
-            _ => Vec::new(),
-        };
+        let candidates = DYNAMIC_PROVIDER_SPECS
+            .iter()
+            .find(|provider| provider.command == parsed_command_line.command)
+            .map(|provider| (provider.collect)(self, request, parsed_command_line))
+            .unwrap_or_default();
 
         if candidates.is_empty() {
             CandidateBatch::empty()
         } else {
             CandidateBatch::inclusive_with_framework(candidates, CompletionFrameworkKind::Skim)
+        }
+    }
+
+    fn collect_dynamic_candidates_cached(
+        &self,
+        request: &CompletionRequest,
+        parsed_command_line: &parser::ParsedCommandLine,
+    ) -> Vec<EnhancedCandidate> {
+        match parsed_command_line.command.as_str() {
+            "git" => self
+                .dynamic
+                .collect_git_candidates_cached(parsed_command_line, request.current_dir),
+            "kubectl" => self
+                .dynamic
+                .collect_kubectl_candidates_cached(parsed_command_line, request.current_dir),
+            _ => Vec::new(),
+        }
+    }
+
+    fn collect_command_candidates_for_ghost(
+        &self,
+        parsed_command_line: &parser::ParsedCommandLine,
+    ) -> Vec<EnhancedCandidate> {
+        match parsed_command_line.completion_context {
+            parser::CompletionContext::SubCommand
+            | parser::CompletionContext::ShortOption
+            | parser::CompletionContext::LongOption => {}
+            _ => return Vec::new(),
+        }
+
+        self.ensure_command_completion_loaded(&parsed_command_line.command);
+        let db_lock = self.command_completion.lock();
+        if db_lock.get_command(&parsed_command_line.command).is_none() {
+            return Vec::new();
+        }
+
+        let completion_generator = CompletionGenerator::new(&db_lock);
+        match completion_generator.generate_candidates(parsed_command_line) {
+            Ok(candidates) => candidates
+                .into_iter()
+                .map(|candidate| self.convert_to_enhanced_candidate(candidate))
+                .collect(),
+            Err(err) => {
+                debug!("Failed to generate ghost completion candidates: {}", err);
+                Vec::new()
+            }
         }
     }
 
@@ -646,6 +790,65 @@ impl IntegratedCompletionEngine {
             }
             _ => Vec::new(),
         }
+    }
+
+    fn collect_package_run_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        if !leading_completion_words_match(parsed_command_line, &["run"]) {
+            return Vec::new();
+        }
+        self.dynamic.collect_project_task_candidates(
+            parsed_command_line,
+            current_dir,
+            JS_TASK_SOURCES,
+        )
+    }
+
+    fn collect_yarn_script_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        let leading_words = leading_completion_words(parsed_command_line);
+        if !(leading_words.is_empty() || leading_words.as_slice() == ["run"]) {
+            return Vec::new();
+        }
+        self.dynamic.collect_project_task_candidates(
+            parsed_command_line,
+            current_dir,
+            JS_TASK_SOURCES,
+        )
+    }
+
+    fn collect_deno_task_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        if !leading_completion_words_match(parsed_command_line, &["task"]) {
+            return Vec::new();
+        }
+        self.dynamic.collect_project_task_candidates(
+            parsed_command_line,
+            current_dir,
+            DENO_TASK_SOURCES,
+        )
+    }
+
+    fn collect_top_level_task_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        sources: &[&str],
+    ) -> Vec<EnhancedCandidate> {
+        if !leading_completion_words(parsed_command_line).is_empty() {
+            return Vec::new();
+        }
+        self.dynamic
+            .collect_project_task_candidates(parsed_command_line, current_dir, sources)
     }
 
     fn collect_external_candidates(
@@ -906,15 +1109,156 @@ fn slice_chars(input: &str, start: usize, end: usize) -> String {
         .collect()
 }
 
+fn replace_char_range(input: &str, start: usize, end: usize, replacement: &str) -> String {
+    let mut result = String::with_capacity(input.len() + replacement.len());
+    for (index, ch) in input.chars().enumerate() {
+        if index == start {
+            result.push_str(replacement);
+        }
+        if index < start || index >= end {
+            result.push(ch);
+        }
+    }
+    if start >= input.chars().count() {
+        result.push_str(replacement);
+    }
+    result
+}
+
 pub(super) fn matches_prefix(current_token: &str, value: &str) -> bool {
     current_token.is_empty() || super::fuzzy_match_score(value, current_token).is_some()
 }
 
 fn is_dynamic_completion_command(command: &str) -> bool {
-    matches!(
-        command,
-        "task" | "pm" | "pj" | "mcp" | "git" | "docker" | "kubectl"
-    )
+    DYNAMIC_PROVIDER_SPECS
+        .iter()
+        .any(|provider| provider.command == command)
+}
+
+fn collect_task_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_task_candidates(parsed, request.current_dir)
+}
+
+fn collect_pm_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    _request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine.collect_pm_candidates(parsed)
+}
+
+fn collect_pj_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    _request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine.collect_pj_candidates(parsed)
+}
+
+fn collect_mcp_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    _request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine.collect_mcp_candidates(parsed)
+}
+
+fn collect_git_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_git_candidates(parsed, request.current_dir)
+}
+
+fn collect_docker_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_docker_candidates(parsed, request.current_dir)
+}
+
+fn collect_kubectl_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine
+        .dynamic
+        .collect_kubectl_candidates(parsed, request.current_dir)
+}
+
+fn collect_npm_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine.collect_package_run_candidates(parsed, request.current_dir)
+}
+
+fn collect_yarn_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine.collect_yarn_script_candidates(parsed, request.current_dir)
+}
+
+fn collect_deno_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine.collect_deno_task_candidates(parsed, request.current_dir)
+}
+
+fn collect_just_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine.collect_top_level_task_candidates(parsed, request.current_dir, JUST_TASK_SOURCES)
+}
+
+fn collect_make_dynamic_candidates(
+    engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+) -> Vec<EnhancedCandidate> {
+    engine.collect_top_level_task_candidates(parsed, request.current_dir, MAKE_TASK_SOURCES)
+}
+
+fn leading_completion_words(parsed: &ParsedCommandLine) -> Vec<&str> {
+    let mut words: Vec<&str> = if parsed.subcommand_path.is_empty() {
+        parsed
+            .specified_arguments
+            .iter()
+            .map(String::as_str)
+            .collect()
+    } else {
+        parsed.subcommand_path.iter().map(String::as_str).collect()
+    };
+
+    if words.last().copied() == Some(parsed.current_token.as_str()) {
+        words.pop();
+    }
+
+    words
+}
+
+fn leading_completion_words_match(parsed: &ParsedCommandLine, expected: &[&str]) -> bool {
+    leading_completion_words(parsed).as_slice() == expected
 }
 
 fn pm_subcommand_candidates(current_token: &str) -> Vec<EnhancedCandidate> {
@@ -1708,6 +2052,267 @@ mod tests {
         assert_eq!(
             result.replacement_range,
             Some(CompletionReplacementRange { start: 10, end: 12 })
+        );
+    }
+
+    #[test]
+    fn ghost_completion_uses_json_subcommands() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("checkout.txt"), "").unwrap();
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "git che";
+        let ghost = engine.ghost_completion(input, input.len(), dir.path(), None);
+
+        assert_eq!(ghost.as_deref(), Some("git checkout"));
+    }
+
+    #[test]
+    fn ghost_completion_uses_json_subcommands_for_cargo() {
+        let dir = tempdir().unwrap();
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "cargo bu";
+        let ghost = engine.ghost_completion(input, input.len(), dir.path(), None);
+
+        assert_eq!(ghost.as_deref(), Some("cargo build"));
+    }
+
+    #[tokio::test]
+    async fn ghost_completion_uses_cached_kubectl_context() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+
+        let kubectl = bin_dir.join("kubectl");
+        fs::write(
+            &kubectl,
+            "#!/bin/sh\nif [ \"$1\" = \"config\" ] && [ \"$2\" = \"get-contexts\" ]; then\n  printf 'dev-cluster\\nprod-cluster\\n'\nfi\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&kubectl).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&kubectl, permissions).unwrap();
+
+        let environment = Environment::new();
+        {
+            let mut env = environment.write();
+            env.paths = vec![bin_dir.display().to_string()];
+            env.clear_command_cache();
+        }
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "kubectl --context=de";
+        let _ = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+
+        let ghost = engine.ghost_completion(input, input.len(), dir.path(), None);
+        assert_eq!(ghost.as_deref(), Some("kubectl --context=dev-cluster"));
+    }
+
+    #[tokio::test]
+    async fn npm_run_completes_package_scripts() {
+        let dir = tempdir().unwrap();
+        let marker = dir.path().join("should-not-exist");
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "scripts": { "build": "vite build", "test": "vitest" } }"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("Makefile"),
+            format!("$(shell touch {})\nall:\n\t@true\n", marker.display()),
+        )
+        .unwrap();
+
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "npm run bu";
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "build"),
+            "expected npm script completion in {:?}",
+            result.candidates
+        );
+        assert!(
+            !marker.exists(),
+            "npm run completion must not invoke Makefile discovery"
+        );
+    }
+
+    #[tokio::test]
+    async fn pnpm_run_completes_package_scripts() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "scripts": { "bundle": "vite build", "test": "vitest" } }"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("pnpm-lock.yaml"),
+            "lockfileVersion: '9.0'\n",
+        )
+        .unwrap();
+
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "pnpm run bun";
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "bundle"),
+            "expected pnpm script completion in {:?}",
+            result.candidates
+        );
+    }
+
+    #[tokio::test]
+    async fn yarn_completes_package_scripts_without_run_subcommand() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "scripts": { "bundle": "vite build", "test": "vitest" } }"#,
+        )
+        .unwrap();
+        fs::write(dir.path().join("yarn.lock"), "").unwrap();
+
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "yarn bun";
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "bundle"),
+            "expected yarn script completion in {:?}",
+            result.candidates
+        );
+    }
+
+    #[tokio::test]
+    async fn deno_task_completes_deno_tasks() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("deno.json"),
+            r#"{ "tasks": { "build": "deno run build.ts", "test": "deno test" } }"#,
+        )
+        .unwrap();
+
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "deno task bu";
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "build"),
+            "expected deno task completion in {:?}",
+            result.candidates
+        );
+    }
+
+    #[tokio::test]
+    async fn just_completes_project_recipes() {
+        if std::process::Command::new("just")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("Justfile"),
+            "test-recipe:\n\t@true\nbuild-recipe:\n\t@true\n",
+        )
+        .unwrap();
+
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "just bu";
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "build-recipe"),
+            "expected just recipe completion in {:?}",
+            result.candidates
+        );
+    }
+
+    #[tokio::test]
+    async fn make_completes_project_targets() {
+        if std::process::Command::new("make")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("Makefile"),
+            "test-target:\n\t@true\nbuild-target:\n\t@true\n",
+        )
+        .unwrap();
+
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "make te";
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "test-target"),
+            "expected make target completion in {:?}",
+            result.candidates
         );
     }
 

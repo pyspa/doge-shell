@@ -3,66 +3,66 @@
   "description": "Distributed version control system",
   "global_options": [
     {
-        "short": "-v",
-        "long": "--version",
-        "description": "Show version info"
+      "short": "-v",
+      "long": "--version",
+      "description": "Show version info"
     },
     {
-        "long": "--help",
-        "description": "Show help info"
+      "long": "--help",
+      "description": "Show help info"
     },
     {
-        "short": "-C",
-        "description": "Run as if git was started in <path>"
+      "short": "-C",
+      "description": "Run as if git was started in <path>"
     },
     {
-        "short": "-c",
-        "description": "Pass a configuration parameter to command"
+      "short": "-c",
+      "description": "Pass a configuration parameter to command"
     },
     {
-        "long": "--exec-path",
-        "description": "Path to wherever your core git programs are installed"
+      "long": "--exec-path",
+      "description": "Path to wherever your core git programs are installed"
     },
     {
-        "long": "--html-path",
-        "description": "Path to wherever your html documentation are installed"
+      "long": "--html-path",
+      "description": "Path to wherever your html documentation are installed"
     },
     {
-        "long": "--man-path",
-        "description": "Path to wherever your man pages are installed"
+      "long": "--man-path",
+      "description": "Path to wherever your man pages are installed"
     },
     {
-        "long": "--info-path",
-        "description": "Path to wherever your info pages are installed"
+      "long": "--info-path",
+      "description": "Path to wherever your info pages are installed"
     },
     {
-        "short": "-p",
-        "long": "--paginate",
-        "description": "Pipe all output into less"
+      "short": "-p",
+      "long": "--paginate",
+      "description": "Pipe all output into less"
     },
     {
-        "long": "--no-pager",
-        "description": "Do not pipe git output into a pager"
+      "long": "--no-pager",
+      "description": "Do not pipe git output into a pager"
     },
     {
-        "long": "--no-replace-objects",
-        "description": "Do not use replacement refs to replace git objects"
+      "long": "--no-replace-objects",
+      "description": "Do not use replacement refs to replace git objects"
     },
     {
-        "long": "--bare",
-        "description": "Treat the repository as a bare repository"
+      "long": "--bare",
+      "description": "Treat the repository as a bare repository"
     },
     {
-        "long": "--git-dir",
-        "description": "Set the path to the repository"
+      "long": "--git-dir",
+      "description": "Set the path to the repository"
     },
     {
-        "long": "--work-tree",
-        "description": "Set the path to the working tree"
+      "long": "--work-tree",
+      "description": "Set the path to the working tree"
     },
     {
-        "long": "--namespace",
-        "description": "Set the git namespace"
+      "long": "--namespace",
+      "description": "Set the git namespace"
     }
   ],
   "subcommands": [
@@ -115,29 +115,45 @@
       ]
     },
     {
-        "name": "add",
-        "description": "Add file contents to the index",
-        "arguments": [
-            {
-                "name": "file",
-                "type": {
-                    "type": "File",
-                    "data": { "extensions": null } 
-                }
-            }
-        ],
-        "options": [
-            {
-                "short": "-A",
-                "long": "--all",
-                "description": "Add all changes"
-            },
-            {
-                "short": "-u",
-                "long": "--update",
-                "description": "Update staged files"
-            }
-        ]
+      "name": "add",
+      "description": "Add file contents to the index",
+      "arguments": [
+        {
+          "name": "file",
+          "description": "Files to add",
+          "type": {
+            "type": "Script",
+            "data": "git status --porcelain 2>/dev/null | awk '{if(NF==3){print $3}else{print $2}}'"
+          }
+        }
+      ],
+      "options": [
+        {
+          "short": "-A",
+          "long": "--all",
+          "description": "Add all changes"
+        },
+        {
+          "short": "-u",
+          "long": "--update",
+          "description": "Update staged files"
+        },
+        {
+          "short": "-p",
+          "long": "--patch",
+          "description": "Interactively choose hunks of patch"
+        },
+        {
+          "short": "-N",
+          "long": "--intent-to-add",
+          "description": "Record only the fact that the path will be added later"
+        },
+        {
+          "short": "-n",
+          "long": "--dry-run",
+          "description": "Don't actually add the file(s), just show if they exist"
+        }
+      ]
     },
     {
       "name": "status",
@@ -268,19 +284,19 @@
       ]
     },
     {
-       "name": "show",
-       "description": "Show various types of objects",
-       "arguments": [
-         {
-           "name": "object",
-           "description": "Object to show",
-           "required": true,
-           "type": {
-             "type": "Script",
-             "data": "git branch --format='%(refname:short)'"
-           }
-         }
-       ]
+      "name": "show",
+      "description": "Show various types of objects",
+      "arguments": [
+        {
+          "name": "object",
+          "description": "Object to show",
+          "required": true,
+          "type": {
+            "type": "Script",
+            "data": "git branch --format='%(refname:short)'"
+          }
+        }
+      ]
     },
     {
       "name": "reset",
@@ -301,84 +317,256 @@
       "name": "branch",
       "description": "List, create, or delete branches",
       "arguments": [
-         {
-            "name": "branchname",
-            "description": "Branch name",
-            "required": false,
-            "type": {
-               "type": "Script",
-               "data": "git branch --format='%(refname:short)'"
-            }
-         }
+        {
+          "name": "branchname",
+          "description": "Branch name",
+          "required": false,
+          "type": {
+            "type": "Script",
+            "data": "git branch --format='%(refname:short)'"
+          }
+        }
       ]
     },
     {
       "name": "tag",
       "description": "Create, list, delete or verify a tag object signed with GPG",
       "arguments": [
-         {
-           "name": "tagname",
-           "description": "Tag name",
-           "required": false,
-           "type": {
-             "type": "Script",
-             "data": "git tag"
-           }
-         }
+        {
+          "name": "tagname",
+          "description": "Tag name",
+          "required": false,
+          "type": {
+            "type": "Script",
+            "data": "git tag"
+          }
+        }
       ]
     },
     {
-       "name": "stash",
-       "description": "Stash the changes in a dirty working directory away",
-       "subcommands": [
-          {
-             "name": "list",
-             "description": "List the stash entries",
-             "arguments": []
-          },
-          {
-             "name": "pop",
-             "description": "Remove a single stashed state from the stash list and apply it",
-             "arguments": [
-                {
-                   "name": "stash",
-                   "description": "Stash to pop",
-                   "arg_type": {
-                      "type": "Script",
-                      "data": "git stash list | awk -F: '{print $1}'"
-                   }
-                }
-             ]
-          },
-          {
-             "name": "apply",
-             "description": "Like pop, but do not remove the state from the stash list",
-             "arguments": [
-                {
-                   "name": "stash",
-                   "description": "Stash to apply",
-                   "arg_type": {
-                      "type": "Script",
-                      "data": "git stash list | awk -F: '{print $1}'"
-                   }
-                }
-             ]
-          },
-          {
-             "name": "drop",
-             "description": "Remove a single stashed state from the stash list",
-             "arguments": [
-                {
-                   "name": "stash",
-                   "description": "Stash to drop",
-                   "arg_type": {
-                      "type": "Script",
-                      "data": "git stash list | awk -F: '{print $1}'"
-                   }
-                }
-             ]
+      "name": "stash",
+      "description": "Stash the changes in a dirty working directory away",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List the stash entries",
+          "arguments": []
+        },
+        {
+          "name": "pop",
+          "description": "Remove a single stashed state from the stash list and apply it",
+          "arguments": [
+            {
+              "name": "stash",
+              "description": "Stash to pop",
+              "type": {
+                "type": "Script",
+                "data": "git stash list | awk -F: '{print $1}'"
+              }
+            }
+          ]
+        },
+        {
+          "name": "apply",
+          "description": "Like pop, but do not remove the state from the stash list",
+          "arguments": [
+            {
+              "name": "stash",
+              "description": "Stash to apply",
+              "type": {
+                "type": "Script",
+                "data": "git stash list | awk -F: '{print $1}'"
+              }
+            }
+          ]
+        },
+        {
+          "name": "drop",
+          "description": "Remove a single stashed state from the stash list",
+          "arguments": [
+            {
+              "name": "stash",
+              "description": "Stash to drop",
+              "type": {
+                "type": "Script",
+                "data": "git stash list | awk -F: '{print $1}'"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "restore",
+      "description": "Restore working tree files",
+      "options": [
+        {
+          "short": "-s",
+          "long": "--source",
+          "description": "Restore from the given tree-ish",
+          "takes_value": true,
+          "value_type": {
+            "type": "Script",
+            "data": "git branch --format='%(refname:short)'"
           }
-       ]
+        },
+        {
+          "short": "-S",
+          "long": "--staged",
+          "description": "Restore the content in the staging area"
+        },
+        {
+          "short": "-W",
+          "long": "--worktree",
+          "description": "Restore the content in the working tree"
+        },
+        {
+          "short": "-p",
+          "long": "--patch",
+          "description": "Interactively restore hunks"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "pathspec",
+          "description": "Files to restore",
+          "type": {
+            "type": "Script",
+            "data": "git status --porcelain 2>/dev/null | awk '{if(NF==3){print $3}else{print $2}}'"
+          }
+        }
+      ]
+    },
+    {
+      "name": "worktree",
+      "description": "Manage multiple working trees",
+      "subcommands": [
+        {
+          "name": "add",
+          "description": "Create a new worktree",
+          "arguments": [
+            {
+              "name": "path",
+              "description": "Path for new worktree",
+              "type": {
+                "type": "Directory"
+              }
+            },
+            {
+              "name": "branch",
+              "description": "Branch to checkout",
+              "type": {
+                "type": "Script",
+                "data": "git branch --format='%(refname:short)'"
+              }
+            }
+          ]
+        },
+        {
+          "name": "list",
+          "description": "List worktrees"
+        },
+        {
+          "name": "remove",
+          "description": "Remove a worktree",
+          "arguments": [
+            {
+              "name": "worktree",
+              "description": "Worktree to remove",
+              "type": {
+                "type": "Script",
+                "data": "git worktree list --porcelain 2>/dev/null | grep '^worktree' | cut -d' ' -f2"
+              }
+            }
+          ]
+        },
+        {
+          "name": "prune",
+          "description": "Prune worktree information"
+        }
+      ]
+    },
+    {
+      "name": "remote",
+      "description": "Manage set of tracked repositories",
+      "subcommands": [
+        {
+          "name": "add",
+          "description": "Add a new remote"
+        },
+        {
+          "name": "remove",
+          "description": "Remove a remote",
+          "arguments": [
+            {
+              "name": "name",
+              "description": "Remote to remove",
+              "type": {
+                "type": "Script",
+                "data": "git remote"
+              }
+            }
+          ]
+        },
+        {
+          "name": "rename",
+          "description": "Rename a remote"
+        },
+        {
+          "name": "show",
+          "description": "Show information about remotes",
+          "arguments": [
+            {
+              "name": "remote",
+              "description": "Remote to show",
+              "type": {
+                "type": "Script",
+                "data": "git remote"
+              }
+            }
+          ]
+        },
+        {
+          "name": "-v",
+          "description": "List remotes verbosely"
+        }
+      ]
+    },
+    {
+      "name": "clone",
+      "description": "Clone a repository into a new directory",
+      "options": [
+        {
+          "long": "--depth",
+          "description": "Create shallow clone with specified depth"
+        },
+        {
+          "short": "-b",
+          "long": "--branch",
+          "description": "Branch to checkout"
+        },
+        {
+          "long": "--single-branch",
+          "description": "Clone only one branch"
+        },
+        {
+          "long": "--bare",
+          "description": "Create a bare repository"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "repository",
+          "description": "Repository URL"
+        },
+        {
+          "name": "directory",
+          "description": "Directory to clone into",
+          "type": {
+            "type": "Directory"
+          }
+        }
+      ]
     }
   ]
 }

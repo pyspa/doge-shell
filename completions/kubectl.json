@@ -4,23 +4,44 @@
   "global_options": [
     {
       "long": "--kubeconfig",
-      "short": "-k",
-      "description": "Path to kubeconfig file"
+      "description": "Path to kubeconfig file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "long": "--context",
-      "short": "-c",
-      "description": "Context in kubeconfig"
+      "description": "Context in kubeconfig",
+      "takes_value": true,
+      "value_type": {
+        "type": "Script",
+        "data": "kubectl config get-contexts -o name 2>/dev/null"
+      }
     },
     {
       "long": "--namespace",
       "short": "-n",
-      "description": "Namespace for operations"
+      "description": "Namespace for operations",
+      "takes_value": true,
+      "value_type": {
+        "type": "Script",
+        "data": "kubectl get namespaces -o custom-columns=':metadata.name' --no-headers 2>/dev/null"
+      }
     },
     {
       "long": "--dry-run",
-      "short": "-d",
-      "description": "Dry run, print commands instead of executing"
+      "description": "Dry run mode (client, server, none)",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "none",
+          "client",
+          "server"
+        ]
+      }
     },
     {
       "long": "--help",
@@ -28,14 +49,26 @@
       "description": "Help for kubectl"
     },
     {
-      "long": "--verbose",
-      "short": "-v",
-      "description": "Log level for verbosity"
+      "long": "--v",
+      "description": "Log level for verbosity (0-9)"
     },
     {
       "long": "--output",
       "short": "-o",
-      "description": "Output format (yaml, json, wide, etc.)"
+      "description": "Output format",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "yaml",
+          "json",
+          "wide",
+          "name",
+          "jsonpath",
+          "go-template",
+          "custom-columns"
+        ]
+      }
     },
     {
       "long": "--all-namespaces",
@@ -82,7 +115,7 @@
           "description": "Resource type (pod, service, deployment, etc.)",
           "type": {
             "type": "Script",
-            "data": "kubectl api-resources --namespaced=true -o name 2>/dev/null | cut -d/ -f1" 
+            "data": "kubectl api-resources --namespaced=true -o name 2>/dev/null | cut -d/ -f1"
           }
         },
         {
@@ -145,10 +178,10 @@
         {
           "name": "file_or_type",
           "description": "Config file or resource type",
-           "type": {
-             "type": "Script",
-             "data": "kubectl api-resources --namespaced=true -o name 2>/dev/null | cut -d/ -f1" 
-           }
+          "type": {
+            "type": "Script",
+            "data": "kubectl api-resources --namespaced=true -o name 2>/dev/null | cut -d/ -f1"
+          }
         },
         {
           "name": "name",
@@ -236,17 +269,17 @@
           "name": "type",
           "description": "Resource type if not using file",
           "type": {
-             "type": "Script",
-             "data": "kubectl api-resources --namespaced=true -o name 2>/dev/null | cut -d/ -f1"
-           }
+            "type": "Script",
+            "data": "kubectl api-resources --namespaced=true -o name 2>/dev/null | cut -d/ -f1"
+          }
         },
         {
           "name": "name",
           "description": "Resource name (optional)",
-           "type": {
-             "type": "Script",
-             "data": "kubectl get $ARG_0 -o custom-columns=\":metadata.name\" --no-headers"
-           }
+          "type": {
+            "type": "Script",
+            "data": "kubectl get $ARG_0 -o custom-columns=\":metadata.name\" --no-headers"
+          }
         }
       ],
       "subcommands": []

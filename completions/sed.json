@@ -12,21 +12,28 @@
       "long": "--expression",
       "description": "Add the script to the commands to be executed",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "short": "-f",
       "long": "--file",
       "description": "Add the contents of script-file to the commands to be executed",
       "takes_value": true,
-      "value_type": { "type": "File" }
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "short": "-i",
       "long": "--in-place",
       "description": "Edit files in place (makes backup if SUFFIX supplied)",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "short": "-E",

@@ -28,7 +28,8 @@
       "description": "Use archive file or device ARCHIVE",
       "takes_value": true,
       "value_type": {
-        "type": "File"
+        "type": "File",
+        "data": {}
       }
     },
     {

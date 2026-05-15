@@ -298,6 +298,50 @@ impl SuggestionEngine {
         suggestions
     }
 
+    pub fn predict_history(
+        &mut self,
+        input: &str,
+        cursor: usize,
+        history: Option<&Arc<parking_lot::Mutex<History>>>,
+    ) -> Vec<SuggestionState> {
+        if !self.config.preferences.suggestion_mode.is_enabled() {
+            self.history_cache = None;
+            self.ai_cache = None;
+            return Vec::new();
+        }
+
+        if input.is_empty() {
+            self.history_cache = None;
+            self.ai_cache = None;
+            return Vec::new();
+        }
+
+        let char_len = input.chars().count();
+        if cursor > char_len {
+            return Vec::new();
+        }
+
+        let mut suggestions = Vec::new();
+        if let Some(state) = self.use_cache(self.history_cache.as_ref(), input) {
+            suggestions.push(state.clone());
+        } else if let Some(state) = self.history_suggestion(input, history) {
+            self.history_cache = Some(CachedSuggestion {
+                prefix: input.to_string(),
+                state: state.clone(),
+                generated_at: Instant::now(),
+            });
+            suggestions.push(state);
+        } else {
+            self.history_cache = None;
+        }
+
+        if !suggestions.is_empty() {
+            self.ai_cache = None;
+        }
+
+        suggestions
+    }
+
     fn in_blocklist(&self, input: &str) -> bool {
         const AI_SUGGESTION_BLOCKLIST: &[&str] = &["gco"];
 
@@ -1217,6 +1261,38 @@ mod tests {
             // given "ls src/sugg" matched something, "cd src/sugg" returning None
             // suggests that the matching item was NOT a directory. Correct.
         }
+    }
+
+    #[test]
+    fn predict_history_does_not_return_path_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("checkout.txt");
+        std::fs::File::create(&path).unwrap();
+        let prefix = path.with_extension("");
+        let input = format!("ls {}", prefix.display());
+        let cursor = input.chars().count();
+
+        let mut generic_engine = SuggestionEngine::new();
+        generic_engine.set_preferences(InputPreferences::default());
+        assert!(
+            generic_engine
+                .predict(&input, cursor, None)
+                .iter()
+                .any(|suggestion| {
+                    suggestion.source == SuggestionSource::Completion
+                        && suggestion.full.ends_with("checkout.txt")
+                }),
+            "generic predict should still expose path completion"
+        );
+
+        let mut history_engine = SuggestionEngine::new();
+        history_engine.set_preferences(InputPreferences::default());
+        assert!(
+            history_engine
+                .predict_history(&input, cursor, None)
+                .is_empty(),
+            "history-only prediction must not include path completion"
+        );
     }
 
     #[test]

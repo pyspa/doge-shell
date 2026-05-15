@@ -22,7 +22,9 @@
       "long": "--preset",
       "description": "Use preset file from /etc/mkinitcpio.d/",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "short": "-P",
@@ -35,35 +37,47 @@
       "long": "--generate",
       "description": "Generate a new initramfs image",
       "takes_value": true,
-      "value_type": { "type": "File" }
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "short": "-k",
       "long": "--kernel",
       "description": "Kernel version to use",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "short": "-c",
       "long": "--config",
       "description": "Configuration file to use",
       "takes_value": true,
-      "value_type": { "type": "File" }
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "short": "-d",
       "long": "--generatedir",
       "description": "Directory to place generated image in",
       "takes_value": true,
-      "value_type": { "type": "Directory" }
+      "value_type": {
+        "type": "Directory"
+      }
     },
     {
       "short": "-H",
       "long": "--hookhelp",
       "description": "Show help for a given HOOK",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "short": "-L",
@@ -76,14 +90,19 @@
       "long": "--skiphook",
       "description": "Skip specified hook in build process",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "short": "-U",
       "long": "--uki",
       "description": "Generate a UEFI Unified Kernel Image",
       "takes_value": true,
-      "value_type": { "type": "File" }
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "short": "-v",

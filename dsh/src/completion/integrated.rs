@@ -2761,6 +2761,7 @@ mod tests {
         let _ = engine
             .complete(input, input.len(), dir.path(), 50, None)
             .await;
+        let _ = wait_for_candidate(&engine, input, dir.path(), "dev-cluster").await;
 
         let ghost = engine.ghost_completion(input, input.len(), dir.path(), None);
         assert_eq!(ghost.as_deref(), Some("kubectl --context=dev-cluster"));

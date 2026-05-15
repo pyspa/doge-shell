@@ -139,7 +139,7 @@ fn test_git_completion_with_real_json() {
 }
 
 #[test]
-fn test_pacman_completion_keeps_multiple_script_package_arguments() {
+fn test_pacman_completion_keeps_multiple_package_arguments() {
     let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repo_root = root_dir.parent().unwrap();
     let completions_dir = repo_root.join("completions");
@@ -166,7 +166,10 @@ fn test_pacman_completion_keeps_multiple_script_package_arguments() {
         .first()
         .expect("missing pacman -S package arg");
     assert!(sync_arg.multiple, "pacman -S package arg must be multiple");
-    assert!(matches!(sync_arg.arg_type, Some(ArgumentType::Script(_))));
+    assert!(
+        matches!(sync_arg.arg_type, Some(ArgumentType::String)),
+        "built-in pacman completion must keep package args as String; Script is reserved for authored runtime definitions"
+    );
 
     let remove_arg = remove
         .arguments
@@ -176,5 +179,8 @@ fn test_pacman_completion_keeps_multiple_script_package_arguments() {
         remove_arg.multiple,
         "pacman -R package arg must be multiple"
     );
-    assert!(matches!(remove_arg.arg_type, Some(ArgumentType::Script(_))));
+    assert!(
+        matches!(remove_arg.arg_type, Some(ArgumentType::String)),
+        "built-in pacman completion must keep package args as String; Script is reserved for authored runtime definitions"
+    );
 }

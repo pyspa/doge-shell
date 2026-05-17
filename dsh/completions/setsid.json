@@ -1,0 +1,30 @@
+{
+  "command": "setsid",
+  "description": "Run a program in a new session",
+  "global_options": [
+    {
+      "description": "Fork before executing",
+      "short": "-f",
+      "long": "--fork"
+    },
+    {
+      "description": "Wait for program to exit",
+      "short": "-w",
+      "long": "--wait"
+    },
+    {
+      "description": "Set controlling terminal",
+      "short": "-c",
+      "long": "--ctty"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "command",
+      "description": "Command to run",
+      "type": {
+        "type": "CommandWithArgs"
+      }
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "command": "flock",
+  "description": "Manage locks from shell scripts",
+  "global_options": [
+    {
+      "description": "Shared lock",
+      "short": "-s",
+      "long": "--shared"
+    },
+    {
+      "description": "Exclusive lock",
+      "short": "-x",
+      "long": "--exclusive"
+    },
+    {
+      "description": "Non-blocking mode",
+      "short": "-n",
+      "long": "--nonblock"
+    },
+    {
+      "description": "Timeout in seconds",
+      "short": "-w",
+      "long": "--timeout",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "description": "Unlock",
+      "short": "-u",
+      "long": "--unlock"
+    },
+    {
+      "description": "Command string",
+      "short": "-c",
+      "long": "--command",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "lockfile",
+      "description": "Lock file",
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "name": "command",
+      "description": "Command to run",
+      "required": false,
+      "type": {
+        "type": "CommandWithArgs"
+      }
+    }
+  ]
+}

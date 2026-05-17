@@ -83,6 +83,50 @@ fn test_new_json_completions_load() {
         "apt-get",
         "dnf",
         "yum",
+        "getent",
+        "getconf",
+        "namei",
+        "readlink",
+        "realpath",
+        "install",
+        "truncate",
+        "lsattr",
+        "chattr",
+        "getfacl",
+        "setfacl",
+        "fallocate",
+        "mkswap",
+        "wipefs",
+        "blockdev",
+        "killall",
+        "fuser",
+        "renice",
+        "nice",
+        "ionice",
+        "chrt",
+        "taskset",
+        "prlimit",
+        "flock",
+        "setsid",
+        "ethtool",
+        "bridge",
+        "tc",
+        "arp",
+        "tracepath",
+        "mtr",
+        "host",
+        "nslookup",
+        "iptables",
+        "ip6tables",
+        "nft",
+        "ufw",
+        "firewall-cmd",
+        "busctl",
+        "udevadm",
+        "coredumpctl",
+        "bootctl",
+        "systemd-tmpfiles",
+        "systemd-sysusers",
     ];
 
     for cmd in commands {
@@ -95,6 +139,40 @@ fn test_new_json_completions_load() {
             Err(e) => panic!("Failed to load completion for {}: {}", cmd, e),
         }
     }
+}
+
+#[test]
+fn test_chown_owner_group_precision_gap_is_documented() {
+    let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = root_dir.parent().unwrap();
+    let completions_dir = repo_root.join("completions");
+
+    let loader = JsonCompletionLoader::with_dirs(vec![completions_dir]);
+    let chown_completion = loader
+        .load_command_completion("chown")
+        .unwrap()
+        .expect("chown completion not found in json");
+
+    let owner_group = chown_completion
+        .arguments
+        .first()
+        .expect("missing chown owner/group argument");
+    assert!(
+        matches!(owner_group.arg_type, Some(ArgumentType::User)),
+        "chown owner/group should keep user completion until grouped owner[:group] completion exists"
+    );
+
+    let from = chown_completion
+        .global_options
+        .iter()
+        .find(|option| option.long.as_deref() == Some("--from"))
+        .expect("missing chown --from option");
+    assert!(
+        matches!(from.value_type(), Some(ArgumentType::String)),
+        "chown --from intentionally remains String to avoid generating user x group combinations"
+    );
+    // TODO: Add a focused owner[:group] completion strategy that completes the
+    // group side after ':' without precomputing the full user x group matrix.
 }
 
 #[test]

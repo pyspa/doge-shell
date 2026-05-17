@@ -1,0 +1,46 @@
+{
+  "command": "mtr",
+  "description": "Network diagnostic traceroute and ping tool",
+  "global_options": [
+    {
+      "description": "Report mode",
+      "short": "-r",
+      "long": "--report"
+    },
+    {
+      "description": "Use IPv4",
+      "short": "-4"
+    },
+    {
+      "description": "Use IPv6",
+      "short": "-6"
+    },
+    {
+      "description": "Count pings",
+      "short": "-c",
+      "long": "--report-cycles",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "description": "Interval",
+      "short": "-i",
+      "long": "--interval",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "host",
+      "description": "Destination host",
+      "type": {
+        "type": "String"
+      }
+    }
+  ]
+}

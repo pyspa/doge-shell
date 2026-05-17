@@ -1,0 +1,48 @@
+{
+  "command": "arp",
+  "description": "Manipulate the system ARP cache",
+  "global_options": [
+    {
+      "description": "Display all entries",
+      "short": "-a"
+    },
+    {
+      "description": "Delete an entry",
+      "short": "-d",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "Set an entry",
+      "short": "-s",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "Numeric output",
+      "short": "-n"
+    },
+    {
+      "description": "Interface",
+      "short": "-i",
+      "takes_value": true,
+      "value_type": {
+        "type": "Interface"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "host",
+      "description": "Host name or address",
+      "required": false,
+      "type": {
+        "type": "String"
+      }
+    }
+  ]
+}

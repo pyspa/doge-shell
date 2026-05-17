@@ -1,0 +1,36 @@
+{
+  "command": "chattr",
+  "description": "Change file attributes on a Linux filesystem",
+  "global_options": [
+    {
+      "description": "Recursive change",
+      "short": "-R"
+    },
+    {
+      "description": "Verbose output",
+      "short": "-V"
+    },
+    {
+      "description": "Do not follow symlinks",
+      "short": "-h"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "mode",
+      "description": "Attribute mode, e.g. +i or -a",
+      "type": {
+        "type": "String"
+      }
+    },
+    {
+      "name": "file",
+      "description": "File to change",
+      "multiple": true,
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ]
+}

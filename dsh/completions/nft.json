@@ -1,0 +1,59 @@
+{
+  "command": "nft",
+  "description": "Administration tool for nftables",
+  "global_options": [
+    {
+      "description": "File to read commands from",
+      "short": "-f",
+      "long": "--file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "description": "Check commands without applying",
+      "short": "-c",
+      "long": "--check"
+    },
+    {
+      "description": "Numeric output",
+      "short": "-n",
+      "long": "--numeric"
+    },
+    {
+      "description": "JSON output",
+      "short": "-j",
+      "long": "--json"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "command",
+      "description": "nft command",
+      "type": {
+        "type": "Choice",
+        "data": [
+          "list",
+          "add",
+          "delete",
+          "flush",
+          "create",
+          "insert",
+          "replace",
+          "monitor"
+        ]
+      }
+    },
+    {
+      "name": "object",
+      "description": "nft object",
+      "multiple": true,
+      "required": false,
+      "type": {
+        "type": "String"
+      }
+    }
+  ]
+}

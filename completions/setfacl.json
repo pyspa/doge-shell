@@ -1,0 +1,59 @@
+{
+  "command": "setfacl",
+  "description": "Set file access control lists",
+  "global_options": [
+    {
+      "description": "Modify ACL entries",
+      "short": "-m",
+      "long": "--modify",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "Remove ACL entries",
+      "short": "-x",
+      "long": "--remove",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "Remove all extended ACL entries",
+      "short": "-b",
+      "long": "--remove-all"
+    },
+    {
+      "description": "Remove default ACL entries",
+      "short": "-k",
+      "long": "--remove-default"
+    },
+    {
+      "description": "Recursive operation",
+      "short": "-R",
+      "long": "--recursive"
+    },
+    {
+      "description": "Restore ACL backup",
+      "long": "--restore",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "file",
+      "description": "File to update",
+      "multiple": true,
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ]
+}

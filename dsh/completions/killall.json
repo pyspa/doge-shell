@@ -1,0 +1,67 @@
+{
+  "command": "killall",
+  "description": "Kill processes by name",
+  "global_options": [
+    {
+      "description": "Signal to send",
+      "short": "-s",
+      "long": "--signal",
+      "takes_value": true,
+      "value_type": {
+        "type": "Signal"
+      }
+    },
+    {
+      "description": "Match exact process name",
+      "short": "-e",
+      "long": "--exact"
+    },
+    {
+      "description": "Interactive mode",
+      "short": "-i",
+      "long": "--interactive"
+    },
+    {
+      "description": "Quiet mode",
+      "short": "-q",
+      "long": "--quiet"
+    },
+    {
+      "description": "Verbose mode",
+      "short": "-v",
+      "long": "--verbose"
+    },
+    {
+      "description": "Wait for processes to die",
+      "short": "-w",
+      "long": "--wait"
+    },
+    {
+      "description": "Restrict to user",
+      "short": "-u",
+      "long": "--user",
+      "takes_value": true,
+      "value_type": {
+        "type": "User"
+      }
+    },
+    {
+      "description": "Interpret process name as regex",
+      "short": "-r",
+      "long": "--regexp"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "process",
+      "description": "Process name",
+      "multiple": true,
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "system.process_name"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,58 @@
+{
+  "command": "ionice",
+  "description": "Set or get process I/O scheduling class and priority",
+  "global_options": [
+    {
+      "description": "Scheduling class",
+      "short": "-c",
+      "long": "--class",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "0",
+          "1",
+          "2",
+          "3",
+          "none",
+          "realtime",
+          "best-effort",
+          "idle"
+        ]
+      }
+    },
+    {
+      "description": "Priority level",
+      "short": "-n",
+      "long": "--classdata",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "description": "Operate on PID",
+      "short": "-p",
+      "long": "--pid",
+      "takes_value": true,
+      "value_type": {
+        "type": "Process"
+      }
+    },
+    {
+      "description": "Ignore failure to set priority",
+      "short": "-t",
+      "long": "--ignore"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "command",
+      "description": "Command to run",
+      "required": false,
+      "type": {
+        "type": "CommandWithArgs"
+      }
+    }
+  ]
+}

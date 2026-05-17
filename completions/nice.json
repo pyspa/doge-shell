@@ -1,0 +1,25 @@
+{
+  "command": "nice",
+  "description": "Run a program with modified scheduling priority",
+  "global_options": [
+    {
+      "description": "Niceness adjustment",
+      "short": "-n",
+      "long": "--adjustment",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "command",
+      "description": "Command to run",
+      "required": false,
+      "type": {
+        "type": "CommandWithArgs"
+      }
+    }
+  ]
+}

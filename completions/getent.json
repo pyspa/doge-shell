@@ -1,0 +1,49 @@
+{
+  "command": "getent",
+  "description": "Get entries from Name Service Switch libraries",
+  "global_options": [
+    {
+      "description": "Do not enumerate all entries",
+      "short": "-s",
+      "long": "--service",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "database",
+      "description": "NSS database",
+      "type": {
+        "type": "Choice",
+        "data": [
+          "passwd",
+          "group",
+          "hosts",
+          "services",
+          "protocols",
+          "networks",
+          "ahosts",
+          "ahostsv4",
+          "ahostsv6",
+          "aliases",
+          "ethers",
+          "netgroup",
+          "shadow",
+          "gshadow"
+        ]
+      }
+    },
+    {
+      "name": "key",
+      "description": "Lookup key",
+      "multiple": true,
+      "required": false,
+      "type": {
+        "type": "String"
+      }
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "command": "nslookup",
+  "description": "Query Internet name servers interactively",
+  "global_options": [
+    {
+      "description": "Query type",
+      "long": "-type",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "A",
+          "AAAA",
+          "CNAME",
+          "MX",
+          "NS",
+          "PTR",
+          "SOA",
+          "TXT",
+          "SRV"
+        ]
+      }
+    },
+    {
+      "description": "Port",
+      "long": "-port",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "description": "Timeout",
+      "long": "-timeout",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "name",
+      "description": "Domain name or address",
+      "required": false,
+      "type": {
+        "type": "String"
+      }
+    },
+    {
+      "name": "server",
+      "description": "DNS server",
+      "required": false,
+      "type": {
+        "type": "String"
+      }
+    }
+  ]
+}

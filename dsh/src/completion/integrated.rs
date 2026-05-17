@@ -2914,6 +2914,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ghost_completion_uses_cached_new_local_dynamic_providers_only() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let counter = dir.path().join("busctl-count");
+        write_executable_script(
+            &bin_dir.join("busctl"),
+            &format!(
+                "#!/bin/sh\ncount_file=\"{}\"\ncount=0\nif [ -f \"$count_file\" ]; then count=$(cat \"$count_file\"); fi\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$count_file\"\nif [ \"$1\" = \"list\" ]; then printf 'org.freedesktop.login1 1 systemd root - - - Login\\n'; fi\n",
+                counter.display()
+            ),
+        );
+
+        let engine = engine_with_path(&bin_dir);
+        let input = "busctl introspect org.";
+
+        assert_eq!(
+            engine.ghost_completion(input, input.len(), dir.path(), None),
+            None
+        );
+        assert!(
+            !counter.exists(),
+            "ghost completion must not run uncached local dynamic providers"
+        );
+
+        let _ = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+        let _ = wait_for_candidate(&engine, input, dir.path(), "org.freedesktop.login1").await;
+
+        assert_eq!(
+            engine.ghost_completion(input, input.len(), dir.path(), None),
+            Some("busctl introspect org.freedesktop.login1".to_string())
+        );
+    }
+
+    #[tokio::test]
     async fn npm_run_completes_package_scripts() {
         let dir = tempdir().unwrap();
         let marker = dir.path().join("should-not-exist");
@@ -3347,12 +3384,36 @@ fi
             "#!/bin/sh\nif [ \"$1\" = \"-rno\" ]; then printf 'sda disk\\nsda1 part\\nloop0 loop\\n'; fi\n",
         );
         write_executable_script(
+            &bin_dir.join("blkid"),
+            "#!/bin/sh\nif [ \"$1\" = \"-o\" ]; then printf 'DEVNAME=/dev/sda1\\nUUID=abcd-1234\\nLABEL=rootfs\\n\\nDEVNAME=/dev/sdb1\\nUUID=beef-9999\\nLABEL=data\\n'; fi\n",
+        );
+        write_executable_script(
+            &bin_dir.join("busctl"),
+            "#!/bin/sh\nif [ \"$1\" = \"list\" ]; then printf 'org.freedesktop.login1 1 systemd root - - - Login\\norg.example.Demo 2 demo user - - - Demo\\n'; fi\n",
+        );
+        write_executable_script(
             &bin_dir.join("dpkg-query"),
             "#!/bin/sh\nif [ \"$1\" = \"-W\" ]; then printf 'base-files\\nbash\\ncoreutils\\n'; fi\n",
         );
         write_executable_script(
+            &bin_dir.join("localectl"),
+            "#!/bin/sh\ncase \"$1\" in\nlist-keymaps) printf 'jp106\\nus\\n';;\nlist-locales) printf 'en_US.UTF-8\\nja_JP.UTF-8\\n';;\nesac\n",
+        );
+        write_executable_script(
+            &bin_dir.join("loginctl"),
+            "#!/bin/sh\ncase \"$1\" in\nlist-sessions) printf '2 1000 alice seat0 tty2\\n';;\nlist-seats) printf 'seat0\\n';;\nesac\n",
+        );
+        write_executable_script(
+            &bin_dir.join("losetup"),
+            "#!/bin/sh\nif [ \"$1\" = \"--list\" ]; then printf '/dev/loop0\\n/dev/loop1\\n'; fi\n",
+        );
+        write_executable_script(
             &bin_dir.join("rpm"),
             "#!/bin/sh\nif [ \"$1\" = \"-qa\" ]; then printf 'kernel-core\\nbash\\nsystemd\\n'; fi\n",
+        );
+        write_executable_script(
+            &bin_dir.join("timedatectl"),
+            "#!/bin/sh\nif [ \"$1\" = \"list-timezones\" ]; then printf 'Asia/Tokyo\\nEurope/London\\n'; fi\n",
         );
 
         let engine = engine_with_path(&bin_dir);
@@ -3382,6 +3443,15 @@ fi
             ("kubectl get pods we", "web-0"),
             ("fdisk /dev/s", "/dev/sda"),
             ("mount /dev/lo", "/dev/loop0"),
+            ("blkid -U ab", "abcd-1234"),
+            ("blkid -L root", "rootfs"),
+            ("busctl introspect org.", "org.freedesktop.login1"),
+            ("localectl set-keymap jp", "jp106"),
+            ("localectl set-locale en", "en_US.UTF-8"),
+            ("loginctl session-status 2", "2"),
+            ("loginctl seat-status seat", "seat0"),
+            ("losetup -d /dev/loop", "/dev/loop0"),
+            ("timedatectl set-timezone Asia/T", "Asia/Tokyo"),
             ("apt remove bas", "base-files"),
             ("dnf remove ker", "kernel-core"),
             ("yum remove sys", "systemd"),

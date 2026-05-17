@@ -1,0 +1,35 @@
+{
+  "command": "ethtool",
+  "description": "Query or control network driver and hardware settings",
+  "global_options": [
+    {
+      "description": "Show driver information",
+      "short": "-i",
+      "long": "--driver"
+    },
+    {
+      "description": "Show offload features",
+      "short": "-k",
+      "long": "--show-features"
+    },
+    {
+      "description": "Show statistics",
+      "short": "-S",
+      "long": "--statistics"
+    },
+    {
+      "description": "Change settings",
+      "short": "-s",
+      "long": "--change"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "interface",
+      "description": "Network interface",
+      "type": {
+        "type": "Interface"
+      }
+    }
+  ]
+}

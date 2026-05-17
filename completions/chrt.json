@@ -1,0 +1,58 @@
+{
+  "command": "chrt",
+  "description": "Manipulate real-time scheduling attributes",
+  "global_options": [
+    {
+      "description": "FIFO policy",
+      "short": "-f",
+      "long": "--fifo"
+    },
+    {
+      "description": "Round-robin policy",
+      "short": "-r",
+      "long": "--rr"
+    },
+    {
+      "description": "Batch policy",
+      "short": "-b",
+      "long": "--batch"
+    },
+    {
+      "description": "Idle policy",
+      "short": "-i",
+      "long": "--idle"
+    },
+    {
+      "description": "Other policy",
+      "short": "-o",
+      "long": "--other"
+    },
+    {
+      "description": "Operate on PID",
+      "short": "-p",
+      "long": "--pid",
+      "takes_value": true,
+      "value_type": {
+        "type": "Process"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "priority",
+      "description": "Scheduling priority",
+      "required": false,
+      "type": {
+        "type": "Number"
+      }
+    },
+    {
+      "name": "command",
+      "description": "Command to run",
+      "required": false,
+      "type": {
+        "type": "CommandWithArgs"
+      }
+    }
+  ]
+}

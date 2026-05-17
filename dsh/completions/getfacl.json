@@ -1,0 +1,37 @@
+{
+  "command": "getfacl",
+  "description": "Display file access control lists",
+  "global_options": [
+    {
+      "description": "Display ACL only",
+      "short": "-a",
+      "long": "--access"
+    },
+    {
+      "description": "Display default ACL only",
+      "short": "-d",
+      "long": "--default"
+    },
+    {
+      "description": "Do not display comments",
+      "short": "-c",
+      "long": "--omit-header"
+    },
+    {
+      "description": "Recursive listing",
+      "short": "-R",
+      "long": "--recursive"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "file",
+      "description": "File to inspect",
+      "multiple": true,
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ]
+}

@@ -43,8 +43,10 @@
       "description": "Limit listing to file systems of specified type",
       "takes_value": true,
       "value_type": {
-        "type": "Choice",
-        "data": ["ext4", "ext3", "ext2", "xfs", "btrfs", "ntfs", "vfat", "tmpfs", "nfs", "cifs"]
+        "type": "Dynamic",
+        "data": {
+          "provider": "filesystem.type"
+        }
       }
     },
     {
@@ -52,7 +54,12 @@
       "long": "--exclude-type",
       "description": "Limit listing to file systems not of specified type",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "filesystem.type"
+        }
+      }
     },
     {
       "short": "-B",
@@ -61,7 +68,16 @@
       "takes_value": true,
       "value_type": {
         "type": "Choice",
-        "data": ["K", "M", "G", "T", "P", "1K", "1M", "1G"]
+        "data": [
+          "K",
+          "M",
+          "G",
+          "T",
+          "P",
+          "1K",
+          "1M",
+          "1G"
+        ]
       }
     },
     {
@@ -72,7 +88,9 @@
       "long": "--output",
       "description": "Use the output format defined by FIELD_LIST",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "long": "--help",

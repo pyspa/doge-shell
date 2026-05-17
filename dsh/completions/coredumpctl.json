@@ -1,0 +1,110 @@
+{
+  "command": "coredumpctl",
+  "description": "Retrieve and process saved core dumps",
+  "global_options": [
+    {
+      "description": "Show coredumps for unit",
+      "short": "-u",
+      "long": "--unit",
+      "takes_value": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "systemctl.unit"
+        }
+      }
+    },
+    {
+      "description": "Start time",
+      "long": "--since",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "End time",
+      "long": "--until",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "No pager",
+      "long": "--no-pager"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "list",
+      "description": "List captured core dumps",
+      "arguments": [
+        {
+          "name": "pid",
+          "description": "Process ID",
+          "required": false,
+          "type": {
+            "type": "Process"
+          }
+        }
+      ]
+    },
+    {
+      "name": "info",
+      "description": "Show coredump details",
+      "arguments": [
+        {
+          "name": "pid",
+          "description": "Process ID",
+          "required": false,
+          "type": {
+            "type": "Process"
+          }
+        }
+      ]
+    },
+    {
+      "name": "dump",
+      "description": "Write core dump to stdout",
+      "arguments": [
+        {
+          "name": "pid",
+          "description": "Process ID",
+          "required": false,
+          "type": {
+            "type": "Process"
+          }
+        }
+      ]
+    },
+    {
+      "name": "debug",
+      "description": "Start debugger for coredump",
+      "arguments": [
+        {
+          "name": "pid",
+          "description": "Process ID",
+          "required": false,
+          "type": {
+            "type": "Process"
+          }
+        }
+      ]
+    },
+    {
+      "name": "gdb",
+      "description": "Start gdb for coredump",
+      "arguments": [
+        {
+          "name": "pid",
+          "description": "Process ID",
+          "required": false,
+          "type": {
+            "type": "Process"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "command": "tracepath",
+  "description": "Trace path to a network host",
+  "global_options": [
+    {
+      "description": "Use IPv4",
+      "short": "-4"
+    },
+    {
+      "description": "Use IPv6",
+      "short": "-6"
+    },
+    {
+      "description": "Initial destination port",
+      "short": "-p",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "description": "Maximum hops",
+      "short": "-m",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "destination",
+      "description": "Destination host",
+      "type": {
+        "type": "String"
+      }
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "command": "host",
+  "description": "DNS lookup utility",
+  "global_options": [
+    {
+      "description": "Use IPv4 query transport",
+      "short": "-4"
+    },
+    {
+      "description": "Use IPv6 query transport",
+      "short": "-6"
+    },
+    {
+      "description": "Query type",
+      "short": "-t",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "A",
+          "AAAA",
+          "CNAME",
+          "MX",
+          "NS",
+          "PTR",
+          "SOA",
+          "TXT",
+          "SRV",
+          "CAA"
+        ]
+      }
+    },
+    {
+      "description": "Server",
+      "short": "-s",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "name",
+      "description": "Domain name or address",
+      "type": {
+        "type": "String"
+      }
+    },
+    {
+      "name": "server",
+      "description": "DNS server",
+      "required": false,
+      "type": {
+        "type": "String"
+      }
+    }
+  ]
+}

@@ -6,37 +6,49 @@
       "short": "-c",
       "description": "Stop after sending count ECHO_REQUEST packets",
       "takes_value": true,
-      "value_type": { "type": "Number" }
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
       "short": "-i",
       "description": "Wait interval seconds between sending each packet",
       "takes_value": true,
-      "value_type": { "type": "Number" }
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
       "short": "-W",
       "description": "Time to wait for a response, in seconds",
       "takes_value": true,
-      "value_type": { "type": "Number" }
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
       "short": "-w",
       "description": "Specify a timeout, in seconds, before ping exits",
       "takes_value": true,
-      "value_type": { "type": "Number" }
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
       "short": "-s",
       "description": "Specifies the number of data bytes to be sent",
       "takes_value": true,
-      "value_type": { "type": "Number" }
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
       "short": "-t",
       "description": "Set the IP Time to Live",
       "takes_value": true,
-      "value_type": { "type": "Number" }
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
       "short": "-q",
@@ -74,7 +86,9 @@
       "short": "-I",
       "description": "Set source address or interface",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "Interface"
+      }
     },
     {
       "short": "-D",

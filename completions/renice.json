@@ -1,0 +1,61 @@
+{
+  "command": "renice",
+  "description": "Alter priority of running processes",
+  "global_options": [
+    {
+      "description": "Priority increment/value",
+      "short": "-n",
+      "long": "--priority",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "description": "Process IDs",
+      "short": "-p",
+      "long": "--pid",
+      "takes_value": true,
+      "value_type": {
+        "type": "Process"
+      }
+    },
+    {
+      "description": "User names",
+      "short": "-u",
+      "long": "--user",
+      "takes_value": true,
+      "value_type": {
+        "type": "User"
+      }
+    },
+    {
+      "description": "Process group IDs",
+      "short": "-g",
+      "long": "--pgrp",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "priority",
+      "description": "Priority value",
+      "required": false,
+      "type": {
+        "type": "Number"
+      }
+    },
+    {
+      "name": "id",
+      "description": "Process, group, or user id/name",
+      "multiple": true,
+      "required": false,
+      "type": {
+        "type": "String"
+      }
+    }
+  ]
+}

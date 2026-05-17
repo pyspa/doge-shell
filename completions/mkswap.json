@@ -1,0 +1,51 @@
+{
+  "command": "mkswap",
+  "description": "Set up a Linux swap area",
+  "global_options": [
+    {
+      "description": "Check device for bad blocks",
+      "short": "-c",
+      "long": "--check"
+    },
+    {
+      "description": "Force operation",
+      "short": "-f",
+      "long": "--force"
+    },
+    {
+      "description": "Set label",
+      "short": "-L",
+      "long": "--label",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "Set UUID",
+      "short": "-U",
+      "long": "--uuid",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "Verbose output",
+      "short": "-v",
+      "long": "--verbose"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "device",
+      "description": "Swap device or file",
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "block.device"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "command": "truncate",
+  "description": "Shrink or extend the size of files",
+  "global_options": [
+    {
+      "description": "Do not create files",
+      "short": "-c",
+      "long": "--no-create"
+    },
+    {
+      "description": "Treat size as number of IO blocks",
+      "short": "-o",
+      "long": "--io-blocks"
+    },
+    {
+      "description": "Set or adjust file size",
+      "short": "-s",
+      "long": "--size",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "Verbose output",
+      "short": "-v",
+      "long": "--verbose"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "file",
+      "description": "File to resize",
+      "multiple": true,
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ]
+}

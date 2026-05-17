@@ -1,0 +1,81 @@
+{
+  "command": "udevadm",
+  "description": "udev management tool",
+  "global_options": [
+    {
+      "description": "Debug output",
+      "long": "--debug"
+    },
+    {
+      "description": "Resolve sysname path",
+      "short": "-p",
+      "long": "--path",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "description": "Device node",
+      "short": "-n",
+      "long": "--name",
+      "takes_value": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "block.device"
+        }
+      }
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "info",
+      "description": "Query udev database",
+      "arguments": [
+        {
+          "name": "device",
+          "description": "Device path or node",
+          "required": false,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "block.device"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "monitor",
+      "description": "Monitor kernel and udev events"
+    },
+    {
+      "name": "trigger",
+      "description": "Request events from the kernel"
+    },
+    {
+      "name": "settle",
+      "description": "Wait for udev event queue"
+    },
+    {
+      "name": "control",
+      "description": "Control the udev daemon"
+    },
+    {
+      "name": "test",
+      "description": "Test an event run",
+      "arguments": [
+        {
+          "name": "device",
+          "description": "Device path",
+          "type": {
+            "type": "File",
+            "data": {}
+          }
+        }
+      ]
+    }
+  ]
+}

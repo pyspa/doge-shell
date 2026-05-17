@@ -1,0 +1,34 @@
+{
+  "command": "lsattr",
+  "description": "List file attributes on a Linux filesystem",
+  "global_options": [
+    {
+      "description": "List all files",
+      "short": "-a"
+    },
+    {
+      "description": "List directories like files",
+      "short": "-d"
+    },
+    {
+      "description": "Recursive listing",
+      "short": "-R"
+    },
+    {
+      "description": "Print version/generation number",
+      "short": "-v"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "file",
+      "description": "File to inspect",
+      "multiple": true,
+      "required": false,
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ]
+}

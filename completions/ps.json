@@ -106,7 +106,10 @@
       "description": "Select by command name",
       "takes_value": true,
       "value_type": {
-        "type": "String"
+        "type": "Dynamic",
+        "data": {
+          "provider": "system.process_name"
+        }
       }
     },
     {

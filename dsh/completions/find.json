@@ -96,7 +96,7 @@
       "description": "File is owned by user",
       "takes_value": true,
       "value_type": {
-        "type": "String"
+        "type": "User"
       }
     },
     {
@@ -104,7 +104,7 @@
       "description": "File is owned by group",
       "takes_value": true,
       "value_type": {
-        "type": "String"
+        "type": "Group"
       }
     }
   ],

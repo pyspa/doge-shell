@@ -1,0 +1,68 @@
+{
+  "command": "ufw",
+  "description": "Uncomplicated firewall command line tool",
+  "subcommands": [
+    {
+      "name": "enable",
+      "description": "Enable firewall"
+    },
+    {
+      "name": "disable",
+      "description": "Disable firewall"
+    },
+    {
+      "name": "status",
+      "description": "Show firewall status"
+    },
+    {
+      "name": "reload",
+      "description": "Reload firewall"
+    },
+    {
+      "name": "reset",
+      "description": "Reset firewall"
+    },
+    {
+      "name": "allow",
+      "description": "Add allow rule",
+      "arguments": [
+        {
+          "name": "rule",
+          "description": "Rule specification",
+          "multiple": true,
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "deny",
+      "description": "Add deny rule",
+      "arguments": [
+        {
+          "name": "rule",
+          "description": "Rule specification",
+          "multiple": true,
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "delete",
+      "description": "Delete rule",
+      "arguments": [
+        {
+          "name": "rule",
+          "description": "Rule specification",
+          "multiple": true,
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    }
+  ]
+}

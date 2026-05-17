@@ -1,0 +1,58 @@
+{
+  "command": "firewall-cmd",
+  "description": "firewalld command line client",
+  "global_options": [
+    {
+      "description": "Permanent change",
+      "long": "--permanent"
+    },
+    {
+      "description": "Reload firewall",
+      "long": "--reload"
+    },
+    {
+      "description": "List all settings",
+      "long": "--list-all"
+    },
+    {
+      "description": "Zone name",
+      "long": "--zone",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "Add service",
+      "long": "--add-service",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "Remove service",
+      "long": "--remove-service",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "Add port",
+      "long": "--add-port",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "Remove port",
+      "long": "--remove-port",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "command": "realpath",
+  "description": "Print resolved absolute file names",
+  "global_options": [
+    {
+      "description": "All components must exist",
+      "short": "-e",
+      "long": "--canonicalize-existing"
+    },
+    {
+      "description": "No components need exist",
+      "short": "-m",
+      "long": "--canonicalize-missing"
+    },
+    {
+      "description": "Do not expand symlinks",
+      "short": "-s",
+      "long": "--no-symlinks"
+    },
+    {
+      "description": "Zero-terminate output",
+      "short": "-z",
+      "long": "--zero"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "file",
+      "description": "File to resolve",
+      "multiple": true,
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ]
+}

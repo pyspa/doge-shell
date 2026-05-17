@@ -1,0 +1,37 @@
+{
+  "command": "namei",
+  "description": "Follow a pathname until a terminal point is found",
+  "global_options": [
+    {
+      "description": "Long listing format",
+      "short": "-l"
+    },
+    {
+      "description": "Show mount point directories",
+      "short": "-m"
+    },
+    {
+      "description": "Do not follow symlinks",
+      "short": "-n"
+    },
+    {
+      "description": "Show owners and groups",
+      "short": "-o"
+    },
+    {
+      "description": "Vertical alignment",
+      "short": "-v"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "path",
+      "description": "Path to inspect",
+      "multiple": true,
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ]
+}

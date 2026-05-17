@@ -63,7 +63,10 @@
       "description": "Look up by label",
       "takes_value": true,
       "value_type": {
-        "type": "String"
+        "type": "Dynamic",
+        "data": {
+          "provider": "block.label"
+        }
       }
     },
     {
@@ -72,7 +75,10 @@
       "description": "Look up by UUID",
       "takes_value": true,
       "value_type": {
-        "type": "String"
+        "type": "Dynamic",
+        "data": {
+          "provider": "block.uuid"
+        }
       }
     }
   ],

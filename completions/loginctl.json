@@ -33,7 +33,10 @@
           "name": "session",
           "description": "session id",
           "type": {
-            "type": "String"
+            "type": "Dynamic",
+            "data": {
+              "provider": "loginctl.session"
+            }
           }
         }
       ]
@@ -46,7 +49,10 @@
           "name": "session",
           "description": "session id",
           "type": {
-            "type": "String"
+            "type": "Dynamic",
+            "data": {
+              "provider": "loginctl.session"
+            }
           }
         }
       ]
@@ -59,7 +65,10 @@
           "name": "session",
           "description": "session id",
           "type": {
-            "type": "String"
+            "type": "Dynamic",
+            "data": {
+              "provider": "loginctl.session"
+            }
           }
         }
       ]
@@ -145,7 +154,10 @@
           "name": "seat",
           "description": "seat name",
           "type": {
-            "type": "String"
+            "type": "Dynamic",
+            "data": {
+              "provider": "loginctl.seat"
+            }
           }
         }
       ]

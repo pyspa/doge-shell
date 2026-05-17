@@ -1,0 +1,109 @@
+{
+  "command": "iptables",
+  "description": "Administration tool for IPv4 packet filtering and NAT",
+  "global_options": [
+    {
+      "description": "Append to chain",
+      "short": "-A",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "INPUT",
+          "OUTPUT",
+          "FORWARD",
+          "PREROUTING",
+          "POSTROUTING"
+        ]
+      }
+    },
+    {
+      "description": "Delete from chain",
+      "short": "-D",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "INPUT",
+          "OUTPUT",
+          "FORWARD",
+          "PREROUTING",
+          "POSTROUTING"
+        ]
+      }
+    },
+    {
+      "description": "Insert into chain",
+      "short": "-I",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "INPUT",
+          "OUTPUT",
+          "FORWARD",
+          "PREROUTING",
+          "POSTROUTING"
+        ]
+      }
+    },
+    {
+      "description": "Protocol",
+      "short": "-p",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "tcp",
+          "udp",
+          "icmp",
+          "all"
+        ]
+      }
+    },
+    {
+      "description": "Input interface",
+      "short": "-i",
+      "takes_value": true,
+      "value_type": {
+        "type": "Interface"
+      }
+    },
+    {
+      "description": "Output interface",
+      "short": "-o",
+      "takes_value": true,
+      "value_type": {
+        "type": "Interface"
+      }
+    },
+    {
+      "description": "Jump target",
+      "short": "-j",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "ACCEPT",
+          "DROP",
+          "REJECT",
+          "RETURN",
+          "LOG",
+          "MASQUERADE"
+        ]
+      }
+    },
+    {
+      "description": "List rules",
+      "short": "-L"
+    },
+    {
+      "description": "Numeric output",
+      "short": "-n"
+    },
+    {
+      "description": "Verbose output",
+      "short": "-v"
+    }
+  ]
+}

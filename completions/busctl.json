@@ -1,0 +1,108 @@
+{
+  "command": "busctl",
+  "description": "Introspect and monitor the D-Bus bus",
+  "global_options": [
+    {
+      "description": "Use system bus",
+      "long": "--system"
+    },
+    {
+      "description": "Use user bus",
+      "long": "--user"
+    },
+    {
+      "description": "Do not pipe output into a pager",
+      "long": "--no-pager"
+    },
+    {
+      "description": "Show full output",
+      "long": "--full"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "list",
+      "description": "List bus names"
+    },
+    {
+      "name": "status",
+      "description": "Show service status",
+      "arguments": [
+        {
+          "name": "service",
+          "description": "D-Bus service",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "dbus.service"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "tree",
+      "description": "Show service object tree",
+      "arguments": [
+        {
+          "name": "service",
+          "description": "D-Bus service",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "dbus.service"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "introspect",
+      "description": "Introspect an object",
+      "arguments": [
+        {
+          "name": "service",
+          "description": "D-Bus service",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "dbus.service"
+            }
+          }
+        },
+        {
+          "name": "object",
+          "description": "Object path",
+          "required": false,
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "call",
+      "description": "Call a method",
+      "arguments": [
+        {
+          "name": "service",
+          "description": "D-Bus service",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "dbus.service"
+            }
+          }
+        },
+        {
+          "name": "object",
+          "description": "Object path",
+          "required": false,
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    }
+  ]
+}

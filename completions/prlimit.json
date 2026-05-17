@@ -1,0 +1,57 @@
+{
+  "command": "prlimit",
+  "description": "Get or set process resource limits",
+  "global_options": [
+    {
+      "description": "Operate on PID",
+      "short": "-p",
+      "long": "--pid",
+      "takes_value": true,
+      "value_type": {
+        "type": "Process"
+      }
+    },
+    {
+      "description": "No file limit",
+      "long": "--nofile",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "Number of processes limit",
+      "long": "--nproc",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "Address space limit",
+      "long": "--as",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "Core file size limit",
+      "long": "--core",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "command",
+      "description": "Command to run",
+      "required": false,
+      "type": {
+        "type": "CommandWithArgs"
+      }
+    }
+  ]
+}

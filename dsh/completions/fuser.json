@@ -1,0 +1,60 @@
+{
+  "command": "fuser",
+  "description": "Identify processes using files or sockets",
+  "global_options": [
+    {
+      "description": "Kill processes accessing the file",
+      "short": "-k",
+      "long": "--kill"
+    },
+    {
+      "description": "List all processes using a mounted filesystem",
+      "short": "-m",
+      "long": "--mount"
+    },
+    {
+      "description": "Append user name",
+      "short": "-u",
+      "long": "--user"
+    },
+    {
+      "description": "Verbose output",
+      "short": "-v",
+      "long": "--verbose"
+    },
+    {
+      "description": "Namespace",
+      "short": "-n",
+      "long": "--namespace",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "file",
+          "tcp",
+          "udp"
+        ]
+      }
+    },
+    {
+      "description": "Signal to send with --kill",
+      "short": "-s",
+      "long": "--signal",
+      "takes_value": true,
+      "value_type": {
+        "type": "Signal"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "file",
+      "description": "File, mount point, or socket name",
+      "multiple": true,
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ]
+}

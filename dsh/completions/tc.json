@@ -1,0 +1,121 @@
+{
+  "command": "tc",
+  "description": "Show or manipulate traffic control settings",
+  "global_options": [
+    {
+      "description": "Statistics output",
+      "short": "-s",
+      "long": "--statistics"
+    },
+    {
+      "description": "Details output",
+      "short": "-d",
+      "long": "--details"
+    },
+    {
+      "description": "Raw output",
+      "short": "-r",
+      "long": "--raw"
+    },
+    {
+      "description": "Batch file",
+      "short": "-b",
+      "long": "--batch",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "qdisc",
+      "description": "Queueing discipline operations",
+      "arguments": [
+        {
+          "name": "operation",
+          "description": "Operation",
+          "type": {
+            "type": "Choice",
+            "data": [
+              "show",
+              "add",
+              "change",
+              "replace",
+              "delete"
+            ]
+          }
+        },
+        {
+          "name": "dev",
+          "description": "Network interface",
+          "required": false,
+          "type": {
+            "type": "Interface"
+          }
+        }
+      ]
+    },
+    {
+      "name": "class",
+      "description": "Class operations",
+      "arguments": [
+        {
+          "name": "operation",
+          "description": "Operation",
+          "type": {
+            "type": "Choice",
+            "data": [
+              "show",
+              "add",
+              "change",
+              "replace",
+              "delete"
+            ]
+          }
+        },
+        {
+          "name": "dev",
+          "description": "Network interface",
+          "required": false,
+          "type": {
+            "type": "Interface"
+          }
+        }
+      ]
+    },
+    {
+      "name": "filter",
+      "description": "Filter operations",
+      "arguments": [
+        {
+          "name": "operation",
+          "description": "Operation",
+          "type": {
+            "type": "Choice",
+            "data": [
+              "show",
+              "add",
+              "change",
+              "replace",
+              "delete"
+            ]
+          }
+        },
+        {
+          "name": "dev",
+          "description": "Network interface",
+          "required": false,
+          "type": {
+            "type": "Interface"
+          }
+        }
+      ]
+    },
+    {
+      "name": "monitor",
+      "description": "Monitor traffic control events"
+    }
+  ]
+}

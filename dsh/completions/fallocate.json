@@ -1,0 +1,49 @@
+{
+  "command": "fallocate",
+  "description": "Preallocate or deallocate file space",
+  "global_options": [
+    {
+      "description": "Allocation length",
+      "short": "-l",
+      "long": "--length",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "Offset",
+      "short": "-o",
+      "long": "--offset",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "Punch a hole",
+      "short": "-p",
+      "long": "--punch-hole"
+    },
+    {
+      "description": "Keep apparent file size",
+      "short": "-n",
+      "long": "--keep-size"
+    },
+    {
+      "description": "Verbose output",
+      "short": "-v",
+      "long": "--verbose"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "file",
+      "description": "File to allocate",
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ]
+}

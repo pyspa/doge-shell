@@ -1,0 +1,48 @@
+{
+  "command": "bootctl",
+  "description": "Control EFI firmware boot settings and systemd-boot",
+  "global_options": [
+    {
+      "description": "Path to EFI system partition",
+      "long": "--esp-path",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "description": "Path to extended boot loader partition",
+      "long": "--boot-path",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "description": "Do not print status checks",
+      "long": "--no-variables"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "status",
+      "description": "Show boot loader status"
+    },
+    {
+      "name": "install",
+      "description": "Install systemd-boot"
+    },
+    {
+      "name": "update",
+      "description": "Update systemd-boot"
+    },
+    {
+      "name": "remove",
+      "description": "Remove systemd-boot"
+    },
+    {
+      "name": "list",
+      "description": "List boot loader entries"
+    }
+  ]
+}

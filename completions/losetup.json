@@ -20,7 +20,7 @@
       "value_type": {
         "type": "Dynamic",
         "data": {
-          "provider": "block.device"
+          "provider": "loop.device"
         }
       }
     },

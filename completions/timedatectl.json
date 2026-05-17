@@ -41,7 +41,10 @@
           "name": "timezone",
           "description": "time zone",
           "type": {
-            "type": "String"
+            "type": "Dynamic",
+            "data": {
+              "provider": "timedatectl.timezone"
+            }
           }
         }
       ]

@@ -1,0 +1,59 @@
+{
+  "command": "systemd-tmpfiles",
+  "description": "Create, delete and clean up volatile and temporary files",
+  "global_options": [
+    {
+      "description": "Create files and directories",
+      "long": "--create"
+    },
+    {
+      "description": "Clean files and directories",
+      "long": "--clean"
+    },
+    {
+      "description": "Remove files and directories",
+      "long": "--remove"
+    },
+    {
+      "description": "Execute boot-only lines",
+      "long": "--boot"
+    },
+    {
+      "description": "Limit path prefix",
+      "long": "--prefix",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "description": "Root directory",
+      "long": "--root",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "description": "Replace config file",
+      "long": "--replace",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "config",
+      "description": "Configuration file",
+      "multiple": true,
+      "required": false,
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ]
+}

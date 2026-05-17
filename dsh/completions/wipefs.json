@@ -1,0 +1,48 @@
+{
+  "command": "wipefs",
+  "description": "Wipe filesystem signatures from a device",
+  "global_options": [
+    {
+      "description": "Wipe all signatures",
+      "short": "-a",
+      "long": "--all"
+    },
+    {
+      "description": "Dry run",
+      "short": "-n",
+      "long": "--no-act"
+    },
+    {
+      "description": "Force operation",
+      "short": "-f",
+      "long": "--force"
+    },
+    {
+      "description": "Backup signatures",
+      "short": "-b",
+      "long": "--backup"
+    },
+    {
+      "description": "Offset of signature to erase",
+      "short": "-o",
+      "long": "--offset",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "device",
+      "description": "Block device",
+      "multiple": true,
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "block.device"
+        }
+      }
+    }
+  ]
+}

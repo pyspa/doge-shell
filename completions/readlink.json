@@ -1,0 +1,44 @@
+{
+  "command": "readlink",
+  "description": "Print resolved symbolic links or canonical file names",
+  "global_options": [
+    {
+      "description": "Canonicalize by following every symlink",
+      "short": "-f",
+      "long": "--canonicalize"
+    },
+    {
+      "description": "Canonicalize existing components",
+      "short": "-e",
+      "long": "--canonicalize-existing"
+    },
+    {
+      "description": "Canonicalize missing components",
+      "short": "-m",
+      "long": "--canonicalize-missing"
+    },
+    {
+      "description": "Do not output trailing delimiter",
+      "short": "-n"
+    },
+    {
+      "description": "Quiet mode",
+      "short": "-q"
+    },
+    {
+      "description": "Verbose mode",
+      "short": "-v"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "file",
+      "description": "File to resolve",
+      "multiple": true,
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ]
+}

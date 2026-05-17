@@ -1,0 +1,47 @@
+{
+  "command": "systemd-sysusers",
+  "description": "Allocate system users and groups from config files",
+  "global_options": [
+    {
+      "description": "Root directory",
+      "long": "--root",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "description": "Replace config file",
+      "long": "--replace",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "description": "Dry run",
+      "long": "--dry-run"
+    },
+    {
+      "description": "Inline configuration",
+      "long": "--inline",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "config",
+      "description": "Configuration file",
+      "multiple": true,
+      "required": false,
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ]
+}

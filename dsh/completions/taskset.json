@@ -1,0 +1,39 @@
+{
+  "command": "taskset",
+  "description": "Set or retrieve CPU affinity",
+  "global_options": [
+    {
+      "description": "Operate on existing PID",
+      "short": "-p",
+      "long": "--pid"
+    },
+    {
+      "description": "Use CPU list format",
+      "short": "-c",
+      "long": "--cpu-list"
+    },
+    {
+      "description": "Set affinity for all tasks",
+      "short": "-a",
+      "long": "--all-tasks"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "mask_or_cpu_list",
+      "description": "CPU mask or CPU list",
+      "required": false,
+      "type": {
+        "type": "String"
+      }
+    },
+    {
+      "name": "command",
+      "description": "Command to run or PID",
+      "required": false,
+      "type": {
+        "type": "CommandWithArgs"
+      }
+    }
+  ]
+}

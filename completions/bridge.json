@@ -1,0 +1,83 @@
+{
+  "command": "bridge",
+  "description": "Show and manipulate bridge addresses and devices",
+  "global_options": [
+    {
+      "description": "Print statistics",
+      "short": "-s",
+      "long": "--statistics"
+    },
+    {
+      "description": "JSON output",
+      "short": "-j",
+      "long": "--json"
+    },
+    {
+      "description": "Pretty JSON output",
+      "short": "-p",
+      "long": "--pretty"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "link",
+      "description": "Bridge port commands",
+      "arguments": [
+        {
+          "name": "device",
+          "description": "Network interface",
+          "required": false,
+          "type": {
+            "type": "Interface"
+          }
+        }
+      ]
+    },
+    {
+      "name": "fdb",
+      "description": "Forwarding database commands",
+      "arguments": [
+        {
+          "name": "device",
+          "description": "Network interface",
+          "required": false,
+          "type": {
+            "type": "Interface"
+          }
+        }
+      ]
+    },
+    {
+      "name": "mdb",
+      "description": "Multicast database commands",
+      "arguments": [
+        {
+          "name": "device",
+          "description": "Network interface",
+          "required": false,
+          "type": {
+            "type": "Interface"
+          }
+        }
+      ]
+    },
+    {
+      "name": "vlan",
+      "description": "VLAN filter commands",
+      "arguments": [
+        {
+          "name": "device",
+          "description": "Network interface",
+          "required": false,
+          "type": {
+            "type": "Interface"
+          }
+        }
+      ]
+    },
+    {
+      "name": "monitor",
+      "description": "Monitor bridge events"
+    }
+  ]
+}

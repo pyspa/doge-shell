@@ -1,0 +1,44 @@
+{
+  "command": "blockdev",
+  "description": "Call block device ioctls from the command line",
+  "global_options": [
+    {
+      "description": "Get device size in bytes",
+      "long": "--getsize64"
+    },
+    {
+      "description": "Set read-only",
+      "long": "--setro"
+    },
+    {
+      "description": "Set read-write",
+      "long": "--setrw"
+    },
+    {
+      "description": "Flush buffers",
+      "long": "--flushbufs"
+    },
+    {
+      "description": "Reread partition table",
+      "long": "--rereadpt"
+    },
+    {
+      "description": "Verbose output",
+      "short": "-v",
+      "long": "--verbose"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "device",
+      "description": "Block device",
+      "multiple": true,
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "block.device"
+        }
+      }
+    }
+  ]
+}

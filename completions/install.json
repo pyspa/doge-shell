@@ -1,0 +1,81 @@
+{
+  "command": "install",
+  "description": "Copy files and set attributes",
+  "global_options": [
+    {
+      "description": "Create leading destination directories",
+      "short": "-D"
+    },
+    {
+      "description": "Create directories instead of copying files",
+      "short": "-d",
+      "long": "--directory"
+    },
+    {
+      "description": "Set permission mode",
+      "short": "-m",
+      "long": "--mode",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "Set owner",
+      "short": "-o",
+      "long": "--owner",
+      "takes_value": true,
+      "value_type": {
+        "type": "User"
+      }
+    },
+    {
+      "description": "Set group",
+      "short": "-g",
+      "long": "--group",
+      "takes_value": true,
+      "value_type": {
+        "type": "Group"
+      }
+    },
+    {
+      "description": "Copy all source files into directory",
+      "short": "-t",
+      "long": "--target-directory",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "description": "Preserve timestamps",
+      "short": "-p",
+      "long": "--preserve-timestamps"
+    },
+    {
+      "description": "Verbose output",
+      "short": "-v",
+      "long": "--verbose"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "source",
+      "description": "Source file",
+      "required": false,
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "name": "destination",
+      "description": "Destination file or directory",
+      "required": false,
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ]
+}

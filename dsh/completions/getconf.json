@@ -1,0 +1,27 @@
+{
+  "command": "getconf",
+  "description": "Query system configuration variables",
+  "global_options": [
+    {
+      "description": "Display all configuration variables",
+      "short": "-a"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "name",
+      "description": "Configuration variable name",
+      "type": {
+        "type": "String"
+      }
+    },
+    {
+      "name": "path",
+      "description": "Path for path-specific variables",
+      "required": false,
+      "type": {
+        "type": "Directory"
+      }
+    }
+  ]
+}

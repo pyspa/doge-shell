@@ -21,7 +21,7 @@
       "type": {
         "type": "Dynamic",
         "data": {
-          "provider": "block.device"
+          "provider": "swap.device"
         }
       }
     }

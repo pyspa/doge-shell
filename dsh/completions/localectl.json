@@ -25,7 +25,10 @@
           "description": "locale assignment",
           "multiple": true,
           "type": {
-            "type": "String"
+            "type": "Dynamic",
+            "data": {
+              "provider": "localectl.locale"
+            }
           }
         }
       ]
@@ -42,7 +45,10 @@
           "name": "keymap",
           "description": "keymap",
           "type": {
-            "type": "String"
+            "type": "Dynamic",
+            "data": {
+              "provider": "localectl.keymap"
+            }
           }
         }
       ]

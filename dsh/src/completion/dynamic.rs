@@ -256,6 +256,23 @@ impl DynamicCompletionProvider {
             "block.device" => {
                 self.collect_block_device_candidates(current_dir, current_token, cached_only)
             }
+            "block.label" => self.collect_blkid_attribute_candidates(
+                current_dir,
+                current_token,
+                "LABEL",
+                "block label",
+                cached_only,
+            ),
+            "block.uuid" => self.collect_blkid_attribute_candidates(
+                current_dir,
+                current_token,
+                "UUID",
+                "block uuid",
+                cached_only,
+            ),
+            "dbus.service" => {
+                self.collect_dbus_service_candidates(current_dir, current_token, cached_only)
+            }
             "docker.compose_service" => {
                 let compose_file = selected_docker_compose_file(parsed_command_line, current_dir);
                 if cached_only {
@@ -356,6 +373,9 @@ impl DynamicCompletionProvider {
                     self.collect_task_candidates(parsed_command_line, current_dir)
                 }
             }
+            "filesystem.type" => {
+                self.collect_filesystem_type_candidates(current_token, cached_only)
+            }
             "apt.installed_package" => self.collect_apt_installed_package_candidates(
                 current_dir,
                 current_token,
@@ -377,6 +397,21 @@ impl DynamicCompletionProvider {
             "fstab.mountpoint" => {
                 self.collect_fstab_mountpoint_candidates(current_token, cached_only)
             }
+            "localectl.keymap" => {
+                self.collect_localectl_keymap_candidates(current_dir, current_token, cached_only)
+            }
+            "localectl.locale" => {
+                self.collect_localectl_locale_candidates(current_dir, current_token, cached_only)
+            }
+            "loginctl.seat" => {
+                self.collect_loginctl_seat_candidates(current_dir, current_token, cached_only)
+            }
+            "loginctl.session" => {
+                self.collect_loginctl_session_candidates(current_dir, current_token, cached_only)
+            }
+            "loop.device" => {
+                self.collect_loop_device_candidates(current_dir, current_token, cached_only)
+            }
             "sysctl.key" => self.collect_sysctl_key_candidates(current_token, cached_only),
             "ssh.host" => self.collect_ssh_host_candidates_with_mode(
                 parsed_command_line,
@@ -384,9 +419,20 @@ impl DynamicCompletionProvider {
                 parsed_command_line.command.as_str(),
                 cached_only,
             ),
+            "swap.device" => self.collect_swap_device_candidates(current_token, cached_only),
+            "system.process_name" => self.collect_process_name_candidates_with_mode(
+                parsed_command_line,
+                "system",
+                cached_only,
+            ),
             "system.process_pid" => {
                 self.collect_process_pid_candidates(parsed_command_line, cached_only)
             }
+            "timedatectl.timezone" => self.collect_timedatectl_timezone_candidates(
+                current_dir,
+                current_token,
+                cached_only,
+            ),
             "tmux.session" => {
                 self.collect_tmux_session_candidates(current_dir, current_token, cached_only)
             }
@@ -1833,6 +1879,52 @@ impl DynamicCompletionProvider {
         )
     }
 
+    fn collect_filesystem_type_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_cached_value_candidates(
+            "filesystem",
+            "type",
+            PathBuf::from("/proc/filesystems"),
+            current_token,
+            "filesystem type",
+            cached_only,
+            || Ok(load_filesystem_types()),
+        )
+    }
+
+    fn collect_blkid_attribute_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        attribute: &'static str,
+        description: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("blkid");
+        let current_dir = current_dir.to_path_buf();
+        let value_kind = attribute.to_ascii_lowercase();
+        self.collect_cached_value_candidates(
+            "blkid",
+            &value_kind,
+            PathBuf::from("/run/blkid"),
+            current_token,
+            description,
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parse_blkid_export_attribute(
+                    &run_command_lines(&command_path, &["-o", "export"], &current_dir)?,
+                    attribute,
+                ))
+            },
+        )
+    }
+
     fn collect_block_device_candidates(
         &self,
         current_dir: &Path,
@@ -1861,6 +1953,26 @@ impl DynamicCompletionProvider {
         )
     }
 
+    fn collect_dbus_service_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_local_command_value_candidates(
+            "busctl",
+            "service",
+            PathBuf::from("/run/dbus"),
+            "busctl",
+            &["list"],
+            current_dir,
+            current_token,
+            "D-Bus service",
+            cached_only,
+            parse_busctl_services,
+        )
+    }
+
     fn collect_fstab_mountpoint_candidates(
         &self,
         current_token: &str,
@@ -1874,6 +1986,122 @@ impl DynamicCompletionProvider {
             "fstab mount point",
             cached_only,
             || Ok(load_fstab_mountpoints()),
+        )
+    }
+
+    fn collect_localectl_locale_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_local_command_value_candidates(
+            "localectl",
+            "locale",
+            PathBuf::from("/usr/lib/locale"),
+            "localectl",
+            &["list-locales"],
+            current_dir,
+            current_token,
+            "locale",
+            cached_only,
+            parse_package_lines,
+        )
+    }
+
+    fn collect_localectl_keymap_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_local_command_value_candidates(
+            "localectl",
+            "keymap",
+            PathBuf::from("/usr/share/kbd/keymaps"),
+            "localectl",
+            &["list-keymaps"],
+            current_dir,
+            current_token,
+            "keymap",
+            cached_only,
+            parse_package_lines,
+        )
+    }
+
+    fn collect_loginctl_session_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_local_command_value_candidates(
+            "loginctl",
+            "session",
+            PathBuf::from("/run/systemd/sessions"),
+            "loginctl",
+            &["list-sessions", "--no-legend"],
+            current_dir,
+            current_token,
+            "login session",
+            cached_only,
+            parse_loginctl_sessions,
+        )
+    }
+
+    fn collect_loginctl_seat_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_local_command_value_candidates(
+            "loginctl",
+            "seat",
+            PathBuf::from("/run/systemd/seats"),
+            "loginctl",
+            &["list-seats", "--no-legend"],
+            current_dir,
+            current_token,
+            "login seat",
+            cached_only,
+            parse_loginctl_seats,
+        )
+    }
+
+    fn collect_loop_device_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_local_command_value_candidates(
+            "losetup",
+            "loop-device",
+            PathBuf::from("/sys/block"),
+            "losetup",
+            &["--list", "--noheadings", "--output", "NAME"],
+            current_dir,
+            current_token,
+            "loop device",
+            cached_only,
+            parse_losetup_devices,
+        )
+    }
+
+    fn collect_swap_device_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_cached_value_candidates(
+            "swap",
+            "device",
+            PathBuf::from("/proc/swaps"),
+            current_token,
+            "swap device",
+            cached_only,
+            || Ok(load_swap_devices()),
         )
     }
 
@@ -1893,6 +2121,26 @@ impl DynamicCompletionProvider {
             "sysctl key",
             cached_only,
             || Ok(load_sysctl_keys()),
+        )
+    }
+
+    fn collect_timedatectl_timezone_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_local_command_value_candidates(
+            "timedatectl",
+            "timezone",
+            PathBuf::from("/usr/share/zoneinfo"),
+            "timedatectl",
+            &["list-timezones"],
+            current_dir,
+            current_token,
+            "time zone",
+            cached_only,
+            parse_package_lines,
         )
     }
 
@@ -2436,6 +2684,42 @@ impl DynamicCompletionProvider {
                         &current_dir,
                     )?))
                 }
+            },
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn collect_local_command_value_candidates(
+        &self,
+        command_name: &str,
+        value_kind: &str,
+        scope_dir: PathBuf,
+        executable: &str,
+        args: &'static [&'static str],
+        current_dir: &Path,
+        current_token: &str,
+        description: &str,
+        cached_only: bool,
+        parser: fn(&[String]) -> Vec<String>,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path(executable);
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            command_name,
+            value_kind,
+            scope_dir,
+            current_token,
+            description,
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parser(&run_command_lines(
+                    &command_path,
+                    args,
+                    &current_dir,
+                )?))
             },
         )
     }
@@ -4352,6 +4636,69 @@ fn parse_package_lines(lines: &[String]) -> Vec<String> {
     )
 }
 
+fn parse_first_fields_excluding(lines: &[String], excluded: &[&str]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .filter_map(|line| {
+                let first = line.split_whitespace().next()?;
+                if first.is_empty()
+                    || excluded
+                        .iter()
+                        .any(|header| first.eq_ignore_ascii_case(header))
+                {
+                    None
+                } else {
+                    Some(first.to_string())
+                }
+            })
+            .collect(),
+    )
+}
+
+fn parse_blkid_export_attribute(lines: &[String], attribute: &str) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .filter_map(|line| {
+                let (key, value) = line.split_once('=')?;
+                if key == attribute && !value.is_empty() {
+                    Some(value.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect(),
+    )
+}
+
+fn parse_busctl_services(lines: &[String]) -> Vec<String> {
+    parse_first_fields_excluding(lines, &["NAME"])
+}
+
+fn parse_loginctl_sessions(lines: &[String]) -> Vec<String> {
+    parse_first_fields_excluding(lines, &["SESSION"])
+}
+
+fn parse_loginctl_seats(lines: &[String]) -> Vec<String> {
+    parse_first_fields_excluding(lines, &["SEAT"])
+}
+
+fn parse_losetup_devices(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        parse_first_fields_excluding(lines, &["NAME"])
+            .into_iter()
+            .map(|device| {
+                if device.starts_with("/dev/") {
+                    device
+                } else {
+                    format!("/dev/{device}")
+                }
+            })
+            .collect(),
+    )
+}
+
 fn parse_nmcli_first_field(lines: &[String]) -> Vec<String> {
     dedup_sorted(
         lines
@@ -4400,6 +4747,19 @@ fn parse_lsblk_devices(lines: &[String]) -> Vec<String> {
             })
             .collect(),
     )
+}
+
+fn load_filesystem_types() -> Vec<String> {
+    fs::read_to_string("/proc/filesystems")
+        .map(|contents| {
+            dedup_sorted(
+                contents
+                    .lines()
+                    .filter_map(|line| line.split_whitespace().last().map(str::to_string))
+                    .collect(),
+            )
+        })
+        .unwrap_or_default()
 }
 
 fn load_fstab_mountpoints() -> Vec<String> {
@@ -4460,6 +4820,20 @@ fn load_network_interfaces() -> Vec<String> {
                 entries
                     .flatten()
                     .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+                    .collect(),
+            )
+        })
+        .unwrap_or_default()
+}
+
+fn load_swap_devices() -> Vec<String> {
+    fs::read_to_string("/proc/swaps")
+        .map(|contents| {
+            dedup_sorted(
+                contents
+                    .lines()
+                    .skip(1)
+                    .filter_map(|line| line.split_whitespace().next().map(str::to_string))
                     .collect(),
             )
         })
@@ -4686,6 +5060,37 @@ mod tests {
                 "coreutils".to_string(),
             ]),
             vec!["bash".to_string(), "coreutils".to_string()]
+        );
+        assert_eq!(
+            parse_blkid_export_attribute(
+                &[
+                    "DEVNAME=/dev/sda1".to_string(),
+                    "UUID=abcd-1234".to_string(),
+                    "LABEL=rootfs".to_string(),
+                    "UUID=efgh-5678".to_string(),
+                ],
+                "UUID",
+            ),
+            vec!["abcd-1234".to_string(), "efgh-5678".to_string()]
+        );
+        assert_eq!(
+            parse_busctl_services(&[
+                "NAME PID PROCESS USER CONNECTION UNIT SESSION DESCRIPTION".to_string(),
+                "org.freedesktop.login1 1 systemd root - - - Login".to_string(),
+                ":1.10 100 demo user - - - App".to_string(),
+            ]),
+            vec![":1.10".to_string(), "org.freedesktop.login1".to_string()]
+        );
+        assert_eq!(
+            parse_loginctl_sessions(&[
+                "SESSION UID USER SEAT TTY".to_string(),
+                "2 1000 alice seat0 tty2".to_string(),
+            ]),
+            vec!["2".to_string()]
+        );
+        assert_eq!(
+            parse_losetup_devices(&["NAME".to_string(), "loop0".to_string()]),
+            vec!["/dev/loop0".to_string()]
         );
 
         assert_eq!(

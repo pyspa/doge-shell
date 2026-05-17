@@ -1,0 +1,16 @@
+{
+  "command": "gradle",
+  "description": "Gradle build tool",
+  "global_options": [
+    { "short": "-p", "long": "--project-dir", "description": "Project directory", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "short": "-b", "long": "--build-file", "description": "Build file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["gradle", "kts"] } } },
+    { "short": "-D", "description": "Set system property", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-x", "long": "--exclude-task", "description": "Exclude task", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-q", "long": "--quiet", "description": "Quiet output" },
+    { "short": "-i", "long": "--info", "description": "Info output" },
+    { "long": "--debug", "description": "Debug output" },
+    { "long": "--scan", "description": "Create build scan" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [{ "name": "task", "description": "Task name", "multiple": true, "type": { "type": "String" } }]
+}

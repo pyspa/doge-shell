@@ -23,6 +23,13 @@
     {
       "long": "--loglevel",
       "description": "Level of logging (silent, error, warn, info, verbose)"
+    },
+    {
+      "long": "--workspace",
+      "short": "-w",
+      "description": "Run command in a workspace",
+      "takes_value": true,
+      "value_type": { "type": "Dynamic", "data": { "provider": "node.workspace" } }
     }
   ],
   "subcommands": [

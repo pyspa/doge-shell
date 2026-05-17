@@ -1,0 +1,16 @@
+{
+  "command": "hatch",
+  "description": "Python project manager",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "long": "--version", "description": "Show version" }
+  ],
+  "subcommands": [
+    { "name": "run", "description": "Run a command or script", "arguments": [{ "name": "command", "description": "Command", "type": { "type": "Command" } }] },
+    { "name": "env", "description": "Manage environments", "subcommands": [{ "name": "show", "description": "Show environments" }, { "name": "create", "description": "Create environment" }, { "name": "remove", "description": "Remove environment" }] },
+    { "name": "build", "description": "Build project" },
+    { "name": "publish", "description": "Publish distributions" },
+    { "name": "version", "description": "Inspect or update project version" },
+    { "name": "new", "description": "Create project" }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "command": "glab",
+  "description": "GitLab CLI",
+  "global_options": [
+    { "short": "-R", "long": "--repo", "description": "Repository", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "short": "-v", "long": "--version", "description": "Show version" }
+  ],
+  "subcommands": [
+    { "name": "auth", "description": "Authenticate glab", "subcommands": [{ "name": "login", "description": "Log in" }, { "name": "status", "description": "View auth status" }] },
+    { "name": "repo", "description": "Manage repositories" },
+    { "name": "mr", "description": "Manage merge requests", "subcommands": [{ "name": "list", "description": "List merge requests" }, { "name": "view", "description": "View merge request" }, { "name": "checkout", "description": "Checkout merge request" }, { "name": "create", "description": "Create merge request" }] },
+    { "name": "issue", "description": "Manage issues", "subcommands": [{ "name": "list", "description": "List issues" }, { "name": "view", "description": "View issue" }, { "name": "create", "description": "Create issue" }] },
+    { "name": "ci", "description": "Manage CI pipelines" },
+    { "name": "release", "description": "Manage releases" }
+  ]
+}

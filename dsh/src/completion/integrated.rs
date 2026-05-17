@@ -1549,7 +1549,9 @@ fn replace_char_range(input: &str, start: usize, end: usize, replacement: &str) 
 }
 
 pub(super) fn matches_prefix(current_token: &str, value: &str) -> bool {
-    current_token.is_empty() || super::fuzzy_match_score(value, current_token).is_some()
+    current_token.is_empty()
+        || value.starts_with(current_token)
+        || super::fuzzy_match_score(value, current_token).is_some()
 }
 
 fn is_dynamic_completion_command(command: &str) -> bool {
@@ -2104,9 +2106,14 @@ mod tests {
             {
                 return result;
             }
+            let last_candidates: Vec<_> = result
+                .candidates
+                .iter()
+                .map(|candidate| candidate.text.clone())
+                .collect();
             assert!(
                 start.elapsed() < Duration::from_secs(2),
-                "timed out waiting for completion candidate {expected}"
+                "timed out waiting for completion candidate {expected} for input {input}; last candidates: {last_candidates:?}"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -3646,6 +3653,245 @@ fi
             .complete(input, input.len(), &nested_go_dir, 50, None)
             .await;
         let _ = wait_for_candidate(&engine, input, &nested_go_dir, "./pkg/api").await;
+    }
+
+    #[tokio::test]
+    async fn python_module_dynamic_providers_complete_local_modules() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "[project]\ndependencies = [\"fastapi>=0.110\"]\n",
+        )
+        .unwrap();
+        let package_dir = dir.path().join("src").join("demo_app");
+        fs::create_dir_all(&package_dir).unwrap();
+        fs::write(package_dir.join("__init__.py"), "").unwrap();
+        fs::write(package_dir.join("cli.py"), "").unwrap();
+
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        for (input, expected) in [
+            ("python -m dem", "demo_app"),
+            ("python3 -m demo_app.c", "demo_app.cli"),
+            ("pytest --cov dem", "demo_app"),
+            ("mypy -m demo_app.c", "demo_app.cli"),
+            ("mypy -p fast", "fastapi"),
+        ] {
+            let result = wait_for_candidate(&engine, input, dir.path(), expected).await;
+            assert!(
+                result
+                    .candidates
+                    .iter()
+                    .all(|candidate| candidate.candidate_type == CandidateType::Argument),
+                "{input} should return module argument candidates: {:?}",
+                result.candidates
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn node_workspace_and_bin_completion_walks_monorepo_ancestors() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "private": true, "workspaces": ["packages/*"] }"#,
+        )
+        .unwrap();
+        let package_dir = dir.path().join("packages").join("web");
+        fs::create_dir_all(&package_dir).unwrap();
+        fs::write(
+            package_dir.join("package.json"),
+            r#"{ "name": "@demo/web", "scripts": { "build": "vite build" } }"#,
+        )
+        .unwrap();
+        let node_bin = dir.path().join("node_modules").join(".bin");
+        fs::create_dir_all(&node_bin).unwrap();
+        fs::write(node_bin.join("vite"), "").unwrap();
+
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        for (input, expected) in [
+            ("npx vi", "vite"),
+            ("npm exec vi", "vite"),
+            ("pnpm exec vi", "vite"),
+            ("yarn exec vi", "vite"),
+            ("bun x vi", "vite"),
+            ("npm --workspace @demo", "@demo/web"),
+            ("pnpm --filter @demo", "@demo/web"),
+            ("yarn workspace @demo", "@demo/web"),
+            ("turbo run build --filter @demo", "@demo/web"),
+        ] {
+            let _ = engine
+                .complete(input, input.len(), &package_dir, 50, None)
+                .await;
+            let _ = wait_for_candidate(&engine, input, &package_dir, expected).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn cloud_and_terraform_dynamic_providers_read_local_fixtures() {
+        let dir = tempdir().unwrap();
+        let aws_dir = dir.path().join(".aws");
+        fs::create_dir_all(&aws_dir).unwrap();
+        let aws_config = aws_dir.join("config");
+        let aws_credentials = aws_dir.join("credentials");
+        fs::write(
+            &aws_config,
+            "[default]\nregion = us-east-1\n[profile dev]\nregion = us-west-2\n",
+        )
+        .unwrap();
+        fs::write(&aws_credentials, "[prod]\naws_access_key_id = test\n").unwrap();
+
+        let gcloud_dir = dir.path().join("gcloud");
+        let gcloud_configurations = gcloud_dir.join("configurations");
+        fs::create_dir_all(&gcloud_configurations).unwrap();
+        fs::write(
+            gcloud_configurations.join("config_dev"),
+            "project = demo-dev\n",
+        )
+        .unwrap();
+        fs::write(
+            gcloud_configurations.join("config_prod"),
+            "project = demo-prod\n",
+        )
+        .unwrap();
+
+        let terraform_dir = dir.path().join(".terraform");
+        fs::create_dir_all(terraform_dir.join("terraform.tfstate.d").join("dev")).unwrap();
+        fs::write(terraform_dir.join("environment"), "staging\n").unwrap();
+
+        let environment = Environment::new();
+        {
+            let mut env = environment.write();
+            env.set_system_env_var("HOME".to_string(), dir.path().display().to_string());
+            env.set_system_env_var(
+                "AWS_CONFIG_FILE".to_string(),
+                aws_config.display().to_string(),
+            );
+            env.set_system_env_var(
+                "AWS_SHARED_CREDENTIALS_FILE".to_string(),
+                aws_credentials.display().to_string(),
+            );
+            env.set_system_env_var(
+                "CLOUDSDK_CONFIG".to_string(),
+                gcloud_dir.display().to_string(),
+            );
+        }
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        for (input, expected) in [
+            ("aws --profile de", "dev"),
+            ("gcloud --configuration de", "dev"),
+            ("gcloud --project demo-p", "demo-prod"),
+            ("terraform workspace select sta", "staging"),
+            ("tofu workspace delete de", "dev"),
+        ] {
+            let result = wait_for_candidate(&engine, input, dir.path(), expected).await;
+            assert!(
+                result
+                    .candidates
+                    .iter()
+                    .all(|candidate| candidate.candidate_type == CandidateType::Argument),
+                "{input} should return local config argument candidates: {:?}",
+                result.candidates
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn container_dynamic_providers_complete_fake_cli_objects() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let script = r#"#!/bin/sh
+case "$1" in
+  images) printf 'localhost/app:latest\n<none>:<none>\n' ;;
+  ps)
+    if [ "$2" = "-a" ]; then
+      printf 'web\nold\n'
+    else
+      printf 'web\n'
+    fi
+    ;;
+  network)
+    if [ "$2" = "ls" ]; then printf 'frontend\nbackend\n'; fi
+    ;;
+  volume)
+    if [ "$2" = "ls" ]; then printf 'cache\nlogs\n'; fi
+    ;;
+esac
+"#;
+        write_executable_script(&bin_dir.join("docker"), script);
+        write_executable_script(&bin_dir.join("podman"), script);
+
+        let engine = engine_with_path(&bin_dir);
+        for (input, expected) in [
+            ("docker run loc", "localhost/app:latest"),
+            ("docker rm ol", "old"),
+            ("docker network rm fr", "frontend"),
+            ("docker volume rm ca", "cache"),
+            ("podman run loc", "localhost/app:latest"),
+            ("podman stop we", "web"),
+            ("podman network inspect back", "backend"),
+            ("podman volume inspect lo", "logs"),
+        ] {
+            let _ = engine
+                .complete(input, input.len(), dir.path(), 50, None)
+                .await;
+            let _ = wait_for_candidate(&engine, input, dir.path(), expected).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn nx_run_completion_reads_workspace_and_descendant_projects() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("workspace.json"),
+            r#"{
+              "projects": {
+                "web": { "targets": { "build": {}, "test": {} } },
+                "legacy": { "architect": { "serve": {} } }
+              }
+            }"#,
+        )
+        .unwrap();
+        let api_dir = dir.path().join("apps").join("api");
+        fs::create_dir_all(&api_dir).unwrap();
+        fs::write(
+            api_dir.join("project.json"),
+            r#"{ "name": "api", "targets": { "lint": {} } }"#,
+        )
+        .unwrap();
+        let tasks = dsh_builtin::task::list_tasks_in_dir_for_sources(dir.path(), &["nx"]).unwrap();
+        assert!(
+            tasks.iter().any(|task| task.command == "nx run web:build"),
+            "expected Nx task detection to include web:build: {tasks:?}"
+        );
+
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        for (input, expected) in [
+            ("nx run web:b", "web:build"),
+            ("nx run legacy:s", "legacy:serve"),
+            ("nx run api:l", "api:lint"),
+        ] {
+            let result = wait_for_candidate(&engine, input, dir.path(), expected).await;
+            assert!(
+                !result
+                    .candidates
+                    .iter()
+                    .any(|candidate| candidate.text == "build"),
+                "nx run should use project:target candidates, not bare targets: {:?}",
+                result.candidates
+            );
+        }
     }
 
     #[tokio::test]

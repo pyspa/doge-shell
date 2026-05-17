@@ -1,0 +1,28 @@
+{
+  "command": "podman",
+  "description": "Manage pods, containers, and images",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "short": "-v", "long": "--version", "description": "Show version" }
+  ],
+  "subcommands": [
+    { "name": "run", "description": "Run a command in a new container", "arguments": [{ "name": "image", "description": "Image", "type": { "type": "Dynamic", "data": { "provider": "podman.image" } } }] },
+    { "name": "exec", "description": "Execute command in a running container", "arguments": [{ "name": "container", "description": "Container", "type": { "type": "Dynamic", "data": { "provider": "podman.container", "scope": "running" } } }] },
+    { "name": "stop", "description": "Stop containers", "arguments": [{ "name": "container", "description": "Container", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "podman.container", "scope": "running" } } }] },
+    { "name": "start", "description": "Start containers", "arguments": [{ "name": "container", "description": "Container", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "podman.container" } } }] },
+    { "name": "rm", "description": "Remove containers", "arguments": [{ "name": "container", "description": "Container", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "podman.container" } } }] },
+    { "name": "rmi", "description": "Remove images", "arguments": [{ "name": "image", "description": "Image", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "podman.image" } } }] },
+    { "name": "images", "description": "List images" },
+    { "name": "ps", "description": "List containers" },
+    { "name": "network", "description": "Manage networks", "subcommands": [
+      { "name": "ls", "description": "List networks" },
+      { "name": "rm", "description": "Remove networks", "arguments": [{ "name": "network", "description": "Network", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "podman.network" } } }] },
+      { "name": "inspect", "description": "Inspect networks", "arguments": [{ "name": "network", "description": "Network", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "podman.network" } } }] }
+    ] },
+    { "name": "volume", "description": "Manage volumes", "subcommands": [
+      { "name": "ls", "description": "List volumes" },
+      { "name": "rm", "description": "Remove volumes", "arguments": [{ "name": "volume", "description": "Volume", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "podman.volume" } } }] },
+      { "name": "inspect", "description": "Inspect volumes", "arguments": [{ "name": "volume", "description": "Volume", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "podman.volume" } } }] }
+    ] }
+  ]
+}

@@ -2,9 +2,9 @@
   "command": "gcloud",
   "description": "Google Cloud CLI",
   "global_options": [
-    { "long": "--project", "description": "Google Cloud project ID", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--project", "description": "Google Cloud project ID", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "gcloud.project" } } },
     { "long": "--account", "description": "Google account", "takes_value": true, "value_type": { "type": "String" } },
-    { "long": "--configuration", "description": "Named gcloud configuration", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--configuration", "description": "Named gcloud configuration", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "gcloud.configuration" } } },
     { "long": "--format", "description": "Output format", "takes_value": true, "value_type": { "type": "String" } },
     { "short": "-h", "long": "--help", "description": "Show help" }
   ],

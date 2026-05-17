@@ -1,0 +1,22 @@
+{
+  "command": "wrangler",
+  "description": "Cloudflare Workers CLI",
+  "global_options": [
+    { "short": "-c", "long": "--config", "description": "Config file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["toml", "json", "jsonc"] } } },
+    { "short": "-e", "long": "--env", "description": "Environment", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--cwd", "description": "Working directory", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "short": "-v", "long": "--version", "description": "Show version" }
+  ],
+  "subcommands": [
+    { "name": "dev", "description": "Start local development server" },
+    { "name": "deploy", "description": "Deploy worker" },
+    { "name": "tail", "description": "Tail logs" },
+    { "name": "kv", "description": "Manage KV namespaces" },
+    { "name": "r2", "description": "Manage R2 buckets" },
+    { "name": "d1", "description": "Manage D1 databases" },
+    { "name": "pages", "description": "Manage Pages projects" },
+    { "name": "login", "description": "Log in" },
+    { "name": "logout", "description": "Log out" }
+  ]
+}

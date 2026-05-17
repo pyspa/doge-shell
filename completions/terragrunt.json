@@ -1,0 +1,18 @@
+{
+  "command": "terragrunt",
+  "description": "Thin wrapper for Terraform/OpenTofu",
+  "global_options": [
+    { "long": "--terragrunt-working-dir", "description": "Working directory", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "long": "--terragrunt-config", "description": "Terragrunt config", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["hcl"] } } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "init", "description": "Prepare working directory" },
+    { "name": "plan", "description": "Show execution plan" },
+    { "name": "apply", "description": "Apply changes" },
+    { "name": "destroy", "description": "Destroy managed infrastructure" },
+    { "name": "run-all", "description": "Run command across modules" },
+    { "name": "hclfmt", "description": "Format HCL files" },
+    { "name": "validate", "description": "Validate configuration" }
+  ]
+}

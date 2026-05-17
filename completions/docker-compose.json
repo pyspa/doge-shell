@@ -1,0 +1,19 @@
+{
+  "command": "docker-compose",
+  "description": "Docker Compose standalone command",
+  "global_options": [
+    { "short": "-f", "long": "--file", "description": "Compose file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["yml", "yaml"] } } },
+    { "short": "-p", "long": "--project-name", "description": "Project name", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "up", "description": "Create and start containers", "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }] },
+    { "name": "down", "description": "Stop and remove containers" },
+    { "name": "logs", "description": "View service logs", "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }] },
+    { "name": "exec", "description": "Execute command in service container", "arguments": [{ "name": "service", "description": "Service", "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }] },
+    { "name": "build", "description": "Build services", "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }] },
+    { "name": "ps", "description": "List containers" },
+    { "name": "restart", "description": "Restart services", "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }] },
+    { "name": "stop", "description": "Stop services", "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }] }
+  ]
+}

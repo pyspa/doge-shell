@@ -1,0 +1,8 @@
+{
+  "command": "kubectx",
+  "description": "Switch Kubernetes contexts",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [{ "name": "context", "description": "Kubernetes context", "type": { "type": "Dynamic", "data": { "provider": "kubectl.context" } } }]
+}

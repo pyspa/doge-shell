@@ -274,6 +274,26 @@ impl DynamicCompletionProvider {
                 scope != Some("running"),
                 cached_only,
             ),
+            "docker.network" => self.collect_container_object_candidates(
+                "docker",
+                "network",
+                current_dir,
+                current_token,
+                "docker network",
+                &["network", "ls", "--format", "{{.Name}}"],
+                parse_non_empty_lines,
+                cached_only,
+            ),
+            "docker.volume" => self.collect_container_object_candidates(
+                "docker",
+                "volume",
+                current_dir,
+                current_token,
+                "docker volume",
+                &["volume", "ls", "--format", "{{.Name}}"],
+                parse_non_empty_lines,
+                cached_only,
+            ),
             "block.device" => {
                 self.collect_block_device_candidates(current_dir, current_token, cached_only)
             }
@@ -509,15 +529,62 @@ impl DynamicCompletionProvider {
                 self.collect_mountpoint_candidates(current_dir, current_token, cached_only)
             }
             "kernel.module" => self.collect_kernel_module_candidates(current_token, cached_only),
+            "aws.profile" => self.collect_aws_profile_candidates(current_token, cached_only),
+            "gcloud.configuration" => {
+                self.collect_gcloud_configuration_candidates(current_token, cached_only)
+            }
+            "gcloud.project" => self.collect_gcloud_project_candidates(current_token, cached_only),
             "python.project_dependency" => self.collect_python_project_dependency_candidates(
                 current_dir,
                 current_token,
                 cached_only,
             ),
+            "python.module" => {
+                self.collect_python_module_candidates(current_dir, current_token, cached_only)
+            }
             "node.bin" => self.collect_node_bin_candidates(current_dir, current_token, cached_only),
+            "node.workspace" => {
+                self.collect_node_workspace_candidates(current_dir, current_token, cached_only)
+            }
             "go.package" => {
                 self.collect_go_package_candidates(current_dir, current_token, cached_only)
             }
+            "terraform.workspace" => {
+                self.collect_terraform_workspace_candidates(current_dir, current_token, cached_only)
+            }
+            "podman.image" => self.collect_container_image_candidates(
+                "podman",
+                current_dir,
+                current_token,
+                cached_only,
+            ),
+            "podman.container" => self.collect_container_container_candidates(
+                "podman",
+                current_dir,
+                current_token,
+                scope != Some("running"),
+                cached_only,
+            ),
+            "podman.network" => self.collect_container_object_candidates(
+                "podman",
+                "network",
+                current_dir,
+                current_token,
+                "podman network",
+                &["network", "ls", "--format", "{{.Name}}"],
+                parse_non_empty_lines,
+                cached_only,
+            ),
+            "podman.volume" => self.collect_container_object_candidates(
+                "podman",
+                "volume",
+                current_dir,
+                current_token,
+                "podman volume",
+                &["volume", "ls", "--format", "{{.Name}}"],
+                parse_non_empty_lines,
+                cached_only,
+            ),
             _ => {
                 warn!("Unknown dynamic completion provider: {provider}");
                 Vec::new()
@@ -2814,29 +2881,7 @@ impl DynamicCompletionProvider {
         current_token: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let command_path = self.resolve_command_path("docker");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "docker",
-            "image",
-            canonicalize_path(&current_dir),
-            current_token,
-            "docker image",
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(run_command_lines(
-                    &command_path,
-                    &["images", "--format", "{{.Repository}}:{{.Tag}}"],
-                    &current_dir,
-                )?
-                .into_iter()
-                .filter(|image| !image.contains("<none>"))
-                .collect())
-            },
-        )
+        self.collect_container_image_candidates("docker", current_dir, current_token, cached_only)
     }
 
     fn collect_docker_container_candidates(
@@ -2846,30 +2891,95 @@ impl DynamicCompletionProvider {
         include_stopped: bool,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let command_path = self.resolve_command_path("docker");
+        self.collect_container_container_candidates(
+            "docker",
+            current_dir,
+            current_token,
+            include_stopped,
+            cached_only,
+        )
+    }
+
+    fn collect_container_image_candidates(
+        &self,
+        executable: &'static str,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_container_object_candidates(
+            executable,
+            "image",
+            current_dir,
+            current_token,
+            &format!("{executable} image"),
+            &["images", "--format", "{{.Repository}}:{{.Tag}}"],
+            parse_container_images,
+            cached_only,
+        )
+    }
+
+    fn collect_container_container_candidates(
+        &self,
+        executable: &'static str,
+        current_dir: &Path,
+        current_token: &str,
+        include_stopped: bool,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
         let current_dir = current_dir.to_path_buf();
         let value_kind = if include_stopped {
             "container-all"
         } else {
             "container-running"
         };
+        let args: &'static [&'static str] = if include_stopped {
+            &["ps", "-a", "--format", "{{.Names}}"]
+        } else {
+            &["ps", "--format", "{{.Names}}"]
+        };
+        self.collect_container_object_candidates(
+            executable,
+            value_kind,
+            &current_dir,
+            current_token,
+            &format!("{executable} container"),
+            args,
+            parse_non_empty_lines,
+            cached_only,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn collect_container_object_candidates(
+        &self,
+        executable: &'static str,
+        value_kind: &'static str,
+        current_dir: &Path,
+        current_token: &str,
+        description: &str,
+        args: &'static [&'static str],
+        parser: fn(&[String]) -> Vec<String>,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path(executable);
+        let current_dir = current_dir.to_path_buf();
         self.collect_cached_value_candidates(
-            "docker",
+            executable,
             value_kind,
             canonicalize_path(&current_dir),
             current_token,
-            "docker container",
+            description,
             cached_only,
             move || {
                 let Some(command_path) = command_path else {
                     return Ok(Vec::new());
                 };
-                let args: &[&str] = if include_stopped {
-                    &["ps", "-a", "--format", "{{.Names}}"]
-                } else {
-                    &["ps", "--format", "{{.Names}}"]
-                };
-                run_command_lines(&command_path, args, &current_dir)
+                Ok(parser(&run_command_lines(
+                    &command_path,
+                    args,
+                    &current_dir,
+                )?))
             },
         )
     }
@@ -4209,6 +4319,21 @@ fn dedup_sorted(mut values: Vec<String>) -> Vec<String> {
     values.sort();
     values.dedup();
     values
+}
+
+fn parse_non_empty_lines(lines: &[String]) -> Vec<String> {
+    dedup_sorted(lines.iter().map(|line| line.trim().to_string()).collect())
+}
+
+fn parse_container_images(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .map(|line| line.trim())
+            .filter(|image| !image.contains("<none>"))
+            .map(str::to_string)
+            .collect(),
+    )
 }
 
 fn parse_first_fields(lines: &[String]) -> Vec<String> {

@@ -12,7 +12,7 @@
       "name": "run",
       "description": "Run tasks",
       "options": [
-        { "long": "--filter", "description": "Filter packages", "takes_value": true, "value_type": { "type": "String" } },
+        { "long": "--filter", "description": "Filter packages", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "node.workspace" } } },
         { "long": "--cache-dir", "description": "Cache directory", "takes_value": true, "value_type": { "type": "Directory" } },
         { "long": "--force", "description": "Ignore existing cache" },
         { "long": "--dry-run", "description": "Show what would run" }

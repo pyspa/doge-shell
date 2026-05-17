@@ -1,0 +1,17 @@
+{
+  "command": "zig",
+  "description": "Zig compiler and build tool",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "long": "--version", "description": "Show version" }
+  ],
+  "subcommands": [
+    { "name": "build", "description": "Build project", "arguments": [{ "name": "step", "description": "Build step", "multiple": true, "type": { "type": "String" } }] },
+    { "name": "build-exe", "description": "Create executable", "arguments": [{ "name": "file", "description": "Source file", "multiple": true, "type": { "type": "File", "data": { "extensions": [".zig"] } } }] },
+    { "name": "build-lib", "description": "Create library" },
+    { "name": "build-obj", "description": "Create object" },
+    { "name": "run", "description": "Build and run source file", "arguments": [{ "name": "file", "description": "Source file", "type": { "type": "File", "data": { "extensions": [".zig"] } } }] },
+    { "name": "test", "description": "Run tests", "arguments": [{ "name": "file", "description": "Source file", "type": { "type": "File", "data": { "extensions": [".zig"] } } }] },
+    { "name": "fmt", "description": "Format files", "arguments": [{ "name": "file", "description": "File or directory", "multiple": true, "type": { "type": "File", "data": {} } }] }
+  ]
+}

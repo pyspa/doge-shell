@@ -1,0 +1,14 @@
+{
+  "command": "packer",
+  "description": "Build machine images",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "long": "--version", "description": "Show version" }
+  ],
+  "subcommands": [
+    { "name": "init", "description": "Install template plugins", "arguments": [{ "name": "template", "description": "Template", "type": { "type": "File", "data": { "extensions": ["pkr.hcl", "json"] } } }] },
+    { "name": "build", "description": "Build image", "arguments": [{ "name": "template", "description": "Template", "type": { "type": "File", "data": { "extensions": ["pkr.hcl", "json"] } } }] },
+    { "name": "validate", "description": "Validate template", "arguments": [{ "name": "template", "description": "Template", "type": { "type": "File", "data": { "extensions": ["pkr.hcl", "json"] } } }] },
+    { "name": "fmt", "description": "Format HCL templates" }
+  ]
+}

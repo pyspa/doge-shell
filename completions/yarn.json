@@ -80,6 +80,13 @@
       ]
     },
     {
+      "name": "workspace",
+      "description": "Run a command in a workspace",
+      "arguments": [
+        { "name": "workspace", "description": "Workspace name", "type": { "type": "Dynamic", "data": { "provider": "node.workspace" } } }
+      ]
+    },
+    {
       "name": "exec",
       "description": "Execute a binary in the project environment",
       "arguments": [

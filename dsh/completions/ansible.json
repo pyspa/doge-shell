@@ -1,0 +1,13 @@
+{
+  "command": "ansible",
+  "description": "Run Ansible tasks on hosts",
+  "global_options": [
+    { "short": "-i", "long": "--inventory", "description": "Inventory file or directory", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+    { "short": "-m", "long": "--module-name", "description": "Module name", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-a", "long": "--args", "description": "Module arguments", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-u", "long": "--user", "description": "Remote user", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--become", "description": "Run operations with become" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [{ "name": "pattern", "description": "Host pattern", "type": { "type": "String" } }]
+}

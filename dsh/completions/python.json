@@ -8,7 +8,9 @@
     },
     {
       "short": "-m",
-      "description": "Run library module as a script"
+      "description": "Run library module as a script",
+      "takes_value": true,
+      "value_type": { "type": "Dynamic", "data": { "provider": "python.module" } }
     },
     {
       "short": "-i",

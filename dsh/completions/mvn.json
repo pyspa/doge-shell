@@ -1,0 +1,13 @@
+{
+  "command": "mvn",
+  "description": "Apache Maven build tool",
+  "global_options": [
+    { "short": "-f", "long": "--file", "description": "POM file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["xml"] } } },
+    { "short": "-P", "description": "Profiles", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-D", "description": "Define system property", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-q", "long": "--quiet", "description": "Quiet output" },
+    { "short": "-X", "long": "--debug", "description": "Debug output" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [{ "name": "goal", "description": "Lifecycle phase or plugin goal", "multiple": true, "type": { "type": "Choice", "data": ["clean", "validate", "compile", "test", "package", "verify", "install", "deploy", "site"] } }]
+}

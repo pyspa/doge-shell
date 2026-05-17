@@ -2,7 +2,7 @@
   "command": "aws",
   "description": "AWS CLI",
   "global_options": [
-    { "long": "--profile", "description": "Use a specific profile", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--profile", "description": "Use a specific profile", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "aws.profile" } } },
     { "long": "--region", "description": "Use a specific region", "takes_value": true, "value_type": { "type": "String" } },
     { "long": "--output", "description": "Output format", "takes_value": true, "value_type": { "type": "Choice", "data": ["json", "yaml", "yaml-stream", "text", "table"] } },
     { "long": "--endpoint-url", "description": "Override command endpoint", "takes_value": true, "value_type": { "type": "Url" } },

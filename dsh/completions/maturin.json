@@ -1,0 +1,16 @@
+{
+  "command": "maturin",
+  "description": "Build and publish Rust Python packages",
+  "global_options": [
+    { "short": "-m", "long": "--manifest-path", "description": "Cargo manifest", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["toml"] } } },
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "short": "-V", "long": "--version", "description": "Show version" }
+  ],
+  "subcommands": [
+    { "name": "develop", "description": "Build and install into current virtualenv" },
+    { "name": "build", "description": "Build wheels and source distributions" },
+    { "name": "publish", "description": "Publish to package index" },
+    { "name": "sdist", "description": "Build source distribution" },
+    { "name": "init", "description": "Create a new project" }
+  ]
+}

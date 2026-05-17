@@ -32,8 +32,8 @@
       "subcommands": [
         { "name": "list", "description": "List workspaces" },
         { "name": "new", "description": "Create workspace" },
-        { "name": "select", "description": "Select workspace" },
-        { "name": "delete", "description": "Delete workspace" }
+        { "name": "select", "description": "Select workspace", "arguments": [{ "name": "workspace", "description": "Workspace name", "type": { "type": "Dynamic", "data": { "provider": "terraform.workspace" } } }] },
+        { "name": "delete", "description": "Delete workspace", "arguments": [{ "name": "workspace", "description": "Workspace name", "type": { "type": "Dynamic", "data": { "provider": "terraform.workspace" } } }] }
       ]
     }
   ]

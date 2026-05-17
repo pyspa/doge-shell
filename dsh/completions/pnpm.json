@@ -98,6 +98,7 @@
   "global_options": [
     { "short": "-v", "long": "--version", "description": "Show version" },
     { "short": "-h", "long": "--help", "description": "Show help" },
-    { "short": "-r", "long": "--recursive", "description": "Run in all packages" }
+    { "short": "-r", "long": "--recursive", "description": "Run in all packages" },
+    { "short": "-F", "long": "--filter", "description": "Filter workspace packages", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "node.workspace" } } }
   ]
 }

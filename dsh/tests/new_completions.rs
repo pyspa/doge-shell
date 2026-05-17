@@ -86,6 +86,27 @@ fn test_new_json_completions_load() {
         "ts-node",
         "jest",
         "playwright",
+        "pipx",
+        "tox",
+        "nox",
+        "hatch",
+        "maturin",
+        "mvn",
+        "gradle",
+        "cmake",
+        "ninja",
+        "zig",
+        "podman",
+        "docker-compose",
+        "kubectx",
+        "kubens",
+        "tofu",
+        "terragrunt",
+        "packer",
+        "ansible",
+        "ansible-playbook",
+        "glab",
+        "wrangler",
         "crontab",
         "usermod",
         "userdel",
@@ -222,6 +243,147 @@ fn test_dev_cli_completions_use_dynamic_providers() {
             Some(ArgumentType::Dynamic { provider, scope }) if provider == "project.task" && scope.as_deref() == Some("nx.run")
         ),
         "nx run should complete qualified Nx run targets"
+    );
+
+    let python = loader
+        .load_command_completion("python")
+        .unwrap()
+        .expect("python completion not found in json");
+    let python_m = python
+        .global_options
+        .iter()
+        .find(|option| option.short.as_deref() == Some("-m"))
+        .expect("missing python -m");
+    assert!(
+        matches!(
+            python_m.value_type(),
+            Some(ArgumentType::Dynamic { provider, .. }) if provider == "python.module"
+        ),
+        "python -m should complete importable modules"
+    );
+
+    let npm = loader
+        .load_command_completion("npm")
+        .unwrap()
+        .expect("npm completion not found in json");
+    let npm_workspace = npm
+        .global_options
+        .iter()
+        .find(|option| option.long.as_deref() == Some("--workspace"))
+        .expect("missing npm --workspace");
+    assert!(
+        matches!(
+            npm_workspace.value_type(),
+            Some(ArgumentType::Dynamic { provider, .. }) if provider == "node.workspace"
+        ),
+        "npm --workspace should complete local workspaces"
+    );
+
+    let aws = loader
+        .load_command_completion("aws")
+        .unwrap()
+        .expect("aws completion not found in json");
+    let profile = aws
+        .global_options
+        .iter()
+        .find(|option| option.long.as_deref() == Some("--profile"))
+        .expect("missing aws --profile");
+    assert!(
+        matches!(
+            profile.value_type(),
+            Some(ArgumentType::Dynamic { provider, .. }) if provider == "aws.profile"
+        ),
+        "aws --profile should complete local AWS profiles"
+    );
+
+    let gcloud = loader
+        .load_command_completion("gcloud")
+        .unwrap()
+        .expect("gcloud completion not found in json");
+    let configuration = gcloud
+        .global_options
+        .iter()
+        .find(|option| option.long.as_deref() == Some("--configuration"))
+        .expect("missing gcloud --configuration");
+    let project = gcloud
+        .global_options
+        .iter()
+        .find(|option| option.long.as_deref() == Some("--project"))
+        .expect("missing gcloud --project");
+    assert!(
+        matches!(
+            configuration.value_type(),
+            Some(ArgumentType::Dynamic { provider, .. }) if provider == "gcloud.configuration"
+        ),
+        "gcloud --configuration should complete local configurations"
+    );
+    assert!(
+        matches!(
+            project.value_type(),
+            Some(ArgumentType::Dynamic { provider, .. }) if provider == "gcloud.project"
+        ),
+        "gcloud --project should complete local projects"
+    );
+
+    let terraform = loader
+        .load_command_completion("terraform")
+        .unwrap()
+        .expect("terraform completion not found in json");
+    let workspace = terraform
+        .subcommands
+        .iter()
+        .find(|sub| sub.name == "workspace")
+        .expect("missing terraform workspace");
+    let select = workspace
+        .subcommands
+        .iter()
+        .find(|sub| sub.name == "select")
+        .expect("missing terraform workspace select");
+    assert!(
+        matches!(
+            select.arguments.first().and_then(|arg| arg.arg_type.as_ref()),
+            Some(ArgumentType::Dynamic { provider, .. }) if provider == "terraform.workspace"
+        ),
+        "terraform workspace select should complete local Terraform workspaces"
+    );
+
+    let podman = loader
+        .load_command_completion("podman")
+        .unwrap()
+        .expect("podman completion not found in json");
+    let podman_run = podman
+        .subcommands
+        .iter()
+        .find(|sub| sub.name == "run")
+        .expect("missing podman run");
+    assert!(
+        matches!(
+            podman_run.arguments.first().and_then(|arg| arg.arg_type.as_ref()),
+            Some(ArgumentType::Dynamic { provider, .. }) if provider == "podman.image"
+        ),
+        "podman run should complete local images"
+    );
+
+    let docker = loader
+        .load_command_completion("docker")
+        .unwrap()
+        .expect("docker completion not found in json");
+    let network = docker
+        .subcommands
+        .iter()
+        .find(|sub| sub.name == "network")
+        .expect("missing docker network");
+    let network_rm = network
+        .subcommands
+        .iter()
+        .find(|sub| sub.name == "rm")
+        .expect("missing docker network rm");
+    assert!(
+        matches!(
+            network_rm.arguments.first().and_then(|arg| arg.arg_type.as_ref()),
+            Some(ArgumentType::Dynamic { provider, .. }) if provider == "docker.network"
+        ),
+        "docker network rm should complete local Docker networks"
     );
 }
 

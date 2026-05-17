@@ -1,0 +1,18 @@
+{
+  "command": "tox",
+  "description": "Python test environment automation",
+  "global_options": [
+    { "short": "-c", "long": "--conf", "description": "Config file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["ini", "toml"] } } },
+    { "short": "-e", "long": "--env", "description": "Environment list", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-p", "long": "--parallel", "description": "Run environments in parallel", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--recreate", "description": "Recreate environments" },
+    { "short": "-q", "long": "--quiet", "description": "Decrease verbosity" },
+    { "short": "-v", "long": "--verbose", "description": "Increase verbosity" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "run", "description": "Run tox environments" },
+    { "name": "list", "description": "List environments" },
+    { "name": "quickstart", "description": "Create starter configuration" }
+  ]
+}

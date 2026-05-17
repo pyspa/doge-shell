@@ -159,6 +159,11 @@ impl<'a> ContextCorrector<'a> {
                 };
             }
             self.remove_known_option_values_from_arguments(&mut new_parsed, command_completion);
+            if let Some(corrected) =
+                self.correct_option_value_context(&new_parsed, command_completion)
+            {
+                return corrected;
+            }
             return new_parsed;
         }
 

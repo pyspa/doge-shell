@@ -1,0 +1,14 @@
+{
+  "command": "ninja",
+  "description": "Small build system",
+  "global_options": [
+    { "short": "-C", "description": "Change to directory before building", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "short": "-f", "description": "Build file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+    { "short": "-j", "description": "Parallel jobs", "takes_value": true, "value_type": { "type": "Number" } },
+    { "short": "-k", "description": "Keep going until N jobs fail", "takes_value": true, "value_type": { "type": "Number" } },
+    { "short": "-n", "description": "Dry run" },
+    { "short": "-t", "description": "Run tool", "takes_value": true, "value_type": { "type": "Choice", "data": ["clean", "commands", "deps", "graph", "query", "targets"] } },
+    { "short": "-h", "description": "Show help" }
+  ],
+  "arguments": [{ "name": "target", "description": "Build target", "multiple": true, "type": { "type": "String" } }]
+}

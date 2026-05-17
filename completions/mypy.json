@@ -9,8 +9,8 @@
     { "long": "--non-interactive", "description": "Install stubs non-interactively" },
     { "long": "--python-version", "description": "Python version to target", "takes_value": true, "value_type": { "type": "String" } },
     { "long": "--platform", "description": "Target platform", "takes_value": true, "value_type": { "type": "String" } },
-    { "short": "-p", "long": "--package", "description": "Type-check package", "takes_value": true, "value_type": { "type": "String" } },
-    { "short": "-m", "long": "--module", "description": "Type-check module", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-p", "long": "--package", "description": "Type-check package", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "python.module" } } },
+    { "short": "-m", "long": "--module", "description": "Type-check module", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "python.module" } } },
     { "long": "--scripts-are-modules", "description": "Treat scripts as modules" },
     { "long": "--cache-dir", "description": "Use cache directory", "takes_value": true, "value_type": { "type": "Directory" } },
     { "short": "-h", "long": "--help", "description": "Show help" }

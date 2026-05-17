@@ -1,0 +1,18 @@
+{
+  "command": "pipx",
+  "description": "Install and run Python applications in isolated environments",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "long": "--version", "description": "Show version" }
+  ],
+  "subcommands": [
+    { "name": "install", "description": "Install a package", "arguments": [{ "name": "package", "description": "Package spec", "multiple": true }] },
+    { "name": "run", "description": "Download and run an app", "arguments": [{ "name": "app", "description": "App or package spec" }] },
+    { "name": "inject", "description": "Install packages into an existing pipx venv" },
+    { "name": "uninstall", "description": "Uninstall a package" },
+    { "name": "upgrade", "description": "Upgrade a package" },
+    { "name": "upgrade-all", "description": "Upgrade all packages" },
+    { "name": "list", "description": "List installed packages" },
+    { "name": "ensurepath", "description": "Ensure pipx binary path is on PATH" }
+  ]
+}

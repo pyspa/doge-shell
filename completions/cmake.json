@@ -1,0 +1,14 @@
+{
+  "command": "cmake",
+  "description": "Cross-platform build system generator",
+  "global_options": [
+    { "short": "-S", "description": "Source directory", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "short": "-B", "description": "Build directory", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "short": "-D", "description": "Create or update cache entry", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-G", "description": "Generator name", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--build", "description": "Build a generated project", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "long": "--install", "description": "Install a generated project", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "long": "--preset", "description": "Use configure preset", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ]
+}

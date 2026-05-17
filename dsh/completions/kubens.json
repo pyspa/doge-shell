@@ -1,0 +1,8 @@
+{
+  "command": "kubens",
+  "description": "Switch Kubernetes namespaces",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [{ "name": "namespace", "description": "Kubernetes namespace", "type": { "type": "Dynamic", "data": { "provider": "kubectl.namespace" } } }]
+}

@@ -1,0 +1,12 @@
+{
+  "command": "nox",
+  "description": "Python automation sessions",
+  "global_options": [
+    { "short": "-f", "long": "--noxfile", "description": "Noxfile", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": [".py"] } } },
+    { "short": "-s", "long": "--session", "description": "Session to run", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-k", "long": "--keywords", "description": "Only run sessions matching expression", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-r", "long": "--reuse-existing-virtualenvs", "description": "Reuse existing virtualenvs" },
+    { "short": "-l", "long": "--list", "description": "List sessions" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ]
+}

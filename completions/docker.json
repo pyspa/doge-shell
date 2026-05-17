@@ -658,22 +658,32 @@
         {
           "name": "rm",
           "description": "Remove one or more networks",
-          "options": []
+          "options": [],
+          "arguments": [{ "name": "network", "description": "Network name", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.network" } } }]
         },
         {
           "name": "inspect",
           "description": "Display detailed information on one or more networks",
-          "options": []
+          "options": [],
+          "arguments": [{ "name": "network", "description": "Network name", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.network" } } }]
         },
         {
           "name": "connect",
           "description": "Connect a container to a network",
-          "options": []
+          "options": [],
+          "arguments": [
+            { "name": "network", "description": "Network name", "type": { "type": "Dynamic", "data": { "provider": "docker.network" } } },
+            { "name": "container", "description": "Container name", "type": { "type": "Dynamic", "data": { "provider": "docker.container" } } }
+          ]
         },
         {
           "name": "disconnect",
           "description": "Disconnect a container from a network",
-          "options": []
+          "options": [],
+          "arguments": [
+            { "name": "network", "description": "Network name", "type": { "type": "Dynamic", "data": { "provider": "docker.network" } } },
+            { "name": "container", "description": "Container name", "type": { "type": "Dynamic", "data": { "provider": "docker.container" } } }
+          ]
         }
       ]
     },
@@ -694,12 +704,14 @@
         {
           "name": "rm",
           "description": "Remove one or more volumes",
-          "options": []
+          "options": [],
+          "arguments": [{ "name": "volume", "description": "Volume name", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.volume" } } }]
         },
         {
           "name": "inspect",
           "description": "Display detailed information on one or more volumes",
-          "options": []
+          "options": [],
+          "arguments": [{ "name": "volume", "description": "Volume name", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.volume" } } }]
         },
         {
           "name": "prune",

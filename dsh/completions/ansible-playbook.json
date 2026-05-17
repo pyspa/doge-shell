@@ -1,0 +1,14 @@
+{
+  "command": "ansible-playbook",
+  "description": "Run Ansible playbooks",
+  "global_options": [
+    { "short": "-i", "long": "--inventory", "description": "Inventory file or directory", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+    { "short": "-l", "long": "--limit", "description": "Limit selected hosts", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-t", "long": "--tags", "description": "Only run tagged tasks", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--skip-tags", "description": "Skip tagged tasks", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-e", "long": "--extra-vars", "description": "Set extra variables", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--check", "description": "Check mode" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [{ "name": "playbook", "description": "Playbook file", "multiple": true, "type": { "type": "File", "data": { "extensions": ["yml", "yaml"] } } }]
+}

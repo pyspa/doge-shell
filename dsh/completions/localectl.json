@@ -1,0 +1,89 @@
+{
+  "command": "localectl",
+  "description": "Control the system locale and keyboard layout settings",
+  "global_options": [
+    {
+      "long": "--no-pager",
+      "description": "Do not pipe output into a pager"
+    },
+    {
+      "long": "--no-convert",
+      "description": "Do not convert keymap between console and X11"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "status",
+      "description": "Show locale status"
+    },
+    {
+      "name": "set-locale",
+      "description": "Set system locale",
+      "arguments": [
+        {
+          "name": "locale",
+          "description": "locale assignment",
+          "multiple": true,
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "list-locales",
+      "description": "List locales"
+    },
+    {
+      "name": "set-keymap",
+      "description": "Set console keymap",
+      "arguments": [
+        {
+          "name": "keymap",
+          "description": "keymap",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "list-keymaps",
+      "description": "List console keymaps"
+    },
+    {
+      "name": "set-x11-keymap",
+      "description": "Set X11 keymap",
+      "arguments": [
+        {
+          "name": "layout",
+          "description": "layout",
+          "type": {
+            "type": "String"
+          }
+        },
+        {
+          "name": "model",
+          "description": "model",
+          "type": {
+            "type": "String"
+          }
+        },
+        {
+          "name": "variant",
+          "description": "variant",
+          "type": {
+            "type": "String"
+          }
+        },
+        {
+          "name": "options",
+          "description": "options",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    }
+  ]
+}

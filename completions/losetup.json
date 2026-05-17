@@ -1,0 +1,82 @@
+{
+  "command": "losetup",
+  "description": "Set up and control loop devices",
+  "global_options": [
+    {
+      "short": "-a",
+      "long": "--all",
+      "description": "List all used loop devices"
+    },
+    {
+      "short": "-f",
+      "long": "--find",
+      "description": "Find first unused loop device"
+    },
+    {
+      "short": "-d",
+      "long": "--detach",
+      "description": "Detach loop device",
+      "takes_value": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "block.device"
+        }
+      }
+    },
+    {
+      "short": "-D",
+      "long": "--detach-all",
+      "description": "Detach all loop devices"
+    },
+    {
+      "short": "-j",
+      "long": "--associated",
+      "description": "List loop devices associated with file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-o",
+      "long": "--offset",
+      "description": "Start at offset",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-P",
+      "long": "--partscan",
+      "description": "Force kernel to scan partition table"
+    },
+    {
+      "short": "-r",
+      "long": "--read-only",
+      "description": "Set up read-only loop device"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "device",
+      "description": "Loop or block device",
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "block.device"
+        }
+      }
+    },
+    {
+      "name": "file",
+      "description": "Backing file",
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ]
+}

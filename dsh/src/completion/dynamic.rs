@@ -253,6 +253,9 @@ impl DynamicCompletionProvider {
                 scope != Some("running"),
                 cached_only,
             ),
+            "block.device" => {
+                self.collect_block_device_candidates(current_dir, current_token, cached_only)
+            }
             "docker.compose_service" => {
                 let compose_file = selected_docker_compose_file(parsed_command_line, current_dir);
                 if cached_only {
@@ -353,6 +356,28 @@ impl DynamicCompletionProvider {
                     self.collect_task_candidates(parsed_command_line, current_dir)
                 }
             }
+            "apt.installed_package" => self.collect_apt_installed_package_candidates(
+                current_dir,
+                current_token,
+                parsed_command_line.command.as_str(),
+                cached_only,
+            ),
+            "dnf.installed_package" => self.collect_rpm_installed_package_candidates(
+                current_dir,
+                current_token,
+                "dnf",
+                cached_only,
+            ),
+            "rpm.installed_package" => self.collect_rpm_installed_package_candidates(
+                current_dir,
+                current_token,
+                "rpm",
+                cached_only,
+            ),
+            "fstab.mountpoint" => {
+                self.collect_fstab_mountpoint_candidates(current_token, cached_only)
+            }
+            "sysctl.key" => self.collect_sysctl_key_candidates(current_token, cached_only),
             "ssh.host" => self.collect_ssh_host_candidates_with_mode(
                 parsed_command_line,
                 current_dir,
@@ -1514,26 +1539,12 @@ impl DynamicCompletionProvider {
         ) {
             return Vec::new();
         }
-        let command_path = self.resolve_command_path("lsblk");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "mount",
-            "block-device",
-            canonicalize_path(&current_dir),
-            parsed_command_line.current_token.as_str(),
-            "block device",
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(parse_lsblk_devices(&run_command_lines(
-                    &command_path,
-                    &["-rno", "NAME,TYPE"],
-                    &current_dir,
-                )?))
-            },
-        )
+
+        let current_token = parsed_command_line.current_token.as_str();
+        let mut candidates =
+            self.collect_block_device_candidates(current_dir, current_token, cached_only);
+        candidates.extend(self.collect_fstab_mountpoint_candidates(current_token, cached_only));
+        candidates
     }
 
     pub(crate) fn collect_umount_candidates(
@@ -1819,6 +1830,127 @@ impl DynamicCompletionProvider {
             "kernel module",
             cached_only,
             || Ok(load_kernel_module_names()),
+        )
+    }
+
+    fn collect_block_device_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("lsblk");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "block",
+            "device",
+            PathBuf::from("/sys/block"),
+            current_token,
+            "block device",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parse_lsblk_devices(&run_command_lines(
+                    &command_path,
+                    &["-rno", "NAME,TYPE"],
+                    &current_dir,
+                )?))
+            },
+        )
+    }
+
+    fn collect_fstab_mountpoint_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_cached_value_candidates(
+            "fstab",
+            "mountpoint",
+            PathBuf::from("/etc/fstab"),
+            current_token,
+            "fstab mount point",
+            cached_only,
+            || Ok(load_fstab_mountpoints()),
+        )
+    }
+
+    fn collect_sysctl_key_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        if current_token.contains('=') {
+            return Vec::new();
+        }
+        self.collect_cached_value_candidates(
+            "sysctl",
+            "key",
+            PathBuf::from("/proc/sys"),
+            current_token,
+            "sysctl key",
+            cached_only,
+            || Ok(load_sysctl_keys()),
+        )
+    }
+
+    fn collect_apt_installed_package_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        command_name: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("dpkg-query");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            command_name,
+            "installed-package",
+            PathBuf::from("/var/lib/dpkg/status"),
+            current_token,
+            "installed deb package",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parse_package_lines(&run_command_lines(
+                    &command_path,
+                    &["-W", "-f=${binary:Package}\\n"],
+                    &current_dir,
+                )?))
+            },
+        )
+    }
+
+    fn collect_rpm_installed_package_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        command_name: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("rpm");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            command_name,
+            "installed-package",
+            PathBuf::from("/var/lib/rpm"),
+            current_token,
+            "installed rpm package",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parse_package_lines(&run_command_lines(
+                    &command_path,
+                    &["-qa", "--qf", "%{NAME}\\n"],
+                    &current_dir,
+                )?))
+            },
         )
     }
 
@@ -4210,6 +4342,16 @@ fn parse_pip_freeze_packages(lines: &[String]) -> Vec<String> {
     )
 }
 
+fn parse_package_lines(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .map(|line| line.trim().to_string())
+            .filter(|line| !line.is_empty())
+            .collect(),
+    )
+}
+
 fn parse_nmcli_first_field(lines: &[String]) -> Vec<String> {
     dedup_sorted(
         lines
@@ -4250,7 +4392,7 @@ fn parse_lsblk_devices(lines: &[String]) -> Vec<String> {
                 let mut fields = line.split_whitespace();
                 let name = fields.next()?;
                 let kind = fields.next()?;
-                if matches!(kind, "disk" | "part") {
+                if matches!(kind, "disk" | "part" | "loop") {
                     Some(format!("/dev/{name}"))
                 } else {
                     None
@@ -4258,6 +4400,36 @@ fn parse_lsblk_devices(lines: &[String]) -> Vec<String> {
             })
             .collect(),
     )
+}
+
+fn load_fstab_mountpoints() -> Vec<String> {
+    fs::read_to_string("/etc/fstab")
+        .map(|contents| parse_fstab_mountpoints(&contents))
+        .unwrap_or_default()
+}
+
+fn parse_fstab_mountpoints(contents: &str) -> Vec<String> {
+    dedup_sorted(
+        contents
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    return None;
+                }
+                let mountpoint = line.split_whitespace().nth(1)?;
+                Some(decode_fstab_field(mountpoint))
+            })
+            .collect(),
+    )
+}
+
+fn decode_fstab_field(value: &str) -> String {
+    value
+        .replace("\\040", " ")
+        .replace("\\011", "\t")
+        .replace("\\012", "\n")
+        .replace("\\134", "\\")
 }
 
 fn load_package_json_dependencies(package_json: &Path) -> Vec<String> {
@@ -4292,6 +4464,43 @@ fn load_network_interfaces() -> Vec<String> {
             )
         })
         .unwrap_or_default()
+}
+
+fn load_sysctl_keys() -> Vec<String> {
+    let root = Path::new("/proc/sys");
+    let mut values = Vec::new();
+    collect_sysctl_keys(root, root, &mut values);
+    dedup_sorted(values)
+}
+
+fn collect_sysctl_keys(root: &Path, dir: &Path, values: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_sysctl_keys(root, &path, values);
+            continue;
+        }
+
+        if !path.is_file() {
+            continue;
+        }
+
+        let Ok(relative) = path.strip_prefix(root) else {
+            continue;
+        };
+        let key = relative
+            .components()
+            .filter_map(|component| component.as_os_str().to_str())
+            .collect::<Vec<_>>()
+            .join(".");
+        if !key.is_empty() {
+            values.push(key);
+        }
+    }
 }
 
 fn load_kernel_module_names() -> Vec<String> {
@@ -4470,6 +4679,14 @@ mod tests {
             ]),
             vec!["pytest".to_string(), "requests".to_string()]
         );
+        assert_eq!(
+            parse_package_lines(&[
+                " bash ".to_string(),
+                "".to_string(),
+                "coreutils".to_string(),
+            ]),
+            vec!["bash".to_string(), "coreutils".to_string()]
+        );
 
         assert_eq!(
             parse_nmcli_first_field(&[
@@ -4495,6 +4712,12 @@ mod tests {
                 "sr0 rom".to_string(),
             ]),
             vec!["/dev/sda".to_string(), "/dev/sda1".to_string()]
+        );
+        assert_eq!(
+            parse_fstab_mountpoints(
+                "# comment\nUUID=abc / ext4 defaults 0 1\nserver:/share /mnt/with\\040space nfs defaults 0 0\n"
+            ),
+            vec!["/".to_string(), "/mnt/with space".to_string()]
         );
 
         assert_eq!(
@@ -4599,6 +4822,35 @@ mod tests {
         );
 
         assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn mount_cached_candidates_include_fstab_mountpoints() {
+        let provider = DynamicCompletionProvider::new(Environment::new());
+        provider.cache.write().commands.insert(
+            DynamicCommandCacheKey {
+                kind: DynamicCommandCacheKind::CommandValue {
+                    command: "fstab".to_string(),
+                    value_kind: "mountpoint".to_string(),
+                },
+                scope_dir: PathBuf::from("/etc/fstab"),
+            },
+            CommandValueCacheEntry {
+                values: vec!["/mnt/data".to_string(), "/srv/share".to_string()],
+                cached_at: Instant::now(),
+                last_load_duration: None,
+                last_error: None,
+            },
+        );
+
+        let candidates =
+            provider.collect_mount_candidates_cached(&parsed("mount /mnt"), Path::new("/tmp"));
+
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate.text == "/mnt/data")
+        );
     }
 
     #[test]

@@ -1,0 +1,56 @@
+{
+  "command": "groupmod",
+  "description": "Modify a group definition on the system",
+  "global_options": [
+    {
+      "short": "-g",
+      "long": "--gid",
+      "description": "New group ID",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-n",
+      "long": "--new-name",
+      "description": "New group name",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-o",
+      "long": "--non-unique",
+      "description": "Allow duplicate GID"
+    },
+    {
+      "short": "-p",
+      "long": "--password",
+      "description": "Encrypted password",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-R",
+      "long": "--root",
+      "description": "Chroot directory",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "group",
+      "description": "existing group",
+      "type": {
+        "type": "Group"
+      }
+    }
+  ]
+}

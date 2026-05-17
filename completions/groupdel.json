@@ -1,0 +1,29 @@
+{
+  "command": "groupdel",
+  "description": "Delete a group",
+  "global_options": [
+    {
+      "short": "-f",
+      "long": "--force",
+      "description": "Delete even if it is a primary group"
+    },
+    {
+      "short": "-R",
+      "long": "--root",
+      "description": "Chroot directory",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "group",
+      "description": "existing group",
+      "type": {
+        "type": "Group"
+      }
+    }
+  ]
+}

@@ -1,0 +1,137 @@
+{
+  "command": "machinectl",
+  "description": "Control the systemd machine manager",
+  "global_options": [
+    {
+      "long": "--no-pager",
+      "description": "Do not pipe output into a pager"
+    },
+    {
+      "long": "--no-legend",
+      "description": "Do not print legend"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "list",
+      "description": "List machines"
+    },
+    {
+      "name": "status",
+      "description": "Show machine status",
+      "arguments": [
+        {
+          "name": "machine",
+          "description": "machine name",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "show",
+      "description": "Show machine properties",
+      "arguments": [
+        {
+          "name": "machine",
+          "description": "machine name",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "login",
+      "description": "Log into a machine",
+      "arguments": [
+        {
+          "name": "machine",
+          "description": "machine name",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "shell",
+      "description": "Open a shell in a machine",
+      "arguments": [
+        {
+          "name": "machine",
+          "description": "machine name",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "start",
+      "description": "Start container as service",
+      "arguments": [
+        {
+          "name": "machine",
+          "description": "machine name",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "stop",
+      "description": "Stop machine",
+      "arguments": [
+        {
+          "name": "machine",
+          "description": "machine name",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reboot",
+      "description": "Reboot machine",
+      "arguments": [
+        {
+          "name": "machine",
+          "description": "machine name",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "poweroff",
+      "description": "Power off machine",
+      "arguments": [
+        {
+          "name": "machine",
+          "description": "machine name",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "terminate",
+      "description": "Terminate machine",
+      "arguments": [
+        {
+          "name": "machine",
+          "description": "machine name",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    }
+  ]
+}

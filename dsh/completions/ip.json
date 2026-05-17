@@ -11,6 +11,29 @@
       "long": "--version",
       "short": "-V",
       "description": "Show version information"
+    },
+    {
+      "short": "-4",
+      "description": "Use IPv4"
+    },
+    {
+      "short": "-6",
+      "description": "Use IPv6"
+    },
+    {
+      "short": "-d",
+      "long": "--details",
+      "description": "Show details"
+    },
+    {
+      "short": "-j",
+      "long": "--json",
+      "description": "Output JSON"
+    },
+    {
+      "short": "-o",
+      "long": "--oneline",
+      "description": "One line per record"
     }
   ],
   "subcommands": [
@@ -99,28 +122,74 @@
           "name": "show",
           "description": "List addresses",
           "options": [],
-          "arguments": [],
+          "arguments": [
+            {
+              "name": "dev",
+              "description": "Network interface",
+              "type": {
+                "type": "Interface"
+              }
+            }
+          ],
           "subcommands": []
         },
         {
           "name": "add",
           "description": "Add an address",
           "options": [],
-          "arguments": [],
+          "arguments": [
+            {
+              "name": "address",
+              "description": "IP address",
+              "type": {
+                "type": "String"
+              }
+            },
+            {
+              "name": "dev",
+              "description": "Network interface",
+              "type": {
+                "type": "Interface"
+              }
+            }
+          ],
           "subcommands": []
         },
         {
           "name": "delete",
           "description": "Delete an address",
           "options": [],
-          "arguments": [],
+          "arguments": [
+            {
+              "name": "address",
+              "description": "IP address",
+              "type": {
+                "type": "String"
+              }
+            },
+            {
+              "name": "dev",
+              "description": "Network interface",
+              "type": {
+                "type": "Interface"
+              }
+            }
+          ],
           "subcommands": []
         },
         {
           "name": "flush",
           "description": "Flush all addresses",
           "options": [],
-          "arguments": [],
+          "arguments": [
+            {
+              "name": "dev",
+              "description": "Network interface",
+              "type": {
+                "type": "Interface"
+              }
+            }
+          ],
           "subcommands": []
         },
         {
@@ -142,7 +211,15 @@
           "name": "show",
           "description": "List routes",
           "options": [],
-          "arguments": [],
+          "arguments": [
+            {
+              "name": "dev",
+              "description": "Network interface",
+              "type": {
+                "type": "Interface"
+              }
+            }
+          ],
           "subcommands": []
         },
         {
@@ -170,7 +247,15 @@
           "name": "flush",
           "description": "Flush routing tables",
           "options": [],
-          "arguments": [],
+          "arguments": [
+            {
+              "name": "dev",
+              "description": "Network interface",
+              "type": {
+                "type": "Interface"
+              }
+            }
+          ],
           "subcommands": []
         },
         {
@@ -192,7 +277,15 @@
           "name": "show",
           "description": "List neighbour entries",
           "options": [],
-          "arguments": [],
+          "arguments": [
+            {
+              "name": "dev",
+              "description": "Network interface",
+              "type": {
+                "type": "Interface"
+              }
+            }
+          ],
           "subcommands": []
         },
         {
@@ -213,7 +306,15 @@
           "name": "flush",
           "description": "Flush all neighbour entries",
           "options": [],
-          "arguments": [],
+          "arguments": [
+            {
+              "name": "dev",
+              "description": "Network interface",
+              "type": {
+                "type": "Interface"
+              }
+            }
+          ],
           "subcommands": []
         },
         {

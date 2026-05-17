@@ -338,6 +338,11 @@ fn audit_command_value(value: &Value, audit: &mut CompletionAudit) {
             audit_option_value(option, audit);
         }
     }
+    if let Some(options) = obj.get("options").and_then(Value::as_array) {
+        for option in options {
+            audit_option_value(option, audit);
+        }
+    }
     if let Some(arguments) = obj.get("arguments").and_then(Value::as_array) {
         for argument in arguments {
             audit_argument_value(argument, audit);
@@ -437,6 +442,9 @@ fn validate_completion_json(json: &str, expected_command: &str) -> Result<()> {
     if let Some(options) = obj.get("global_options") {
         validate_options_array(options, "global_options")?;
     }
+    if let Some(options) = obj.get("options") {
+        validate_options_array(options, "options")?;
+    }
     if let Some(arguments) = obj.get("arguments") {
         validate_arguments_array(arguments, "arguments")?;
     }
@@ -527,7 +535,7 @@ fn valid_short_option(option: &str) -> bool {
 
 fn valid_long_option(option: &str) -> bool {
     let base = option_base(option);
-    base.starts_with('-') && base.len() > 1 && base != "--"
+    (base.starts_with('-') || base.starts_with('+')) && base.len() > 1 && base != "--"
 }
 
 fn validate_arguments_array(value: &Value, path: &str) -> Result<()> {
@@ -692,6 +700,33 @@ mod tests {
         {
           "command": "foo",
           "global_options": [
+            { "description": "no flag" }
+          ]
+        }
+        "#;
+        assert!(validate_completion_json(json, "foo").is_err());
+    }
+
+    #[test]
+    fn validate_completion_checks_top_level_options_alias() {
+        let json = r#"
+        {
+          "command": "foo",
+          "options": [
+            { "short": "-v", "long": "--verbose" },
+            { "long": "+O2" }
+          ]
+        }
+        "#;
+        assert!(validate_completion_json(json, "foo").is_ok());
+    }
+
+    #[test]
+    fn validate_completion_rejects_invalid_top_level_options_alias() {
+        let json = r#"
+        {
+          "command": "foo",
+          "options": [
             { "description": "no flag" }
           ]
         }

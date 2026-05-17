@@ -1,0 +1,139 @@
+{
+  "command": "apt",
+  "description": "Debian package management command",
+  "global_options": [
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show help"
+    },
+    {
+      "short": "-y",
+      "long": "--yes",
+      "description": "Assume yes"
+    },
+    {
+      "short": "-q",
+      "long": "--quiet",
+      "description": "Quiet output"
+    },
+    {
+      "short": "-s",
+      "long": "--simulate",
+      "description": "Simulate actions"
+    },
+    {
+      "long": "--no-install-recommends",
+      "description": "Do not install recommended packages"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "update",
+      "description": "Update package indexes"
+    },
+    {
+      "name": "upgrade",
+      "description": "Upgrade installed packages"
+    },
+    {
+      "name": "full-upgrade",
+      "description": "Upgrade with dependency changes"
+    },
+    {
+      "name": "install",
+      "description": "Install packages",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "package name",
+          "multiple": true,
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "remove",
+      "description": "Remove installed packages",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "installed package",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "apt.installed_package"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "purge",
+      "description": "Remove packages and configuration files",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "installed package",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "apt.installed_package"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "autoremove",
+      "description": "Remove automatically installed packages",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "installed package",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "apt.installed_package"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "show",
+      "description": "Show package information",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "installed package",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "apt.installed_package"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "list",
+      "description": "List packages",
+      "arguments": [
+        {
+          "name": "pattern",
+          "description": "package pattern",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    }
+  ]
+}

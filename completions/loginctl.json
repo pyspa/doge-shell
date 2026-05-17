@@ -1,0 +1,162 @@
+{
+  "command": "loginctl",
+  "description": "Control the systemd login manager",
+  "global_options": [
+    {
+      "long": "--no-pager",
+      "description": "Do not pipe output into a pager"
+    },
+    {
+      "long": "--no-legend",
+      "description": "Do not print legend"
+    },
+    {
+      "short": "-H",
+      "long": "--host",
+      "description": "Operate on remote host",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "list-sessions",
+      "description": "List sessions"
+    },
+    {
+      "name": "session-status",
+      "description": "Show session status",
+      "arguments": [
+        {
+          "name": "session",
+          "description": "session id",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "show-session",
+      "description": "Show session properties",
+      "arguments": [
+        {
+          "name": "session",
+          "description": "session id",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "terminate-session",
+      "description": "Terminate a session",
+      "arguments": [
+        {
+          "name": "session",
+          "description": "session id",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "list-users",
+      "description": "List users"
+    },
+    {
+      "name": "user-status",
+      "description": "Show user status",
+      "arguments": [
+        {
+          "name": "user",
+          "description": "user name",
+          "type": {
+            "type": "User"
+          }
+        }
+      ]
+    },
+    {
+      "name": "show-user",
+      "description": "Show user properties",
+      "arguments": [
+        {
+          "name": "user",
+          "description": "user name",
+          "type": {
+            "type": "User"
+          }
+        }
+      ]
+    },
+    {
+      "name": "enable-linger",
+      "description": "Enable user lingering",
+      "arguments": [
+        {
+          "name": "user",
+          "description": "user name",
+          "type": {
+            "type": "User"
+          }
+        }
+      ]
+    },
+    {
+      "name": "disable-linger",
+      "description": "Disable user lingering",
+      "arguments": [
+        {
+          "name": "user",
+          "description": "user name",
+          "type": {
+            "type": "User"
+          }
+        }
+      ]
+    },
+    {
+      "name": "terminate-user",
+      "description": "Terminate user sessions",
+      "arguments": [
+        {
+          "name": "user",
+          "description": "user name",
+          "type": {
+            "type": "User"
+          }
+        }
+      ]
+    },
+    {
+      "name": "list-seats",
+      "description": "List seats"
+    },
+    {
+      "name": "seat-status",
+      "description": "Show seat status",
+      "arguments": [
+        {
+          "name": "seat",
+          "description": "seat name",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "lock-sessions",
+      "description": "Lock all sessions"
+    },
+    {
+      "name": "unlock-sessions",
+      "description": "Unlock all sessions"
+    }
+  ]
+}

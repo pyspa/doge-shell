@@ -1,0 +1,91 @@
+{
+  "command": "fdisk",
+  "description": "Manipulate disk partition tables",
+  "global_options": [
+    {
+      "short": "-l",
+      "long": "--list",
+      "description": "List partition tables"
+    },
+    {
+      "short": "-x",
+      "long": "--list-details",
+      "description": "List extra details"
+    },
+    {
+      "short": "-u",
+      "long": "--units",
+      "description": "Display units",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "cylinders",
+          "sectors"
+        ]
+      }
+    },
+    {
+      "short": "-b",
+      "long": "--sector-size",
+      "description": "Sector size",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-C",
+      "long": "--cylinders",
+      "description": "Specify cylinders",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-H",
+      "long": "--heads",
+      "description": "Specify heads",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-S",
+      "long": "--sectors",
+      "description": "Specify sectors",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-w",
+      "long": "--wipe",
+      "description": "Wipe signatures",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "auto",
+          "always",
+          "never"
+        ]
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "device",
+      "description": "Block device",
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "block.device"
+        }
+      }
+    }
+  ]
+}

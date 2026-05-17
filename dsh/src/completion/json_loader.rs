@@ -2,6 +2,7 @@ use super::command::{ArgumentType, CommandCompletion, CommandCompletionDatabase}
 use crate::shell::APP_NAME;
 use anyhow::{Context, Result};
 use rust_embed::RustEmbed;
+use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -204,7 +205,21 @@ impl JsonCompletionLoader {
         debug!("Content length: {} bytes", content_str.len());
         debug!("Parsing JSON content from: {}", source_name);
 
-        let completion: CommandCompletion = match serde_json::from_str(content_str) {
+        let mut value: Value = match serde_json::from_str(content_str) {
+            Ok(value) => value,
+            Err(e) => {
+                warn!("JSON parse error in {}: {}", source_name, e);
+                debug!("JSON parse error details: {:?}", e);
+                return Err(anyhow::anyhow!(
+                    "Failed to parse JSON in source: {}: {}",
+                    source_name,
+                    e
+                ));
+            }
+        };
+        normalize_legacy_top_level_options(&mut value);
+
+        let completion: CommandCompletion = match serde_json::from_value(value) {
             Ok(completion) => completion,
             Err(e) => {
                 warn!("JSON parse error in {}: {}", source_name, e);
@@ -478,6 +493,34 @@ impl JsonCompletionLoader {
     }
 }
 
+fn normalize_legacy_top_level_options(value: &mut Value) {
+    let Value::Object(object) = value else {
+        return;
+    };
+
+    let Some(options) = object.remove("options") else {
+        return;
+    };
+
+    let options = match options {
+        Value::Array(options) => options,
+        other => {
+            object.insert("options".to_string(), other);
+            return;
+        }
+    };
+
+    match object.get_mut("global_options") {
+        Some(Value::Array(global_options)) => global_options.extend(options),
+        Some(_) => {
+            object.insert("options".to_string(), Value::Array(options));
+        }
+        None => {
+            object.insert("global_options".to_string(), Value::Array(options));
+        }
+    }
+}
+
 fn option_base(option: &str) -> &str {
     option.split_whitespace().next().unwrap_or("")
 }
@@ -489,7 +532,7 @@ fn valid_short_option(option: &str) -> bool {
 
 fn valid_long_option(option: &str) -> bool {
     let base = option_base(option);
-    base.starts_with('-') && base.len() > 1 && base != "--"
+    (base.starts_with('-') || base.starts_with('+')) && base.len() > 1 && base != "--"
 }
 
 impl Default for JsonCompletionLoader {
@@ -733,6 +776,38 @@ mod tests {
         assert_eq!(
             schema_providers,
             dsh_types::completion::DYNAMIC_COMPLETION_PROVIDERS
+        );
+    }
+
+    #[test]
+    fn top_level_options_are_merged_with_global_options() {
+        let loader = JsonCompletionLoader::new();
+        let completion = loader
+            .load_completion_from_content(
+                br#"{
+                    "command": "legacy-options",
+                    "global_options": [
+                        { "long": "--help", "description": "Show help" }
+                    ],
+                    "options": [
+                        { "long": "--verbose", "short": "-v", "description": "Verbose output" }
+                    ]
+                }"#,
+                "legacy-options.json",
+            )
+            .unwrap();
+
+        assert!(
+            completion
+                .global_options
+                .iter()
+                .any(|option| option.long.as_deref() == Some("--help"))
+        );
+        assert!(
+            completion
+                .global_options
+                .iter()
+                .any(|option| option.long.as_deref() == Some("--verbose"))
         );
     }
 

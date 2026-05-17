@@ -61,6 +61,35 @@
       "short": "-6",
       "long": "--ipv6",
       "description": "Display only IPv6 sockets"
+    },
+    {
+      "short": "-F",
+      "long": "--filter",
+      "description": "Read filter information from file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-A",
+      "long": "--query",
+      "description": "Socket table to display",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "all",
+          "inet",
+          "tcp",
+          "udp",
+          "raw",
+          "unix",
+          "packet",
+          "netlink"
+        ]
+      }
     }
   ]
 }

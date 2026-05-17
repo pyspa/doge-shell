@@ -1,0 +1,53 @@
+{
+  "command": "sysctl",
+  "description": "Configure kernel parameters at runtime",
+  "global_options": [
+    {
+      "short": "-a",
+      "long": "--all",
+      "description": "Display all values"
+    },
+    {
+      "short": "-w",
+      "long": "--write",
+      "description": "Write a sysctl setting"
+    },
+    {
+      "short": "-p",
+      "long": "--load",
+      "description": "Load settings from a file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-n",
+      "long": "--values",
+      "description": "Print values without key names"
+    },
+    {
+      "short": "-e",
+      "long": "--ignore",
+      "description": "Ignore unknown keys"
+    },
+    {
+      "long": "--system",
+      "description": "Load settings from system configuration files"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "key",
+      "description": "Kernel parameter key",
+      "multiple": true,
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "sysctl.key"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,74 @@
+{
+  "command": "fsck",
+  "description": "Check and repair a Linux filesystem",
+  "global_options": [
+    {
+      "short": "-A",
+      "description": "Check all filesystems in fstab"
+    },
+    {
+      "short": "-R",
+      "description": "Skip root filesystem with -A"
+    },
+    {
+      "short": "-N",
+      "description": "Do not execute, show what would be done"
+    },
+    {
+      "short": "-M",
+      "description": "Do not check mounted filesystems"
+    },
+    {
+      "short": "-P",
+      "description": "Check filesystems in parallel"
+    },
+    {
+      "short": "-s",
+      "description": "Serialize checks"
+    },
+    {
+      "short": "-t",
+      "description": "Filesystem type",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "ext2",
+          "ext3",
+          "ext4",
+          "xfs",
+          "btrfs",
+          "vfat",
+          "exfat",
+          "ntfs",
+          "iso9660",
+          "nfs",
+          "cifs",
+          "tmpfs",
+          "swap"
+        ]
+      }
+    },
+    {
+      "short": "-y",
+      "description": "Assume yes"
+    },
+    {
+      "short": "-n",
+      "description": "Assume no"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "device",
+      "description": "Block device",
+      "multiple": true,
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "block.device"
+        }
+      }
+    }
+  ]
+}

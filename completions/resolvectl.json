@@ -1,0 +1,150 @@
+{
+  "command": "resolvectl",
+  "description": "Resolve domain names, IPv4/IPv6 addresses, DNS records, and services",
+  "global_options": [
+    {
+      "short": "-4",
+      "description": "Resolve IPv4 only"
+    },
+    {
+      "short": "-6",
+      "description": "Resolve IPv6 only"
+    },
+    {
+      "short": "-i",
+      "long": "--interface",
+      "description": "Network interface",
+      "takes_value": true,
+      "value_type": {
+        "type": "Interface"
+      }
+    },
+    {
+      "short": "-p",
+      "long": "--protocol",
+      "description": "Protocol",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "dns",
+          "llmnr",
+          "llmnr-ipv4",
+          "llmnr-ipv6",
+          "mdns",
+          "mdns-ipv4",
+          "mdns-ipv6"
+        ]
+      }
+    },
+    {
+      "short": "-t",
+      "long": "--type",
+      "description": "DNS record type",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "A",
+          "AAAA",
+          "MX",
+          "TXT",
+          "SRV",
+          "CNAME",
+          "SOA",
+          "NS",
+          "PTR"
+        ]
+      }
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "status",
+      "description": "Show resolver status",
+      "arguments": [
+        {
+          "name": "interface",
+          "description": "network interface",
+          "type": {
+            "type": "Interface"
+          }
+        }
+      ]
+    },
+    {
+      "name": "query",
+      "description": "Resolve host names",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "host or domain name",
+          "multiple": true,
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "service",
+      "description": "Resolve services",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "service name",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "dns",
+      "description": "Get or set DNS servers",
+      "arguments": [
+        {
+          "name": "interface",
+          "description": "network interface",
+          "type": {
+            "type": "Interface"
+          }
+        }
+      ]
+    },
+    {
+      "name": "domain",
+      "description": "Get or set search domains",
+      "arguments": [
+        {
+          "name": "interface",
+          "description": "network interface",
+          "type": {
+            "type": "Interface"
+          }
+        }
+      ]
+    },
+    {
+      "name": "default-route",
+      "description": "Get or set default route",
+      "arguments": [
+        {
+          "name": "interface",
+          "description": "network interface",
+          "type": {
+            "type": "Interface"
+          }
+        }
+      ]
+    },
+    {
+      "name": "flush-caches",
+      "description": "Flush DNS caches"
+    },
+    {
+      "name": "reset-statistics",
+      "description": "Reset statistics"
+    }
+  ]
+}

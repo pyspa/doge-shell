@@ -38,5 +38,14 @@
       "description": "Report password status on the named account"
     }
   ],
-  "subcommands": []
+  "subcommands": [],
+  "arguments": [
+    {
+      "name": "user",
+      "description": "User account",
+      "type": {
+        "type": "User"
+      }
+    }
+  ]
 }

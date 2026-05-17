@@ -22,6 +22,13 @@
         "$ref": "#/definitions/CommandOption"
       }
     },
+    "options": {
+      "type": "array",
+      "description": "Legacy alias for global_options; the runtime loader merges these into global_options",
+      "items": {
+        "$ref": "#/definitions/CommandOption"
+      }
+    },
     "subcommands": {
       "type": "array",
       "description": "Subcommands of this command",
@@ -50,8 +57,8 @@
         },
         "long": {
           "type": ["string", "null"],
-          "description": "Long or command-specific option form (e.g., '--verbose', '--type <TYPE>', '-Xmx'). Must start with '-' and must not be bare '-' or '--'.",
-          "pattern": "^(?!--(?:\\s|$))-(?!\\s)\\S+(?:\\s+\\S.*)?$"
+          "description": "Long or command-specific option form (e.g., '--verbose', '--type <TYPE>', '-Xmx', '+short'). Must start with '-' or '+' and must not be bare '-' or '--'.",
+          "pattern": "^(?!--(?:\\s|$))[-+](?!\\s)\\S+(?:\\s+\\S.*)?$"
         },
         "description": {
           "type": ["string", "null"],
@@ -370,12 +377,16 @@
                   "type": "string",
                   "description": "Stable dynamic completion provider id",
                   "enum": [
+                    "apt.installed_package",
+                    "block.device",
                     "cargo.bin",
                     "cargo.example",
                     "cargo.package",
+                    "dnf.installed_package",
                     "docker.compose_service",
                     "docker.container",
                     "docker.image",
+                    "fstab.mountpoint",
                     "git.branch",
                     "git.changed_path",
                     "git.checkout_target",
@@ -398,9 +409,11 @@
                     "pacman.package",
                     "pip.installed_package",
                     "project.task",
+                    "rpm.installed_package",
                     "rustup.toolchain",
                     "screen.session",
                     "ssh.host",
+                    "sysctl.key",
                     "system.process_pid",
                     "systemctl.unit",
                     "systemctl.unit_file",

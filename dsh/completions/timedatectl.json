@@ -1,0 +1,96 @@
+{
+  "command": "timedatectl",
+  "description": "Control the system time and date",
+  "global_options": [
+    {
+      "long": "--no-pager",
+      "description": "Do not pipe output into a pager"
+    },
+    {
+      "long": "--adjust-system-clock",
+      "description": "Synchronize system clock from RTC"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "status",
+      "description": "Show current settings"
+    },
+    {
+      "name": "show",
+      "description": "Show properties"
+    },
+    {
+      "name": "set-time",
+      "description": "Set system time",
+      "arguments": [
+        {
+          "name": "time",
+          "description": "time value",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "set-timezone",
+      "description": "Set time zone",
+      "arguments": [
+        {
+          "name": "timezone",
+          "description": "time zone",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "list-timezones",
+      "description": "List time zones"
+    },
+    {
+      "name": "set-local-rtc",
+      "description": "Control RTC mode",
+      "arguments": [
+        {
+          "name": "enabled",
+          "description": "boolean",
+          "type": {
+            "type": "Choice",
+            "data": [
+              "0",
+              "1",
+              "false",
+              "true"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "set-ntp",
+      "description": "Control NTP",
+      "arguments": [
+        {
+          "name": "enabled",
+          "description": "boolean",
+          "type": {
+            "type": "Choice",
+            "data": [
+              "0",
+              "1",
+              "false",
+              "true"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "timesync-status",
+      "description": "Show timesync status"
+    }
+  ]
+}

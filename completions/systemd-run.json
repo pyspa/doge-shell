@@ -1,0 +1,61 @@
+{
+  "command": "systemd-run",
+  "description": "Run a command in a transient systemd unit",
+  "global_options": [
+    {
+      "long": "--user",
+      "description": "Run as user service manager"
+    },
+    {
+      "long": "--scope",
+      "description": "Run as scope unit"
+    },
+    {
+      "long": "--unit",
+      "description": "Unit name",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-p",
+      "long": "--property",
+      "description": "Set unit property",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--working-directory",
+      "description": "Working directory",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "long": "--same-dir",
+      "description": "Use current working directory"
+    },
+    {
+      "long": "--collect",
+      "description": "Unload unit after it exits"
+    },
+    {
+      "long": "--wait",
+      "description": "Synchronously wait for completion"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "command",
+      "description": "command to execute",
+      "multiple": true,
+      "type": {
+        "type": "CommandWithArgs"
+      }
+    }
+  ]
+}

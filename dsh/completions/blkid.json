@@ -1,0 +1,92 @@
+{
+  "command": "blkid",
+  "description": "Locate and print block device attributes",
+  "global_options": [
+    {
+      "short": "-c",
+      "long": "--cache-file",
+      "description": "Read from cache file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-g",
+      "long": "--garbage-collect",
+      "description": "Garbage collect cache"
+    },
+    {
+      "short": "-o",
+      "long": "--output",
+      "description": "Output format",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "full",
+          "value",
+          "list",
+          "device",
+          "udev",
+          "export"
+        ]
+      }
+    },
+    {
+      "short": "-s",
+      "long": "--match-tag",
+      "description": "Show only matching tag",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-t",
+      "long": "--match-token",
+      "description": "Find device by token",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-p",
+      "long": "--probe",
+      "description": "Low-level probing mode"
+    },
+    {
+      "short": "-L",
+      "long": "--label",
+      "description": "Look up by label",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-U",
+      "long": "--uuid",
+      "description": "Look up by UUID",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "device",
+      "description": "Block device",
+      "multiple": true,
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "block.device"
+        }
+      }
+    }
+  ]
+}

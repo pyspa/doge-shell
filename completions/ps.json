@@ -39,7 +39,25 @@
       "short": "-o",
       "description": "User-defined format",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "pid",
+          "ppid",
+          "user",
+          "uid",
+          "cpu",
+          "mem",
+          "vsz",
+          "rss",
+          "tty",
+          "stat",
+          "start",
+          "time",
+          "comm",
+          "args"
+        ]
+      }
     },
     {
       "long": "--sort",
@@ -70,20 +88,26 @@
       "long": "--pid",
       "description": "Select by PID",
       "takes_value": true,
-      "value_type": { "type": "Number" }
+      "value_type": {
+        "type": "Process"
+      }
     },
     {
       "short": "-U",
       "long": "--user",
       "description": "Select by real user ID or name",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "User"
+      }
     },
     {
       "short": "-C",
       "description": "Select by command name",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "long": "--forest",

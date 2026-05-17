@@ -1,0 +1,194 @@
+{
+  "command": "yum",
+  "description": "RPM package management command",
+  "global_options": [
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show help"
+    },
+    {
+      "short": "-y",
+      "long": "--assumeyes",
+      "description": "Assume yes"
+    },
+    {
+      "short": "-q",
+      "long": "--quiet",
+      "description": "Quiet output"
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Verbose output"
+    },
+    {
+      "long": "--disablerepo",
+      "description": "Disable repository",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--enablerepo",
+      "description": "Enable repository",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "check-update",
+      "description": "Check for available updates"
+    },
+    {
+      "name": "upgrade",
+      "description": "Upgrade packages",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "installed package",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "dnf.installed_package"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "update",
+      "description": "Update packages",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "installed package",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "dnf.installed_package"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "install",
+      "description": "Install packages",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "package name",
+          "multiple": true,
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "remove",
+      "description": "Remove installed packages",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "installed package",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "dnf.installed_package"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "erase",
+      "description": "Remove installed packages",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "installed package",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "dnf.installed_package"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "reinstall",
+      "description": "Reinstall installed packages",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "installed package",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "dnf.installed_package"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "info",
+      "description": "Show package information",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "installed package",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "dnf.installed_package"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "list",
+      "description": "List packages",
+      "arguments": [
+        {
+          "name": "package",
+          "description": "installed package",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "dnf.installed_package"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "search",
+      "description": "Search package metadata",
+      "arguments": [
+        {
+          "name": "term",
+          "description": "search term",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,100 @@
+{
+  "command": "systemd-analyze",
+  "description": "Analyze and debug system manager startup performance",
+  "global_options": [
+    {
+      "long": "--user",
+      "description": "Operate on user systemd instance"
+    },
+    {
+      "long": "--system",
+      "description": "Operate on system systemd instance"
+    },
+    {
+      "long": "--no-pager",
+      "description": "Do not pipe output into a pager"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "time",
+      "description": "Print startup time"
+    },
+    {
+      "name": "blame",
+      "description": "Print units ordered by startup time"
+    },
+    {
+      "name": "critical-chain",
+      "description": "Print critical chain",
+      "arguments": [
+        {
+          "name": "unit",
+          "description": "systemd unit",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "systemctl.unit"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "plot",
+      "description": "Output SVG plot"
+    },
+    {
+      "name": "dot",
+      "description": "Output dependency graph"
+    },
+    {
+      "name": "dump",
+      "description": "Output manager state"
+    },
+    {
+      "name": "cat-config",
+      "description": "Show configuration files",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "configuration name",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "verify",
+      "description": "Verify unit files",
+      "arguments": [
+        {
+          "name": "unit_file",
+          "description": "unit file",
+          "multiple": true,
+          "type": {
+            "type": "File",
+            "data": {}
+          }
+        }
+      ]
+    },
+    {
+      "name": "security",
+      "description": "Review unit security settings",
+      "arguments": [
+        {
+          "name": "unit",
+          "description": "systemd unit",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "systemctl.unit"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

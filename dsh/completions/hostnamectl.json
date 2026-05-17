@@ -1,0 +1,106 @@
+{
+  "command": "hostnamectl",
+  "description": "Control the system hostname",
+  "global_options": [
+    {
+      "long": "--static",
+      "description": "Operate on static hostname"
+    },
+    {
+      "long": "--transient",
+      "description": "Operate on transient hostname"
+    },
+    {
+      "long": "--pretty",
+      "description": "Operate on pretty hostname"
+    },
+    {
+      "long": "--no-pager",
+      "description": "Do not pipe output into a pager"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "status",
+      "description": "Show hostname status"
+    },
+    {
+      "name": "hostname",
+      "description": "Show hostname"
+    },
+    {
+      "name": "set-hostname",
+      "description": "Set hostname",
+      "arguments": [
+        {
+          "name": "hostname",
+          "description": "host name",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "set-icon-name",
+      "description": "Set icon name",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "icon name",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "set-chassis",
+      "description": "Set chassis type",
+      "arguments": [
+        {
+          "name": "chassis",
+          "description": "chassis",
+          "type": {
+            "type": "Choice",
+            "data": [
+              "desktop",
+              "laptop",
+              "server",
+              "tablet",
+              "handset",
+              "vm",
+              "container"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "set-deployment",
+      "description": "Set deployment environment",
+      "arguments": [
+        {
+          "name": "deployment",
+          "description": "deployment",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "set-location",
+      "description": "Set location",
+      "arguments": [
+        {
+          "name": "location",
+          "description": "location",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    }
+  ]
+}

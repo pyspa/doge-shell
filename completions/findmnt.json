@@ -1,0 +1,107 @@
+{
+  "command": "findmnt",
+  "description": "Find mounted filesystems",
+  "global_options": [
+    {
+      "short": "-a",
+      "long": "--all",
+      "description": "Print all filesystems"
+    },
+    {
+      "short": "-l",
+      "long": "--list",
+      "description": "Use list output"
+    },
+    {
+      "short": "-r",
+      "long": "--raw",
+      "description": "Use raw output"
+    },
+    {
+      "short": "-J",
+      "long": "--json",
+      "description": "Use JSON output"
+    },
+    {
+      "short": "-n",
+      "long": "--noheadings",
+      "description": "Do not print headings"
+    },
+    {
+      "short": "-t",
+      "long": "--types",
+      "description": "Limit filesystem types",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "ext2",
+          "ext3",
+          "ext4",
+          "xfs",
+          "btrfs",
+          "vfat",
+          "exfat",
+          "ntfs",
+          "iso9660",
+          "nfs",
+          "cifs",
+          "tmpfs",
+          "swap"
+        ]
+      }
+    },
+    {
+      "short": "-S",
+      "long": "--source",
+      "description": "Mount source",
+      "takes_value": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "block.device"
+        }
+      }
+    },
+    {
+      "short": "-T",
+      "long": "--target",
+      "description": "Mount target",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-o",
+      "long": "--output",
+      "description": "Output columns",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-F",
+      "long": "--tab-file",
+      "description": "fstab file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "mountpoint",
+      "description": "Mount point from fstab",
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "fstab.mountpoint"
+        }
+      }
+    }
+  ]
+}

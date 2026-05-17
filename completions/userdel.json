@@ -1,0 +1,30 @@
+{
+  "command": "userdel",
+  "description": "Delete a user account and related files",
+  "global_options": [
+    {
+      "short": "-f",
+      "long": "--force",
+      "description": "Force removal"
+    },
+    {
+      "short": "-r",
+      "long": "--remove",
+      "description": "Remove home directory and mail spool"
+    },
+    {
+      "short": "-Z",
+      "long": "--selinux-user",
+      "description": "Remove SELinux user mapping"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "login",
+      "description": "existing user",
+      "type": {
+        "type": "User"
+      }
+    }
+  ]
+}

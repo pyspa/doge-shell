@@ -1,0 +1,40 @@
+{
+  "command": "crontab",
+  "description": "Maintain crontab files for individual users",
+  "global_options": [
+    {
+      "short": "-e",
+      "description": "Edit current crontab"
+    },
+    {
+      "short": "-l",
+      "description": "List current crontab"
+    },
+    {
+      "short": "-r",
+      "description": "Remove current crontab"
+    },
+    {
+      "short": "-i",
+      "description": "Prompt before deleting"
+    },
+    {
+      "short": "-u",
+      "description": "Operate on user",
+      "takes_value": true,
+      "value_type": {
+        "type": "User"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "file",
+      "description": "crontab file",
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ]
+}

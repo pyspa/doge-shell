@@ -30,7 +30,12 @@
       "long": "--unit",
       "description": "Show messages for the specified systemd unit",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "systemctl.unit"
+        }
+      }
     },
     {
       "short": "-S",
@@ -54,6 +59,33 @@
       "short": "-k",
       "long": "--dmesg",
       "description": "Show only kernel messages"
+    },
+    {
+      "short": "-p",
+      "long": "--priority",
+      "description": "Filter by priority",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "emerg",
+          "alert",
+          "crit",
+          "err",
+          "warning",
+          "notice",
+          "info",
+          "debug",
+          "0",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7"
+        ]
+      }
     }
   ],
   "subcommands": []

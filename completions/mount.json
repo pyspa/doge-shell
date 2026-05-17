@@ -25,7 +25,11 @@
     {
       "short": "-o",
       "long": "--options",
-      "description": "Comma-separated list of mount options"
+      "description": "Comma-separated list of mount options",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "short": "-r",
@@ -45,19 +49,19 @@
       "value_type": {
         "type": "Choice",
         "data": [
-          "ext4",
-          "ext3",
           "ext2",
+          "ext3",
+          "ext4",
           "xfs",
           "btrfs",
-          "ntfs",
           "vfat",
           "exfat",
+          "ntfs",
           "iso9660",
           "nfs",
           "cifs",
           "tmpfs",
-          "squashfs"
+          "swap"
         ]
       }
     },
@@ -69,9 +73,14 @@
   ],
   "arguments": [
     {
-      "name": "device",
-      "description": "Device to mount",
-      "type": { "type": "String" }
+      "name": "device_or_mountpoint",
+      "description": "Block device or fstab mount point",
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "block.device"
+        }
+      }
     },
     {
       "name": "mountpoint",

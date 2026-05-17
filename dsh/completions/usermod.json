@@ -1,0 +1,117 @@
+{
+  "command": "usermod",
+  "description": "Modify a user account",
+  "global_options": [
+    {
+      "short": "-a",
+      "long": "--append",
+      "description": "Append user to supplementary groups"
+    },
+    {
+      "short": "-c",
+      "long": "--comment",
+      "description": "GECOS field",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-d",
+      "long": "--home",
+      "description": "New home directory",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-e",
+      "long": "--expiredate",
+      "description": "Expiration date",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-f",
+      "long": "--inactive",
+      "description": "Inactive days",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-g",
+      "long": "--gid",
+      "description": "Primary group",
+      "takes_value": true,
+      "value_type": {
+        "type": "Group"
+      }
+    },
+    {
+      "short": "-G",
+      "long": "--groups",
+      "description": "Supplementary group",
+      "takes_value": true,
+      "value_type": {
+        "type": "Group"
+      }
+    },
+    {
+      "short": "-l",
+      "long": "--login",
+      "description": "New login name",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-L",
+      "long": "--lock",
+      "description": "Lock password"
+    },
+    {
+      "short": "-m",
+      "long": "--move-home",
+      "description": "Move home directory"
+    },
+    {
+      "short": "-s",
+      "long": "--shell",
+      "description": "Login shell",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-u",
+      "long": "--uid",
+      "description": "New UID",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-U",
+      "long": "--unlock",
+      "description": "Unlock password"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "login",
+      "description": "existing user",
+      "type": {
+        "type": "User"
+      }
+    }
+  ]
+}

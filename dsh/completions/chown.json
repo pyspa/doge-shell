@@ -32,7 +32,12 @@
     },
     {
       "long": "--reference",
-      "description": "Use the owner and group of given reference file"
+      "description": "Use the owner and group of given reference file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "long": "--dereference",
@@ -45,7 +50,11 @@
     },
     {
       "long": "--from",
-      "description": "change the owner and/or group of each file only if its current owner and/or group match those specified here."
+      "description": "change the owner and/or group of each file only if its current owner and/or group match those specified here.",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "long": "--no-preserve-root",
@@ -79,7 +88,8 @@
       "type": {
         "type": "File",
         "data": {}
-      }
+      },
+      "multiple": true
     }
   ]
 }

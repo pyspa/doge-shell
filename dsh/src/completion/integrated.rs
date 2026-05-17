@@ -3342,6 +3342,18 @@ fi
             &bin_dir.join("kubectl"),
             "#!/bin/sh\nif [ \"$1\" = \"get\" ] && [ \"$2\" = \"pods\" ]; then printf 'web-0\\napi-0\\n'; fi\n",
         );
+        write_executable_script(
+            &bin_dir.join("lsblk"),
+            "#!/bin/sh\nif [ \"$1\" = \"-rno\" ]; then printf 'sda disk\\nsda1 part\\nloop0 loop\\n'; fi\n",
+        );
+        write_executable_script(
+            &bin_dir.join("dpkg-query"),
+            "#!/bin/sh\nif [ \"$1\" = \"-W\" ]; then printf 'base-files\\nbash\\ncoreutils\\n'; fi\n",
+        );
+        write_executable_script(
+            &bin_dir.join("rpm"),
+            "#!/bin/sh\nif [ \"$1\" = \"-qa\" ]; then printf 'kernel-core\\nbash\\nsystemd\\n'; fi\n",
+        );
 
         let engine = engine_with_path(&bin_dir);
 
@@ -3368,6 +3380,11 @@ fi
             ("docker stop app", "app-container"),
             ("docker inspect app-i", "app-image:latest"),
             ("kubectl get pods we", "web-0"),
+            ("fdisk /dev/s", "/dev/sda"),
+            ("mount /dev/lo", "/dev/loop0"),
+            ("apt remove bas", "base-files"),
+            ("dnf remove ker", "kernel-core"),
+            ("yum remove sys", "systemd"),
         ];
 
         for (input, expected) in cases {
@@ -3376,6 +3393,43 @@ fi
                 .await;
             let _ = wait_for_candidate(&engine, input, dir.path(), expected).await;
         }
+    }
+
+    #[tokio::test]
+    async fn sysctl_key_completion_uses_proc_sys_keys_without_value_side() {
+        if !Path::new("/proc/sys/net/ipv4/ip_forward").exists() {
+            return;
+        }
+
+        let dir = tempdir().unwrap();
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "sysctl net.ipv4.ip_for";
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "net.ipv4.ip_forward"),
+            "expected sysctl key completion in {:?}",
+            result.candidates
+        );
+
+        let value_input = "sysctl net.ipv4.ip_forward=1";
+        let value_result = engine
+            .complete(value_input, value_input.len(), dir.path(), 50, None)
+            .await;
+        assert!(
+            !value_result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "net.ipv4.ip_forward"),
+            "sysctl key provider must not complete the value side"
+        );
     }
 
     #[tokio::test]

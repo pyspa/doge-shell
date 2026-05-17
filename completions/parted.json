@@ -1,0 +1,72 @@
+{
+  "command": "parted",
+  "description": "Disk partition manipulation program",
+  "global_options": [
+    {
+      "short": "-l",
+      "long": "--list",
+      "description": "List partition layout on all block devices"
+    },
+    {
+      "short": "-s",
+      "long": "--script",
+      "description": "Never prompt for user intervention"
+    },
+    {
+      "short": "-a",
+      "long": "--align",
+      "description": "Alignment type",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "none",
+          "cylinder",
+          "minimal",
+          "optimal"
+        ]
+      }
+    },
+    {
+      "short": "-m",
+      "long": "--machine",
+      "description": "Display machine parseable output"
+    },
+    {
+      "short": "-j",
+      "long": "--json",
+      "description": "Display JSON output"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "device",
+      "description": "Block device",
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "block.device"
+        }
+      }
+    },
+    {
+      "name": "command",
+      "description": "parted command",
+      "type": {
+        "type": "Choice",
+        "data": [
+          "print",
+          "mklabel",
+          "mkpart",
+          "rm",
+          "resizepart",
+          "set",
+          "name",
+          "align-check",
+          "unit",
+          "help"
+        ]
+      }
+    }
+  ]
+}

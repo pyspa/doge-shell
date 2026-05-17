@@ -3,71 +3,82 @@
   "description": "Display and update sorted information about processes",
   "global_options": [
     {
-      "long": "--help",
       "short": "-h",
+      "long": "--help",
       "description": "Display help information"
     },
     {
-      "long": "--version",
       "short": "-V",
+      "long": "--version",
       "description": "Display version information"
-    }
-  ],
-  "subcommands": [],
-  "options": [
+    },
     {
-      "long": "-p",
       "short": "-p",
-      "description": "Monitor only processes with given PIDs"
+      "description": "Monitor only processes with given PIDs",
+      "takes_value": true,
+      "value_type": {
+        "type": "Process"
+      }
     },
     {
-      "long": "-u",
       "short": "-u",
-      "description": "Show only processes for given user"
+      "description": "Show only processes for given user",
+      "takes_value": true,
+      "value_type": {
+        "type": "User"
+      }
     },
     {
-      "long": "-n",
       "short": "-n",
-      "description": "Number of iterations before top exits"
+      "description": "Number of iterations before top exits",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
-      "long": "-d",
       "short": "-d",
-      "description": "Delay between updates in seconds"
+      "description": "Delay between updates in seconds",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
-      "long": "-b",
       "short": "-b",
-      "description": "Batch mode operation (non-interactive)"
+      "description": "Batch mode operation"
     },
     {
-      "long": "-c",
       "short": "-c",
       "description": "Display absolute path for command"
     },
     {
-      "long": "-s",
       "short": "-s",
-      "description": "Specify sort field"
+      "description": "Secure mode"
     },
     {
-      "long": "-o",
       "short": "-o",
-      "description": "Override sort field"
-    },
-    {
-      "long": "-i",
-      "short": "-i",
-      "description": "Suppress idle processes (interactive mode)"
-    },
-    {
-      "long": "-H",
-      "description": "Threads mode operation"
-    },
-    {
-      "long": "-w",
-      "description": "Output width in columns"
+      "description": "Override sort field",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "PID",
+          "USER",
+          "PR",
+          "NI",
+          "VIRT",
+          "RES",
+          "SHR",
+          "S",
+          "%CPU",
+          "%MEM",
+          "TIME+",
+          "COMMAND"
+        ]
+      }
     }
   ],
+  "subcommands": [],
   "arguments": []
 }

@@ -33,5 +33,18 @@
       "description": "Output info about topology"
     }
   ],
-  "subcommands": []
+  "subcommands": [],
+  "arguments": [
+    {
+      "name": "device",
+      "description": "Block device",
+      "multiple": true,
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "block.device"
+        }
+      }
+    }
+  ]
 }

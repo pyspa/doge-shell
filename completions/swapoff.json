@@ -1,0 +1,29 @@
+{
+  "command": "swapoff",
+  "description": "Disable devices and files for paging and swapping",
+  "global_options": [
+    {
+      "short": "-a",
+      "long": "--all",
+      "description": "Disable all swaps"
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Verbose output"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "device",
+      "description": "Swap block device",
+      "multiple": true,
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "block.device"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "command": "service",
+  "description": "Run a System V init script or service action",
+  "global_options": [
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show help"
+    },
+    {
+      "long": "--status-all",
+      "description": "Run status for all services"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "service",
+      "description": "service unit",
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "systemctl.unit"
+        }
+      }
+    },
+    {
+      "name": "action",
+      "description": "service action",
+      "type": {
+        "type": "Choice",
+        "data": [
+          "start",
+          "stop",
+          "restart",
+          "reload",
+          "force-reload",
+          "status",
+          "enable",
+          "disable"
+        ]
+      }
+    }
+  ]
+}

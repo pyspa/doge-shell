@@ -53,7 +53,10 @@
   "arguments": [
     {
       "name": "user",
-      "description": "User name (optional)"
+      "description": "User name (optional)",
+      "type": {
+        "type": "User"
+      }
     }
   ]
 }

@@ -1,0 +1,63 @@
+{
+  "command": "mkfs",
+  "description": "Build a Linux filesystem",
+  "global_options": [
+    {
+      "short": "-t",
+      "long": "--type",
+      "description": "Filesystem type",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "ext2",
+          "ext3",
+          "ext4",
+          "xfs",
+          "btrfs",
+          "vfat",
+          "exfat",
+          "ntfs",
+          "iso9660",
+          "nfs",
+          "cifs",
+          "tmpfs",
+          "swap"
+        ]
+      }
+    },
+    {
+      "short": "-V",
+      "long": "--verbose",
+      "description": "Verbose output"
+    },
+    {
+      "short": "-v",
+      "description": "Verbose output"
+    },
+    {
+      "short": "-c",
+      "description": "Check device for bad blocks"
+    },
+    {
+      "short": "-L",
+      "description": "Set filesystem label",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "device",
+      "description": "Block device",
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "block.device"
+        }
+      }
+    }
+  ]
+}

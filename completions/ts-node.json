@@ -1,0 +1,15 @@
+{
+  "command": "ts-node",
+  "description": "TypeScript execution environment for Node.js",
+  "global_options": [
+    { "short": "-P", "long": "--project", "description": "tsconfig file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["json"] } } },
+    { "short": "-T", "long": "--transpileOnly", "description": "Use transpile-only mode" },
+    { "short": "-e", "long": "--eval", "description": "Evaluate code", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-r", "long": "--require", "description": "Require module before execution", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--esm", "description": "Use ESM loader" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [
+    { "name": "script", "description": "TypeScript script", "type": { "type": "File", "data": { "extensions": [".ts", ".tsx", ".mts", ".cts"] } } }
+  ]
+}

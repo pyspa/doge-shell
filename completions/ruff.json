@@ -16,6 +16,8 @@
         { "long": "--unsafe-fixes", "description": "Apply unsafe fixes" },
         { "long": "--select", "description": "Rule codes to enable" },
         { "long": "--ignore", "description": "Rule codes to ignore" },
+        { "long": "--fix-only", "description": "Apply fixes without reporting remaining violations" },
+        { "long": "--output-format", "description": "Output format", "takes_value": true, "value_type": { "type": "Choice", "data": ["concise", "full", "json", "junit", "grouped", "github", "gitlab", "pylint", "rdjson", "azure"] } },
         { "long": "--watch", "description": "Run in watch mode" }
       ],
       "arguments": [{ "name": "path", "description": "File or directory", "required": false, "multiple": true, "type": { "type": "File", "data": {} } }]
@@ -29,7 +31,9 @@
       ],
       "arguments": [{ "name": "path", "description": "File or directory", "required": false, "multiple": true, "type": { "type": "File", "data": {} } }]
     },
-    { "name": "rule", "description": "Explain a rule" },
-    { "name": "server", "description": "Run language server" }
+    { "name": "rule", "description": "Explain a rule", "arguments": [{ "name": "rule", "description": "Rule code", "type": { "type": "String" } }] },
+    { "name": "server", "description": "Run language server" },
+    { "name": "config", "description": "List or describe configuration options" },
+    { "name": "clean", "description": "Clear caches" }
   ]
 }

@@ -1,0 +1,18 @@
+{
+  "command": "vite",
+  "description": "Vite development server and bundler",
+  "global_options": [
+    { "long": "--host", "description": "Listen on all addresses or specified host", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--port", "description": "Port to use", "takes_value": true, "value_type": { "type": "Number" } },
+    { "long": "--open", "description": "Open browser on startup" },
+    { "long": "--config", "description": "Config file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": [".js", ".mjs", ".ts", ".mts"] } } },
+    { "long": "--mode", "description": "Environment mode", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "dev", "description": "Start development server" },
+    { "name": "build", "description": "Build for production" },
+    { "name": "preview", "description": "Preview production build" },
+    { "name": "optimize", "description": "Pre-bundle dependencies" }
+  ]
+}

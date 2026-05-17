@@ -49,7 +49,7 @@
         {
           "name": "script",
           "description": "Script to run",
-          "type": { "type": "Dynamic", "data": { "provider": "project.task" } }
+          "type": { "type": "Dynamic", "data": { "provider": "project.task", "scope": "pnpm" } }
         }
       ]
     },
@@ -80,8 +80,20 @@
         { "name": "path", "description": "Show store path" }
       ]
     },
-    { "name": "exec", "description": "Execute a command in scope of a project" },
-    { "name": "dlx", "description": "Download and execute a package" }
+    {
+      "name": "exec",
+      "description": "Execute a command in scope of a project",
+      "arguments": [
+        { "name": "binary", "description": "Local package binary", "type": { "type": "Dynamic", "data": { "provider": "node.bin" } } }
+      ]
+    },
+    {
+      "name": "dlx",
+      "description": "Download and execute a package",
+      "arguments": [
+        { "name": "binary", "description": "Local package binary", "type": { "type": "Dynamic", "data": { "provider": "node.bin" } } }
+      ]
+    }
   ],
   "global_options": [
     { "short": "-v", "long": "--version", "description": "Show version" },

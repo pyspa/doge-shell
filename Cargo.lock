@@ -1128,6 +1128,7 @@ dependencies = [
  "termion",
  "termios",
  "tokio",
+ "toml",
  "tracing",
  "tracing-subscriber",
  "unicode-width",

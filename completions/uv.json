@@ -13,16 +13,41 @@
       "name": "run",
       "description": "Run a command or script",
       "options": [
-        { "long": "--with", "description": "Run with additional packages" },
+        { "long": "--with", "description": "Run with additional packages", "takes_value": true, "value_type": { "type": "String" } },
         { "long": "--env-file", "description": "Load environment from file", "takes_value": true, "value_type": { "type": "File", "data": {} } }
       ],
       "arguments": [{ "name": "command", "description": "Command to run", "type": { "type": "Command" } }]
     },
     { "name": "sync", "description": "Sync the project environment" },
     { "name": "lock", "description": "Update lockfile" },
-    { "name": "add", "description": "Add dependencies", "arguments": [{ "name": "package", "description": "Package requirement", "multiple": true }] },
-    { "name": "remove", "description": "Remove dependencies", "arguments": [{ "name": "package", "description": "Package name", "multiple": true }] },
-    { "name": "pip", "description": "Manage Python packages with a pip-compatible interface" },
+    {
+      "name": "add",
+      "description": "Add dependencies",
+      "options": [
+        { "long": "--dev", "description": "Add to the development dependency group" },
+        { "long": "--optional", "description": "Add to an optional dependency group", "takes_value": true, "value_type": { "type": "String" } }
+      ],
+      "arguments": [{ "name": "package", "description": "Package requirement", "multiple": true }]
+    },
+    {
+      "name": "remove",
+      "description": "Remove dependencies",
+      "arguments": [
+        { "name": "package", "description": "Package name", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "python.project_dependency" } } }
+      ]
+    },
+    {
+      "name": "pip",
+      "description": "Manage Python packages with a pip-compatible interface",
+      "subcommands": [
+        { "name": "install", "description": "Install packages", "arguments": [{ "name": "package", "description": "Package requirement", "multiple": true }] },
+        { "name": "uninstall", "description": "Uninstall packages", "arguments": [{ "name": "package", "description": "Installed package", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "python.project_dependency" } } }] },
+        { "name": "list", "description": "List installed packages" },
+        { "name": "freeze", "description": "Output installed packages" },
+        { "name": "compile", "description": "Compile requirements", "arguments": [{ "name": "file", "description": "Input requirements file", "type": { "type": "File", "data": {} } }] },
+        { "name": "sync", "description": "Sync environment from requirements", "arguments": [{ "name": "file", "description": "Requirements file", "type": { "type": "File", "data": {} } }] }
+      ]
+    },
     {
       "name": "tool",
       "description": "Run and install tools",

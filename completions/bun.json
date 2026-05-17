@@ -36,12 +36,22 @@
         {
           "name": "script",
           "description": "Script or task name",
-          "type": { "type": "Dynamic", "data": { "provider": "project.task" } }
+          "type": { "type": "Dynamic", "data": { "provider": "project.task", "scope": "bun" } }
+        }
+      ]
+    },
+    {
+      "name": "x",
+      "description": "Execute a package binary",
+      "arguments": [
+        {
+          "name": "binary",
+          "description": "Local package binary",
+          "type": { "type": "Dynamic", "data": { "provider": "node.bin" } }
         }
       ]
     },
     { "name": "test", "description": "Run tests" },
-    { "name": "x", "description": "Execute a package binary" },
     { "name": "create", "description": "Create a new project from a template" },
     { "name": "upgrade", "description": "Upgrade Bun" }
   ]

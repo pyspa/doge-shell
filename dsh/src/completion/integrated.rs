@@ -3022,6 +3022,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn npm_run_completes_package_scripts_even_when_lockfile_selects_another_manager() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "scripts": { "build": "vite build", "test": "vitest" } }"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("pnpm-lock.yaml"),
+            "lockfileVersion: '9.0'\n",
+        )
+        .unwrap();
+
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "npm run bu";
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "build"),
+            "expected npm script completion in {:?}",
+            result.candidates
+        );
+    }
+
+    #[tokio::test]
     async fn yarn_completes_package_scripts_without_run_subcommand() {
         let dir = tempdir().unwrap();
         fs::write(
@@ -3058,6 +3091,7 @@ mod tests {
             r#"{ "scripts": { "build": "bun build ./src/index.ts", "test": "bun test" } }"#,
         )
         .unwrap();
+        fs::write(dir.path().join("bun.lockb"), "").unwrap();
 
         let environment = Environment::new();
         let mut engine = IntegratedCompletionEngine::new(environment);
@@ -3564,5 +3598,104 @@ fi
             engine.ghost_completion(input, input.len(), dir.path(), None),
             Some("tmux attach -t dev-session".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn dev_dynamic_providers_complete_local_project_values() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("go.mod"), "module example.com/demo\n").unwrap();
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "[project]\ndependencies = [\"requests>=2\", \"pytest\"]\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("requirements-dev.txt"), "ruff==0.8\n").unwrap();
+        let nested_go_dir = dir.path().join("pkg");
+        fs::create_dir_all(&nested_go_dir).unwrap();
+
+        let node_bin = dir.path().join("node_modules").join(".bin");
+        fs::create_dir_all(&node_bin).unwrap();
+        fs::write(node_bin.join("vite"), "").unwrap();
+        fs::write(node_bin.join("eslint"), "").unwrap();
+
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        write_executable_script(
+            &bin_dir.join("go"),
+            "#!/bin/sh\nif [ \"$1\" = list ]; then printf 'example.com/demo\\t%s\\n' \"$PWD\"; printf 'example.com/demo/pkg/api\\t%s/pkg/api\\n' \"$PWD\"; fi\n",
+        );
+
+        let engine = engine_with_path(&bin_dir);
+        let cases = [
+            ("uv remove req", "requests"),
+            ("poetry remove py", "pytest"),
+            ("npx vi", "vite"),
+            ("npm exec es", "eslint"),
+            ("go test ./p", "./pkg/api"),
+        ];
+
+        for (input, expected) in cases {
+            let _ = engine
+                .complete(input, input.len(), dir.path(), 50, None)
+                .await;
+            let _ = wait_for_candidate(&engine, input, dir.path(), expected).await;
+        }
+
+        let input = "go test ./p";
+        let _ = engine
+            .complete(input, input.len(), &nested_go_dir, 50, None)
+            .await;
+        let _ = wait_for_candidate(&engine, input, &nested_go_dir, "./pkg/api").await;
+    }
+
+    #[tokio::test]
+    async fn project_task_scope_limits_dev_task_sources() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "scripts": { "build-npm": "echo npm" } }"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("deno.json"),
+            r#"{ "tasks": { "build-deno": "deno run main.ts" } }"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("turbo.json"),
+            r#"{ "tasks": { "build-turbo": {} } }"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("project.json"),
+            r#"{ "name": "app", "targets": { "build-nx": {} } }"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("mise.toml"),
+            "[tasks.build-mise]\nrun = 'echo mise'\n",
+        )
+        .unwrap();
+
+        let environment = Environment::new();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        for (input, expected) in [
+            ("deno task bu", "build-deno"),
+            ("turbo run bu", "build-turbo"),
+            ("nx run app:b", "app:build-nx"),
+            ("mise run bu", "build-mise"),
+        ] {
+            let result = wait_for_candidate(&engine, input, dir.path(), expected).await;
+            assert!(
+                !result
+                    .candidates
+                    .iter()
+                    .any(|candidate| candidate.text == "build-npm"),
+                "{input} should not include npm tasks from another project.task scope: {:?}",
+                result.candidates
+            );
+        }
     }
 }

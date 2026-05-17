@@ -1,0 +1,22 @@
+{
+  "command": "vitest",
+  "description": "Vite-native test runner",
+  "global_options": [
+    { "long": "--config", "description": "Config file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": [".js", ".mjs", ".ts", ".mts"] } } },
+    { "long": "--run", "description": "Disable watch mode" },
+    { "long": "--watch", "description": "Enable watch mode" },
+    { "long": "--ui", "description": "Open Vitest UI" },
+    { "long": "--coverage", "description": "Enable coverage" },
+    { "short": "-t", "long": "--testNamePattern", "description": "Run tests matching name", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "run", "description": "Run tests once" },
+    { "name": "watch", "description": "Run tests in watch mode" },
+    { "name": "dev", "description": "Run tests in development mode" },
+    { "name": "related", "description": "Run tests related to changed files" }
+  ],
+  "arguments": [
+    { "name": "filter", "description": "Test file or name filter", "multiple": true, "type": { "type": "File", "data": {} } }
+  ]
+}

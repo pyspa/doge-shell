@@ -1,0 +1,32 @@
+{
+  "command": "turbo",
+  "description": "Turborepo task runner",
+  "global_options": [
+    { "long": "--cwd", "description": "Working directory", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "long": "--color", "description": "Use color output" },
+    { "long": "--no-color", "description": "Disable color output" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    {
+      "name": "run",
+      "description": "Run tasks",
+      "options": [
+        { "long": "--filter", "description": "Filter packages", "takes_value": true, "value_type": { "type": "String" } },
+        { "long": "--cache-dir", "description": "Cache directory", "takes_value": true, "value_type": { "type": "Directory" } },
+        { "long": "--force", "description": "Ignore existing cache" },
+        { "long": "--dry-run", "description": "Show what would run" }
+      ],
+      "arguments": [
+        { "name": "task", "description": "Turbo task", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "project.task", "scope": "turbo" } } }
+      ]
+    },
+    { "name": "prune", "description": "Prepare a pruned subset of the monorepo" },
+    { "name": "query", "description": "Query package graph" },
+    { "name": "daemon", "description": "Manage the background daemon" },
+    { "name": "login", "description": "Log in to remote cache" },
+    { "name": "logout", "description": "Log out of remote cache" },
+    { "name": "link", "description": "Link this repo to remote cache" },
+    { "name": "unlink", "description": "Unlink this repo from remote cache" }
+  ]
+}

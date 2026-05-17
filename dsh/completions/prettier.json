@@ -1,0 +1,16 @@
+{
+  "command": "prettier",
+  "description": "Code formatter",
+  "global_options": [
+    { "short": "-w", "long": "--write", "description": "Edit files in-place" },
+    { "short": "-c", "long": "--check", "description": "Check formatting" },
+    { "long": "--list-different", "description": "Print differing files" },
+    { "long": "--config", "description": "Config file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": [".json", ".yaml", ".yml", ".js", ".cjs", ".mjs", ".toml"] } } },
+    { "long": "--parser", "description": "Parser", "takes_value": true, "value_type": { "type": "Choice", "data": ["babel", "typescript", "json", "yaml", "markdown", "html", "css", "scss"] } },
+    { "long": "--ignore-path", "description": "Ignore file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [
+    { "name": "file", "description": "File or glob", "multiple": true, "type": { "type": "File", "data": {} } }
+  ]
+}

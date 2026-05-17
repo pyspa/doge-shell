@@ -1,0 +1,32 @@
+{
+  "command": "nx",
+  "description": "Nx monorepo task runner",
+  "global_options": [
+    { "long": "--help", "description": "Show help" },
+    { "long": "--version", "description": "Show version" },
+    { "long": "--verbose", "description": "Show verbose output" }
+  ],
+  "subcommands": [
+    {
+      "name": "run",
+      "description": "Run a target",
+      "arguments": [
+        { "name": "target", "description": "Nx project target", "type": { "type": "Dynamic", "data": { "provider": "project.task", "scope": "nx.run" } } }
+      ]
+    },
+    {
+      "name": "run-many",
+      "description": "Run target for many projects",
+      "options": [
+        { "short": "-t", "long": "--target", "description": "Target name", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "project.task", "scope": "nx" } } },
+        { "short": "-p", "long": "--projects", "description": "Project filter", "takes_value": true, "value_type": { "type": "String" } }
+      ]
+    },
+    { "name": "affected", "description": "Run affected commands" },
+    { "name": "graph", "description": "Show project graph" },
+    { "name": "show", "description": "Show workspace information" },
+    { "name": "generate", "aliases": ["g"], "description": "Generate code" },
+    { "name": "reset", "description": "Clear local cache" },
+    { "name": "daemon", "description": "Manage daemon" }
+  ]
+}

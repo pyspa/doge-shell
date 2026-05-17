@@ -1,0 +1,16 @@
+{
+  "command": "eslint",
+  "description": "JavaScript and TypeScript linter",
+  "global_options": [
+    { "short": "-c", "long": "--config", "description": "Config file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": [".js", ".cjs", ".mjs", ".json", ".yaml", ".yml"] } } },
+    { "long": "--fix", "description": "Automatically fix problems" },
+    { "long": "--fix-dry-run", "description": "Preview fixes without writing" },
+    { "long": "--format", "description": "Output formatter", "takes_value": true, "value_type": { "type": "Choice", "data": ["stylish", "json", "compact", "unix", "html", "junit"] } },
+    { "long": "--ext", "description": "File extensions", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--cache", "description": "Only check changed files" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [
+    { "name": "file", "description": "File or directory", "multiple": true, "type": { "type": "File", "data": {} } }
+  ]
+}

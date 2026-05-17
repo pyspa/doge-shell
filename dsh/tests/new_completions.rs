@@ -74,6 +74,18 @@ fn test_new_json_completions_load() {
         "systemd-run",
         "machinectl",
         "localectl",
+        "deno",
+        "turbo",
+        "nx",
+        "npx",
+        "vite",
+        "vitest",
+        "eslint",
+        "prettier",
+        "tsc",
+        "ts-node",
+        "jest",
+        "playwright",
         "crontab",
         "usermod",
         "userdel",
@@ -139,6 +151,78 @@ fn test_new_json_completions_load() {
             Err(e) => panic!("Failed to load completion for {}: {}", cmd, e),
         }
     }
+}
+
+#[test]
+fn test_dev_cli_completions_use_dynamic_providers() {
+    let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = root_dir.parent().unwrap();
+    let completions_dir = repo_root.join("completions");
+
+    let loader = JsonCompletionLoader::with_dirs(vec![completions_dir]);
+
+    let uv = loader
+        .load_command_completion("uv")
+        .unwrap()
+        .expect("uv completion not found in json");
+    let uv_remove = uv
+        .subcommands
+        .iter()
+        .find(|sub| sub.name == "remove")
+        .expect("missing uv remove");
+    assert!(
+        matches!(
+            uv_remove.arguments.first().and_then(|arg| arg.arg_type.as_ref()),
+            Some(ArgumentType::Dynamic { provider, .. }) if provider == "python.project_dependency"
+        ),
+        "uv remove should complete local Python project dependencies"
+    );
+
+    let npx = loader
+        .load_command_completion("npx")
+        .unwrap()
+        .expect("npx completion not found in json");
+    assert!(
+        matches!(
+            npx.arguments.first().and_then(|arg| arg.arg_type.as_ref()),
+            Some(ArgumentType::Dynamic { provider, .. }) if provider == "node.bin"
+        ),
+        "npx should complete local node_modules/.bin commands"
+    );
+
+    let go = loader
+        .load_command_completion("go")
+        .unwrap()
+        .expect("go completion not found in json");
+    let go_test = go
+        .subcommands
+        .iter()
+        .find(|sub| sub.name == "test")
+        .expect("missing go test");
+    assert!(
+        matches!(
+            go_test.arguments.first().and_then(|arg| arg.arg_type.as_ref()),
+            Some(ArgumentType::Dynamic { provider, .. }) if provider == "go.package"
+        ),
+        "go test should complete local Go packages"
+    );
+
+    let nx = loader
+        .load_command_completion("nx")
+        .unwrap()
+        .expect("nx completion not found in json");
+    let nx_run = nx
+        .subcommands
+        .iter()
+        .find(|sub| sub.name == "run")
+        .expect("missing nx run");
+    assert!(
+        matches!(
+            nx_run.arguments.first().and_then(|arg| arg.arg_type.as_ref()),
+            Some(ArgumentType::Dynamic { provider, scope }) if provider == "project.task" && scope.as_deref() == Some("nx.run")
+        ),
+        "nx run should complete qualified Nx run targets"
+    );
 }
 
 #[test]

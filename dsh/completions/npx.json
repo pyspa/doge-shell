@@ -1,0 +1,14 @@
+{
+  "command": "npx",
+  "description": "Execute npm package binaries",
+  "global_options": [
+    { "short": "-y", "long": "--yes", "description": "Skip install prompt" },
+    { "long": "--no-install", "description": "Do not install missing packages" },
+    { "short": "-p", "long": "--package", "description": "Package to install", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-c", "long": "--call", "description": "Command string to execute", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [
+    { "name": "binary", "description": "Local package binary", "type": { "type": "Dynamic", "data": { "provider": "node.bin" } } }
+  ]
+}

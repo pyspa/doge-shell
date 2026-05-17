@@ -1,0 +1,17 @@
+{
+  "command": "jest",
+  "description": "JavaScript test runner",
+  "global_options": [
+    { "short": "-c", "long": "--config", "description": "Config file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": [".js", ".cjs", ".mjs", ".json", ".ts"] } } },
+    { "short": "-w", "long": "--watch", "description": "Watch files for changes" },
+    { "long": "--watchAll", "description": "Watch all files" },
+    { "short": "-t", "long": "--testNamePattern", "description": "Run tests matching name", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--runInBand", "description": "Run tests serially" },
+    { "long": "--coverage", "description": "Collect coverage" },
+    { "long": "--updateSnapshot", "description": "Update snapshots" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [
+    { "name": "pattern", "description": "Test path pattern", "multiple": true, "type": { "type": "File", "data": {} } }
+  ]
+}

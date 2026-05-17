@@ -11,8 +11,11 @@
     { "long": "--lf", "description": "Run last failures" },
     { "long": "--ff", "description": "Run failures first" },
     { "long": "--pdb", "description": "Start debugger on failure" },
-    { "long": "--cov", "description": "Measure coverage for package or path", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--cov", "description": "Measure coverage for package or path", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "python.project_dependency" } } },
     { "long": "--cov-report", "description": "Coverage report type", "takes_value": true, "value_type": { "type": "Choice", "data": ["term", "term-missing", "html", "xml", "json"] } },
+    { "long": "--rootdir", "description": "Root directory", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "long": "--junitxml", "description": "Write JUnit XML report", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["xml"] } } },
+    { "long": "--durations", "description": "Show slowest test durations", "takes_value": true, "value_type": { "type": "Number" } },
     { "short": "-h", "long": "--help", "description": "Show help" }
   ],
   "arguments": [

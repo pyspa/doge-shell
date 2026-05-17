@@ -11,8 +11,27 @@
     { "name": "install", "description": "Install project dependencies" },
     { "name": "update", "description": "Update dependencies" },
     { "name": "lock", "description": "Lock dependencies" },
-    { "name": "add", "description": "Add dependency", "arguments": [{ "name": "package", "description": "Package requirement", "multiple": true }] },
-    { "name": "remove", "description": "Remove dependency", "arguments": [{ "name": "package", "description": "Package name", "multiple": true }] },
+    {
+      "name": "add",
+      "description": "Add dependency",
+      "options": [
+        { "short": "-G", "long": "--group", "description": "Dependency group", "takes_value": true, "value_type": { "type": "String" } },
+        { "short": "-D", "long": "--dev", "description": "Add as development dependency" },
+        { "short": "-E", "long": "--extras", "description": "Extras to activate", "takes_value": true, "value_type": { "type": "String" } }
+      ],
+      "arguments": [{ "name": "package", "description": "Package requirement", "multiple": true }]
+    },
+    {
+      "name": "remove",
+      "description": "Remove dependency",
+      "options": [
+        { "short": "-G", "long": "--group", "description": "Dependency group", "takes_value": true, "value_type": { "type": "String" } },
+        { "short": "-D", "long": "--dev", "description": "Remove from development dependencies" }
+      ],
+      "arguments": [
+        { "name": "package", "description": "Package name", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "python.project_dependency" } } }
+      ]
+    },
     { "name": "run", "description": "Run a command in the virtualenv", "arguments": [{ "name": "command", "description": "Command to run", "type": { "type": "Command" } }] },
     { "name": "shell", "description": "Spawn a shell in the virtualenv" },
     {
@@ -21,9 +40,12 @@
       "subcommands": [
         { "name": "info", "description": "Display environment info" },
         { "name": "list", "description": "List environments" },
-        { "name": "use", "description": "Use a Python executable", "arguments": [{ "name": "python", "description": "Python executable" }] },
+        { "name": "use", "description": "Use a Python executable", "arguments": [{ "name": "python", "description": "Python executable", "type": { "type": "Command" } }] },
         { "name": "remove", "description": "Remove an environment" }
       ]
-    }
+    },
+    { "name": "show", "description": "Show information about packages", "arguments": [{ "name": "package", "description": "Dependency", "type": { "type": "Dynamic", "data": { "provider": "python.project_dependency" } } }] },
+    { "name": "build", "description": "Build package" },
+    { "name": "publish", "description": "Publish package" }
   ]
 }

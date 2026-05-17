@@ -1,0 +1,37 @@
+{
+  "command": "deno",
+  "description": "Deno JavaScript and TypeScript runtime",
+  "global_options": [
+    { "short": "-q", "long": "--quiet", "description": "Suppress diagnostic output" },
+    { "long": "--config", "description": "Path to config file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["json", "jsonc"] } } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    {
+      "name": "run",
+      "description": "Run a JavaScript or TypeScript program",
+      "options": [
+        { "short": "-A", "long": "--allow-all", "description": "Allow all permissions" },
+        { "long": "--allow-read", "description": "Allow file system read access" },
+        { "long": "--allow-write", "description": "Allow file system write access" },
+        { "long": "--allow-net", "description": "Allow network access" },
+        { "long": "--watch", "description": "Restart on file changes" }
+      ],
+      "arguments": [{ "name": "script", "description": "Script file", "type": { "type": "File", "data": { "extensions": [".ts", ".tsx", ".js", ".jsx", ".mjs"] } } }]
+    },
+    {
+      "name": "task",
+      "description": "Run a task from deno.json",
+      "arguments": [
+        { "name": "task", "description": "Deno task", "type": { "type": "Dynamic", "data": { "provider": "project.task", "scope": "deno" } } }
+      ]
+    },
+    { "name": "test", "description": "Run tests", "arguments": [{ "name": "path", "description": "Test file or directory", "multiple": true, "type": { "type": "File", "data": {} } }] },
+    { "name": "fmt", "description": "Format source files", "arguments": [{ "name": "path", "description": "File or directory", "multiple": true, "type": { "type": "File", "data": {} } }] },
+    { "name": "lint", "description": "Lint source files", "arguments": [{ "name": "path", "description": "File or directory", "multiple": true, "type": { "type": "File", "data": {} } }] },
+    { "name": "check", "description": "Type-check source files", "arguments": [{ "name": "path", "description": "File or directory", "multiple": true, "type": { "type": "File", "data": {} } }] },
+    { "name": "cache", "description": "Cache dependencies" },
+    { "name": "info", "description": "Show information about cache or module graph" },
+    { "name": "upgrade", "description": "Upgrade Deno" }
+  ]
+}

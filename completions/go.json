@@ -12,6 +12,9 @@
         { "long": "-race", "description": "Enable race detector" },
         { "long": "-ldflags", "description": "Linker flags" },
         { "long": "-tags", "description": "Build tags" }
+      ],
+      "arguments": [
+        { "name": "package", "description": "Package pattern", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "go.package" } } }
       ]
     },
     {
@@ -39,6 +42,9 @@
         { "long": "-bench", "description": "Run benchmarks" },
         { "long": "-count", "description": "Run tests n times" },
         { "long": "-timeout", "description": "Test timeout" }
+      ],
+      "arguments": [
+        { "name": "package", "description": "Package pattern", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "go.package" } } }
       ]
     },
     {
@@ -65,15 +71,24 @@
     },
     {
       "name": "install",
-      "description": "Compile and install packages"
+      "description": "Compile and install packages",
+      "arguments": [
+        { "name": "package", "description": "Package pattern", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "go.package" } } }
+      ]
     },
     {
       "name": "fmt",
-      "description": "Format Go source files"
+      "description": "Format Go source files",
+      "arguments": [
+        { "name": "package", "description": "Package pattern", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "go.package" } } }
+      ]
     },
     {
       "name": "vet",
-      "description": "Report likely mistakes in packages"
+      "description": "Report likely mistakes in packages",
+      "arguments": [
+        { "name": "package", "description": "Package pattern", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "go.package" } } }
+      ]
     },
     {
       "name": "doc",
@@ -101,6 +116,9 @@
       "options": [
         { "short": "-m", "description": "List modules" },
         { "long": "-json", "description": "JSON output" }
+      ],
+      "arguments": [
+        { "name": "package", "description": "Package pattern", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "go.package" } } }
       ]
     },
     {

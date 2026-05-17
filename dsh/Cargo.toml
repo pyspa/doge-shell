@@ -86,6 +86,7 @@ tempfile = "3.0"
 which = "8.0"
 wait-timeout = "0.2"
 glob = "0.3"
+toml = "1"
 
 
 [dev-dependencies]

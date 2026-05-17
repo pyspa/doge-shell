@@ -1,0 +1,27 @@
+{
+  "command": "playwright",
+  "description": "Playwright browser automation and test runner",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "short": "-V", "long": "--version", "description": "Show version" }
+  ],
+  "subcommands": [
+    {
+      "name": "test",
+      "description": "Run Playwright tests",
+      "options": [
+        { "short": "-c", "long": "--config", "description": "Config file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": [".js", ".ts", ".mjs", ".mts"] } } },
+        { "long": "--project", "description": "Project to run", "takes_value": true, "value_type": { "type": "String" } },
+        { "long": "--headed", "description": "Run browsers headed" },
+        { "long": "--debug", "description": "Run tests with debugger" },
+        { "long": "--ui", "description": "Run tests in UI mode" },
+        { "long": "--grep", "description": "Only run tests matching pattern", "takes_value": true, "value_type": { "type": "String" } }
+      ],
+      "arguments": [{ "name": "test", "description": "Test file", "multiple": true, "type": { "type": "File", "data": {} } }]
+    },
+    { "name": "install", "description": "Install browsers" },
+    { "name": "show-report", "description": "Show HTML report" },
+    { "name": "codegen", "description": "Generate tests by recording actions" },
+    { "name": "open", "description": "Open page in browser" }
+  ]
+}

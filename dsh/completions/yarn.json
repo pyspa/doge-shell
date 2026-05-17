@@ -48,7 +48,7 @@
         {
           "name": "script",
           "description": "Script to run",
-          "type": { "type": "Dynamic", "data": { "provider": "project.task" } }
+          "type": { "type": "Dynamic", "data": { "provider": "project.task", "scope": "yarn" } }
         }
       ]
     },
@@ -77,6 +77,13 @@
       "subcommands": [
         { "name": "clean", "description": "Clean cache" },
         { "name": "dir", "description": "Show cache directory" }
+      ]
+    },
+    {
+      "name": "exec",
+      "description": "Execute a binary in the project environment",
+      "arguments": [
+        { "name": "binary", "description": "Local package binary", "type": { "type": "Dynamic", "data": { "provider": "node.bin" } } }
       ]
     },
     { "name": "global", "description": "Manage global packages",

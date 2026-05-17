@@ -14,10 +14,19 @@ use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant, SystemTime};
 use tracing::warn;
 
+mod dev;
+
 const DYNAMIC_COMMAND_CACHE_TTL_MS: u64 = 1000;
 const COMPLETION_COMMAND_TIMEOUT: Duration = Duration::from_millis(1500);
 const EXTERNAL_COMPLETION_CACHE_LIMIT: usize = 128;
 const JS_PROJECT_TASK_SOURCES: &[&str] = &["npm", "pnpm", "yarn", "bun"];
+const DENO_PROJECT_TASK_SOURCES: &[&str] = &["deno"];
+const TURBO_PROJECT_TASK_SOURCES: &[&str] = &["turbo"];
+const NX_PROJECT_TASK_SOURCES: &[&str] = &["nx"];
+const MISE_PROJECT_TASK_SOURCES: &[&str] = &["mise"];
+const TASKFILE_PROJECT_TASK_SOURCES: &[&str] = &["taskfile"];
+const JUST_PROJECT_TASK_SOURCES: &[&str] = &["just"];
+const MAKE_PROJECT_TASK_SOURCES: &[&str] = &["make"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FileMetadataSignature {
@@ -36,6 +45,18 @@ struct TaskCacheEntry {
 struct TaskCacheKey {
     project_root: PathBuf,
     sources: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectTaskCandidateText {
+    Name,
+    NxRunArgument,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProjectTaskCompletionConfig {
+    sources: &'static [&'static str],
+    candidate_text: ProjectTaskCandidateText,
 }
 
 #[derive(Debug, Clone)]
@@ -360,12 +381,13 @@ impl DynamicCompletionProvider {
                 cached_only,
             ),
             "project.task" => {
-                if let Some(sources) = declared_project_task_sources(parsed_command_line) {
+                if let Some(config) = project_task_completion_config(scope, parsed_command_line) {
                     self.collect_project_task_candidates_for_sources_with_mode(
                         parsed_command_line,
                         current_dir,
-                        sources,
+                        config.sources,
                         cached_only,
+                        config.candidate_text,
                     )
                 } else if cached_only {
                     self.collect_task_candidates_with_mode(parsed_command_line, current_dir, true)
@@ -487,6 +509,15 @@ impl DynamicCompletionProvider {
                 self.collect_mountpoint_candidates(current_dir, current_token, cached_only)
             }
             "kernel.module" => self.collect_kernel_module_candidates(current_token, cached_only),
+            "python.project_dependency" => self.collect_python_project_dependency_candidates(
+                current_dir,
+                current_token,
+                cached_only,
+            ),
+            "node.bin" => self.collect_node_bin_candidates(current_dir, current_token, cached_only),
+            "go.package" => {
+                self.collect_go_package_candidates(current_dir, current_token, cached_only)
+            }
             _ => {
                 warn!("Unknown dynamic completion provider: {provider}");
                 Vec::new()
@@ -2251,6 +2282,7 @@ impl DynamicCompletionProvider {
             current_dir,
             sources,
             false,
+            ProjectTaskCandidateText::Name,
         )
     }
 
@@ -2260,6 +2292,7 @@ impl DynamicCompletionProvider {
         current_dir: &Path,
         sources: &[&str],
         cached_only: bool,
+        candidate_text: ProjectTaskCandidateText,
     ) -> Vec<EnhancedCandidate> {
         let current_token = parsed_command_line.current_token.as_str();
         match parsed_command_line.completion_context {
@@ -2284,9 +2317,12 @@ impl DynamicCompletionProvider {
         tasks
             .into_iter()
             .filter(|task| sources.contains(&task.source.as_str()))
-            .filter(|task| matches_prefix(current_token, &task.name))
-            .map(|task| EnhancedCandidate {
-                text: task.name,
+            .filter_map(|task| {
+                let text = project_task_candidate_text(&task, candidate_text);
+                matches_prefix(current_token, &text).then_some((task, text))
+            })
+            .map(|(task, text)| EnhancedCandidate {
+                text,
                 description: Some(format_task_description(&task.source, &task.command)),
                 candidate_type: CandidateType::Argument,
                 priority: 125,
@@ -4341,12 +4377,66 @@ fn systemctl_unit_kind_for_subcommand(subcommand: &str) -> Option<SystemdUnitLis
     }
 }
 
-fn declared_project_task_sources(
+fn project_task_completion_config(
+    scope: Option<&str>,
     parsed_command_line: &ParsedCommandLine,
-) -> Option<&'static [&'static str]> {
-    match parsed_command_line.command.as_str() {
+) -> Option<ProjectTaskCompletionConfig> {
+    if let Some(scope_sources) = scope.and_then(project_task_sources_for_scope) {
+        return Some(ProjectTaskCompletionConfig {
+            sources: scope_sources,
+            candidate_text: project_task_candidate_text_for_scope(scope),
+        });
+    }
+
+    let sources: &'static [&'static str] = match parsed_command_line.command.as_str() {
         "npm" | "pnpm" | "yarn" | "bun" => Some(JS_PROJECT_TASK_SOURCES),
+        "deno" => Some(DENO_PROJECT_TASK_SOURCES),
+        "turbo" => Some(TURBO_PROJECT_TASK_SOURCES),
+        "nx" => Some(NX_PROJECT_TASK_SOURCES),
+        "mise" => Some(MISE_PROJECT_TASK_SOURCES),
+        "task" => Some(TASKFILE_PROJECT_TASK_SOURCES),
+        "just" => Some(JUST_PROJECT_TASK_SOURCES),
+        "make" => Some(MAKE_PROJECT_TASK_SOURCES),
         _ => None,
+    }?;
+    Some(ProjectTaskCompletionConfig {
+        sources,
+        candidate_text: ProjectTaskCandidateText::Name,
+    })
+}
+
+fn project_task_sources_for_scope(scope: &str) -> Option<&'static [&'static str]> {
+    match scope {
+        "js" | "package-json" | "npm" | "pnpm" | "yarn" | "bun" => Some(JS_PROJECT_TASK_SOURCES),
+        "deno" => Some(DENO_PROJECT_TASK_SOURCES),
+        "turbo" => Some(TURBO_PROJECT_TASK_SOURCES),
+        "nx" | "nx.run" => Some(NX_PROJECT_TASK_SOURCES),
+        "mise" => Some(MISE_PROJECT_TASK_SOURCES),
+        "taskfile" | "task" => Some(TASKFILE_PROJECT_TASK_SOURCES),
+        "just" => Some(JUST_PROJECT_TASK_SOURCES),
+        "make" => Some(MAKE_PROJECT_TASK_SOURCES),
+        _ => None,
+    }
+}
+
+fn project_task_candidate_text_for_scope(scope: Option<&str>) -> ProjectTaskCandidateText {
+    match scope {
+        Some("nx.run") => ProjectTaskCandidateText::NxRunArgument,
+        _ => ProjectTaskCandidateText::Name,
+    }
+}
+
+fn project_task_candidate_text(
+    task: &task::TaskInfo,
+    candidate_text: ProjectTaskCandidateText,
+) -> String {
+    match candidate_text {
+        ProjectTaskCandidateText::Name => task.name.clone(),
+        ProjectTaskCandidateText::NxRunArgument => task
+            .command
+            .strip_prefix("nx run ")
+            .unwrap_or(&task.name)
+            .to_string(),
     }
 }
 

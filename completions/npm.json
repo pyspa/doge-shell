@@ -102,7 +102,7 @@
         {
           "name": "script",
           "description": "Script name from package.json",
-          "type": { "type": "Dynamic", "data": { "provider": "project.task" } }
+          "type": { "type": "Dynamic", "data": { "provider": "project.task", "scope": "npm" } }
         }
       ],
       "subcommands": []
@@ -184,6 +184,32 @@
           "long": "--description",
           "description": "Package description"
         }
+      ],
+      "arguments": [],
+      "subcommands": []
+    },
+    {
+      "name": "exec",
+      "description": "Execute a package binary",
+      "options": [
+        { "long": "--package", "description": "Package to install for execution", "takes_value": true, "value_type": { "type": "String" } },
+        { "short": "-c", "long": "--call", "description": "Command string to execute", "takes_value": true, "value_type": { "type": "String" } }
+      ],
+      "arguments": [
+        {
+          "name": "binary",
+          "description": "Local package binary",
+          "type": { "type": "Dynamic", "data": { "provider": "node.bin" } }
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "name": "ci",
+      "description": "Clean install from package lock",
+      "options": [
+        { "long": "--omit", "description": "Dependency types to omit", "takes_value": true, "value_type": { "type": "Choice", "data": ["dev", "optional", "peer"] } },
+        { "long": "--ignore-scripts", "description": "Do not run lifecycle scripts" }
       ],
       "arguments": [],
       "subcommands": []

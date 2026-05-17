@@ -1,0 +1,16 @@
+{
+  "command": "tsc",
+  "description": "TypeScript compiler",
+  "global_options": [
+    { "short": "-p", "long": "--project", "description": "Compile project from tsconfig", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["json"] } } },
+    { "short": "-w", "long": "--watch", "description": "Watch input files" },
+    { "long": "--build", "description": "Build composite projects" },
+    { "long": "--pretty", "description": "Use color and formatting", "takes_value": true, "value_type": { "type": "Choice", "data": ["true", "false"] } },
+    { "long": "--noEmit", "description": "Do not emit output" },
+    { "long": "--declaration", "description": "Generate declaration files" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [
+    { "name": "file", "description": "TypeScript file", "multiple": true, "type": { "type": "File", "data": { "extensions": [".ts", ".tsx", ".mts", ".cts"] } } }
+  ]
+}

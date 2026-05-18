@@ -53,6 +53,11 @@
       "description": "Print summary statistics"
     },
     {
+      "short": "-K",
+      "long": "--kill",
+      "description": "Attempt to forcibly close sockets"
+    },
+    {
       "short": "-4",
       "long": "--ipv4",
       "description": "Display only IPv4 sockets"
@@ -88,6 +93,48 @@
           "unix",
           "packet",
           "netlink"
+        ]
+      }
+    },
+    {
+      "short": "-f",
+      "long": "--family",
+      "description": "Protocol family to display",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "unix",
+          "inet",
+          "inet6",
+          "link",
+          "netlink"
+        ]
+      }
+    },
+    {
+      "long": "--state",
+      "description": "Socket state filter",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "established",
+          "syn-sent",
+          "syn-recv",
+          "fin-wait-1",
+          "fin-wait-2",
+          "time-wait",
+          "closed",
+          "close-wait",
+          "last-ack",
+          "listening",
+          "closing",
+          "all",
+          "connected",
+          "synchronized",
+          "bucket",
+          "big"
         ]
       }
     }

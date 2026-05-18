@@ -1,0 +1,61 @@
+{
+  "command": "ipset",
+  "description": "Administration tool for IP sets",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "short": "-v", "long": "--version", "description": "Show version" },
+    { "short": "-q", "long": "--quiet", "description": "Suppress output" },
+    {
+      "short": "-f",
+      "long": "--file",
+      "description": "Read commands from file",
+      "takes_value": true,
+      "value_type": { "type": "File", "data": {} }
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "list",
+      "description": "List sets",
+      "arguments": [{ "name": "set", "description": "Set name", "type": { "type": "Dynamic", "data": { "provider": "ipset.set" } } }]
+    },
+    {
+      "name": "save",
+      "description": "Save sets",
+      "arguments": [{ "name": "set", "description": "Set name", "type": { "type": "Dynamic", "data": { "provider": "ipset.set" } } }]
+    },
+    {
+      "name": "create",
+      "description": "Create a set",
+      "arguments": [
+        { "name": "set", "description": "Set name", "type": { "type": "String" } },
+        { "name": "type", "description": "Set type", "type": { "type": "Choice", "data": ["hash:ip", "hash:net", "hash:ip,port", "hash:net,port", "bitmap:ip", "bitmap:port", "list:set"] } }
+      ]
+    },
+    {
+      "name": "add",
+      "description": "Add an entry",
+      "arguments": [{ "name": "set", "description": "Set name", "type": { "type": "Dynamic", "data": { "provider": "ipset.set" } } }, { "name": "entry", "description": "Set entry", "type": { "type": "String" } }]
+    },
+    {
+      "name": "del",
+      "description": "Delete an entry",
+      "arguments": [{ "name": "set", "description": "Set name", "type": { "type": "Dynamic", "data": { "provider": "ipset.set" } } }, { "name": "entry", "description": "Set entry", "type": { "type": "String" } }]
+    },
+    {
+      "name": "test",
+      "description": "Test set membership",
+      "arguments": [{ "name": "set", "description": "Set name", "type": { "type": "Dynamic", "data": { "provider": "ipset.set" } } }, { "name": "entry", "description": "Set entry", "type": { "type": "String" } }]
+    },
+    {
+      "name": "destroy",
+      "description": "Destroy sets",
+      "arguments": [{ "name": "set", "description": "Set name", "type": { "type": "Dynamic", "data": { "provider": "ipset.set" } } }]
+    },
+    {
+      "name": "flush",
+      "description": "Flush sets",
+      "arguments": [{ "name": "set", "description": "Set name", "type": { "type": "Dynamic", "data": { "provider": "ipset.set" } } }]
+    }
+  ]
+}

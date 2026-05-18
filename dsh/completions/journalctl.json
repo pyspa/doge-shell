@@ -13,6 +13,18 @@
       "description": "Immediately jump to the end of the journal inside the implied pager tool"
     },
     {
+      "short": "-b",
+      "long": "--boot",
+      "description": "Show messages from a specific boot",
+      "takes_value": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "journalctl.boot"
+        }
+      }
+    },
+    {
       "short": "-n",
       "long": "--lines",
       "description": "Show the most recent journal events, specified by the argument",
@@ -26,9 +38,28 @@
       "description": "Do not pipe output into a pager"
     },
     {
+      "long": "--user",
+      "description": "Show messages from user services"
+    },
+    {
+      "long": "--system",
+      "description": "Show messages from system services"
+    },
+    {
       "short": "-u",
       "long": "--unit",
       "description": "Show messages for the specified systemd unit",
+      "takes_value": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "systemctl.unit"
+        }
+      }
+    },
+    {
+      "long": "--user-unit",
+      "description": "Show messages for the specified user unit",
       "takes_value": true,
       "value_type": {
         "type": "Dynamic",
@@ -59,6 +90,26 @@
       "short": "-k",
       "long": "--dmesg",
       "description": "Show only kernel messages"
+    },
+    {
+      "short": "-o",
+      "long": "--output",
+      "description": "Change journal output format",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "short",
+          "short-iso",
+          "short-precise",
+          "short-monotonic",
+          "verbose",
+          "export",
+          "json",
+          "json-pretty",
+          "cat"
+        ]
+      }
     },
     {
       "short": "-p",

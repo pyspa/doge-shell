@@ -1,0 +1,30 @@
+{
+  "command": "iw",
+  "description": "nl80211 based CLI configuration utility for wireless devices",
+  "subcommands": [
+    { "name": "list", "description": "List wireless capabilities" },
+    { "name": "event", "description": "Monitor wireless events" },
+    {
+      "name": "dev",
+      "description": "Manage wireless interfaces",
+      "arguments": [{ "name": "interface", "description": "Wireless interface", "type": { "type": "Interface" } }],
+      "subcommands": [
+        { "name": "info", "description": "Show interface information" },
+        { "name": "link", "description": "Show link status" },
+        { "name": "scan", "description": "Scan for networks" },
+        { "name": "station", "description": "Station operations" },
+        { "name": "set", "description": "Set interface parameters" }
+      ]
+    },
+    {
+      "name": "phy",
+      "description": "Manage physical wireless devices",
+      "arguments": [{ "name": "phy", "description": "PHY name", "type": { "type": "String" } }]
+    },
+    {
+      "name": "reg",
+      "description": "Regulatory domain operations",
+      "subcommands": [{ "name": "get", "description": "Show regulatory domain" }, { "name": "set", "description": "Set regulatory domain", "arguments": [{ "name": "country", "description": "ISO country code", "type": { "type": "String" } }] }]
+    }
+  ]
+}

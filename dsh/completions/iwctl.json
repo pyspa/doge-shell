@@ -1,0 +1,27 @@
+{
+  "command": "iwctl",
+  "description": "iwd wireless daemon client",
+  "subcommands": [
+    { "name": "help", "description": "Show help" },
+    { "name": "version", "description": "Show version" },
+    {
+      "name": "device",
+      "description": "Manage devices",
+      "subcommands": [{ "name": "list", "description": "List devices" }, { "name": "show", "description": "Show device", "arguments": [{ "name": "device", "description": "Device name", "type": { "type": "Interface" } }] }]
+    },
+    {
+      "name": "station",
+      "description": "Manage stations",
+      "arguments": [{ "name": "station", "description": "Station name", "type": { "type": "Interface" } }],
+      "subcommands": [
+        { "name": "scan", "description": "Scan for networks" },
+        { "name": "get-networks", "description": "List networks" },
+        { "name": "connect", "description": "Connect to a network", "arguments": [{ "name": "ssid", "description": "Network SSID", "type": { "type": "String" } }] },
+        { "name": "disconnect", "description": "Disconnect station" },
+        { "name": "show", "description": "Show station state" }
+      ]
+    },
+    { "name": "known-networks", "description": "Manage known networks" },
+    { "name": "adapter", "description": "Manage adapters" }
+  ]
+}

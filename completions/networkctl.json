@@ -1,0 +1,51 @@
+{
+  "command": "networkctl",
+  "description": "Query and control systemd-networkd links",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "long": "--version", "description": "Show version" },
+    { "long": "--no-pager", "description": "Do not pipe output into a pager" },
+    { "long": "--no-legend", "description": "Do not print legend" },
+    { "short": "-a", "long": "--all", "description": "Show all links" },
+    {
+      "long": "--json",
+      "description": "Use JSON output",
+      "takes_value": true,
+      "value_type": { "type": "Choice", "data": ["short", "pretty", "off"] }
+    }
+  ],
+  "subcommands": [
+    { "name": "list", "description": "List links" },
+    {
+      "name": "status",
+      "description": "Show link status",
+      "arguments": [{ "name": "link", "description": "Link name", "type": { "type": "Dynamic", "data": { "provider": "networkctl.link" } } }]
+    },
+    {
+      "name": "lldp",
+      "description": "Show LLDP neighbors",
+      "arguments": [{ "name": "link", "description": "Link name", "type": { "type": "Dynamic", "data": { "provider": "networkctl.link" } } }]
+    },
+    {
+      "name": "up",
+      "description": "Bring links up",
+      "arguments": [{ "name": "link", "description": "Link name", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "networkctl.link" } } }]
+    },
+    {
+      "name": "down",
+      "description": "Bring links down",
+      "arguments": [{ "name": "link", "description": "Link name", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "networkctl.link" } } }]
+    },
+    {
+      "name": "renew",
+      "description": "Renew dynamic address configuration",
+      "arguments": [{ "name": "link", "description": "Link name", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "networkctl.link" } } }]
+    },
+    {
+      "name": "reconfigure",
+      "description": "Reconfigure links",
+      "arguments": [{ "name": "link", "description": "Link name", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "networkctl.link" } } }]
+    },
+    { "name": "reload", "description": "Reload .network and .netdev files" }
+  ]
+}

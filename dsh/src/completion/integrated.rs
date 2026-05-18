@@ -1163,6 +1163,10 @@ impl IntegratedCompletionEngine {
         request: &CompletionRequest,
         parsed_command_line: &ParsedCommandLine,
     ) -> CandidateBatch {
+        if self.scalar_option_value_context(parsed_command_line) {
+            return CandidateBatch::empty();
+        }
+
         let candidates = self.dynamic.collect_fish_fallback_candidates(
             request.current_dir,
             request.input,
@@ -1174,6 +1178,25 @@ impl IntegratedCompletionEngine {
         }
 
         CandidateBatch::inclusive_with_framework(candidates, CompletionFrameworkKind::Skim)
+    }
+
+    fn scalar_option_value_context(&self, parsed_command_line: &ParsedCommandLine) -> bool {
+        if !matches!(
+            parsed_command_line.completion_context,
+            parser::CompletionContext::OptionValue { .. }
+        ) {
+            return false;
+        }
+
+        matches!(
+            self.argument_type_for_completion_context(parsed_command_line),
+            Some(
+                ArgumentType::String
+                    | ArgumentType::Number
+                    | ArgumentType::Url
+                    | ArgumentType::Regex
+            )
+        )
     }
 
     /// Convert CompletionCandidate to EnhancedCandidate
@@ -3299,8 +3322,6 @@ mod tests {
         {
             let mut env = environment.write();
             env.paths = vec![bin_dir.display().to_string()];
-            env.variables
-                .insert("DSH_COMPLETION_FISH_FALLBACK".to_string(), "1".to_string());
             env.clear_command_cache();
         }
         let mut engine = IntegratedCompletionEngine::new(environment);
@@ -3341,6 +3362,53 @@ mod tests {
             .find(|candidate| candidate.text == "che-fish-only")
             .unwrap();
         assert_eq!(fish_candidate.description.as_deref(), Some("Fish only"));
+    }
+
+    #[tokio::test]
+    async fn fish_fallback_still_runs_for_string_positional_arguments() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        write_executable_script(
+            &bin_dir.join("fish"),
+            "#!/bin/sh\nprintf 'zzfish-package\\tFish package\\n'\n",
+        );
+
+        let environment = Environment::new();
+        {
+            let mut env = environment.write();
+            env.paths = vec![bin_dir.display().to_string()];
+            env.clear_command_cache();
+        }
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "apk add zzfish";
+        let started = std::time::Instant::now();
+        let result = loop {
+            let result = engine
+                .complete(input, input.len(), dir.path(), 200, None)
+                .await;
+            if result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "zzfish-package")
+            {
+                break result;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "expected fish fallback for String positional argument"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+
+        let fish_candidate = result
+            .candidates
+            .iter()
+            .find(|candidate| candidate.text == "zzfish-package")
+            .unwrap();
+        assert_eq!(fish_candidate.description.as_deref(), Some("Fish package"));
     }
 
     #[tokio::test]

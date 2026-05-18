@@ -3,6 +3,15 @@
   "description": "firewalld command line client",
   "global_options": [
     {
+      "description": "Show help",
+      "short": "-h",
+      "long": "--help"
+    },
+    {
+      "description": "Show version",
+      "long": "--version"
+    },
+    {
       "description": "Permanent change",
       "long": "--permanent"
     },
@@ -15,11 +24,38 @@
       "long": "--list-all"
     },
     {
+      "description": "List services",
+      "long": "--list-services"
+    },
+    {
+      "description": "List ports",
+      "long": "--list-ports"
+    },
+    {
+      "description": "Get active zones",
+      "long": "--get-active-zones"
+    },
+    {
+      "description": "Get available zones",
+      "long": "--get-zones"
+    },
+    {
+      "description": "Get available services",
+      "long": "--get-services"
+    },
+    {
+      "description": "Get available ICMP types",
+      "long": "--get-icmptypes"
+    },
+    {
       "description": "Zone name",
       "long": "--zone",
       "takes_value": true,
       "value_type": {
-        "type": "String"
+        "type": "Dynamic",
+        "data": {
+          "provider": "firewalld.zone"
+        }
       }
     },
     {
@@ -27,7 +63,10 @@
       "long": "--add-service",
       "takes_value": true,
       "value_type": {
-        "type": "String"
+        "type": "Dynamic",
+        "data": {
+          "provider": "firewalld.service"
+        }
       }
     },
     {
@@ -35,7 +74,10 @@
       "long": "--remove-service",
       "takes_value": true,
       "value_type": {
-        "type": "String"
+        "type": "Dynamic",
+        "data": {
+          "provider": "firewalld.service"
+        }
       }
     },
     {
@@ -49,6 +91,44 @@
     {
       "description": "Remove port",
       "long": "--remove-port",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "Add ICMP block",
+      "long": "--add-icmp-block",
+      "takes_value": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "firewalld.icmp_type"
+        }
+      }
+    },
+    {
+      "description": "Remove ICMP block",
+      "long": "--remove-icmp-block",
+      "takes_value": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "firewalld.icmp_type"
+        }
+      }
+    },
+    {
+      "description": "Add rich rule",
+      "long": "--add-rich-rule",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "description": "Remove rich rule",
+      "long": "--remove-rich-rule",
       "takes_value": true,
       "value_type": {
         "type": "String"

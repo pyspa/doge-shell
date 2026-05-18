@@ -21,6 +21,41 @@
       "description": "Change settings",
       "short": "-s",
       "long": "--change"
+    },
+    {
+      "description": "Show ring parameters",
+      "short": "-g",
+      "long": "--show-ring"
+    },
+    {
+      "description": "Change ring parameters",
+      "short": "-G",
+      "long": "--set-ring"
+    },
+    {
+      "description": "Identify adapter by blinking LEDs",
+      "short": "-p",
+      "long": "--identify"
+    },
+    {
+      "description": "Show pause parameters",
+      "short": "-a",
+      "long": "--show-pause"
+    },
+    {
+      "description": "Change pause parameters",
+      "short": "-A",
+      "long": "--pause"
+    },
+    {
+      "description": "Show channels",
+      "short": "-l",
+      "long": "--show-channels"
+    },
+    {
+      "description": "Set channels",
+      "short": "-L",
+      "long": "--set-channels"
     }
   ],
   "arguments": [

@@ -1,0 +1,17 @@
+{
+  "command": "smartctl",
+  "description": "Control and monitor SMART disks",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "short": "-V", "long": "--version", "description": "Show version" },
+    { "short": "-a", "long": "--all", "description": "Show all SMART information" },
+    { "short": "-x", "long": "--xall", "description": "Show all SMART and non-SMART information" },
+    { "short": "-H", "long": "--health", "description": "Show health status" },
+    { "short": "-i", "long": "--info", "description": "Show device identity information" },
+    { "short": "-A", "long": "--attributes", "description": "Show vendor SMART attributes" },
+    { "short": "-l", "long": "--log", "description": "Show SMART log", "takes_value": true, "value_type": { "type": "Choice", "data": ["error", "selftest", "selective", "directory", "xerror", "xselftest", "sataphy"] } },
+    { "short": "-t", "long": "--test", "description": "Run self-test", "takes_value": true, "value_type": { "type": "Choice", "data": ["offline", "short", "long", "conveyance", "select"] } },
+    { "short": "-d", "long": "--device", "description": "Device type", "takes_value": true, "value_type": { "type": "Choice", "data": ["auto", "ata", "scsi", "sat", "nvme", "usbjmicron", "usbsunplus", "megaraid"] } }
+  ],
+  "arguments": [{ "name": "device", "description": "Block device", "type": { "type": "Dynamic", "data": { "provider": "block.device" } } }]
+}

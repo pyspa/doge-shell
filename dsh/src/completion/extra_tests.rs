@@ -1,4 +1,7 @@
 #[cfg(test)]
+mod new_completions;
+
+#[cfg(test)]
 mod tests {
     use crate::completion::parser::CommandLineParser;
 

@@ -1,0 +1,15 @@
+{
+  "command": "wg",
+  "description": "WireGuard configuration utility",
+  "subcommands": [
+    { "name": "show", "description": "Show current WireGuard configuration", "arguments": [{ "name": "interface", "description": "WireGuard interface", "type": { "type": "Dynamic", "data": { "provider": "wireguard.interface" } } }] },
+    { "name": "showconf", "description": "Show configuration for an interface", "arguments": [{ "name": "interface", "description": "WireGuard interface", "type": { "type": "Dynamic", "data": { "provider": "wireguard.interface" } } }] },
+    { "name": "set", "description": "Change interface configuration", "arguments": [{ "name": "interface", "description": "WireGuard interface", "type": { "type": "Dynamic", "data": { "provider": "wireguard.interface" } } }] },
+    { "name": "setconf", "description": "Apply configuration from file", "arguments": [{ "name": "interface", "description": "WireGuard interface", "type": { "type": "Dynamic", "data": { "provider": "wireguard.interface" } } }, { "name": "file", "description": "Configuration file", "type": { "type": "File", "data": {} } }] },
+    { "name": "addconf", "description": "Append configuration from file", "arguments": [{ "name": "interface", "description": "WireGuard interface", "type": { "type": "Dynamic", "data": { "provider": "wireguard.interface" } } }, { "name": "file", "description": "Configuration file", "type": { "type": "File", "data": {} } }] },
+    { "name": "syncconf", "description": "Synchronize configuration from file", "arguments": [{ "name": "interface", "description": "WireGuard interface", "type": { "type": "Dynamic", "data": { "provider": "wireguard.interface" } } }, { "name": "file", "description": "Configuration file", "type": { "type": "File", "data": {} } }] },
+    { "name": "genkey", "description": "Generate a private key" },
+    { "name": "pubkey", "description": "Derive a public key" },
+    { "name": "genpsk", "description": "Generate a preshared key" }
+  ]
+}

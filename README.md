@@ -720,7 +720,7 @@ include setup.sh
 
 ### Fish Completion Fallback
 
-Set `DSH_COMPLETION_FISH_FALLBACK=1` to let TAB completion call `fish -c 'complete -C ...'` when `fish` is available in `PATH`. This fallback is off by default, runs with a timeout, is cached with other external completion results, and is merged below built-in JSON and project-aware dynamic candidates.
+TAB completion calls `fish -c 'complete -C ...'` automatically when `fish` is available in `PATH`. Leave `DSH_COMPLETION_FISH_FALLBACK` unset for auto mode, set it to `1`, `true`, `yes`, or `on` to force it on, or set it to `0`, `false`, `no`, or `off` to disable it. This fallback runs with a timeout, is cached with other external completion results, and is merged below built-in JSON and project-aware dynamic candidates.
 
 ## 💻 Command Palette
 

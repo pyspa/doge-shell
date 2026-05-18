@@ -1,0 +1,15 @@
+{
+  "command": "rfkill",
+  "description": "Tool for enabling and disabling wireless devices",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "short": "-J", "long": "--json", "description": "Use JSON output" },
+    { "short": "-n", "long": "--noheadings", "description": "Do not print headings" },
+    { "short": "-o", "long": "--output", "description": "Output columns", "takes_value": true, "value_type": { "type": "String" } }
+  ],
+  "subcommands": [
+    { "name": "list", "description": "List rfkill devices", "arguments": [{ "name": "type", "description": "Device type", "type": { "type": "Choice", "data": ["all", "wifi", "bluetooth", "uwb", "wimax", "wwan", "gps", "fm", "nfc"] } }] },
+    { "name": "block", "description": "Block device", "arguments": [{ "name": "device", "description": "Device index or type", "type": { "type": "Choice", "data": ["all", "wifi", "bluetooth", "uwb", "wimax", "wwan", "gps", "fm", "nfc"] } }] },
+    { "name": "unblock", "description": "Unblock device", "arguments": [{ "name": "device", "description": "Device index or type", "type": { "type": "Choice", "data": ["all", "wifi", "bluetooth", "uwb", "wimax", "wwan", "gps", "fm", "nfc"] } }] }
+  ]
+}

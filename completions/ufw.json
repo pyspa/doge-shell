@@ -12,7 +12,20 @@
     },
     {
       "name": "status",
-      "description": "Show firewall status"
+      "description": "Show firewall status",
+      "arguments": [
+        {
+          "name": "mode",
+          "description": "Status detail",
+          "type": {
+            "type": "Choice",
+            "data": [
+              "verbose",
+              "numbered"
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "reload",
@@ -61,6 +74,33 @@
           "type": {
             "type": "String"
           }
+        }
+      ]
+    },
+    {
+      "name": "app",
+      "description": "Manage application profiles",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List application profiles"
+        },
+        {
+          "name": "info",
+          "description": "Show application profile information",
+          "arguments": [
+            {
+              "name": "profile",
+              "description": "Application profile",
+              "type": {
+                "type": "String"
+              }
+            }
+          ]
+        },
+        {
+          "name": "update",
+          "description": "Update application profile rules"
         }
       ]
     }

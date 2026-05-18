@@ -1,0 +1,10 @@
+{
+  "command": "wg-quick",
+  "description": "Set up WireGuard tunnels based on config files",
+  "subcommands": [
+    { "name": "up", "description": "Bring up a WireGuard interface", "arguments": [{ "name": "interface", "description": "Interface or config file", "type": { "type": "Dynamic", "data": { "provider": "wireguard.config" } } }] },
+    { "name": "down", "description": "Bring down a WireGuard interface", "arguments": [{ "name": "interface", "description": "Interface or config file", "type": { "type": "Dynamic", "data": { "provider": "wireguard.interface" } } }] },
+    { "name": "save", "description": "Save current configuration", "arguments": [{ "name": "interface", "description": "WireGuard interface", "type": { "type": "Dynamic", "data": { "provider": "wireguard.interface" } } }] },
+    { "name": "strip", "description": "Output configuration with wg-quick-only fields removed", "arguments": [{ "name": "interface", "description": "Interface or config file", "type": { "type": "Dynamic", "data": { "provider": "wireguard.config" } } }] }
+  ]
+}

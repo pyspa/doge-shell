@@ -102,6 +102,30 @@ enum SystemdUnitListKind {
     UnitFiles,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SystemdManagerScope {
+    System,
+    User,
+    Global,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FishFallbackMode {
+    Auto,
+    Enabled,
+    Disabled,
+}
+
+impl FishFallbackMode {
+    fn label(self) -> &'static str {
+        match self {
+            FishFallbackMode::Auto => "auto",
+            FishFallbackMode::Enabled => "enabled",
+            FishFallbackMode::Disabled => "disabled",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct NmcliCompletionSpec<'a> {
     kind: &'a str,
@@ -203,6 +227,25 @@ pub(crate) fn diagnostics_lines() -> Vec<String> {
 
 pub(crate) fn is_known_declared_dynamic_provider(provider: &str) -> bool {
     is_known_dynamic_completion_provider(provider)
+}
+
+pub(crate) fn fish_fallback_mode_label(environment: &Environment) -> &'static str {
+    fish_fallback_mode_from_env(environment).label()
+}
+
+fn fish_fallback_mode_from_env(environment: &Environment) -> FishFallbackMode {
+    match environment
+        .get_var("DSH_COMPLETION_FISH_FALLBACK")
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        None => FishFallbackMode::Auto,
+        Some(value) if env_truthy(value) => FishFallbackMode::Enabled,
+        Some(value) if env_falsey(value) => FishFallbackMode::Disabled,
+        Some(_) => FishFallbackMode::Disabled,
+    }
 }
 
 impl DynamicCompletionProvider {
@@ -362,6 +405,7 @@ impl DynamicCompletionProvider {
                     current_dir,
                     current_token,
                     kind,
+                    selected_systemd_manager_scope(parsed_command_line),
                     "systemd unit",
                     cached_only,
                 )
@@ -370,9 +414,34 @@ impl DynamicCompletionProvider {
                 current_dir,
                 current_token,
                 SystemdUnitListKind::UnitFiles,
+                selected_systemd_manager_scope(parsed_command_line),
                 "systemd unit file",
                 cached_only,
             ),
+            "journalctl.boot" => {
+                self.collect_journalctl_boot_candidates(current_dir, current_token, cached_only)
+            }
+            "firewalld.zone" => {
+                self.collect_firewalld_zone_candidates(current_dir, current_token, cached_only)
+            }
+            "firewalld.service" => {
+                self.collect_firewalld_service_candidates(current_dir, current_token, cached_only)
+            }
+            "firewalld.icmp_type" => {
+                self.collect_firewalld_icmp_type_candidates(current_dir, current_token, cached_only)
+            }
+            "networkctl.link" => {
+                self.collect_networkctl_link_candidates(current_dir, current_token, cached_only)
+            }
+            "ipset.set" => {
+                self.collect_ipset_set_candidates(current_dir, current_token, cached_only)
+            }
+            "wireguard.interface" => {
+                self.collect_wireguard_interface_candidates(current_dir, current_token, cached_only)
+            }
+            "wireguard.config" => {
+                self.collect_wireguard_config_candidates(current_dir, current_token)
+            }
             "cargo.package" => self.collect_cargo_metadata_candidates(
                 current_dir,
                 current_token,
@@ -424,6 +493,11 @@ impl DynamicCompletionProvider {
                 parsed_command_line.command.as_str(),
                 cached_only,
             ),
+            "apk.installed_package" => self.collect_apk_installed_package_candidates(
+                current_dir,
+                current_token,
+                cached_only,
+            ),
             "dnf.installed_package" => self.collect_rpm_installed_package_candidates(
                 current_dir,
                 current_token,
@@ -434,6 +508,11 @@ impl DynamicCompletionProvider {
                 current_dir,
                 current_token,
                 "rpm",
+                cached_only,
+            ),
+            "zypper.installed_package" => self.collect_zypper_installed_package_candidates(
+                current_dir,
+                current_token,
                 cached_only,
             ),
             "fstab.mountpoint" => {
@@ -664,10 +743,7 @@ impl DynamicCompletionProvider {
     }
 
     fn fish_fallback_enabled(&self) -> bool {
-        self.environment
-            .read()
-            .get_var("DSH_COMPLETION_FISH_FALLBACK")
-            .is_some_and(|value| env_truthy(&value))
+        fish_fallback_mode_from_env(&self.environment.read()) != FishFallbackMode::Disabled
     }
 
     pub(crate) fn collect_git_candidates(
@@ -1120,6 +1196,7 @@ impl DynamicCompletionProvider {
             current_dir,
             parsed_command_line.current_token.as_str(),
             kind,
+            selected_systemd_manager_scope(parsed_command_line),
             "systemd unit",
             cached_only,
         )
@@ -1160,6 +1237,7 @@ impl DynamicCompletionProvider {
             current_dir,
             parsed_command_line.current_token.as_str(),
             SystemdUnitListKind::All,
+            selected_systemd_manager_scope(parsed_command_line),
             "systemd unit",
             cached_only,
         )
@@ -2300,6 +2378,203 @@ impl DynamicCompletionProvider {
         )
     }
 
+    fn collect_apk_installed_package_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_local_command_value_candidates(
+            "apk",
+            "installed-package",
+            PathBuf::from("/lib/apk/db/installed"),
+            "apk",
+            &["info"],
+            current_dir,
+            current_token,
+            "installed apk package",
+            cached_only,
+            parse_package_lines,
+        )
+    }
+
+    fn collect_zypper_installed_package_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_local_command_value_candidates(
+            "zypper",
+            "installed-package",
+            PathBuf::from("/var/lib/rpm"),
+            "rpm",
+            &["-qa", "--qf", "%{NAME}\\n"],
+            current_dir,
+            current_token,
+            "installed rpm package",
+            cached_only,
+            parse_package_lines,
+        )
+    }
+
+    fn collect_journalctl_boot_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_local_command_value_candidates(
+            "journalctl",
+            "boot",
+            PathBuf::from("/var/log/journal"),
+            "journalctl",
+            &["--list-boots", "--no-pager"],
+            current_dir,
+            current_token,
+            "journal boot",
+            cached_only,
+            parse_journalctl_boots,
+        )
+    }
+
+    fn collect_firewalld_zone_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_local_command_value_candidates(
+            "firewall-cmd",
+            "zone",
+            PathBuf::from("/etc/firewalld/zones"),
+            "firewall-cmd",
+            &["--get-zones"],
+            current_dir,
+            current_token,
+            "firewalld zone",
+            cached_only,
+            parse_whitespace_values,
+        )
+    }
+
+    fn collect_firewalld_service_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_local_command_value_candidates(
+            "firewall-cmd",
+            "service",
+            PathBuf::from("/usr/lib/firewalld/services"),
+            "firewall-cmd",
+            &["--get-services"],
+            current_dir,
+            current_token,
+            "firewalld service",
+            cached_only,
+            parse_whitespace_values,
+        )
+    }
+
+    fn collect_firewalld_icmp_type_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_local_command_value_candidates(
+            "firewall-cmd",
+            "icmp-type",
+            PathBuf::from("/usr/lib/firewalld/icmptypes"),
+            "firewall-cmd",
+            &["--get-icmptypes"],
+            current_dir,
+            current_token,
+            "firewalld ICMP type",
+            cached_only,
+            parse_whitespace_values,
+        )
+    }
+
+    fn collect_networkctl_link_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_local_command_value_candidates(
+            "networkctl",
+            "link",
+            PathBuf::from("/sys/class/net"),
+            "networkctl",
+            &["list", "--all", "--no-legend", "--no-pager"],
+            current_dir,
+            current_token,
+            "network link",
+            cached_only,
+            parse_networkctl_links,
+        )
+    }
+
+    fn collect_ipset_set_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_local_command_value_candidates(
+            "ipset",
+            "set",
+            PathBuf::from("/etc/ipset.conf"),
+            "ipset",
+            &["list", "-n"],
+            current_dir,
+            current_token,
+            "ipset set",
+            cached_only,
+            parse_package_lines,
+        )
+    }
+
+    fn collect_wireguard_interface_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_local_command_value_candidates(
+            "wg",
+            "interface",
+            PathBuf::from("/etc/wireguard"),
+            "wg",
+            &["show", "interfaces"],
+            current_dir,
+            current_token,
+            "WireGuard interface",
+            cached_only,
+            parse_whitespace_values,
+        )
+    }
+
+    fn collect_wireguard_config_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+    ) -> Vec<EnhancedCandidate> {
+        collect_wireguard_config_names_from_dirs([Path::new("/etc/wireguard"), current_dir])
+            .into_iter()
+            .filter(|value| matches_prefix(current_token, value))
+            .map(|value| EnhancedCandidate {
+                text: value,
+                description: Some("WireGuard config".to_string()),
+                candidate_type: CandidateType::Argument,
+                priority: 130,
+            })
+            .collect()
+    }
+
     pub(crate) fn collect_tcpdump_candidates(
         &self,
         parsed_command_line: &ParsedCommandLine,
@@ -3082,21 +3357,28 @@ impl DynamicCompletionProvider {
         current_dir: &Path,
         current_token: &str,
         kind: SystemdUnitListKind,
+        manager_scope: Option<SystemdManagerScope>,
         description: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
         let command_path = self.resolve_command_path("systemctl");
         let current_dir = current_dir.to_path_buf();
-        let value_kind = match kind {
+        let base_value_kind = match kind {
             SystemdUnitListKind::All => "unit-all",
             SystemdUnitListKind::Running => "unit-running",
             SystemdUnitListKind::Enabled => "unit-enabled",
             SystemdUnitListKind::Disabled => "unit-disabled",
             SystemdUnitListKind::UnitFiles => "unit-files",
         };
+        let value_kind = match manager_scope {
+            Some(SystemdManagerScope::System) => format!("system-{base_value_kind}"),
+            Some(SystemdManagerScope::User) => format!("user-{base_value_kind}"),
+            Some(SystemdManagerScope::Global) => format!("global-{base_value_kind}"),
+            None => base_value_kind.to_string(),
+        };
         self.collect_cached_value_candidates(
             "systemctl",
-            value_kind,
+            &value_kind,
             canonicalize_path(&current_dir),
             current_token,
             description,
@@ -3105,7 +3387,14 @@ impl DynamicCompletionProvider {
                 let Some(command_path) = command_path else {
                     return Ok(Vec::new());
                 };
-                let args: Vec<&str> = match kind {
+                let mut args: Vec<&str> = Vec::new();
+                match manager_scope {
+                    Some(SystemdManagerScope::System) => args.push("--system"),
+                    Some(SystemdManagerScope::User) => args.push("--user"),
+                    Some(SystemdManagerScope::Global) => args.push("--global"),
+                    None => {}
+                }
+                args.extend(match kind {
                     SystemdUnitListKind::All => {
                         vec!["list-units", "--all", "--no-pager", "--no-legend"]
                     }
@@ -3127,7 +3416,7 @@ impl DynamicCompletionProvider {
                     SystemdUnitListKind::UnitFiles => {
                         vec!["list-unit-files", "--no-pager", "--no-legend"]
                     }
-                };
+                });
                 Ok(parse_first_fields(&run_command_lines(
                     &command_path,
                     &args,
@@ -4345,6 +4634,53 @@ fn parse_first_fields(lines: &[String]) -> Vec<String> {
     )
 }
 
+fn parse_whitespace_values(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .flat_map(|line| line.split_whitespace())
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+fn parse_journalctl_boots(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .filter_map(|line| {
+                let mut fields = line.split_whitespace();
+                let offset = fields.next()?;
+                if offset.parse::<i32>().is_ok() {
+                    Some(offset.to_string())
+                } else {
+                    fields.next().map(str::to_string)
+                }
+            })
+            .collect(),
+    )
+}
+
+fn parse_networkctl_links(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .filter_map(|line| {
+                let mut fields = line.split_whitespace();
+                let first = fields.next()?;
+                if first == "IDX" {
+                    return None;
+                }
+                if first.parse::<u32>().is_ok() {
+                    fields.next().map(str::to_string)
+                } else {
+                    Some(first.to_string())
+                }
+            })
+            .collect(),
+    )
+}
+
 fn selected_git_remote(parsed_command_line: &ParsedCommandLine) -> Option<&str> {
     parsed_command_line
         .specified_arguments
@@ -4502,6 +4838,42 @@ fn systemctl_unit_kind_for_subcommand(subcommand: &str) -> Option<SystemdUnitLis
     }
 }
 
+fn selected_systemd_manager_scope(
+    parsed_command_line: &ParsedCommandLine,
+) -> Option<SystemdManagerScope> {
+    if matches!(
+        &parsed_command_line.completion_context,
+        CompletionContext::OptionValue { option_name, .. } if option_name == "--user-unit"
+    ) {
+        return Some(SystemdManagerScope::User);
+    }
+
+    let has_option = |name: &str| {
+        parsed_command_line
+            .specified_options
+            .iter()
+            .chain(parsed_command_line.raw_args.iter())
+            .any(|token| token == name)
+    };
+    let has_inline_option_value = |name: &str| {
+        parsed_command_line.raw_args.iter().any(|token| {
+            token
+                .strip_prefix(name)
+                .is_some_and(|suffix| suffix.starts_with('='))
+        })
+    };
+
+    if has_option("--user-unit") || has_inline_option_value("--user-unit") || has_option("--user") {
+        Some(SystemdManagerScope::User)
+    } else if has_option("--global") {
+        Some(SystemdManagerScope::Global)
+    } else if has_option("--system") {
+        Some(SystemdManagerScope::System)
+    } else {
+        None
+    }
+}
+
 fn project_task_completion_config(
     scope: Option<&str>,
     parsed_command_line: &ParsedCommandLine,
@@ -4573,6 +4945,13 @@ fn env_truthy(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
+    )
+}
+
+fn env_falsey(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "0" | "false" | "no" | "off"
     )
 }
 
@@ -5128,6 +5507,33 @@ fn collect_kernel_module_names(dir: &Path, values: &mut Vec<String>) {
     }
 }
 
+fn collect_wireguard_config_names_from_dirs<'a>(
+    dirs: impl IntoIterator<Item = &'a Path>,
+) -> Vec<String> {
+    let mut values = Vec::new();
+    for dir in dirs {
+        let Ok(entries) = fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let Some(name) = file_name.strip_suffix(".conf") else {
+                continue;
+            };
+            if !name.is_empty() {
+                values.push(name.to_string());
+            }
+        }
+    }
+    dedup_sorted(values)
+}
+
 fn format_task_description(source: &str, command: &str) -> String {
     let summary = format!("{source}: {command}");
     truncate_string(&summary, 80)
@@ -5361,6 +5767,58 @@ mod tests {
         assert_eq!(
             parse_git_status_porcelain_paths(" M src/lib.rs\0R  src/new.rs\0src/old.rs\0"),
             vec!["src/lib.rs".to_string(), "src/new.rs".to_string()]
+        );
+    }
+
+    #[test]
+    fn wireguard_config_names_strip_conf_suffix_and_ignore_other_files() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("wg0.conf"), "").unwrap();
+        fs::write(dir.path().join("wg-dev.conf"), "").unwrap();
+        fs::write(dir.path().join("notes.txt"), "").unwrap();
+        fs::create_dir(dir.path().join("nested.conf")).unwrap();
+
+        assert_eq!(
+            collect_wireguard_config_names_from_dirs([dir.path()]),
+            vec!["wg-dev".to_string(), "wg0".to_string()]
+        );
+    }
+
+    #[test]
+    fn journalctl_user_unit_completion_queries_user_systemd_units() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        write_executable_script(
+            &bin_dir.join("systemctl"),
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > systemctl-args.txt\nprintf 'ssh.service loaded active running SSH\\n'\n",
+        );
+
+        let environment = Environment::new();
+        {
+            let mut env = environment.write();
+            env.paths = vec![bin_dir.display().to_string()];
+            env.clear_command_cache();
+        }
+        let provider = DynamicCompletionProvider::new(environment);
+        let candidates = provider.collect_declared_dynamic_candidates(
+            "systemctl.unit",
+            None,
+            &parsed("journalctl --user-unit ssh"),
+            dir.path(),
+            false,
+        );
+
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate.text == "ssh.service"),
+            "expected user unit candidate in {:?}",
+            candidates
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("systemctl-args.txt")).unwrap(),
+            "--user\nlist-units\n--all\n--no-pager\n--no-legend\n"
         );
     }
 
@@ -5834,15 +6292,21 @@ volumes:
     }
 
     #[test]
-    fn fish_fallback_requires_flag_and_fish_command() {
+    fn fish_fallback_auto_requires_fish_command_and_respects_disable() {
         let dir = tempdir().unwrap();
-        let provider = DynamicCompletionProvider::new(Environment::new());
+        let environment = Environment::new();
+        {
+            let mut env = environment.write();
+            env.paths = vec![];
+            env.clear_command_cache();
+        }
+        let provider = DynamicCompletionProvider::new(environment);
         let input = "git che";
         assert!(
             provider
                 .collect_fish_fallback_candidates(dir.path(), input, input.len(), &parsed(input))
                 .is_empty(),
-            "fish fallback is opt-in"
+            "auto fallback still needs fish on PATH"
         );
 
         let environment = Environment::new();
@@ -5859,6 +6323,28 @@ volumes:
                 .collect_fish_fallback_candidates(dir.path(), input, input.len(), &parsed(input))
                 .is_empty(),
             "enabled fallback still needs fish on PATH"
+        );
+
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        write_executable_script(
+            &bin_dir.join("fish"),
+            "#!/bin/sh\nprintf 'checkout\\tFish checkout\\n'\n",
+        );
+        let disabled_environment = Environment::new();
+        {
+            let mut env = disabled_environment.write();
+            env.paths = vec![bin_dir.display().to_string()];
+            env.variables
+                .insert("DSH_COMPLETION_FISH_FALLBACK".to_string(), "0".to_string());
+            env.clear_command_cache();
+        }
+        let provider = DynamicCompletionProvider::new(disabled_environment);
+        assert!(
+            provider
+                .collect_fish_fallback_candidates(dir.path(), input, input.len(), &parsed(input))
+                .is_empty(),
+            "false-like flag disables fish fallback"
         );
     }
 
@@ -5877,10 +6363,6 @@ volumes:
         {
             let mut env = environment.write();
             env.paths = vec![bin_dir.display().to_string()];
-            env.variables.insert(
-                "DSH_COMPLETION_FISH_FALLBACK".to_string(),
-                "true".to_string(),
-            );
             env.clear_command_cache();
         }
         let provider = DynamicCompletionProvider::new(environment);

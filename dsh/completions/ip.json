@@ -115,6 +115,10 @@
     {
       "name": "address",
       "description": "Protocol address management",
+      "aliases": [
+        "addr",
+        "a"
+      ],
       "options": [],
       "arguments": [],
       "subcommands": [
@@ -204,6 +208,9 @@
     {
       "name": "route",
       "description": "Routing table management",
+      "aliases": [
+        "r"
+      ],
       "options": [],
       "arguments": [],
       "subcommands": [
@@ -270,6 +277,10 @@
     {
       "name": "neigh",
       "description": "ARP or NDISC cache management",
+      "aliases": [
+        "neighbor",
+        "n"
+      ],
       "options": [],
       "arguments": [],
       "subcommands": [
@@ -413,16 +424,121 @@
       ]
     },
     {
+      "name": "tuntap",
+      "description": "Manage TUN/TAP devices",
+      "subcommands": [
+        {
+          "name": "show",
+          "description": "List TUN/TAP devices"
+        },
+        {
+          "name": "add",
+          "description": "Create a TUN/TAP device",
+          "arguments": [
+            {
+              "name": "dev",
+              "description": "Device name",
+              "type": {
+                "type": "Interface"
+              }
+            }
+          ]
+        },
+        {
+          "name": "delete",
+          "description": "Delete a TUN/TAP device",
+          "arguments": [
+            {
+              "name": "dev",
+              "description": "Device name",
+              "type": {
+                "type": "Interface"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "monitor",
       "description": "Watch for netlink messages",
       "options": [],
       "arguments": [
         {
           "name": "OBJECT",
-          "description": "'all', 'link', 'address', 'route', 'neigh', 'rule'"
+          "description": "Object type to monitor",
+          "type": {
+            "type": "Choice",
+            "data": [
+              "all",
+              "link",
+              "address",
+              "route",
+              "neigh",
+              "rule",
+              "mroute",
+              "prefix"
+            ]
+          }
         }
       ],
       "subcommands": []
+    },
+    {
+      "name": "netns",
+      "description": "Network namespace management",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List network namespaces"
+        },
+        {
+          "name": "add",
+          "description": "Create a network namespace",
+          "arguments": [
+            {
+              "name": "name",
+              "description": "Namespace name",
+              "type": {
+                "type": "String"
+              }
+            }
+          ]
+        },
+        {
+          "name": "delete",
+          "description": "Delete a network namespace",
+          "arguments": [
+            {
+              "name": "name",
+              "description": "Namespace name",
+              "type": {
+                "type": "String"
+              }
+            }
+          ]
+        },
+        {
+          "name": "exec",
+          "description": "Run command in a network namespace",
+          "arguments": [
+            {
+              "name": "name",
+              "description": "Namespace name",
+              "type": {
+                "type": "String"
+              }
+            },
+            {
+              "name": "command",
+              "description": "Command to run",
+              "type": {
+                "type": "CommandWithArgs"
+              }
+            }
+          ]
+        }
+      ]
     }
   ]
 }

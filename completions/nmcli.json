@@ -206,7 +206,15 @@
     {
       "short": "-m",
       "long": "--mode",
-      "description": "Output mode (tabular | multiline)"
+      "description": "Output mode (tabular | multiline)",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "tabular",
+          "multiline"
+        ]
+      }
     },
     {
       "short": "-c",
@@ -225,7 +233,11 @@
     {
       "short": "-f",
       "long": "--fields",
-      "description": "Specify the output fields"
+      "description": "Specify the output fields",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
     },
     {
       "short": "-e",
@@ -253,7 +265,11 @@
     {
       "short": "-w",
       "long": "--wait",
-      "description": "Set timeout waiting for finishing operations"
+      "description": "Set timeout waiting for finishing operations",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
       "short": "-v",

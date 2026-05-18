@@ -1,0 +1,15 @@
+{
+  "command": "rpm",
+  "description": "RPM package manager",
+  "global_options": [
+    { "short": "-q", "long": "--query", "description": "Query package" },
+    { "short": "-e", "long": "--erase", "description": "Erase package" },
+    { "short": "-i", "long": "--install", "description": "Install package file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": [".rpm"] } } },
+    { "short": "-U", "long": "--upgrade", "description": "Upgrade package file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": [".rpm"] } } },
+    { "short": "-V", "long": "--verify", "description": "Verify package" },
+    { "short": "-a", "long": "--all", "description": "Query or verify all packages" },
+    { "short": "-l", "long": "--list", "description": "List files in package" },
+    { "short": "-f", "long": "--file", "description": "Query package owning file", "takes_value": true, "value_type": { "type": "File", "data": {} } }
+  ],
+  "arguments": [{ "name": "package", "description": "Installed RPM package", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "rpm.installed_package" } } }]
+}

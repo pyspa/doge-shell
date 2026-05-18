@@ -1,4 +1,5 @@
 pub const DYNAMIC_COMPLETION_PROVIDERS: &[&str] = &[
+    "apk.installed_package",
     "apt.installed_package",
     "aws.profile",
     "block.device",
@@ -15,6 +16,9 @@ pub const DYNAMIC_COMPLETION_PROVIDERS: &[&str] = &[
     "docker.network",
     "docker.volume",
     "filesystem.type",
+    "firewalld.icmp_type",
+    "firewalld.service",
+    "firewalld.zone",
     "fstab.mountpoint",
     "gcloud.configuration",
     "gcloud.project",
@@ -29,6 +33,8 @@ pub const DYNAMIC_COMPLETION_PROVIDERS: &[&str] = &[
     "git.tag",
     "git.worktree",
     "go.package",
+    "ipset.set",
+    "journalctl.boot",
     "js.dependency",
     "kernel.module",
     "kubectl.context",
@@ -41,6 +47,7 @@ pub const DYNAMIC_COMPLETION_PROVIDERS: &[&str] = &[
     "loginctl.session",
     "loop.device",
     "mount.mountpoint",
+    "networkctl.link",
     "nmcli.connection",
     "nmcli.device",
     "node.bin",
@@ -67,6 +74,9 @@ pub const DYNAMIC_COMPLETION_PROVIDERS: &[&str] = &[
     "terraform.workspace",
     "timedatectl.timezone",
     "tmux.session",
+    "wireguard.config",
+    "wireguard.interface",
+    "zypper.installed_package",
 ];
 
 pub fn is_known_dynamic_completion_provider(provider: &str) -> bool {

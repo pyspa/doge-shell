@@ -1,0 +1,20 @@
+{
+  "command": "zypper",
+  "description": "SUSE package manager",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "short": "-n", "long": "--non-interactive", "description": "Run without asking questions" },
+    { "short": "-q", "long": "--quiet", "description": "Suppress output" }
+  ],
+  "subcommands": [
+    { "name": "install", "aliases": ["in"], "description": "Install packages", "arguments": [{ "name": "package", "description": "Package name", "multiple": true, "type": { "type": "String" } }] },
+    { "name": "remove", "aliases": ["rm"], "description": "Remove packages", "arguments": [{ "name": "package", "description": "Installed package", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "zypper.installed_package" } } }] },
+    { "name": "info", "aliases": ["if"], "description": "Show package information", "arguments": [{ "name": "package", "description": "Installed package", "type": { "type": "Dynamic", "data": { "provider": "zypper.installed_package" } } }] },
+    { "name": "search", "aliases": ["se"], "description": "Search packages", "arguments": [{ "name": "pattern", "description": "Search pattern", "type": { "type": "String" } }] },
+    { "name": "update", "aliases": ["up"], "description": "Update packages" },
+    { "name": "patch", "description": "Install needed patches" },
+    { "name": "refresh", "aliases": ["ref"], "description": "Refresh repositories" },
+    { "name": "repos", "aliases": ["lr"], "description": "List repositories" },
+    { "name": "locks", "aliases": ["ll"], "description": "List package locks" }
+  ]
+}

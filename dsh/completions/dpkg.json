@@ -1,0 +1,14 @@
+{
+  "command": "dpkg",
+  "description": "Debian package manager",
+  "global_options": [
+    { "short": "-i", "long": "--install", "description": "Install package file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": [".deb"] } } },
+    { "short": "-r", "long": "--remove", "description": "Remove package", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "apt.installed_package" } } },
+    { "short": "-P", "long": "--purge", "description": "Purge package", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "apt.installed_package" } } },
+    { "short": "-l", "long": "--list", "description": "List packages" },
+    { "short": "-s", "long": "--status", "description": "Show package status", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "apt.installed_package" } } },
+    { "short": "-L", "long": "--listfiles", "description": "List package files", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "apt.installed_package" } } },
+    { "short": "-S", "long": "--search", "description": "Search package owning a file", "takes_value": true, "value_type": { "type": "File", "data": {} } }
+  ],
+  "arguments": [{ "name": "package", "description": "Installed package", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "apt.installed_package" } } }]
+}

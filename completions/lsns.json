@@ -1,0 +1,12 @@
+{
+  "command": "lsns",
+  "description": "List Linux namespaces",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "short": "-J", "long": "--json", "description": "Use JSON output" },
+    { "short": "-n", "long": "--noheadings", "description": "Do not print headings" },
+    { "short": "-p", "long": "--task", "description": "Show namespaces of a process", "takes_value": true, "value_type": { "type": "Process" } },
+    { "short": "-t", "long": "--type", "description": "Namespace type", "takes_value": true, "value_type": { "type": "Choice", "data": ["mnt", "net", "ipc", "user", "pid", "uts", "cgroup", "time"] } },
+    { "short": "-o", "long": "--output", "description": "Output columns", "takes_value": true, "value_type": { "type": "String" } }
+  ]
+}

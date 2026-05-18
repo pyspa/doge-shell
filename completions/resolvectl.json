@@ -11,6 +11,19 @@
       "description": "Resolve IPv6 only"
     },
     {
+      "long": "--json",
+      "description": "Use JSON output",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "short",
+          "pretty",
+          "off"
+        ]
+      }
+    },
+    {
       "short": "-i",
       "long": "--interface",
       "description": "Network interface",
@@ -137,6 +150,23 @@
           }
         }
       ]
+    },
+    {
+      "name": "revert",
+      "description": "Revert per-interface DNS configuration",
+      "arguments": [
+        {
+          "name": "interface",
+          "description": "network interface",
+          "type": {
+            "type": "Interface"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reset-server-features",
+      "description": "Forget learned DNS server feature levels"
     },
     {
       "name": "flush-caches",

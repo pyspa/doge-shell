@@ -1,0 +1,14 @@
+{
+  "command": "findfs",
+  "description": "Find a filesystem by label or UUID",
+  "arguments": [
+    {
+      "name": "specifier",
+      "description": "Filesystem specifier",
+      "type": {
+        "type": "Choice",
+        "data": ["LABEL=", "UUID=", "PARTUUID=", "PARTLABEL="]
+      }
+    }
+  ]
+}

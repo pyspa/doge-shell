@@ -1,0 +1,12 @@
+{
+  "command": "lslocks",
+  "description": "List local system locks",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "short": "-J", "long": "--json", "description": "Use JSON output" },
+    { "short": "-n", "long": "--noheadings", "description": "Do not print headings" },
+    { "short": "-p", "long": "--pid", "description": "Show locks held by process", "takes_value": true, "value_type": { "type": "Process" } },
+    { "short": "-o", "long": "--output", "description": "Output columns", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-r", "long": "--raw", "description": "Use raw output" }
+  ]
+}

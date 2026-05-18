@@ -10,7 +10,11 @@
     },
     {
       "short": "-c",
-      "description": "Capture count"
+      "description": "Capture count",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
       "short": "-n",
@@ -35,7 +39,11 @@
     {
       "short": "-w",
       "description": "Write to file",
-      "takes_value": true
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "short": "-r",
@@ -60,7 +68,11 @@
     },
     {
       "short": "-s",
-      "description": "Snapshot length"
+      "description": "Snapshot length",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
       "short": "-S",
@@ -77,6 +89,36 @@
     {
       "short": "-D",
       "description": "List interfaces"
+    },
+    {
+      "short": "-y",
+      "description": "Link-layer header type",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "EN10MB",
+          "LINUX_SLL",
+          "LINUX_SLL2",
+          "RAW",
+          "IEEE802_11_RADIO",
+          "NFLOG",
+          "USBPCAP"
+        ]
+      }
+    },
+    {
+      "short": "-Q",
+      "description": "Capture direction",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "in",
+          "out",
+          "inout"
+        ]
+      }
     }
   ]
 }

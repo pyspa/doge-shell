@@ -1,0 +1,14 @@
+{
+  "command": "lsipc",
+  "description": "Show System V IPC facilities",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "short": "-J", "long": "--json", "description": "Use JSON output" },
+    { "short": "-g", "long": "--global", "description": "Show system-wide usage" },
+    { "short": "-m", "long": "--shmems", "description": "Show shared memory segments" },
+    { "short": "-q", "long": "--queues", "description": "Show message queues" },
+    { "short": "-s", "long": "--semaphores", "description": "Show semaphore arrays" },
+    { "short": "-p", "long": "--creator", "description": "Show creator and owner PIDs" },
+    { "short": "-o", "long": "--output", "description": "Output columns", "takes_value": true, "value_type": { "type": "String" } }
+  ]
+}

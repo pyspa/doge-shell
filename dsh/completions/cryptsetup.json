@@ -1,0 +1,21 @@
+{
+  "command": "cryptsetup",
+  "description": "Manage dm-crypt and LUKS encrypted devices",
+  "global_options": [
+    { "short": "-v", "long": "--verbose", "description": "Verbose mode" },
+    { "short": "-q", "long": "--batch-mode", "description": "Do not ask for confirmation" },
+    { "long": "--type", "description": "Device type", "takes_value": true, "value_type": { "type": "Choice", "data": ["luks", "luks1", "luks2", "plain", "loopaes", "tcrypt", "bitlk"] } },
+    { "long": "--key-file", "description": "Read key from file", "takes_value": true, "value_type": { "type": "File", "data": {} } }
+  ],
+  "subcommands": [
+    { "name": "open", "description": "Open encrypted device", "arguments": [{ "name": "device", "description": "Block device", "type": { "type": "Dynamic", "data": { "provider": "block.device" } } }, { "name": "name", "description": "Mapping name", "type": { "type": "String" } }] },
+    { "name": "close", "description": "Close encrypted device", "arguments": [{ "name": "name", "description": "Mapping name", "type": { "type": "String" } }] },
+    { "name": "status", "description": "Show mapping status", "arguments": [{ "name": "name", "description": "Mapping name", "type": { "type": "String" } }] },
+    { "name": "luksFormat", "description": "Initialize a LUKS partition", "arguments": [{ "name": "device", "description": "Block device", "type": { "type": "Dynamic", "data": { "provider": "block.device" } } }] },
+    { "name": "luksOpen", "description": "Open LUKS device", "arguments": [{ "name": "device", "description": "Block device", "type": { "type": "Dynamic", "data": { "provider": "block.device" } } }, { "name": "name", "description": "Mapping name", "type": { "type": "String" } }] },
+    { "name": "luksClose", "description": "Close LUKS device", "arguments": [{ "name": "name", "description": "Mapping name", "type": { "type": "String" } }] },
+    { "name": "luksDump", "description": "Dump LUKS header information", "arguments": [{ "name": "device", "description": "Block device", "type": { "type": "Dynamic", "data": { "provider": "block.device" } } }] },
+    { "name": "resize", "description": "Resize active mapping", "arguments": [{ "name": "name", "description": "Mapping name", "type": { "type": "String" } }] },
+    { "name": "benchmark", "description": "Run encryption benchmark" }
+  ]
+}

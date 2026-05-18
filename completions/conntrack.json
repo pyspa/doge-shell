@@ -1,0 +1,22 @@
+{
+  "command": "conntrack",
+  "description": "Netfilter connection tracking command line interface",
+  "global_options": [
+    { "short": "-L", "long": "--dump", "description": "List connection tracking entries" },
+    { "short": "-D", "long": "--delete", "description": "Delete entries" },
+    { "short": "-E", "long": "--event", "description": "Show events" },
+    { "short": "-F", "long": "--flush", "description": "Flush table" },
+    {
+      "short": "-p",
+      "long": "--proto",
+      "description": "Layer 4 protocol",
+      "takes_value": true,
+      "value_type": { "type": "Choice", "data": ["tcp", "udp", "icmp", "icmpv6", "sctp", "dccp", "gre"] }
+    },
+    { "short": "-s", "long": "--orig-src", "description": "Original source address", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-d", "long": "--orig-dst", "description": "Original destination address", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--reply-src", "description": "Reply source address", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--reply-dst", "description": "Reply destination address", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-o", "long": "--output", "description": "Output format", "takes_value": true, "value_type": { "type": "Choice", "data": ["default", "extended", "xml", "timestamp", "id"] } }
+  ]
+}

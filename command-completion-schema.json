@@ -377,6 +377,7 @@
                   "type": "string",
                   "description": "Stable dynamic completion provider id",
                   "enum": [
+                    "apk.installed_package",
                     "apt.installed_package",
                     "aws.profile",
                     "block.device",
@@ -393,6 +394,9 @@
                     "docker.network",
                     "docker.volume",
                     "filesystem.type",
+                    "firewalld.icmp_type",
+                    "firewalld.service",
+                    "firewalld.zone",
                     "fstab.mountpoint",
                     "gcloud.configuration",
                     "gcloud.project",
@@ -407,6 +411,8 @@
                     "git.tag",
                     "git.worktree",
                     "go.package",
+                    "ipset.set",
+                    "journalctl.boot",
                     "js.dependency",
                     "kernel.module",
                     "kubectl.context",
@@ -419,6 +425,7 @@
                     "loginctl.session",
                     "loop.device",
                     "mount.mountpoint",
+                    "networkctl.link",
                     "nmcli.connection",
                     "nmcli.device",
                     "node.bin",
@@ -444,7 +451,10 @@
                     "systemctl.unit_file",
                     "terraform.workspace",
                     "timedatectl.timezone",
-                    "tmux.session"
+                    "tmux.session",
+                    "wireguard.config",
+                    "wireguard.interface",
+                    "zypper.installed_package"
                   ]
                 },
                 "scope": {

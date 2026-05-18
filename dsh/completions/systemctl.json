@@ -74,6 +74,50 @@
       "takes_value": false,
       "required": false,
       "multiple": false
+    },
+    {
+      "short": "-t",
+      "long": "--type",
+      "description": "Filter by unit type",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "service",
+          "socket",
+          "target",
+          "timer",
+          "mount",
+          "automount",
+          "path",
+          "slice",
+          "scope",
+          "device"
+        ]
+      }
+    },
+    {
+      "long": "--state",
+      "description": "Filter by unit state",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "active",
+          "inactive",
+          "failed",
+          "running",
+          "exited",
+          "enabled",
+          "disabled",
+          "masked",
+          "static"
+        ]
+      }
+    },
+    {
+      "long": "--failed",
+      "description": "Show failed units"
     }
   ],
   "subcommands": [

@@ -555,11 +555,10 @@ fn load_pnpm_workspace_patterns(path: &Path) -> Vec<String> {
         if !line.starts_with(' ') && !line.starts_with('\t') {
             break;
         }
-        if let Some(value) = trimmed.strip_prefix('-') {
-            if let Some(pattern) = clean_workspace_pattern(value.trim()) {
+        if let Some(value) = trimmed.strip_prefix('-')
+            && let Some(pattern) = clean_workspace_pattern(value.trim()) {
                 patterns.push(pattern);
             }
-        }
     }
     patterns
 }

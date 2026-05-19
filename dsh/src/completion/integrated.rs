@@ -21,12 +21,12 @@ use dsh_types::mcp::McpTransport;
 use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, LazyLock};
+use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
 const DEFAULT_CACHE_TTL_MS: u64 = 3000;
-const HISTORY_BOOST_SCAN_LIMIT: usize = 2000;
+const HISTORY_BOOST_SCAN_LIMIT: usize = 512;
 const HISTORY_BOOST_SCORE_CAP: u32 = 5000;
 const JS_TASK_SOURCES: &[&str] = &["npm", "pnpm", "yarn", "bun"];
 const DENO_TASK_SOURCES: &[&str] = &["deno"];
@@ -43,6 +43,13 @@ struct DynamicProviderSpec {
     command: &'static str,
     collect: DynamicProviderFn,
 }
+
+static COMPLETION_STAGE_TIMING_ENABLED: LazyLock<bool> = LazyLock::new(|| {
+    std::env::var("DSH_COMPLETION_TIMING")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+});
 
 const DYNAMIC_PROVIDER_SPECS: &[DynamicProviderSpec] = &[
     DynamicProviderSpec {
@@ -185,6 +192,46 @@ struct CompletionRequest<'a> {
     current_dir: &'a Path,
     max_results: usize,
     cursor_pos: usize,
+}
+
+struct CompletionTiming {
+    enabled: bool,
+    last: Instant,
+    stages: Vec<(&'static str, Duration)>,
+}
+
+impl CompletionTiming {
+    fn start() -> Self {
+        let now = Instant::now();
+        Self {
+            enabled: *COMPLETION_STAGE_TIMING_ENABLED,
+            last: now,
+            stages: Vec::new(),
+        }
+    }
+
+    fn mark(&mut self, stage: &'static str) {
+        if !self.enabled {
+            return;
+        }
+        let now = Instant::now();
+        self.stages.push((stage, now.duration_since(self.last)));
+        self.last = now;
+    }
+
+    fn finish(mut self, input: &str, outcome: &'static str) {
+        if !self.enabled {
+            return;
+        }
+        self.mark(outcome);
+        let summary = self
+            .stages
+            .into_iter()
+            .map(|(stage, elapsed)| format!("{stage}={}us", elapsed.as_micros()))
+            .collect::<Vec<_>>()
+            .join(" ");
+        debug!("completion timing input={input:?} {summary}");
+    }
 }
 
 impl<'a> CompletionRequest<'a> {
@@ -437,16 +484,19 @@ impl IntegratedCompletionEngine {
         );
 
         let request = CompletionRequest::new(input, current_dir, max_results, cursor_pos);
+        let mut timing = CompletionTiming::start();
 
         let parsed_command_line = self.convert_to_parsed_command_line(input, cursor_pos);
         let replacement_range =
             completion_replacement_range(input, cursor_pos, &parsed_command_line);
         let uses_dynamic_completion = is_dynamic_completion_command(&parsed_command_line.command);
+        timing.mark("parse");
 
         if !uses_dynamic_completion
             && !request.input.is_empty()
             && let Some(hit) = self.cache.lookup(request.input)
         {
+            timing.mark("cache_lookup");
             debug!(
                 "cache hit for '{}' (key: '{}', exact: {})",
                 request.input, hit.key, hit.exact
@@ -458,12 +508,15 @@ impl IntegratedCompletionEngine {
                     .lookup_cached_framework(&hit.key)
                     .unwrap_or_else(super::default_completion_framework);
 
+                timing.finish(request.input, "cache_hit");
                 return CompletionResult {
                     candidates: hit.candidates,
                     framework,
                     replacement_range,
                 };
             }
+        } else {
+            timing.mark("cache_lookup");
         }
 
         let command_context = if !parsed_command_line.command.is_empty() {
@@ -477,34 +530,43 @@ impl IntegratedCompletionEngine {
 
         // 1. Project-aware dynamic completion
         let dynamic_batch = self.collect_dynamic_candidates(&request, &parsed_command_line);
+        timing.mark("dynamic");
         if !aggregator.extend(dynamic_batch) {
             let mut results = aggregator.finalize(history);
+            timing.mark("finalize");
             results.replacement_range = replacement_range;
             if !uses_dynamic_completion {
                 self.store_in_cache(request.input, &results.candidates, results.framework);
             }
+            timing.finish(request.input, "dynamic_exclusive");
             return results;
         }
 
         // 2. JSON-based command completion
         let command_collection = self.collect_command_candidates(&request, &parsed_command_line);
+        timing.mark("json");
         if !aggregator.extend(command_collection.batch) {
             let mut results = aggregator.finalize(history);
+            timing.mark("finalize");
             results.replacement_range = replacement_range;
             if !uses_dynamic_completion {
                 self.store_in_cache(request.input, &results.candidates, results.framework);
             }
+            timing.finish(request.input, "json_exclusive");
             return results;
         }
 
         // 3. External completer fallback
         let external_batch = self.collect_external_candidates(&request, &parsed_command_line);
+        timing.mark("external");
         if !aggregator.extend(external_batch) {
             let mut results = aggregator.finalize(history);
+            timing.mark("finalize");
             results.replacement_range = replacement_range;
             if !uses_dynamic_completion {
                 self.store_in_cache(request.input, &results.candidates, results.framework);
             }
+            timing.finish(request.input, "external_exclusive");
             return results;
         }
 
@@ -512,20 +574,25 @@ impl IntegratedCompletionEngine {
         // project-aware dynamic and JSON completion, but it can supply broad fish-style
         // candidates for commands without built-in definitions.
         let fish_batch = self.collect_fish_fallback_candidates(&request, &parsed_command_line);
+        timing.mark("fish");
         if !aggregator.extend(fish_batch) {
             let mut results = aggregator.finalize(history);
+            timing.mark("finalize");
             results.replacement_range = replacement_range;
             if !uses_dynamic_completion {
                 self.store_in_cache(request.input, &results.candidates, results.framework);
             }
+            timing.finish(request.input, "fish_exclusive");
             return results;
         }
 
         let mut results = aggregator.finalize(history);
+        timing.mark("finalize");
         results.replacement_range = replacement_range;
         if !uses_dynamic_completion {
             self.store_in_cache(request.input, &results.candidates, results.framework);
         }
+        timing.finish(request.input, "complete");
         results
     }
 
@@ -1267,24 +1334,7 @@ impl IntegratedCompletionEngine {
             }
         }
 
-        // Text-based deduplication (keep higher priority ones)
-        candidates.sort_by(|a, b| {
-            b.priority
-                .cmp(&a.priority)
-                .then_with(|| a.text.cmp(&b.text))
-        });
-
-        let mut seen = std::collections::HashSet::new();
-        candidates.retain(|candidate| {
-            if seen.contains(&candidate.text) {
-                false
-            } else {
-                seen.insert(candidate.text.clone());
-                true
-            }
-        });
-
-        // Final sorting (priority -> type -> alphabetical order)
+        // Sorting before dedup keeps the best-ranked candidate for duplicate text.
         candidates.sort_by(|a, b| {
             b.priority
                 .cmp(&a.priority)
@@ -1295,6 +1345,8 @@ impl IntegratedCompletionEngine {
                 })
                 .then_with(|| a.text.cmp(&b.text))
         });
+        let mut seen = HashSet::with_capacity(candidates.len());
+        candidates.retain(|candidate| seen.insert(candidate.text.clone()));
 
         candidates.truncate(max_results);
         candidates

@@ -261,6 +261,21 @@ mod tests {
     }
 
     #[test]
+    fn builtin_actions_register_project_cockpit() {
+        let mut registry = ActionRegistry::new();
+        actions::register_all(&mut registry);
+        let actions = registry.get_all();
+
+        let action = actions
+            .iter()
+            .find(|action| action.name() == "Project Cockpit")
+            .expect("Project Cockpit action should be registered");
+
+        assert_eq!(action.category(), "Project");
+        assert!(action.usage().expect("usage").contains("doctor validate"));
+    }
+
+    #[test]
     fn test_string_item() {
         let item = StringItem("test value".to_string());
         assert_eq!(item.text(), "test value");

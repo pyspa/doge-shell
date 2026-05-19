@@ -919,15 +919,19 @@ impl DynamicCompletionProvider {
         current_dir: &Path,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let Some(primary) = parsed_command_line
+        let primary = parsed_command_line
             .subcommand_path
             .first()
-            .map(String::as_str)
-        else {
-            return Vec::new();
-        };
+            .map(String::as_str);
 
-        if primary != "compose" {
+        let compose_invocation = primary == Some("compose")
+            || (parsed_command_line.command == "docker"
+                && !docker_compose_words(parsed_command_line).is_empty());
+
+        if !compose_invocation {
+            let Some(primary) = primary else {
+                return Vec::new();
+            };
             return self.collect_docker_object_candidates(
                 primary,
                 parsed_command_line,
@@ -3710,7 +3714,7 @@ impl DynamicCompletionProvider {
             project_root: project_root.clone(),
             sources: Vec::new(),
         };
-        let signature = task_completion_signature(&project_root);
+        let signature = task_completion_signature(&project_root, None);
 
         if let Some(tasks) = self.lookup_task_cache(&cache_key, &signature) {
             return Ok(tasks);
@@ -3733,7 +3737,7 @@ impl DynamicCompletionProvider {
             project_root: project_root.clone(),
             sources: Vec::new(),
         };
-        let signature = task_completion_signature(&project_root);
+        let signature = task_completion_signature(&project_root, None);
         self.lookup_task_cache(&cache_key, &signature)
             .unwrap_or_default()
     }
@@ -3748,7 +3752,7 @@ impl DynamicCompletionProvider {
             project_root: project_root.clone(),
             sources: normalized_task_sources(sources),
         };
-        let signature = task_completion_signature(&project_root);
+        let signature = task_completion_signature(&project_root, Some(sources));
 
         if let Some(tasks) = self.lookup_task_cache(&cache_key, &signature) {
             return Ok(tasks);
@@ -3775,7 +3779,7 @@ impl DynamicCompletionProvider {
             project_root: project_root.clone(),
             sources: normalized_task_sources(sources),
         };
-        let signature = task_completion_signature(&project_root);
+        let signature = task_completion_signature(&project_root, Some(sources));
         self.lookup_task_cache(&cache_key, &signature)
             .unwrap_or_default()
     }
@@ -4207,13 +4211,15 @@ fn file_metadata_signature(path: &Path) -> FileMetadataSignature {
     }
 }
 
-fn task_completion_signature(project_root: &Path) -> Vec<FileMetadataSignature> {
-    [
+fn task_completion_signature(
+    project_root: &Path,
+    sources: Option<&[&str]>,
+) -> Vec<FileMetadataSignature> {
+    let mut paths = [
         "mise.toml",
         "Taskfile.yml",
         "Taskfile.yaml",
         "turbo.json",
-        "project.json",
         "package.json",
         "Cargo.toml",
         "Makefile",
@@ -4222,8 +4228,63 @@ fn task_completion_signature(project_root: &Path) -> Vec<FileMetadataSignature> 
         "deno.jsonc",
     ]
     .into_iter()
-    .map(|name| file_metadata_signature(&project_root.join(name)))
-    .collect()
+    .map(|name| project_root.join(name))
+    .collect::<Vec<_>>();
+
+    if sources_include_nx(sources) {
+        paths.extend([
+            project_root.join("workspace.json"),
+            project_root.join("angular.json"),
+            project_root.join("project.json"),
+        ]);
+        paths.extend(descendant_project_json_files(project_root, 4));
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+        .into_iter()
+        .map(|path| file_metadata_signature(&path))
+        .collect()
+}
+
+fn sources_include_nx(sources: Option<&[&str]>) -> bool {
+    sources.is_none_or(|sources| sources.contains(&"nx"))
+}
+
+fn descendant_project_json_files(root: &Path, max_depth: usize) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    collect_descendant_project_json_files(root, 0, max_depth, &mut paths);
+    paths
+}
+
+fn collect_descendant_project_json_files(
+    dir: &Path,
+    depth: usize,
+    max_depth: usize,
+    paths: &mut Vec<PathBuf>,
+) {
+    if depth > max_depth {
+        return;
+    }
+
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.starts_with('.') || matches!(name, "node_modules" | "target" | "dist" | "build") {
+            continue;
+        }
+        if path.is_file() && name == "project.json" {
+            paths.push(path);
+        } else if path.is_dir() {
+            collect_descendant_project_json_files(&path, depth + 1, max_depth, paths);
+        }
+    }
 }
 
 fn normalized_task_sources(sources: &[&str]) -> Vec<String> {
@@ -4253,19 +4314,11 @@ fn find_compose_file(current_dir: &Path) -> Option<PathBuf> {
 }
 
 fn selected_docker_compose_command(parsed_command_line: &ParsedCommandLine) -> Option<&str> {
-    let mut after_compose = false;
     let mut skip_next_value = false;
 
-    for token in completion_words(parsed_command_line) {
+    for token in docker_compose_words(parsed_command_line) {
         if skip_next_value {
             skip_next_value = false;
-            continue;
-        }
-
-        if !after_compose {
-            if token == "compose" {
-                after_compose = true;
-            }
             continue;
         }
 
@@ -4288,17 +4341,9 @@ fn selected_docker_compose_file(
     parsed_command_line: &ParsedCommandLine,
     current_dir: &Path,
 ) -> Option<PathBuf> {
-    let mut after_compose = false;
-    let words = completion_words(parsed_command_line);
+    let words = docker_compose_words(parsed_command_line);
 
     for (index, token) in words.iter().enumerate() {
-        if !after_compose {
-            if *token == "compose" {
-                after_compose = true;
-            }
-            continue;
-        }
-
         if *token == "-f" || *token == "--file" {
             let Some(value) = words.get(index + 1).copied() else {
                 continue;
@@ -4315,6 +4360,40 @@ fn selected_docker_compose_file(
     }
 
     None
+}
+
+fn docker_compose_words(parsed_command_line: &ParsedCommandLine) -> Vec<&str> {
+    let words = completion_words(parsed_command_line);
+    if parsed_command_line.command == "docker-compose" {
+        return words;
+    }
+
+    if parsed_command_line.command == "docker" {
+        let mut skip_next_value = false;
+        let mut compose_index = None;
+        for (index, word) in words.iter().enumerate() {
+            if skip_next_value {
+                skip_next_value = false;
+                continue;
+            }
+            if docker_global_option_takes_value(word) {
+                skip_next_value = true;
+                continue;
+            }
+            if is_inline_docker_global_option_value(word) || word.starts_with('-') {
+                continue;
+            }
+            if *word == "compose" {
+                compose_index = Some(index);
+                break;
+            }
+        }
+        if let Some(index) = compose_index {
+            return words.into_iter().skip(index + 1).collect();
+        }
+    }
+
+    Vec::new()
 }
 
 fn compose_file_path_from_token(current_dir: &Path, token: &str) -> Option<PathBuf> {
@@ -4341,6 +4420,32 @@ fn docker_compose_option_takes_value(token: &str) -> bool {
             | "--project-directory"
             | "--parallel"
     )
+}
+
+fn docker_global_option_takes_value(token: &str) -> bool {
+    matches!(
+        token,
+        "-c" | "--config"
+            | "--context"
+            | "-H"
+            | "--host"
+            | "--log-level"
+            | "--tlscacert"
+            | "--tlscert"
+            | "--tlskey"
+    )
+}
+
+fn is_inline_docker_global_option_value(token: &str) -> bool {
+    token.starts_with("--config=")
+        || token.starts_with("-c=")
+        || token.starts_with("--context=")
+        || token.starts_with("-H=")
+        || token.starts_with("--host=")
+        || token.starts_with("--log-level=")
+        || token.starts_with("--tlscacert=")
+        || token.starts_with("--tlscert=")
+        || token.starts_with("--tlskey=")
 }
 
 fn is_inline_docker_compose_option_value(token: &str) -> bool {
@@ -6082,6 +6187,188 @@ volumes:
         assert!(
             candidates.iter().all(|candidate| candidate.text != "api"),
             "explicit compose file should take precedence over ancestor defaults"
+        );
+    }
+
+    #[test]
+    fn docker_compose_service_completion_uses_standalone_explicit_file_option() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("compose.yaml"),
+            "services:\n  api:\n    image: example/api\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("compose.dev.yml"),
+            "services:\n  worker:\n    image: example/worker\n",
+        )
+        .unwrap();
+
+        let provider = DynamicCompletionProvider::new(Environment::new());
+        let parsed = parsed("docker-compose -f compose.dev.yml up wo");
+        assert_eq!(selected_docker_compose_command(&parsed), Some("up"));
+
+        let candidates = provider.collect_declared_dynamic_candidates(
+            "docker.compose_service",
+            None,
+            &parsed,
+            dir.path(),
+            false,
+        );
+
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate.text == "worker"),
+            "expected service completion from standalone docker-compose -f file"
+        );
+        assert!(
+            candidates.iter().all(|candidate| candidate.text != "api"),
+            "explicit compose file should take precedence over ancestor defaults"
+        );
+    }
+
+    #[test]
+    fn docker_compose_service_completion_allows_docker_global_option_before_compose() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("compose.yaml"),
+            "services:\n  api:\n    image: example/api\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("compose.dev.yml"),
+            "services:\n  worker:\n    image: example/worker\n",
+        )
+        .unwrap();
+
+        let provider = DynamicCompletionProvider::new(Environment::new());
+        let candidates = provider.collect_docker_candidates(
+            &parsed("docker --context prod compose -f compose.dev.yml up wo"),
+            dir.path(),
+        );
+
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate.text == "worker"),
+            "expected service completion when docker global option precedes compose"
+        );
+        assert!(
+            candidates.iter().all(|candidate| candidate.text != "api"),
+            "explicit compose file should take precedence over ancestor defaults"
+        );
+    }
+
+    #[test]
+    fn docker_compose_service_completion_allows_inline_docker_global_option_before_compose() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("compose.yaml"),
+            "services:\n  api:\n    image: example/api\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("compose.dev.yml"),
+            "services:\n  worker:\n    image: example/worker\n",
+        )
+        .unwrap();
+
+        let provider = DynamicCompletionProvider::new(Environment::new());
+        let candidates = provider.collect_docker_candidates(
+            &parsed("docker --context=prod compose -f compose.dev.yml up wo"),
+            dir.path(),
+        );
+
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate.text == "worker"),
+            "expected service completion when inline docker global option precedes compose"
+        );
+        assert!(
+            candidates.iter().all(|candidate| candidate.text != "api"),
+            "explicit compose file should take precedence over ancestor defaults"
+        );
+    }
+
+    #[test]
+    fn nx_task_cache_refreshes_when_descendant_project_json_changes() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("workspace.json"), r#"{ "projects": {} }"#).unwrap();
+        let api_dir = dir.path().join("apps").join("api");
+        fs::create_dir_all(&api_dir).unwrap();
+        fs::write(
+            api_dir.join("project.json"),
+            r#"{ "name": "api", "targets": { "build": {} } }"#,
+        )
+        .unwrap();
+
+        let provider = DynamicCompletionProvider::new(Environment::new());
+        let build_candidates = provider.collect_project_task_candidates_for_sources_with_mode(
+            &parsed("nx run bu"),
+            dir.path(),
+            NX_PROJECT_TASK_SOURCES,
+            false,
+            ProjectTaskCandidateText::Name,
+        );
+        assert!(
+            build_candidates
+                .iter()
+                .any(|candidate| candidate.text == "build"),
+            "expected Nx task completion from descendant project.json"
+        );
+
+        std::thread::sleep(Duration::from_millis(20));
+        fs::write(
+            api_dir.join("project.json"),
+            r#"{ "name": "api", "targets": { "build": {}, "test": {} } }"#,
+        )
+        .unwrap();
+
+        let test_candidates = provider.collect_project_task_candidates_for_sources_with_mode(
+            &parsed("nx run te"),
+            dir.path(),
+            NX_PROJECT_TASK_SOURCES,
+            false,
+            ProjectTaskCandidateText::Name,
+        );
+        assert!(
+            test_candidates
+                .iter()
+                .any(|candidate| candidate.text == "test"),
+            "expected task cache invalidation after descendant project.json changes"
+        );
+    }
+
+    #[test]
+    fn non_nx_source_task_signature_ignores_descendant_project_json_changes() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("package.json"),
+            r#"{ "scripts": { "build": "vite build" } }"#,
+        )
+        .unwrap();
+        let api_dir = dir.path().join("apps").join("api");
+        fs::create_dir_all(&api_dir).unwrap();
+        fs::write(
+            api_dir.join("project.json"),
+            r#"{ "name": "api", "targets": { "build": {} } }"#,
+        )
+        .unwrap();
+
+        let before = task_completion_signature(dir.path(), Some(JS_PROJECT_TASK_SOURCES));
+        std::thread::sleep(Duration::from_millis(20));
+        fs::write(
+            api_dir.join("project.json"),
+            r#"{ "name": "api", "targets": { "build": {}, "test": {} } }"#,
+        )
+        .unwrap();
+        let after = task_completion_signature(dir.path(), Some(JS_PROJECT_TASK_SOURCES));
+
+        assert_eq!(
+            before, after,
+            "non-Nx source-scoped task signatures should not scan descendant project.json files"
         );
     }
 

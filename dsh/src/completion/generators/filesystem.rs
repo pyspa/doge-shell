@@ -18,6 +18,8 @@ impl FileSystemGenerator {
         extensions: Option<&Vec<String>>,
     ) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::with_capacity(32);
+        let normalized_extensions =
+            extensions.map(|extensions| normalize_extension_filters(extensions));
 
         let normalized_token = normalize_path_token(current_token);
         let (dir_path, file_prefix) = Self::split_dir_and_prefix(&normalized_token);
@@ -50,15 +52,11 @@ impl FileSystemGenerator {
                 }
             }
 
-            if !is_dir && let Some(exts) = extensions {
-                let ext_ok = Path::new(file_name)
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| format!(".{e}"))
-                    .is_some_and(|e| exts.contains(&e));
-                if !ext_ok {
-                    continue;
-                }
+            if !is_dir
+                && let Some(extensions) = normalized_extensions.as_deref()
+                && !file_name_matches_extension_filters(file_name, extensions)
+            {
+                continue;
             }
 
             let full_path = Self::build_candidate_path(&dir_path, file_name);
@@ -173,6 +171,27 @@ impl FileSystemGenerator {
     }
 }
 
+fn normalize_extension_filters(extensions: &[String]) -> Vec<String> {
+    extensions
+        .iter()
+        .map(|extension| extension.trim())
+        .filter(|extension| !extension.is_empty())
+        .map(|extension| {
+            if extension.starts_with('.') {
+                extension.to_string()
+            } else {
+                format!(".{extension}")
+            }
+        })
+        .collect()
+}
+
+fn file_name_matches_extension_filters(file_name: &str, extensions: &[String]) -> bool {
+    extensions
+        .iter()
+        .any(|extension| file_name.ends_with(extension))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,6 +248,42 @@ mod tests {
             apple.priority >= 1000,
             "Exact prefix should have at least +1000 bonus"
         );
+    }
+
+    #[test]
+    fn file_candidates_filter_bare_and_dotted_extensions() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("compose.yml"), "").unwrap();
+        std::fs::write(dir.path().join("compose.yaml"), "").unwrap();
+        std::fs::write(dir.path().join("compose.txt"), "").unwrap();
+
+        let token = dir.path().join("compose.").to_string_lossy().to_string();
+        let extensions = vec!["yml".to_string(), ".yaml".to_string()];
+        let candidates =
+            FileSystemGenerator::generate_file_candidates_with_filter(&token, Some(&extensions))
+                .expect("file candidates");
+        let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
+
+        assert!(texts.iter().any(|text| text.ends_with("compose.yml")));
+        assert!(texts.iter().any(|text| text.ends_with("compose.yaml")));
+        assert!(!texts.iter().any(|text| text.ends_with("compose.txt")));
+    }
+
+    #[test]
+    fn file_candidates_filter_multi_dot_extensions() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("image.pkr.hcl"), "").unwrap();
+        std::fs::write(dir.path().join("image.hcl"), "").unwrap();
+
+        let token = dir.path().join("image").to_string_lossy().to_string();
+        let extensions = vec!["pkr.hcl".to_string()];
+        let candidates =
+            FileSystemGenerator::generate_file_candidates_with_filter(&token, Some(&extensions))
+                .expect("file candidates");
+        let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
+
+        assert!(texts.iter().any(|text| text.ends_with("image.pkr.hcl")));
+        assert!(!texts.iter().any(|text| text.ends_with("image.hcl")));
     }
 
     #[test]

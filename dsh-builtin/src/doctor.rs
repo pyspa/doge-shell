@@ -426,7 +426,8 @@ fn check_ai(ctx: &Context, proxy: &mut dyn ShellProxy) {
 }
 
 fn check_mcp(ctx: &Context, proxy: &mut dyn ShellProxy) {
-    let configured = proxy.list_mcp_servers().len();
+    let configured_servers = proxy.list_mcp_servers();
+    let configured = configured_servers.len();
     let servers = proxy
         .get_var("MCP_SERVERS")
         .unwrap_or_else(|| configured.to_string());
@@ -442,6 +443,14 @@ fn check_mcp(ctx: &Context, proxy: &mut dyn ShellProxy) {
     let _ = ctx.write_stdout(&format!("ok servers {servers}"));
     let _ = ctx.write_stdout(&format!("ok connected {connected}"));
     let _ = ctx.write_stdout(&format!("ok tools {tools}"));
+    for server in configured_servers {
+        if let McpTransport::Sse { url } = &server.transport {
+            let _ = ctx.write_stdout(&format!(
+                "warn mcp {} sse url={} configuration-only use-streamable-http",
+                server.label, url
+            ));
+        }
+    }
 }
 
 fn check_project(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path) {
@@ -797,7 +806,7 @@ fn check_safety(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path) {
                 }
                 McpTransport::Sse { url } => {
                     let _ = ctx.write_stdout(&format!(
-                        "warn mcp {} sse url={} unsupported-runtime",
+                        "warn mcp {} sse url={} configuration-only use-streamable-http",
                         server.label, url
                     ));
                 }
@@ -1556,16 +1565,25 @@ mod tests {
             cwd: dir.path().to_path_buf(),
             vars,
             allowlist: vec!["bash".to_string(), "git status".to_string()],
-            servers: vec![McpServerConfig {
-                label: "local".to_string(),
-                description: None,
-                transport: McpTransport::Stdio {
-                    command: "node".to_string(),
-                    args: Vec::new(),
-                    env: mcp_env,
-                    cwd: None,
+            servers: vec![
+                McpServerConfig {
+                    label: "local".to_string(),
+                    description: None,
+                    transport: McpTransport::Stdio {
+                        command: "node".to_string(),
+                        args: Vec::new(),
+                        env: mcp_env,
+                        cwd: None,
+                    },
                 },
-            }],
+                McpServerConfig {
+                    label: "legacy".to_string(),
+                    description: None,
+                    transport: McpTransport::Sse {
+                        url: "https://example.com/sse".to_string(),
+                    },
+                },
+            ],
             direnv_allowed: false,
         };
         let (ctx, observer) = observed_context();
@@ -1582,8 +1600,43 @@ mod tests {
         assert!(output.contains("warn execute-allowlist risky `bash`"));
         assert!(output.contains("ok execute-allowlist `git status`"));
         assert!(output.contains("warn mcp local stdio command=node sensitive-env"));
+        assert!(output.contains(
+            "warn mcp legacy sse url=https://example.com/sse configuration-only use-streamable-http"
+        ));
         assert!(output.contains("warn ai-base-url insecure http://example.com/v1"));
         assert!(output.contains("warn envrc not-allowed"));
         assert!(output.contains("warn unignored-log debug.log"));
+    }
+
+    #[test]
+    fn doctor_mcp_reports_legacy_sse_as_configuration_only() {
+        let mut proxy = TestProxy {
+            cwd: PathBuf::from("."),
+            vars: HashMap::new(),
+            allowlist: Vec::new(),
+            servers: vec![McpServerConfig {
+                label: "legacy".to_string(),
+                description: None,
+                transport: McpTransport::Sse {
+                    url: "https://example.com/sse".to_string(),
+                },
+            }],
+            direnv_allowed: false,
+        };
+        let (ctx, observer) = observed_context();
+
+        let status = command(
+            &ctx,
+            vec!["doctor".to_string(), "mcp".to_string()],
+            &mut proxy,
+        );
+
+        assert_eq!(status, ExitStatus::ExitedWith(0));
+        let output = observed_stdout(&observer);
+        assert!(output.contains("[mcp]"));
+        assert!(output.contains("ok configured 1"));
+        assert!(output.contains(
+            "warn mcp legacy sse url=https://example.com/sse configuration-only use-streamable-http"
+        ));
     }
 }

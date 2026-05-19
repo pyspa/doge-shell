@@ -15,6 +15,7 @@ pub mod jump_directory;
 pub mod kill_process;
 pub mod lisp_action;
 pub mod port_check;
+pub mod project_cockpit;
 pub mod reload_config;
 pub mod run_script;
 pub mod search_history;
@@ -61,6 +62,7 @@ pub fn register_all(registry: &mut ActionRegistry) {
         "pm",
         BuiltinInvocation::Static(&["status"]),
     )));
+    registry.register(Arc::new(project_cockpit::ProjectCockpitAction));
     registry.register(Arc::new(BuiltinCommandAction::new(
         "Project Init",
         "Register the current project root",

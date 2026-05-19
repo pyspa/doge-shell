@@ -27,6 +27,7 @@ use xdg::BaseDirectories;
 
 /// Default timeout for MCP tool calls (30 seconds)
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
+const LEGACY_SSE_UNSUPPORTED_MESSAGE: &str = "Legacy SSE MCP transport is configuration-only; rmcp 1.7 removed the legacy SSE client transport. Use streamable HTTP via mcp-add-http instead.";
 
 /// Status of a MCP server connection
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -936,10 +937,7 @@ async fn list_tools_via_transport(transport: McpTransport) -> Result<Vec<Tool>> 
             let _ = service.cancel().await;
             Ok(tools)
         }
-        McpTransport::Sse { .. } => {
-            // SseClientTransport is not supported in rmcp 0.14.0
-            anyhow::bail!("SSE transport is not supported in rmcp 0.14.0")
-        }
+        McpTransport::Sse { .. } => anyhow::bail!(LEGACY_SSE_UNSUPPORTED_MESSAGE),
         McpTransport::Http {
             url,
             auth_header,
@@ -992,9 +990,7 @@ async fn call_tool_via_transport(
 
             Ok(response)
         }
-        McpTransport::Sse { .. } => {
-            anyhow::bail!("SSE transport is not supported in rmcp 0.14.0")
-        }
+        McpTransport::Sse { .. } => anyhow::bail!(LEGACY_SSE_UNSUPPORTED_MESSAGE),
         McpTransport::Http {
             url,
             auth_header,
@@ -1310,17 +1306,14 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            "SSE transport is not supported in rmcp 0.14.0"
+            LEGACY_SSE_UNSUPPORTED_MESSAGE
         );
 
         // Test call_tool_via_transport
         let result = call_tool_via_transport(transport, "test_tool", None).await;
         // Verify the specific error message
         match result {
-            Err(e) => assert_eq!(
-                e.to_string(),
-                "SSE transport is not supported in rmcp 0.14.0"
-            ),
+            Err(e) => assert_eq!(e.to_string(), LEGACY_SSE_UNSUPPORTED_MESSAGE),
             Ok(_) => panic!("Expected SSE transport to fail"),
         }
     }

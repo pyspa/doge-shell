@@ -213,11 +213,7 @@ fn run_snippet(ctx: &Context, name: &str, proxy: &mut dyn ShellProxy) -> ExitSta
         // Execute the command via shell
         ctx.write_stdout(&format!("▶ Running: {}", snippet.command))
             .ok();
-        match proxy.dispatch(
-            ctx,
-            "sh",
-            vec!["sh".to_string(), "-c".to_string(), snippet.command],
-        ) {
+        match crate::dispatch_shell_command(ctx, proxy, snippet.command) {
             Ok(_) => ExitStatus::ExitedWith(0),
             Err(e) => {
                 ctx.write_stderr(&format!("snippet: execution failed: {e}"))
@@ -285,12 +281,14 @@ mod tests {
 
     struct MockShellProxy {
         snippets: HashMap<String, TestSnippet>,
+        dispatched: Option<(String, Vec<String>)>,
     }
 
     impl MockShellProxy {
         fn new() -> Self {
             Self {
                 snippets: HashMap::new(),
+                dispatched: None,
             }
         }
     }
@@ -300,12 +298,8 @@ mod tests {
             Ok(std::env::current_dir()?)
         }
         fn exit_shell(&mut self) {}
-        fn dispatch(
-            &mut self,
-            _ctx: &Context,
-            _cmd: &str,
-            _argv: Vec<String>,
-        ) -> anyhow::Result<()> {
+        fn dispatch(&mut self, _ctx: &Context, cmd: &str, argv: Vec<String>) -> anyhow::Result<()> {
+            self.dispatched = Some((cmd.to_string(), argv));
             Ok(())
         }
         fn save_path_history(&mut self, _path: &str) {}
@@ -469,5 +463,26 @@ mod tests {
 
         let result = add_snippet(&ctx, "invalid name", "command", None, &mut proxy);
         assert_eq!(result, ExitStatus::ExitedWith(1));
+    }
+
+    #[test]
+    fn test_run_snippet_dispatches_shell_command_without_duplicate_sh() {
+        use nix::unistd::getpid;
+        let mut proxy = MockShellProxy::new();
+        proxy.add_snippet("test".to_string(), "echo hello".to_string(), None);
+        let pid = getpid();
+        let pgid = pid;
+        let ctx = Context::new_safe(pid, pgid, false);
+
+        let result = run_snippet(&ctx, "test", &mut proxy);
+
+        assert_eq!(result, ExitStatus::ExitedWith(0));
+        assert_eq!(
+            proxy.dispatched,
+            Some((
+                "sh".to_string(),
+                vec!["-c".to_string(), "echo hello".to_string()]
+            ))
+        );
     }
 }

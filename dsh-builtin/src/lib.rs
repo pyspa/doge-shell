@@ -335,6 +335,14 @@ pub trait ShellProxy {
     }
 }
 
+pub(crate) fn dispatch_shell_command(
+    ctx: &Context,
+    proxy: &mut dyn ShellProxy,
+    command: String,
+) -> Result<()> {
+    proxy.dispatch(ctx, "sh", vec!["-c".to_string(), command])
+}
+
 use std::any::Any;
 
 /// Trait representing a builtin command with its description

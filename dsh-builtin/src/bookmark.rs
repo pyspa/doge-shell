@@ -187,7 +187,7 @@ fn run_bookmark(ctx: &Context, name: &str, proxy: &mut dyn ShellProxy) -> ExitSt
     if let Some((command, _)) = proxy.get_bookmark(name) {
         proxy.record_bookmark_use(name);
         ctx.write_stdout(&format!("▶ Running: {}", command)).ok();
-        match proxy.dispatch(ctx, "sh", vec!["sh".to_string(), "-c".to_string(), command]) {
+        match crate::dispatch_shell_command(ctx, proxy, command) {
             Ok(_) => ExitStatus::ExitedWith(0),
             Err(e) => {
                 ctx.write_stderr(&format!("bookmark: execution failed: {e}"))
@@ -209,6 +209,7 @@ mod tests {
     struct MockShellProxy {
         bookmarks: std::collections::HashMap<String, (String, i64)>,
         last_command: Option<String>,
+        dispatched: Option<(String, Vec<String>)>,
     }
 
     impl MockShellProxy {
@@ -216,6 +217,7 @@ mod tests {
             Self {
                 bookmarks: std::collections::HashMap::new(),
                 last_command: Some("echo test".to_string()),
+                dispatched: None,
             }
         }
     }
@@ -225,12 +227,8 @@ mod tests {
             Ok(std::env::current_dir()?)
         }
         fn exit_shell(&mut self) {}
-        fn dispatch(
-            &mut self,
-            _ctx: &Context,
-            _cmd: &str,
-            _argv: Vec<String>,
-        ) -> anyhow::Result<()> {
+        fn dispatch(&mut self, _ctx: &Context, cmd: &str, argv: Vec<String>) -> anyhow::Result<()> {
+            self.dispatched = Some((cmd.to_string(), argv));
             Ok(())
         }
         fn save_path_history(&mut self, _path: &str) {}
@@ -338,5 +336,25 @@ mod tests {
         let result = remove_bookmark(&ctx, "test", &mut proxy);
         assert_eq!(result, ExitStatus::ExitedWith(0));
         assert!(proxy.get_bookmark("test").is_none());
+    }
+
+    #[test]
+    fn test_run_bookmark_dispatches_shell_command_without_duplicate_sh() {
+        use nix::unistd::getpid;
+        let mut proxy = MockShellProxy::new();
+        proxy.add_bookmark("test".to_string(), "echo hello".to_string());
+        let pid = getpid();
+        let ctx = Context::new_safe(pid, pid, false);
+
+        let result = run_bookmark(&ctx, "test", &mut proxy);
+
+        assert_eq!(result, ExitStatus::ExitedWith(0));
+        assert_eq!(
+            proxy.dispatched,
+            Some((
+                "sh".to_string(),
+                vec!["-c".to_string(), "echo hello".to_string()]
+            ))
+        );
     }
 }

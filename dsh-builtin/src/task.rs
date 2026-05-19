@@ -172,7 +172,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         // Print what we run
         let _ = ctx.write_stdout(&format!("Running: {}\n", command));
 
-        match proxy.dispatch(ctx, "sh", vec!["sh".to_string(), "-c".to_string(), command]) {
+        match crate::dispatch_shell_command(ctx, proxy, command) {
             Ok(_) => ExitStatus::ExitedWith(0),
             Err(e) => {
                 let _ = ctx.write_stderr(&format!("Execution failed: {}\n", e));
@@ -354,11 +354,7 @@ fn execute_task(ctx: &Context, task: &Task, proxy: &mut dyn ShellProxy) -> ExitS
         "Running [{}] {} -> {}\n",
         task.source, task.name, task.command
     ));
-    match proxy.dispatch(
-        ctx,
-        "sh",
-        vec!["sh".to_string(), "-c".to_string(), task.command.clone()],
-    ) {
+    match crate::dispatch_shell_command(ctx, proxy, task.command.clone()) {
         Ok(_) => ExitStatus::ExitedWith(0),
         Err(e) => {
             let _ = ctx.write_stderr(&format!("Execution failed: {}\n", e));
@@ -603,7 +599,111 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io::Write;
+    use std::path::PathBuf;
     use tempfile::tempdir;
+
+    struct MockShellProxy {
+        current_dir: PathBuf,
+        dispatched: Option<(String, Vec<String>)>,
+    }
+
+    impl MockShellProxy {
+        fn new(current_dir: PathBuf) -> Self {
+            Self {
+                current_dir,
+                dispatched: None,
+            }
+        }
+    }
+
+    impl ShellProxy for MockShellProxy {
+        fn exit_shell(&mut self) {}
+
+        fn get_github_status(&self) -> (usize, usize, usize) {
+            (0, 0, 0)
+        }
+
+        fn get_git_branch(&self) -> Option<String> {
+            None
+        }
+
+        fn get_job_count(&self) -> usize {
+            0
+        }
+
+        fn dispatch(&mut self, _ctx: &Context, cmd: &str, argv: Vec<String>) -> anyhow::Result<()> {
+            self.dispatched = Some((cmd.to_string(), argv));
+            Ok(())
+        }
+
+        fn save_path_history(&mut self, _path: &str) {}
+
+        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn insert_path(&mut self, _index: usize, _path: &str) {}
+
+        fn get_var(&mut self, _key: &str) -> Option<String> {
+            None
+        }
+
+        fn set_var(&mut self, _key: String, _value: String) {}
+
+        fn set_env_var(&mut self, _key: String, _value: String) {}
+
+        fn unset_env_var(&mut self, _key: &str) {}
+
+        fn get_alias(&mut self, _name: &str) -> Option<String> {
+            None
+        }
+
+        fn set_alias(&mut self, _name: String, _command: String) {}
+
+        fn list_aliases(&mut self) -> std::collections::HashMap<String, String> {
+            std::collections::HashMap::new()
+        }
+
+        fn add_abbr(&mut self, _name: String, _expansion: String) {}
+
+        fn remove_abbr(&mut self, _name: &str) -> bool {
+            false
+        }
+
+        fn list_abbrs(&self) -> Vec<(String, String)> {
+            Vec::new()
+        }
+
+        fn get_abbr(&self, _name: &str) -> Option<String> {
+            None
+        }
+
+        fn list_mcp_servers(&mut self) -> Vec<dsh_types::mcp::McpServerConfig> {
+            Vec::new()
+        }
+
+        fn list_execute_allowlist(&mut self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn list_exported_vars(&self) -> Vec<(String, String)> {
+            Vec::new()
+        }
+
+        fn export_var(&mut self, _key: &str) -> bool {
+            false
+        }
+
+        fn set_and_export_var(&mut self, _key: String, _value: String) {}
+
+        fn get_current_dir(&self) -> anyhow::Result<PathBuf> {
+            Ok(self.current_dir.clone())
+        }
+
+        fn get_lisp_var(&self, _key: &str) -> Option<String> {
+            None
+        }
+    }
 
     #[test]
     fn test_detect_package_json() {
@@ -868,5 +968,29 @@ mod tests {
         let filtered = filtered_tasks_for_request(&tasks, None, Some("lint:fix"));
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].command, "npm run lint:fix");
+    }
+
+    #[test]
+    fn command_dispatches_selected_task_through_shell_without_duplicate_sh() {
+        let dir = tempdir().unwrap();
+        File::create(dir.path().join("Cargo.toml")).unwrap();
+        let mut proxy = MockShellProxy::new(dir.path().to_path_buf());
+        let pid = nix::unistd::getpid();
+        let ctx = Context::new_safe(pid, pid, false);
+
+        let status = command(
+            &ctx,
+            vec!["task".to_string(), "build".to_string()],
+            &mut proxy,
+        );
+
+        assert_eq!(status, ExitStatus::ExitedWith(0));
+        assert_eq!(
+            proxy.dispatched,
+            Some((
+                "sh".to_string(),
+                vec!["-c".to_string(), "cargo build".to_string()]
+            ))
+        );
     }
 }

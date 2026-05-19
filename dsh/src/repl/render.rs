@@ -198,6 +198,14 @@ pub fn print_input(
     let is_empty = repl.input.is_empty();
     let input_string = repl.input.as_str().to_owned(); // Must allocate here to avoid E0502 when calling &mut repl methods
     let _prompt_display_width = repl.prompt_mark_width; // cached at new()/print_prompt()
+    let history_match_ranges = repl.input.color_ranges.as_ref().and_then(|ranges| {
+        let ranges: Vec<_> = ranges
+            .iter()
+            .copied()
+            .filter(|(_, _, kind)| matches!(kind, ColorType::HistoryMatch))
+            .collect();
+        (!ranges.is_empty()).then_some(ranges)
+    });
 
     let mut completion: Option<String> = None;
     if is_empty || reset_completion {
@@ -222,6 +230,10 @@ pub fn print_input(
             repl.last_analyzed_input.clear();
             repl.last_analyzed_input.push_str(&input_string);
         }
+    }
+
+    if let Some(ranges) = history_match_ranges {
+        merge_history_match_ranges(&mut repl.input.color_ranges, ranges);
     }
 
     if completion.is_none() {
@@ -348,6 +360,42 @@ fn apply_fresh_analysis(
         completion_full,
         completion: analysis_completion,
     });
+}
+
+fn merge_history_match_ranges(
+    color_ranges: &mut Option<Vec<(usize, usize, ColorType)>>,
+    history_ranges: Vec<(usize, usize, ColorType)>,
+) {
+    let mut merged = Vec::new();
+
+    for (start, end, kind) in color_ranges.take().unwrap_or_default() {
+        if matches!(kind, ColorType::HistoryMatch) {
+            continue;
+        }
+
+        let mut segments = vec![(start, end, kind)];
+        for &(match_start, match_end, _) in &history_ranges {
+            let mut next = Vec::new();
+            for (seg_start, seg_end, seg_kind) in segments {
+                if match_end <= seg_start || match_start >= seg_end {
+                    next.push((seg_start, seg_end, seg_kind));
+                    continue;
+                }
+                if seg_start < match_start {
+                    next.push((seg_start, match_start, seg_kind));
+                }
+                if match_end < seg_end {
+                    next.push((match_end, seg_end, seg_kind));
+                }
+            }
+            segments = next;
+        }
+        merged.extend(segments);
+    }
+
+    merged.extend(history_ranges);
+    merged.sort_by_key(|(start, _, _)| *start);
+    *color_ranges = (!merged.is_empty()).then_some(merged);
 }
 
 #[derive(Clone, Copy)]

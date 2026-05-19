@@ -96,6 +96,7 @@ impl Input {
 
         // Incrementally update display width
         self.cached_display_width += ch.width().unwrap_or_default();
+        self.color_ranges = None;
     }
 
     pub fn insert_str(&mut self, string: &str) {
@@ -121,6 +122,7 @@ impl Input {
         // Incrementally update display width
         let added_width: usize = string.chars().map(|c| c.width().unwrap_or_default()).sum();
         self.cached_display_width += added_width;
+        self.color_ranges = None;
     }
 
     pub fn replace_range_chars(&mut self, start: usize, end: usize, replacement: &str) -> bool {
@@ -165,6 +167,7 @@ impl Input {
             self.indices.remove(remove_index);
             self.shift_indices_from(remove_index, -(char_len as isize));
             self.cursor -= 1;
+            self.color_ranges = None;
         }
     }
 
@@ -220,6 +223,7 @@ impl Input {
 
         // Recalculate display width (simpler than tracking removed chars)
         self.recalculate_display_width();
+        self.color_ranges = None;
 
         // Cursor position remains effectively the same (now at end)
     }
@@ -255,6 +259,7 @@ impl Input {
 
         // Recalculate display width
         self.recalculate_display_width();
+        self.color_ranges = None;
     }
 
     pub fn move_word_left(&mut self) {
@@ -581,6 +586,7 @@ impl Input {
         self.input.drain(byte_index..byte_index + char_len);
         self.indices.remove(self.cursor);
         self.shift_indices_from(self.cursor, -(char_len as isize));
+        self.color_ranges = None;
     }
 
     pub fn get_words(&self) -> Result<Vec<(Rule, Span<'_>, bool)>> {
@@ -664,13 +670,22 @@ impl Input {
                 ColorType::ProcSubst => self.config.proc_subst_color,
                 ColorType::Error => self.config.error_color,
                 ColorType::ValidPath => self.config.valid_path_color,
+                ColorType::HistoryMatch => self.config.history_match_fg_color,
             };
 
             for (i, line) in colored_text.split('\n').enumerate() {
                 if i > 0 {
                     write!(writer, "\r\n")?;
                 }
-                write!(writer, "{}", line.with(color))?;
+                if matches!(color_type, ColorType::HistoryMatch) {
+                    write!(
+                        writer,
+                        "{}",
+                        line.with(color).on(self.config.history_match_bg_color)
+                    )?;
+                } else {
+                    write!(writer, "{}", line.with(color))?;
+                }
             }
 
             // Update the last processed position
@@ -791,6 +806,40 @@ mod tests {
         // Cursor movement test
         input.move_to_end();
         assert_eq!(input.cursor(), 2);
+    }
+
+    #[test]
+    fn history_match_color_range_uses_background_style() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+        input.reset_with_color_ranges(
+            "git status".to_string(),
+            vec![(4, 10, ColorType::HistoryMatch)],
+        );
+
+        crossterm::style::force_color_output(true);
+        let mut output = Vec::new();
+        input.print(&mut output, None);
+        crossterm::style::force_color_output(false);
+        let rendered = String::from_utf8(output).unwrap();
+
+        assert!(rendered.contains("38;5;0m"), "{rendered:?}");
+        assert!(rendered.contains("48;5;11m"), "{rendered:?}");
+        assert!(rendered.contains("status"));
+    }
+
+    #[test]
+    fn editing_clears_color_ranges() {
+        let config = InputConfig::default();
+        let mut input = Input::new(config);
+        input.reset_with_color_ranges(
+            "git status".to_string(),
+            vec![(4, 10, ColorType::HistoryMatch)],
+        );
+
+        input.insert('!');
+
+        assert!(input.color_ranges.is_none());
     }
 
     #[test]

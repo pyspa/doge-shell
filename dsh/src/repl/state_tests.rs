@@ -2,6 +2,7 @@
 mod tests {
     use crate::environment::Environment;
     use crate::history::History;
+    use crate::input::ColorType;
     use crate::repl::Repl;
     use crate::repl::handler;
     use crate::repl::state::{InteractiveAction, ReplControlFlow};
@@ -121,6 +122,15 @@ mod tests {
             .unwrap();
         assert!(matches!(up_result, ReplControlFlow::Continue));
         assert_eq!(repl.input.as_str(), "docker status");
+        assert_eq!(
+            repl.input.color_ranges.as_deref(),
+            Some(
+                &[
+                    (0, 6, ColorType::CommandExists),
+                    (7, 13, ColorType::HistoryMatch)
+                ][..]
+            )
+        );
 
         let down_result =
             handler::handle_key_event(&mut repl, &key(KeyCode::Down, KeyModifiers::NONE))
@@ -128,6 +138,15 @@ mod tests {
                 .unwrap();
         assert!(matches!(down_result, ReplControlFlow::Continue));
         assert_eq!(repl.input.as_str(), "status");
+        assert!(
+            !repl
+                .input
+                .color_ranges
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .any(|(_, _, kind)| matches!(kind, ColorType::HistoryMatch))
+        );
 
         repl.input.reset("test".to_string());
         let next_up_result =
@@ -136,5 +155,14 @@ mod tests {
                 .unwrap();
         assert!(matches!(next_up_result, ReplControlFlow::Continue));
         assert_eq!(repl.input.as_str(), "cargo test");
+        assert_eq!(
+            repl.input.color_ranges.as_deref(),
+            Some(
+                &[
+                    (0, 5, ColorType::CommandExists),
+                    (6, 10, ColorType::HistoryMatch)
+                ][..]
+            )
+        );
     }
 }

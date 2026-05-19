@@ -18,6 +18,8 @@ pub struct InputConfig {
     pub completion_color: Color,         // Completion candidates (dark grey)
     pub ghost_color: Color,              // Inline suggestion text (dim gray)
     pub valid_path_color: Color,         // Valid path (magenta)
+    pub history_match_fg_color: Color,   // History search match foreground
+    pub history_match_bg_color: Color,   // History search match background
 }
 
 impl Default for InputConfig {
@@ -39,11 +41,13 @@ impl Default for InputConfig {
             completion_color: Color::DarkGrey,
             ghost_color: Color::DarkGrey,
             valid_path_color: Color::Magenta,
+            history_match_fg_color: Color::Black,
+            history_match_bg_color: Color::Yellow,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorType {
     CommandExists,
     CommandNotExists,
@@ -58,4 +62,5 @@ pub enum ColorType {
     ProcSubst,
     Error,
     ValidPath,
+    HistoryMatch,
 }

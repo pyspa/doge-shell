@@ -1,3 +1,4 @@
+use crate::input::{ColorType, Input};
 use crate::repl::Repl;
 use crate::repl::state::ReplControlFlow;
 use crate::terminal::renderer::TerminalRenderer;
@@ -6,13 +7,84 @@ use crossterm::cursor;
 use crossterm::queue;
 use dsh_frecency::ItemStats;
 
-fn apply_history_item(input: &mut crate::input::Input, item: &ItemStats) {
+fn apply_history_item(input: &mut Input, item: &ItemStats) {
     let color_ranges: Vec<(usize, usize, crate::input::ColorType)> = item
         .match_index
         .iter()
-        .map(|&idx| (idx, idx + 1, crate::input::ColorType::CommandExists))
+        .filter_map(|&idx| char_index_range(&item.item, idx))
+        .map(|(start, end)| (start, end, ColorType::HistoryMatch))
         .collect();
     input.reset_with_color_ranges(item.item.clone(), color_ranges);
+}
+
+fn apply_history_command(input: &mut Input, command: String, search_word: Option<&str>) {
+    let color_ranges = search_word
+        .map(|word| history_match_ranges(&command, word))
+        .unwrap_or_default();
+
+    if color_ranges.is_empty() {
+        input.reset(command);
+    } else {
+        input.reset_with_color_ranges(command, color_ranges);
+    }
+}
+
+fn char_index_range(input: &str, char_index: usize) -> Option<(usize, usize)> {
+    input
+        .char_indices()
+        .nth(char_index)
+        .map(|(start, ch)| (start, start + ch.len_utf8()))
+}
+
+fn history_match_ranges(input: &str, word: &str) -> Vec<(usize, usize, ColorType)> {
+    if word.is_empty() {
+        return Vec::new();
+    }
+
+    if word.chars().any(|ch| ch.is_uppercase()) {
+        return input
+            .match_indices(word)
+            .map(|(start, matched)| (start, start + matched.len(), ColorType::HistoryMatch))
+            .collect();
+    }
+
+    case_insensitive_match_ranges(input, word)
+}
+
+fn case_insensitive_match_ranges(input: &str, word: &str) -> Vec<(usize, usize, ColorType)> {
+    let haystack: Vec<(usize, usize, String)> = input
+        .char_indices()
+        .map(|(start, ch)| (start, start + ch.len_utf8(), ch.to_lowercase().to_string()))
+        .collect();
+    let needle: Vec<String> = word
+        .chars()
+        .map(|ch| ch.to_lowercase().to_string())
+        .collect();
+
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return Vec::new();
+    }
+
+    let mut ranges = Vec::new();
+    let mut index = 0;
+    while index + needle.len() <= haystack.len() {
+        if haystack[index..index + needle.len()]
+            .iter()
+            .map(|(_, _, lower)| lower)
+            .eq(needle.iter())
+        {
+            ranges.push((
+                haystack[index].0,
+                haystack[index + needle.len() - 1].1,
+                ColorType::HistoryMatch,
+            ));
+            index += needle.len();
+        } else {
+            index += 1;
+        }
+    }
+
+    ranges
 }
 
 pub(crate) fn handle_history_previous(repl: &mut Repl<'_>) {
@@ -42,7 +114,8 @@ pub(crate) fn handle_history_previous(repl: &mut Repl<'_>) {
             }
 
             if let Some(cmd) = history.back() {
-                repl.input.reset(cmd);
+                let search_word = history.search_word.clone();
+                apply_history_command(&mut repl.input, cmd, search_word.as_deref());
             }
         }
     }
@@ -73,7 +146,8 @@ pub(crate) fn handle_history_next(repl: &mut Repl<'_>) {
         }
 
         if let Some(cmd) = history.forward() {
-            repl.input.reset(cmd);
+            let search_word = history.search_word.clone();
+            apply_history_command(&mut repl.input, cmd, search_word.as_deref());
         } else {
             // If forward() returns None, we are back at the prompt line (future)
             // Restore the original search prefix or clear input

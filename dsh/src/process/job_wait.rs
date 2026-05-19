@@ -305,6 +305,7 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
             }
             Ok(Ok(KnownWaitResult::NoChildren)) | Ok(Err(nix::errno::Errno::ECHILD)) => {
                 check_background_all_output(job).await?;
+                drain_foreground_completed_output(job).await?;
                 break;
             }
             Ok(Err(nix::errno::Errno::EINTR)) => {
@@ -334,6 +335,7 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
 
         if is_job_completed(job) {
             debug!("Job completed, breaking from wait_process_no_hang loop");
+            drain_foreground_completed_output(job).await?;
             break;
         }
 
@@ -571,10 +573,24 @@ pub async fn check_background_all_output(job: &mut Job) -> Result<()> {
     let mut i = 0;
     while i < job.monitors.len() {
         debug!("Processing monitor {}", i);
-        job.monitors[i].output_all(false).await?;
+        job.monitors[i].drain_available().await?;
         i += 1;
     }
     debug!("check_background_all_output completed");
+    Ok(())
+}
+
+pub async fn drain_foreground_completed_output(job: &mut Job) -> Result<()> {
+    debug!(
+        "drain_foreground_completed_output: monitors.len() = {}",
+        job.monitors.len()
+    );
+    let mut i = 0;
+    while i < job.monitors.len() {
+        debug!("Draining completed monitor {}", i);
+        job.monitors[i].drain_to_eof().await?;
+        i += 1;
+    }
     Ok(())
 }
 

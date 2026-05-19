@@ -44,16 +44,6 @@ impl Environment {
         self.input_preferences.auto_pair = enabled;
     }
 
-    /// Check if block separation is enabled.
-    pub fn block_separator_enabled(&self) -> bool {
-        self.input_preferences.block_separator
-    }
-
-    /// Enable or disable block separation.
-    pub fn set_block_separator_enabled(&mut self, enabled: bool) {
-        self.input_preferences.block_separator = enabled;
-    }
-
     /// Check if AI command explanation is enabled.
     pub fn ai_explanation_enabled(&self) -> bool {
         self.input_preferences.ai_explanation

@@ -49,13 +49,6 @@ pub(crate) async fn check_background_jobs(repl: &mut Repl<'_>, output: bool) -> 
     let exists = !jobs.is_empty();
 
     if output && exists {
-        // Process background output for completed jobs
-        for mut job in jobs {
-            if !job.foreground {
-                job.check_background_all_output().await?;
-            }
-        }
-
         // Batch all output operations with a single terminal renderer
         let mut renderer = TerminalRenderer::new();
         let mut output_buffer = String::new();

@@ -1,4 +1,4 @@
-use crate::process::{Job, ProcessState};
+use crate::process::{Job, wait::is_job_completed};
 use crate::shell::Shell;
 use anyhow::Result;
 use nix::sys::signal::Signal;
@@ -144,7 +144,7 @@ pub async fn check_job_state(shell: &mut Shell) -> Result<Vec<Job>> {
 
         let is_completed_now = job.update_status();
 
-        if !is_completed_now && !job.foreground {
+        if !job.foreground {
             debug!(
                 "CHECK_JOB_STATE_BACKGROUND: Checking background output for job {}",
                 job.job_id
@@ -156,6 +156,9 @@ pub async fn check_job_state(shell: &mut Shell) -> Result<Vec<Job>> {
                     job.job_id, e
                 );
             }
+        }
+
+        if !is_completed_now {
             // Re-evaluate status after checking output
             job.update_status();
         }
@@ -165,9 +168,8 @@ pub async fn check_job_state(shell: &mut Shell) -> Result<Vec<Job>> {
     // We move all jobs out, partition them, and put active jobs back.
     // This avoids O(N^2) removal operations.
     let all_jobs = std::mem::take(&mut shell.wait_jobs);
-    let (completed, active): (Vec<Job>, Vec<Job>) = all_jobs
-        .into_iter()
-        .partition(|job| matches!(job.state, ProcessState::Completed(_, _)));
+    let (completed, active): (Vec<Job>, Vec<Job>) =
+        all_jobs.into_iter().partition(is_job_completed);
 
     shell.wait_jobs = active;
     let completed_jobs = completed;

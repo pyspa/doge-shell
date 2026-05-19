@@ -346,6 +346,8 @@ impl Shell {
 mod tests {
     use super::*;
 
+    static SHELL_PROCESS_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[test]
     fn request_eval_command_rejects_nested_drain() {
         let environment = crate::environment::Environment::new();
@@ -381,6 +383,8 @@ mod tests {
     async fn foreground_output_observer_captures_stdout_and_stderr() {
         use dsh_types::observed_output::ObservedOutput;
 
+        let _guard = SHELL_PROCESS_TEST_LOCK.lock().await;
+
         async fn run_observed(command: &str) -> dsh_types::observed_output::ObservedOutputSnapshot {
             let environment = crate::environment::Environment::new();
             let mut shell = Shell::new(environment);
@@ -405,5 +409,42 @@ mod tests {
         let stderr = run_observed("sh -c 'printf err >&2'").await;
         assert_eq!(stderr.stdout, "");
         assert_eq!(stderr.stderr, "err");
+
+        let delayed = run_observed(
+            "sh -c 'printf out; sleep 0.05; printf tail; printf err >&2; sleep 0.05; printf done >&2'",
+        )
+        .await;
+        assert_eq!(delayed.stdout, "outtail");
+        assert_eq!(delayed.stderr, "errdone");
+    }
+
+    #[tokio::test]
+    async fn background_job_check_does_not_wait_for_stdout_holding_descendant() {
+        use std::time::Duration;
+
+        let _guard = SHELL_PROCESS_TEST_LOCK.lock().await;
+
+        let environment = crate::environment::Environment::new();
+        let mut shell = Shell::new(environment);
+        *shell.environment.read().safety_level.write() = crate::safety::SafetyLevel::Loose;
+        let mut ctx = dsh_types::Context::new_safe(shell.pid, shell.pgid, true);
+        ctx.interactive = false;
+
+        let exit_code = shell
+            .eval_str(&mut ctx, "sh -c '(sleep 1) & exit 0'".to_string(), true)
+            .await
+            .unwrap();
+        assert_eq!(exit_code, 0);
+        assert_eq!(shell.wait_jobs.len(), 1);
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let completed = tokio::time::timeout(Duration::from_millis(300), shell.check_job_state())
+            .await
+            .expect("background job check should not wait for descendant-held stdout")
+            .unwrap();
+
+        assert_eq!(completed.len(), 1);
+        assert!(shell.wait_jobs.is_empty());
+        tokio::time::sleep(Duration::from_millis(1100)).await;
     }
 }

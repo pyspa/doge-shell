@@ -5,7 +5,7 @@ use crate::parser::{self, HighlightKind, Rule};
 use anyhow::Result;
 use crossterm::cursor::{self, MoveLeft};
 use crossterm::queue;
-use crossterm::style::{Color, Print, ResetColor, SetForegroundColor, Stylize};
+use crossterm::style::{Color, Print, ResetColor, Stylize};
 use crossterm::terminal::{self, Clear, ClearType};
 use pest::iterators::Pairs;
 use std::io::Write;
@@ -57,30 +57,6 @@ pub(crate) fn move_cursor_relative(
     if new_col != prev_col {
         queue!(out, cursor::MoveToColumn(new_col as u16)).ok();
     }
-}
-
-pub(crate) fn print_block_separator(repl: &Repl<'_>, out: &mut impl Write) {
-    if !repl.input_preferences.block_separator {
-        return;
-    }
-
-    // Get the current terminal width
-    let cols = repl.columns as u16;
-    if cols == 0 {
-        return;
-    }
-
-    // Create a string of '─' characters to fill the terminal width
-    let separator = "─".repeat(cols as usize);
-
-    queue!(
-        out,
-        SetForegroundColor(Color::DarkGrey),
-        Print(separator),
-        ResetColor,
-        Print("\r\n")
-    )
-    .ok();
 }
 
 pub(crate) fn print_prompt(repl: &mut Repl<'_>, out: &mut impl Write) {

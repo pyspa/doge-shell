@@ -147,7 +147,6 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
 
     // After command execution, show new prompt
     let mut renderer = TerminalRenderer::new();
-    repl.print_block_separator(&mut renderer);
     repl.print_prompt(&mut renderer);
     renderer.flush().ok();
     Ok(())
@@ -180,7 +179,6 @@ async fn execute_shell_command(
 
             // Show new prompt and skip command execution
             let mut renderer = TerminalRenderer::new();
-            repl.print_block_separator(&mut renderer);
             repl.print_prompt(&mut renderer);
             renderer.flush().ok();
             return Ok(());
@@ -469,7 +467,6 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
                 print!("\x1b]133;D;1\x1b\\");
 
                 let mut renderer = TerminalRenderer::new();
-                repl.print_block_separator(&mut renderer);
                 repl.print_prompt(&mut renderer);
                 renderer.flush().ok();
                 return Ok(());
@@ -510,7 +507,6 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
 
     // After command execution, show new prompt
     let mut renderer = TerminalRenderer::new();
-    repl.print_block_separator(&mut renderer);
     repl.print_prompt(&mut renderer);
     renderer.flush().ok();
     Ok(())
@@ -547,7 +543,6 @@ pub(crate) fn handle_interrupt(repl: &mut Repl<'_>) -> Result<()> {
         // 130 is the standard exit code for SIGINT
         print!("\x1b]133;D;130\x1b\\");
 
-        repl.print_block_separator(&mut renderer);
         repl.print_prompt(&mut renderer);
         renderer.flush().ok();
         repl.input.clear();

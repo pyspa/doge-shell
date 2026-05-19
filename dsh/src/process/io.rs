@@ -98,10 +98,9 @@ impl OutputMonitor {
         }
     }
 
-    pub async fn output_all(&mut self, block: bool) -> Result<()> {
-        let mut len = 1;
+    pub async fn drain_available(&mut self) -> Result<()> {
         let mut buffer = String::new();
-        while len != 0 {
+        loop {
             let mut line = String::new();
             match time::timeout(
                 Duration::from_millis(MONITOR_TIMEOUT),
@@ -110,20 +109,35 @@ impl OutputMonitor {
             .await
             {
                 Ok(Ok(readed)) => {
-                    len = readed;
                     if readed == 0 {
-                        if !block {
-                            break;
-                        }
+                        break;
                     } else {
                         self.append_line(&mut buffer, &line);
                     }
                 }
                 Ok(Err(_)) | Err(_) => {
-                    if !block {
-                        break;
-                    }
+                    break;
                 }
+            }
+        }
+        if !buffer.is_empty() {
+            self.flush_buffer(&buffer)?;
+        }
+        Ok(())
+    }
+
+    pub async fn drain_to_eof(&mut self) -> Result<()> {
+        let mut buffer = String::new();
+        loop {
+            let mut line = String::new();
+            let read = self.reader.read_line(&mut line).await?;
+            if read == 0 {
+                break;
+            }
+            self.append_line(&mut buffer, &line);
+            if buffer.len() >= 8192 {
+                self.flush_buffer(&buffer)?;
+                buffer.clear();
             }
         }
         if !buffer.is_empty() {
@@ -342,7 +356,12 @@ pub(crate) fn handle_output_redirect(
 
 #[cfg(test)]
 mod tests {
-    use super::{append_output_chunk, normalize_tty_newlines};
+    use super::{MONITOR_TIMEOUT, OutputMonitor, append_output_chunk, normalize_tty_newlines};
+    use dsh_types::observed_output::ObservedStream;
+    use nix::unistd::pipe;
+    use std::io::Write as _;
+    use std::os::fd::{FromRawFd, IntoRawFd};
+    use std::time::Duration;
 
     #[test]
     fn append_output_chunk_prefixes_only_first_chunk() {
@@ -418,5 +437,25 @@ mod tests {
 
         assert!(normalized.is_none());
         assert_eq!(last, Some(b'\r'));
+    }
+
+    #[tokio::test]
+    async fn output_monitor_drain_to_eof_waits_for_late_output() {
+        let (read_fd, write_fd) = pipe().expect("pipe");
+        let mut monitor = OutputMonitor::new(read_fd.into_raw_fd(), None, ObservedStream::Stdout);
+        let write_fd = write_fd.into_raw_fd();
+
+        let writer = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(MONITOR_TIMEOUT + 50)).await;
+            let mut file = unsafe { std::fs::File::from_raw_fd(write_fd) };
+            file.write_all(b"late output").expect("write output");
+        });
+
+        monitor.drain_available().await.expect("drain available");
+        assert_eq!(monitor.captured_output, "");
+
+        monitor.drain_to_eof().await.expect("drain to eof");
+        writer.await.expect("writer task");
+        assert_eq!(monitor.captured_output, "late output");
     }
 }

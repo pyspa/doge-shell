@@ -24,7 +24,7 @@ pub(crate) fn handle_history_previous(repl: &mut Repl<'_>) {
         return;
     }
 
-    // Magic Up Arrow: Prefix-based history search
+    // Magic Up Arrow: fish-style contains history search
     if let Some(history_arc) = &repl.shell.cmd_history {
         // Try to lock history (non-blocking)
         if let Some(mut history) = history_arc.try_lock() {
@@ -37,7 +37,7 @@ pub(crate) fn handle_history_previous(repl: &mut Repl<'_>) {
 
             // If we are at the start of history navigation (bottom), initialize search
             // Use at_end() to check if we are at the "newest" position
-            if history.at_end() && history.search_word.is_none() && !input_str.is_empty() {
+            if history.at_end() && !input_str.is_empty() {
                 history.search_word = Some(input_str);
             }
 
@@ -79,14 +79,7 @@ pub(crate) fn handle_history_next(repl: &mut Repl<'_>) {
             // Restore the original search prefix or clear input
             let saved_input = history.search_word.clone().unwrap_or_default();
             repl.input.reset(saved_input);
-
-            // FIX: manually reset index if we are at the last item and trying to go forward.
-            // Check if we are at the last regular entry
-            if history.at_latest_entry() {
-                history.reset_index();
-                let saved_input = history.search_word.clone().unwrap_or_default();
-                repl.input.reset(saved_input);
-            }
+            history.search_word = None;
         }
     }
 }

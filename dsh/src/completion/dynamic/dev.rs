@@ -556,9 +556,10 @@ fn load_pnpm_workspace_patterns(path: &Path) -> Vec<String> {
             break;
         }
         if let Some(value) = trimmed.strip_prefix('-')
-            && let Some(pattern) = clean_workspace_pattern(value.trim()) {
-                patterns.push(pattern);
-            }
+            && let Some(pattern) = clean_workspace_pattern(value.trim())
+        {
+            patterns.push(pattern);
+        }
     }
     patterns
 }

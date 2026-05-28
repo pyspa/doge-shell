@@ -1,0 +1,1 @@
+{"command":"dumpe2fs","description":"Dump ext filesystem information","global_options":[{"short":"-b","description":"Print bad blocks"},{"short":"-h","description":"Print superblock information only"},{"short":"-x","description":"Hex output"},{"short":"-V","description":"Show version"}],"arguments":[{"name":"device","type":{"type":"Dynamic","data":{"provider":"block.device"}}}]}

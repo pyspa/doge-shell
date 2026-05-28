@@ -1,0 +1,16 @@
+{
+  "command": "snippet",
+  "description": "Manage command snippets",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "add", "aliases": ["-a"], "description": "Add snippet", "arguments": [{ "name": "name", "description": "Snippet name" }, { "name": "command", "description": "Command", "multiple": true, "type": { "type": "CommandWithArgs" } }] },
+    { "name": "remove", "aliases": ["rm", "-r"], "description": "Remove snippet", "arguments": [{ "name": "name", "description": "Snippet name" }] },
+    { "name": "list", "aliases": ["-l", "--list"], "description": "List snippets" },
+    { "name": "run", "aliases": ["exec", "-x"], "description": "Run snippet", "arguments": [{ "name": "name", "description": "Snippet name" }] },
+    { "name": "edit", "aliases": ["-e"], "description": "Edit snippet", "arguments": [{ "name": "name", "description": "Snippet name" }] },
+    { "name": "help", "description": "Show help" }
+  ],
+  "arguments": [{ "name": "name", "description": "Snippet name" }]
+}

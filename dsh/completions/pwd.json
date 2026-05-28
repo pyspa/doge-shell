@@ -1,0 +1,1 @@
+{"command":"pwd","description":"Print current working directory","global_options":[{"short":"-L","long":"--logical","description":"Use PWD from environment"},{"short":"-P","long":"--physical","description":"Avoid symlinks"},{"long":"--help","description":"Show help"}]}

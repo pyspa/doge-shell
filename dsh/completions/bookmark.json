@@ -1,0 +1,15 @@
+{
+  "command": "bookmark",
+  "description": "Manage command bookmarks",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "add", "aliases": ["-a"], "description": "Add bookmark", "arguments": [{ "name": "name", "description": "Bookmark name" }, { "name": "command", "description": "Command", "multiple": true, "type": { "type": "CommandWithArgs" } }] },
+    { "name": "remove", "aliases": ["rm", "-r"], "description": "Remove bookmark", "arguments": [{ "name": "name", "description": "Bookmark name" }] },
+    { "name": "list", "aliases": ["-l", "--list"], "description": "List bookmarks" },
+    { "name": "run", "aliases": ["exec", "-x"], "description": "Run bookmark", "arguments": [{ "name": "name", "description": "Bookmark name" }] },
+    { "name": "help", "description": "Show help" }
+  ],
+  "arguments": [{ "name": "name", "description": "Bookmark name" }]
+}

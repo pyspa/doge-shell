@@ -1,0 +1,1 @@
+{"command":"yes","description":"Repeatedly output a string","global_options":[{"long":"--help","description":"Show help"},{"long":"--version","description":"Show version"}],"arguments":[{"name":"string","multiple":true,"type":{"type":"String"}}]}

@@ -1,0 +1,17 @@
+{
+  "command": "project",
+  "description": "Manage doge-shell projects",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "init", "description": "Register current project", "arguments": [{ "name": "name", "description": "Project name" }] },
+    { "name": "status", "aliases": ["st"], "description": "Show project status" },
+    { "name": "add", "description": "Register project path", "arguments": [{ "name": "path", "description": "Project path", "type": { "type": "Directory" } }, { "name": "name", "description": "Project name" }] },
+    { "name": "list", "aliases": ["ls"], "description": "List projects" },
+    { "name": "remove", "aliases": ["rm"], "description": "Remove project", "arguments": [{ "name": "name", "description": "Project name" }] },
+    { "name": "work", "description": "Switch project", "arguments": [{ "name": "name", "description": "Project name" }] },
+    { "name": "jump", "description": "Select and switch project" },
+    { "name": "activate", "description": "Activate project environment", "options": [{ "long": "--dry-run", "description": "Show changes without applying" }] }
+  ]
+}

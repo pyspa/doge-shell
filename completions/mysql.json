@@ -1,0 +1,15 @@
+{
+  "command": "mysql",
+  "description": "MySQL client",
+  "global_options": [
+    { "short": "-h", "long": "--host", "description": "Server host", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-P", "long": "--port", "description": "Server port", "takes_value": true, "value_type": { "type": "Number" } },
+    { "short": "-u", "long": "--user", "description": "User", "takes_value": true, "value_type": { "type": "User" } },
+    { "short": "-p", "long": "--password", "description": "Prompt for password" },
+    { "short": "-D", "long": "--database", "description": "Database", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-e", "long": "--execute", "description": "Execute statement", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--ssl-mode", "description": "SSL mode", "takes_value": true, "value_type": { "type": "Choice", "data": ["DISABLED", "PREFERRED", "REQUIRED", "VERIFY_CA", "VERIFY_IDENTITY"] } },
+    { "short": "-?", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [{ "name": "database", "description": "Database name" }]
+}

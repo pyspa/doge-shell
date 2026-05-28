@@ -3,7 +3,7 @@
   "description": "Run Ansible playbooks",
   "global_options": [
     { "short": "-i", "long": "--inventory", "description": "Inventory file or directory", "takes_value": true, "value_type": { "type": "File", "data": {} } },
-    { "short": "-l", "long": "--limit", "description": "Limit selected hosts", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-l", "long": "--limit", "description": "Limit selected hosts", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "ansible.inventory_host" } } },
     { "short": "-t", "long": "--tags", "description": "Only run tagged tasks", "takes_value": true, "value_type": { "type": "String" } },
     { "long": "--skip-tags", "description": "Skip tagged tasks", "takes_value": true, "value_type": { "type": "String" } },
     { "short": "-e", "long": "--extra-vars", "description": "Set extra variables", "takes_value": true, "value_type": { "type": "String" } },

@@ -1,0 +1,13 @@
+{
+  "command": "task",
+  "description": "Run project-specific tasks",
+  "global_options": [
+    { "short": "-l", "long": "--list", "description": "List detected tasks" },
+    { "long": "--json", "description": "List detected tasks as JSON" },
+    { "short": "-s", "long": "--source", "description": "Filter by task source", "takes_value": true, "value_type": { "type": "Choice", "data": ["npm", "pnpm", "yarn", "bun", "cargo", "gradle", "make", "just", "deno", "mise", "taskfile", "turbo", "nx"] } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [
+    { "name": "task", "description": "Task name", "type": { "type": "Dynamic", "data": { "provider": "project.task" } } }
+  ]
+}

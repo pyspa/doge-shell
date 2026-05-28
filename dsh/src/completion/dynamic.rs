@@ -15,6 +15,7 @@ use std::time::{Duration, Instant, SystemTime};
 use tracing::warn;
 
 mod dev;
+mod linux;
 
 const DYNAMIC_COMMAND_CACHE_TTL_MS: u64 = 1000;
 const COMPLETION_COMMAND_TIMEOUT: Duration = Duration::from_millis(1500);
@@ -27,6 +28,7 @@ const MISE_PROJECT_TASK_SOURCES: &[&str] = &["mise"];
 const TASKFILE_PROJECT_TASK_SOURCES: &[&str] = &["taskfile"];
 const JUST_PROJECT_TASK_SOURCES: &[&str] = &["just"];
 const MAKE_PROJECT_TASK_SOURCES: &[&str] = &["make"];
+const GRADLE_PROJECT_TASK_SOURCES: &[&str] = &["gradle"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FileMetadataSignature {
@@ -608,7 +610,17 @@ impl DynamicCompletionProvider {
                 self.collect_mountpoint_candidates(current_dir, current_token, cached_only)
             }
             "kernel.module" => self.collect_kernel_module_candidates(current_token, cached_only),
+            "audit.rule_key" => self.collect_audit_rule_key_candidates(current_token, cached_only),
+            "ansible.inventory_host" => self.collect_ansible_inventory_host_candidates(
+                parsed_command_line,
+                current_dir,
+                current_token,
+                cached_only,
+            ),
             "aws.profile" => self.collect_aws_profile_candidates(current_token, cached_only),
+            "az.subscription" => {
+                self.collect_az_subscription_candidates(current_token, cached_only)
+            }
             "gcloud.configuration" => {
                 self.collect_gcloud_configuration_candidates(current_token, cached_only)
             }
@@ -628,9 +640,46 @@ impl DynamicCompletionProvider {
             "go.package" => {
                 self.collect_go_package_candidates(current_dir, current_token, cached_only)
             }
+            "helm.release" => self.collect_helm_release_candidates(
+                parsed_command_line,
+                current_dir,
+                current_token,
+                cached_only,
+            ),
+            "ip.route_table" => self.collect_ip_route_table_candidates(current_token, cached_only),
+            "btrfs.subvolume" => {
+                self.collect_btrfs_subvolume_candidates(current_dir, current_token, cached_only)
+            }
+            "dmsetup.device" => self.collect_dmsetup_device_candidates(current_token, cached_only),
+            "lvm.logical_volume" => {
+                self.collect_lvm_logical_volume_candidates(current_token, cached_only)
+            }
+            "lvm.physical_volume" => {
+                self.collect_lvm_physical_volume_candidates(current_token, cached_only)
+            }
+            "lvm.volume_group" => {
+                self.collect_lvm_volume_group_candidates(current_token, cached_only)
+            }
+            "maven.module" => {
+                self.collect_maven_module_candidates(current_dir, current_token, cached_only)
+            }
+            "maven.profile" => {
+                self.collect_maven_profile_candidates(current_dir, current_token, cached_only)
+            }
+            "mdadm.array" => self.collect_mdadm_array_candidates(current_token, cached_only),
+            "nft.chain" => {
+                self.collect_nft_chain_candidates(current_dir, current_token, cached_only)
+            }
+            "nft.table" => {
+                self.collect_nft_table_candidates(current_dir, current_token, cached_only)
+            }
+            "selinux.module" => self.collect_selinux_module_candidates(current_token, cached_only),
             "terraform.workspace" => {
                 self.collect_terraform_workspace_candidates(current_dir, current_token, cached_only)
             }
+            "shell.abbr" => self.collect_shell_abbr_candidates(current_token),
+            "shell.alias" => self.collect_shell_alias_candidates(current_token),
+            "shell.env_var" => self.collect_shell_env_var_candidates(current_token),
             "podman.image" => self.collect_container_image_candidates(
                 "podman",
                 current_dir,
@@ -664,6 +713,12 @@ impl DynamicCompletionProvider {
                 parse_non_empty_lines,
                 cached_only,
             ),
+            "zfs.dataset" => {
+                self.collect_zfs_dataset_candidates(current_dir, current_token, cached_only)
+            }
+            "zpool.pool" => {
+                self.collect_zpool_pool_candidates(current_dir, current_token, cached_only)
+            }
             _ => {
                 warn!("Unknown dynamic completion provider: {provider}");
                 Vec::new()
@@ -700,6 +755,80 @@ impl DynamicCompletionProvider {
                 priority: 90,
             })
             .collect()
+    }
+
+    fn collect_shell_alias_candidates(&self, current_token: &str) -> Vec<EnhancedCandidate> {
+        let values = self
+            .environment
+            .read()
+            .alias
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        shell_state_candidates(values, current_token, "shell alias")
+    }
+
+    fn collect_shell_abbr_candidates(&self, current_token: &str) -> Vec<EnhancedCandidate> {
+        let values = self
+            .environment
+            .read()
+            .abbreviations
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        shell_state_candidates(values, current_token, "shell abbreviation")
+    }
+
+    fn collect_shell_env_var_candidates(&self, current_token: &str) -> Vec<EnhancedCandidate> {
+        let mut values = self
+            .environment
+            .read()
+            .system_env_vars
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        values.extend(std::env::vars().map(|(key, _)| key));
+        shell_state_candidates(values, current_token, "environment variable")
+    }
+
+    fn collect_helm_release_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("helm");
+        let namespace = selected_kubectl_namespace(parsed_command_line).map(str::to_string);
+        let kube_context = selected_helm_kube_context(parsed_command_line).map(str::to_string);
+        let value_kind = format!(
+            "release:{}:{}",
+            namespace.as_deref().unwrap_or("_"),
+            kube_context.as_deref().unwrap_or("_")
+        );
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "helm",
+            &value_kind,
+            current_dir.clone(),
+            current_token,
+            "Helm release",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                let mut command = subprocess::command(&command_path);
+                command.arg("list").arg("--short").current_dir(&current_dir);
+                if let Some(namespace) = namespace.as_deref() {
+                    command.arg("--namespace").arg(namespace);
+                }
+                if let Some(kube_context) = kube_context.as_deref() {
+                    command.arg("--kube-context").arg(kube_context);
+                }
+                Ok(parse_non_empty_lines(&collect_command_lines(command)?))
+            },
+        )
     }
 
     pub(crate) fn collect_fish_fallback_candidates(
@@ -4226,6 +4355,12 @@ fn task_completion_signature(
         "makefile",
         "deno.json",
         "deno.jsonc",
+        "build.gradle",
+        "build.gradle.kts",
+        "settings.gradle",
+        "settings.gradle.kts",
+        "gradle.properties",
+        "gradlew",
     ]
     .into_iter()
     .map(|name| project_root.join(name))
@@ -4719,6 +4854,23 @@ fn parse_non_empty_lines(lines: &[String]) -> Vec<String> {
     dedup_sorted(lines.iter().map(|line| line.trim().to_string()).collect())
 }
 
+fn shell_state_candidates(
+    values: Vec<String>,
+    current_token: &str,
+    description: &str,
+) -> Vec<EnhancedCandidate> {
+    dedup_sorted(values)
+        .into_iter()
+        .filter(|value| matches_prefix(current_token, value))
+        .map(|value| EnhancedCandidate {
+            text: value,
+            description: Some(description.to_string()),
+            candidate_type: CandidateType::Argument,
+            priority: 140,
+        })
+        .collect()
+}
+
 fn parse_container_images(lines: &[String]) -> Vec<String> {
     dedup_sorted(
         lines
@@ -4873,6 +5025,28 @@ fn selected_kubectl_namespace(parsed_command_line: &ParsedCommandLine) -> Option
     None
 }
 
+fn selected_helm_kube_context(parsed_command_line: &ParsedCommandLine) -> Option<&str> {
+    let words = completion_words(parsed_command_line);
+    for (index, token) in words.iter().enumerate() {
+        if *token == "--kube-context" {
+            let Some(value) = words.get(index + 1).copied() else {
+                continue;
+            };
+            if !value.is_empty() && !value.starts_with('-') {
+                return Some(value);
+            }
+        }
+
+        if let Some(value) = token.strip_prefix("--kube-context=")
+            && !value.is_empty()
+        {
+            return Some(value);
+        }
+    }
+
+    None
+}
+
 fn split_kubectl_resource_name_token(token: &str) -> Option<(&str, &str)> {
     let (resource, name_prefix) = token.split_once('/')?;
     if resource.is_empty() {
@@ -4999,6 +5173,7 @@ fn project_task_completion_config(
         "task" => Some(TASKFILE_PROJECT_TASK_SOURCES),
         "just" => Some(JUST_PROJECT_TASK_SOURCES),
         "make" => Some(MAKE_PROJECT_TASK_SOURCES),
+        "gradle" | "gradlew" => Some(GRADLE_PROJECT_TASK_SOURCES),
         _ => None,
     }?;
     Some(ProjectTaskCompletionConfig {
@@ -5017,6 +5192,7 @@ fn project_task_sources_for_scope(scope: &str) -> Option<&'static [&'static str]
         "taskfile" | "task" => Some(TASKFILE_PROJECT_TASK_SOURCES),
         "just" => Some(JUST_PROJECT_TASK_SOURCES),
         "make" => Some(MAKE_PROJECT_TASK_SOURCES),
+        "gradle" | "gradlew" => Some(GRADLE_PROJECT_TASK_SOURCES),
         _ => None,
     }
 }
@@ -6005,6 +6181,89 @@ mod tests {
         );
 
         assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn shell_state_dynamic_providers_read_environment_maps() {
+        let environment = Environment::new();
+        {
+            let mut env = environment.write();
+            env.alias.insert("gs".to_string(), "git status".to_string());
+            env.abbreviations
+                .insert("gco".to_string(), "git checkout".to_string());
+            env.system_env_vars
+                .insert("DSH_TEST_ENV".to_string(), "1".to_string());
+        }
+        let provider = DynamicCompletionProvider::new(environment);
+
+        assert!(
+            provider
+                .collect_declared_dynamic_candidates(
+                    "shell.alias",
+                    None,
+                    &parsed("unalias g"),
+                    Path::new("/tmp"),
+                    false,
+                )
+                .iter()
+                .any(|candidate| candidate.text == "gs")
+        );
+        assert!(
+            provider
+                .collect_declared_dynamic_candidates(
+                    "shell.abbr",
+                    None,
+                    &parsed("abbr erase gc"),
+                    Path::new("/tmp"),
+                    false,
+                )
+                .iter()
+                .any(|candidate| candidate.text == "gco")
+        );
+        assert!(
+            provider
+                .collect_declared_dynamic_candidates(
+                    "shell.env_var",
+                    None,
+                    &parsed("unset DSH_TEST"),
+                    Path::new("/tmp"),
+                    false,
+                )
+                .iter()
+                .any(|candidate| candidate.text == "DSH_TEST_ENV")
+        );
+    }
+
+    #[test]
+    fn helm_release_completion_passes_namespace_and_context() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        write_executable_script(
+            &bin_dir.join("helm"),
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > helm-args.txt\nprintf 'api\\nworker\\n'\n",
+        );
+
+        let environment = Environment::new();
+        {
+            let mut env = environment.write();
+            env.paths = vec![bin_dir.display().to_string()];
+            env.clear_command_cache();
+        }
+        let provider = DynamicCompletionProvider::new(environment);
+        let candidates = provider.collect_declared_dynamic_candidates(
+            "helm.release",
+            None,
+            &parsed("helm --kube-context prod -n apps status ap"),
+            dir.path(),
+            false,
+        );
+
+        assert!(candidates.iter().any(|candidate| candidate.text == "api"));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("helm-args.txt")).unwrap(),
+            "list\n--short\n--namespace\napps\n--kube-context\nprod\n"
+        );
     }
 
     #[test]

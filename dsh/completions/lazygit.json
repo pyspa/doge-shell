@@ -1,0 +1,13 @@
+{
+  "command": "lazygit",
+  "description": "Terminal UI for git",
+  "global_options": [
+    { "short": "-p", "long": "--path", "description": "Repository path", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "short": "-w", "long": "--work-tree", "description": "Work tree path", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "short": "-g", "long": "--git-dir", "description": "Git directory", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "short": "-f", "long": "--filter", "description": "Path filter", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-v", "long": "--version", "description": "Show version" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [{ "name": "path", "type": { "type": "Directory" } }]
+}

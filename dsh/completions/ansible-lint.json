@@ -1,0 +1,14 @@
+{
+  "command": "ansible-lint",
+  "description": "Lint Ansible playbooks and roles",
+  "global_options": [
+    { "short": "-c", "long": "--config-file", "description": "Config file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["yml", "yaml"] } } },
+    { "short": "-p", "long": "--parseable", "description": "Parseable output" },
+    { "short": "-q", "long": "--quiet", "description": "Quiet output" },
+    { "short": "-v", "long": "--verbose", "description": "Verbose output" },
+    { "long": "--fix", "description": "Apply fixes" },
+    { "long": "--offline", "description": "Offline mode" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [{ "name": "path", "multiple": true, "type": { "type": "File", "data": { "extensions": ["yml", "yaml"] } } }]
+}

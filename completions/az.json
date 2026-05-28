@@ -2,7 +2,7 @@
   "command": "az",
   "description": "Azure CLI",
   "global_options": [
-    { "long": "--subscription", "description": "Azure subscription", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--subscription", "description": "Azure subscription", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "az.subscription" } } },
     { "long": "--output", "short": "-o", "description": "Output format", "takes_value": true, "value_type": { "type": "Choice", "data": ["json", "jsonc", "yaml", "table", "tsv", "none"] } },
     { "long": "--query", "description": "JMESPath query string", "takes_value": true, "value_type": { "type": "String" } },
     { "long": "--debug", "description": "Increase logging verbosity" },

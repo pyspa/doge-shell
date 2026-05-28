@@ -1,0 +1,20 @@
+{
+  "command": "flatpak",
+  "description": "Flatpak package manager",
+  "global_options": [
+    { "long": "--user", "description": "Use user installation" },
+    { "long": "--system", "description": "Use system installation" },
+    { "long": "--installation", "description": "Named installation", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "install", "description": "Install application" },
+    { "name": "update", "description": "Update applications" },
+    { "name": "uninstall", "aliases": ["remove"], "description": "Uninstall application" },
+    { "name": "run", "description": "Run application" },
+    { "name": "list", "description": "List installed refs" },
+    { "name": "search", "description": "Search remotes" },
+    { "name": "remote-add", "description": "Add remote" },
+    { "name": "remote-list", "description": "List remotes" }
+  ]
+}

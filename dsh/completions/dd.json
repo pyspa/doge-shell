@@ -1,0 +1,1 @@
+{"command":"dd","description":"Convert and copy files","global_options":[{"long":"--help","description":"Show help"}],"arguments":[{"name":"operand","multiple":true,"type":{"type":"Choice","data":["if=","of=","bs=","ibs=","obs=","count=","skip=","seek=","status=progress","conv=fsync","conv=notrunc","conv=noerror","oflag=direct","iflag=fullblock"]}}]}

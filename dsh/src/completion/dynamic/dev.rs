@@ -1,5 +1,7 @@
 use super::{DynamicCompletionProvider, dedup_sorted, run_command_lines};
 use crate::completion::integrated::EnhancedCandidate;
+use crate::completion::parser::ParsedCommandLine;
+use crate::completion::shell_path::normalize_path_token;
 use dsh_builtin::project_context;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -164,6 +166,94 @@ impl DynamicCompletionProvider {
             "gcloud project",
             cached_only,
             move || Ok(load_gcloud_projects(&config_dir)),
+        )
+    }
+
+    pub(crate) fn collect_az_subscription_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let config_dir = azure_config_dir(&self.env_var("HOME"), self.env_var("AZURE_CONFIG_DIR"));
+        let profile_file = config_dir.join("azureProfile.json");
+        self.collect_cached_value_candidates(
+            "az",
+            "subscription",
+            config_dir,
+            current_token,
+            "Azure subscription",
+            cached_only,
+            move || Ok(load_az_subscriptions(&profile_file)),
+        )
+    }
+
+    pub(crate) fn collect_maven_profile_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let maven_root = find_maven_root(current_dir)
+            .unwrap_or_else(|| project_context::find_project_root(current_dir));
+        self.collect_cached_value_candidates(
+            "maven",
+            "profile",
+            maven_root.clone(),
+            current_token,
+            "Maven profile",
+            cached_only,
+            move || Ok(load_maven_profiles(&maven_root.join("pom.xml"))),
+        )
+    }
+
+    pub(crate) fn collect_maven_module_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let maven_root = find_maven_root(current_dir)
+            .unwrap_or_else(|| project_context::find_project_root(current_dir));
+        self.collect_cached_value_candidates(
+            "maven",
+            "module",
+            maven_root.clone(),
+            current_token,
+            "Maven module",
+            cached_only,
+            move || Ok(load_maven_modules(&maven_root.join("pom.xml"))),
+        )
+    }
+
+    pub(crate) fn collect_ansible_inventory_host_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let project_root = project_context::find_project_root(current_dir);
+        let inventory_paths = selected_ansible_inventory_paths(
+            parsed_command_line,
+            current_dir,
+            project_root.as_path(),
+        );
+        let value_kind = format!(
+            "inventory-host:{}",
+            inventory_paths
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(":")
+        );
+        self.collect_cached_value_candidates(
+            "ansible",
+            &value_kind,
+            project_root,
+            current_token,
+            "Ansible inventory host/group",
+            cached_only,
+            move || Ok(load_ansible_inventory_values(&inventory_paths)),
         )
     }
 
@@ -755,6 +845,251 @@ fn load_gcloud_project_values(path: &Path) -> Vec<String> {
         .collect()
 }
 
+fn azure_config_dir(home: &Option<String>, explicit: Option<String>) -> PathBuf {
+    explicit
+        .map(PathBuf::from)
+        .or_else(|| home.as_ref().map(|home| PathBuf::from(home).join(".azure")))
+        .unwrap_or_else(|| PathBuf::from(".azure"))
+}
+
+fn load_az_subscriptions(profile_file: &Path) -> Vec<String> {
+    let Ok(contents) = fs::read_to_string(profile_file) else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return Vec::new();
+    };
+    let mut values = Vec::new();
+    if let Some(subscriptions) = value
+        .get("subscriptions")
+        .and_then(serde_json::Value::as_array)
+    {
+        for subscription in subscriptions {
+            values.extend(subscription.get("id").and_then(serde_json::Value::as_str));
+        }
+    }
+    dedup_sorted(values.into_iter().map(str::to_string).collect())
+}
+
+fn find_maven_root(current_dir: &Path) -> Option<PathBuf> {
+    let cwd = current_dir
+        .canonicalize()
+        .unwrap_or_else(|_| current_dir.to_path_buf());
+    cwd.ancestors()
+        .find(|ancestor| ancestor.join("pom.xml").is_file())
+        .map(Path::to_path_buf)
+}
+
+fn load_maven_profiles(pom_file: &Path) -> Vec<String> {
+    let Ok(contents) = fs::read_to_string(pom_file) else {
+        return Vec::new();
+    };
+    dedup_sorted(
+        xml_blocks(&contents, "profile")
+            .into_iter()
+            .flat_map(|block| xml_tag_values(block, "id"))
+            .collect(),
+    )
+}
+
+fn load_maven_modules(pom_file: &Path) -> Vec<String> {
+    let Ok(contents) = fs::read_to_string(pom_file) else {
+        return Vec::new();
+    };
+    dedup_sorted(
+        xml_blocks(&contents, "modules")
+            .into_iter()
+            .flat_map(|block| xml_tag_values(block, "module"))
+            .collect(),
+    )
+}
+
+fn xml_blocks<'a>(contents: &'a str, tag: &str) -> Vec<&'a str> {
+    let mut blocks = Vec::new();
+    let mut rest = contents;
+    let open_prefix = format!("<{tag}");
+    let close = format!("</{tag}>");
+    while let Some(start) = rest.find(&open_prefix) {
+        let after_start = &rest[start..];
+        let Some(open_end) = after_start.find('>') else {
+            break;
+        };
+        let after_open = &after_start[open_end + 1..];
+        let Some(close_start) = after_open.find(&close) else {
+            break;
+        };
+        blocks.push(&after_open[..close_start]);
+        rest = &after_open[close_start + close.len()..];
+    }
+    blocks
+}
+
+fn xml_tag_values(contents: &str, tag: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut rest = contents;
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    while let Some(start) = rest.find(&open) {
+        let after_open = &rest[start + open.len()..];
+        let Some(end) = after_open.find(&close) else {
+            break;
+        };
+        let value = after_open[..end].trim();
+        if !value.is_empty() && !value.contains('<') {
+            values.push(value.to_string());
+        }
+        rest = &after_open[end + close.len()..];
+    }
+    values
+}
+
+fn selected_ansible_inventory_paths(
+    parsed_command_line: &ParsedCommandLine,
+    current_dir: &Path,
+    project_root: &Path,
+) -> Vec<PathBuf> {
+    let words = parsed_command_line
+        .subcommand_path
+        .iter()
+        .chain(parsed_command_line.raw_args.iter())
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let mut values = Vec::new();
+    for (index, token) in words.iter().enumerate() {
+        if *token == "-i" || *token == "--inventory" {
+            let Some(value) = words.get(index + 1).copied() else {
+                continue;
+            };
+            if !value.is_empty() && !value.starts_with('-') {
+                values.push(path_from_token(current_dir, value));
+            }
+            continue;
+        }
+        if let Some(value) = token
+            .strip_prefix("--inventory=")
+            .or_else(|| token.strip_prefix("-i="))
+            && !value.is_empty()
+        {
+            values.push(path_from_token(current_dir, value));
+        }
+    }
+
+    if values.is_empty() {
+        values.extend([
+            project_root.join("inventory"),
+            project_root.join("hosts"),
+            project_root.join("ansible").join("inventory"),
+            current_dir.join("inventory"),
+            current_dir.join("hosts"),
+        ]);
+    }
+    dedup_sorted_paths(values)
+}
+
+fn path_from_token(current_dir: &Path, token: &str) -> PathBuf {
+    let path = PathBuf::from(normalize_path_token(token));
+    if path.is_absolute() {
+        path
+    } else {
+        current_dir.join(path)
+    }
+}
+
+fn load_ansible_inventory_values(paths: &[PathBuf]) -> Vec<String> {
+    let mut values = Vec::new();
+    for path in paths {
+        values.extend(load_ansible_inventory_path(path));
+    }
+    dedup_sorted(values)
+}
+
+fn load_ansible_inventory_path(path: &Path) -> Vec<String> {
+    if path.is_file() {
+        return parse_ansible_inventory_file(path);
+    }
+    if !path.is_dir() {
+        return Vec::new();
+    }
+    let Ok(entries) = fs::read_dir(path) else {
+        return Vec::new();
+    };
+    let mut values = Vec::new();
+    for entry in entries.flatten() {
+        let child = entry.path();
+        if child.is_file() {
+            values.extend(parse_ansible_inventory_file(&child));
+        }
+    }
+    values
+}
+
+fn parse_ansible_inventory_file(path: &Path) -> Vec<String> {
+    let Ok(contents) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    parse_ansible_inventory_values(&contents)
+}
+
+fn parse_ansible_inventory_values(contents: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
+            continue;
+        }
+        if let Some(section) = trimmed.strip_prefix('[').and_then(|v| v.strip_suffix(']')) {
+            let name = section
+                .split(':')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .trim_matches(['"', '\'']);
+            if is_ansible_inventory_name(name) {
+                values.push(name.to_string());
+            }
+            continue;
+        }
+        if let Some(key) = trimmed.strip_suffix(':') {
+            let key = key.trim().trim_matches(['"', '\'']);
+            if is_ansible_inventory_name(key)
+                && !matches!(key, "all" | "hosts" | "children" | "vars")
+            {
+                values.push(key.to_string());
+            }
+            continue;
+        }
+        let host = trimmed
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .split(':')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_matches(['"', '\'']);
+        if is_ansible_inventory_name(host)
+            && !host.contains('=')
+            && !matches!(host, "all" | "hosts" | "children" | "vars")
+        {
+            values.push(host.to_string());
+        }
+    }
+    dedup_sorted(values)
+}
+
+fn is_ansible_inventory_name(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':'))
+}
+
+fn dedup_sorted_paths(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
 fn find_terraform_root(current_dir: &Path) -> Option<PathBuf> {
     let cwd = current_dir
         .canonicalize()
@@ -962,6 +1297,29 @@ mkdocs = "^1"
             vec!["demo-dev".to_string(), "demo-prod".to_string()]
         );
 
+        let azure_dir = dir.path().join(".azure");
+        fs::create_dir_all(&azure_dir).unwrap();
+        fs::write(
+            azure_dir.join("azureProfile.json"),
+            r#"{
+                "subscriptions": [
+                    { "id": "0000-1111", "name": "Dev Subscription" },
+                    { "id": "2222-3333", "name": "Prod Subscription" }
+                ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load_az_subscriptions(&azure_dir.join("azureProfile.json")),
+            vec!["0000-1111".to_string(), "2222-3333".to_string()]
+        );
+        assert!(
+            !load_az_subscriptions(&azure_dir.join("azureProfile.json"))
+                .iter()
+                .any(|value| value.contains(' ')),
+            "subscription names are not shell-safe as raw argument candidates"
+        );
+
         let terraform_dir = dir.path().join(".terraform");
         fs::create_dir_all(terraform_dir.join("terraform.tfstate.d").join("dev")).unwrap();
         fs::write(terraform_dir.join("environment"), "staging\n").unwrap();
@@ -971,6 +1329,66 @@ mkdocs = "^1"
                 "default".to_string(),
                 "dev".to_string(),
                 "staging".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn maven_loaders_read_profiles_and_modules_from_pom() {
+        let dir = tempdir().unwrap();
+        let pom = dir.path().join("pom.xml");
+        fs::write(
+            &pom,
+            r#"
+<project>
+  <modules>
+    <module>service-api</module>
+    <module>service-web</module>
+  </modules>
+  <profiles>
+    <profile><id>dev</id></profile>
+    <profile><id>release</id></profile>
+  </profiles>
+</project>
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            load_maven_modules(&pom),
+            vec!["service-api".to_string(), "service-web".to_string()]
+        );
+        assert_eq!(
+            load_maven_profiles(&pom),
+            vec!["dev".to_string(), "release".to_string()]
+        );
+    }
+
+    #[test]
+    fn ansible_inventory_parser_reads_ini_and_yaml_names() {
+        let inventory = r#"
+[web]
+web-1 ansible_host=192.0.2.10
+
+[db:children]
+postgres
+
+all:
+  children:
+    api:
+      hosts:
+        api-1:
+"#;
+
+        assert_eq!(
+            parse_ansible_inventory_values(inventory),
+            vec![
+                "api".to_string(),
+                "api-1".to_string(),
+                "db".to_string(),
+                "postgres".to_string(),
+                "web".to_string(),
+                "web-1".to_string(),
             ]
         );
     }

@@ -1,0 +1,19 @@
+{
+  "command": "nix",
+  "description": "Nix command",
+  "global_options": [
+    { "long": "--extra-experimental-features", "description": "Enable experimental features", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--option", "description": "Set Nix option", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "build", "description": "Build installable", "arguments": [{ "name": "installable", "multiple": true }] },
+    { "name": "develop", "description": "Enter development shell" },
+    { "name": "flake", "description": "Manage flakes", "subcommands": [{ "name": "show", "description": "Show flake outputs" }, { "name": "update", "description": "Update lock file" }, { "name": "check", "description": "Check flake" }, { "name": "init", "description": "Create flake" }] },
+    { "name": "profile", "description": "Manage profiles" },
+    { "name": "run", "description": "Run app" },
+    { "name": "shell", "description": "Start shell with packages" },
+    { "name": "store", "description": "Manage store" },
+    { "name": "registry", "description": "Manage registry" }
+  ]
+}

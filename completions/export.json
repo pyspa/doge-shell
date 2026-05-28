@@ -2,5 +2,13 @@
   "command": "export",
   "description": "Set environment variables",
   "global_options": [],
+  "arguments": [
+    {
+      "name": "assignment",
+      "description": "Environment variable or NAME=value assignment",
+      "multiple": true,
+      "type": { "type": "Dynamic", "data": { "provider": "shell.env_var" } }
+    }
+  ],
   "subcommands": []
 }

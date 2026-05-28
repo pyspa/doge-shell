@@ -1,0 +1,18 @@
+{
+  "command": "op",
+  "description": "1Password CLI",
+  "global_options": [
+    { "long": "--account", "description": "Account shorthand or sign-in address", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--format", "description": "Output format", "takes_value": true, "value_type": { "type": "Choice", "data": ["human-readable", "json"] } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "signin", "description": "Sign in" },
+    { "name": "signout", "description": "Sign out" },
+    { "name": "account", "description": "Manage accounts" },
+    { "name": "vault", "description": "Manage vaults" },
+    { "name": "item", "description": "Manage items", "subcommands": [{ "name": "get", "description": "Get item" }, { "name": "list", "description": "List items" }, { "name": "create", "description": "Create item" }, { "name": "edit", "description": "Edit item" }, { "name": "delete", "description": "Delete item" }] },
+    { "name": "read", "description": "Read secret reference", "arguments": [{ "name": "reference", "description": "Secret reference" }] },
+    { "name": "run", "description": "Run command with injected secrets", "arguments": [{ "name": "command", "multiple": true, "type": { "type": "CommandWithArgs" } }] }
+  ]
+}

@@ -1,0 +1,1 @@
+{"command":"sync","description":"Synchronize cached writes to storage","global_options":[{"short":"-d","long":"--data","description":"Sync only file data"},{"short":"-f","long":"--file-system","description":"Sync containing file systems"},{"long":"--help","description":"Show help"}],"arguments":[{"name":"file","multiple":true,"type":{"type":"File","data":{}}}]}

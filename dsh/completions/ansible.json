@@ -9,5 +9,5 @@
     { "long": "--become", "description": "Run operations with become" },
     { "short": "-h", "long": "--help", "description": "Show help" }
   ],
-  "arguments": [{ "name": "pattern", "description": "Host pattern", "type": { "type": "String" } }]
+  "arguments": [{ "name": "pattern", "description": "Host pattern", "type": { "type": "Dynamic", "data": { "provider": "ansible.inventory_host" } } }]
 }

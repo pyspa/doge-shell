@@ -2,5 +2,13 @@
   "command": "alias",
   "description": "Define or display aliases",
   "global_options": [],
+  "arguments": [
+    {
+      "name": "name",
+      "description": "Existing alias name or name=value definition",
+      "multiple": true,
+      "type": { "type": "Dynamic", "data": { "provider": "shell.alias" } }
+    }
+  ],
   "subcommands": []
 }

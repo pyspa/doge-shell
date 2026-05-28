@@ -1,0 +1,15 @@
+{
+  "command": "hyperfine",
+  "description": "Command-line benchmarking tool",
+  "global_options": [
+    { "short": "-w", "long": "--warmup", "description": "Warmup runs", "takes_value": true, "value_type": { "type": "Number" } },
+    { "short": "-m", "long": "--min-runs", "description": "Minimum runs", "takes_value": true, "value_type": { "type": "Number" } },
+    { "short": "-r", "long": "--runs", "description": "Exact runs", "takes_value": true, "value_type": { "type": "Number" } },
+    { "short": "-p", "long": "--prepare", "description": "Preparation command", "takes_value": true, "value_type": { "type": "CommandWithArgs" } },
+    { "short": "-c", "long": "--cleanup", "description": "Cleanup command", "takes_value": true, "value_type": { "type": "CommandWithArgs" } },
+    { "long": "--export-json", "description": "Export JSON", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["json"] } } },
+    { "long": "--export-markdown", "description": "Export Markdown", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["md"] } } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [{ "name": "command", "description": "Command to benchmark", "multiple": true, "type": { "type": "CommandWithArgs" } }]
+}

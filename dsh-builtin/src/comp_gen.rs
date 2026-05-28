@@ -295,6 +295,9 @@ struct CompletionAudit {
     string_count: usize,
     dynamic_count: usize,
     unknown_providers: BTreeMap<String, usize>,
+    used_providers: BTreeMap<String, usize>,
+    empty_definitions: Vec<String>,
+    mirror_mismatches: Vec<String>,
 }
 
 fn audit_completion_dir(dir: &Path) -> Result<String> {
@@ -314,19 +317,124 @@ fn audit_completion_dir(dir: &Path) -> Result<String> {
         let value: Value = serde_json::from_str(&json)
             .with_context(|| format!("Invalid JSON in '{}'", path.display()))?;
         audit.command_count += 1;
+        if completion_definition_is_empty(&value) {
+            audit.empty_definitions.push(
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("<unknown>")
+                    .to_string(),
+            );
+        }
         audit_command_value(&value, &mut audit);
     }
+    audit.mirror_mismatches = completion_mirror_mismatches(dir)?;
+
+    let unused_providers = DYNAMIC_COMPLETION_PROVIDERS
+        .iter()
+        .filter(|provider| !audit.used_providers.contains_key(**provider))
+        .copied()
+        .collect::<Vec<_>>();
 
     let mut lines = vec![
         format!("commands={}", audit.command_count),
         format!("string_types={}", audit.string_count),
         format!("dynamic_types={}", audit.dynamic_count),
         format!("unknown_providers={}", audit.unknown_providers.len()),
+        format!("unused_providers={}", unused_providers.len()),
+        format!("empty_definitions={}", audit.empty_definitions.len()),
+        format!("mirror_mismatches={}", audit.mirror_mismatches.len()),
     ];
     for (provider, count) in audit.unknown_providers {
         lines.push(format!("unknown_provider {provider} count={count}"));
     }
+    for provider in unused_providers {
+        lines.push(format!("unused_provider {provider}"));
+    }
+    for command in audit.empty_definitions {
+        lines.push(format!("empty_definition {command}"));
+    }
+    for mismatch in audit.mirror_mismatches {
+        lines.push(format!("mirror_mismatch {mismatch}"));
+    }
     Ok(lines.join("\n"))
+}
+
+fn completion_definition_is_empty(value: &Value) -> bool {
+    let Some(obj) = value.as_object() else {
+        return false;
+    };
+    ["global_options", "options", "arguments", "subcommands"]
+        .iter()
+        .all(|key| {
+            obj.get(*key)
+                .and_then(Value::as_array)
+                .is_none_or(|values| values.is_empty())
+        })
+}
+
+fn completion_mirror_mismatches(dir: &Path) -> Result<Vec<String>> {
+    let Some(mirror_dir) = completion_mirror_dir(dir) else {
+        return Ok(Vec::new());
+    };
+    if !mirror_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut mismatches = Vec::new();
+    let mut seen = BTreeMap::new();
+    for entry in fs::read_dir(dir)
+        .with_context(|| format!("Failed to read completion dir '{}'", dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        seen.insert(file_name.to_string(), ());
+        let mirror_path = mirror_dir.join(file_name);
+        if !mirror_path.exists() {
+            mismatches.push(format!("{file_name}:missing-in-mirror"));
+            continue;
+        }
+        if fs::read(&path)? != fs::read(&mirror_path)? {
+            mismatches.push(format!("{file_name}:content-differs"));
+        }
+    }
+
+    for entry in fs::read_dir(&mirror_dir)
+        .with_context(|| format!("Failed to read mirror dir '{}'", mirror_dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !seen.contains_key(file_name) {
+            mismatches.push(format!("{file_name}:missing-in-source"));
+        }
+    }
+    mismatches.sort();
+    Ok(mismatches)
+}
+
+fn completion_mirror_dir(dir: &Path) -> Option<PathBuf> {
+    let name = dir.file_name()?.to_str()?;
+    if name != "completions" {
+        return None;
+    }
+    let parent = dir.parent()?;
+    if parent.file_name().and_then(|name| name.to_str()) == Some("dsh") {
+        parent.parent().map(|repo| repo.join("completions"))
+    } else {
+        let candidate = parent.join("dsh").join("completions");
+        candidate.is_dir().then_some(candidate)
+    }
 }
 
 fn audit_command_value(value: &Value, audit: &mut CompletionAudit) {
@@ -416,6 +524,10 @@ fn audit_argument_type_value(value: &Value, audit: &mut CompletionAudit) {
                     .entry(provider.to_string())
                     .or_insert(0) += 1;
             }
+            *audit
+                .used_providers
+                .entry(provider.to_string())
+                .or_insert(0) += 1;
         }
         _ => {}
     }
@@ -975,6 +1087,21 @@ mod tests {
         assert!(output.contains("string_types=1"));
         assert!(output.contains("dynamic_types=2"));
         assert!(output.contains("unknown_providers=1"));
+        assert!(output.contains("empty_definitions=0"));
         assert!(output.contains("unknown_provider bad.provider count=1"));
+    }
+
+    #[test]
+    fn audit_completion_dir_reports_empty_definitions() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("empty.json"),
+            r#"{ "command": "empty", "global_options": [], "subcommands": [] }"#,
+        )
+        .unwrap();
+
+        let output = audit_completion_dir(dir.path()).unwrap();
+        assert!(output.contains("empty_definitions=1"));
+        assert!(output.contains("empty_definition empty.json"));
     }
 }

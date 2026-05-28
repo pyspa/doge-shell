@@ -1,0 +1,1 @@
+{"command":"printenv","description":"Print environment variables","global_options":[{"short":"-0","long":"--null","description":"End each output line with NUL"},{"long":"--help","description":"Show help"}],"arguments":[{"name":"variable","multiple":true,"type":{"type":"Dynamic","data":{"provider":"shell.env_var"}}}]}

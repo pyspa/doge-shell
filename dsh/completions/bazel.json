@@ -1,0 +1,21 @@
+{
+  "command": "bazel",
+  "description": "Bazel build tool",
+  "global_options": [
+    { "long": "--bazelrc", "description": "Bazel rc file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+    { "long": "--output_base", "description": "Output base", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "long": "--max_idle_secs", "description": "Server idle timeout", "takes_value": true, "value_type": { "type": "Number" } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "build", "description": "Build targets", "arguments": [{ "name": "target", "multiple": true }] },
+    { "name": "test", "description": "Test targets", "arguments": [{ "name": "target", "multiple": true }] },
+    { "name": "run", "description": "Run target", "arguments": [{ "name": "target" }] },
+    { "name": "query", "description": "Query target graph", "arguments": [{ "name": "expression" }] },
+    { "name": "aquery", "description": "Action query" },
+    { "name": "cquery", "description": "Configured query" },
+    { "name": "clean", "description": "Clean outputs" },
+    { "name": "info", "description": "Show workspace info" },
+    { "name": "shutdown", "description": "Stop Bazel server" }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "command": "flyctl",
+  "description": "Fly.io CLI",
+  "global_options": [
+    { "short": "-a", "long": "--app", "description": "App name", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-c", "long": "--config", "description": "Config file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["toml"] } } },
+    { "long": "--access-token", "description": "Access token", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--json", "description": "JSON output" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "auth", "description": "Authentication" },
+    { "name": "launch", "description": "Create app" },
+    { "name": "deploy", "description": "Deploy app" },
+    { "name": "status", "description": "Show app status" },
+    { "name": "logs", "description": "Show logs" },
+    { "name": "ssh", "description": "SSH commands" },
+    { "name": "secrets", "description": "Manage secrets" },
+    { "name": "volumes", "description": "Manage volumes" }
+  ]
+}

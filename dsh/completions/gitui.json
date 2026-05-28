@@ -1,0 +1,12 @@
+{
+  "command": "gitui",
+  "description": "Terminal UI for git",
+  "global_options": [
+    { "short": "-d", "long": "--directory", "description": "Repository path", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "short": "-w", "long": "--watcher", "description": "Enable file watcher" },
+    { "short": "-t", "long": "--theme", "description": "Theme file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+    { "short": "-l", "long": "--logging", "description": "Enable logging" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [{ "name": "path", "type": { "type": "Directory" } }]
+}

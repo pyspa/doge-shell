@@ -15,5 +15,13 @@
       "description": "Treat each name as a nameref variable"
     }
   ],
+  "arguments": [
+    {
+      "name": "name",
+      "description": "Environment variable name",
+      "multiple": true,
+      "type": { "type": "Dynamic", "data": { "provider": "shell.env_var" } }
+    }
+  ],
   "subcommands": []
 }

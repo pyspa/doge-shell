@@ -1,0 +1,1 @@
+{"command":"xfs_info","description":"Display XFS filesystem geometry","global_options":[{"short":"-V","description":"Show version"}],"arguments":[{"name":"mountpoint-or-device","type":{"type":"Dynamic","data":{"provider":"mount.mountpoint"}}}]}

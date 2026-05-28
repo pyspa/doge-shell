@@ -128,6 +128,16 @@
           "options": [],
           "arguments": [
             {
+              "name": "table",
+              "description": "Routing table",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "ip.route_table"
+                }
+              }
+            },
+            {
               "name": "dev",
               "description": "Network interface",
               "type": {
@@ -233,14 +243,36 @@
           "name": "add",
           "description": "Add a new route",
           "options": [],
-          "arguments": [],
+          "arguments": [
+            {
+              "name": "table",
+              "description": "Routing table",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "ip.route_table"
+                }
+              }
+            }
+          ],
           "subcommands": []
         },
         {
           "name": "delete",
           "description": "Delete a route",
           "options": [],
-          "arguments": [],
+          "arguments": [
+            {
+              "name": "table",
+              "description": "Routing table",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "ip.route_table"
+                }
+              }
+            }
+          ],
           "subcommands": []
         },
         {
@@ -255,6 +287,16 @@
           "description": "Flush routing tables",
           "options": [],
           "arguments": [
+            {
+              "name": "table",
+              "description": "Routing table",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "ip.route_table"
+                }
+              }
+            },
             {
               "name": "dev",
               "description": "Network interface",

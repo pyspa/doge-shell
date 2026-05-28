@@ -1,0 +1,22 @@
+{
+  "command": "vercel",
+  "description": "Vercel CLI",
+  "global_options": [
+    { "short": "-A", "long": "--local-config", "description": "Local config file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["json"] } } },
+    { "short": "-t", "long": "--token", "description": "Auth token", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--cwd", "description": "Working directory", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "long": "--scope", "description": "Team or scope", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "deploy", "description": "Deploy project" },
+    { "name": "dev", "description": "Start local dev server" },
+    { "name": "build", "description": "Build project" },
+    { "name": "pull", "description": "Pull project settings" },
+    { "name": "env", "description": "Manage environment variables" },
+    { "name": "logs", "description": "Show deployment logs" },
+    { "name": "domains", "description": "Manage domains" },
+    { "name": "link", "description": "Link project" }
+  ],
+  "arguments": [{ "name": "path", "type": { "type": "Directory" } }]
+}

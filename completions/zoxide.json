@@ -1,0 +1,14 @@
+{
+  "command": "zoxide",
+  "description": "Smarter cd command",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "add", "description": "Add path", "arguments": [{ "name": "path", "type": { "type": "Directory" } }] },
+    { "name": "query", "description": "Query database", "options": [{ "short": "-i", "long": "--interactive", "description": "Interactive selection" }, { "short": "-l", "long": "--list", "description": "List matches" }], "arguments": [{ "name": "keywords", "multiple": true }] },
+    { "name": "remove", "description": "Remove path", "arguments": [{ "name": "path", "type": { "type": "Directory" } }] },
+    { "name": "init", "description": "Print shell init", "arguments": [{ "name": "shell", "type": { "type": "Choice", "data": ["bash", "zsh", "fish", "elvish", "powershell", "xonsh"] } }] },
+    { "name": "import", "description": "Import database" }
+  ]
+}

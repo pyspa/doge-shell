@@ -1,0 +1,19 @@
+{
+  "command": "xh",
+  "description": "Friendly and fast HTTP client",
+  "global_options": [
+    { "short": "-v", "long": "--verbose", "description": "Verbose output" },
+    { "short": "-h", "long": "--headers", "description": "Print response headers" },
+    { "short": "-b", "long": "--body", "description": "Print response body" },
+    { "short": "-f", "long": "--form", "description": "Submit form data" },
+    { "short": "-j", "long": "--json", "description": "Submit JSON data" },
+    { "short": "-a", "long": "--auth", "description": "Authentication", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--download", "description": "Download response" },
+    { "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [
+    { "name": "method", "description": "HTTP method", "type": { "type": "Choice", "data": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] } },
+    { "name": "url", "description": "Request URL", "type": { "type": "Url" } },
+    { "name": "item", "description": "Header or field", "multiple": true, "type": { "type": "String" } }
+  ]
+}

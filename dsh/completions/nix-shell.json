@@ -1,0 +1,13 @@
+{
+  "command": "nix-shell",
+  "description": "Start a shell from a Nix expression",
+  "global_options": [
+    { "short": "-p", "long": "--packages", "description": "Packages", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-A", "long": "--attr", "description": "Attribute", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-I", "description": "Add path to Nix search path", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--pure", "description": "Clear environment" },
+    { "long": "--run", "description": "Run command", "takes_value": true, "value_type": { "type": "CommandWithArgs" } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [{ "name": "file", "type": { "type": "File", "data": { "extensions": ["nix"] } } }]
+}

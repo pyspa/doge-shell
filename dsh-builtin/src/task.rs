@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tabled::{Table, Tabled};
 
 pub fn description() -> &'static str {
-    "Run project-specific tasks (npm, cargo, make, deno, just, etc.)"
+    "Run project-specific tasks (npm, cargo, gradle, make, deno, just, etc.)"
 }
 
 #[derive(Debug, Clone, Serialize, Tabled)]
@@ -235,7 +235,7 @@ fn help_text() -> &'static str {
     concat!(
         "Usage: task [--list|--json] [--source <source>] [<task>|<source>:<task>]\n",
         "\n",
-        "Run or list project-specific tasks detected from package.json, Cargo.toml, Makefile, Justfile, mise, Taskfile, turbo, nx, and deno.\n",
+        "Run or list project-specific tasks detected from package.json, Cargo.toml, Gradle, Makefile, Justfile, mise, Taskfile, turbo, nx, and deno.\n",
         "\n",
         "Options:\n",
         "  -l, --list            List detected tasks\n",
@@ -446,7 +446,35 @@ fn detect_tasks_in_dir(
         }
     }
 
-    // 3. Makefile
+    // 3. Gradle
+    if source_enabled(source_filter, "gradle") && has_gradle_project(current_dir) {
+        match mode {
+            TaskDetectionMode::Full => {
+                let command_name = if current_dir.join("gradlew").is_file() {
+                    "./gradlew"
+                } else {
+                    "gradle"
+                };
+                if let Ok(output) = Command::new(command_name)
+                    .current_dir(current_dir)
+                    .args(["-q", "tasks", "--all"])
+                    .output()
+                {
+                    let content = String::from_utf8_lossy(&output.stdout);
+                    for name in parse_gradle_task_names(&content) {
+                        tasks.push(TaskInfo {
+                            source: "gradle".to_string(),
+                            name: name.clone(),
+                            command: format!("{command_name} {name}"),
+                        });
+                    }
+                }
+            }
+            TaskDetectionMode::MetadataOnly => deferred_sources.push("gradle".to_string()),
+        }
+    }
+
+    // 4. Makefile
     if source_enabled(source_filter, "make")
         && (current_dir.join("Makefile").exists() || current_dir.join("makefile").exists())
     {
@@ -479,7 +507,7 @@ fn detect_tasks_in_dir(
         }
     }
 
-    // 4. deno.json / deno.jsonc
+    // 5. deno.json / deno.jsonc
     let deno_json = current_dir.join("deno.json");
     let deno_jsonc = current_dir.join("deno.jsonc");
     let deno_path = if deno_json.exists() {
@@ -508,7 +536,7 @@ fn detect_tasks_in_dir(
         }
     }
 
-    // 5. Justfile
+    // 6. Justfile
     let justfile_exists = ["Justfile", "justfile", ".justfile"]
         .iter()
         .any(|f| current_dir.join(f).exists());
@@ -560,6 +588,41 @@ fn detect_js_manager(path: &Path) -> String {
     } else {
         "npm".to_string()
     }
+}
+
+fn has_gradle_project(path: &Path) -> bool {
+    [
+        "build.gradle",
+        "build.gradle.kts",
+        "settings.gradle",
+        "settings.gradle.kts",
+        "gradle.properties",
+        "gradlew",
+    ]
+    .iter()
+    .any(|name| path.join(name).exists())
+}
+
+fn parse_gradle_task_names(output: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for line in output.lines() {
+        let trimmed = line.trim();
+        let Some((name, _description)) = trimmed.split_once(" - ") else {
+            continue;
+        };
+        let name = name.trim();
+        if is_gradle_task_name(name) {
+            names.push(name.to_string());
+        }
+    }
+    dedup_strings(names)
+}
+
+fn is_gradle_task_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | ':'))
 }
 
 use std::sync::LazyLock;
@@ -742,6 +805,37 @@ mod tests {
                 .iter()
                 .any(|t| t.name == "check" && t.source == "cargo")
         );
+    }
+
+    #[test]
+    fn parse_gradle_tasks_reads_task_names_from_gradle_output() {
+        let output = r#"
+Build tasks
+-----------
+assemble - Assembles the outputs of this project.
+build - Assembles and tests this project.
+:app:testDebugUnitTest - Run unit tests.
+help
+"#;
+
+        assert_eq!(
+            parse_gradle_task_names(output),
+            vec![
+                "assemble".to_string(),
+                "build".to_string(),
+                ":app:testDebugUnitTest".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn metadata_summary_does_not_execute_gradle() {
+        let dir = tempdir().unwrap();
+        File::create(dir.path().join("build.gradle")).unwrap();
+
+        let summary = summarize_tasks_in_dir_metadata_only(dir.path()).unwrap();
+        assert!(summary.tasks.is_empty());
+        assert_eq!(summary.deferred_sources, vec!["gradle".to_string()]);
     }
 
     #[test]

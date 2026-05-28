@@ -1,0 +1,20 @@
+{
+  "command": "pass",
+  "description": "Standard unix password manager",
+  "global_options": [
+    { "short": "-c", "long": "--clip", "description": "Copy password to clipboard" },
+    { "short": "-q", "long": "--qrcode", "description": "Show QR code" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "init", "description": "Initialize password store" },
+    { "name": "ls", "aliases": ["list"], "description": "List entries" },
+    { "name": "show", "description": "Show entry", "arguments": [{ "name": "entry", "description": "Password entry" }] },
+    { "name": "insert", "description": "Insert entry", "arguments": [{ "name": "entry", "description": "Password entry" }] },
+    { "name": "edit", "description": "Edit entry", "arguments": [{ "name": "entry", "description": "Password entry" }] },
+    { "name": "generate", "description": "Generate password", "arguments": [{ "name": "entry", "description": "Password entry" }, { "name": "length", "description": "Password length", "type": { "type": "Number" } }] },
+    { "name": "rm", "aliases": ["remove", "delete"], "description": "Remove entry", "arguments": [{ "name": "entry", "description": "Password entry" }] },
+    { "name": "git", "description": "Run git in password store", "arguments": [{ "name": "args", "multiple": true, "type": { "type": "CommandWithArgs" } }] }
+  ],
+  "arguments": [{ "name": "entry", "description": "Password entry" }]
+}

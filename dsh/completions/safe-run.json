@@ -1,0 +1,10 @@
+{
+  "command": "safe-run",
+  "description": "Run a command after safety analysis",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [
+    { "name": "command", "description": "Command to analyze and run", "multiple": true, "type": { "type": "CommandWithArgs" } }
+  ]
+}

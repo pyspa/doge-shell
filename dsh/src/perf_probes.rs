@@ -7,7 +7,10 @@ use crate::prompt::Prompt;
 use crate::repl::Repl;
 use crate::shell::Shell;
 use parking_lot::Mutex as ParkingMutex;
+use std::fs;
 use std::hint::black_box;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -29,7 +32,15 @@ pub fn run_default_probes(iterations: usize) -> Vec<ProbeResult> {
         probe_dynamic_completion_cache_hit(iterations),
         probe_history_search(iterations),
         probe_history_search_large(iterations),
-        runtime.block_on(probe_integrated_completion(iterations)),
+        runtime.block_on(probe_integrated_completion_git_subcommand_warm(iterations)),
+        runtime.block_on(probe_integrated_completion_git_branch_cached(iterations)),
+        runtime.block_on(probe_integrated_completion_docker_subcommand_warm(
+            iterations,
+        )),
+        runtime.block_on(probe_integrated_completion_kubectl_subcommand_warm(
+            iterations,
+        )),
+        runtime.block_on(probe_integrated_completion_static_json_warm(iterations)),
         runtime.block_on(probe_repl_analyze_input(iterations)),
         runtime.block_on(probe_repl_analyze_long_input(iterations)),
         runtime.block_on(probe_repl_analyze_quoted_path_input(iterations)),
@@ -170,24 +181,23 @@ fn probe_history_search_large(iterations: usize) -> ProbeResult {
     }
 }
 
-async fn probe_integrated_completion(iterations: usize) -> ProbeResult {
-    let environment = Environment::new();
-    let mut engine = IntegratedCompletionEngine::new(environment);
-    engine
-        .initialize_command_completion()
-        .expect("initialize command completion");
-
+async fn probe_integrated_completion_git_subcommand_warm(iterations: usize) -> ProbeResult {
     let mut history = History::new();
     seed_history(&mut history, 2_000);
     let history = Arc::new(ParkingMutex::new(history));
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let engine = completion_engine_without_path();
+    let input = "git ch";
 
+    let _ = engine
+        .complete(input, input.chars().count(), &cwd, 64, Some(&history))
+        .await;
     let start = Instant::now();
     for _ in 0..iterations {
         let result = engine
             .complete(
-                black_box("git ch"),
-                "git ch".chars().count(),
+                black_box(input),
+                input.chars().count(),
                 &cwd,
                 64,
                 Some(&history),
@@ -198,7 +208,98 @@ async fn probe_integrated_completion(iterations: usize) -> ProbeResult {
     let elapsed = start.elapsed();
 
     ProbeResult {
-        name: "integrated_completion",
+        name: "integrated_completion_git_subcommand_warm",
+        iterations,
+        elapsed,
+    }
+}
+
+async fn probe_integrated_completion_git_branch_cached(iterations: usize) -> ProbeResult {
+    let temp_dir = tempfile::tempdir().expect("integrated completion probe temp dir");
+    let bin_dir = temp_dir.path().join("bin");
+    fs::create_dir_all(&bin_dir).expect("probe bin dir");
+    write_executable_script(
+        &bin_dir.join("git"),
+        "#!/bin/sh\nif [ \"$1\" = \"for-each-ref\" ]; then printf 'feature/probe\\nfeature/cache\\nmain\\n'; fi\n",
+    );
+
+    let engine = completion_engine_with_paths(vec![bin_dir.display().to_string()]);
+    let input = "git checkout feat";
+    let _ = engine
+        .complete(input, input.chars().count(), temp_dir.path(), 64, None)
+        .await;
+
+    let start = Instant::now();
+    for _ in 0..iterations {
+        let result = engine
+            .complete(
+                black_box(input),
+                input.chars().count(),
+                temp_dir.path(),
+                64,
+                None,
+            )
+            .await;
+        black_box(result.candidates.len());
+    }
+    let elapsed = start.elapsed();
+
+    ProbeResult {
+        name: "integrated_completion_git_branch_cached",
+        iterations,
+        elapsed,
+    }
+}
+
+async fn probe_integrated_completion_docker_subcommand_warm(iterations: usize) -> ProbeResult {
+    probe_integrated_completion_warm_case(
+        iterations,
+        "integrated_completion_docker_subcommand_warm",
+        "docker co",
+    )
+    .await
+}
+
+async fn probe_integrated_completion_kubectl_subcommand_warm(iterations: usize) -> ProbeResult {
+    probe_integrated_completion_warm_case(
+        iterations,
+        "integrated_completion_kubectl_subcommand_warm",
+        "kubectl ge",
+    )
+    .await
+}
+
+async fn probe_integrated_completion_static_json_warm(iterations: usize) -> ProbeResult {
+    probe_integrated_completion_warm_case(
+        iterations,
+        "integrated_completion_static_json_warm",
+        "rg --ig",
+    )
+    .await
+}
+
+async fn probe_integrated_completion_warm_case(
+    iterations: usize,
+    name: &'static str,
+    input: &str,
+) -> ProbeResult {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let engine = completion_engine_without_path();
+
+    let _ = engine
+        .complete(input, input.chars().count(), &cwd, 64, None)
+        .await;
+    let start = Instant::now();
+    for _ in 0..iterations {
+        let result = engine
+            .complete(black_box(input), input.chars().count(), &cwd, 64, None)
+            .await;
+        black_box(result.candidates.len());
+    }
+    let elapsed = start.elapsed();
+
+    ProbeResult {
+        name,
         iterations,
         elapsed,
     }
@@ -326,6 +427,36 @@ async fn probe_repl_analyze_input_case(
     }
 }
 
+fn completion_engine_without_path() -> IntegratedCompletionEngine {
+    completion_engine_with_paths(Vec::new())
+}
+
+fn completion_engine_with_paths(paths: Vec<String>) -> IntegratedCompletionEngine {
+    let environment = Environment::new();
+    {
+        let mut env = environment.write();
+        env.paths = paths;
+        env.clear_command_cache();
+    }
+    let mut engine = IntegratedCompletionEngine::new(environment);
+    engine
+        .initialize_command_completion()
+        .expect("initialize command completion");
+    engine
+}
+
+fn write_executable_script(path: &std::path::Path, content: &str) {
+    fs::write(path, content).expect("write probe executable");
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(path)
+            .expect("probe executable metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).expect("probe executable permissions");
+    }
+}
+
 fn measure(iterations: usize, mut f: impl FnMut()) -> Duration {
     let start = Instant::now();
     for _ in 0..iterations {
@@ -366,6 +497,11 @@ mod tests {
 
         assert!(names.contains(&"dynamic_completion_cache_miss"));
         assert!(names.contains(&"dynamic_completion_cache_hit"));
+        assert!(names.contains(&"integrated_completion_git_subcommand_warm"));
+        assert!(names.contains(&"integrated_completion_git_branch_cached"));
+        assert!(names.contains(&"integrated_completion_docker_subcommand_warm"));
+        assert!(names.contains(&"integrated_completion_kubectl_subcommand_warm"));
+        assert!(names.contains(&"integrated_completion_static_json_warm"));
         assert!(results.iter().all(|result| result.iterations >= 1));
     }
 }

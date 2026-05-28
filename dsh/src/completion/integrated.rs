@@ -489,10 +489,10 @@ impl IntegratedCompletionEngine {
         let parsed_command_line = self.convert_to_parsed_command_line(input, cursor_pos);
         let replacement_range =
             completion_replacement_range(input, cursor_pos, &parsed_command_line);
-        let uses_dynamic_completion = is_dynamic_completion_command(&parsed_command_line.command);
+        let cache_allowed = completion_cache_allowed(&parsed_command_line);
         timing.mark("parse");
 
-        if !uses_dynamic_completion
+        if cache_allowed
             && !request.input.is_empty()
             && let Some(hit) = self.cache.lookup(request.input)
         {
@@ -535,7 +535,7 @@ impl IntegratedCompletionEngine {
             let mut results = aggregator.finalize(history);
             timing.mark("finalize");
             results.replacement_range = replacement_range;
-            if !uses_dynamic_completion {
+            if cache_allowed {
                 self.store_in_cache(request.input, &results.candidates, results.framework);
             }
             timing.finish(request.input, "dynamic_exclusive");
@@ -549,7 +549,7 @@ impl IntegratedCompletionEngine {
             let mut results = aggregator.finalize(history);
             timing.mark("finalize");
             results.replacement_range = replacement_range;
-            if !uses_dynamic_completion {
+            if cache_allowed {
                 self.store_in_cache(request.input, &results.candidates, results.framework);
             }
             timing.finish(request.input, "json_exclusive");
@@ -563,7 +563,7 @@ impl IntegratedCompletionEngine {
             let mut results = aggregator.finalize(history);
             timing.mark("finalize");
             results.replacement_range = replacement_range;
-            if !uses_dynamic_completion {
+            if cache_allowed {
                 self.store_in_cache(request.input, &results.candidates, results.framework);
             }
             timing.finish(request.input, "external_exclusive");
@@ -579,7 +579,7 @@ impl IntegratedCompletionEngine {
             let mut results = aggregator.finalize(history);
             timing.mark("finalize");
             results.replacement_range = replacement_range;
-            if !uses_dynamic_completion {
+            if cache_allowed {
                 self.store_in_cache(request.input, &results.candidates, results.framework);
             }
             timing.finish(request.input, "fish_exclusive");
@@ -589,7 +589,7 @@ impl IntegratedCompletionEngine {
         let mut results = aggregator.finalize(history);
         timing.mark("finalize");
         results.replacement_range = replacement_range;
-        if !uses_dynamic_completion {
+        if cache_allowed {
             self.store_in_cache(request.input, &results.candidates, results.framework);
         }
         timing.finish(request.input, "complete");
@@ -1635,6 +1635,20 @@ fn is_dynamic_completion_command(command: &str) -> bool {
         .any(|provider| provider.command == command)
 }
 
+fn completion_cache_allowed(parsed_command_line: &ParsedCommandLine) -> bool {
+    if !is_dynamic_completion_command(&parsed_command_line.command) {
+        return true;
+    }
+
+    matches!(
+        parsed_command_line.completion_context,
+        parser::CompletionContext::Command
+            | parser::CompletionContext::SubCommand
+            | parser::CompletionContext::ShortOption
+            | parser::CompletionContext::LongOption
+    )
+}
+
 fn collect_task_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
@@ -2535,6 +2549,114 @@ mod tests {
         assert_eq!(
             completion_result.framework,
             crate::completion::framework::CompletionFrameworkKind::Skim
+        );
+    }
+
+    #[tokio::test]
+    async fn dynamic_command_static_subcommand_uses_completion_cache() {
+        let dir = tempdir().unwrap();
+        let environment = Environment::new();
+        {
+            let mut env = environment.write();
+            env.paths.clear();
+            env.clear_command_cache();
+        }
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "git che";
+        let first = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+        assert!(
+            first
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "checkout"),
+            "expected git checkout from JSON subcommand completion"
+        );
+
+        let cached = engine
+            .cache
+            .lookup(input)
+            .expect("expected top-level cache");
+        assert!(cached.exact);
+        assert!(
+            cached
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "checkout")
+        );
+
+        let second = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+        let first_texts = first
+            .candidates
+            .iter()
+            .map(|candidate| candidate.text.as_str())
+            .collect::<Vec<_>>();
+        let second_texts = second
+            .candidates
+            .iter()
+            .map(|candidate| candidate.text.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(second_texts, first_texts);
+    }
+
+    #[tokio::test]
+    async fn dynamic_command_argument_does_not_use_completion_cache() {
+        let dir = tempdir().unwrap();
+
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        fs::write(dir.path().join("README.md"), "hello\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["checkout", "-b", "feature/test-branch"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let environment = Environment::new();
+        {
+            let mut env = environment.write();
+            env.clear_command_cache();
+        }
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "git checkout feat";
+        let _ = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+        let _ = wait_for_candidate(&engine, input, dir.path(), "feature/test-branch").await;
+
+        assert!(
+            engine.cache.lookup(input).is_none(),
+            "dynamic argument values must stay out of the top-level completion cache"
         );
     }
 

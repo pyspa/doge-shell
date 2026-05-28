@@ -487,9 +487,10 @@ fn parse_audit_rule_keys(contents: &str) -> Vec<String> {
                     values.push(value.to_string());
                 }
             } else if let Some(value) = part.strip_prefix("key=")
-                && is_simple_completion_value(value) {
-                    values.push(value.to_string());
-                }
+                && is_simple_completion_value(value)
+            {
+                values.push(value.to_string());
+            }
         }
     }
     dedup_sorted(values)

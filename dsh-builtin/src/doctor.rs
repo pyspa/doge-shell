@@ -9,6 +9,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+const PERFORMANCE_TOP_DEFAULT: usize = 5;
+
 pub fn description() -> &'static str {
     "Diagnose config, AI, MCP, project, runtime, skills, safety, setup, and dev validation state"
 }
@@ -105,7 +107,7 @@ fn help_text() -> &'static str {
         "  doctor\n",
         "  doctor ai\n",
         "  doctor project\n",
-        "  doctor performance --latency --latency-iters 1000\n",
+        "  doctor performance --top 5 --latency --latency-iters 1000\n",
         "  doctor skills\n",
         "  doctor safety\n",
         "  doctor setup\n",
@@ -520,6 +522,7 @@ fn check_runtimes(ctx: &Context) {
 }
 
 fn check_performance(ctx: &Context, proxy: &mut dyn ShellProxy, args: &[String]) {
+    let top_limit = performance_top_limit(args);
     match proxy.command_history_len() {
         Some(count) => {
             let _ = ctx.write_stdout(&format!("ok history-loaded entries={count}"));
@@ -567,8 +570,14 @@ fn check_performance(ctx: &Context, proxy: &mut dyn ShellProxy, args: &[String])
         if lines.is_empty() {
             let _ = ctx.write_stdout("skip latency-probes unavailable");
         } else {
-            for line in lines {
+            for line in &lines {
                 let _ = ctx.write_stdout(&format!("ok {line}"));
+            }
+            if let Some((name, avg_ns)) = slowest_latency_probe(&lines) {
+                let _ = ctx.write_stdout(&format!(
+                    "ok latency-slowest probe={name} avg={avg_ns}ns focus={}",
+                    latency_probe_focus(name)
+                ));
             }
         }
     } else {
@@ -582,25 +591,51 @@ fn check_performance(ctx: &Context, proxy: &mut dyn ShellProxy, args: &[String])
     {
         Some(timing) => {
             let _ = ctx.write_stdout(&format!("ok timing-entries {}", timing.stats.len()));
+            let _ = ctx.write_stdout(&format!("ok timing-top limit={top_limit}"));
 
-            if let Some(slowest) = timing.top_slowest(1).first() {
-                let _ = ctx.write_stdout(&format!(
-                    "ok slowest {} avg={} success={:.1}%",
-                    slowest.command,
-                    crate::command_timing::format_duration(slowest.average_duration_ms()),
-                    slowest.success_rate()
-                ));
-            } else {
+            let slowest = timing.top_slowest(top_limit);
+            if slowest.is_empty() {
                 let _ = ctx.write_stdout("skip slowest none");
+            } else {
+                for (index, stats) in slowest.into_iter().enumerate() {
+                    if index == 0 {
+                        let _ = ctx.write_stdout(&format!(
+                            "ok slowest {} avg={} success={:.1}%",
+                            stats.command,
+                            crate::command_timing::format_duration(stats.average_duration_ms()),
+                            stats.success_rate()
+                        ));
+                    } else {
+                        let _ = ctx.write_stdout(&format!(
+                            "ok slowest#{} {} avg={} success={:.1}%",
+                            index + 1,
+                            stats.command,
+                            crate::command_timing::format_duration(stats.average_duration_ms()),
+                            stats.success_rate()
+                        ));
+                    }
+                }
             }
 
-            if let Some(frequent) = timing.top_frequent(1).first() {
-                let _ = ctx.write_stdout(&format!(
-                    "ok frequent {} calls={}",
-                    frequent.command, frequent.total_calls
-                ));
-            } else {
+            let frequent = timing.top_frequent(top_limit);
+            if frequent.is_empty() {
                 let _ = ctx.write_stdout("skip frequent none");
+            } else {
+                for (index, stats) in frequent.into_iter().enumerate() {
+                    if index == 0 {
+                        let _ = ctx.write_stdout(&format!(
+                            "ok frequent {} calls={}",
+                            stats.command, stats.total_calls
+                        ));
+                    } else {
+                        let _ = ctx.write_stdout(&format!(
+                            "ok frequent#{} {} calls={}",
+                            index + 1,
+                            stats.command,
+                            stats.total_calls
+                        ));
+                    }
+                }
             }
         }
         None => {
@@ -646,6 +681,60 @@ fn performance_latency_iterations(args: &[String]) -> Option<usize> {
             None
         }
     })
+}
+
+fn performance_top_limit(args: &[String]) -> usize {
+    let parsed = args
+        .windows(2)
+        .find_map(|window| {
+            if window[0] == "--top" {
+                window[1].parse::<usize>().ok()
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            args.iter().find_map(|arg| {
+                arg.strip_prefix("--top=")
+                    .and_then(|value| value.parse::<usize>().ok())
+            })
+        });
+
+    parsed
+        .filter(|value| *value > 0)
+        .unwrap_or(PERFORMANCE_TOP_DEFAULT)
+}
+
+fn slowest_latency_probe(lines: &[String]) -> Option<(&str, u128)> {
+    lines
+        .iter()
+        .filter_map(|line| latency_probe_name_and_avg(line))
+        .max_by_key(|(_, avg_ns)| *avg_ns)
+}
+
+fn latency_probe_name_and_avg(line: &str) -> Option<(&str, u128)> {
+    let rest = line.strip_prefix("latency ")?;
+    let (name, metrics) = rest.split_once(' ')?;
+    let avg_ns = metrics
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("avg=")?.strip_suffix("ns"))?
+        .parse::<u128>()
+        .ok()?;
+    Some((name, avg_ns))
+}
+
+fn latency_probe_focus(name: &str) -> &'static str {
+    if name.starts_with("integrated_completion") {
+        "completion"
+    } else if name.starts_with("repl_analyze") || name.starts_with("repl_print") {
+        "repl"
+    } else if name.starts_with("history") {
+        "history"
+    } else if name.contains("cache") {
+        "cache"
+    } else {
+        "runtime"
+    }
 }
 
 fn executable_cache_file_info() -> Option<(PathBuf, usize)> {
@@ -1402,6 +1491,39 @@ mod tests {
         assert_eq!(performance_latency_iterations(&args), Some(250));
         assert!(!performance_latency_enabled(&[]));
         assert_eq!(performance_latency_iterations(&[]), None);
+    }
+
+    #[test]
+    fn performance_top_option_defaults_and_parses() {
+        assert_eq!(performance_top_limit(&[]), PERFORMANCE_TOP_DEFAULT);
+        assert_eq!(
+            performance_top_limit(&["--top".to_string(), "3".to_string()]),
+            3
+        );
+        assert_eq!(performance_top_limit(&["--top=7".to_string()]), 7);
+        assert_eq!(
+            performance_top_limit(&["--top".to_string(), "0".to_string()]),
+            PERFORMANCE_TOP_DEFAULT
+        );
+        assert_eq!(
+            performance_top_limit(&["--top".to_string(), "bad".to_string()]),
+            PERFORMANCE_TOP_DEFAULT
+        );
+    }
+
+    #[test]
+    fn latency_probe_summary_selects_slowest_focus() {
+        let lines = vec![
+            "latency completion_cache_lookup total=10us avg=10ns iterations=1".to_string(),
+            "latency integrated_completion_git_subcommand_warm total=100us avg=100ns iterations=1"
+                .to_string(),
+            "latency repl_analyze_input total=50us avg=50ns iterations=1".to_string(),
+        ];
+
+        let (name, avg_ns) = slowest_latency_probe(&lines).expect("slowest probe");
+        assert_eq!(name, "integrated_completion_git_subcommand_warm");
+        assert_eq!(avg_ns, 100);
+        assert_eq!(latency_probe_focus(name), "completion");
     }
 
     #[test]

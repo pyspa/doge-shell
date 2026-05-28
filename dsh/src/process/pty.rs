@@ -5,6 +5,18 @@ use nix::unistd::setsid;
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PtyMode {
+    OutputOnly,
+    FullProxy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PtyChildConfig {
+    pub slave: RawFd,
+    pub mode: PtyMode,
+}
+
 #[derive(Debug)]
 pub struct Pty {
     pub master: std::fs::File,

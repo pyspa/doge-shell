@@ -1,6 +1,15 @@
 const DEFAULT_BUFFER_CAPACITY: usize = 4096;
 use std::io::{self, Write};
 
+pub(crate) fn flush_stdout_bytes(bytes: &[u8]) -> io::Result<()> {
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    if !bytes.is_empty() {
+        handle.write_all(bytes)?;
+    }
+    handle.flush()
+}
+
 /// Buffered terminal renderer that batches commands before flushing to stdout.
 /// Does not hold StdoutLock persistently to allow safe reuse and sharing.
 #[derive(Debug)]
@@ -33,10 +42,7 @@ impl TerminalRenderer {
             return Ok(());
         }
 
-        let stdout = std::io::stdout();
-        let mut handle = stdout.lock();
-        handle.write_all(&self.buffer)?;
-        handle.flush()?;
+        flush_stdout_bytes(&self.buffer)?;
         self.buffer.clear();
         Ok(())
     }

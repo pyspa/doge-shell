@@ -10,13 +10,14 @@ use tokio::io::unix::AsyncFd;
 use tokio::{fs, io, time};
 
 use super::redirect::Redirect;
-use crate::terminal::renderer::TerminalRenderer;
+use crate::terminal::renderer::{TerminalRenderer, flush_stdout_bytes};
 use dsh_types::Context;
 use dsh_types::observed_output::{ObservedStream, SharedOutputObserver};
 use libc::STDIN_FILENO;
 
 const MONITOR_TIMEOUT: u64 = 200;
 const FIRST_MONITOR_OUTPUT_PREFIX: &str = "\r\n";
+const MAX_PENDING_CONTROL_BYTES: usize = 4096;
 
 fn append_output_chunk(output_started: &mut bool, buffer: &mut String, chunk: &str) {
     if !*output_started {
@@ -150,34 +151,157 @@ impl OutputMonitor {
 pub struct PtyMonitor {
     inner: AsyncFd<std::fs::File>,
     pub captured_output: Vec<u8>,
-    stdout_is_tty: bool,
-    last_passthrough_byte: Option<u8>,
+    display_buffer: PtyDisplayBuffer,
     observer: Option<SharedOutputObserver>,
 }
 
-fn normalize_tty_newlines(data: &[u8], last_byte: &mut Option<u8>) -> Option<Vec<u8>> {
-    let mut prev = *last_byte;
-    let mut normalized = Vec::new();
-    let mut changed = false;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PtyDisplayState {
+    Ground,
+    Escape,
+    Csi,
+    Osc,
+    OscEscape,
+    ControlString,
+    ControlStringEscape,
+}
 
-    for (index, &byte) in data.iter().enumerate() {
-        if byte == b'\n' && prev != Some(b'\r') {
-            if !changed {
-                normalized.reserve(data.len() + 8);
-                normalized.extend_from_slice(&data[..index]);
-                changed = true;
-            }
-            normalized.push(b'\r');
-            normalized.push(b'\n');
-        } else if changed {
-            normalized.push(byte);
+#[derive(Debug)]
+struct PtyDisplayBuffer {
+    stdout_is_tty: bool,
+    state: PtyDisplayState,
+    pending_control: Vec<u8>,
+    last_passthrough_byte: Option<u8>,
+}
+
+impl PtyDisplayBuffer {
+    fn new(stdout_is_tty: bool) -> Self {
+        Self {
+            stdout_is_tty,
+            state: PtyDisplayState::Ground,
+            pending_control: Vec::new(),
+            last_passthrough_byte: None,
         }
-        prev = Some(byte);
     }
 
-    *last_byte = prev;
+    fn push_chunk(&mut self, data: &[u8]) -> Vec<u8> {
+        if !self.stdout_is_tty {
+            self.last_passthrough_byte = data.last().copied();
+            return data.to_vec();
+        }
 
-    if changed { Some(normalized) } else { None }
+        let mut output = Vec::with_capacity(data.len());
+        for &byte in data {
+            self.push_byte(byte, &mut output);
+            self.last_passthrough_byte = Some(byte);
+        }
+        output
+    }
+
+    fn finish(&mut self) -> Vec<u8> {
+        self.state = PtyDisplayState::Ground;
+        std::mem::take(&mut self.pending_control)
+    }
+
+    fn push_byte(&mut self, byte: u8, output: &mut Vec<u8>) {
+        match self.state {
+            PtyDisplayState::Ground => self.push_ground_byte(byte, output),
+            PtyDisplayState::Escape => self.push_escape_byte(byte, output),
+            PtyDisplayState::Csi => self.push_csi_byte(byte, output),
+            PtyDisplayState::Osc => self.push_osc_byte(byte, output),
+            PtyDisplayState::OscEscape => self.push_osc_escape_byte(byte, output),
+            PtyDisplayState::ControlString => self.push_control_string_byte(byte, output),
+            PtyDisplayState::ControlStringEscape => {
+                self.push_control_string_escape_byte(byte, output)
+            }
+        }
+    }
+
+    fn push_ground_byte(&mut self, byte: u8, output: &mut Vec<u8>) {
+        if byte == b'\x1b' {
+            self.pending_control.push(byte);
+            self.state = PtyDisplayState::Escape;
+        } else if byte == b'\n' && self.last_passthrough_byte != Some(b'\r') {
+            output.extend_from_slice(b"\r\n");
+        } else {
+            output.push(byte);
+        }
+    }
+
+    fn push_escape_byte(&mut self, byte: u8, output: &mut Vec<u8>) {
+        self.pending_control.push(byte);
+        match byte {
+            b'[' => self.state = PtyDisplayState::Csi,
+            b']' => self.state = PtyDisplayState::Osc,
+            b'P' | b'X' | b'^' | b'_' => self.state = PtyDisplayState::ControlString,
+            _ => self.flush_pending(output),
+        }
+        self.flush_pending_if_too_large(output);
+    }
+
+    fn push_csi_byte(&mut self, byte: u8, output: &mut Vec<u8>) {
+        self.pending_control.push(byte);
+        if (0x40..=0x7e).contains(&byte) {
+            self.flush_pending(output);
+        } else {
+            self.flush_pending_if_too_large(output);
+        }
+    }
+
+    fn push_osc_byte(&mut self, byte: u8, output: &mut Vec<u8>) {
+        self.pending_control.push(byte);
+        match byte {
+            b'\x07' => self.flush_pending(output),
+            b'\x1b' => self.state = PtyDisplayState::OscEscape,
+            _ => self.flush_pending_if_too_large(output),
+        }
+    }
+
+    fn push_osc_escape_byte(&mut self, byte: u8, output: &mut Vec<u8>) {
+        self.pending_control.push(byte);
+        if byte == b'\\' {
+            self.flush_pending(output);
+        } else if byte == b'\x1b' {
+            self.state = PtyDisplayState::OscEscape;
+            self.flush_pending_if_too_large(output);
+        } else {
+            self.state = PtyDisplayState::Osc;
+            self.flush_pending_if_too_large(output);
+        }
+    }
+
+    fn push_control_string_byte(&mut self, byte: u8, output: &mut Vec<u8>) {
+        self.pending_control.push(byte);
+        match byte {
+            b'\x07' => self.flush_pending(output),
+            b'\x1b' => self.state = PtyDisplayState::ControlStringEscape,
+            _ => self.flush_pending_if_too_large(output),
+        }
+    }
+
+    fn push_control_string_escape_byte(&mut self, byte: u8, output: &mut Vec<u8>) {
+        self.pending_control.push(byte);
+        if byte == b'\\' {
+            self.flush_pending(output);
+        } else if byte == b'\x1b' {
+            self.state = PtyDisplayState::ControlStringEscape;
+            self.flush_pending_if_too_large(output);
+        } else {
+            self.state = PtyDisplayState::ControlString;
+            self.flush_pending_if_too_large(output);
+        }
+    }
+
+    fn flush_pending(&mut self, output: &mut Vec<u8>) {
+        output.append(&mut self.pending_control);
+        self.state = PtyDisplayState::Ground;
+    }
+
+    fn flush_pending_if_too_large(&mut self, output: &mut Vec<u8>) {
+        if self.pending_control.len() >= MAX_PENDING_CONTROL_BYTES {
+            self.flush_pending(output);
+        }
+    }
 }
 
 impl PtyMonitor {
@@ -194,18 +318,15 @@ impl PtyMonitor {
         Ok(PtyMonitor {
             inner,
             captured_output: Vec::new(),
-            stdout_is_tty: isatty(unsafe { BorrowedFd::borrow_raw(libc::STDOUT_FILENO) })
-                .unwrap_or(false),
-            last_passthrough_byte: None,
+            display_buffer: PtyDisplayBuffer::new(
+                isatty(unsafe { BorrowedFd::borrow_raw(libc::STDOUT_FILENO) }).unwrap_or(false),
+            ),
             observer,
         })
     }
 
     pub async fn process_output(&mut self) -> Result<()> {
-        use tokio::io::AsyncWriteExt;
-
         let mut buf = [0u8; 4096];
-        let mut stdout = tokio::io::stdout();
 
         loop {
             // Use timeout to avoid blocking indefinitely when PTY is closed
@@ -236,19 +357,9 @@ impl PtyMonitor {
                 Ok(Ok(n)) => {
                     tracing::debug!("PtyMonitor: Read {} bytes", n);
                     let data = &buf[..n];
-                    let display_data = if self.stdout_is_tty {
-                        normalize_tty_newlines(data, &mut self.last_passthrough_byte)
-                    } else {
-                        self.last_passthrough_byte = data.last().copied();
-                        None
-                    };
-                    let display_bytes = display_data.as_deref().unwrap_or(data);
+                    let display_bytes = self.display_buffer.push_chunk(data);
 
-                    // Print to real stdout (Passthrough) - use async write
-                    if let Err(e) = stdout.write_all(display_bytes).await {
-                        tracing::error!("PtyMonitor: Failed to write to stdout: {}", e);
-                    }
-                    if let Err(e) = stdout.flush().await {
+                    if let Err(e) = flush_stdout_bytes(&display_bytes) {
                         tracing::error!("PtyMonitor: Failed to flush stdout: {}", e);
                     }
 
@@ -290,7 +401,10 @@ impl PtyMonitor {
         }
 
         // Final flush to ensure all output is displayed
-        let _ = stdout.flush().await;
+        let remaining = self.display_buffer.finish();
+        if let Err(e) = flush_stdout_bytes(&remaining) {
+            tracing::error!("PtyMonitor: Failed to flush final stdout bytes: {}", e);
+        }
         Ok(())
     }
 }
@@ -356,7 +470,7 @@ pub(crate) fn handle_output_redirect(
 
 #[cfg(test)]
 mod tests {
-    use super::{MONITOR_TIMEOUT, OutputMonitor, append_output_chunk, normalize_tty_newlines};
+    use super::{MONITOR_TIMEOUT, OutputMonitor, PtyDisplayBuffer, append_output_chunk};
     use dsh_types::observed_output::ObservedStream;
     use nix::unistd::pipe;
     use std::io::Write as _;
@@ -386,57 +500,129 @@ mod tests {
 
     #[test]
     fn normalize_tty_newlines_converts_bare_lf() {
-        let mut last = None;
+        let mut buffer = PtyDisplayBuffer::new(true);
 
-        let normalized = normalize_tty_newlines(b"first\nsecond\n", &mut last)
-            .expect("bare LF should be normalized");
+        let normalized = buffer.push_chunk(b"first\nsecond\n");
 
         assert_eq!(normalized, b"first\r\nsecond\r\n");
-        assert_eq!(last, Some(b'\n'));
+        assert!(buffer.finish().is_empty());
     }
 
     #[test]
     fn normalize_tty_newlines_preserves_existing_crlf() {
-        let mut last = None;
+        let mut buffer = PtyDisplayBuffer::new(true);
 
-        let normalized = normalize_tty_newlines(b"first\r\nsecond\r\n", &mut last);
+        let normalized = buffer.push_chunk(b"first\r\nsecond\r\n");
 
-        assert!(normalized.is_none());
-        assert_eq!(last, Some(b'\n'));
+        assert_eq!(normalized, b"first\r\nsecond\r\n");
+        assert!(buffer.finish().is_empty());
     }
 
     #[test]
     fn normalize_tty_newlines_handles_ansi_colored_output() {
-        let mut last = None;
+        let mut buffer = PtyDisplayBuffer::new(true);
 
-        let normalized = normalize_tty_newlines(b"\x1b[31mred\x1b[0m\n", &mut last)
-            .expect("colored LF should be normalized");
+        let normalized = buffer.push_chunk(b"\x1b[31mred\x1b[0m\n");
 
         assert_eq!(normalized, b"\x1b[31mred\x1b[0m\r\n");
-        assert_eq!(last, Some(b'\n'));
+        assert!(buffer.finish().is_empty());
     }
 
     #[test]
     fn normalize_tty_newlines_preserves_split_crlf_across_chunks() {
-        let mut last = None;
+        let mut buffer = PtyDisplayBuffer::new(true);
 
-        let first = normalize_tty_newlines(b"prefix\r", &mut last);
-        let second = normalize_tty_newlines(b"\nsuffix\n", &mut last)
-            .expect("second chunk should only normalize the bare trailing LF");
+        let first = buffer.push_chunk(b"prefix\r");
+        let second = buffer.push_chunk(b"\nsuffix\n");
 
-        assert!(first.is_none());
+        assert_eq!(first, b"prefix\r");
         assert_eq!(second, b"\nsuffix\r\n");
-        assert_eq!(last, Some(b'\n'));
+        assert!(buffer.finish().is_empty());
     }
 
     #[test]
     fn normalize_tty_newlines_preserves_carriage_return_progress_updates() {
-        let mut last = None;
+        let mut buffer = PtyDisplayBuffer::new(true);
 
-        let normalized = normalize_tty_newlines(b"loading\rstep2\r", &mut last);
+        let normalized = buffer.push_chunk(b"loading\rstep2\r");
 
-        assert!(normalized.is_none());
-        assert_eq!(last, Some(b'\r'));
+        assert_eq!(normalized, b"loading\rstep2\r");
+        assert!(buffer.finish().is_empty());
+    }
+
+    #[test]
+    fn pty_display_buffer_holds_split_csi_until_complete() {
+        let mut buffer = PtyDisplayBuffer::new(true);
+
+        let first = buffer.push_chunk(b"\x1b[3");
+        let second = buffer.push_chunk(b"1mred\x1b[0m\n");
+
+        assert!(first.is_empty());
+        assert_eq!(second, b"\x1b[31mred\x1b[0m\r\n");
+        assert!(buffer.finish().is_empty());
+    }
+
+    #[test]
+    fn pty_display_buffer_holds_split_osc_until_st() {
+        let mut buffer = PtyDisplayBuffer::new(true);
+
+        let first = buffer.push_chunk(b"\x1b]0;title");
+        let second = buffer.push_chunk(b"\x1b\\done\n");
+
+        assert!(first.is_empty());
+        assert_eq!(second, b"\x1b]0;title\x1b\\done\r\n");
+        assert!(buffer.finish().is_empty());
+    }
+
+    #[test]
+    fn pty_display_buffer_flushes_incomplete_control_on_finish() {
+        let mut buffer = PtyDisplayBuffer::new(true);
+
+        let output = buffer.push_chunk(b"\x1b]0;unterminated");
+        let final_output = buffer.finish();
+
+        assert!(output.is_empty());
+        assert_eq!(final_output, b"\x1b]0;unterminated");
+    }
+
+    #[test]
+    fn pty_display_buffer_limits_unterminated_control_growth() {
+        let mut buffer = PtyDisplayBuffer::new(true);
+        let mut input = b"\x1b]".to_vec();
+        input.extend(std::iter::repeat_n(b'a', super::MAX_PENDING_CONTROL_BYTES));
+
+        let output = buffer.push_chunk(&input);
+
+        assert!(!output.is_empty());
+        assert!(buffer.finish().is_empty());
+    }
+
+    #[test]
+    fn pty_display_buffer_preserves_non_tty_bytes() {
+        let mut buffer = PtyDisplayBuffer::new(false);
+
+        let output = buffer.push_chunk(b"\x1b[31mred\x1b[0m\n");
+
+        assert_eq!(output, b"\x1b[31mred\x1b[0m\n");
+        assert!(buffer.finish().is_empty());
+    }
+
+    #[test]
+    fn pty_display_buffer_handles_many_colored_lines() {
+        let mut buffer = PtyDisplayBuffer::new(true);
+        let mut input = Vec::new();
+        let mut expected = Vec::new();
+        for index in 0..1024 {
+            let line = format!("\x1b[31mline-{index}\x1b[0m\n");
+            input.extend_from_slice(line.as_bytes());
+            expected.extend_from_slice(format!("\x1b[31mline-{index}\x1b[0m\r\n").as_bytes());
+        }
+
+        let output = buffer.push_chunk(&input);
+
+        assert_eq!(output, expected);
+        assert_eq!(input.last(), Some(&b'\n'));
+        assert!(buffer.finish().is_empty());
     }
 
     #[tokio::test]

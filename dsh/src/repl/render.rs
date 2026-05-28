@@ -60,6 +60,10 @@ pub(crate) fn move_cursor_relative(
 }
 
 pub(crate) fn print_prompt(repl: &mut Repl<'_>, out: &mut impl Write) {
+    // A full prompt establishes a new input drawing origin. Any previous input
+    // redraw height belongs to the old prompt and must not clear later output.
+    repl.last_drawn_cursor_y = 0;
+
     if !repl.multiline_buffer.is_empty() {
         let continuation_prompt = "..> ";
         out.write_all(continuation_prompt.as_bytes()).ok();
@@ -478,14 +482,17 @@ fn render_hint_if_room(repl: &Repl<'_>, out: &mut impl Write, hint: &'static str
 pub(crate) fn render_transient_prompt_to<W: Write>(
     out: &mut W,
     input: &crate::input::Input,
-    input_width: usize,
     prompt_width: usize,
     cols: u16,
 ) -> Result<()> {
-    // Calculate how many lines the prompt+input occupies
-    // Note: Preprompt is always one extra line above
-    let input_lines = (prompt_width + input_width) / (cols as usize);
-    let total_lines = 1 + input_lines; // +1 for preprompt
+    if cols == 0 {
+        return Ok(());
+    }
+
+    // Move only from the current cursor line back to the preprompt. Width-only
+    // division overcounts when the input ends exactly at the terminal edge.
+    let (_, cursor_y) = input.cursor_pos(cols as usize, prompt_width);
+    let total_lines = 1 + cursor_y; // +1 for preprompt
 
     queue!(
         out,
@@ -509,4 +516,120 @@ pub(crate) fn render_transient_prompt_to<W: Write>(
     queue!(out, cursor::Show).ok();
     out.flush().ok();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{print_input, print_prompt, render_transient_prompt_to};
+    use crate::environment::Environment;
+    use crate::input::{Input, InputConfig};
+    use crate::repl::Repl;
+    use crate::shell::Shell;
+
+    fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
+    }
+
+    fn test_input(text: &str) -> Input {
+        let mut input = Input::new(InputConfig::default());
+        input.reset(text.to_string());
+        input
+    }
+
+    #[tokio::test]
+    async fn print_prompt_resets_previous_input_redraw_height() {
+        let mut shell = Shell::new(Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        repl.last_drawn_cursor_y = 3;
+
+        let mut output = Vec::new();
+        print_prompt(&mut repl, &mut output);
+
+        assert_eq!(repl.last_drawn_cursor_y, 0);
+    }
+
+    #[tokio::test]
+    async fn continuation_prompt_resets_previous_input_redraw_height() {
+        let mut shell = Shell::new(Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        repl.multiline_buffer = "echo one\n".to_string();
+        repl.last_drawn_cursor_y = 2;
+
+        let mut output = Vec::new();
+        print_prompt(&mut repl, &mut output);
+
+        assert_eq!(repl.last_drawn_cursor_y, 0);
+        assert_eq!(output, b"..> ");
+    }
+
+    #[tokio::test]
+    async fn print_input_after_prompt_does_not_clear_using_stale_height() {
+        let mut shell = Shell::new(Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        repl.columns = 20;
+        repl.prompt_mark_cache = "> ".to_string();
+        repl.prompt_mark_width = 2;
+        repl.last_drawn_cursor_y = 3;
+
+        let mut prompt_output = Vec::new();
+        print_prompt(&mut repl, &mut prompt_output);
+
+        repl.input.reset("x".to_string());
+        let mut input_output = Vec::new();
+        print_input(&mut repl, &mut input_output, true, false);
+
+        assert!(!contains_bytes(&input_output, b"\x1b[3A"));
+        assert_eq!(repl.last_drawn_cursor_y, 0);
+    }
+
+    #[tokio::test]
+    async fn print_input_still_tracks_current_multiline_height() {
+        let mut shell = Shell::new(Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        repl.columns = 8;
+        repl.prompt_mark_cache = "> ".to_string();
+        repl.prompt_mark_width = 2;
+        repl.input.reset("abcdefg".to_string());
+
+        let mut output = Vec::new();
+        print_input(&mut repl, &mut output, true, false);
+
+        assert_eq!(repl.last_drawn_cursor_y, 1);
+    }
+
+    #[test]
+    fn transient_prompt_does_not_overcount_exact_terminal_edge() {
+        let input = test_input("abc");
+        let mut output = Vec::new();
+
+        render_transient_prompt_to(&mut output, &input, 2, 5).expect("render transient prompt");
+
+        assert!(contains_bytes(&output, b"\x1b[1A"));
+        assert!(!contains_bytes(&output, b"\x1b[2A"));
+    }
+
+    #[test]
+    fn transient_prompt_uses_current_cursor_line_not_full_input_height() {
+        let mut input = test_input("abcdefghijklmnop");
+        input.move_to_begin();
+        input.move_by(9);
+        let mut output = Vec::new();
+
+        render_transient_prompt_to(&mut output, &input, 2, 8).expect("render transient prompt");
+
+        assert!(contains_bytes(&output, b"\x1b[2A"));
+        assert!(!contains_bytes(&output, b"\x1b[3A"));
+    }
+
+    #[test]
+    fn transient_prompt_skips_clear_when_terminal_width_is_unknown() {
+        let input = test_input("ls -al");
+        let mut output = Vec::new();
+
+        render_transient_prompt_to(&mut output, &input, 2, 0).expect("render transient prompt");
+
+        assert!(output.is_empty());
+    }
 }

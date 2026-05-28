@@ -12,6 +12,7 @@ use std::sync::Arc;
 use tracing::{debug, error};
 
 use super::job_process::JobProcess;
+use super::pty::{PtyChildConfig, PtyMode};
 use super::state::ProcessState;
 use super::wait::wait_pid_job;
 use crate::shell::SHELL_TERMINAL;
@@ -224,45 +225,49 @@ impl Process {
         Ok(PreparedExecution { cmd, argv, envp })
     }
 
-    pub fn launch(
+    #[allow(dead_code)]
+    pub(crate) fn launch(
         &mut self,
         pid: Pid,
         pgid: Pid,
         interactive: bool,
         foreground: bool,
         environment: Arc<RwLock<Environment>>,
-        pty_slave: Option<RawFd>,
+        pty: Option<PtyChildConfig>,
     ) -> Result<()> {
         let prepared = self.prepare_execution(environment)?;
-        self.launch_prepared(pid, pgid, interactive, foreground, prepared, pty_slave)
+        self.launch_prepared(pid, pgid, interactive, foreground, prepared, pty)
     }
 
-    pub fn launch_prepared(
+    pub(crate) fn launch_prepared(
         &mut self,
         pid: Pid,
         pgid: Pid,
         interactive: bool,
         foreground: bool,
         prepared: PreparedExecution,
-        pty_slave: Option<RawFd>,
+        pty: Option<PtyChildConfig>,
     ) -> Result<()> {
         let PreparedExecution { cmd, argv, envp } = prepared;
+        let full_proxy_pty = pty.is_some_and(|pty| pty.mode == PtyMode::FullProxy);
         if interactive {
-            // If using PTY, setsid() will be called later which sets the process group/session.
-            // We must avoid setpgid() making us a leader before setsid() (which causes EPERM).
-            if pty_slave.is_none() {
+            // Full-proxy PTY jobs call setsid() below, so they must not be made
+            // process-group leaders first. Output-only PTY jobs use normal job
+            // control and keep stdin on the real terminal.
+            if !full_proxy_pty {
                 debug!(
                     "setpgid child process {} pid:{} pgid:{} foreground:{}",
                     &self.cmd, pid, pgid, foreground
                 );
                 setpgid(pid, pgid).context("failed setpgid")?;
             } else {
-                debug!("Skipping setpgid for PTY process (setsid will handle it)");
+                debug!("Skipping setpgid for full-proxy PTY process (setsid will handle it)");
             }
 
-            // If we are using PTY, we don't want to set this process as foreground of the SHELL's terminal
-            // because the Shell will proxy input/output.
-            if foreground && pty_slave.is_none() {
+            // Output-only PTY jobs use the real terminal for stdin, so they
+            // need normal foreground job control before they can read input.
+            // Full-proxy PTY jobs keep the shell foreground and proxy I/O.
+            if foreground && !full_proxy_pty {
                 tcsetpgrp(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }, pgid)
                     .context("failed tcsetpgrp")?;
             }
@@ -278,7 +283,9 @@ impl Process {
             }
         }
 
-        if let Some(slave_fd) = pty_slave {
+        if let Some(slave_fd) = pty.map(|pty| pty.slave)
+            && full_proxy_pty
+        {
             // Create a new session and set the controlling terminal to the PTY
             // This is crucial for programs like 'ls' to detect they are in a terminal
             let my_pid = nix::unistd::getpid();
@@ -311,7 +318,7 @@ impl Process {
 
         debug!(
             "launch: execve cmd:{:?} argv:{:?} foreground:{:?} infile:{:?} outfile:{:?} pid:{:?} pgid:{:?} pty:{:?}",
-            cmd, argv, foreground, self.stdin, self.stdout, pid, pgid, pty_slave
+            cmd, argv, foreground, self.stdin, self.stdout, pid, pgid, pty
         );
 
         // Standard IO setup (PTY slave is handled via self.stdin/stdout/stderr being set to it by caller if needed)

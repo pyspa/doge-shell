@@ -10,6 +10,7 @@ use super::builtin::BuiltinProcess;
 use super::fork::{fork_builtin_process, fork_process};
 use super::io::{create_pipe, handle_output_redirect};
 use super::process::Process;
+use super::pty::{PtyChildConfig, PtyMode};
 use super::redirect::Redirect;
 use super::signal::send_signal;
 use super::state::ProcessState;
@@ -44,6 +45,23 @@ impl std::fmt::Debug for JobProcess {
                 .finish(),
         }
     }
+}
+
+fn apply_pty_stdio(ctx: &mut Context, slave: RawFd, pty_mode: PtyMode) -> bool {
+    let mut slave_applied = false;
+    if pty_mode == PtyMode::FullProxy && ctx.infile == STDIN_FILENO {
+        ctx.infile = slave;
+        slave_applied = true;
+    }
+    if ctx.outfile == STDOUT_FILENO {
+        ctx.outfile = slave;
+        slave_applied = true;
+    }
+    if ctx.errfile == STDERR_FILENO {
+        ctx.errfile = slave;
+        slave_applied = true;
+    }
+    slave_applied
 }
 
 impl JobProcess {
@@ -271,13 +289,13 @@ impl JobProcess {
         matches!(self, JobProcess::Command(_))
     }
 
-    pub fn launch(
+    pub(crate) fn launch(
         &mut self,
         ctx: &mut Context,
         shell: &mut Shell,
         redirect: &Option<Redirect>,
         stdout: RawFd,
-        pty_slave: Option<RawFd>,
+        pty: Option<PtyChildConfig>,
     ) -> Result<(Pid, Option<Box<JobProcess>>)> {
         // has pipelines process ?
         let next_process = self.take_next();
@@ -287,7 +305,7 @@ impl JobProcess {
             && matches!(self, JobProcess::Command(_))
             && !has_next_process
             && redirect.is_none()
-            && pty_slave.is_none()
+            && pty.is_none()
             && ctx.captured_out.is_none();
 
         let pipe_out = match next_process {
@@ -299,7 +317,7 @@ impl JobProcess {
                 // We don't do this in interactive mode to preserve TTY (colors, etc.)
                 if (!ctx.interactive
                     && redirect.is_none()
-                    && pty_slave.is_none()
+                    && pty.is_none()
                     && ctx.captured_out.is_none())
                     || observe_foreground_external
                 {
@@ -327,26 +345,11 @@ impl JobProcess {
             }
         }
 
-        if let Some(slave) = pty_slave {
-            // PTY sets the "default" TTY fds.
-            // Pipeline/Redirection/Capture overrides them.
-            // We should only set slave if the FD is still the default.
-            // In non-interactive mode with redirects, we MUST favor redirects
-            // to ensure captured output works correctly.
-
-            let mut slave_applied = false;
-            if ctx.infile == STDIN_FILENO {
-                ctx.infile = slave;
-                slave_applied = true;
-            }
-            if ctx.outfile == STDOUT_FILENO {
-                ctx.outfile = slave;
-                slave_applied = true;
-            }
-            if ctx.errfile == STDERR_FILENO {
-                ctx.errfile = slave;
-                slave_applied = true;
-            }
+        if let Some(pty) = pty {
+            // PTY sets the default TTY fds. Output-only PTY keeps stdin on the
+            // real terminal so normal shell typeahead remains available after
+            // foreground commands finish.
+            let slave_applied = apply_pty_stdio(ctx, pty.slave, pty.mode);
 
             debug!(
                 "JOB_IO_SETUP: Job {} ({}) - final i/o: infile={}, outfile={}, errfile={} (slave={}, slave_applied={})",
@@ -355,7 +358,7 @@ impl JobProcess {
                 ctx.infile,
                 ctx.outfile,
                 ctx.errfile,
-                slave,
+                pty.slave,
                 slave_applied
             );
         }
@@ -381,7 +384,7 @@ impl JobProcess {
             JobProcess::Command(process) => {
                 ctx.process_count += 1;
                 // fork
-                fork_process(ctx, ctx.pgid, process, shell, pty_slave)?
+                fork_process(ctx, ctx.pgid, process, shell, pty)?
             }
         };
 
@@ -486,5 +489,31 @@ mod tests {
             JobProcess::Command(_) => {} // Expected variant
             _ => panic!("Expected Command variant"),
         }
+    }
+
+    #[test]
+    fn output_only_pty_keeps_stdin_on_real_terminal() {
+        let mut ctx = Context::new_safe(Pid::from_raw(1), Pid::from_raw(1), true);
+        let slave = 42;
+
+        let applied = apply_pty_stdio(&mut ctx, slave, PtyMode::OutputOnly);
+
+        assert!(applied);
+        assert_eq!(ctx.infile, STDIN_FILENO);
+        assert_eq!(ctx.outfile, slave);
+        assert_eq!(ctx.errfile, slave);
+    }
+
+    #[test]
+    fn full_proxy_pty_replaces_stdin_stdout_and_stderr() {
+        let mut ctx = Context::new_safe(Pid::from_raw(1), Pid::from_raw(1), true);
+        let slave = 42;
+
+        let applied = apply_pty_stdio(&mut ctx, slave, PtyMode::FullProxy);
+
+        assert!(applied);
+        assert_eq!(ctx.infile, slave);
+        assert_eq!(ctx.outfile, slave);
+        assert_eq!(ctx.errfile, slave);
     }
 }

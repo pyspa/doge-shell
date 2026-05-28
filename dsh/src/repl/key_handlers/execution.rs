@@ -3,7 +3,7 @@ use crate::command_timing;
 use crate::errors::display_user_error;
 use crate::repl::Repl;
 use crate::repl::render_transient_prompt_to;
-use crate::terminal::renderer::TerminalRenderer;
+use crate::terminal::renderer::{TerminalRenderer, flush_stdout_bytes};
 use anyhow::Result;
 use crossterm::queue;
 use crossterm::style::Print;
@@ -15,6 +15,18 @@ use std::time::{Instant, SystemTime};
 use tracing::{debug, warn};
 
 const COMMAND_BLOCK_MAX_OBSERVED_BYTES: usize = 1024 * 1024;
+
+fn write_terminal_control(bytes: &[u8]) {
+    if let Err(err) = flush_stdout_bytes(bytes) {
+        warn!("Failed to write terminal control sequence: {}", err);
+    }
+}
+
+fn write_command_boundary(bytes: &[u8]) {
+    if let Err(err) = flush_stdout_bytes(bytes) {
+        warn!("Failed to write command boundary: {}", err);
+    }
+}
 
 /// Execute the current content of the input buffer.
 pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
@@ -39,7 +51,7 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
             repl.completion.clear();
             repl.suggestion_manager.clear();
 
-            print!("\r\n");
+            write_command_boundary(b"\r\n");
             let mut renderer = TerminalRenderer::new();
             repl.print_prompt(&mut renderer);
             renderer.flush().ok();
@@ -107,24 +119,14 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
         .input_preferences
         .transient_prompt
     {
-        use crate::input::display_width;
-
         let mut stdout = std::io::stdout();
-        let input_width = display_width(repl.input.as_str());
         let prompt_width = repl.prompt_mark_width;
         let cols = repl.columns;
 
-        render_transient_prompt_to(
-            &mut stdout,
-            &repl.input,
-            input_width,
-            prompt_width,
-            cols as u16,
-        )
-        .ok();
+        render_transient_prompt_to(&mut stdout, &repl.input, prompt_width, cols as u16).ok();
     }
 
-    print!("\r\n");
+    write_command_boundary(b"\r\n");
     if !repl.input.is_empty() {
         let original_input = repl.input.to_string();
         let input_str = ai_watch_request
@@ -135,7 +137,7 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
         execute_shell_command(repl, input_str, ai_watch_request).await?;
 
         while let Some(command) = repl.shell.pop_requested_eval_command() {
-            print!("\r\nblocks rerun: {command}\r\n");
+            write_command_boundary(format!("\r\nblocks rerun: {command}\r\n").as_bytes());
             let _drain_guard = repl.shell.begin_pending_eval_drain()?;
             execute_shell_command(repl, command, None).await?;
         }
@@ -175,7 +177,7 @@ async fn execute_shell_command(
             );
 
             // Command failed to start due to terminal init error
-            print!("\x1b]133;D;1\x1b\\");
+            write_terminal_control(b"\x1b]133;D;1\x1b\\");
 
             // Show new prompt and skip command execution
             let mut renderer = TerminalRenderer::new();
@@ -189,7 +191,7 @@ async fn execute_shell_command(
     ctx.output_observer = output_observer.clone();
 
     // OSC 133 C: Command executed / Output start
-    print!("\x1b]133;C\x1b\\");
+    write_terminal_control(b"\x1b]133;C\x1b\\");
 
     let exit_code = match repl
         .shell
@@ -209,7 +211,7 @@ async fn execute_shell_command(
     };
 
     // OSC 133 D: Command finished
-    print!("\x1b]133;D;{}\x1b\\", exit_code);
+    write_terminal_control(format!("\x1b]133;D;{exit_code}\x1b\\").as_bytes());
 
     repl.cache.invalidate();
 
@@ -464,7 +466,7 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
                 );
 
                 // Command failed to start due to terminal init error
-                print!("\x1b]133;D;1\x1b\\");
+                write_terminal_control(b"\x1b]133;D;1\x1b\\");
 
                 let mut renderer = TerminalRenderer::new();
                 repl.print_prompt(&mut renderer);
@@ -475,7 +477,7 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
         let mut ctx = Context::new(repl.shell.pid, repl.shell.pgid, Some(shell_tmode), true);
 
         // OSC 133 C: Command executed / Output start
-        print!("\x1b]133;C\x1b\\");
+        write_terminal_control(b"\x1b]133;C\x1b\\");
 
         let exit_code = match repl.shell.eval_str(&mut ctx, input.clone(), true).await {
             Ok(code) => {
@@ -490,7 +492,7 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
         };
 
         // OSC 133 D: Command finished
-        print!("\x1b]133;D;{}\x1b\\", exit_code);
+        write_terminal_control(format!("\x1b]133;D;{exit_code}\x1b\\").as_bytes());
 
         repl.cache.invalidate();
         repl.input.clear();
@@ -541,7 +543,7 @@ pub(crate) fn handle_interrupt(repl: &mut Repl<'_>) -> Result<()> {
 
         // OSC 133 D: Command finished (interrupted)
         // 130 is the standard exit code for SIGINT
-        print!("\x1b]133;D;130\x1b\\");
+        write_terminal_control(b"\x1b]133;D;130\x1b\\");
 
         repl.print_prompt(&mut renderer);
         renderer.flush().ok();

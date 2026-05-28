@@ -4,6 +4,7 @@ use tracing::debug;
 
 use super::builtin::BuiltinProcess;
 use super::process::Process;
+use super::pty::PtyChildConfig;
 use crate::shell::Shell;
 use dsh_types::Context;
 use libc::{STDERR_FILENO, STDOUT_FILENO};
@@ -59,7 +60,7 @@ pub(crate) fn fork_process(
     job_pgid: Option<Pid>,
     process: &mut Process,
     shell: &mut Shell,
-    pty_slave: Option<std::os::unix::io::RawFd>,
+    pty: Option<PtyChildConfig>,
 ) -> Result<Pid> {
     debug!("🍴 FORK: Starting fork_process");
     debug!(
@@ -76,7 +77,7 @@ pub(crate) fn fork_process(
     );
 
     // capture
-    if ctx.outfile == STDOUT_FILENO && !ctx.foreground && pty_slave.is_none() {
+    if ctx.outfile == STDOUT_FILENO && !ctx.foreground && pty.is_none() {
         debug!("🍴 FORK: Creating capture pipe for stdout (background process)");
         let (pout, pin) = pipe().context("failed pipe")?;
         process.stdout = pin.into_raw_fd();
@@ -93,7 +94,7 @@ pub(crate) fn fork_process(
         );
     }
 
-    if ctx.errfile == STDERR_FILENO && !ctx.foreground && pty_slave.is_none() {
+    if ctx.errfile == STDERR_FILENO && !ctx.foreground && pty.is_none() {
         debug!("🍴 FORK: Creating capture pipe for stderr (background process)");
         let (pout, pin) = pipe().context("failed pipe")?;
         process.stderr = pin.into_raw_fd();
@@ -137,14 +138,9 @@ pub(crate) fn fork_process(
             let pid = getpid();
             let pgid = job_pgid.unwrap_or(pid);
 
-            if let Err(_e) = process.launch_prepared(
-                pid,
-                pgid,
-                ctx.interactive,
-                ctx.foreground,
-                prepared,
-                pty_slave,
-            ) {
+            if let Err(_e) =
+                process.launch_prepared(pid, pgid, ctx.interactive, ctx.foreground, prepared, pty)
+            {
                 // Raw write to stderr or simple exit
                 std::process::exit(1);
             }

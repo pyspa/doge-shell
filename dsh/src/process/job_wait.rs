@@ -36,7 +36,7 @@ pub async fn put_in_foreground(job: &mut Job, no_hang: bool, cont: bool) -> Resu
 
     debug!("Terminal environment detected, proceeding with process group control");
 
-    if job.pty.is_none() {
+    if !crate::process::job_pty::uses_full_pty_proxy(job) {
         if let Some(pgid) = job.pgid {
             debug!("Setting foreground process group to {}", pgid);
             if let Err(err) = tcsetpgrp(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }, pgid) {
@@ -58,7 +58,7 @@ pub async fn put_in_foreground(job: &mut Job, no_hang: bool, cont: bool) -> Resu
             debug!("No pgid available, skipping process group operations");
         }
     } else {
-        debug!("PTY job active, skipping tcsetpgrp (shell remains foreground to proxy I/O)");
+        debug!("Full-proxy PTY job active, skipping tcsetpgrp (shell proxies I/O)");
     }
 
     debug!("About to call wait_job with no_hang: {}", no_hang);
@@ -96,7 +96,7 @@ pub fn put_in_foreground_sync(job: &mut Job, no_hang: bool, cont: bool) -> Resul
 
     debug!("Terminal environment detected, proceeding with process group control");
 
-    if job.pty.is_none() {
+    if !crate::process::job_pty::uses_full_pty_proxy(job) {
         if let Some(pgid) = job.pgid {
             debug!("Setting foreground process group to {}", pgid);
             if let Err(err) = tcsetpgrp(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }, pgid) {
@@ -118,7 +118,7 @@ pub fn put_in_foreground_sync(job: &mut Job, no_hang: bool, cont: bool) -> Resul
             debug!("No pgid available, skipping process group operations");
         }
     } else {
-        debug!("PTY job active, skipping tcsetpgrp (shell remains foreground to proxy I/O)");
+        debug!("Full-proxy PTY job active, skipping tcsetpgrp (shell proxies I/O)");
     }
 
     debug!("About to call wait_job_sync with no_hang: {}", no_hang);

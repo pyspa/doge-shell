@@ -1,6 +1,6 @@
 use anyhow::{Context as _, Result};
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
-use nix::unistd::{Pid, close, getpgrp, setpgid};
+use nix::unistd::{Pid, close, getpgid, getpgrp, setpgid};
 use std::fs::File;
 use std::os::unix::io::{AsRawFd, RawFd};
 use tracing::{debug, error};
@@ -11,7 +11,7 @@ use super::process::Process;
 use super::redirect::Redirect;
 use super::state::{ListOp, ProcessState, SubshellType};
 use super::wait::is_job_completed;
-use crate::process::pty::Pty;
+use crate::process::pty::{Pty, PtyChildConfig, PtyMode};
 use crate::shell::Shell;
 use dsh_types::Context;
 
@@ -39,6 +39,7 @@ pub struct Job {
     /// Whether to capture output for $OUT variable
     pub capture_output: bool,
     pub pty: Option<Pty>,
+    pub(crate) pty_mode: Option<PtyMode>,
     pub pty_output_task: Option<tokio::task::JoinHandle<Result<String>>>,
     pub pty_input_task: Option<tokio::task::JoinHandle<()>>,
     pub disable_pty: bool,
@@ -85,6 +86,7 @@ impl Job {
             shell_pgid,
             capture_output: false,
             pty: None,
+            pty_mode: None,
             pty_output_task: None,
             pty_input_task: None,
             disable_pty: false,
@@ -113,6 +115,7 @@ impl Job {
             shell_pgid,
             capture_output: false,
             pty: None,
+            pty_mode: None,
             pty_output_task: None,
             pty_input_task: None,
             disable_pty: false,
@@ -150,6 +153,10 @@ impl Job {
 
         // 1. Setup PTY if needed
         let pty_slave_fd = self.setup_pty(ctx).await?;
+        let pty_child = pty_slave_fd.map(|slave| PtyChildConfig {
+            slave,
+            mode: self.pty_mode.unwrap_or(PtyMode::FullProxy),
+        });
         let _pty_raw_mode_guard = job_pty::ForegroundPtyRawModeGuard::new(self, ctx);
 
         // 2. Launch processes
@@ -160,7 +167,7 @@ impl Job {
                 process.get_cmd()
             );
 
-            if let Err(e) = self.launch_process(ctx, shell, &mut process, pty_slave_fd) {
+            if let Err(e) = self.launch_process(ctx, shell, &mut process, pty_child) {
                 error!(
                     "JOB_LAUNCH_PROCESS_ERROR: Failed to launch process for job {}: {}",
                     self.job_id, e
@@ -221,7 +228,7 @@ impl Job {
         ctx: &mut Context,
         shell: &mut Shell,
         process: &mut JobProcess,
-        pty_slave: Option<RawFd>,
+        pty: Option<PtyChildConfig>,
     ) -> Result<()> {
         let previous_infile = ctx.infile;
         let mut _input_file_guard: Option<File> = None;
@@ -238,7 +245,7 @@ impl Job {
 
         // Use launch for automatic capture (modified internal logic)
         let (pid, mut next_process) =
-            process.launch(ctx, shell, &self.redirect, self.stdout, pty_slave)?;
+            process.launch(ctx, shell, &self.redirect, self.stdout, pty)?;
         if self.pid.is_none() {
             self.pid = Some(pid); // set process pid
         }
@@ -251,11 +258,9 @@ impl Job {
                 debug!("set job id: {} pgid: {:?}", self.id, self.pgid);
             }
 
-            // For PTY jobs, we skip setting the process group in the parent.
-            // The child will call setsid() to create a new session and become the leader.
-            // Calling setpgid() here would make the child a process group leader in the shell's session,
-            // which causes setsid() in the child to fail with EPERM.
-            if pty_slave.is_none() {
+            // Full-proxy PTY jobs create a new session in the child, so the
+            // parent must not make them process-group leaders first.
+            if pty.is_none_or(|pty| pty.mode == PtyMode::OutputOnly) {
                 debug!("🔧 PGID: Setting process group for {}", process.get_cmd());
                 debug!(
                     "🔧 PGID: setpgid {} pid:{} pgid:{:?}",
@@ -273,16 +278,31 @@ impl Job {
                         target_pgid, pid
                     ),
                     Err(e) => {
-                        error!(
-                            "🔧 PGID: Failed to set pgid {} for pid {}: {}",
-                            target_pgid, pid, e
-                        );
-                        return Err(e.into());
+                        let tolerated_output_only_race = if self.pty_mode
+                            == Some(PtyMode::OutputOnly)
+                        {
+                            let already_in_group =
+                                getpgid(Some(pid)).is_ok_and(|pgid| pgid == target_pgid);
+                            debug!(
+                                "🔧 PGID: setpgid failed for output-only PTY job (pid {}, pgid {}, already_in_group={}): {}",
+                                pid, target_pgid, already_in_group, e
+                            );
+                            already_in_group
+                        } else {
+                            false
+                        };
+                        if !tolerated_output_only_race {
+                            error!(
+                                "🔧 PGID: Failed to set pgid {} for pid {}: {}",
+                                target_pgid, pid, e
+                            );
+                            return Err(e.into());
+                        }
                     }
                 }
             } else {
                 debug!(
-                    "Skipping parent setpgid for PTY job (child {} will setsid)",
+                    "Skipping parent setpgid for full-proxy PTY job (child {} will setsid)",
                     pid
                 );
             }
@@ -308,6 +328,7 @@ impl Job {
         }
 
         let (stdin, stdout, stderr) = process.get_io();
+        let pty_slave = pty.map(|pty| pty.slave);
         if stdin != self.stdin {
             let should_close = match input_fd {
                 Some(fd) => stdin != fd,
@@ -349,7 +370,7 @@ impl Job {
         if let Some(Err(err)) = next_process
             .take()
             .as_mut()
-            .map(|process| self.launch_process(ctx, shell, process, pty_slave))
+            .map(|process| self.launch_process(ctx, shell, process, pty))
         {
             debug!("err {:?}", err);
             return Err(err);

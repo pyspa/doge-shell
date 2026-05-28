@@ -7,10 +7,15 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 pub fn description() -> &'static str {
-    "Search and retrieve past command outputs"
+    "Interactively select files to stage with git add"
 }
 
-// Define local StringItem wrapper
+const GA_SKIM_BINDINGS: &[&str] = &[
+    "enter:accept",
+    "space:toggle+down",
+    "tab:toggle+down",
+    "btab:toggle+up",
+];
 
 #[derive(Debug, Clone)]
 struct GitFileItem {
@@ -67,16 +72,7 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
         })
         .collect();
 
-    let options = SkimOptionsBuilder::default()
-        .multi(true)
-        .prompt("Git Add> ".to_string())
-        .bind(vec!["Enter:accept".to_string(), "Space:toggle".to_string()])
-        .preview("".to_string()) // Preview handled by ItemPreview
-        // .preview_window("right:60%") // Disabled
-        .build()
-        .map_err(|e| format!("failed to build skim options: {}", e));
-
-    let options = match options {
+    let options = match build_ga_skim_options() {
         Ok(o) => o,
         Err(e) => {
             let _ = ctx.write_stderr(&format!("ga: {}\n", e));
@@ -135,6 +131,22 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
     }
 }
 
+fn build_ga_skim_options() -> Result<SkimOptions, String> {
+    SkimOptionsBuilder::default()
+        .multi(true)
+        .prompt("Git Add> ".to_string())
+        .bind(
+            GA_SKIM_BINDINGS
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+        )
+        .preview("".to_string()) // Preview handled by ItemPreview
+        // .preview_window("right:60%") // Disabled
+        .build()
+        .map_err(|e| format!("failed to build skim options: {}", e))
+}
+
 fn is_git_repository() -> bool {
     Command::new("git")
         .args(["rev-parse", "--git-dir"])
@@ -172,4 +184,44 @@ fn get_git_status() -> Result<Vec<GitFileItem>, String> {
     }
 
     Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use skim::binds::parse_key;
+
+    #[test]
+    fn ga_skim_options_enable_multi_select() {
+        let options = build_ga_skim_options().expect("ga skim options should build");
+
+        assert!(options.multi);
+    }
+
+    #[test]
+    fn ga_skim_options_register_multi_select_bindings() {
+        let options = build_ga_skim_options().expect("ga skim options should build");
+
+        for key in ["space", "tab", "btab", "enter"] {
+            let key_event = parse_key(key).expect("test key should parse");
+            assert!(
+                options.keymap.contains_key(&key_event),
+                "expected binding for {key}"
+            );
+        }
+
+        let space = parse_key("space").expect("space should parse");
+        let space_actions = options.keymap.get(&space).expect("space should be bound");
+        assert_eq!(format!("{space_actions:?}"), "[Toggle, Down(1)]");
+    }
+
+    #[test]
+    fn ga_skim_bindings_use_lowercase_key_names() {
+        for binding in GA_SKIM_BINDINGS {
+            let (key, _) = binding
+                .split_once(':')
+                .expect("ga skim binding should include an action");
+            assert_eq!(key, key.to_ascii_lowercase());
+        }
+    }
 }

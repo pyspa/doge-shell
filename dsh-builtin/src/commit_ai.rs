@@ -1,5 +1,6 @@
 use super::ShellProxy;
 use crate::chatgpt::load_openai_config;
+use crate::interactive_input;
 use dsh_openai::ChatGptClient;
 use dsh_types::{Context, ExitStatus};
 use serde_json::json;
@@ -77,7 +78,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         let _ = io::stdout().flush();
 
         let mut input = String::new();
-        if io::stdin().read_line(&mut input).is_err() {
+        if interactive_input::read_line(ctx, &mut input).is_err() {
             return ExitStatus::ExitedWith(1);
         }
 

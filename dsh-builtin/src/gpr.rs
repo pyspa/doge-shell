@@ -5,6 +5,7 @@
 
 use super::ShellProxy;
 use crate::github_client;
+use crate::interactive_input;
 use dsh_types::{Context, ExitStatus};
 use getopts::Options;
 use skim::prelude::*;
@@ -99,7 +100,7 @@ fn create_pr(ctx: &Context, matches: &getopts::Matches) -> ExitStatus {
         print!("PR Title: ");
         io::stdout().flush().ok();
         let mut input = String::new();
-        if io::stdin().read_line(&mut input).is_err() {
+        if interactive_input::read_line(ctx, &mut input).is_err() {
             ctx.write_stderr("gpr: failed to read title").ok();
             return ExitStatus::ExitedWith(1);
         }

@@ -24,6 +24,7 @@ mod eproject;
 mod eview;
 mod export;
 mod include;
+mod interactive_input;
 mod magit;
 mod markdown;
 mod safe_run;

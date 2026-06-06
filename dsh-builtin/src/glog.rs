@@ -1,4 +1,5 @@
 use super::ShellProxy;
+use crate::interactive_input;
 use dsh_types::{Context, ExitStatus};
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -43,7 +44,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy) ->
     }
 
     // Interactive commit selection
-    if let Some(selected_line) = interactive_commit_selection(&log_entries) {
+    if let Some(selected_line) = interactive_commit_selection(ctx, &log_entries) {
         // Extract commit hash from selected line
         if let Some(commit_hash) = extract_commit_hash(&selected_line) {
             checkout_commit(ctx, &commit_hash)
@@ -179,7 +180,7 @@ fn get_git_log(options: &LogOptions) -> Result<Vec<String>, String> {
 }
 
 /// Interactive commit selection using skim or fzf
-fn interactive_commit_selection(log_entries: &[String]) -> Option<String> {
+fn interactive_commit_selection(ctx: &Context, log_entries: &[String]) -> Option<String> {
     let log_content = log_entries.join("\n");
 
     // Try skim (sk) first with git-specific options
@@ -278,7 +279,7 @@ fn interactive_commit_selection(log_entries: &[String]) -> Option<String> {
     }
 
     // Final fallback to simple numbered selection
-    numbered_commit_selection(log_entries)
+    numbered_commit_selection(ctx, log_entries)
 }
 
 /// Extract commit hash from a git log line
@@ -320,7 +321,7 @@ fn strip_ansi_codes(input: &str) -> String {
 }
 
 /// Fallback numbered selection when interactive tools are not available
-fn numbered_commit_selection(log_entries: &[String]) -> Option<String> {
+fn numbered_commit_selection(ctx: &Context, log_entries: &[String]) -> Option<String> {
     use std::io::{self, Write};
 
     println!("Interactive tools not available. Select commit by number:");
@@ -336,7 +337,7 @@ fn numbered_commit_selection(log_entries: &[String]) -> Option<String> {
     io::stdout().flush().ok()?;
 
     let mut input = String::new();
-    io::stdin().read_line(&mut input).ok()?;
+    interactive_input::read_line(ctx, &mut input).ok()?;
 
     let input = input.trim();
 
@@ -357,7 +358,6 @@ fn numbered_commit_selection(log_entries: &[String]) -> Option<String> {
 
 /// Checkout to a specific commit (detached HEAD)
 fn checkout_commit(ctx: &Context, commit_hash: &str) -> ExitStatus {
-    use std::io;
     // Warn user about detached HEAD state
     ctx.write_stdout(&format!(
         "⚠️  Checking out commit {commit_hash} will put you in 'detached HEAD' state."
@@ -375,7 +375,7 @@ fn checkout_commit(ctx: &Context, commit_hash: &str) -> ExitStatus {
     ctx.write_stdout("Do you want to proceed? (y/N): ").ok();
 
     let mut input = String::new();
-    if io::stdin().read_line(&mut input).is_err() {
+    if interactive_input::read_line(ctx, &mut input).is_err() {
         ctx.write_stderr("glog: failed to read input").ok();
         return ExitStatus::ExitedWith(1);
     }

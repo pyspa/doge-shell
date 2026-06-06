@@ -1,4 +1,5 @@
 use super::ShellProxy;
+use crate::interactive_input;
 use anyhow::Result;
 use dsh_types::notebook::{BlockKind, Notebook};
 use dsh_types::{Context, ExitStatus};
@@ -58,7 +59,7 @@ fn run_play(ctx: &Context, path: &str, proxy: &mut dyn ShellProxy) -> Result<()>
         let _ = io::stdout().flush();
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
+        interactive_input::read_line(ctx, &mut input)?;
         let choice = input.trim().to_lowercase();
 
         if choice == "q" {

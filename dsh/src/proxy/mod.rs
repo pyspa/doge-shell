@@ -11,6 +11,8 @@ use anyhow::{Context as _, Result};
 use dsh_builtin::ShellProxy;
 use dsh_types::{Context, mcp::McpServerConfig};
 use globmatch;
+use std::fs::OpenOptions;
+use std::io::{self, BufRead, BufReader, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
 
@@ -20,6 +22,26 @@ fn canonical_or_original(path: &Path) -> PathBuf {
 
 fn is_same_direnv_root(requested: &Path, allowed: &Path) -> bool {
     canonical_or_original(requested) == canonical_or_original(allowed)
+}
+
+fn read_confirmation_line(input: &mut String) -> io::Result<usize> {
+    let stdin = io::stdin();
+    if should_read_confirmation_from_tty(stdin.is_terminal())
+        && let Ok(tty) = OpenOptions::new().read(true).open("/dev/tty")
+    {
+        let mut reader = BufReader::new(tty);
+        return reader.read_line(input);
+    }
+
+    stdin.read_line(input)
+}
+
+fn should_read_confirmation_from_tty(stdin_is_terminal: bool) -> bool {
+    stdin_is_terminal
+}
+
+fn confirmation_is_yes(input: &str) -> bool {
+    input.trim().to_lowercase() == "y"
 }
 
 impl ShellProxy for Shell {
@@ -347,20 +369,17 @@ impl ShellProxy for Shell {
     }
 
     fn confirm_action(&mut self, message: &str) -> Result<bool> {
-        use std::io::stdin;
-
         debug!("Safety confirmation requested: {}", message);
 
         // Use eprint! instead of println! or print! to ensure the prompt goes to stderr.
         // This is critical if the shell output is being piped.
         eprint!("{} [y/N]: ", message);
-        use std::io::Write;
         std::io::stderr().flush()?;
 
         let mut input = String::new();
-        stdin().read_line(&mut input)?;
+        read_confirmation_line(&mut input)?;
 
-        let confirmed = input.trim().to_lowercase() == "y";
+        let confirmed = confirmation_is_yes(&input);
         debug!("Confirmation result: {}", confirmed);
         Ok(confirmed)
     }
@@ -806,5 +825,24 @@ mod tests {
             !is_same_direnv_root(&child, &allowed),
             "allow-direnv should not implicitly trust nested project roots"
         );
+    }
+
+    #[test]
+    fn confirmation_accepts_only_single_y() {
+        assert!(confirmation_is_yes("y\n"));
+        assert!(confirmation_is_yes("Y\r\n"));
+        assert!(confirmation_is_yes(" y "));
+
+        assert!(!confirmation_is_yes(""));
+        assert!(!confirmation_is_yes("\n"));
+        assert!(!confirmation_is_yes("n\n"));
+        assert!(!confirmation_is_yes("yes\n"));
+        assert!(!confirmation_is_yes("1\n"));
+    }
+
+    #[test]
+    fn confirmation_reads_tty_only_when_stdin_is_terminal() {
+        assert!(should_read_confirmation_from_tty(true));
+        assert!(!should_read_confirmation_from_tty(false));
     }
 }

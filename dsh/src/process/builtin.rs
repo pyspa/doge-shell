@@ -97,9 +97,9 @@ impl BuiltinProcess {
         match exit {
             ExitStatus::ExitedWith(code) => {
                 if code >= 0 {
-                    self.state = ProcessState::Completed(1, None);
+                    self.state = ProcessState::Completed(code.clamp(0, 255) as u8, None);
                 } else {
-                    self.state = ProcessState::Completed(0, None);
+                    self.state = ProcessState::Completed(1, None);
                 }
                 debug!("Builtin process {} exited with code: {}", self.name, code);
             }
@@ -124,5 +124,85 @@ impl BuiltinProcess {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::environment::Environment;
+
+    fn test_context() -> Context {
+        Context::new_safe(Pid::from_raw(1), Pid::from_raw(1), true)
+    }
+
+    fn test_shell() -> Shell {
+        Shell::new(Environment::new())
+    }
+
+    fn builtin_exit_zero(
+        _ctx: &Context,
+        _argv: Vec<String>,
+        _proxy: &mut dyn dsh_builtin::ShellProxy,
+    ) -> ExitStatus {
+        ExitStatus::ExitedWith(0)
+    }
+
+    fn builtin_exit_seven(
+        _ctx: &Context,
+        _argv: Vec<String>,
+        _proxy: &mut dyn dsh_builtin::ShellProxy,
+    ) -> ExitStatus {
+        ExitStatus::ExitedWith(7)
+    }
+
+    fn builtin_exit_negative(
+        _ctx: &Context,
+        _argv: Vec<String>,
+        _proxy: &mut dyn dsh_builtin::ShellProxy,
+    ) -> ExitStatus {
+        ExitStatus::ExitedWith(-1)
+    }
+
+    fn launch_state(
+        cmd_fn: fn(&Context, Vec<String>, &mut dyn dsh_builtin::ShellProxy) -> ExitStatus,
+    ) -> ProcessState {
+        let mut process = BuiltinProcess::new(
+            "test-builtin".to_string(),
+            cmd_fn,
+            vec!["test-builtin".into()],
+        );
+        let mut ctx = test_context();
+        let mut shell = test_shell();
+
+        process
+            .launch(&mut ctx, &mut shell)
+            .expect("builtin launch should succeed");
+
+        process.state
+    }
+
+    #[test]
+    fn launch_preserves_success_exit_code() {
+        assert_eq!(
+            launch_state(builtin_exit_zero),
+            ProcessState::Completed(0, None)
+        );
+    }
+
+    #[test]
+    fn launch_preserves_nonzero_exit_code() {
+        assert_eq!(
+            launch_state(builtin_exit_seven),
+            ProcessState::Completed(7, None)
+        );
+    }
+
+    #[test]
+    fn launch_maps_negative_exit_code_to_failure() {
+        assert_eq!(
+            launch_state(builtin_exit_negative),
+            ProcessState::Completed(1, None)
+        );
     }
 }

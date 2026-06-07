@@ -183,103 +183,122 @@ fn get_git_log(options: &LogOptions) -> Result<Vec<String>, String> {
 fn interactive_commit_selection(ctx: &Context, log_entries: &[String]) -> Option<String> {
     let log_content = log_entries.join("\n");
 
-    // Try skim (sk) first with git-specific options
-    if let Ok(mut child) = Command::new("sk")
-        .args([
-            "--ansi",    // Support ANSI color codes
-            "--reverse", // Reverse layout (newer commits at top)
-            "--preview", // Enable preview
-            r#"echo {} | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | sed 's/^[*|\\/ -]*//' | awk '{print $1}' | xargs -I {} sh -c 'git show --color=always --format=fuller "$1" 2>/dev/null || echo "Error: Invalid commit hash"' _ {}"#, // Preview command
-            "--preview-window",
-            "right:60%",
-            "--header",
-            "Select commit to checkout (ESC/Ctrl+C/Ctrl+G to cancel)",
-            "--bind",
-            "ctrl-c:abort",
-            "--bind",
-            "ctrl-g:abort",
-            "--bind",
-            "esc:abort",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(log_content.as_bytes());
-            drop(stdin);
-        }
-
-        if let Ok(output) = child.wait_with_output() {
-            if output.status.success() {
-                let selected = String::from_utf8_lossy(&output.stdout);
-                let trimmed = selected.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            } else {
-                // Check if process was interrupted (Ctrl+C, Ctrl+G, ESC)
-                if let Some(exit_code) = output.status.code() {
-                    if exit_code == 130 || exit_code == 1 {
-                        // User cancelled with Ctrl+C (130) or ESC (1)
-                        return None;
-                    }
-                } else {
-                    // Process was terminated by signal (e.g., SIGINT)
-                    return None;
-                }
-            }
-        }
-    }
-
-    // Fallback to fzf
-    if let Ok(mut child) = Command::new("fzf")
-        .args([
-            "--ansi",
-            "--reverse",
-            "--preview",
-            r#"echo {} | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | sed 's/^[*|\\/ -]*//' | awk '{print $1}' | xargs -I {} sh -c 'git show --color=always --format=fuller "$1" 2>/dev/null || echo "Error: Invalid commit hash"' _ {}"#,
-            "--preview-window", "right:60%",
-            "--header", "Select commit to checkout (ESC/Ctrl+C/Ctrl+G to cancel)",
-            "--bind", "ctrl-c:abort",
-            "--bind", "ctrl-g:abort",
-            "--bind", "esc:abort",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(log_content.as_bytes());
-            drop(stdin);
-        }
-
-        if let Ok(output) = child.wait_with_output() {
-            if output.status.success() {
-                let selected = String::from_utf8_lossy(&output.stdout);
-                let trimmed = selected.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            } else {
-                // Check if process was interrupted (Ctrl+C, Ctrl+G, ESC)
-                if let Some(exit_code) = output.status.code() {
-                    if exit_code == 130 || exit_code == 1 {
-                        // User cancelled with Ctrl+C (130) or ESC (1)
-                        return None;
-                    }
-                } else {
-                    // Process was terminated by signal (e.g., SIGINT)
-                    return None;
-                }
+    if ctx.interactive {
+        for program in ["sk", "fzf"] {
+            match run_selector(program, &log_content, selector_spawn_config(ctx)) {
+                SelectorResult::Selected(line) => return Some(line),
+                SelectorResult::Cancelled => return None,
+                SelectorResult::Unavailable => {}
             }
         }
     }
 
     // Final fallback to simple numbered selection
     numbered_commit_selection(ctx, log_entries)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectorStream {
+    Piped,
+    Inherit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SelectorSpawnConfig {
+    stdin: SelectorStream,
+    stdout: SelectorStream,
+    stderr: SelectorStream,
+}
+
+fn selector_spawn_config(ctx: &Context) -> SelectorSpawnConfig {
+    SelectorSpawnConfig {
+        stdin: SelectorStream::Piped,
+        stdout: SelectorStream::Piped,
+        stderr: if ctx.interactive {
+            SelectorStream::Inherit
+        } else {
+            SelectorStream::Piped
+        },
+    }
+}
+
+fn apply_selector_stdio(command: &mut Command, config: SelectorSpawnConfig) {
+    command.stdin(selector_stdio(config.stdin));
+    command.stdout(selector_stdio(config.stdout));
+    command.stderr(selector_stdio(config.stderr));
+}
+
+fn selector_stdio(stream: SelectorStream) -> Stdio {
+    match stream {
+        SelectorStream::Piped => Stdio::piped(),
+        SelectorStream::Inherit => Stdio::inherit(),
+    }
+}
+
+enum SelectorResult {
+    Selected(String),
+    Cancelled,
+    Unavailable,
+}
+
+fn run_selector(program: &str, log_content: &str, config: SelectorSpawnConfig) -> SelectorResult {
+    let mut command = Command::new(program);
+    command.args(selector_args());
+    apply_selector_stdio(&mut command, config);
+
+    let Ok(mut child) = command.spawn() else {
+        return SelectorResult::Unavailable;
+    };
+
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(log_content.as_bytes());
+        drop(stdin);
+    }
+
+    let Ok(output) = child.wait_with_output() else {
+        return SelectorResult::Unavailable;
+    };
+
+    if output.status.success() {
+        let selected = String::from_utf8_lossy(&output.stdout);
+        let trimmed = selected.trim();
+        if trimmed.is_empty() {
+            SelectorResult::Unavailable
+        } else {
+            SelectorResult::Selected(trimmed.to_string())
+        }
+    } else if selector_status_is_cancelled(&output.status) {
+        SelectorResult::Cancelled
+    } else {
+        SelectorResult::Unavailable
+    }
+}
+
+fn selector_args() -> [&'static str; 14] {
+    [
+        "--ansi",
+        "--reverse",
+        "--preview",
+        r#"echo {} | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | sed 's/^[*|\\/ -]*//' | awk '{print $1}' | xargs -I {} sh -c 'git show --color=always --format=fuller "$1" 2>/dev/null || echo "Error: Invalid commit hash"' _ {}"#,
+        "--preview-window",
+        "right:60%",
+        "--header",
+        "Select commit to checkout (ESC/Ctrl+C/Ctrl+G to cancel)",
+        "--bind",
+        "ctrl-c:abort",
+        "--bind",
+        "ctrl-g:abort",
+        "--bind",
+        "esc:abort",
+    ]
+}
+
+fn selector_status_is_cancelled(status: &std::process::ExitStatus) -> bool {
+    match status.code() {
+        Some(130 | 1) => true,
+        Some(_) => false,
+        None => true,
+    }
 }
 
 /// Extract commit hash from a git log line
@@ -418,6 +437,13 @@ fn checkout_commit(ctx: &Context, commit_hash: &str) -> ExitStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nix::unistd::Pid;
+
+    fn test_context(interactive: bool) -> Context {
+        let mut ctx = Context::new_safe(Pid::from_raw(1), Pid::from_raw(1), true);
+        ctx.interactive = interactive;
+        ctx
+    }
 
     #[test]
     fn test_parse_arguments() {
@@ -474,6 +500,22 @@ mod tests {
 
         let input = "No ANSI codes here";
         assert_eq!(strip_ansi_codes(input), input);
+    }
+
+    #[test]
+    fn selector_spawn_config_displays_tui_on_stderr_when_interactive() {
+        let config = selector_spawn_config(&test_context(true));
+        assert_eq!(config.stdin, SelectorStream::Piped);
+        assert_eq!(config.stdout, SelectorStream::Piped);
+        assert_eq!(config.stderr, SelectorStream::Inherit);
+    }
+
+    #[test]
+    fn selector_spawn_config_does_not_require_tui_stderr_when_noninteractive() {
+        let config = selector_spawn_config(&test_context(false));
+        assert_eq!(config.stdin, SelectorStream::Piped);
+        assert_eq!(config.stdout, SelectorStream::Piped);
+        assert_eq!(config.stderr, SelectorStream::Piped);
     }
 
     #[test]

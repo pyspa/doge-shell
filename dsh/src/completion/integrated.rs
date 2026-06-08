@@ -271,6 +271,17 @@ impl CandidateBatch {
             framework: Some(framework),
         }
     }
+
+    fn exclusive_with_framework(
+        candidates: Vec<EnhancedCandidate>,
+        framework: CompletionFrameworkKind,
+    ) -> Self {
+        Self {
+            candidates,
+            exclusive: true,
+            framework: Some(framework),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -284,6 +295,13 @@ impl CommandCollection {
             batch: CandidateBatch::empty(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct ParsedCommandLineCache {
+    input: String,
+    cursor_pos: usize,
+    parsed: ParsedCommandLine,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -383,6 +401,7 @@ pub struct IntegratedCompletionEngine {
     loader: Option<JsonCompletionLoader>,
     /// Command line parser
     parser: CommandLineParser,
+    parsed_cache: RwLock<Option<ParsedCommandLineCache>>,
 
     /// Dynamic completion registry
 
@@ -402,6 +421,7 @@ impl IntegratedCompletionEngine {
             command_completion: Arc::new(Mutex::new(CommandCompletionDatabase::new())),
             loader: None,
             parser: CommandLineParser::new(),
+            parsed_cache: RwLock::new(None),
 
             cache: CompletionCache::new(Duration::from_millis(DEFAULT_CACHE_TTL_MS)),
             framework_cache: RwLock::new(HashMap::new()),
@@ -421,6 +441,13 @@ impl IntegratedCompletionEngine {
 
     /// Convert ParsedCommand to ParsedCommandLine for dynamic completion
     fn convert_to_parsed_command_line(&self, input: &str, cursor_pos: usize) -> ParsedCommandLine {
+        if let Some(cached) = self.parsed_cache.read().as_ref()
+            && cached.input == input
+            && cached.cursor_pos == cursor_pos
+        {
+            return cached.parsed.clone();
+        }
+
         let mut parsed = self.parser.parse(input, cursor_pos);
 
         // For dynamic completion, update command with resolved alias
@@ -437,6 +464,12 @@ impl IntegratedCompletionEngine {
         // Update args to use specified_arguments and options to use specified_options
         parsed.args = parsed.specified_arguments.clone();
         parsed.options = parsed.specified_options.clone();
+
+        *self.parsed_cache.write() = Some(ParsedCommandLineCache {
+            input: input.to_string(),
+            cursor_pos,
+            parsed: parsed.clone(),
+        });
 
         parsed
     }
@@ -769,6 +802,8 @@ impl IntegratedCompletionEngine {
 
         if candidates.is_empty() {
             CandidateBatch::empty()
+        } else if dynamic_candidates_are_exclusive(parsed_command_line) {
+            CandidateBatch::exclusive_with_framework(candidates, CompletionFrameworkKind::Skim)
         } else {
             CandidateBatch::inclusive_with_framework(candidates, CompletionFrameworkKind::Skim)
         }
@@ -1646,6 +1681,28 @@ fn completion_cache_allowed(parsed_command_line: &ParsedCommandLine) -> bool {
             | parser::CompletionContext::SubCommand
             | parser::CompletionContext::ShortOption
             | parser::CompletionContext::LongOption
+    )
+}
+
+fn dynamic_candidates_are_exclusive(parsed_command_line: &ParsedCommandLine) -> bool {
+    if parsed_command_line.command != "git" {
+        return false;
+    }
+
+    if !matches!(
+        parsed_command_line.completion_context,
+        parser::CompletionContext::Argument { .. } | parser::CompletionContext::SubCommand
+    ) {
+        return false;
+    }
+
+    let Some(primary_subcommand) = parsed_command_line.subcommand_path.first() else {
+        return false;
+    };
+
+    matches!(
+        primary_subcommand.as_str(),
+        "checkout" | "switch" | "merge" | "rebase" | "branch"
     )
 }
 
@@ -2657,6 +2714,62 @@ mod tests {
         assert!(
             engine.cache.lookup(input).is_none(),
             "dynamic argument values must stay out of the top-level completion cache"
+        );
+    }
+
+    #[tokio::test]
+    async fn git_dynamic_value_candidates_skip_fallback_collectors() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        write_executable_script(
+            &bin_dir.join("git"),
+            "#!/bin/sh\nif [ \"$1\" = \"for-each-ref\" ]; then printf 'feature/probe\\nmain\\n'; fi\n",
+        );
+
+        let external_marker = dir.path().join("external-called");
+        let environment = Environment::new();
+        {
+            let mut env = environment.write();
+            env.paths = vec![bin_dir.display().to_string()];
+            env.variables.insert(
+                "DSH_EXTERNAL_COMPLETER".to_string(),
+                format!(
+                    "printf 'external-branch\\tExternal completer\\n'; printf called > {}",
+                    external_marker.display()
+                ),
+            );
+            env.clear_command_cache();
+        }
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let input = "git checkout feat";
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "feature/probe"),
+            "expected git checkout target from dynamic completion"
+        );
+        assert!(
+            !result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "external-branch"),
+            "git dynamic value completion should not merge external fallback candidates"
+        );
+        assert!(
+            !external_marker.exists(),
+            "external fallback should not run for exclusive git dynamic value completion"
+        );
+        assert!(
+            engine.cache.lookup(input).is_none(),
+            "exclusive dynamic argument values must stay out of the top-level completion cache"
         );
     }
 

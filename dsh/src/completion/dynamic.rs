@@ -83,6 +83,12 @@ struct CommandValueErrorEntry {
 }
 
 #[derive(Debug, Clone)]
+struct ProjectRootCacheEntry {
+    project_root: PathBuf,
+    cached_at: Instant,
+}
+
+#[derive(Debug, Clone)]
 struct ExternalCompletionCacheEntry {
     candidates: Vec<EnhancedCandidate>,
     cached_at: Instant,
@@ -173,6 +179,7 @@ struct ProjectDynamicCache {
     external: HashMap<ExternalCompletionCacheKey, ExternalCompletionCacheEntry>,
     external_pending: HashSet<ExternalCompletionCacheKey>,
     external_pruned_total: usize,
+    project_roots: HashMap<PathBuf, ProjectRootCacheEntry>,
 }
 
 pub(crate) struct DynamicCompletionProvider {
@@ -256,6 +263,33 @@ impl DynamicCompletionProvider {
             environment,
             cache: Arc::new(RwLock::new(ProjectDynamicCache::default())),
         }
+    }
+
+    fn cached_project_root(&self, current_dir: &Path) -> PathBuf {
+        let key = current_dir.to_path_buf();
+        let ttl = Duration::from_millis(DYNAMIC_COMMAND_CACHE_TTL_MS);
+        {
+            let cache = self.cache.read();
+            if let Some(entry) = cache.project_roots.get(&key)
+                && entry.cached_at.elapsed() < ttl
+            {
+                return entry.project_root.clone();
+            }
+        }
+
+        let project_root = project_context::find_project_root(current_dir);
+        let mut cache = self.cache.write();
+        cache
+            .project_roots
+            .retain(|_, entry| entry.cached_at.elapsed() < ttl);
+        cache.project_roots.insert(
+            key,
+            ProjectRootCacheEntry {
+                project_root: project_root.clone(),
+                cached_at: Instant::now(),
+            },
+        );
+        project_root
     }
 
     pub(crate) fn collect_task_candidates(
@@ -2850,7 +2884,7 @@ impl DynamicCompletionProvider {
         current_token: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let scope_dir = project_context::find_project_root(current_dir);
+        let scope_dir = self.cached_project_root(current_dir);
         let command_path = self.resolve_command_path("git");
         self.collect_cached_command_candidates(
             DynamicCommandCacheKind::GitBranch,
@@ -2881,7 +2915,7 @@ impl DynamicCompletionProvider {
         current_token: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let scope_dir = project_context::find_project_root(current_dir);
+        let scope_dir = self.cached_project_root(current_dir);
         let command_path = self.resolve_command_path("git");
         self.collect_cached_command_candidates(
             DynamicCommandCacheKind::GitRemote,
@@ -2908,7 +2942,7 @@ impl DynamicCompletionProvider {
         current_token: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let scope_dir = project_context::find_project_root(current_dir);
+        let scope_dir = self.cached_project_root(current_dir);
         let command_path = self.resolve_command_path("git");
         self.collect_cached_command_candidates(
             DynamicCommandCacheKind::GitWorktree,
@@ -2942,7 +2976,7 @@ impl DynamicCompletionProvider {
         current_token: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let scope_dir = project_context::find_project_root(current_dir);
+        let scope_dir = self.cached_project_root(current_dir);
         let command_path = self.resolve_command_path("git");
         self.collect_cached_value_candidates(
             "git",
@@ -2983,7 +3017,7 @@ impl DynamicCompletionProvider {
         current_token: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let scope_dir = project_context::find_project_root(current_dir);
+        let scope_dir = self.cached_project_root(current_dir);
         let command_path = self.resolve_command_path("git");
         let remote = remote.map(str::to_string);
         let value_kind = format!(
@@ -3026,7 +3060,7 @@ impl DynamicCompletionProvider {
         current_token: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let scope_dir = project_context::find_project_root(current_dir);
+        let scope_dir = self.cached_project_root(current_dir);
         let command_path = self.resolve_command_path("git");
         let remote = remote.map(str::to_string);
         let value_kind = format!(
@@ -3074,7 +3108,7 @@ impl DynamicCompletionProvider {
         current_token: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let scope_dir = project_context::find_project_root(current_dir);
+        let scope_dir = self.cached_project_root(current_dir);
         let command_path = self.resolve_command_path("git");
         self.collect_cached_value_candidates(
             "git",
@@ -3116,7 +3150,7 @@ impl DynamicCompletionProvider {
         current_token: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let scope_dir = project_context::find_project_root(current_dir);
+        let scope_dir = self.cached_project_root(current_dir);
         let command_path = self.resolve_command_path("git");
         self.collect_cached_value_candidates(
             "git",
@@ -3143,7 +3177,7 @@ impl DynamicCompletionProvider {
         current_token: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let scope_dir = project_context::find_project_root(current_dir);
+        let scope_dir = self.cached_project_root(current_dir);
         let command_path = self.resolve_command_path("git");
         self.collect_cached_value_candidates(
             "git",
@@ -3174,7 +3208,7 @@ impl DynamicCompletionProvider {
         current_token: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let scope_dir = project_context::find_project_root(current_dir);
+        let scope_dir = self.cached_project_root(current_dir);
         let command_path = self.resolve_command_path("git");
         self.collect_cached_value_candidates(
             "git",
@@ -3249,9 +3283,16 @@ impl DynamicCompletionProvider {
     where
         F: FnOnce() -> Result<Vec<String>> + Send + 'static,
     {
-        self.load_or_lookup_command_values(command_name, value_kind, scope_dir, cached_only, loader)
+        let values = self.load_or_lookup_command_values(
+            command_name,
+            value_kind,
+            scope_dir,
+            cached_only,
+            loader,
+        );
+
+        cached_value_matches(values, current_token)
             .into_iter()
-            .filter(|value| matches_prefix(current_token, value))
             .map(|value| EnhancedCandidate {
                 text: value,
                 description: Some(description.to_string()),
@@ -3809,9 +3850,8 @@ impl DynamicCompletionProvider {
             self.load_command_values(kind, scope_dir, loader)
         };
 
-        values
+        cached_value_matches(values, current_token)
             .into_iter()
-            .filter(|value| matches_prefix(current_token, value))
             .map(|value| EnhancedCandidate {
                 text: value,
                 description: Some(description.to_string()),
@@ -4308,6 +4348,31 @@ fn provider_diagnostics_lines(cache: &ProjectDynamicCache) -> Vec<String> {
                 error_text
             )
         })
+        .collect()
+}
+
+fn cached_value_matches(values: Vec<String>, current_token: &str) -> Vec<String> {
+    if current_token.is_empty() {
+        return values;
+    }
+
+    let mut prefix_matches = Vec::new();
+    let mut fuzzy_candidates = Vec::new();
+    for value in values {
+        if value.starts_with(current_token) {
+            prefix_matches.push(value);
+        } else {
+            fuzzy_candidates.push(value);
+        }
+    }
+
+    if !prefix_matches.is_empty() {
+        return prefix_matches;
+    }
+
+    fuzzy_candidates
+        .into_iter()
+        .filter(|value| matches_prefix(current_token, value))
         .collect()
 }
 
@@ -5857,6 +5922,25 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         false
+    }
+
+    #[test]
+    fn cached_value_matches_prefers_prefix_before_fuzzy_fallback() {
+        let prefix_matches = cached_value_matches(
+            vec![
+                "hotfix/feature".to_string(),
+                "feature/main".to_string(),
+                "feature/probe".to_string(),
+            ],
+            "feat",
+        );
+        assert_eq!(prefix_matches, vec!["feature/main", "feature/probe"]);
+
+        let fuzzy_matches = cached_value_matches(
+            vec!["hotfix/feature".to_string(), "release/main".to_string()],
+            "hf",
+        );
+        assert_eq!(fuzzy_matches, vec!["hotfix/feature"]);
     }
 
     #[test]

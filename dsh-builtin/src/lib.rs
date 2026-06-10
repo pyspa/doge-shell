@@ -3,8 +3,8 @@ use dsh_types::{
     Context, ExitStatus, command_block::CommandBlock, mcp::McpServerConfig,
     output_history::OutputEntry, safety_policy::SafetyLevel,
 };
-use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use std::sync::Mutex;
 use tracing::debug;
 
@@ -390,8 +390,8 @@ impl BuiltinCommandTrait for BuiltinCommandFn {
 
 /// Global registry of all builtin commands
 /// Uses lazy initialization and mutex for thread-safe access
-pub static BUILTIN_COMMAND: Lazy<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait>>>> =
-    Lazy::new(|| {
+pub static BUILTIN_COMMAND: LazyLock<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait>>>> =
+    LazyLock::new(|| {
         let mut builtin = HashMap::new();
 
         // Core shell commands

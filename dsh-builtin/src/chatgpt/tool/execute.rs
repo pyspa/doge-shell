@@ -311,11 +311,10 @@ fn resolve_allowlist_path() -> Result<Option<PathBuf>, String> {
 mod tests {
     use super::*;
     use dsh_types::Context;
-    use once_cell::sync::Lazy;
-    use std::sync::Mutex;
+    use std::sync::{LazyLock, Mutex};
     use tempfile::tempdir;
 
-    static ENV_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     struct TestProxy {
         allow: Vec<String>,

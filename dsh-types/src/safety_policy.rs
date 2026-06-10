@@ -1,6 +1,6 @@
-use once_cell::sync::Lazy;
 use regex::Regex;
 use std::path::Path;
+use std::sync::LazyLock;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum SafetyLevel {
@@ -28,25 +28,26 @@ impl SafetyLevel {
     }
 }
 
-static SECRET_ASSIGNMENT: Lazy<Option<Regex>> =
-    Lazy::new(|| Regex::new(r"(?i)\b([A-Z_][A-Z0-9_]*)=([^\s]+)").ok());
+static SECRET_ASSIGNMENT: LazyLock<Option<Regex>> =
+    LazyLock::new(|| Regex::new(r"(?i)\b([A-Z_][A-Z0-9_]*)=([^\s]+)").ok());
 
-static SECRET_OPTION: Lazy<Option<Regex>> = Lazy::new(|| {
+static SECRET_OPTION: LazyLock<Option<Regex>> = LazyLock::new(|| {
     Regex::new(
         r#"(?i)(--?(?:password|passwd|passphrase|token|secret|api[-_]?key|access[-_]?token)(?:\s+|=)|-p\s+)([^\s"']+|"[^"]*"|'[^']*')"#,
     )
     .ok()
 });
 
-static AUTH_BEARER: Lazy<Option<Regex>> =
-    Lazy::new(|| Regex::new(r#"(?i)(authorization\s*:\s*bearer\s+)([A-Za-z0-9._~+/=-]+)"#).ok());
+static AUTH_BEARER: LazyLock<Option<Regex>> = LazyLock::new(|| {
+    Regex::new(r#"(?i)(authorization\s*:\s*bearer\s+)([A-Za-z0-9._~+/=-]+)"#).ok()
+});
 
-static QUERY_SECRET: Lazy<Option<Regex>> = Lazy::new(|| {
+static QUERY_SECRET: LazyLock<Option<Regex>> = LazyLock::new(|| {
     Regex::new(r#"(?i)([?&](?:token|access_token|api_key|apikey|auth|password)=)([^&\s]+)"#).ok()
 });
 
-static PRIVATE_KEY_MARKER: Lazy<Option<Regex>> =
-    Lazy::new(|| Regex::new(r"-----BEGIN [A-Z ]*PRIVATE KEY-----").ok());
+static PRIVATE_KEY_MARKER: LazyLock<Option<Regex>> =
+    LazyLock::new(|| Regex::new(r"-----BEGIN [A-Z ]*PRIVATE KEY-----").ok());
 
 pub fn is_sensitive_key(key: &str) -> bool {
     let key = key.to_ascii_uppercase();

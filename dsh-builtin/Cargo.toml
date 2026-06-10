@@ -13,7 +13,6 @@ dsh-openai = { path = "../dsh-openai" }
 anyhow.workspace = true
 thiserror.workspace = true
 shellexpand.workspace = true
-once_cell.workspace = true
 dirs.workspace = true
 tracing.workspace = true
 uuid.workspace = true

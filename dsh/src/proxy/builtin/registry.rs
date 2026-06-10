@@ -6,8 +6,8 @@
 use crate::shell::Shell;
 use anyhow::Result;
 use dsh_types::Context;
-use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use super::{exit, history, jobs, lisp, reload, var, z};
 
@@ -15,7 +15,7 @@ use super::{exit, history, jobs, lisp, reload, var, z};
 pub type CommandHandler = fn(&mut Shell, &Context, Vec<String>) -> Result<()>;
 
 /// Global builtin command registry.
-pub static BUILTIN_REGISTRY: Lazy<BuiltinRegistry> = Lazy::new(BuiltinRegistry::new);
+pub static BUILTIN_REGISTRY: LazyLock<BuiltinRegistry> = LazyLock::new(BuiltinRegistry::new);
 
 /// Registry of builtin shell commands.
 pub struct BuiltinRegistry {

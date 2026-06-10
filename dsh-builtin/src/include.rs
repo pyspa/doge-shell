@@ -134,12 +134,11 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use once_cell::sync::Lazy;
     use std::cell::RefCell;
-    use std::sync::Mutex;
+    use std::sync::{LazyLock, Mutex};
 
     // Mutex to prevent test races on environment variables
-    static ENV_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     struct MockShellProxy {
         env: RefCell<HashMap<String, String>>,

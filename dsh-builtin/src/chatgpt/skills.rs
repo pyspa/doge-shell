@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 use tracing::{debug, warn};
@@ -59,8 +59,8 @@ impl Skill {
 }
 
 const MAX_SKILL_SUMMARY_CHARS: usize = 140;
-static SKILLS_FRAGMENT_CACHE: Lazy<Mutex<Option<CachedSkillsFragment>>> =
-    Lazy::new(|| Mutex::new(None));
+static SKILLS_FRAGMENT_CACHE: LazyLock<Mutex<Option<CachedSkillsFragment>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SkillsDirSignature {

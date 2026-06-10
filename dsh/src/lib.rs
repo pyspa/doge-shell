@@ -10,6 +10,7 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::os::fd::BorrowedFd;
 use std::os::unix::io::AsRawFd;
 use std::process::ExitCode;
+use std::sync::Arc;
 use tracing::debug;
 
 pub mod ai_features;
@@ -94,6 +95,20 @@ pub enum SubCommand {
         #[arg(short, long)]
         path: Option<String>,
     },
+
+    /// Generate AI-powered completion definition for a command
+    Completion {
+        /// Command to generate completion for
+        command: String,
+
+        /// Output file path (default: ~/.config/dsh/completions/<command>.json)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Force overwrite existing completion file
+        #[arg(short, long)]
+        force: bool,
+    },
 }
 
 pub fn lib_main() -> ExitCode {
@@ -123,6 +138,13 @@ pub async fn run_shell() -> ExitCode {
         match subcommand {
             SubCommand::Import { shell, path } => {
                 return handle_import_command(shell, path.as_deref());
+            }
+            SubCommand::Completion {
+                command,
+                output,
+                force,
+            } => {
+                return handle_completion_command(command.clone(), output.clone(), *force).await;
             }
         }
     }
@@ -254,6 +276,158 @@ pub async fn run_shell() -> ExitCode {
     } else {
         run_interactive(&mut shell, &mut ctx).await
     }
+}
+
+pub async fn handle_completion_command(
+    command: String,
+    output: Option<String>,
+    force: bool,
+) -> ExitCode {
+    use crate::ai_features::generate_completion_json;
+    use crate::environment::Environment;
+    use dsh_openai::{ChatGptClient, OpenAiConfig};
+    use std::fs;
+    use std::process::Command;
+    use tracing::{debug, error, info, warn};
+
+    info!("Generating completion for command: {}", command);
+
+    // Get help text from the command
+    let help_output = Command::new("sh")
+        .arg("-c")
+        .arg(format!("{} --help", command))
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output();
+
+    let help_text = match help_output {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            if stdout.is_empty() && !stderr.is_empty() {
+                // Some commands output help to stderr
+                stderr
+            } else {
+                stdout
+            }
+        }
+        Err(e) => {
+            error!("Failed to execute '{} --help': {}", command, e);
+            eprintln!("Error: Failed to get help text for '{}': {}", command, e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if help_text.trim().is_empty() {
+        warn!("No help text returned from '{} --help'", command);
+        eprintln!("Warning: No help text returned from '{} --help'", command);
+        return ExitCode::FAILURE;
+    }
+
+    debug!("Got help text ({} chars)", help_text.len());
+
+    // Initialize AI service
+    let env = Environment::new();
+    let config = OpenAiConfig::from_getter(|key| {
+        let value = {
+            let guard = env.read();
+            guard.get_var(key)
+        };
+        value.or_else(|| std::env::var(key).ok())
+    });
+
+    let _api_key = match config.api_key() {
+        Some(key) => key,
+        None => {
+            error!("OpenAI API key not configured. Set OPENAI_API_KEY environment variable.");
+            eprintln!(
+                "Error: OpenAI API key not configured. Set OPENAI_API_KEY environment variable."
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let client = match ChatGptClient::try_from_config(&config) {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Failed to create AI client: {}", e);
+            eprintln!("Error: Failed to create AI client: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mcp_manager = env.read().mcp_manager.clone();
+    let safety_level = env.read().safety_level.clone();
+    let allowlist = env.read().execute_allowlist.clone();
+    let safety_guard = Arc::new(crate::safety::SafetyGuard::new());
+
+    let service = crate::ai_features::LiveAiService::new(
+        client,
+        mcp_manager,
+        safety_level,
+        safety_guard,
+        None,
+        allowlist,
+    );
+
+    // Generate completion JSON using AI
+    let completion_json = match generate_completion_json(&service, &command, &help_text).await {
+        Ok(json) => json,
+        Err(e) => {
+            error!("Failed to generate completion JSON: {}", e);
+            eprintln!("Error: Failed to generate completion: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Validate JSON
+    let parsed: serde_json::Value = match serde_json::from_str(&completion_json) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("Generated completion is not valid JSON: {}", e);
+            eprintln!("Error: Generated completion is not valid JSON: {}", e);
+            eprintln!("Raw output: {}", completion_json);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Determine output path
+    let output_path = output.unwrap_or_else(|| {
+        let config_dir = xdg::BaseDirectories::with_prefix("dsh")
+            .get_config_home()
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let completions_dir = config_dir.join("completions");
+        fs::create_dir_all(&completions_dir).unwrap();
+        completions_dir
+            .join(format!("{}.json", command))
+            .to_string_lossy()
+            .to_string()
+    });
+
+    // Check if file exists and force flag
+    if std::path::Path::new(&output_path).exists() && !force {
+        error!(
+            "Completion file already exists: {}. Use --force to overwrite.",
+            output_path
+        );
+        eprintln!(
+            "Error: Completion file already exists: {}. Use --force to overwrite.",
+            output_path
+        );
+        return ExitCode::FAILURE;
+    }
+
+    // Write the completion file
+    if let Err(e) = fs::write(&output_path, serde_json::to_string_pretty(&parsed).unwrap()) {
+        error!("Failed to write completion file: {}", e);
+        eprintln!("Error: Failed to write completion file: {}", e);
+        return ExitCode::FAILURE;
+    }
+
+    info!("Completion written to: {}", output_path);
+    println!("Completion generated and saved to: {}", output_path);
+    ExitCode::SUCCESS
 }
 
 pub fn handle_import_command(shell_name: &str, custom_path: Option<&str>) -> ExitCode {

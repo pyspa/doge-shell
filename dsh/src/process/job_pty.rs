@@ -8,7 +8,7 @@ use crate::shell::Shell;
 use anyhow::Result;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dsh_types::Context;
-use libc::STDIN_FILENO;
+use libc::{STDIN_FILENO, STDOUT_FILENO};
 use std::os::unix::io::{AsRawFd, IntoRawFd, RawFd};
 use tokio::io::unix::AsyncFd;
 use tracing::{debug, error};
@@ -57,6 +57,28 @@ fn is_builtin_job(job: &Job) -> bool {
         .unwrap_or(false)
 }
 
+/// Decide whether an interactive foreground external command should run behind a
+/// full PTY proxy (stdin/stdout/stderr all on the PTY, real terminal switched to
+/// raw mode, input proxied to the master) instead of the output-only proxy.
+///
+/// A coherent terminal is required for curses/TUI programs (e.g. `tig`, `less`,
+/// `vim`): they configure raw mode on their output fd and read keystrokes from
+/// the same terminal, so splitting input (real terminal) and output (PTY slave)
+/// leaves the input side in cooked mode and breaks key bindings.
+///
+/// We only use the full proxy when both the command's input and output go to the
+/// terminal (neither redirected nor piped to/from another command). Otherwise the
+/// child's stdin is never moved onto the PTY by `apply_pty_stdio`, so selecting
+/// FullProxy would leave the input proxy running for a program that reads from a
+/// file/pipe instead, and piped/redirected commands are not interactive TUIs.
+fn should_use_full_proxy(job: &Job, ctx: &Context) -> bool {
+    ctx.foreground
+        && ctx.interactive
+        && !is_builtin_job(job)
+        && ctx.infile == STDIN_FILENO
+        && ctx.outfile == STDOUT_FILENO
+}
+
 fn should_enable_foreground_pty_raw_mode(job: &Job, ctx: &Context) -> bool {
     ctx.foreground
         && ctx.interactive
@@ -77,7 +99,11 @@ pub async fn setup_pty(job: &mut Job, ctx: &mut Context) -> Result<Option<RawFd>
     match Pty::new() {
         Ok(pty) => {
             debug!("PTY created: {:?}", pty);
-            let pty_mode = PtyMode::OutputOnly;
+            let pty_mode = if should_use_full_proxy(job, ctx) {
+                PtyMode::FullProxy
+            } else {
+                PtyMode::OutputOnly
+            };
             if let Ok((cols, rows)) = crossterm::terminal::size() {
                 let _ = pty.resize(rows, cols);
             }
@@ -96,8 +122,19 @@ pub async fn setup_pty(job: &mut Job, ctx: &mut Context) -> Result<Option<RawFd>
                     });
                     job.pty_output_task = Some(output_task);
 
-                    if pty_mode == PtyMode::FullProxy && ctx.interactive && !is_builtin_job(job) {
-                        setup_pty_input_proxy(job, pty.try_clone()?).await;
+                    if pty_mode == PtyMode::FullProxy {
+                        match pty.try_clone() {
+                            Ok(pty_in) => {
+                                setup_pty_input_proxy(job, pty_in).await;
+                            }
+                            Err(e) => {
+                                // A clone failure here is transient (e.g. fd
+                                // exhaustion). Fall back to output-only so the
+                                // command still runs instead of failing entirely.
+                                error!("Failed to clone PTY for input proxy, falling back to output-only: {}", e);
+                                job.pty_mode = Some(PtyMode::OutputOnly);
+                            }
+                        }
                     }
                 }
                 Err(e) => error!("Failed to clone PTY for output: {}", e),
@@ -383,7 +420,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn setup_pty_defaults_to_output_only_without_input_proxy() {
+    async fn setup_pty_uses_full_proxy_with_input_proxy_for_terminal_output() {
         let mut ctx = test_context(true, true);
         let mut job = test_job_with_process(
             JobProcess::Command(Process::new(
@@ -393,9 +430,31 @@ mod tests {
             false,
         );
 
-        let slave = setup_pty(&mut job, &mut ctx)
-            .await
-            .expect("setup output-only pty");
+        let slave = setup_pty(&mut job, &mut ctx).await.expect("setup pty");
+
+        assert!(slave.is_some());
+        assert_eq!(job.pty_mode, Some(PtyMode::FullProxy));
+        assert!(job.pty.is_some());
+        assert!(job.pty_output_task.is_some());
+        assert!(job.pty_input_task.is_some());
+
+        cleanup_pty_tasks(&mut job).await;
+    }
+
+    #[tokio::test]
+    async fn setup_pty_falls_back_to_output_only_when_redirected() {
+        let mut ctx = test_context(true, true);
+        // Output is redirected away from the terminal, so no full proxy.
+        ctx.outfile = 5;
+        let mut job = test_job_with_process(
+            JobProcess::Command(Process::new(
+                "/bin/echo".to_string(),
+                vec!["echo".to_string()],
+            )),
+            false,
+        );
+
+        let slave = setup_pty(&mut job, &mut ctx).await.expect("setup pty");
 
         assert!(slave.is_some());
         assert_eq!(job.pty_mode, Some(PtyMode::OutputOnly));

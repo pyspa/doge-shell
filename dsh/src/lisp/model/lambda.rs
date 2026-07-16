@@ -31,7 +31,7 @@ impl std::hash::Hash for Lambda {
 
 impl std::fmt::Display for Lambda {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let body_str = format!("{}", &self.body);
+        let body_str = format!("{}", self.body);
 
         write!(
             f,

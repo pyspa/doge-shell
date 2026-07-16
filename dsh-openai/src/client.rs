@@ -293,7 +293,7 @@ impl ChatGptClient {
             temperature = ?temperature
         );
 
-        let header_value = format!("Bearer {}", &self.api_key);
+        let header_value = format!("Bearer {}", self.api_key);
         let builder = self
             .client
             .clone()

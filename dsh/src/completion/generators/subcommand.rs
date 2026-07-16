@@ -84,10 +84,9 @@ impl SubCommandGenerator {
                 .iter()
                 .find(|sc| sc.name == *subcommand_name || sc.aliases.contains(subcommand_name));
 
-            if let Some(sc) = current_subcommand {
+            {
+                let sc = current_subcommand?;
                 current_subcommands = &sc.subcommands;
-            } else {
-                return None;
             }
         }
 

@@ -777,7 +777,7 @@ impl Candidate {
             Candidate::Item(_, desc) if !desc.is_empty() => Some(desc),
             Candidate::Command { description, .. } if !description.is_empty() => Some(description),
             Candidate::Option { description, .. } if !description.is_empty() => Some(description),
-            Candidate::History { frequency: _, .. } => None, // Could format frequency here if desired
+            Candidate::History { .. } => None, // Could format frequency here if desired
             Candidate::Process { command, .. } => Some(command),
             _ => None,
         }

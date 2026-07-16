@@ -131,7 +131,10 @@ pub async fn setup_pty(job: &mut Job, ctx: &mut Context) -> Result<Option<RawFd>
                                 // A clone failure here is transient (e.g. fd
                                 // exhaustion). Fall back to output-only so the
                                 // command still runs instead of failing entirely.
-                                error!("Failed to clone PTY for input proxy, falling back to output-only: {}", e);
+                                error!(
+                                    "Failed to clone PTY for input proxy, falling back to output-only: {}",
+                                    e
+                                );
                                 job.pty_mode = Some(PtyMode::OutputOnly);
                             }
                         }

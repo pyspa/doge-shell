@@ -125,6 +125,6 @@ impl std::fmt::Display for Env {
         output.push_str("Env: ");
         self.display_recursive(&mut output, 0);
 
-        write!(formatter, "{}", &output)
+        write!(formatter, "{}", output)
     }
 }

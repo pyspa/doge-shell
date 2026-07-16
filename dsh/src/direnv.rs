@@ -53,7 +53,7 @@ impl DirEnvironment {
             match entry {
                 Entry::Env(env_entry) => {
                     env.set_system_env_var(env_entry.key.clone(), env_entry.value.clone());
-                    out.write_fmt(format_args!("+{} ", &env_entry.key)).ok();
+                    out.write_fmt(format_args!("+{} ", env_entry.key)).ok();
                 }
                 Entry::PathAdd(path_entry) => {
                     let mut path = path_entry.path.clone();

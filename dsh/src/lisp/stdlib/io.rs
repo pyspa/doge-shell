@@ -7,7 +7,7 @@ pub fn register(env: &mut Env) {
         Value::NativeFunc(|_env, args| {
             let expr = require_arg("print", &args, 0)?;
 
-            println!("{}", &expr);
+            println!("{}", expr);
             Ok(expr.clone())
         }),
     );

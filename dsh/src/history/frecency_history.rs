@@ -431,7 +431,7 @@ impl FrecencyHistory {
     /// Print match scores for debugging.
     pub fn show_score(&self, pattern: &str) {
         for res in self.sort_by_match(pattern) {
-            println!("'{}' match_score:{:?}", &res.item, res.match_score);
+            println!("'{}' match_score:{:?}", res.item, res.match_score);
         }
     }
 }

@@ -687,10 +687,9 @@ impl Prompt {
         // Resolve .git file (worktree/submodule)
         let git_dir = if git_dir.is_file() {
             if let Ok(content) = std::fs::read_to_string(&git_dir) {
-                if let Some(path) = content.trim().strip_prefix("gitdir: ") {
+                {
+                    let path = content.trim().strip_prefix("gitdir: ")?;
                     git_root.join(path.trim())
-                } else {
-                    return None;
                 }
             } else {
                 return None;
@@ -988,10 +987,9 @@ fn find_git_root(cwd: &Path) -> Option<String> {
                 break;
             }
         }
-        if let Some(parent) = p.parent() {
+        {
+            let parent = p.parent()?;
             p = parent;
-        } else {
-            return None;
         }
     }
 

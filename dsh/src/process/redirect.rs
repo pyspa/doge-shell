@@ -3,7 +3,6 @@ use std::os::unix::io::FromRawFd;
 use tokio::{fs, io};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum Redirect {
     StdoutOutput(String),
     StdoutAppend(String),

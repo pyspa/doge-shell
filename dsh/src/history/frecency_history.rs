@@ -45,7 +45,6 @@ impl fmt::Debug for FrecencyHistory {
     }
 }
 
-#[allow(dead_code)]
 impl Default for FrecencyHistory {
     fn default() -> Self {
         Self::new()
@@ -179,6 +178,7 @@ impl FrecencyHistory {
         }
     }
 
+    // Indexed accessor kept as part of the history query API.
     #[allow(dead_code)]
     fn get(&self, index: usize) -> Option<ItemStats> {
         if let Some(ref histories) = self.histories {

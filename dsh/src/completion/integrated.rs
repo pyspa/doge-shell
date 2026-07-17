@@ -2194,7 +2194,6 @@ pub enum CandidateType {
     /// Process
     Process,
     /// Generic
-    #[allow(dead_code)]
     Generic,
 }
 
@@ -2214,7 +2213,6 @@ impl CandidateType {
     }
 
     /// Get display icon
-    #[allow(dead_code)]
     pub fn icon(&self) -> &'static str {
         match self {
             CandidateType::SubCommand => "⚡",

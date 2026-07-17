@@ -86,7 +86,6 @@ pub enum CompletionContext {
         arg_type: Option<ArgumentType>,
     },
     /// Unknown (error state)
-    #[allow(dead_code)]
     Unknown,
 }
 
@@ -132,6 +131,8 @@ impl CommandLineParser {
     }
 
     /// Split input string into tokens
+    // Currently exercised only by unit tests; retained as the simple
+    // positions-free counterpart of `tokenize_with_positions`.
     #[allow(dead_code)]
     fn tokenize(&self, input: &str) -> Vec<String> {
         self.tokenize_with_positions(input)

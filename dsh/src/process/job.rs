@@ -62,7 +62,6 @@ fn last_process_state(process: JobProcess) -> ProcessState {
 }
 
 impl Job {
-    #[allow(dead_code)]
     pub fn new_with_process(cmd: String, path: String, argv: Vec<String>) -> Self {
         let process = JobProcess::Command(Process::new(path, argv));
         let id = format!("{}", xid::new());
@@ -204,11 +203,6 @@ impl Job {
 
     pub(crate) async fn setup_pty(&mut self, ctx: &mut Context) -> Result<Option<RawFd>> {
         job_pty::setup_pty(self, ctx).await
-    }
-
-    #[allow(dead_code)]
-    pub(crate) async fn setup_pty_input_proxy(&mut self, pty_in: Pty) {
-        job_pty::setup_pty_input_proxy(self, pty_in).await
     }
 
     pub(crate) async fn cleanup_pty_tasks(&mut self) {
@@ -410,7 +404,6 @@ impl Job {
         }
     }
 
-    #[allow(dead_code)]
     pub async fn check_background_output(&mut self) -> Result<()> {
         job_wait::check_background_output(self).await
     }

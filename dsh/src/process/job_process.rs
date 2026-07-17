@@ -79,7 +79,6 @@ impl JobProcess {
         }
     }
 
-    #[allow(dead_code)]
     pub fn mut_next(&self) -> Option<Box<JobProcess>> {
         match self {
             JobProcess::Builtin(jprocess) => jprocess.next.as_ref().cloned(),
@@ -127,7 +126,6 @@ impl JobProcess {
         }
     }
 
-    #[allow(dead_code)]
     pub fn get_pid(&self) -> Option<Pid> {
         match self {
             JobProcess::Builtin(_) => {
@@ -138,7 +136,6 @@ impl JobProcess {
         }
     }
 
-    #[allow(dead_code)]
     pub fn set_state(&mut self, state: ProcessState) {
         match self {
             JobProcess::Builtin(p) => p.state = state,
@@ -284,7 +281,6 @@ impl JobProcess {
         Ok(true)
     }
 
-    #[allow(dead_code)]
     pub fn waitable(&self) -> bool {
         matches!(self, JobProcess::Command(_))
     }
@@ -411,7 +407,6 @@ impl JobProcess {
         }
     }
 
-    #[allow(dead_code)]
     pub fn cont(&self) -> Result<()> {
         match self {
             JobProcess::Builtin(_) => Ok(()),

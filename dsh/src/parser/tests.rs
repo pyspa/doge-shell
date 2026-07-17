@@ -631,7 +631,7 @@ fn parse_subshell() {
 fn parse_subshell2() {
     init();
     let sub = "(ls -al | wc -l)";
-    let cmd = format!("echo {}", &sub);
+    let cmd = format!("echo {sub}");
     let pairs = ShellParser::parse(Rule::commands, &cmd).unwrap_or_else(|e| panic!("{}", e));
 
     for pair in pairs {

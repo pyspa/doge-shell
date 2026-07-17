@@ -57,6 +57,7 @@ impl BuiltinRegistry {
     }
 
     /// Check if a command is a builtin.
+    // `is_builtin` is exercised by tests; `list` is public registry API.
     #[allow(dead_code)]
     pub fn is_builtin(&self, name: &str) -> bool {
         self.commands.contains_key(name)

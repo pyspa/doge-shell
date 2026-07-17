@@ -706,32 +706,26 @@ impl Input {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn fg_color(&self) -> Color {
         self.config.fg_color
     }
 
-    #[allow(dead_code)]
     pub fn command_exists_color(&self) -> Color {
         self.config.command_exists_color
     }
 
-    #[allow(dead_code)]
     pub fn command_not_exists_color(&self) -> Color {
         self.config.command_not_exists_color
     }
 
-    #[allow(dead_code)]
     pub fn argument_color(&self) -> Color {
         self.config.argument_color
     }
 
-    #[allow(dead_code)]
     pub fn completion_color(&self) -> Color {
         self.config.completion_color
     }
 
-    #[allow(dead_code)]
     pub fn ghost_color(&self) -> Color {
         self.config.ghost_color
     }

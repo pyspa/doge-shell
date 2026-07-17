@@ -31,7 +31,6 @@ impl<'a> CompletionGenerator<'a> {
     }
 
     /// Check if a command has JSON completion data available
-    #[allow(dead_code)]
     pub fn has_command_completion(&self, command: &str) -> bool {
         self.database.get_command(command).is_some()
     }

@@ -96,26 +96,6 @@ impl TypeName for &TableRc {
     }
 }
 
-#[allow(dead_code)]
-pub fn make_list(vec: Vec<String>) -> Value {
-    let lst = vec.iter().map(|x| Value::String(x.to_string()));
-    Value::List(List::from_iter(lst))
-}
-
-#[allow(dead_code)]
-pub fn unquote(s: &str) -> String {
-    let quote = match s.chars().next() {
-        Some(c) => c,
-        None => return String::new(), // Empty string
-    };
-
-    if quote != '"' && quote != '\'' && quote != '`' {
-        return s.to_string();
-    }
-    let s = &s[1..s.len() - 1];
-    s.to_string()
-}
-
 pub fn list_of_strings(name: &str, value: &Value) -> Result<Vec<String>, RuntimeError> {
     match value {
         Value::List(list) if *list == List::NIL => Ok(Vec::new()),

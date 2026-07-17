@@ -145,6 +145,8 @@ impl Environment {
 
         debug!("default path {:?}", &paths);
 
+        // `Environment` is not Send/Sync because of `UnsafeSend<autocompletion>`;
+        // it is intentionally confined to the main thread. See `UnsafeSend`.
         #[allow(clippy::arc_with_non_send_sync)]
         let env_arc = Arc::new(RwLock::new(Environment {
             alias: HashMap::new(),
@@ -197,6 +199,7 @@ impl Environment {
         let system_env_vars = parent.read().system_env_vars.clone();
         let safety_level = parent.read().safety_level.clone();
 
+        // See note above: `Environment` is main-thread-confined by design.
         #[allow(clippy::arc_with_non_send_sync)]
         Arc::new(RwLock::new(Environment {
             alias,

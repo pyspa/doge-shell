@@ -307,7 +307,6 @@ pub fn expand_alias_tilde(
     Ok(argv)
 }
 
-#[allow(dead_code)]
 pub fn expand_alias(input: String, environment: Arc<RwLock<Environment>>) -> Result<String> {
     let (cow, _) = parse_with_expansion(&input, environment)?;
     Ok(cow.into_owned())

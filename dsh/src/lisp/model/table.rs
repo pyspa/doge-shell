@@ -493,6 +493,8 @@ impl PartialEq for Table {
     }
 }
 
+// Keys inserted into the resulting map are always `Value::String` (JSON object
+// keys), so the interior mutability of other `Value` variants is irrelevant.
 #[allow(clippy::mutable_key_type)]
 fn json_to_value(json: &JsonValue) -> Value {
     match json {

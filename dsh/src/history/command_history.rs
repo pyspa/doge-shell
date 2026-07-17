@@ -58,10 +58,11 @@ pub struct HistoryQuery {
 
 /// Command history with SQLite persistence.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct History {
     pub(crate) db: Option<Db>,
     pub(crate) histories: Vec<Entry>,
+    // Retained for potential capacity bookkeeping; not read yet.
+    #[allow(dead_code)]
     size: usize,
     current_index: usize,
     pub search_word: Option<String>,
@@ -72,7 +73,6 @@ pub struct History {
     normalized_entries: Vec<String>,
 }
 
-#[allow(dead_code)]
 impl Default for History {
     fn default() -> Self {
         Self::new()
@@ -535,6 +535,8 @@ impl History {
         Ok(())
     }
 
+    // Lifecycle hooks kept for API symmetry with backing stores that
+    // require explicit open/close; currently no-ops.
     #[allow(dead_code)]
     pub(crate) fn open(&mut self) -> Result<&mut History> {
         Ok(self)

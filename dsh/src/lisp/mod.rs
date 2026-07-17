@@ -214,7 +214,6 @@ impl LispEngine {
     }
 
     /// Execute all functions in a hook list safely
-    #[allow(dead_code)]
     pub fn execute_hook_list(&self, hook_list: &Value) -> anyhow::Result<()> {
         use crate::lisp::model::Value;
         use tracing::warn;
@@ -237,7 +236,6 @@ impl LispEngine {
     }
 
     /// Get a hook list by name
-    #[allow(dead_code)]
     pub fn get_hook_list(&self, hook_name: &str) -> anyhow::Result<Value> {
         let full_name = format!("*{}*", hook_name);
         match self.run(&full_name) {
@@ -249,7 +247,6 @@ impl LispEngine {
         }
     }
 
-    #[allow(dead_code)]
     pub fn has(&self, name: &str) -> bool {
         if let Ok(v) = self.run(name) {
             v != Value::NIL

@@ -2,10 +2,12 @@ use crossterm::event::Event;
 use std::time::{Duration, Instant};
 
 #[derive(Eq, PartialEq)]
-#[allow(dead_code)]
 pub enum ShellEvent {
     Input(Event),
+    // Planned event variants; not emitted yet.
+    #[allow(dead_code)]
     Paste(String),
+    #[allow(dead_code)]
     ScreenResized,
 }
 

@@ -375,6 +375,8 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
         Value::NativeFunc(|_env, args| {
             let chunks = args.chunks(2);
 
+            // Hash keys come from user args but are used as immutable lookups;
+            // interior-mutable `Value` variants are never mutated while stored.
             #[allow(clippy::mutable_key_type)]
             let mut hash = HashMap::new();
 

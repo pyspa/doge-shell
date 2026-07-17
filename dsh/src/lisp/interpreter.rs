@@ -12,6 +12,7 @@ pub fn eval(env: Rc<RefCell<Env>>, expression: &Value) -> Result<Value, RuntimeE
 
 /// Evaluate a series of s-expressions. Each expression is evaluated in
 /// order and the final one's return value is returned.
+// Public multi-expression counterpart of `eval`; kept as interpreter API.
 #[allow(dead_code)]
 pub fn eval_block(
     env: Rc<RefCell<Env>>,

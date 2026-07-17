@@ -225,6 +225,8 @@ impl Process {
         Ok(PreparedExecution { cmd, argv, envp })
     }
 
+    // Convenience entry point that prepares and launches in one call;
+    // callers currently use `prepare_execution` + `launch_prepared`.
     #[allow(dead_code)]
     pub(crate) fn launch(
         &mut self,

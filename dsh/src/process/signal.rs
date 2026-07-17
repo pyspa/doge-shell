@@ -33,7 +33,6 @@ fn unblock_sigint() -> Result<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
 pub(crate) fn check_and_clear_sigint() -> bool {
     RECEIVED_SIGINT.swap(false, Ordering::SeqCst)
 }

@@ -20,6 +20,9 @@ pub type NativeClosureType =
 /// `Value` encompasses all possible Lisp values, including atoms, lists, and
 /// others.
 #[derive(Clone)]
+// `Value` contains interior-mutable variants (List/HashMap via Rc<RefCell>),
+// but values used as HashMap keys are always non-mutating scalars
+// (String/Int/Float/Bool), so hashes stay stable. Lint suppressed accordingly.
 #[allow(clippy::mutable_key_type)]
 pub enum Value {
     True,

@@ -232,7 +232,6 @@ impl CompletionDisplay {
         }
     }
 
-    #[allow(dead_code)]
     pub fn new(candidates: Vec<Candidate>, prompt_text: String, input_text: String) -> Self {
         Self::new_with_config(
             candidates,

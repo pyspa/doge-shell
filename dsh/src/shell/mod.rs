@@ -155,13 +155,11 @@ impl Shell {
     }
 
     /// Send signal to foreground job
-    #[allow(dead_code)]
     pub fn send_signal_to_foreground_job(&mut self, signal: Signal) -> Result<()> {
         job::send_signal_to_foreground_job(self, signal)
     }
 
     /// Terminate all background jobs
-    #[allow(dead_code)]
     pub fn terminate_background_jobs(&mut self) -> Result<()> {
         job::terminate_background_jobs(self)
     }

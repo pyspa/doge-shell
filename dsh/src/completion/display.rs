@@ -100,6 +100,20 @@ pub struct CompletionDisplay {
     cursor_hidden: bool,
     has_more_items: bool,
     total_items_count: usize,
+    /// Whether to reserve a detail line below the grid for the highlighted
+    /// candidate's description. Decided once per session (constant while the
+    /// grid is open) so the rendered geometry does not change as the selection
+    /// moves. Enabled when at least one candidate carries a description.
+    show_detail_line: bool,
+}
+
+/// Build the one-line detail text shown for the highlighted candidate:
+/// `<name> — <description>`. Returns `None` when the candidate has no
+/// description worth showing.
+fn detail_line_text(candidate: &Candidate) -> Option<String> {
+    let description = candidate.get_description()?;
+    let name = candidate.get_display_name();
+    Some(format!("{name} — {description}"))
 }
 
 #[derive(Debug, Clone)]
@@ -250,6 +264,11 @@ impl CompletionDisplay {
         let total_items_count = candidates.len();
         let has_more_items = total_items_count > config.max_items;
 
+        // Reserve a detail line only when some candidate actually has a
+        // description to show (e.g. commands/options), so plain file/path
+        // completion is not pushed up by an always-empty line.
+        let show_detail_line = candidates.iter().any(|c| c.get_description().is_some());
+
         // Limit candidates to max_items
         if has_more_items {
             candidates.truncate(config.max_items);
@@ -274,7 +293,12 @@ impl CompletionDisplay {
             cursor_hidden: false,
             has_more_items,
             total_items_count,
+            show_detail_line,
         }
+    }
+
+    fn detail_rows(&self) -> u16 {
+        if self.show_detail_line { 1 } else { 0 }
     }
 
     /// Ensure there's enough space below the cursor for completion display
@@ -296,7 +320,7 @@ impl CompletionDisplay {
         };
 
         let available_rows = terminal_height.saturating_sub(current_row + 1);
-        let needed_rows = layout.total_rows as u16;
+        let needed_rows = layout.total_rows as u16 + self.detail_rows();
 
         debug!(
             "Space check - Terminal height: {}, current row: {}, available: {}, needed: {}",
@@ -443,6 +467,9 @@ impl CompletionDisplay {
             }
         }
 
+        // Detail line for the highlighted candidate, just below the grid.
+        self.render_detail_line(&mut renderer, &layout)?;
+
         if let (Some(start_row), Some(start_col)) = (self.display_start_row, self.display_start_col)
         {
             let prompt_width = unicode_display_width(&self.prompt_text);
@@ -524,19 +551,43 @@ impl CompletionDisplay {
         if let Some(start_row) = self.display_start_row {
             queue!(writer, cursor::MoveTo(0, start_row + 1))?;
             self.render_all_items(writer, layout)?;
-
-            // Move cursor back to input position
-            if let Some(start_col) = self.display_start_col {
-                let prompt_width = unicode_display_width(&self.prompt_text);
-                let input_width = unicode_display_width(&self.input_text);
-                let input_end_col = start_col + prompt_width as u16 + input_width as u16;
-                queue!(writer, cursor::MoveTo(input_end_col, start_row))?;
-            }
+            // The cursor is returned to the input position by the caller
+            // (`display_with_mode`) after the detail line has been drawn.
         } else {
             // Fallback to full display if position is unknown
             self.render_all_items(writer, layout)?;
         }
 
+        Ok(())
+    }
+
+    /// Render the detail line for the highlighted candidate directly below the
+    /// grid. Reuses the same dimmed style as the rest of the auxiliary text.
+    /// A no-op when no detail line is reserved for this session.
+    fn render_detail_line(
+        &self,
+        writer: &mut TerminalRenderer,
+        layout: &LayoutCache,
+    ) -> Result<()> {
+        if !self.show_detail_line {
+            return Ok(());
+        }
+
+        let text = self
+            .get_selected()
+            .and_then(detail_line_text)
+            .unwrap_or_default();
+        let truncated = truncate_to_width(&text, layout.terminal_width.saturating_sub(1));
+
+        queue!(
+            writer,
+            cursor::MoveToNextLine(1),
+            cursor::MoveToColumn(0),
+            Clear(ClearType::CurrentLine),
+            SetForegroundColor(Color::DarkGrey),
+            Print(truncated),
+            ResetColor
+        )?;
         Ok(())
     }
 
@@ -606,6 +657,9 @@ impl CompletionDisplay {
 
         let mut renderer = TerminalRenderer::new();
 
+        // Include the detail line (if any) below the grid in the rows to clear.
+        let rows_to_clear = layout.total_rows + self.detail_rows() as usize;
+
         if let (Some(start_row), Some(start_col)) = (self.display_start_row, self.display_start_col)
         {
             debug!(
@@ -616,7 +670,7 @@ impl CompletionDisplay {
             queue!(renderer, cursor::MoveTo(start_col, start_row))?;
             queue!(renderer, Clear(ClearType::CurrentLine))?;
 
-            for i in 0..layout.total_rows {
+            for i in 0..rows_to_clear {
                 queue!(
                     renderer,
                     cursor::MoveToNextLine(1),
@@ -637,7 +691,7 @@ impl CompletionDisplay {
             debug!("Using fallback clear method");
 
             queue!(renderer, Clear(ClearType::CurrentLine))?;
-            for i in 0..layout.total_rows {
+            for i in 0..rows_to_clear {
                 queue!(
                     renderer,
                     cursor::MoveToPreviousLine(1),
@@ -883,6 +937,56 @@ impl Candidate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detail_line_text_combines_name_and_description() {
+        let candidate = Candidate::Command {
+            name: "git".to_string(),
+            description: "Version control".to_string(),
+        };
+        assert_eq!(
+            detail_line_text(&candidate).as_deref(),
+            Some("git — Version control")
+        );
+    }
+
+    #[test]
+    fn detail_line_text_is_none_without_description() {
+        let candidate = Candidate::File {
+            path: "file.txt".to_string(),
+            is_dir: false,
+        };
+        assert_eq!(detail_line_text(&candidate), None);
+    }
+
+    #[test]
+    fn detail_line_reserved_only_when_a_candidate_has_description() {
+        // Plain files: no description anywhere -> no detail row reserved.
+        let files = vec![
+            Candidate::File {
+                path: "a.txt".to_string(),
+                is_dir: false,
+            },
+            Candidate::File {
+                path: "b/".to_string(),
+                is_dir: true,
+            },
+        ];
+        let display =
+            CompletionDisplay::new_with_config(files, "$ ", "", CompletionConfig::default());
+        assert!(!display.show_detail_line);
+        assert_eq!(display.detail_rows(), 0);
+
+        // A described command -> detail row reserved.
+        let described = vec![Candidate::Command {
+            name: "git".to_string(),
+            description: "Version control".to_string(),
+        }];
+        let display =
+            CompletionDisplay::new_with_config(described, "$ ", "", CompletionConfig::default());
+        assert!(display.show_detail_line);
+        assert_eq!(display.detail_rows(), 1);
+    }
 
     #[test]
     fn completion_config_default_uses_env_override() {

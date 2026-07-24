@@ -2426,7 +2426,11 @@ mod tests {
                 .iter()
                 .any(|c| c.text == "$DSH_SPECIAL_VAR"),
             "expected `$DSH_SPECIAL_VAR` among {:?}",
-            result.candidates.iter().map(|c| &c.text).collect::<Vec<_>>()
+            result
+                .candidates
+                .iter()
+                .map(|c| &c.text)
+                .collect::<Vec<_>>()
         );
         // The replacement range must cover the whole `$...` token so the
         // inserted value replaces it (rather than appending after `$DSH_SPEC`).
@@ -2454,7 +2458,11 @@ mod tests {
                 .iter()
                 .any(|c| c.text == "${DSH_BRACE_VAR}"),
             "expected `${{DSH_BRACE_VAR}}` among {:?}",
-            result.candidates.iter().map(|c| &c.text).collect::<Vec<_>>()
+            result
+                .candidates
+                .iter()
+                .map(|c| &c.text)
+                .collect::<Vec<_>>()
         );
     }
 
@@ -2471,7 +2479,11 @@ mod tests {
         assert!(
             result.candidates.iter().any(|c| c.text == "~root"),
             "expected `~root` among {:?}",
-            result.candidates.iter().map(|c| &c.text).collect::<Vec<_>>()
+            result
+                .candidates
+                .iter()
+                .map(|c| &c.text)
+                .collect::<Vec<_>>()
         );
     }
 
@@ -2481,7 +2493,11 @@ mod tests {
         assert!(engine.collect_special_token_candidates("git").is_none());
         assert!(engine.collect_special_token_candidates("--flag").is_none());
         // A `$VAR/subpath` token is a path, not a bare variable.
-        assert!(engine.collect_special_token_candidates("$HOME/foo").is_none());
+        assert!(
+            engine
+                .collect_special_token_candidates("$HOME/foo")
+                .is_none()
+        );
         assert!(engine.collect_special_token_candidates("$").is_some());
     }
 

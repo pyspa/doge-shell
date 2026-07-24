@@ -263,7 +263,10 @@ mod tests {
         // never left bare.
         match spec {
             PreviewSpec::Command(cmd) => {
-                assert!(cmd.contains("'a'\\''; rm -rf ~'"), "unquoted path in: {cmd}");
+                assert!(
+                    cmd.contains("'a'\\''; rm -rf ~'"),
+                    "unquoted path in: {cmd}"
+                );
             }
             other => panic!("expected command preview, got {other:?}"),
         }

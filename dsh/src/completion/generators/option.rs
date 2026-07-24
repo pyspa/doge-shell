@@ -36,13 +36,25 @@ impl OptionGenerator {
         include_long: bool,
         include_short: bool,
     ) -> Vec<CompletionCandidate> {
+        // The parser records the token currently under the cursor in
+        // `specified_options` too. Drop one occurrence of it so that completing
+        // a fully-typed option (e.g. `--all`) is not self-excluded just because
+        // it prefixes another option (e.g. `--all-match`).
+        let mut already_specified = parsed.specified_options.clone();
+        if let Some(pos) = already_specified
+            .iter()
+            .position(|opt| opt == &parsed.current_token)
+        {
+            already_specified.remove(pos);
+        }
+
         let build = |matcher: &dyn Fn(&str, &str) -> bool| -> Vec<CompletionCandidate> {
             let mut candidates = Vec::with_capacity(16);
             for option in options {
                 if include_long
                     && let Some(ref long) = option.long
                     && matcher(&parsed.current_token, long)
-                    && !parsed.specified_options.contains(long)
+                    && !already_specified.contains(long)
                 {
                     candidates.push(CompletionCandidate::long_option(
                         long.clone(),
@@ -53,7 +65,7 @@ impl OptionGenerator {
                 if include_short
                     && let Some(ref short) = option.short
                     && matcher(&parsed.current_token, short)
-                    && !parsed.specified_options.contains(short)
+                    && !already_specified.contains(short)
                 {
                     candidates.push(CompletionCandidate::short_option(
                         short.clone(),
@@ -170,5 +182,38 @@ mod tests {
         // `--mesage` (typo) prefix-matches nothing → fuzzy fallback → `--message`.
         let got = long_texts(&options, "--mesage");
         assert!(got.contains(&"--message".to_string()), "got: {got:?}");
+    }
+
+    #[test]
+    fn current_token_option_is_not_self_excluded() {
+        // `--all` fully typed, TAB pressed. The parser records `--all` in
+        // specified_options; it must NOT be excluded from its own completion
+        // even though it prefixes `--all-match`.
+        let options = vec![opt("--all", "a"), opt("--all-match", "am")];
+        let mut p = parsed("--all");
+        p.specified_options = vec!["--all".to_string()];
+        let refs: Vec<&CommandOption> = options.iter().collect();
+        let got: Vec<String> = OptionGenerator::match_options(&refs, &p, true, true)
+            .into_iter()
+            .map(|c| c.text)
+            .collect();
+        assert!(got.contains(&"--all".to_string()), "got: {got:?}");
+        assert!(got.contains(&"--all-match".to_string()), "got: {got:?}");
+    }
+
+    #[test]
+    fn previously_specified_option_is_still_excluded() {
+        // `--foo` was specified earlier; now completing a fresh `--` token.
+        // `--foo` must be excluded, `--bar` offered.
+        let options = vec![opt("--foo", "f"), opt("--bar", "b")];
+        let mut p = parsed("--");
+        p.specified_options = vec!["--foo".to_string(), "--".to_string()];
+        let refs: Vec<&CommandOption> = options.iter().collect();
+        let got: Vec<String> = OptionGenerator::match_options(&refs, &p, true, true)
+            .into_iter()
+            .map(|c| c.text)
+            .collect();
+        assert!(!got.contains(&"--foo".to_string()), "got: {got:?}");
+        assert!(got.contains(&"--bar".to_string()), "got: {got:?}");
     }
 }

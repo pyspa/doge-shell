@@ -1,6 +1,7 @@
 use crate::completion::command::{
     CommandCompletion, CommandOption, CompletionCandidate, SubCommand,
 };
+use crate::completion::integrated::matches_prefix;
 use crate::completion::parser::ParsedCommandLine;
 use anyhow::Result;
 
@@ -11,55 +12,63 @@ impl OptionGenerator {
         command_completion: &CommandCompletion,
         parsed: &ParsedCommandLine,
     ) -> Result<Vec<CompletionCandidate>> {
-        let mut candidates = Vec::with_capacity(16);
         let options = Self::collect_available_options(command_completion, &parsed.subcommand_path);
-
-        for option in options {
-            if let Some(ref short) = option.short
-                && short.starts_with(&parsed.current_token)
-                && !parsed.specified_options.contains(short)
-            {
-                candidates.push(CompletionCandidate::short_option(
-                    short.clone(),
-                    option.description.clone(),
-                ));
-            }
-        }
-
-        Ok(candidates)
+        Ok(Self::match_options(&options, parsed, false, true))
     }
 
     pub fn generate_long_option_candidates(
         command_completion: &CommandCompletion,
         parsed: &ParsedCommandLine,
     ) -> Result<Vec<CompletionCandidate>> {
-        let mut candidates = Vec::with_capacity(16);
         let options = Self::collect_available_options(command_completion, &parsed.subcommand_path);
+        // Long-option context also offers short options because the parser
+        // treats a single "-" as LongOption context.
+        Ok(Self::match_options(&options, parsed, true, true))
+    }
 
-        for option in options {
-            if let Some(ref long) = option.long
-                && long.starts_with(&parsed.current_token)
-                && !parsed.specified_options.contains(long)
-            {
-                candidates.push(CompletionCandidate::long_option(
-                    long.clone(),
-                    option.description.clone(),
-                ));
-            }
+    /// Match options with **prefix-first, fuzzy-fallback** semantics (same as
+    /// subcommands): prefix matches win when present, fuzzy only fills in when
+    /// nothing prefix-matches (so `git commit --mesage` can still reach
+    /// `--message`). Already-specified options are excluded.
+    fn match_options(
+        options: &[&CommandOption],
+        parsed: &ParsedCommandLine,
+        include_long: bool,
+        include_short: bool,
+    ) -> Vec<CompletionCandidate> {
+        let build = |matcher: &dyn Fn(&str, &str) -> bool| -> Vec<CompletionCandidate> {
+            let mut candidates = Vec::with_capacity(16);
+            for option in options {
+                if include_long
+                    && let Some(ref long) = option.long
+                    && matcher(&parsed.current_token, long)
+                    && !parsed.specified_options.contains(long)
+                {
+                    candidates.push(CompletionCandidate::long_option(
+                        long.clone(),
+                        option.description.clone(),
+                    ));
+                }
 
-            // Also check short options because the parser treats single "-" as LongOption context
-            if let Some(ref short) = option.short
-                && short.starts_with(&parsed.current_token)
-                && !parsed.specified_options.contains(short)
-            {
-                candidates.push(CompletionCandidate::short_option(
-                    short.clone(),
-                    option.description.clone(),
-                ));
+                if include_short
+                    && let Some(ref short) = option.short
+                    && matcher(&parsed.current_token, short)
+                    && !parsed.specified_options.contains(short)
+                {
+                    candidates.push(CompletionCandidate::short_option(
+                        short.clone(),
+                        option.description.clone(),
+                    ));
+                }
             }
+            candidates
+        };
+
+        let prefix = build(&|token: &str, value: &str| value.starts_with(token));
+        if !prefix.is_empty() {
+            return prefix;
         }
-
-        Ok(candidates)
+        build(&|token: &str, value: &str| matches_prefix(token, value))
     }
 
     fn collect_available_options<'b>(
@@ -103,5 +112,63 @@ impl OptionGenerator {
         }
 
         current_subcommand
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::completion::parser::CompletionContext;
+
+    fn opt(long: &str, description: &str) -> CommandOption {
+        CommandOption {
+            short: None,
+            long: Some(long.to_string()),
+            description: Some(description.to_string()),
+            takes_value: false,
+            value_type: None,
+            argument: None,
+        }
+    }
+
+    fn parsed(token: &str) -> ParsedCommandLine {
+        ParsedCommandLine {
+            command: "demo".to_string(),
+            subcommand_path: vec![],
+            raw_args: vec![],
+            args: vec![],
+            options: vec![],
+            current_token: token.to_string(),
+            current_arg: Some(token.to_string()),
+            completion_context: CompletionContext::LongOption,
+            specified_options: vec![],
+            specified_arguments: vec![],
+            cursor_index: 0,
+        }
+    }
+
+    fn long_texts(options: &[CommandOption], token: &str) -> Vec<String> {
+        let refs: Vec<&CommandOption> = options.iter().collect();
+        OptionGenerator::match_options(&refs, &parsed(token), true, true)
+            .into_iter()
+            .map(|c| c.text)
+            .collect()
+    }
+
+    #[test]
+    fn prefix_options_win_over_fuzzy() {
+        let options = vec![opt("--verbose", "v"), opt("--version", "V"), opt("--all", "a")];
+        let got = long_texts(&options, "--ver");
+        assert!(got.contains(&"--verbose".to_string()));
+        assert!(got.contains(&"--version".to_string()));
+        assert!(!got.contains(&"--all".to_string()), "got: {got:?}");
+    }
+
+    #[test]
+    fn option_fuzzy_fallback_on_typo() {
+        let options = vec![opt("--message", "m"), opt("--amend", "a")];
+        // `--mesage` (typo) prefix-matches nothing → fuzzy fallback → `--message`.
+        let got = long_texts(&options, "--mesage");
+        assert!(got.contains(&"--message".to_string()), "got: {got:?}");
     }
 }

@@ -11,9 +11,10 @@
 - canonical Skill source: `docs/ai/skills/`
 - Codex runtime skills: `~/.codex/skills/`
 - doge-shell runtime skills: `~/.config/dsh/skills/`
+- Claude Code runtime skills: `~/.claude/skills/` (`CLAUDE_CONFIG_DIR` で上書き可)
 
 ## 使い分け
-- `AGENTS.md`: この repo で最初に守る短いルールだけを書く。
+- `AGENTS.md`: この repo で最初に守る短いルールだけを書く。`CLAUDE.md` は `@AGENTS.md` を import するだけの薄いアダプタにし、内容は複製しない。
 - `SKILL.md`: 別エージェントが作業を始めるための最短手順だけを書く。
 - `references/`: 長い説明、モジュール一覧、チェックリストを置く。
 
@@ -44,4 +45,5 @@ doctor skills
 - Codex 最小: `--profile codex-core` (`doge-shell-repo`)
 - Codex よく使う構成: `--profile codex-common` (`doge-shell-repo`, `doge-shell-validation`, `doge-shell-investigation`, `doge-shell-chat-tools`)
 - dsh runtime 用: `--profile dsh-common`
+- Claude Code 用: `--target claude --profile claude-common`
 - 領域別: `doge-shell-parser-shell`, `doge-shell-process-pty`, `doge-shell-repl-completion`, `doge-shell-prompt-terminal-ui`, `doge-shell-env-startup`, `doge-shell-lisp-config`, `doge-shell-history-frecency`, `doge-shell-command-palette-ai`, `doge-shell-builtin-commands`, `doge-shell-serve-web`, `doge-shell-notebook-markdown`, `doge-shell-safety-policy`

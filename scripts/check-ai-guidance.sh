@@ -111,10 +111,18 @@ EOF
 }
 
 check_bad_guidance() {
-    bad_cargo=$(grep -RInE 'cargo test -p dsh([[:space:]`;,.:]|$)' "$repo_root/AGENTS.md" "$repo_root/docs/ai" 2>/dev/null | grep -vE 'Never (use|run)' || true)
+    # The dsh/ directory is the Cargo package `doge-shell`; `-p dsh` matches no package.
+    # Scan tracked AI guidance AND per-tool guidance (.serena memories) so command drift
+    # cannot hide in a tool config that agents load and act on.
+    guidance_targets="$repo_root/AGENTS.md $repo_root/docs/ai"
+    if [ -d "$repo_root/.serena/memories" ]; then
+        guidance_targets="$guidance_targets $repo_root/.serena/memories"
+    fi
+
+    bad_cargo=$(grep -RInE 'cargo (test|run|build|check|clippy) -p dsh([[:space:]`;,.:]|$)' $guidance_targets 2>/dev/null | grep -vE 'Never (use|run)' || true)
     if [ -n "$bad_cargo" ]; then
         echo "$bad_cargo" >&2
-        fail "use cargo test -p doge-shell, not cargo test -p dsh"
+        fail "use the doge-shell package name (e.g. cargo test -p doge-shell), not -p dsh"
     fi
 
     bad_readme=$(grep -RInE '(Start with|start with|最初に).*(README\.md)|README\.md.*( first|から読む|を読む)' "$repo_root/AGENTS.md" "$repo_root/docs/ai" 2>/dev/null | grep -vE 'do not|読まない|only when|only for|Open.*only|読む条件' || true)
@@ -195,8 +203,12 @@ doge-shell-chat-tools"
 doge-shell-validation
 doge-shell-investigation
 doge-shell-chat-tools"
+    expect_installer_list "claude-common" "doge-shell-repo
+doge-shell-validation
+doge-shell-investigation
+doge-shell-chat-tools"
 
-    for profile in codex-core codex-common dsh-common; do
+    for profile in codex-core codex-common dsh-common claude-common; do
         if ! grep -q -- "--profile $profile" "$repo_root/docs/ai/README.md"; then
             fail "docs/ai/README.md does not mention installer profile: $profile"
         fi
@@ -208,6 +220,14 @@ doge-shell-chat-tools"
 
     if ! bash "$installer" --status --target codex --profile codex-core >/dev/null; then
         fail "runtime skill installer status check failed"
+    fi
+
+    if ! bash "$installer" --dry-run --target claude --profile claude-common >/dev/null; then
+        fail "runtime skill installer claude dry run failed"
+    fi
+
+    if ! bash "$installer" --status --target claude --profile claude-common >/dev/null; then
+        fail "runtime skill installer claude status check failed"
     fi
 }
 

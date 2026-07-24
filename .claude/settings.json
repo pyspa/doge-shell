@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(cargo pkgid:*)",
+      "Bash(cargo metadata:*)",
+      "Bash(cargo run -p doge-shell -- --help)",
+      "Bash(rg:*)",
+      "Bash(fd:*)",
+      "Bash(ls:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(scripts/check-ai-guidance.sh)",
+      "Bash(scripts/install-runtime-skills.sh --list:*)",
+      "Bash(scripts/install-runtime-skills.sh --status:*)",
+      "Bash(scripts/install-runtime-skills.sh --dry-run:*)"
+    ]
+  }
+}

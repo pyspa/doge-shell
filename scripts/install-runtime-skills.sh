@@ -4,26 +4,29 @@ set -eu
 
 usage() {
     cat <<'EOF'
-Usage: scripts/install-runtime-skills.sh [--target codex|dsh|both] [--profile name] [skill-name ...]
-       scripts/install-runtime-skills.sh [codex|dsh|both]
+Usage: scripts/install-runtime-skills.sh [--target codex|dsh|claude|both] [--profile name] [skill-name ...]
+       scripts/install-runtime-skills.sh [codex|dsh|claude|both]
        scripts/install-runtime-skills.sh --list [--profile name] [skill-name ...]
-       scripts/install-runtime-skills.sh --status [--target codex|dsh|both] [--profile name]
+       scripts/install-runtime-skills.sh --status [--target codex|dsh|claude|both] [--profile name]
 
 Installs sample runtime skills from docs/ai/skills/ into:
-  codex -> ~/.codex/skills
-  dsh   -> ~/.config/dsh/skills
-  both  -> both destinations
+  codex  -> ~/.codex/skills
+  dsh    -> ~/.config/dsh/skills
+  claude -> ~/.claude/skills   (Claude Code user-level skills; CLAUDE_CONFIG_DIR overrides ~/.claude)
+  both   -> codex and dsh destinations
 
 Profiles:
-  codex-core   doge-shell-repo
-  codex-common doge-shell-repo, doge-shell-validation, doge-shell-investigation, doge-shell-chat-tools
-  dsh-common   doge-shell-repo, doge-shell-validation, doge-shell-investigation, doge-shell-chat-tools
+  codex-core     doge-shell-repo
+  codex-common   doge-shell-repo, doge-shell-validation, doge-shell-investigation, doge-shell-chat-tools
+  dsh-common     doge-shell-repo, doge-shell-validation, doge-shell-investigation, doge-shell-chat-tools
+  claude-common  doge-shell-repo, doge-shell-validation, doge-shell-investigation, doge-shell-chat-tools
 
 Examples:
   scripts/install-runtime-skills.sh --list
   scripts/install-runtime-skills.sh --list --profile codex-core
   scripts/install-runtime-skills.sh --dry-run --target codex --profile codex-core
   scripts/install-runtime-skills.sh --status --target codex --profile codex-core
+  scripts/install-runtime-skills.sh --target claude --profile claude-common
   scripts/install-runtime-skills.sh
   scripts/install-runtime-skills.sh --target codex doge-shell-repo
   scripts/install-runtime-skills.sh dsh
@@ -66,7 +69,7 @@ while [ "$#" -gt 0 ]; do
             shift 2
             continue
             ;;
-        codex|dsh|both)
+        codex|dsh|claude|both)
             if [ "$mode" = "both" ] && [ "${#requested_skills[@]}" -eq 0 ]; then
                 mode="$1"
             else
@@ -90,7 +93,7 @@ if [ -n "$profile" ] && [ "${#requested_skills[@]}" -gt 0 ]; then
 fi
 
 case "$mode" in
-    codex|dsh|both)
+    codex|dsh|claude|both)
         ;;
     *)
         usage >&2
@@ -112,7 +115,7 @@ profile_skills() {
         codex-core)
             printf '%s\n' doge-shell-repo
             ;;
-        codex-common|dsh-common)
+        codex-common|dsh-common|claude-common)
             printf '%s\n' \
                 doge-shell-repo \
                 doge-shell-validation \
@@ -225,6 +228,10 @@ if [ "$status_only" -eq 1 ]; then
         skill_list | status_selected "${XDG_CONFIG_HOME:-$HOME/.config}/dsh/skills" dsh
     fi
 
+    if [ "$mode" = "claude" ]; then
+        skill_list | status_selected "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills" claude
+    fi
+
     exit 0
 fi
 
@@ -234,4 +241,8 @@ fi
 
 if [ "$mode" = "dsh" ] || [ "$mode" = "both" ]; then
     skill_list | install_selected "${XDG_CONFIG_HOME:-$HOME/.config}/dsh/skills"
+fi
+
+if [ "$mode" = "claude" ]; then
+    skill_list | install_selected "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills"
 fi

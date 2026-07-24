@@ -895,12 +895,34 @@ impl IntegratedCompletionEngine {
             false,
         ));
 
+        // `git checkout`/`git restore` accept BOTH refs and working-tree paths.
+        // The dynamic provider only yields branches, and these subcommands are
+        // treated as exclusive (so later file stages never run), which would
+        // otherwise make `git checkout <file>` impossible to complete. Merge in
+        // file/directory candidates so both branches and paths are offered.
+        if git_subcommand_accepts_paths(parsed_command_line) {
+            candidates.extend(self.file_candidates_for_token(&parsed_command_line.current_token));
+        }
+
         if candidates.is_empty() {
             CandidateBatch::empty()
         } else if dynamic_candidates_are_exclusive(parsed_command_line) {
             CandidateBatch::exclusive_with_framework(candidates, CompletionFrameworkKind::Skim)
         } else {
             CandidateBatch::inclusive_with_framework(candidates, CompletionFrameworkKind::Skim)
+        }
+    }
+
+    /// File/directory candidates for the current token, converted to the
+    /// engine's `EnhancedCandidate` form. Errors are swallowed (completion is
+    /// best-effort) and yield an empty list.
+    fn file_candidates_for_token(&self, current_token: &str) -> Vec<EnhancedCandidate> {
+        match FileSystemGenerator::generate_file_candidates(current_token) {
+            Ok(candidates) => candidates
+                .into_iter()
+                .map(|c| self.convert_to_enhanced_candidate(c))
+                .collect(),
+            Err(_) => Vec::new(),
         }
     }
 
@@ -1817,6 +1839,28 @@ fn dynamic_candidates_are_exclusive(parsed_command_line: &ParsedCommandLine) -> 
     matches!(
         primary_subcommand.as_str(),
         "checkout" | "switch" | "merge" | "rebase" | "branch"
+    )
+}
+
+/// Whether the current `git` subcommand accepts working-tree paths as an
+/// argument (in addition to any refs). `git checkout` and `git restore` are
+/// dual-purpose (switch branch OR restore a file), so file/directory candidates
+/// must be offered alongside branch candidates.
+fn git_subcommand_accepts_paths(parsed_command_line: &ParsedCommandLine) -> bool {
+    if parsed_command_line.command != "git" {
+        return false;
+    }
+
+    if !matches!(
+        parsed_command_line.completion_context,
+        parser::CompletionContext::Argument { .. }
+    ) {
+        return false;
+    }
+
+    matches!(
+        parsed_command_line.subcommand_path.first().map(String::as_str),
+        Some("checkout") | Some("restore")
     )
 }
 
@@ -2981,6 +3025,74 @@ mod tests {
         assert!(
             engine.cache.lookup(input).is_none(),
             "exclusive dynamic argument values must stay out of the top-level completion cache"
+        );
+    }
+
+    #[test]
+    fn git_subcommand_accepts_paths_detects_checkout_and_restore() {
+        let make = |command: &str, sub: &str| parser::ParsedCommandLine {
+            command: command.to_string(),
+            subcommand_path: vec![sub.to_string()],
+            raw_args: vec![],
+            args: vec![],
+            options: vec![],
+            current_token: "feat".to_string(),
+            current_arg: Some("feat".to_string()),
+            completion_context: parser::CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: None,
+            },
+            specified_options: vec![],
+            specified_arguments: vec![],
+            cursor_index: 0,
+        };
+        assert!(git_subcommand_accepts_paths(&make("git", "checkout")));
+        assert!(git_subcommand_accepts_paths(&make("git", "restore")));
+        // Branch-only subcommands must NOT pull in file candidates.
+        assert!(!git_subcommand_accepts_paths(&make("git", "switch")));
+        assert!(!git_subcommand_accepts_paths(&make("git", "branch")));
+        // Non-git commands are unaffected.
+        assert!(!git_subcommand_accepts_paths(&make("ls", "checkout")));
+    }
+
+    #[tokio::test]
+    async fn git_checkout_is_not_exclusive_against_files() {
+        // Regression: `git checkout` used to be exclusive with a branch-only
+        // dynamic provider, which suppressed file completion entirely. Files
+        // must still be offered. We use an absolute-path token (independent of
+        // the process CWD) so the working-tree file is found deterministically.
+        let dir = tempdir().unwrap();
+        let git_env = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .output()
+                .unwrap();
+        };
+        git_env(&["init"]);
+        git_env(&["config", "user.email", "test@example.com"]);
+        git_env(&["config", "user.name", "Test User"]);
+        fs::write(dir.path().join("README.md"), "hello\n").unwrap();
+        git_env(&["add", "README.md"]);
+        git_env(&["commit", "-m", "init"]);
+        git_env(&["checkout", "-b", "feature/test-branch"]);
+        fs::write(dir.path().join("features.txt"), "x\n").unwrap();
+
+        let environment = Environment::new();
+        environment.write().clear_command_cache();
+        let mut engine = IntegratedCompletionEngine::new(environment);
+        engine.initialize_command_completion().unwrap();
+
+        let token_prefix = format!("{}/feat", dir.path().display());
+        let input = format!("git checkout {token_prefix}");
+        let result = engine
+            .complete(&input, input.chars().count(), dir.path(), 50, None)
+            .await;
+
+        assert!(
+            result.candidates.iter().any(|c| c.text.contains("features")),
+            "expected working-tree file `features.txt` among {:?}",
+            result.candidates.iter().map(|c| &c.text).collect::<Vec<_>>()
         );
     }
 

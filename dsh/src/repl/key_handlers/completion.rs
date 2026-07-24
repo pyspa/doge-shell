@@ -126,21 +126,30 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
         input_text, cursor_pos
     );
 
-    // Get completion candidates from the integrated engine
+    // Get completion candidates from the integrated engine.
+    //
+    // `complete()` performs synchronous, potentially blocking work (dynamic
+    // completion may run external commands with a timeout of up to ~1.5s on a
+    // cold cache). Drive it via `block_in_place` so the multi-threaded runtime
+    // can keep making progress on other tasks while this worker is blocked,
+    // mirroring the pattern used in `shell::eval::launch_subshell`.
     let CompletionResult {
         candidates: engine_candidates,
         framework: completion_framework,
         replacement_range,
-    } = repl
-        .integrated_completion
-        .complete(
-            &input_text,
-            cursor_pos,
-            &current_dir,
-            MAX_RESULT, // maximum number of candidates to return
-            repl.shell.cmd_history.as_ref(),
-        )
-        .await;
+    } = {
+        let engine = &repl.integrated_completion;
+        let history = repl.shell.cmd_history.as_ref();
+        let input_ref = input_text.as_str();
+        let dir_ref = current_dir.as_path();
+        tokio::task::block_in_place(|| {
+            futures::executor::block_on(engine.complete(
+                input_ref, cursor_pos, dir_ref,
+                MAX_RESULT, // maximum number of candidates to return
+                history,
+            ))
+        })
+    };
 
     debug!(
         "IntegratedCompletionEngine returned {} candidates (framework: {:?})",
@@ -174,21 +183,14 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
         match res {
             completion::CompletionSelection::Selected(val) => {
                 debug!("Completion selected: '{}'", val);
-                // For history candidates (indicated by clock emoji), replace entire input
-                let is_history_candidate = val.starts_with("🕒 ");
-                if is_history_candidate {
-                    let command = val[3..].trim();
-                    repl.input.reset(command.to_string());
+                if let Some(range) = replacement_range {
+                    repl.input
+                        .replace_range_chars(range.start, range.end, val.as_str());
                 } else {
-                    if let Some(range) = replacement_range {
-                        repl.input
-                            .replace_range_chars(range.start, range.end, val.as_str());
-                    } else {
-                        if let Some(len) = removal_len {
-                            repl.input.backspacen(len);
-                        }
-                        repl.input.insert_str(val.as_str());
+                    if let Some(len) = removal_len {
+                        repl.input.backspacen(len);
                     }
+                    repl.input.insert_str(val.as_str());
                 }
                 repl.start_completion = true;
                 return Ok(ReplControlFlow::Continue);
@@ -225,18 +227,11 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
     match completion_result {
         completion::CompletionSelection::Selected(val) => {
             debug!("Completion selected: '{}'", val);
-            // For history candidates (indicated by clock emoji), replace entire input
-            let is_history_candidate = val.starts_with("🕒 ");
-            if is_history_candidate {
-                let command = val[3..].trim(); // Remove the clock emoji and any extra spaces
-                repl.input.reset(command.to_string());
-            } else {
-                // For regular completions, replace the query part with the selected value
-                if let Some(len) = removal_len {
-                    repl.input.backspacen(len); // Remove the original query text
-                }
-                repl.input.insert_str(val.as_str()); // Insert the completion
+            // Replace the query part with the selected value.
+            if let Some(len) = removal_len {
+                repl.input.backspacen(len); // Remove the original query text
             }
+            repl.input.insert_str(val.as_str()); // Insert the completion
             completion_handled = true;
         }
         completion::CompletionSelection::Interactive(items, query) => {

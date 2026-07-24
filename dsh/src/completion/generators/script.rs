@@ -33,24 +33,27 @@ impl<R: ScriptRunner> ScriptGenerator<R> {
         command_template: &str,
         parsed: &ParsedCommandLine,
     ) -> Result<Vec<CompletionCandidate>> {
-        // Simple variable substitution
+        // Substitute template variables. Every value that originates from the
+        // command line is user-controlled, so it is shell-quoted before being
+        // spliced into the template that is later executed via `sh -c`. Without
+        // quoting, a token such as `"; rm -rf ~` would be executed as a command
+        // during completion (before the user even presses Enter).
         let mut command = command_template.to_string();
-        command = command.replace("$COMMAND", &parsed.command);
+        command = command.replace("$COMMAND", &shell_quote(&parsed.command));
         if let Some(arg) = &parsed.current_arg {
-            command = command.replace("$CURRENT_TOKEN", arg);
+            command = command.replace("$CURRENT_TOKEN", &shell_quote(arg));
         } else {
-            command = command.replace("$CURRENT_TOKEN", "");
+            command = command.replace("$CURRENT_TOKEN", "''");
         }
         if let Some(first_sub) = parsed.subcommand_path.first() {
-            command = command.replace("$SUBCOMMAND", first_sub);
+            command = command.replace("$SUBCOMMAND", &shell_quote(first_sub));
         } else {
-            command = command.replace("$SUBCOMMAND", "");
+            command = command.replace("$SUBCOMMAND", "''");
         }
 
-        // Quote arguments to prevent injection if possible, but basic replacement for now
         for (i, arg) in parsed.specified_arguments.iter().enumerate() {
             let key = format!("$ARG_{}", i);
-            command = command.replace(&key, arg);
+            command = command.replace(&key, &shell_quote(arg));
         }
 
         // Execute command
@@ -86,6 +89,24 @@ impl Default for ScriptGenerator<DefaultScriptRunner> {
     }
 }
 
+/// Wrap a value in single quotes so it is treated as a single literal argument
+/// by a POSIX shell. Any embedded single quote is escaped using the standard
+/// `'\''` sequence. This neutralizes shell metacharacters in user-supplied
+/// completion tokens before they are spliced into a `Script` template.
+fn shell_quote(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('\'');
+    for ch in value.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,7 +135,7 @@ mod tests {
 
     #[test]
     fn test_script_variable_substitution() {
-        let runner = MockScriptRunner::new("echo br", "branch1\nbranch2");
+        let runner = MockScriptRunner::new("echo 'br'", "branch1\nbranch2");
 
         let generator = ScriptGenerator::new(runner);
 
@@ -180,7 +201,7 @@ mod tests {
 
     #[test]
     fn test_script_arg_substitution() {
-        let runner = MockScriptRunner::new("echo foo", "result");
+        let runner = MockScriptRunner::new("echo 'foo'", "result");
 
         let generator = ScriptGenerator::new(runner);
 
@@ -210,6 +231,49 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].text, "result");
     }
+    #[test]
+    fn shell_quote_wraps_plain_value() {
+        assert_eq!(shell_quote("br"), "'br'");
+    }
+
+    #[test]
+    fn shell_quote_escapes_embedded_single_quote() {
+        assert_eq!(shell_quote("a'b"), "'a'\\''b'");
+    }
+
+    #[test]
+    fn script_current_token_is_shell_quoted_against_injection() {
+        // A malicious token must be passed as a single literal argument, never
+        // interpreted as additional shell commands.
+        let runner = MockScriptRunner::new(r#"git checkout '"; rm -rf ~'"#, "");
+
+        let generator = ScriptGenerator::new(runner);
+
+        let parsed = ParsedCommandLine {
+            command: "git".to_string(),
+            subcommand_path: vec![],
+            raw_args: vec![],
+            args: vec![],
+            options: vec![],
+            current_token: r#""; rm -rf ~"#.to_string(),
+            current_arg: Some(r#""; rm -rf ~"#.to_string()),
+            completion_context: CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: None,
+            },
+            specified_options: vec![],
+            specified_arguments: vec![],
+            cursor_index: 0,
+        };
+
+        // Assertion of the exact quoted command happens inside MockScriptRunner::run.
+        let result = generator
+            .generate_script_candidates("git checkout $CURRENT_TOKEN", &parsed)
+            .unwrap();
+
+        assert!(result.is_empty());
+    }
+
     #[test]
     fn test_large_output_deadlock() {
         let runner = DefaultScriptRunner;

@@ -1,7 +1,69 @@
 use crate::completion::display::{Candidate, CompletionConfig};
 use crate::completion::framework::{CompletionFrameworkKind, CompletionSelection};
-use skim::SkimItem;
+use crate::completion::subprocess::shell_quote;
+use skim::{ItemPreview, PreviewContext, SkimItem};
 use std::borrow::Cow;
+
+/// What to show in the skim preview pane for a candidate. Split out from the
+/// `SkimItem::preview` impl so the command construction is unit-testable
+/// (`ItemPreview` is not comparable).
+#[derive(Debug, PartialEq)]
+pub(crate) enum PreviewSpec {
+    /// A read-only shell command whose output skim renders (async, cancellable).
+    Command(String),
+    /// Static text (used for candidates whose "preview" is their description).
+    Text(String),
+    /// Nothing meaningful to preview.
+    None,
+}
+
+/// Build a context-appropriate preview for a completion candidate. All commands
+/// are read-only and embed shell-quoted values directly (no `{}` placeholder),
+/// so pathological candidate text cannot inject shell commands.
+pub(crate) fn candidate_preview(candidate: &Candidate) -> PreviewSpec {
+    match candidate {
+        Candidate::File { path, is_dir } => file_preview(path, *is_dir),
+        Candidate::Path(path) => {
+            let is_dir = path.ends_with('/');
+            let trimmed = path.strip_suffix('/').unwrap_or(path);
+            file_preview(trimmed, is_dir)
+        }
+        Candidate::GitBranch { name, .. } => PreviewSpec::Command(format!(
+            "git log --oneline --color=always --max-count=20 {} 2>/dev/null",
+            shell_quote(name)
+        )),
+        Candidate::Process { pid, .. } => {
+            if !pid.is_empty() && pid.chars().all(|c| c.is_ascii_digit()) {
+                PreviewSpec::Command(format!(
+                    "ps -p {pid} -o pid,ppid,pgid,stat,etime,pcpu,pmem,args 2>/dev/null"
+                ))
+            } else {
+                PreviewSpec::None
+            }
+        }
+        Candidate::Command { description, .. }
+        | Candidate::Option { description, .. }
+        | Candidate::Item(_, description) => {
+            if description.is_empty() {
+                PreviewSpec::None
+            } else {
+                PreviewSpec::Text(description.clone())
+            }
+        }
+        Candidate::Basic(_) | Candidate::History { .. } => PreviewSpec::None,
+    }
+}
+
+fn file_preview(path: &str, is_dir: bool) -> PreviewSpec {
+    let quoted = shell_quote(path);
+    if is_dir {
+        PreviewSpec::Command(format!("ls -la -- {quoted} 2>/dev/null"))
+    } else {
+        PreviewSpec::Command(format!(
+            "bat --color=always --style=plain -- {quoted} 2>/dev/null || cat -- {quoted} 2>/dev/null"
+        ))
+    }
+}
 
 impl SkimItem for Candidate {
     fn output(&self) -> Cow<'_, str> {
@@ -63,6 +125,14 @@ impl SkimItem for Candidate {
             }
         }
     }
+
+    fn preview(&self, _context: PreviewContext) -> ItemPreview {
+        match candidate_preview(self) {
+            PreviewSpec::Command(cmd) => ItemPreview::Command(cmd),
+            PreviewSpec::Text(text) => ItemPreview::Text(text),
+            PreviewSpec::None => ItemPreview::Global,
+        }
+    }
 }
 
 pub fn select_item_with_skim(items: Vec<Candidate>, query: Option<&str>) -> CompletionSelection {
@@ -100,6 +170,104 @@ pub fn replace_space(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::completion::framework::CompletionSelection;
+
+    #[test]
+    fn preview_for_file_uses_bat_with_quoted_path() {
+        let spec = candidate_preview(&Candidate::File {
+            path: "src/main.rs".to_string(),
+            is_dir: false,
+        });
+        assert_eq!(
+            spec,
+            PreviewSpec::Command(
+                "bat --color=always --style=plain -- 'src/main.rs' 2>/dev/null \
+                 || cat -- 'src/main.rs' 2>/dev/null"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn preview_for_directory_lists_contents() {
+        let dir = candidate_preview(&Candidate::File {
+            path: "target".to_string(),
+            is_dir: true,
+        });
+        assert_eq!(
+            dir,
+            PreviewSpec::Command("ls -la -- 'target' 2>/dev/null".to_string())
+        );
+        // A Path ending in `/` is treated as a directory too.
+        let path_dir = candidate_preview(&Candidate::Path("target/".to_string()));
+        assert_eq!(
+            path_dir,
+            PreviewSpec::Command("ls -la -- 'target' 2>/dev/null".to_string())
+        );
+    }
+
+    #[test]
+    fn preview_for_git_branch_shows_log() {
+        let spec = candidate_preview(&Candidate::GitBranch {
+            name: "feature/x".to_string(),
+            is_current: false,
+        });
+        assert_eq!(
+            spec,
+            PreviewSpec::Command(
+                "git log --oneline --color=always --max-count=20 'feature/x' 2>/dev/null"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn preview_for_process_requires_numeric_pid() {
+        let ok = candidate_preview(&Candidate::Process {
+            pid: "1234".to_string(),
+            command: "sleep".to_string(),
+        });
+        assert!(matches!(ok, PreviewSpec::Command(_)));
+        // A non-numeric pid must not be spliced into a command.
+        let bad = candidate_preview(&Candidate::Process {
+            pid: "12; rm -rf ~".to_string(),
+            command: "x".to_string(),
+        });
+        assert_eq!(bad, PreviewSpec::None);
+    }
+
+    #[test]
+    fn preview_for_command_uses_description_text() {
+        let spec = candidate_preview(&Candidate::Command {
+            name: "ls".to_string(),
+            description: "list directory contents".to_string(),
+        });
+        assert_eq!(
+            spec,
+            PreviewSpec::Text("list directory contents".to_string())
+        );
+        // Empty description => nothing to preview.
+        let empty = candidate_preview(&Candidate::Command {
+            name: "ls".to_string(),
+            description: String::new(),
+        });
+        assert_eq!(empty, PreviewSpec::None);
+    }
+
+    #[test]
+    fn preview_quotes_paths_with_shell_metacharacters() {
+        let spec = candidate_preview(&Candidate::File {
+            path: "a'; rm -rf ~".to_string(),
+            is_dir: false,
+        });
+        // The dangerous path must be single-quoted (with the embedded quote escaped),
+        // never left bare.
+        match spec {
+            PreviewSpec::Command(cmd) => {
+                assert!(cmd.contains("'a'\\''; rm -rf ~'"), "unquoted path in: {cmd}");
+            }
+            other => panic!("expected command preview, got {other:?}"),
+        }
+    }
 
     #[test]
     fn test_select_item_with_skim_single_candidate() {

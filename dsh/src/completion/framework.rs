@@ -122,7 +122,16 @@ impl SkimCompletionFramework {
         std::thread::spawn(move || {
             let mut options_builder = SkimOptionsBuilder::default();
             options_builder.select_1(true);
-            options_builder.bind(vec!["Enter:accept".to_string()]);
+            options_builder.bind(vec![
+                "Enter:accept".to_string(),
+                // Let users hide/show the preview pane on demand.
+                "ctrl-o:toggle-preview".to_string(),
+            ]);
+            // Enable a context-aware preview pane. The per-item preview command
+            // is provided by `SkimItem::preview` (see skim_adapter.rs); an empty
+            // global preview string is enough to turn the pane on.
+            options_builder.preview(String::new());
+            options_builder.preview_window("right:50%:wrap");
             if let Some(query) = query {
                 options_builder.query(query);
             }

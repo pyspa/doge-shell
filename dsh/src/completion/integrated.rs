@@ -525,6 +525,21 @@ impl IntegratedCompletionEngine {
         let cache_allowed = completion_cache_allowed(&parsed_command_line);
         timing.mark("parse");
 
+        // Variable ($VAR / ${VAR) and user-home (~user) references are completed
+        // uniformly across all commands, independent of per-command definitions.
+        // Handled before the cache so freshly `export`ed variables show up
+        // immediately (enumeration is cheap: no subprocess, just map lookups).
+        if let Some(candidates) =
+            self.collect_special_token_candidates(&parsed_command_line.current_token)
+        {
+            timing.finish(request.input, "special_token");
+            return CompletionResult {
+                candidates,
+                framework: CompletionFrameworkKind::Skim,
+                replacement_range,
+            };
+        }
+
         if cache_allowed
             && !request.input.is_empty()
             && let Some(hit) = self.cache.lookup(request.input)
@@ -645,6 +660,23 @@ impl IntegratedCompletionEngine {
         let replacement_range =
             completion_replacement_range(input, cursor_pos, &parsed_command_line)?;
 
+        // Variable / user-home references: predict the first matching candidate.
+        if let Some(candidates) =
+            self.collect_special_token_candidates(&parsed_command_line.current_token)
+        {
+            let candidate = candidates.first()?;
+            let full = replace_char_range(
+                input,
+                replacement_range.start,
+                replacement_range.end,
+                &candidate.text,
+            );
+            if full == input || !full.starts_with(input) {
+                return None;
+            }
+            return Some(full);
+        }
+
         let mut candidates = self.collect_dynamic_candidates_cached(&request, &parsed_command_line);
         candidates.extend(
             self.collect_command_candidates_for_ghost(&parsed_command_line, request.current_dir),
@@ -670,6 +702,69 @@ impl IntegratedCompletionEngine {
         }
 
         Some(full)
+    }
+
+    /// Collect candidates for "special" tokens that complete the same way
+    /// regardless of the command: environment/shell variable references
+    /// (`$VAR`, `${VAR`) and user-home references (`~user`). Returns `None`
+    /// when the current token is not one of these, so normal completion
+    /// proceeds unchanged.
+    fn collect_special_token_candidates(
+        &self,
+        current_token: &str,
+    ) -> Option<Vec<EnhancedCandidate>> {
+        if let Some(rest) = current_token.strip_prefix("${") {
+            // Still typing the name inside `${...}` (no closing brace / path yet).
+            if rest.contains('}') || rest.contains('/') {
+                return None;
+            }
+            return Some(self.variable_candidates(rest, |name| format!("${{{name}}}")));
+        }
+        if let Some(rest) = current_token.strip_prefix('$') {
+            // `$NAME`. A `/` means it is really a path after expansion, not a
+            // bare variable, so leave it to path completion.
+            if rest.contains('/') {
+                return None;
+            }
+            return Some(self.variable_candidates(rest, |name| format!("${name}")));
+        }
+        if let Some(rest) = current_token.strip_prefix('~') {
+            // `~user`. Once a `/` appears it is a path under the home directory.
+            if rest.contains('/') {
+                return None;
+            }
+            return Some(tilde_user_candidates(rest));
+        }
+        None
+    }
+
+    /// Build variable-name candidates from the shell environment. Names come
+    /// from system environment variables, shell-local variables, and the live
+    /// process environment, deduplicated and sorted. `format_value` renders the
+    /// final replacement text (e.g. `$NAME` or `${NAME}`).
+    fn variable_candidates(
+        &self,
+        prefix: &str,
+        format_value: impl Fn(&str) -> String,
+    ) -> Vec<EnhancedCandidate> {
+        let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        {
+            let env = self.environment.read();
+            names.extend(env.system_env_vars.keys().cloned());
+            names.extend(env.variables.keys().cloned());
+        }
+        names.extend(std::env::vars().map(|(key, _)| key));
+
+        names
+            .into_iter()
+            .filter(|name| prefix.is_empty() || name.starts_with(prefix))
+            .map(|name| EnhancedCandidate {
+                text: format_value(&name),
+                description: Some("environment variable".to_string()),
+                candidate_type: CandidateType::Generic,
+                priority: 140,
+            })
+            .collect()
     }
 
     fn collect_command_candidates(
@@ -1658,6 +1753,25 @@ fn replace_char_range(input: &str, start: usize, end: usize, replacement: &str) 
     result
 }
 
+/// User-home (`~user`) candidates, reusing the `/etc/passwd`-backed user
+/// generator. `prefix` is the partial user name (the part after `~`); the
+/// returned text keeps the leading `~` so it replaces the whole token.
+fn tilde_user_candidates(prefix: &str) -> Vec<EnhancedCandidate> {
+    let generator = super::generators::user::UserGenerator::new();
+    match generator.generate_candidates(prefix) {
+        Ok(users) => users
+            .into_iter()
+            .map(|user| EnhancedCandidate {
+                text: format!("~{}", user.text),
+                description: user.description,
+                candidate_type: CandidateType::Generic,
+                priority: 140,
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
 pub(super) fn matches_prefix(current_token: &str, value: &str) -> bool {
     current_token.is_empty()
         || value.starts_with(current_token)
@@ -2286,6 +2400,89 @@ mod tests {
     fn test_integrated_completion_engine_creation() {
         let engine = IntegratedCompletionEngine::new(Environment::new());
         assert!(engine.loader.is_none());
+    }
+
+    fn engine_with_variable(name: &str, value: &str) -> IntegratedCompletionEngine {
+        let environment = Environment::new();
+        environment
+            .write()
+            .variables
+            .insert(name.to_string(), value.to_string());
+        IntegratedCompletionEngine::new(environment)
+    }
+
+    #[tokio::test]
+    async fn dollar_token_completes_shell_variables_with_prefix_kept() {
+        let engine = engine_with_variable("DSH_SPECIAL_VAR", "1");
+        let input = "echo $DSH_SPEC";
+        let dir = tempdir().unwrap();
+        let result = engine
+            .complete(input, input.chars().count(), dir.path(), 50, None)
+            .await;
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|c| c.text == "$DSH_SPECIAL_VAR"),
+            "expected `$DSH_SPECIAL_VAR` among {:?}",
+            result.candidates.iter().map(|c| &c.text).collect::<Vec<_>>()
+        );
+        // The replacement range must cover the whole `$...` token so the
+        // inserted value replaces it (rather than appending after `$DSH_SPEC`).
+        let range = result.replacement_range.expect("replacement range");
+        let replaced: String = input
+            .chars()
+            .skip(range.start)
+            .take(range.end - range.start)
+            .collect();
+        assert_eq!(replaced, "$DSH_SPEC");
+    }
+
+    #[tokio::test]
+    async fn brace_variable_token_completes_with_brace_form() {
+        let engine = engine_with_variable("DSH_BRACE_VAR", "1");
+        let input = "echo ${DSH_BRACE";
+        let dir = tempdir().unwrap();
+        let result = engine
+            .complete(input, input.chars().count(), dir.path(), 50, None)
+            .await;
+
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|c| c.text == "${DSH_BRACE_VAR}"),
+            "expected `${{DSH_BRACE_VAR}}` among {:?}",
+            result.candidates.iter().map(|c| &c.text).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn tilde_token_completes_user_home() {
+        let engine = IntegratedCompletionEngine::new(Environment::new());
+        let input = "cat ~roo";
+        let dir = tempdir().unwrap();
+        let result = engine
+            .complete(input, input.chars().count(), dir.path(), 50, None)
+            .await;
+
+        // `root` exists on Linux/macOS; candidate keeps the leading `~`.
+        assert!(
+            result.candidates.iter().any(|c| c.text == "~root"),
+            "expected `~root` among {:?}",
+            result.candidates.iter().map(|c| &c.text).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn special_token_dispatch_ignores_normal_tokens() {
+        let engine = IntegratedCompletionEngine::new(Environment::new());
+        assert!(engine.collect_special_token_candidates("git").is_none());
+        assert!(engine.collect_special_token_candidates("--flag").is_none());
+        // A `$VAR/subpath` token is a path, not a bare variable.
+        assert!(engine.collect_special_token_candidates("$HOME/foo").is_none());
+        assert!(engine.collect_special_token_candidates("$").is_some());
     }
 
     #[test]

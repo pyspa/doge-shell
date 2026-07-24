@@ -39,21 +39,21 @@ impl<R: ScriptRunner> ScriptGenerator<R> {
         // quoting, a token such as `"; rm -rf ~` would be executed as a command
         // during completion (before the user even presses Enter).
         let mut command = command_template.to_string();
-        command = command.replace("$COMMAND", &shell_quote(&parsed.command));
+        command = command.replace("$COMMAND", &subprocess::shell_quote(&parsed.command));
         if let Some(arg) = &parsed.current_arg {
-            command = command.replace("$CURRENT_TOKEN", &shell_quote(arg));
+            command = command.replace("$CURRENT_TOKEN", &subprocess::shell_quote(arg));
         } else {
             command = command.replace("$CURRENT_TOKEN", "''");
         }
         if let Some(first_sub) = parsed.subcommand_path.first() {
-            command = command.replace("$SUBCOMMAND", &shell_quote(first_sub));
+            command = command.replace("$SUBCOMMAND", &subprocess::shell_quote(first_sub));
         } else {
             command = command.replace("$SUBCOMMAND", "''");
         }
 
         for (i, arg) in parsed.specified_arguments.iter().enumerate() {
             let key = format!("$ARG_{}", i);
-            command = command.replace(&key, &shell_quote(arg));
+            command = command.replace(&key, &subprocess::shell_quote(arg));
         }
 
         // Execute command
@@ -87,24 +87,6 @@ impl Default for ScriptGenerator<DefaultScriptRunner> {
     fn default() -> Self {
         Self::new(DefaultScriptRunner)
     }
-}
-
-/// Wrap a value in single quotes so it is treated as a single literal argument
-/// by a POSIX shell. Any embedded single quote is escaped using the standard
-/// `'\''` sequence. This neutralizes shell metacharacters in user-supplied
-/// completion tokens before they are spliced into a `Script` template.
-fn shell_quote(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('\'');
-    for ch in value.chars() {
-        if ch == '\'' {
-            out.push_str("'\\''");
-        } else {
-            out.push(ch);
-        }
-    }
-    out.push('\'');
-    out
 }
 
 #[cfg(test)]
@@ -231,16 +213,6 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].text, "result");
     }
-    #[test]
-    fn shell_quote_wraps_plain_value() {
-        assert_eq!(shell_quote("br"), "'br'");
-    }
-
-    #[test]
-    fn shell_quote_escapes_embedded_single_quote() {
-        assert_eq!(shell_quote("a'b"), "'a'\\''b'");
-    }
-
     #[test]
     fn script_current_token_is_shell_quoted_against_injection() {
         // A malicious token must be passed as a single literal argument, never

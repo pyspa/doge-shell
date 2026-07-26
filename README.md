@@ -36,7 +36,7 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 
 - **Context-Aware Completion**: Intelligent tab completion for commands, files, and options
 - **Skim Integration**: Fuzzy finding interface for completion using [skim](https://github.com/lotabout/skim)
-- **History Search**: Interactive history search with Ctrl+R using the current input as the search query
+- **History Search**: Interactive history search with Ctrl+R, seeded with the current input. Each candidate shows its exit status, duration, age and directory, and the scope (global / session / cwd / project), status and slow-command filters can be toggled live from inside the picker
 - **Command Abbreviations**: Define and use abbreviations with `abbr` command
 - **AI-Powered Completion**: OpenAI integration for intelligent command completion suggestions
 - **Execution Status & Duration**: The prompt shows the exit status and elapsed time of the previous command
@@ -705,7 +705,7 @@ include setup.sh
 ### Key Bindings
 
 - `Tab` - Context-aware completion
-- `Ctrl+R` - Interactive history search using the current input as the query
+- `Ctrl+R` - Interactive history search using the current input as the query (see [History Search](#history-search))
 - `Ctrl+C` - Cancel current command (press twice to exit shell)
 - `Ctrl+D` - End of input (exit) on an empty line, delete the character under the cursor otherwise
 - `Ctrl+Z` - Suspend the running command; on an empty prompt, resume the most recently stopped job
@@ -726,6 +726,33 @@ include setup.sh
 - `Alt+[` / `Alt+]` - Rotate through suggestions
 - `Alt+w` - Wrap the current input with `ai-watch --`
 - `Alt+m` - Open Macro Recorder
+
+### History Search
+
+`Ctrl+R` opens a full-screen history picker, seeded with whatever you have already typed.
+Each row shows the exit status, duration, age and directory of the command, so a failed or
+slow run is recognisable at a glance. Narrower terminals drop the optional columns, keeping
+the status glyph and the command itself.
+
+The filters that the `history` command exposes as flags are available as live toggles:
+
+- `Ctrl+R` - cycle scope: `global` → `session` → `cwd` → `project`
+- `Ctrl+S` - cycle status: `any` → `failure` → `success`
+- `Ctrl+T` - show only commands that took a second or more
+- `Up` / `Down`, `Ctrl+P` / `Ctrl+N`, `PageUp` / `PageDown`, `Home` / `End` - move the selection
+- `Ctrl+U` - clear the query
+- `Enter` - put the command in the input buffer (it is never executed for you)
+- `Esc`, `Ctrl+C`, `Ctrl+G` - cancel and leave the input untouched
+
+The status line reports the active filters and how many entries match, e.g.
+`scope:cwd  status:failure  slow:off  (12/5000, last run)`.
+
+**`last run`**: history is stored one row per distinct command string, carrying only the
+metadata of its most recent execution. `scope:cwd` therefore means "commands whose *last*
+run was in this directory", not "every command ever run here", and the exit status and
+duration shown are those of that last run.
+
+Set `DSH_HISTORY_PICKER=skim` to fall back to the previous skim-based interface.
 
 ### Fish Completion Fallback
 

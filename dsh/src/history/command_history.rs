@@ -56,6 +56,80 @@ pub struct HistoryQuery {
     pub current_session_id: Option<String>,
 }
 
+/// Applies a [`HistoryQuery`]'s filters to individual entries.
+///
+/// Holds the lowercased query text so a scan does not redo that work per entry.
+/// Shared by [`History::search_entries`] and the interactive Ctrl-R picker so
+/// the two cannot drift apart; the result limit is the caller's business.
+pub struct EntryMatcher<'q> {
+    query: &'q HistoryQuery,
+    normalized_text: Option<String>,
+}
+
+impl<'q> EntryMatcher<'q> {
+    pub fn new(query: &'q HistoryQuery) -> Self {
+        Self {
+            normalized_text: query.text.as_ref().map(|text| text.to_lowercase()),
+            query,
+        }
+    }
+
+    /// `normalized_entry` is the pre-lowercased command text when the caller
+    /// maintains a cache for it; `None` lowercases on the fly.
+    pub fn matches(&self, entry: &Entry, normalized_entry: Option<&str>) -> bool {
+        if let Some(text) = &self.normalized_text {
+            let contains_text = match normalized_entry {
+                Some(normalized) => normalized.contains(text.as_str()),
+                None => entry.entry.to_lowercase().contains(text.as_str()),
+            };
+            if !contains_text {
+                return false;
+            }
+        }
+
+        match self.query.status {
+            HistoryStatusFilter::Any => {}
+            HistoryStatusFilter::Success => {
+                if entry.exit_code != Some(0) {
+                    return false;
+                }
+            }
+            HistoryStatusFilter::Failure => {
+                if entry.exit_code.is_none() || entry.exit_code == Some(0) {
+                    return false;
+                }
+            }
+        }
+
+        if let Some(min_duration_ms) = self.query.min_duration_ms
+            && entry.duration_ms.unwrap_or_default() < min_duration_ms
+        {
+            return false;
+        }
+
+        match self.query.scope {
+            HistoryScope::Global => {}
+            HistoryScope::Session => {
+                if entry.session_id.as_deref() != self.query.current_session_id.as_deref() {
+                    return false;
+                }
+            }
+            HistoryScope::Cwd => {
+                if entry.cwd.as_deref() != self.query.current_cwd.as_deref() {
+                    return false;
+                }
+            }
+            HistoryScope::Project => {
+                if entry.context.as_deref() != self.query.current_project.as_deref() {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+}
+
 /// Command history with SQLite persistence.
 #[derive(Debug, Clone)]
 pub struct History {
@@ -661,59 +735,14 @@ impl History {
             return Vec::new();
         }
 
-        let normalized_text = query.text.as_ref().map(|text| text.to_lowercase());
+        let matcher = EntryMatcher::new(query);
         let cache_usable = self.normalized_entries.len() == self.histories.len();
         let mut matched = Vec::new();
 
         for (index, entry) in self.histories.iter().enumerate().rev() {
-            if let Some(text) = &normalized_text {
-                let contains_text = if cache_usable {
-                    self.normalized_entries[index].contains(text)
-                } else {
-                    entry.entry.to_lowercase().contains(text)
-                };
-                if !contains_text {
-                    continue;
-                }
-            }
-
-            match query.status {
-                HistoryStatusFilter::Any => {}
-                HistoryStatusFilter::Success => {
-                    if entry.exit_code != Some(0) {
-                        continue;
-                    }
-                }
-                HistoryStatusFilter::Failure => {
-                    if entry.exit_code.is_none() || entry.exit_code == Some(0) {
-                        continue;
-                    }
-                }
-            }
-
-            if let Some(min_duration_ms) = query.min_duration_ms
-                && entry.duration_ms.unwrap_or_default() < min_duration_ms
-            {
+            let normalized_entry = cache_usable.then(|| self.normalized_entries[index].as_str());
+            if !matcher.matches(entry, normalized_entry) {
                 continue;
-            }
-
-            match query.scope {
-                HistoryScope::Global => {}
-                HistoryScope::Session => {
-                    if entry.session_id.as_deref() != query.current_session_id.as_deref() {
-                        continue;
-                    }
-                }
-                HistoryScope::Cwd => {
-                    if entry.cwd.as_deref() != query.current_cwd.as_deref() {
-                        continue;
-                    }
-                }
-                HistoryScope::Project => {
-                    if entry.context.as_deref() != query.current_project.as_deref() {
-                        continue;
-                    }
-                }
             }
 
             matched.push(entry.clone());
@@ -725,6 +754,14 @@ impl History {
         }
 
         matched
+    }
+
+    /// The most recent `max` entries, newest first, as an owned snapshot.
+    ///
+    /// Lets an interactive picker re-filter on every keystroke without holding
+    /// the history lock for the duration of the session.
+    pub fn snapshot_entries(&self, max: usize) -> Vec<Entry> {
+        self.histories.iter().rev().take(max).cloned().collect()
     }
 
     /// Get an iterator over history entries.
@@ -822,6 +859,124 @@ mod tests {
         let results = history.search_entries(&query);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].entry, "cargo build");
+    }
+
+    #[test]
+    fn entry_matches_applies_scope() {
+        let entry = sample_entry(
+            "cargo build",
+            Some(0),
+            Some(100),
+            Some("/repo/src"),
+            Some("/repo"),
+            Some("session-a"),
+        );
+        let context = HistoryQuery {
+            current_cwd: Some("/repo/src".to_string()),
+            current_project: Some("/repo".to_string()),
+            current_session_id: Some("session-a".to_string()),
+            ..Default::default()
+        };
+
+        for scope in [
+            HistoryScope::Global,
+            HistoryScope::Session,
+            HistoryScope::Cwd,
+            HistoryScope::Project,
+        ] {
+            let query = HistoryQuery {
+                scope,
+                ..context.clone()
+            };
+            assert!(
+                EntryMatcher::new(&query).matches(&entry, None),
+                "{scope:?} should match its own context"
+            );
+        }
+
+        let elsewhere = HistoryQuery {
+            scope: HistoryScope::Cwd,
+            current_cwd: Some("/other".to_string()),
+            ..context.clone()
+        };
+        assert!(!EntryMatcher::new(&elsewhere).matches(&entry, None));
+
+        let other_session = HistoryQuery {
+            scope: HistoryScope::Session,
+            current_session_id: Some("session-b".to_string()),
+            ..context.clone()
+        };
+        assert!(!EntryMatcher::new(&other_session).matches(&entry, None));
+
+        let other_project = HistoryQuery {
+            scope: HistoryScope::Project,
+            current_project: Some("/elsewhere".to_string()),
+            ..context
+        };
+        assert!(!EntryMatcher::new(&other_project).matches(&entry, None));
+    }
+
+    #[test]
+    fn entry_matches_applies_status_and_duration() {
+        let ok = sample_entry("ok", Some(0), Some(5000), None, None, None);
+        let failed = sample_entry("bad", Some(2), Some(10), None, None, None);
+        let unknown = sample_entry("legacy", None, None, None, None, None);
+
+        let success = HistoryQuery {
+            status: HistoryStatusFilter::Success,
+            ..Default::default()
+        };
+        assert!(EntryMatcher::new(&success).matches(&ok, None));
+        assert!(!EntryMatcher::new(&success).matches(&failed, None));
+        assert!(!EntryMatcher::new(&success).matches(&unknown, None));
+
+        let failure = HistoryQuery {
+            status: HistoryStatusFilter::Failure,
+            ..Default::default()
+        };
+        assert!(EntryMatcher::new(&failure).matches(&failed, None));
+        assert!(!EntryMatcher::new(&failure).matches(&ok, None));
+        // An entry with no recorded status is not a known failure.
+        assert!(!EntryMatcher::new(&failure).matches(&unknown, None));
+
+        let slow = HistoryQuery {
+            min_duration_ms: Some(1000),
+            ..Default::default()
+        };
+        assert!(EntryMatcher::new(&slow).matches(&ok, None));
+        assert!(!EntryMatcher::new(&slow).matches(&failed, None));
+        assert!(!EntryMatcher::new(&slow).matches(&unknown, None));
+    }
+
+    #[test]
+    fn entry_matches_text_is_case_insensitive_with_and_without_cache() {
+        let entry = sample_entry("Cargo Build", None, None, None, None, None);
+        let query = HistoryQuery {
+            text: Some("CARGO".to_string()),
+            ..Default::default()
+        };
+        let matcher = EntryMatcher::new(&query);
+
+        assert!(matcher.matches(&entry, None));
+        // The cached path must agree with the on-the-fly one.
+        assert!(matcher.matches(&entry, Some("cargo build")));
+    }
+
+    #[test]
+    fn snapshot_entries_returns_newest_first_and_respects_the_cap() {
+        let mut history = History::new();
+        history
+            .write_batch(vec![
+                ("first".to_string(), 1),
+                ("second".to_string(), 2),
+                ("third".to_string(), 3),
+            ])
+            .unwrap();
+
+        let snapshot = history.snapshot_entries(2);
+        assert_eq!(snapshot.len(), 2);
+        assert_eq!(snapshot[0].entry, "third");
+        assert_eq!(snapshot[1].entry, "second");
     }
 
     #[test]

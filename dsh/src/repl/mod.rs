@@ -142,6 +142,13 @@ pub struct Repl<'a> {
     pub(crate) last_preprompt_plain: Option<String>,
 }
 
+/// Whether Ctrl-R should use the pre-picker skim flow.
+///
+/// An escape hatch for one release, following `DSH_COMPLETION_FRAMEWORK`.
+fn history_picker_backend_is_skim() -> bool {
+    matches!(std::env::var("DSH_HISTORY_PICKER"), Ok(value) if value.eq_ignore_ascii_case("skim"))
+}
+
 impl<'a> Drop for Repl<'a> {
     fn drop(&mut self) {
         // Cancel background task
@@ -1151,7 +1158,59 @@ impl<'a> Repl<'a> {
         Ok(())
     }
 
+    /// Largest history snapshot handed to the interactive picker.
+    ///
+    /// The picker re-filters the whole snapshot on every keystroke, so this
+    /// bounds that work; older entries stay reachable through the `history`
+    /// builtin.
+    const HISTORY_PICKER_SNAPSHOT: usize = 5000;
+
+    /// Ctrl-R: search history interactively.
+    ///
+    /// Uses the dedicated picker, which exposes the scope/status/duration
+    /// filters and the per-entry metadata. `DSH_HISTORY_PICKER=skim` selects the
+    /// previous skim-based flow for one release.
     pub fn select_history(&mut self) -> Result<ReplControlFlow> {
+        if history_picker_backend_is_skim() {
+            return self.select_history_with_skim();
+        }
+
+        let Some(history_arc) = self.shell.cmd_history.as_ref() else {
+            return Ok(ReplControlFlow::Continue);
+        };
+        let Some(mut history) = history_arc.try_lock() else {
+            warn!("Failed to acquire command history lock for history selection - lock is busy");
+            return Ok(ReplControlFlow::Continue);
+        };
+
+        let entries = history.snapshot_entries(Self::HISTORY_PICKER_SNAPSHOT);
+        history.reset_index();
+        // Released before the interactive session: the picker owns a snapshot,
+        // and holding the lock would block the background history writer.
+        drop(history);
+
+        if entries.is_empty() {
+            return Ok(ReplControlFlow::Continue);
+        }
+
+        // Same scope context the `history` builtin builds, so `scope:cwd` means
+        // the same thing in both.
+        let base = crate::history::query_context(self.shell.session_id.clone());
+        let picker = crate::history::picker::HistoryPicker::new(
+            entries,
+            base,
+            self.input.as_str().to_string(),
+            chrono::Local::now().timestamp(),
+        );
+
+        Ok(ReplControlFlow::RunInteractive(Box::new(move || {
+            Ok(crate::history::picker::run(picker)?
+                .map(|text| crate::repl::state::InteractiveAction::ReplaceAll { text }))
+        })))
+    }
+
+    /// The pre-picker skim flow, kept behind `DSH_HISTORY_PICKER=skim`.
+    fn select_history_with_skim(&mut self) -> Result<ReplControlFlow> {
         let query = self.input.as_str();
         if let Some(ref mut history) = self.shell.cmd_history {
             if let Some(mut history) = history.try_lock() {

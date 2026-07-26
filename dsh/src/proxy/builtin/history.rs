@@ -20,18 +20,13 @@ pub fn execute(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<()
             return Ok(());
         }
 
-        let current_cwd = std::env::current_dir()
-            .ok()
-            .map(|path| path.to_string_lossy().into_owned());
         let query = HistoryQuery {
             text: options.query.clone(),
             scope: options.scope,
             status: options.status,
             min_duration_ms: options.min_duration_ms,
             limit: Some(options.limit),
-            current_cwd: current_cwd.clone(),
-            current_project: crate::history::get_current_context(),
-            current_session_id: Some(shell.session_id.clone()),
+            ..crate::history::query_context(shell.session_id.clone())
         };
 
         for item in history.search_entries(&query) {

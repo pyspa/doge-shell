@@ -163,6 +163,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ctrl_r_returns_run_interactive() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut history = History::new();
+        history
+            .write_batch(vec![("cargo test".to_string(), 1)])
+            .unwrap();
+        shell.cmd_history = Some(Arc::new(ParkingMutex::new(history)));
+        let mut repl = Repl::new(&mut shell);
+
+        let result =
+            handler::handle_key_event(&mut repl, &key(KeyCode::Char('r'), KeyModifiers::CONTROL))
+                .await
+                .unwrap();
+
+        // Deliberately not invoking the closure: it would grab the tty.
+        assert!(matches!(result, ReplControlFlow::RunInteractive(_)));
+    }
+
+    #[tokio::test]
+    async fn ctrl_r_with_no_history_returns_continue() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        shell.cmd_history = Some(Arc::new(ParkingMutex::new(History::new())));
+        let mut repl = Repl::new(&mut shell);
+
+        let result =
+            handler::handle_key_event(&mut repl, &key(KeyCode::Char('r'), KeyModifiers::CONTROL))
+                .await
+                .unwrap();
+
+        // No entries to pick from: stay on the prompt rather than opening an
+        // empty full-screen picker.
+        assert!(matches!(result, ReplControlFlow::Continue));
+    }
+
+    #[tokio::test]
+    async fn ctrl_r_preserves_the_input_until_the_picker_answers() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut history = History::new();
+        history
+            .write_batch(vec![("cargo test".to_string(), 1)])
+            .unwrap();
+        shell.cmd_history = Some(Arc::new(ParkingMutex::new(history)));
+        let mut repl = Repl::new(&mut shell);
+        repl.input.reset("car".to_string());
+
+        handler::handle_key_event(&mut repl, &key(KeyCode::Char('r'), KeyModifiers::CONTROL))
+            .await
+            .unwrap();
+
+        assert_eq!(repl.input.as_str(), "car");
+    }
+
+    #[tokio::test]
     async fn check_background_jobs_with_no_jobs_is_silent() {
         let environment = Environment::new();
         let mut shell = Shell::new(environment);

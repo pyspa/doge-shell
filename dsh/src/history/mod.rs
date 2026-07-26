@@ -16,13 +16,32 @@ mod command_history;
 mod context;
 mod entry;
 mod frecency_history;
+pub mod picker;
 
 #[cfg(test)]
 mod tests;
 
 // Re-export main types for backward compatibility
 pub use command_history::History;
-pub use command_history::{HistoryMetadata, HistoryQuery, HistoryScope, HistoryStatusFilter};
+pub use command_history::{
+    EntryMatcher, HistoryMetadata, HistoryQuery, HistoryScope, HistoryStatusFilter,
+};
 pub use context::get_current_context;
 pub use entry::Entry;
 pub use frecency_history::FrecencyHistory;
+
+/// A [`HistoryQuery`] carrying only the caller's current scope context.
+///
+/// The `Cwd`/`Project`/`Session` filters compare an entry against these fields,
+/// so every caller must populate them the same way — the `history` builtin and
+/// the Ctrl-R picker share this to stay consistent.
+pub fn query_context(session_id: String) -> HistoryQuery {
+    HistoryQuery {
+        current_cwd: std::env::current_dir()
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned()),
+        current_project: get_current_context(),
+        current_session_id: Some(session_id),
+        ..Default::default()
+    }
+}

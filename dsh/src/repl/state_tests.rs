@@ -163,6 +163,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ctrl_o_with_no_blocks_returns_continue() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+        repl.columns = 80;
+
+        let result =
+            handler::handle_key_event(&mut repl, &key(KeyCode::Char('o'), KeyModifiers::CONTROL))
+                .await
+                .unwrap();
+
+        // Nothing recorded yet: say so instead of opening an empty full-screen UI.
+        assert!(matches!(result, ReplControlFlow::Continue));
+    }
+
+    #[tokio::test]
+    async fn ctrl_o_with_blocks_returns_run_interactive() {
+        use dsh_types::command_block::CommandBlock;
+
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        shell
+            .environment
+            .write()
+            .command_blocks
+            .push(CommandBlock::new(
+                "cargo test".to_string(),
+                Some("/repo".to_string()),
+                0,
+                120,
+                &[],
+                None,
+            ));
+        let mut repl = Repl::new(&mut shell);
+        repl.input.reset("in progress".to_string());
+
+        let result =
+            handler::handle_key_event(&mut repl, &key(KeyCode::Char('o'), KeyModifiers::CONTROL))
+                .await
+                .unwrap();
+
+        // Deliberately not invoking the closure: it would grab the tty.
+        assert!(matches!(result, ReplControlFlow::RunInteractive(_)));
+        assert_eq!(repl.input.as_str(), "in progress");
+    }
+
+    #[tokio::test]
+    async fn replace_all_and_execute_variant_carries_the_command() {
+        use crate::repl::state::InteractiveAction;
+
+        let action = InteractiveAction::ReplaceAllAndExecute {
+            text: "cd /repo".to_string(),
+        };
+        match action {
+            InteractiveAction::ReplaceAllAndExecute { text } => assert_eq!(text, "cd /repo"),
+            _ => panic!("expected ReplaceAllAndExecute"),
+        }
+    }
+
+    #[tokio::test]
     async fn ctrl_r_returns_run_interactive() {
         let environment = Environment::new();
         let mut shell = Shell::new(environment);

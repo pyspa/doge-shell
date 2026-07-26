@@ -615,8 +615,34 @@ blocks show 1 --stderr
 # Reuse or explain a block
 blocks command 1
 blocks explain 1
+
+# Browse them full-screen (same as Ctrl+O)
+blocks tui
 ```
 
+#### Block Browser
+
+`Ctrl+O` opens a two-pane browser over this session's blocks: the list on one
+side, the selected block's captured output on the other. Escape sequences are
+stripped and `\r` progress bars are collapsed to their final state, so a
+`cargo build` block reads as a handful of lines rather than thousands. Output
+from full-screen programs such as `vim` is almost entirely cursor positioning,
+so those blocks start folded.
+
+- `j` / `k` / `↑` / `↓` - move in the list, or scroll when the output pane has focus
+- `Tab` - switch pane · `g` / `G` - top / bottom · `Ctrl+D` / `Ctrl+U` - page the output
+- `Space` - fold / unfold · `s` - cycle stdout / stderr / both · `W` - toggle wrapping
+- `/` - filter by command **or output text** · `f` - failed only · `w` - `ai-watch` blocks only
+- `c` / `y` - copy the command / the output
+- `Enter` - put the command in the input buffer · `r` - re-run it · `d` - `cd` to where it ran
+- `e` - explain it with AI · `?` - key help · `q` / `Esc` - close
+
+Copying uses the system clipboard, falling back to OSC 52 so it still works over
+SSH. Blocks are session-local and are not persisted across restarts.
+
+Many blocks legitimately have no output: it is only captured for a foreground
+external command that is not redirected, not part of a pipeline, and not
+PTY-proxied. The browser says so rather than showing an empty pane.
 
 ### Import History
 
@@ -709,6 +735,7 @@ include setup.sh
 - `Ctrl+C` - Cancel current command (press twice to exit shell)
 - `Ctrl+D` - End of input (exit) on an empty line, delete the character under the cursor otherwise
 - `Ctrl+Z` - Suspend the running command; on an empty prompt, resume the most recently stopped job
+- `Ctrl+O` - Open the [Block Browser](#block-browser) over this session's commands and their output
 - `Ctrl+L` - Clear screen
 - `Home` / `End` - Move to the beginning / end of the line (same as `Ctrl+A` / `Ctrl+E`)
 - `Delete` - Delete the character under the cursor

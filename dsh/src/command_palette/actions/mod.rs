@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod block_browser;
 pub mod builtin_command;
 pub mod clear_screen;
 pub mod dashboard;
@@ -35,6 +36,7 @@ pub fn register_all(registry: &mut ActionRegistry) {
     registry.register(Arc::new(clear_screen::ClearScreenAction));
     registry.register(Arc::new(reload_config::ReloadConfigAction));
     registry.register(Arc::new(dashboard::DashboardAction));
+    registry.register(Arc::new(block_browser::BlockBrowserAction));
     registry.register(Arc::new(BuiltinCommandAction::new(
         "Doctor Setup",
         "Show setup diagnostics and next steps",

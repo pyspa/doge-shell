@@ -36,6 +36,39 @@ pub(crate) async fn handle_open_command_palette(repl: &mut Repl<'_>) -> Result<R
     Ok(ReplControlFlow::Continue)
 }
 
+/// Open the command block browser (Ctrl-O).
+///
+/// `CommandBlock` is plain owned data, so a snapshot crosses the `Send`
+/// boundary into the `RunInteractive` closure without dragging `Environment`
+/// (which is `!Send`) along.
+pub(crate) fn handle_open_block_browser(repl: &mut Repl<'_>) -> Result<ReplControlFlow> {
+    let blocks = repl
+        .shell
+        .environment
+        .read()
+        .command_blocks
+        .get_all_blocks();
+    if blocks.is_empty() {
+        let mut renderer = TerminalRenderer::new();
+        renderer.write_all(b"\r\ndsh: no command blocks recorded yet\r\n")?;
+        repl.print_prompt(&mut renderer);
+        repl.print_input(&mut renderer, false, false);
+        renderer.flush()?;
+        return Ok(ReplControlFlow::Continue);
+    }
+
+    Ok(ReplControlFlow::RunInteractive(Box::new(move || {
+        use crate::blocks_ui::{BlockBrowser, BrowserOutcome, run};
+        use crate::repl::state::InteractiveAction;
+
+        Ok(match run(BlockBrowser::new(blocks))? {
+            BrowserOutcome::Insert(text) => Some(InteractiveAction::ReplaceAll { text }),
+            BrowserOutcome::Run(text) => Some(InteractiveAction::ReplaceAllAndExecute { text }),
+            BrowserOutcome::Quit => None,
+        })
+    })))
+}
+
 /// Handle clearing the screen.
 pub(crate) fn handle_clear_screen(repl: &mut Repl<'_>) -> Result<ReplControlFlow> {
     let mut renderer = TerminalRenderer::new();

@@ -28,6 +28,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         BlocksMode::Rerun(index) => rerun_block(ctx, proxy, index),
         BlocksMode::Explain(index) => explain_block(ctx, proxy, index),
         BlocksMode::Clear => clear_blocks(ctx, proxy),
+        BlocksMode::Tui => open_tui(ctx, proxy),
         BlocksMode::Help => {
             let _ = ctx.write_stdout(help_text());
             ExitStatus::ExitedWith(0)
@@ -57,6 +58,10 @@ enum BlocksMode {
     Rerun(usize),
     Explain(usize),
     Clear,
+    /// Full-screen browser. Implemented in the `dsh` crate and reached through
+    /// the proxy, because it needs clipboard and terminal code this crate
+    /// cannot depend on.
+    Tui,
     Help,
 }
 
@@ -85,6 +90,14 @@ fn parse_options(args: &[String]) -> Result<BlocksOptions, String> {
         "command" => parse_index_mode(&args[1..], BlocksMode::Command),
         "rerun" => parse_index_mode(&args[1..], BlocksMode::Rerun),
         "explain" => parse_index_mode(&args[1..], BlocksMode::Explain),
+        "tui" | "browse" => {
+            if args.len() > 1 {
+                return Err("tui does not accept extra arguments".to_string());
+            }
+            Ok(BlocksOptions {
+                mode: BlocksMode::Tui,
+            })
+        }
         "clear" | "-c" | "--clear" => {
             if args.len() > 1 {
                 return Err("clear does not accept extra arguments".to_string());
@@ -336,6 +349,28 @@ fn explain_block(ctx: &Context, proxy: &mut dyn ShellProxy, index: usize) -> Exi
     }
 }
 
+/// Hand off to the full-screen browser in the `dsh` crate.
+///
+/// This crate cannot depend on `dsh`, so the real implementation is registered
+/// in the builtin registry and reached through `dispatch`; falls back to the
+/// plain list when there is no terminal to draw on.
+fn open_tui(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    use std::io::IsTerminal;
+
+    if !std::io::stdout().is_terminal() {
+        return list_blocks(ctx, proxy, 20, false, false);
+    }
+
+    match proxy.dispatch(ctx, "blocks-tui", vec!["blocks-tui".to_string()]) {
+        Ok(()) => ExitStatus::ExitedWith(0),
+        Err(err) => {
+            let _ = ctx.write_stderr(&format!("blocks: {err}"));
+            // A terminal too small for the browser still deserves the list.
+            list_blocks(ctx, proxy, 20, false, false)
+        }
+    }
+}
+
 fn clear_blocks(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
     let removed = proxy.clear_command_blocks();
     let _ = ctx.write_stdout(&format!("Cleared {removed} command blocks."));
@@ -405,6 +440,7 @@ fn help_text() -> &'static str {
         "  command <N>                               Print the command only\n",
         "  rerun <N>                                 Rerun a command block\n",
         "  explain <N>                               Ask AI to explain a block\n",
+        "  tui                                       Browse blocks full-screen (also Ctrl-O)\n",
         "  clear                                     Clear command blocks\n",
         "  help                                      Show this help\n",
         "\n",
@@ -413,6 +449,7 @@ fn help_text() -> &'static str {
         "  blocks list --failed\n",
         "  blocks show 2 --stderr\n",
         "  blocks command 1\n",
+        "  blocks tui\n",
     )
 }
 
@@ -561,6 +598,24 @@ mod tests {
         let status = command(&ctx, argv, proxy);
         let snapshot = observer.lock().unwrap().snapshot();
         (status, snapshot)
+    }
+
+    #[test]
+    fn parse_tui_subcommand() {
+        for name in ["tui", "browse"] {
+            assert_eq!(
+                parse_options(&[name.to_string()]).unwrap(),
+                BlocksOptions {
+                    mode: BlocksMode::Tui
+                },
+                "`blocks {name}` should open the browser"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_tui_rejects_extra_arguments() {
+        assert!(parse_options(&["tui".to_string(), "3".to_string()]).is_err());
     }
 
     #[test]

@@ -303,6 +303,9 @@ pub(crate) async fn handle_key_event(
         KeyAction::OpenCommandPalette => {
             return Ok(ReplControlFlow::OpenCommandPalette);
         }
+        KeyAction::OpenBlockBrowser => {
+            return auxiliary::handle_open_block_browser(repl);
+        }
         KeyAction::AcceptCompletion => {
             completion::handle_accept_completion(repl);
         }

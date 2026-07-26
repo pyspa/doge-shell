@@ -1033,6 +1033,7 @@ impl<'a> Repl<'a> {
                                     disable_raw_mode().ok();
 
                                     // Execute the interactive closure
+                                    let mut execute_after = false;
                                     match closure() {
                                         Ok(Some(action)) => {
                                             use crate::repl::state::InteractiveAction;
@@ -1051,6 +1052,10 @@ impl<'a> Repl<'a> {
                                                     // Apply full replacement
                                                     self.input.reset(text);
                                                 }
+                                                InteractiveAction::ReplaceAllAndExecute { text } => {
+                                                    self.input.reset(text);
+                                                    execute_after = true;
+                                                }
                                             }
 
                                             // Trigger validation/highlighting
@@ -1068,15 +1073,28 @@ impl<'a> Repl<'a> {
                                     // Re-enable raw mode
                                     enable_raw_mode().ok();
 
+                                    if execute_after {
+                                        // `handle_execute` emits the OSC 133 boundaries, manages
+                                        // raw mode around the child, and draws the next prompt
+                                        // itself, so it must run instead of the redraw below.
+                                        match key_handlers::execution::handle_execute(self).await {
+                                            Ok(()) => {}
+                                            Err(err) => {
+                                                self.shell.print_error(format!("Error: {err:?}\r"));
+                                                break;
+                                            }
+                                        }
+                                    } else {
+                                        // Redraw prompt
+                                        let mut renderer = TerminalRenderer::new();
+                                        self.print_prompt(&mut renderer);
+                                        // Reprint input with updates
+                                        self.print_input(&mut renderer, true, true);
+                                        renderer.flush().ok();
+                                    }
+
                                     // Recreate reader
                                     reader = EventStream::new();
-
-                                    // Redraw prompt
-                                    let mut renderer = TerminalRenderer::new();
-                                    self.print_prompt(&mut renderer);
-                                    // Reprint input with updates
-                                    self.print_input(&mut renderer, true, true);
-                                    renderer.flush().ok();
                                 }
                                 Err(err) => {
                                     self.shell.print_error(format!("Error: {err:?}\r"));

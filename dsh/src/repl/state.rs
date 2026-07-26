@@ -24,6 +24,14 @@ pub enum InteractiveAction {
     ReplaceAll {
         text: String,
     },
+    /// Replace the buffer and run it immediately.
+    ///
+    /// A `RunInteractive` closure is synchronous and cannot execute anything
+    /// itself, so a full-screen UI that wants to act — re-run a block, `cd` to
+    /// where it ran, ask the AI to explain it — hands the command back this way.
+    ReplaceAllAndExecute {
+        text: String,
+    },
 }
 
 pub enum ReplControlFlow {

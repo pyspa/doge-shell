@@ -60,6 +60,8 @@ pub enum KeyAction {
 
     // Command Palette
     OpenCommandPalette,
+    /// Browse this session's command blocks with their captured output.
+    OpenBlockBrowser,
 
     // AI features
     AiAutoFix,
@@ -258,6 +260,9 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
         // Ctrl+R: History search
         (KeyCode::Char('r'), CTRL) => KeyAction::HistorySearch,
 
+        // Ctrl+O: Block browser
+        (KeyCode::Char('o'), CTRL) => KeyAction::OpenBlockBrowser,
+
         // Ctrl+V: Paste
         (KeyCode::Char('v'), CTRL) => KeyAction::Paste,
 
@@ -403,6 +408,28 @@ mod tests {
         assert_eq!(
             determine_key_action(&key(KeyCode::Char('z'), CTRL), &ctx),
             KeyAction::Unsupported
+        );
+    }
+
+    #[test]
+    fn ctrl_o_opens_the_block_browser() {
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char('o'), CTRL), &ctx_default()),
+            KeyAction::OpenBlockBrowser
+        );
+    }
+
+    #[test]
+    fn ctrl_o_is_not_shadowed_by_completion_or_suggestion_context() {
+        let ctx = KeyContext {
+            has_completion: true,
+            has_suggestion: true,
+            completion_mode: true,
+            ..ctx_default()
+        };
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char('o'), CTRL), &ctx),
+            KeyAction::OpenBlockBrowser
         );
     }
 

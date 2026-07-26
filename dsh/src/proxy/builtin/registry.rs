@@ -9,7 +9,7 @@ use dsh_types::Context;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use super::{exit, history, jobs, lisp, reload, var, z};
+use super::{blocks_tui, exit, history, jobs, lisp, reload, var, z};
 
 /// Type alias for builtin command handler functions.
 pub type CommandHandler = fn(&mut Shell, &Context, Vec<String>) -> Result<()>;
@@ -34,6 +34,10 @@ impl BuiltinRegistry {
 
         // Navigation
         commands.insert("z", z::execute);
+
+        // Full-screen block browser, dispatched here by the `blocks` builtin
+        // because it needs terminal and clipboard code from this crate.
+        commands.insert("blocks-tui", blocks_tui::execute);
 
         // Job control
         commands.insert("jobs", jobs::execute_jobs);
@@ -88,7 +92,18 @@ mod tests {
     #[test]
     fn test_registry_contains_all_commands() {
         let expected = vec![
-            "exit", "history", "reload", "z", "jobs", "fg", "bg", "lisp", "lisp-run", "var", "read",
+            "exit",
+            "history",
+            "reload",
+            "z",
+            "jobs",
+            "fg",
+            "bg",
+            "lisp",
+            "lisp-run",
+            "var",
+            "read",
+            "blocks-tui",
         ];
         for cmd in expected {
             assert!(

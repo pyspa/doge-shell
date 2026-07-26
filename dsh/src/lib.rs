@@ -15,6 +15,7 @@ use tracing::debug;
 
 pub mod ai_features;
 pub mod argument_explainer;
+pub mod blocks_ui;
 pub mod command_palette;
 pub mod command_suggestion;
 pub mod command_timing;

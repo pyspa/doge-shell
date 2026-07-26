@@ -640,6 +640,10 @@ so those blocks start folded.
 Copying uses the system clipboard, falling back to OSC 52 so it still works over
 SSH. Blocks are session-local and are not persisted across restarts.
 
+Run as `blocks tui` there is no input buffer to fill, so `Enter` prints the
+command and `r` runs it. From `Ctrl+O` and the command palette, both put it in
+the buffer for you to confirm.
+
 Many blocks legitimately have no output: it is only captured for a foreground
 external command that is not redirected, not part of a pipeline, and not
 PTY-proxied. The browser says so rather than showing an empty pane.

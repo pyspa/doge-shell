@@ -195,6 +195,12 @@ impl CommandPalette {
                 return Ok(crate::repl::ai_watch::wrap_current_input(input));
             }
 
+            // Like Search History: the browser produces a command, and the
+            // `Action` trait has no way to return one.
+            if action_name == "Block Browser" {
+                return actions::block_browser::select_block_command(shell).await;
+            }
+
             // Re-acquire lock to get the action (we dropped it before running Skim)
             let action = {
                 let registry = REGISTRY.read();
@@ -245,6 +251,22 @@ mod tests {
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].name(), "Test Action");
         assert_eq!(actions[0].description(), "Test Description");
+    }
+
+    /// `run` dispatches the command-producing actions by matching `name()`
+    /// against a literal, and the `Action` trait cannot return a command. If a
+    /// name drifts the match silently stops firing and the action falls through
+    /// to `execute`, which has no way to hand the command back.
+    #[test]
+    fn command_producing_actions_keep_the_names_run_intercepts() {
+        assert_eq!(
+            actions::block_browser::BlockBrowserAction.name(),
+            "Block Browser"
+        );
+        assert_eq!(
+            actions::search_history::SearchHistoryAction.name(),
+            "Search History"
+        );
     }
 
     #[test]

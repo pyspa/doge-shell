@@ -1208,6 +1208,15 @@ impl<'a> Repl<'a> {
         drop(history);
 
         if entries.is_empty() {
+            // Say so rather than swallowing the keypress: an unexplained no-op
+            // reads as a broken binding.
+            let mut renderer = TerminalRenderer::new();
+            renderer
+                .write_all(b"\r\ndsh: no command history yet\r\n")
+                .ok();
+            self.print_prompt(&mut renderer);
+            self.print_input(&mut renderer, false, false);
+            renderer.flush().ok();
             return Ok(ReplControlFlow::Continue);
         }
 

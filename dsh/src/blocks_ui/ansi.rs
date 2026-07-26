@@ -28,8 +28,22 @@ enum State {
 /// ordinary text rather than swallowing the rest of the output.
 pub fn strip_ansi(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
+    scan(input, |ch| out.push(ch));
+    out
+}
+
+/// Drive the escape-sequence state machine, handing every kept character to
+/// `keep`.
+///
+/// Callers that only need a count must not have to materialise the stripped
+/// string: doing that for every block up front made opening the browser cost
+/// seconds at the 100-block × 1 MiB cap.
+fn scan(input: &str, mut keep: impl FnMut(char)) {
     let mut state = State::Ground;
     let mut pending = String::new();
+    // `pending` never exceeds MAX_PENDING_CONTROL, so its length in chars is
+    // tracked directly instead of recounting the string on every byte.
+    let mut pending_len = 0usize;
 
     for ch in input.chars() {
         match state {
@@ -38,7 +52,7 @@ pub fn strip_ansi(input: &str) -> String {
                     pending.push(ch);
                     state = State::Escape;
                 } else {
-                    out.push(ch);
+                    keep(ch);
                 }
             }
             State::Escape => {
@@ -108,21 +122,24 @@ pub fn strip_ansi(input: &str) -> String {
             }
         }
 
+        pending_len = pending.chars().count();
+
         // Not a real escape sequence after all: keep the text instead of
         // discarding the remainder of the output.
-        if pending.chars().count() >= MAX_PENDING_CONTROL {
-            out.push_str(&pending);
+        if pending_len >= MAX_PENDING_CONTROL {
+            for pending_ch in pending.chars() {
+                keep(pending_ch);
+            }
             pending.clear();
+            pending_len = 0;
             state = State::Ground;
         }
     }
 
-    // Trailing partial sequence: the output was truncated mid-escape.
-    if !pending.is_empty() && pending.chars().count() >= MAX_PENDING_CONTROL {
-        out.push_str(&pending);
-    }
-
-    out
+    // Anything still pending is a sequence the output was truncated in the
+    // middle of; it is shorter than MAX_PENDING_CONTROL (the in-loop check
+    // flushes past that) and is escape bytes, so drop it.
+    let _ = pending_len;
 }
 
 /// Apply the overwrite semantics of `\r` and `\x08` within a single line.
@@ -182,18 +199,50 @@ pub fn display_lines(output: &str) -> Vec<String> {
     lines
 }
 
+/// Bytes of each block sampled to classify it. Density is a heuristic, and the
+/// browser classifies every block up front, so the cost must not scale with the
+/// 1 MiB capture cap.
+const DENSITY_SAMPLE_BYTES: usize = 64 * 1024;
+
 /// Rough share of the text that was ANSI escapes.
 ///
 /// Full-screen programs (`vim`, `htop`) leave a block that is almost entirely
 /// cursor positioning; after stripping it is noise, so the browser collapses
 /// those by default rather than pretending they are readable output.
+///
+/// Counts through [`scan`] instead of measuring `strip_ansi`'s output: building
+/// a stripped copy of every block just to compare lengths is what made opening
+/// the browser cost a visible pause.
 pub fn ansi_density(output: &str) -> f32 {
-    if output.is_empty() {
+    let sample = sample_prefix(output, DENSITY_SAMPLE_BYTES);
+    if sample.is_empty() {
         return 0.0;
     }
-    let total = output.chars().count();
-    let kept = strip_ansi(output).chars().count();
+
+    let mut total = 0usize;
+    let mut kept = 0usize;
+    scan_counting(sample, &mut total, &mut kept);
     (total - kept) as f32 / total as f32
+}
+
+fn scan_counting(sample: &str, total: &mut usize, kept: &mut usize) {
+    *total = sample.chars().count();
+    let mut count = 0usize;
+    scan(sample, |_| count += 1);
+    *kept = count;
+}
+
+/// Longest prefix of `text` that is at most `max_bytes` long and ends on a
+/// character boundary.
+fn sample_prefix(text: &str, max_bytes: usize) -> &str {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 #[cfg(test)]
@@ -292,6 +341,36 @@ mod tests {
     #[test]
     fn display_lines_of_empty_output_is_empty() {
         assert!(display_lines("").is_empty());
+    }
+
+    #[test]
+    fn sample_prefix_never_splits_a_character() {
+        let text = "あいうえお"; // 3 bytes each
+        // 7 is mid-character; the prefix must back off to 6.
+        let sample = sample_prefix(text, 7);
+        assert_eq!(sample, "あい");
+        assert!(text.starts_with(sample));
+
+        // Shorter than the cap: returned whole.
+        assert_eq!(sample_prefix(text, 1000), text);
+        // Cap smaller than the first character: empty rather than a panic.
+        assert_eq!(sample_prefix(text, 2), "");
+        assert_eq!(sample_prefix("", 10), "");
+    }
+
+    #[test]
+    fn ansi_density_only_samples_a_prefix() {
+        // Escapes up front, then far more plain text than the sample window:
+        // the verdict comes from the sample, not the whole block.
+        let noisy_head: String = "\x1b[1;1H\x1b[K".repeat(DENSITY_SAMPLE_BYTES / 9);
+        let long_tail = "plain text\n".repeat(200_000);
+        let block = format!("{noisy_head}{long_tail}");
+        assert!(block.len() > DENSITY_SAMPLE_BYTES * 4);
+        assert!(ansi_density(&block) > 0.5);
+
+        // And a block whose sampled head is plain stays plain.
+        let plain_head = format!("{long_tail}{noisy_head}");
+        assert!(ansi_density(&plain_head) < 0.5);
     }
 
     #[test]

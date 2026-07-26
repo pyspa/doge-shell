@@ -16,11 +16,16 @@ pub fn execute(shell: &mut Shell, ctx: &Context, _argv: Vec<String>) -> Result<(
     }
 
     match run(BlockBrowser::new(blocks))? {
-        // Unlike the Ctrl-O path there is no input buffer to write back into —
-        // the builtin runs as a command, not from the line editor — so queue the
-        // command for the shell to evaluate next.
-        BrowserOutcome::Insert(text) | BrowserOutcome::Run(text) => {
+        // There is no input buffer to write back into — the builtin runs as a
+        // command, not from the line editor. `r` asked for execution, so queue
+        // it; this drains in `handle_execute` right after the builtin returns.
+        BrowserOutcome::Run(text) => {
             shell.request_eval_command(text)?;
+        }
+        // Enter means "give me the command", not "run it". Print it rather than
+        // silently promoting it to an execution the user did not ask for.
+        BrowserOutcome::Insert(text) => {
+            ctx.write_stdout(&text)?;
         }
         BrowserOutcome::Quit => {}
     }

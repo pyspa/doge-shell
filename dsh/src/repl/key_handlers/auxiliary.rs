@@ -32,6 +32,10 @@ pub(crate) async fn handle_open_command_palette(repl: &mut Repl<'_>) -> Result<R
 
     let mut renderer = TerminalRenderer::new();
     repl.print_prompt(&mut renderer);
+    // Actions that hand a command back (Search History, Block Browser) put it in
+    // the buffer; without this it stays invisible until the next keystroke and
+    // the palette looks like it did nothing.
+    repl.print_input(&mut renderer, true, false);
     renderer.flush().ok();
     Ok(ReplControlFlow::Continue)
 }

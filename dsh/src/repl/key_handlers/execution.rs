@@ -137,7 +137,8 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
         execute_shell_command(repl, input_str, ai_watch_request).await?;
 
         while let Some(command) = repl.shell.pop_requested_eval_command() {
-            write_command_boundary(format!("\r\nblocks rerun: {command}\r\n").as_bytes());
+            // Queued by `blocks rerun` and by the block browser's `r`.
+            write_command_boundary(format!("\r\nblocks run: {command}\r\n").as_bytes());
             let _drain_guard = repl.shell.begin_pending_eval_drain()?;
             execute_shell_command(repl, command, None).await?;
         }

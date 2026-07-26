@@ -35,6 +35,43 @@ pub(crate) fn handle_backspace(repl: &mut Repl<'_>) -> bool {
     true // reset_completion = true
 }
 
+/// Re-insert the text removed by the last kill (Ctrl-Y).
+pub(crate) fn handle_yank(repl: &mut Repl<'_>) -> bool {
+    if !repl.input.yank() {
+        return false;
+    }
+    repl.completion.clear();
+    repl.input.color_ranges = None;
+    true
+}
+
+/// Undo the last edit (Ctrl-_).
+pub(crate) fn handle_undo(repl: &mut Repl<'_>) -> bool {
+    if !repl.input.undo() {
+        return false;
+    }
+    repl.completion.clear();
+    true
+}
+
+/// Redo the last undone edit (Alt-/).
+pub(crate) fn handle_redo(repl: &mut Repl<'_>) -> bool {
+    if !repl.input.redo() {
+        return false;
+    }
+    repl.completion.clear();
+    true
+}
+
+/// Delete the character under the cursor (Delete key, and Ctrl-D on a
+/// non-empty line). `Input::delete_char` is a no-op at end of buffer.
+pub(crate) fn handle_delete_char_forward(repl: &mut Repl<'_>) -> bool {
+    repl.input.delete_char();
+    repl.completion.clear();
+    repl.input.color_ranges = None;
+    true // reset_completion = true
+}
+
 pub(crate) fn handle_delete_word_backward(repl: &mut Repl<'_>) -> bool {
     repl.input.delete_word_backward();
     true

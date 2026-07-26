@@ -275,44 +275,8 @@ async fn execute_shell_command(
 
     // Auto-Notify logic
     {
-        // Check threshold
-        let threshold = repl
-            .shell
-            .environment
-            .read()
-            .input_preferences
-            .auto_notify_threshold;
-        let enabled = repl
-            .shell
-            .environment
-            .read()
-            .input_preferences
-            .auto_notify_enabled;
-
-        if enabled && elapsed >= std::time::Duration::from_secs(threshold) {
-            use notify_rust::Notification;
-            let summary = if exit_code == 0 {
-                "Command Completed"
-            } else {
-                "Command Failed"
-            };
-            let cmd_preview = if input_str.len() > 50 {
-                format!("{}...", &input_str[..47])
-            } else {
-                input_str.clone()
-            };
-            let body = format!("'{}' took {:.1}s", cmd_preview, elapsed.as_secs_f64());
-
-            // Fire and forget notification
-            if let Err(e) = Notification::new()
-                .summary(summary)
-                .body(&body)
-                .appname("doge-shell")
-                .show()
-            {
-                warn!("Failed to send desktop notification: {}", e);
-            }
-        }
+        let prefs = repl.shell.environment.read().input_preferences;
+        crate::repl::notify::notify_command_finished(&prefs, &input_str, elapsed, exit_code);
     }
 
     repl.input.clear();
@@ -515,6 +479,58 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
 }
 
 /// Handle Ctrl+C interrupt.
+/// Ctrl-D on an empty line: end of input.
+///
+/// Sets `should_exit`; the REPL loop's stopped-job check then produces the
+/// bash-like "There are stopped jobs." retry behavior.
+pub(crate) fn handle_eof(repl: &mut Repl<'_>) -> Result<()> {
+    let mut renderer = TerminalRenderer::new();
+    queue!(renderer, Print("\r\nexit\r\n")).ok();
+    renderer.flush().ok();
+    repl.should_exit = true;
+    Ok(())
+}
+
+/// Ctrl-Z on an empty line: resume the most recently stopped job.
+///
+/// Delegates to the `fg` builtin rather than reimplementing tcsetpgrp/SIGCONT.
+pub(crate) fn handle_resume_last_job(repl: &mut Repl<'_>) -> Result<()> {
+    let Some(job_id) = repl
+        .shell
+        .wait_jobs
+        .iter()
+        .rev()
+        .find(|job| matches!(job.state, crate::process::state::ProcessState::Stopped(..)))
+        .map(|job| job.job_id)
+    else {
+        return Ok(());
+    };
+
+    let shell_tmode = match get_tmode_safe(&repl.tmode) {
+        Ok(tmode) => tmode,
+        Err(e) => {
+            warn!("Cannot get terminal mode for resume: {}", e);
+            return Ok(());
+        }
+    };
+    let ctx = Context::new(repl.shell.pid, repl.shell.pgid, Some(shell_tmode), true);
+
+    crossterm::terminal::disable_raw_mode().ok();
+    let result = crate::proxy::resume_job_foreground(repl.shell, &ctx, job_id);
+    crossterm::terminal::enable_raw_mode().ok();
+
+    if let Err(e) = result {
+        warn!("Failed to resume job {}: {}", job_id, e);
+    }
+
+    repl.input.clear();
+    let mut renderer = TerminalRenderer::new();
+    repl.print_prompt(&mut renderer);
+    repl.print_input(&mut renderer, true, false);
+    renderer.flush().ok();
+    Ok(())
+}
+
 pub(crate) fn handle_interrupt(repl: &mut Repl<'_>) -> Result<()> {
     debug!("CTRL_C_HANDLER: Ctrl+C pressed, processing...");
     let mut renderer = TerminalRenderer::new();

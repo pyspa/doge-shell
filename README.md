@@ -39,7 +39,8 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 - **History Search**: Interactive history search with Ctrl+R using the current input as the search query
 - **Command Abbreviations**: Define and use abbreviations with `abbr` command
 - **AI-Powered Completion**: OpenAI integration for intelligent command completion suggestions
-- **Right Prompt**: Displays command execution status and duration on the right side
+- **Execution Status & Duration**: The prompt shows the exit status and elapsed time of the previous command
+- **Job Notifications**: Finished background jobs are reported as `[1]+  Done  <cmd>` above the prompt without disturbing what you are typing
 - **Inline Argument Explainer**: Displays real-time descriptions of command arguments and options below the prompt as you type
 - **Transient Prompt**: Automatically collapses the prompt after command execution to keep the terminal clean
 
@@ -706,10 +707,17 @@ include setup.sh
 - `Tab` - Context-aware completion
 - `Ctrl+R` - Interactive history search using the current input as the query
 - `Ctrl+C` - Cancel current command (press twice to exit shell)
+- `Ctrl+D` - End of input (exit) on an empty line, delete the character under the cursor otherwise
+- `Ctrl+Z` - Suspend the running command; on an empty prompt, resume the most recently stopped job
 - `Ctrl+L` - Clear screen
+- `Home` / `End` - Move to the beginning / end of the line (same as `Ctrl+A` / `Ctrl+E`)
+- `Delete` - Delete the character under the cursor
 - `Ctrl+K` - Delete from cursor to end of line
 - `Ctrl+U` - Delete from cursor to beginning of line
 - `Ctrl+W` - Delete word backward
+- `Ctrl+Y` - Yank back the text removed by the last `Ctrl+K` / `Ctrl+U` / `Ctrl+W`
+- `Ctrl+_` - Undo the last edit (undo steps break at word boundaries)
+- `Alt+/` - Redo
 - `Alt+x` - Open Command Palette
 - `Esc` (double press) - Toggle `sudo` prefix for the current command
 - `Ctrl+x Ctrl+e` - Edit current input in external editor (`$VISUAL` or `$EDITOR`)

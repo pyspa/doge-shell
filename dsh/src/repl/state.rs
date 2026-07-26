@@ -4,11 +4,10 @@ use std::time::{Duration, Instant};
 #[derive(Eq, PartialEq)]
 pub enum ShellEvent {
     Input(Event),
-    // Planned event variants; not emitted yet.
+    // Planned event variant; not emitted yet. Terminal resizes arrive as
+    // `Input(Event::Resize(..))` from the crossterm EventStream.
     #[allow(dead_code)]
     Paste(String),
-    #[allow(dead_code)]
-    ScreenResized,
 }
 
 #[derive(Debug)]

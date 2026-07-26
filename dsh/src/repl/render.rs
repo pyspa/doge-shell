@@ -59,7 +59,45 @@ pub(crate) fn move_cursor_relative(
     }
 }
 
+/// Number of terminal rows an already-ANSI-stripped preprompt occupies at
+/// `columns` wide.
+///
+/// Anything that erases and re-emits the preprompt must move up by this much;
+/// assuming one row leaves an orphaned fragment whenever it wraps.
+pub(crate) fn preprompt_rows(plain: &str, columns: usize) -> usize {
+    if columns == 0 {
+        return 1;
+    }
+    plain
+        .split('\n')
+        .map(|segment| {
+            let width = display_width(segment.trim_end_matches('\r'));
+            // A segment exactly `columns` wide still occupies one row: the
+            // terminal defers the wrap until the next character.
+            width.div_ceil(columns).max(1)
+        })
+        .sum()
+}
+
+/// Draw a new prompt: emits shell-integration markers and runs pre-prompt hooks.
 pub(crate) fn print_prompt(repl: &mut Repl<'_>, out: &mut impl Write) {
+    print_prompt_inner(repl, out, true)
+}
+
+/// Redraw the prompt that is already on screen.
+///
+/// Unlike [`print_prompt`] this emits no OSC 133 A (which would open a bogus
+/// command block in shell-integration-aware terminals, with no matching
+/// OSC 133 D) and runs no pre-prompt hooks — a redraw is not a new prompt, and
+/// user hooks must not fire on terminal resizes or background job notices.
+///
+/// The caller is responsible for erasing the old prompt first; see
+/// [`print_above_prompt`].
+pub(crate) fn redraw_prompt(repl: &mut Repl<'_>, out: &mut impl Write) {
+    print_prompt_inner(repl, out, false)
+}
+
+fn print_prompt_inner(repl: &mut Repl<'_>, out: &mut impl Write, new_prompt: bool) {
     // A full prompt establishes a new input drawing origin. Any previous input
     // redraw height belongs to the old prompt and must not clear later output.
     repl.last_drawn_cursor_y = 0;
@@ -69,30 +107,32 @@ pub(crate) fn print_prompt(repl: &mut Repl<'_>, out: &mut impl Write) {
         out.write_all(continuation_prompt.as_bytes()).ok();
         repl.prompt_mark_cache = continuation_prompt.to_string();
         repl.prompt_mark_width = 4; // length of "..> "
+        // Continuation mode draws no preprompt line.
+        repl.last_preprompt_plain = None;
         return;
     }
 
-    // OSC 133 A: Prompt start
-    out.write_all(b"\x1b]133;A\x1b\\").ok();
+    if new_prompt {
+        // OSC 133 A: Prompt start
+        out.write_all(b"\x1b]133;A\x1b\\").ok();
 
-    // OSC 7 Directory Tracking (emit before hooks)
-    if let Ok(cwd) = std::env::current_dir()
-        && let Ok(hostname) = nix::unistd::gethostname()
-    {
-        let hostname: std::ffi::OsString = hostname;
-        let hostname_str = hostname.to_string_lossy().to_string();
-        let cwd_str = cwd.to_string_lossy();
-        // Format: \x1b]7;file://<hostname><pwd>\x1b\
-        // Note: We skip full URL encoding for simplicity, assumes standard paths.
-        let osc7 = format!("\x1b]7;file://{}{}\x1b\\", hostname_str, cwd_str);
-        out.write_all(osc7.as_bytes()).ok();
-    }
+        // OSC 7 Directory Tracking (emit before hooks)
+        if let Ok(cwd) = std::env::current_dir()
+            && let Ok(hostname) = nix::unistd::gethostname()
+        {
+            let hostname: std::ffi::OsString = hostname;
+            let hostname_str = hostname.to_string_lossy().to_string();
+            let cwd_str = cwd.to_string_lossy();
+            // Format: \x1b]7;file://<hostname><pwd>\x1b\
+            // Note: We skip full URL encoding for simplicity, assumes standard paths.
+            let osc7 = format!("\x1b]7;file://{}{}\x1b\\", hostname_str, cwd_str);
+            out.write_all(osc7.as_bytes()).ok();
+        }
 
-    // debug!("print_prompt called - full preprompt + mark redraw");
-
-    // Execute pre-prompt hooks
-    if let Err(e) = repl.shell.exec_pre_prompt_hooks() {
-        debug!("Error executing pre-prompt hooks: {}", e);
+        // Execute pre-prompt hooks
+        if let Err(e) = repl.shell.exec_pre_prompt_hooks() {
+            debug!("Error executing pre-prompt hooks: {}", e);
+        }
     }
 
     // Update status and render preprompt (acquire write lock)
@@ -105,6 +145,9 @@ pub(crate) fn print_prompt(repl: &mut Repl<'_>, out: &mut impl Write) {
         prompt.print_preprompt(&mut buffer);
         new_mark = prompt.mark.clone();
     }
+
+    repl.last_preprompt_plain =
+        Some(console::strip_ansi_codes(&String::from_utf8_lossy(&buffer)).into_owned());
 
     // Perform I/O without holding the lock
     out.write_all(&buffer).ok();
@@ -187,6 +230,50 @@ pub(crate) fn compute_color_ranges_from_pairs<'p>(
 ) -> (Vec<(usize, usize, ColorType)>, bool) {
     let highlight = parser::collect_highlight_tokens_from_pairs(pairs, input.len());
     highlight_result_to_ranges(repl, highlight, input)
+}
+
+/// Emit `lines` above the inline prompt, then redraw the prompt and the
+/// in-progress input so the user's typing is preserved.
+///
+/// Used for asynchronous notices (finished background jobs) that arrive from
+/// the REPL's background tick while the user may be mid-line.
+///
+/// Callers must guarantee no other full-screen UI owns the terminal. That holds
+/// for the background tick: the completion grid only exists while
+/// `CompletionInteraction::run` blocks on `event::read()`, which runs *inside*
+/// `handle_key_event`, so the tick cannot fire concurrently with it.
+pub(crate) fn print_above_prompt<W: Write>(repl: &mut Repl<'_>, out: &mut W, lines: &[String]) {
+    // `columns == 0` means we never sized the terminal (non-tty); the same
+    // guard `render_transient_prompt_to` uses.
+    if lines.is_empty() || repl.columns == 0 {
+        return;
+    }
+
+    // Move back over the whole prompt so it can be re-emitted below the notice.
+    // The preprompt wraps when it is wider than the terminal, so ask for the
+    // row count at the current width rather than assuming a single line.
+    let up = repl.last_drawn_cursor_y + repl.preprompt_rows();
+
+    queue!(out, cursor::Hide, cursor::MoveToColumn(0)).ok();
+    if up > 0 {
+        queue!(out, cursor::MoveUp(up as u16)).ok();
+    }
+    queue!(out, Clear(ClearType::FromCursorDown)).ok();
+
+    for line in lines {
+        out.write_all(line.as_bytes()).ok();
+        out.write_all(b"\r\n").ok();
+    }
+
+    // A redraw, not a new prompt: no OSC 133 A, no pre-prompt hooks.
+    redraw_prompt(repl, out);
+    // `refresh_suggestion = false`: a timer tick must not kick off AI backfill.
+    print_input(repl, out, false, false);
+
+    // The argument explanation is drawn below the input via
+    // SavePosition/RestorePosition and was wiped by the Clear above. Nulling the
+    // cache makes the 200ms debounce redraw it.
+    repl.last_explanation = None;
 }
 
 pub fn print_input(
@@ -520,7 +607,10 @@ pub(crate) fn render_transient_prompt_to<W: Write>(
 
 #[cfg(test)]
 mod tests {
-    use super::{print_input, print_prompt, render_transient_prompt_to};
+    use super::{
+        preprompt_rows, print_above_prompt, print_input, print_prompt, redraw_prompt,
+        render_transient_prompt_to,
+    };
     use crate::environment::Environment;
     use crate::input::{Input, InputConfig};
     use crate::repl::Repl;
@@ -597,6 +687,228 @@ mod tests {
         print_input(&mut repl, &mut output, true, false);
 
         assert_eq!(repl.last_drawn_cursor_y, 1);
+    }
+
+    #[test]
+    fn preprompt_rows_counts_wrapped_lines() {
+        assert_eq!(preprompt_rows("abc", 40), 1);
+        // Exactly the terminal width still occupies one row: the wrap is
+        // deferred until the next character.
+        assert_eq!(preprompt_rows(&"a".repeat(40), 40), 1);
+        assert_eq!(preprompt_rows(&"a".repeat(41), 40), 2);
+        assert_eq!(preprompt_rows(&"a".repeat(81), 40), 3);
+    }
+
+    #[test]
+    fn preprompt_rows_counts_explicit_newlines() {
+        assert_eq!(preprompt_rows("one\ntwo", 40), 2);
+        // A wrapped segment plus a short one.
+        assert_eq!(preprompt_rows(&format!("{}\nshort", "a".repeat(41)), 40), 3);
+    }
+
+    #[test]
+    fn preprompt_rows_handles_unknown_width() {
+        assert_eq!(preprompt_rows("anything", 0), 1);
+    }
+
+    #[tokio::test]
+    async fn print_above_prompt_moves_past_a_wrapped_preprompt() {
+        // Regression: assuming the preprompt is one row leaves an orphaned
+        // fragment on screen whenever the path is wider than the terminal.
+        let mut shell = Shell::new(Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        repl.columns = 20;
+        repl.prompt_mark_cache = "> ".to_string();
+        repl.prompt_mark_width = 2;
+        repl.input.reset("abc".to_string());
+        repl.last_drawn_cursor_y = 0;
+        // 45 columns of preprompt at 20 wide = 3 rows.
+        repl.last_preprompt_plain = Some("p".repeat(45));
+        assert_eq!(repl.preprompt_rows(), 3);
+
+        let mut output = Vec::new();
+        print_above_prompt(&mut repl, &mut output, &["[1]+  Done  x".to_string()]);
+
+        // Must move up over all three, not the single row the old code assumed.
+        assert!(contains_bytes(&output, b"\x1b[3A"));
+        assert!(!contains_bytes(&output, b"\x1b[1A"));
+    }
+
+    #[tokio::test]
+    async fn print_above_prompt_does_not_emit_prompt_start_or_run_hooks() {
+        // A redraw is not a new prompt: OSC 133 A here would open a command
+        // block with no matching OSC 133 D.
+        let mut shell = Shell::new(Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        repl.columns = 40;
+        repl.prompt_mark_cache = "> ".to_string();
+        repl.prompt_mark_width = 2;
+
+        let mut output = Vec::new();
+        print_above_prompt(&mut repl, &mut output, &["done".to_string()]);
+
+        assert!(!contains_bytes(&output, b"\x1b]133;A"));
+        assert!(!contains_bytes(&output, b"\x1b]7;file://"));
+    }
+
+    #[tokio::test]
+    async fn print_prompt_emits_prompt_start_but_redraw_prompt_does_not() {
+        let mut shell = Shell::new(Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        repl.columns = 40;
+
+        let mut fresh = Vec::new();
+        print_prompt(&mut repl, &mut fresh);
+        assert!(contains_bytes(&fresh, b"\x1b]133;A"));
+
+        let mut again = Vec::new();
+        redraw_prompt(&mut repl, &mut again);
+        assert!(!contains_bytes(&again, b"\x1b]133;A"));
+    }
+
+    #[tokio::test]
+    async fn print_prompt_records_the_preprompt_for_row_counting() {
+        let mut shell = Shell::new(Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        repl.columns = 40;
+
+        let mut output = Vec::new();
+        print_prompt(&mut repl, &mut output);
+
+        // Recorded ANSI-stripped so the row count reflects display width.
+        let plain = repl.last_preprompt_plain.as_deref().unwrap();
+        assert!(!plain.contains('\x1b'));
+        assert!(repl.preprompt_rows() >= 1);
+    }
+
+    #[tokio::test]
+    async fn continuation_prompt_reports_no_preprompt_rows() {
+        let mut shell = Shell::new(Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        repl.columns = 40;
+        repl.multiline_buffer = "echo one\n".to_string();
+
+        let mut output = Vec::new();
+        print_prompt(&mut repl, &mut output);
+
+        assert!(repl.last_preprompt_plain.is_none());
+        assert_eq!(repl.preprompt_rows(), 0);
+    }
+
+    #[tokio::test]
+    async fn print_above_prompt_moves_past_preprompt_and_clears() {
+        let mut shell = Shell::new(Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        repl.columns = 40;
+        repl.prompt_mark_cache = "> ".to_string();
+        repl.prompt_mark_width = 2;
+        repl.input.reset("abc".to_string());
+        repl.last_drawn_cursor_y = 0;
+        repl.last_preprompt_plain = Some("~/repo".to_string());
+
+        let mut output = Vec::new();
+        print_above_prompt(&mut repl, &mut output, &["[1]+  Done  sleep 1".to_string()]);
+
+        // One row up for the preprompt line, then clear everything below.
+        assert!(contains_bytes(&output, b"\x1b[1A"));
+        assert!(contains_bytes(&output, b"\x1b[J"));
+        assert!(contains_bytes(&output, b"[1]+  Done  sleep 1"));
+    }
+
+    #[tokio::test]
+    async fn print_above_prompt_in_continuation_mode_skips_preprompt_line() {
+        let mut shell = Shell::new(Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        repl.columns = 40;
+        repl.prompt_mark_cache = "..> ".to_string();
+        repl.prompt_mark_width = 4;
+        repl.multiline_buffer = "echo one\n".to_string();
+        repl.last_drawn_cursor_y = 0;
+
+        let mut output = Vec::new();
+        print_above_prompt(&mut repl, &mut output, &["[1]+  Done  x".to_string()]);
+
+        // No preprompt line exists in continuation mode, so nothing to move past.
+        assert!(!contains_bytes(&output, b"\x1b[1A"));
+        assert!(contains_bytes(&output, b"[1]+  Done  x"));
+    }
+
+    #[tokio::test]
+    async fn print_above_prompt_multiline_input_moves_up_cursor_row_plus_one() {
+        let mut shell = Shell::new(Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        repl.columns = 8;
+        repl.prompt_mark_cache = "> ".to_string();
+        repl.prompt_mark_width = 2;
+        repl.input.reset("abcdefg".to_string());
+        // "> abcdefg" wraps at 8 columns, so the cursor sits on row 1.
+        repl.last_drawn_cursor_y = 1;
+        repl.last_preprompt_plain = Some("~".to_string());
+
+        let mut output = Vec::new();
+        print_above_prompt(&mut repl, &mut output, &["done".to_string()]);
+
+        // 1 input row + 1 preprompt row.
+        assert!(contains_bytes(&output, b"\x1b[2A"));
+    }
+
+    #[tokio::test]
+    async fn print_above_prompt_noop_when_columns_zero() {
+        let mut shell = Shell::new(Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        repl.columns = 0;
+
+        let mut output = Vec::new();
+        print_above_prompt(&mut repl, &mut output, &["done".to_string()]);
+
+        assert!(output.is_empty());
+    }
+
+    #[tokio::test]
+    async fn print_above_prompt_noop_when_no_lines() {
+        let mut shell = Shell::new(Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        repl.columns = 40;
+
+        let mut output = Vec::new();
+        print_above_prompt(&mut repl, &mut output, &[]);
+
+        assert!(output.is_empty());
+    }
+
+    #[tokio::test]
+    async fn print_above_prompt_preserves_input_buffer() {
+        let mut shell = Shell::new(Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        repl.columns = 40;
+        repl.prompt_mark_cache = "> ".to_string();
+        repl.prompt_mark_width = 2;
+        repl.input.reset("git comm".to_string());
+
+        let mut output = Vec::new();
+        print_above_prompt(&mut repl, &mut output, &["done".to_string()]);
+
+        assert_eq!(repl.input.as_str(), "git comm");
+        // The input is redrawn below the notice. Syntax highlighting splits it
+        // into colored runs, so assert on the individual tokens.
+        assert!(contains_bytes(&output, b"done"));
+        assert!(contains_bytes(&output, b"git"));
+        assert!(contains_bytes(&output, b"comm"));
+    }
+
+    #[tokio::test]
+    async fn print_above_prompt_clears_last_explanation() {
+        let mut shell = Shell::new(Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        repl.columns = 40;
+        repl.prompt_mark_cache = "> ".to_string();
+        repl.prompt_mark_width = 2;
+        repl.last_explanation = Some("stale hint".to_string());
+
+        let mut output = Vec::new();
+        print_above_prompt(&mut repl, &mut output, &["done".to_string()]);
+
+        assert!(repl.last_explanation.is_none());
     }
 
     #[test]

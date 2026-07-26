@@ -53,8 +53,10 @@ use cache::*;
 pub(crate) mod ai_watch;
 pub mod confirmation;
 mod handler;
+pub(crate) mod job_notify;
 pub mod key_action;
 mod key_handlers;
+pub(crate) mod notify;
 mod render;
 mod suggestion_manager;
 
@@ -130,6 +132,14 @@ pub struct Repl<'a> {
     pub(crate) github_task: Option<tokio::task::JoinHandle<()>>,
     /// Y coordinate of the cursor in the previously drawn input to allow proper clearing backward
     pub(crate) last_drawn_cursor_y: usize,
+    /// The last drawn preprompt with ANSI codes stripped, or `None` in
+    /// continuation mode, which draws no preprompt at all.
+    ///
+    /// Kept as text rather than a row count because the number of rows it
+    /// occupies depends on the terminal width, which changes under our feet on
+    /// resize. Anything that erases and re-emits the preprompt asks
+    /// [`Repl::preprompt_rows`] for the count at the *current* width.
+    pub(crate) last_preprompt_plain: Option<String>,
 }
 
 impl<'a> Drop for Repl<'a> {
@@ -327,6 +337,7 @@ impl<'a> Repl<'a> {
             last_analysis_result: None,
             github_task: Some(github_task),
             last_drawn_cursor_y: 0,
+            last_preprompt_plain: None,
         }
     }
 
@@ -659,6 +670,17 @@ impl<'a> Repl<'a> {
         refresh_suggestion: bool,
     ) {
         render::print_input(self, out, reset_completion, refresh_suggestion)
+    }
+
+    /// Rows the currently drawn preprompt occupies at the *current* width.
+    ///
+    /// Zero in continuation mode. Recomputed on each call so a resize between
+    /// drawing and erasing cannot leave a stale count behind.
+    pub(crate) fn preprompt_rows(&self) -> usize {
+        match &self.last_preprompt_plain {
+            None => 0,
+            Some(plain) => render::preprompt_rows(plain, self.columns),
+        }
     }
 
     pub async fn run_interactive(&mut self) -> Result<()> {

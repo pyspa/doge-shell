@@ -16,6 +16,15 @@ use std::io::{self, BufRead, BufReader, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use tracing::{debug, warn};
 
+/// Bring a stopped job back to the foreground, as the `fg` builtin does.
+///
+/// Exposed so the Ctrl-Z key binding can reuse the builtin's tcsetpgrp/SIGCONT
+/// handling instead of reimplementing it, without widening the whole `builtin`
+/// module's visibility.
+pub(crate) fn resume_job_foreground(shell: &mut Shell, ctx: &Context, job_id: usize) -> Result<()> {
+    builtin::jobs::execute_fg(shell, ctx, vec!["fg".to_string(), job_id.to_string()])
+}
+
 fn canonical_or_original(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }

@@ -12,6 +12,25 @@ use unicode_width::UnicodeWidthChar;
 
 const INITIAL_CAP: usize = 256;
 
+/// Upper bound on retained undo snapshots for a single line.
+const MAX_UNDO_DEPTH: usize = 100;
+
+/// Buffer state captured for undo/redo.
+#[derive(Debug, Clone)]
+struct Snapshot {
+    input: String,
+    cursor: usize,
+}
+
+/// Kind of the last edit, used to coalesce a run of typed characters into a
+/// single undo step instead of one step per keystroke.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditKind {
+    Insert,
+    Delete,
+    Other,
+}
+
 #[derive(Debug, Clone)]
 pub struct Input {
     config: InputConfig,
@@ -20,6 +39,19 @@ pub struct Input {
     indices: Vec<usize>,
     /// Cached display width of the full input string (updated on modification)
     cached_display_width: usize,
+
+    /// Text removed by the most recent kill (Ctrl-K / Ctrl-U / Ctrl-W),
+    /// re-insertable with Ctrl-Y.
+    kill_ring: String,
+    undo_stack: Vec<Snapshot>,
+    redo_stack: Vec<Snapshot>,
+    last_edit_kind: Option<EditKind>,
+    /// Whether the previously typed character was whitespace, used to break the
+    /// undo run at word boundaries.
+    last_insert_was_space: bool,
+    /// Set while a compound edit runs so nested primitives don't each record a
+    /// snapshot (e.g. `delete_word_backward` calling `backspace` in a loop).
+    suppress_undo: bool,
 
     pub completion: Option<String>,
     pub color_ranges: Option<Vec<(usize, usize, ColorType)>>, // (start, end, color_type)
@@ -34,13 +66,99 @@ impl Input {
             input: String::with_capacity(INITIAL_CAP),
             indices: Vec::with_capacity(INITIAL_CAP),
             cached_display_width: 0,
+            kill_ring: String::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            last_edit_kind: None,
+            last_insert_was_space: false,
+            suppress_undo: false,
             completion: None,
             color_ranges: None,
             can_execute: false,
         }
     }
 
+    /// Record the pre-edit state so it can be restored by `undo`.
+    ///
+    /// Consecutive inserts coalesce into one step; any other edit starts a new
+    /// one. Recording an edit invalidates the redo stack, as usual.
+    fn record_undo(&mut self, kind: EditKind) {
+        if self.suppress_undo {
+            return;
+        }
+        if kind == EditKind::Insert && self.last_edit_kind == Some(EditKind::Insert) {
+            self.redo_stack.clear();
+            return;
+        }
+
+        self.undo_stack.push(Snapshot {
+            input: self.input.clone(),
+            cursor: self.cursor,
+        });
+        if self.undo_stack.len() > MAX_UNDO_DEPTH {
+            self.undo_stack.remove(0);
+        }
+        self.redo_stack.clear();
+        self.last_edit_kind = Some(kind);
+    }
+
+    fn restore(&mut self, snapshot: Snapshot) {
+        self.input = snapshot.input;
+        self.update_indices();
+        self.recalculate_display_width();
+        self.cursor = min(snapshot.cursor, self.len());
+        self.color_ranges = None;
+        self.completion = None;
+        self.last_edit_kind = None;
+        self.last_insert_was_space = false;
+    }
+
+    /// Restore the previous buffer state. Returns false when there is nothing
+    /// left to undo.
+    pub fn undo(&mut self) -> bool {
+        let Some(previous) = self.undo_stack.pop() else {
+            return false;
+        };
+        self.redo_stack.push(Snapshot {
+            input: self.input.clone(),
+            cursor: self.cursor,
+        });
+        self.restore(previous);
+        true
+    }
+
+    /// Re-apply the most recently undone state.
+    pub fn redo(&mut self) -> bool {
+        let Some(next) = self.redo_stack.pop() else {
+            return false;
+        };
+        self.undo_stack.push(Snapshot {
+            input: self.input.clone(),
+            cursor: self.cursor,
+        });
+        self.restore(next);
+        true
+    }
+
+    /// Text held by the most recent kill.
+    pub fn kill_ring(&self) -> &str {
+        &self.kill_ring
+    }
+
+    /// Insert the kill ring at the cursor. Returns false when it is empty.
+    pub fn yank(&mut self) -> bool {
+        if self.kill_ring.is_empty() {
+            return false;
+        }
+        let text = std::mem::take(&mut self.kill_ring);
+        self.insert_str(&text);
+        self.kill_ring = text;
+        self.last_edit_kind = Some(EditKind::Other);
+        true
+    }
+
     pub fn reset(&mut self, input: String) {
+        self.record_undo(EditKind::Other);
         self.input = input;
         self.update_indices();
         self.recalculate_display_width();
@@ -53,6 +171,7 @@ impl Input {
         input: String,
         color_ranges: Vec<(usize, usize, ColorType)>,
     ) {
+        self.record_undo(EditKind::Other);
         self.input = input;
         self.update_indices();
         self.recalculate_display_width();
@@ -74,6 +193,11 @@ impl Input {
         self.indices.clear();
         self.cached_display_width = 0;
         self.color_ranges = None;
+        // A cleared buffer starts a new command line; its edit history is gone.
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.last_edit_kind = None;
+        self.last_insert_was_space = false;
     }
 
     pub fn move_to_begin(&mut self) {
@@ -85,6 +209,14 @@ impl Input {
     }
 
     pub fn insert(&mut self, ch: char) {
+        // Break the undo run at word boundaries. Without this, a whole typed
+        // line coalesces into one step and a single undo wipes everything.
+        if ch.is_whitespace() != self.last_insert_was_space {
+            self.last_edit_kind = None;
+        }
+        self.record_undo(EditKind::Insert);
+        self.last_insert_was_space = ch.is_whitespace();
+
         let byte_index = self.byte_index();
         self.input.insert(byte_index, ch);
 
@@ -103,6 +235,7 @@ impl Input {
         if string.is_empty() {
             return;
         }
+        self.record_undo(EditKind::Other);
 
         let byte_index = self.byte_index();
         self.input.insert_str(byte_index, string);
@@ -151,6 +284,7 @@ impl Input {
 
     pub fn backspace(&mut self) {
         if self.cursor > 0 && self.cursor <= self.indices.len() {
+            self.record_undo(EditKind::Delete);
             let remove_index = self.cursor - 1;
             let byte_index = self.indices[remove_index];
             let char_len = self.char_len_at(remove_index);
@@ -203,17 +337,26 @@ impl Input {
             idx -= 1;
         }
 
+        self.kill_ring = chars[idx..self.cursor].iter().collect();
+
+        // One undo step for the whole word, not one per character.
+        self.record_undo(EditKind::Other);
         let word_len = self.cursor - idx;
+        self.suppress_undo = true;
         for _ in 0..word_len {
             self.backspace();
         }
+        self.suppress_undo = false;
     }
 
     pub fn delete_to_end(&mut self) {
         if self.cursor >= self.len() {
             return;
         }
+        self.record_undo(EditKind::Other);
         let byte_index = self.byte_index();
+
+        self.kill_ring = self.input[byte_index..].to_string();
 
         // Remove content from string
         self.input.truncate(byte_index);
@@ -232,7 +375,10 @@ impl Input {
         if self.cursor == 0 {
             return;
         }
+        self.record_undo(EditKind::Other);
         let byte_index = self.byte_index();
+
+        self.kill_ring = self.input[..byte_index].to_string();
 
         // Remove content from string
         self.input.drain(0..byte_index);
@@ -571,6 +717,7 @@ impl Input {
         if self.cursor >= self.len() || self.cursor >= self.indices.len() {
             return;
         }
+        self.record_undo(EditKind::Delete);
 
         let byte_index = self.indices[self.cursor];
         let char_len = self.char_len_at(self.cursor);
@@ -775,6 +922,220 @@ impl fmt::Display for Input {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A buffer whose undo history starts empty, as it would at the start of a
+    /// fresh command line.
+    fn input_with(text: &str) -> Input {
+        let mut input = Input::new(InputConfig::default());
+        input.reset(text.to_string());
+        input.undo_stack.clear();
+        input.redo_stack.clear();
+        input.last_edit_kind = None;
+        input
+    }
+
+    // === kill ring ===
+
+    #[test]
+    fn kill_to_end_then_yank_round_trips() {
+        let mut input = input_with("echo hello world");
+        input.cursor = 5;
+        input.delete_to_end();
+        assert_eq!(input.as_str(), "echo ");
+        assert_eq!(input.kill_ring(), "hello world");
+
+        assert!(input.yank());
+        assert_eq!(input.as_str(), "echo hello world");
+    }
+
+    #[test]
+    fn kill_to_beginning_then_yank_round_trips() {
+        let mut input = input_with("echo hello");
+        input.cursor = 5;
+        input.delete_to_beginning();
+        assert_eq!(input.as_str(), "hello");
+        assert_eq!(input.kill_ring(), "echo ");
+
+        input.move_to_begin();
+        assert!(input.yank());
+        assert_eq!(input.as_str(), "echo hello");
+    }
+
+    #[test]
+    fn kill_word_backward_saves_the_word() {
+        let mut input = input_with("git commit");
+        input.delete_word_backward();
+        assert_eq!(input.as_str(), "git ");
+        assert_eq!(input.kill_ring(), "commit");
+    }
+
+    #[test]
+    fn kill_ring_survives_multibyte_text() {
+        let mut input = input_with("echo あいう");
+        input.cursor = 5;
+        input.delete_to_end();
+        assert_eq!(input.kill_ring(), "あいう");
+        assert!(input.yank());
+        assert_eq!(input.as_str(), "echo あいう");
+    }
+
+    #[test]
+    fn yank_with_empty_kill_ring_is_a_noop() {
+        let mut input = input_with("abc");
+        assert!(!input.yank());
+        assert_eq!(input.as_str(), "abc");
+    }
+
+    #[test]
+    fn yank_keeps_the_kill_ring_for_repeated_pastes() {
+        let mut input = input_with("abc");
+        input.delete_to_beginning();
+        assert!(input.yank());
+        assert!(input.yank());
+        assert_eq!(input.as_str(), "abcabc");
+    }
+
+    // === undo / redo ===
+
+    #[test]
+    fn undo_restores_the_previous_buffer() {
+        let mut input = input_with("abc");
+        input.delete_to_beginning();
+        assert_eq!(input.as_str(), "");
+
+        assert!(input.undo());
+        assert_eq!(input.as_str(), "abc");
+    }
+
+    #[test]
+    fn redo_reapplies_an_undone_edit() {
+        let mut input = input_with("abc");
+        input.delete_to_beginning();
+        input.undo();
+        assert_eq!(input.as_str(), "abc");
+
+        assert!(input.redo());
+        assert_eq!(input.as_str(), "");
+    }
+
+    #[test]
+    fn undo_with_empty_history_returns_false() {
+        let mut input = input_with("abc");
+        assert!(!input.undo());
+        assert_eq!(input.as_str(), "abc");
+    }
+
+    #[test]
+    fn consecutive_typing_within_a_word_collapses_into_one_undo_step() {
+        let mut input = input_with("");
+        for ch in "hello".chars() {
+            input.insert(ch);
+        }
+        assert_eq!(input.as_str(), "hello");
+
+        assert!(input.undo());
+        assert_eq!(input.as_str(), "");
+        assert!(!input.undo());
+    }
+
+    #[test]
+    fn undo_breaks_at_word_boundaries() {
+        // A single undo must not wipe the whole typed line.
+        let mut input = input_with("");
+        for ch in "echo keep DROP".chars() {
+            input.insert(ch);
+        }
+        assert_eq!(input.as_str(), "echo keep DROP");
+
+        assert!(input.undo());
+        assert_eq!(input.as_str(), "echo keep ");
+        assert!(input.undo());
+        assert_eq!(input.as_str(), "echo keep");
+        assert!(input.undo());
+        assert_eq!(input.as_str(), "echo ");
+    }
+
+    #[test]
+    fn redo_walks_back_through_word_groups() {
+        let mut input = input_with("");
+        for ch in "echo keep DROP".chars() {
+            input.insert(ch);
+        }
+        input.undo();
+        assert_eq!(input.as_str(), "echo keep ");
+
+        assert!(input.redo());
+        assert_eq!(input.as_str(), "echo keep DROP");
+    }
+
+    #[test]
+    fn a_delete_between_inserts_starts_a_new_undo_step() {
+        let mut input = input_with("");
+        input.insert('a');
+        input.insert('b');
+        input.backspace();
+        input.insert('c');
+        assert_eq!(input.as_str(), "ac");
+
+        input.undo(); // undo the "c"
+        assert_eq!(input.as_str(), "a");
+        input.undo(); // undo the backspace
+        assert_eq!(input.as_str(), "ab");
+        input.undo(); // undo the "ab" run
+        assert_eq!(input.as_str(), "");
+    }
+
+    #[test]
+    fn delete_word_backward_is_a_single_undo_step() {
+        let mut input = input_with("git commit");
+        input.delete_word_backward();
+        assert_eq!(input.as_str(), "git ");
+
+        assert!(input.undo());
+        assert_eq!(input.as_str(), "git commit");
+        assert!(!input.undo());
+    }
+
+    #[test]
+    fn a_new_edit_after_undo_clears_the_redo_stack() {
+        let mut input = input_with("abc");
+        input.delete_to_beginning();
+        input.undo();
+        input.insert('z');
+
+        assert!(!input.redo());
+    }
+
+    #[test]
+    fn clear_drops_the_undo_history() {
+        let mut input = input_with("abc");
+        input.delete_to_beginning();
+        input.clear();
+
+        assert!(!input.undo());
+        assert!(!input.redo());
+    }
+
+    #[test]
+    fn undo_history_is_capped() {
+        let mut input = input_with("");
+        // Alternate kinds so every edit records its own step.
+        for _ in 0..(MAX_UNDO_DEPTH + 20) {
+            input.insert('a');
+            input.backspace();
+        }
+        assert!(input.undo_stack.len() <= MAX_UNDO_DEPTH);
+    }
+
+    #[test]
+    fn undo_clamps_a_stale_cursor() {
+        let mut input = input_with("abcdef");
+        input.move_to_end();
+        input.delete_to_beginning();
+        // Cursor was 6 before the edit; the restored buffer is 6 chars long.
+        assert!(input.undo());
+        assert!(input.cursor() <= input.len());
+    }
 
     #[test]
     fn test_input_creation_and_display() {

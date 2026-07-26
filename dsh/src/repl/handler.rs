@@ -41,24 +41,54 @@ pub(crate) async fn handle_event(repl: &mut Repl<'_>, ev: ShellEvent) -> Result<
                 editing::handle_paste_event(repl, &text).await?;
                 Ok(ReplControlFlow::Continue)
             }
+            Event::Resize(cols, rows) => {
+                handle_resize(repl, cols, rows);
+                Ok(ReplControlFlow::Continue)
+            }
             _ => Ok(ReplControlFlow::Continue),
         },
         ShellEvent::Paste(text) => {
             editing::handle_paste_event(repl, &text).await?;
             Ok(ReplControlFlow::Continue)
         }
-        ShellEvent::ScreenResized => {
-            let screen_size = crossterm::terminal::size().unwrap_or_else(|e| {
-                warn!(
-                    "Failed to get terminal size on resize: {}, keeping current size",
-                    e
-                );
-                (repl.columns as u16, repl.lines as u16)
-            });
-            repl.columns = screen_size.0 as usize;
-            repl.lines = screen_size.1 as usize;
-            Ok(ReplControlFlow::Continue)
-        }
+    }
+}
+
+/// Apply a terminal resize.
+///
+/// Every wrapping calculation (`Input::cursor_pos`, `Input::line_count`,
+/// `render_transient_prompt_to`, `render_hint_if_room`) reads `repl.columns`,
+/// which is otherwise only set once in `Repl::setup()`. Without this the whole
+/// render path keeps using the pre-resize width.
+///
+/// Only the input line is redrawn. The terminal has already reflowed the
+/// preprompt above it, so re-emitting it would leave the pre-resize copy on
+/// screen — one duplicated prompt per resize.
+pub(crate) fn handle_resize(repl: &mut Repl<'_>, cols: u16, rows: u16) {
+    let cols = cols as usize;
+    let rows = rows as usize;
+    if cols == repl.columns && rows == repl.lines {
+        return;
+    }
+
+    repl.columns = cols;
+    repl.lines = rows;
+
+    if cols == 0 {
+        return;
+    }
+
+    // The recorded cursor row was measured at the old width. The terminal
+    // rewrapped the input line, so the row the cursor now sits on is the one
+    // implied by the new width — recompute it before `print_input` uses it to
+    // move back up to the prompt mark.
+    let (_, cursor_y) = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
+    repl.last_drawn_cursor_y = cursor_y;
+
+    let mut renderer = TerminalRenderer::new();
+    repl.print_input(&mut renderer, false, false);
+    if let Err(e) = renderer.flush() {
+        warn!("Failed to redraw after resize: {}", e);
     }
 }
 
@@ -123,6 +153,7 @@ pub(crate) async fn handle_key_event(
         cursor_at_start: repl.input.cursor() == 0,
         next_char: repl.input.char_at(repl.input.cursor()),
         auto_pair: repl.input_preferences.auto_pair,
+        multiline_active: !repl.multiline_buffer.is_empty(),
     };
 
     // Determine action using pure function
@@ -207,6 +238,26 @@ pub(crate) async fn handle_key_event(
         }
         KeyAction::Backspace => {
             reset_completion = editing::handle_backspace(repl);
+        }
+        KeyAction::DeleteCharForward => {
+            reset_completion = editing::handle_delete_char_forward(repl);
+        }
+        KeyAction::Yank => {
+            reset_completion = editing::handle_yank(repl);
+        }
+        KeyAction::Undo => {
+            reset_completion = editing::handle_undo(repl);
+        }
+        KeyAction::Redo => {
+            reset_completion = editing::handle_redo(repl);
+        }
+        KeyAction::Eof => {
+            execution::handle_eof(repl)?;
+            return Ok(ReplControlFlow::Continue);
+        }
+        KeyAction::ResumeLastJob => {
+            execution::handle_resume_last_job(repl)?;
+            return Ok(ReplControlFlow::Continue);
         }
         KeyAction::AiAutoFix => {
             repl.trigger_auto_fix();
@@ -298,9 +349,13 @@ pub(crate) async fn handle_key_event(
         action,
         KeyAction::InsertChar(_)
             | KeyAction::Backspace
+            | KeyAction::DeleteCharForward
             | KeyAction::DeleteWordBackward
             | KeyAction::DeleteToEnd
             | KeyAction::DeleteToBeginning
+            | KeyAction::Yank
+            | KeyAction::Undo
+            | KeyAction::Redo
             | KeyAction::AcceptSuggestionWord
             | KeyAction::AcceptSuggestionFull
             | KeyAction::AcceptCompletion

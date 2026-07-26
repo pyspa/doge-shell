@@ -45,6 +45,9 @@ pub struct Job {
     pub disable_pty: bool,
     /// Lisp expressions to evaluate after command output (from |: operator)
     pub struct_pipe_exprs: Vec<String>,
+    /// When the job was created, used to decide whether a finished background
+    /// job ran long enough to warrant a desktop notification.
+    pub started_at: std::time::Instant,
 }
 
 fn last_process_state(process: JobProcess) -> ProcessState {
@@ -90,6 +93,7 @@ impl Job {
             pty_input_task: None,
             disable_pty: false,
             struct_pipe_exprs: Vec::new(),
+            started_at: std::time::Instant::now(),
         }
     }
 
@@ -119,6 +123,7 @@ impl Job {
             pty_input_task: None,
             disable_pty: false,
             struct_pipe_exprs: Vec::new(),
+            started_at: std::time::Instant::now(),
         }
     }
 

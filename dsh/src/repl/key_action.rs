@@ -28,11 +28,19 @@ pub enum KeyAction {
 
     // Editing operations
     InsertChar(char),
-    InsertPairedChar { open: char, close: char },
+    InsertPairedChar {
+        open: char,
+        close: char,
+    },
     Backspace,
+    DeleteCharForward,
     DeleteWordBackward,
     DeleteToEnd,
     DeleteToBeginning,
+    /// Re-insert the text removed by the last kill (Ctrl-Y).
+    Yank,
+    Undo,
+    Redo,
 
     // Completion / Suggestion
     TriggerCompletion,
@@ -45,6 +53,10 @@ pub enum KeyAction {
     // Command execution
     Execute,
     ExecuteBackground,
+    /// Ctrl-D on an empty buffer: end of input, exit the shell.
+    Eof,
+    /// Ctrl-Z on an empty buffer: resume the most recently stopped job.
+    ResumeLastJob,
 
     // Command Palette
     OpenCommandPalette,
@@ -93,6 +105,10 @@ pub struct KeyContext {
     pub next_char: Option<char>,
     /// Is auto-pair enabled
     pub auto_pair: bool,
+    /// Is a multi-line continuation in progress (`multiline_buffer` non-empty).
+    ///
+    /// Ctrl-D must not exit the shell from an empty continuation line.
+    pub multiline_active: bool,
 }
 
 /// Determine action from key input (pure function)
@@ -190,8 +206,13 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
         (KeyCode::Char(ch), NONE) => KeyAction::InsertChar(ch),
         (KeyCode::Char(ch), SHIFT) => KeyAction::InsertChar(ch),
 
-        // Backspace
+        // Backspace / Delete
         (KeyCode::Backspace, NONE) => KeyAction::Backspace,
+        (KeyCode::Delete, NONE) => KeyAction::DeleteCharForward,
+
+        // Home / End
+        (KeyCode::Home, NONE) => KeyAction::CursorToBegin,
+        (KeyCode::End, NONE) => KeyAction::CursorToEnd,
 
         // AI features
         (KeyCode::Char('f'), ALT) => KeyAction::AiAutoFix,
@@ -224,8 +245,15 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
         // Ctrl+L: Clear screen
         (KeyCode::Char('l'), CTRL) => KeyAction::ClearScreen,
 
-        // Ctrl+D: Usually does nothing (displays exit message)
-        (KeyCode::Char('d'), CTRL) => KeyAction::Unsupported,
+        // Ctrl+D: EOF on an empty line, delete-forward otherwise (bash behavior).
+        // A continuation line is never EOF: the command is still being typed.
+        (KeyCode::Char('d'), CTRL) if ctx.input_empty && !ctx.multiline_active => KeyAction::Eof,
+        (KeyCode::Char('d'), CTRL) => KeyAction::DeleteCharForward,
+
+        // Ctrl+Z: resume the most recently stopped job (zsh ctrl-z style).
+        // Suspending dsh itself would be wrong — it may be a login shell, which
+        // is why SIGTSTP is deliberately ignored in `Shell::set_signals`.
+        (KeyCode::Char('z'), CTRL) if ctx.input_empty => KeyAction::ResumeLastJob,
 
         // Ctrl+R: History search
         (KeyCode::Char('r'), CTRL) => KeyAction::HistorySearch,
@@ -241,6 +269,21 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
 
         // Ctrl+U: Delete to beginning of line
         (KeyCode::Char('u'), CTRL) => KeyAction::DeleteToBeginning,
+
+        // Ctrl+Y: Yank the last kill back in
+        (KeyCode::Char('y'), CTRL) => KeyAction::Yank,
+
+        // Ctrl+_ / Ctrl+/: Undo (the readline binding).
+        //
+        // These all arrive as the same 0x1F byte, which crossterm decodes as
+        // `Ctrl+7` (`c - 0x1C + b'4'`). Terminals speaking the kitty keyboard
+        // protocol instead report the literal key, and some add SHIFT for the
+        // underscore, so accept every spelling.
+        (KeyCode::Char('7'), CTRL) => KeyAction::Undo,
+        (KeyCode::Char('_'), m) | (KeyCode::Char('/'), m) if m.contains(CTRL) => KeyAction::Undo,
+
+        // Alt+/: Redo
+        (KeyCode::Char('/'), ALT) => KeyAction::Redo,
 
         // Esc: Cancel completion or toggle sudo
         (KeyCode::Esc, NONE) => {
@@ -274,7 +317,135 @@ mod tests {
             cursor_at_start: false,
             next_char: None,
             auto_pair: false,
+            multiline_active: false,
         }
+    }
+
+    // === Ctrl-D / Delete / Home / End / Ctrl-Z ===
+
+    #[test]
+    fn ctrl_d_on_empty_buffer_is_eof() {
+        let ctx = KeyContext {
+            input_empty: true,
+            ..ctx_default()
+        };
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char('d'), CTRL), &ctx),
+            KeyAction::Eof
+        );
+    }
+
+    #[test]
+    fn ctrl_d_with_text_deletes_forward() {
+        let ctx = KeyContext {
+            input_empty: false,
+            ..ctx_default()
+        };
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char('d'), CTRL), &ctx),
+            KeyAction::DeleteCharForward
+        );
+    }
+
+    #[test]
+    fn ctrl_d_in_multiline_is_not_eof() {
+        // An empty continuation line must not exit the shell.
+        let ctx = KeyContext {
+            input_empty: true,
+            multiline_active: true,
+            ..ctx_default()
+        };
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char('d'), CTRL), &ctx),
+            KeyAction::DeleteCharForward
+        );
+    }
+
+    #[test]
+    fn delete_key_deletes_forward() {
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Delete, NONE), &ctx_default()),
+            KeyAction::DeleteCharForward
+        );
+    }
+
+    #[test]
+    fn home_and_end_move_cursor() {
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Home, NONE), &ctx_default()),
+            KeyAction::CursorToBegin
+        );
+        assert_eq!(
+            determine_key_action(&key(KeyCode::End, NONE), &ctx_default()),
+            KeyAction::CursorToEnd
+        );
+    }
+
+    #[test]
+    fn ctrl_z_on_empty_buffer_resumes_job() {
+        let ctx = KeyContext {
+            input_empty: true,
+            ..ctx_default()
+        };
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char('z'), CTRL), &ctx),
+            KeyAction::ResumeLastJob
+        );
+    }
+
+    #[test]
+    fn ctrl_z_with_text_is_unsupported() {
+        // Left free so a future undo binding can claim it.
+        let ctx = KeyContext {
+            input_empty: false,
+            ..ctx_default()
+        };
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char('z'), CTRL), &ctx),
+            KeyAction::Unsupported
+        );
+    }
+
+    // === Kill ring / undo ===
+
+    #[test]
+    fn ctrl_y_yanks() {
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char('y'), CTRL), &ctx_default()),
+            KeyAction::Yank
+        );
+    }
+
+    #[test]
+    fn ctrl_underscore_undoes() {
+        // The 0x1F byte a legacy terminal actually sends: crossterm decodes it
+        // as Ctrl+7, not Ctrl+_.
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char('7'), CTRL), &ctx_default()),
+            KeyAction::Undo
+        );
+        // Kitty-keyboard-protocol terminals report the literal key instead.
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char('_'), CTRL), &ctx_default()),
+            KeyAction::Undo
+        );
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char('/'), CTRL), &ctx_default()),
+            KeyAction::Undo
+        );
+        // Some terminals add SHIFT for the underscore.
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char('_'), CTRL | SHIFT), &ctx_default()),
+            KeyAction::Undo
+        );
+    }
+
+    #[test]
+    fn alt_slash_redoes() {
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char('/'), ALT), &ctx_default()),
+            KeyAction::Redo
+        );
     }
 
     // === Cursor movement tests ===

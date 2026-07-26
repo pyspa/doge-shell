@@ -13,6 +13,23 @@ use std::time::Duration;
 use tokio::time;
 use tracing::{debug, error};
 
+/// Report a job that just stopped, in the same `[1]+  Stopped  cmd` format bash
+/// uses. Without it Ctrl-Z looks like it did nothing.
+fn print_stopped_notice(job: &Job) {
+    use crate::repl::job_notify::{JobMarker, JobNotice, JobNoticeState, format_job_notice};
+    use std::io::Write;
+
+    let notice = format_job_notice(&JobNotice {
+        job_id: job.job_id,
+        cmd: job.cmd.clone(),
+        state: JobNoticeState::Stopped,
+        marker: JobMarker::Current,
+    });
+    // Leading \r: in raw mode the cursor is mid-line when the job stops.
+    println!("\r{}", notice);
+    let _ = std::io::stdout().flush();
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KnownWaitResult {
     State(Pid, ProcessState),
@@ -266,7 +283,7 @@ pub fn wait_process_sync(job: &mut Job) -> Result<()> {
 
         if is_job_stopped(job) {
             debug!("⏳ WAIT: Job stopped");
-            println!("\rdsh: job {} '{}' has stopped", job.job_id, job.cmd);
+            print_stopped_notice(job);
             break;
         }
     }
@@ -362,7 +379,7 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
         }
 
         if is_job_stopped(job) {
-            println!("\rdsh: job {} '{}' has stopped", job.job_id, job.cmd);
+            print_stopped_notice(job);
             debug!("Job stopped, breaking from wait_process_no_hang loop");
             break;
         }
@@ -450,7 +467,7 @@ pub fn wait_process_no_hang_sync(job: &mut Job) -> Result<()> {
         }
 
         if is_job_stopped(job) {
-            println!("\rdsh: job {} '{}' has stopped", job.job_id, job.cmd);
+            print_stopped_notice(job);
             debug!("Job stopped, breaking from wait_process_no_hang_sync loop");
             break;
         }

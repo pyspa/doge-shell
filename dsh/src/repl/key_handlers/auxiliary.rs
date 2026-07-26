@@ -1,6 +1,9 @@
 use crate::command_palette::CommandPalette;
 use crate::completion::display::Candidate;
+use crate::process::job::Job;
 use crate::repl::Repl;
+use crate::repl::job_notify::{JobMarker, JobNotice, format_job_notice, notice_state_from};
+use crate::repl::notify::notify_command_finished;
 use crate::repl::state::ReplControlFlow;
 use crate::terminal::renderer::TerminalRenderer;
 use anyhow::Result;
@@ -44,32 +47,59 @@ pub(crate) fn handle_clear_screen(repl: &mut Repl<'_>) -> Result<ReplControlFlow
     Ok(ReplControlFlow::Continue)
 }
 
+/// Reap finished jobs and report the ones that completed in the background.
+///
+/// `check_job_state` returns the jobs that just *completed* and removes them
+/// from `wait_jobs`; reporting must therefore iterate the returned set, not the
+/// surviving one.
 pub(crate) async fn check_background_jobs(repl: &mut Repl<'_>, output: bool) -> Result<()> {
-    let jobs = repl.shell.check_job_state().await?;
-    let exists = !jobs.is_empty();
-
-    if output && exists {
-        // Batch all output operations with a single terminal renderer
-        let mut renderer = TerminalRenderer::new();
-        let mut output_buffer = String::new();
-
-        // Check remaining jobs in wait_jobs for status messages
-        for job in &repl.shell.wait_jobs {
-            if !job.foreground && output {
-                output_buffer.push_str(&format!(
-                    "\rdsh: job {} '{}' {}\n",
-                    job.job_id, job.cmd, job.state
-                ));
-            }
-        }
-
-        if !output_buffer.is_empty() {
-            renderer.write_all(output_buffer.as_bytes())?;
-            repl.print_prompt(&mut renderer);
-            renderer.flush()?;
-        }
+    let completed = repl.shell.check_job_state().await?;
+    if completed.is_empty() {
+        return Ok(());
     }
+
+    // Keep completion's job list in sync now that jobs were removed.
+    repl.sync_completion_jobs();
+
+    if !output {
+        return Ok(());
+    }
+
+    let notices: Vec<String> = completed
+        .iter()
+        .filter(|job| !job.foreground)
+        .enumerate()
+        .map(|(index, job)| {
+            format_job_notice(&JobNotice {
+                job_id: job.job_id,
+                cmd: job.cmd.clone(),
+                state: notice_state_from(&job.state),
+                marker: JobMarker::for_index(index),
+            })
+        })
+        .collect();
+
+    if notices.is_empty() {
+        return Ok(());
+    }
+
+    notify_desktop_for_jobs(repl, &completed);
+
+    let mut renderer = TerminalRenderer::new();
+    crate::repl::render::print_above_prompt(repl, &mut renderer, &notices);
+    renderer.flush()?;
     Ok(())
+}
+
+fn notify_desktop_for_jobs(repl: &Repl<'_>, completed: &[Job]) {
+    let prefs = repl.shell.environment.read().input_preferences;
+    if !prefs.auto_notify_enabled {
+        return;
+    }
+    for job in completed.iter().filter(|job| !job.foreground) {
+        let exit_code = notice_state_from(&job.state).exit_code();
+        notify_command_finished(&prefs, &job.cmd, job.started_at.elapsed(), exit_code);
+    }
 }
 
 pub(crate) async fn handle_macro_record(repl: &mut Repl<'_>) -> Result<()> {

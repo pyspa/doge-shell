@@ -7,9 +7,44 @@
 //! today. The escape-sequence state machine here mirrors `PtyDisplayBuffer` in
 //! `process::io`, discarding what that one forwards.
 
-/// Longest run of bytes treated as an unterminated escape sequence before
-/// giving up and emitting it as text. Mirrors `MAX_PENDING_CONTROL_BYTES`.
-const MAX_PENDING_CONTROL: usize = 64;
+/// Longest run treated as an unterminated escape sequence before giving up and
+/// emitting it as text. Matches `MAX_PENDING_CONTROL_BYTES` in `process::io`.
+///
+/// It has to be this generous: OSC payloads are routinely long. A cwd
+/// notification carrying a deep path (`\x1b]7;file://host/very/long/path\x1b\`)
+/// runs past a hundred characters, and hyperlinks and clipboard writes go
+/// further. Cutting the sequence short does not merely fail to strip it — the
+/// escape bytes get emitted into the rendered output as visible garbage.
+const MAX_PENDING_CONTROL: usize = 4096;
+
+/// The escape sequence being consumed, with its character count maintained
+/// alongside it.
+///
+/// Recomputing the count per character would be quadratic in the sequence
+/// length, which matters once [`MAX_PENDING_CONTROL`] allows sequences of a few
+/// thousand characters. Keeping the two together means the count cannot drift
+/// from the buffer.
+#[derive(Default)]
+struct Pending {
+    text: String,
+    chars: usize,
+}
+
+impl Pending {
+    fn push(&mut self, ch: char) {
+        self.text.push(ch);
+        self.chars += 1;
+    }
+
+    fn clear(&mut self) {
+        self.text.clear();
+        self.chars = 0;
+    }
+
+    fn is_overlong(&self) -> bool {
+        self.chars >= MAX_PENDING_CONTROL
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
@@ -40,10 +75,7 @@ pub fn strip_ansi(input: &str) -> String {
 /// seconds at the 100-block × 1 MiB cap.
 fn scan(input: &str, mut keep: impl FnMut(char)) {
     let mut state = State::Ground;
-    let mut pending = String::new();
-    // `pending` never exceeds MAX_PENDING_CONTROL, so its length in chars is
-    // tracked directly instead of recounting the string on every byte.
-    let mut pending_len = 0usize;
+    let mut pending = Pending::default();
 
     for ch in input.chars() {
         match state {
@@ -122,24 +154,20 @@ fn scan(input: &str, mut keep: impl FnMut(char)) {
             }
         }
 
-        pending_len = pending.chars().count();
-
         // Not a real escape sequence after all: keep the text instead of
         // discarding the remainder of the output.
-        if pending_len >= MAX_PENDING_CONTROL {
-            for pending_ch in pending.chars() {
+        if pending.is_overlong() {
+            for pending_ch in pending.text.chars() {
                 keep(pending_ch);
             }
             pending.clear();
-            pending_len = 0;
             state = State::Ground;
         }
     }
 
     // Anything still pending is a sequence the output was truncated in the
-    // middle of; it is shorter than MAX_PENDING_CONTROL (the in-loop check
+    // middle of; it is shorter than MAX_PENDING_CONTROL (the check above
     // flushes past that) and is escape bytes, so drop it.
-    let _ = pending_len;
 }
 
 /// Apply the overwrite semantics of `\r` and `\x08` within a single line.
@@ -219,17 +247,10 @@ pub fn ansi_density(output: &str) -> f32 {
         return 0.0;
     }
 
-    let mut total = 0usize;
+    let total = sample.chars().count();
     let mut kept = 0usize;
-    scan_counting(sample, &mut total, &mut kept);
+    scan(sample, |_| kept += 1);
     (total - kept) as f32 / total as f32
-}
-
-fn scan_counting(sample: &str, total: &mut usize, kept: &mut usize) {
-    *total = sample.chars().count();
-    let mut count = 0usize;
-    scan(sample, |_| count += 1);
-    *kept = count;
 }
 
 /// Longest prefix of `text` that is at most `max_bytes` long and ends on a
@@ -276,6 +297,56 @@ mod tests {
     fn strip_ansi_preserves_utf8() {
         assert_eq!(strip_ansi("\x1b[32m日本語\x1b[0m"), "日本語");
         assert_eq!(strip_ansi("絵文字 🐕 と ✔"), "絵文字 🐕 と ✔");
+    }
+
+    #[test]
+    fn strip_ansi_removes_a_long_osc_payload() {
+        // Regression: with a small pending cap, a realistic cwd notification
+        // was flushed as text and its URL showed up in the rendered output.
+        let osc7 = "\x1b]7;file://myhost/tmp/claude-1000/-home-ma2-repos-github-com-pyspa-doge-shell/94e5db58-d4cd-4d56-8266-26cb9ea82983/scratchpad\x1b\\";
+        assert!(osc7.chars().count() > 100);
+        assert_eq!(strip_ansi(&format!("{osc7}real output")), "real output");
+
+        // OSC 8 hyperlinks wrap the visible text and are longer still.
+        let link = format!(
+            "\x1b]8;;https://example.com/{}\x07label\x1b]8;;\x07",
+            "segment/".repeat(40)
+        );
+        assert_eq!(strip_ansi(&link), "label");
+    }
+
+    #[test]
+    fn strip_ansi_removes_a_long_multibyte_osc_title() {
+        let title = format!("\x1b]0;{}\x07after", "日本語のタイトル".repeat(30));
+        assert_eq!(strip_ansi(&title), "after");
+    }
+
+    #[test]
+    fn pending_keeps_its_count_in_sync_with_its_text() {
+        // The count exists to avoid a quadratic recount; if it ever drifts from
+        // the buffer the overlong check fires at the wrong point.
+        let mut pending = Pending::default();
+        assert_eq!(pending.chars, 0);
+        assert!(!pending.is_overlong());
+
+        for ch in "\x1b]0;日本".chars() {
+            pending.push(ch);
+        }
+        assert_eq!(pending.chars, pending.text.chars().count());
+        // Multi-byte content: the count is characters, not bytes.
+        assert!(pending.text.len() > pending.chars);
+
+        pending.clear();
+        assert_eq!(pending.chars, 0);
+        assert!(pending.text.is_empty());
+    }
+
+    #[test]
+    fn strip_ansi_handles_a_large_run_of_escape_garbage() {
+        // Quadratic recounting of the pending buffer would make this crawl.
+        let garbage = "\x1b[".repeat(200_000);
+        let out = strip_ansi(&format!("{garbage}tail"));
+        assert!(out.ends_with("tail"));
     }
 
     #[test]

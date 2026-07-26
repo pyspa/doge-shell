@@ -39,7 +39,9 @@
   "arguments": [
     {
       "name": "directories",
-      "description": "Directories to create"
+      "description": "Directories to create",
+      "multiple": true,
+      "type": { "type": "Directory" }
     }
   ]
 }

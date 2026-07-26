@@ -70,5 +70,13 @@
       "description": "Follow symlinks; archive and dump the files they point to"
     }
   ],
+  "arguments": [
+    {
+      "name": "file_or_member",
+      "description": "Local file or archive member",
+      "multiple": true,
+      "type": { "type": "Dynamic", "data": { "provider": "archive.entry" } }
+    }
+  ],
   "subcommands": []
 }

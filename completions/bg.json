@@ -2,5 +2,14 @@
   "command": "bg",
   "description": "Send jobs to background",
   "global_options": [],
+  "arguments": [
+    {
+      "name": "job",
+      "description": "Job specification",
+      "required": false,
+      "multiple": true,
+      "type": { "type": "Dynamic", "data": { "provider": "shell.job" } }
+    }
+  ],
   "subcommands": []
 }

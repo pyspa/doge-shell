@@ -32,7 +32,9 @@
     },
     {
       "long": "--reference",
-      "description": "Use the mode of given reference file"
+      "description": "Use the mode of given reference file",
+      "takes_value": true,
+      "value_type": { "type": "File", "data": {} }
     },
     {
       "long": "--force",
@@ -59,11 +61,14 @@
   "arguments": [
     {
       "name": "mode",
-      "description": "File mode (e.g., 755, u+rwx)"
+      "description": "File mode (e.g., 755, u+rwx)",
+      "type": { "type": "String" }
     },
     {
       "name": "files",
-      "description": "Files whose mode to change"
+      "description": "Files whose mode to change",
+      "multiple": true,
+      "type": { "type": "File", "data": {} }
     }
   ]
 }

@@ -9,7 +9,9 @@
     {
       "long": "--signal",
       "short": "-s",
-      "description": "Signal to send (name or number)"
+      "description": "Signal to send (name or number)",
+      "takes_value": true,
+      "value_type": { "type": "Signal" }
     },
     {
       "long": "--full",
@@ -34,7 +36,9 @@
     {
       "long": "--parent",
       "short": "-P",
-      "description": "Select processes with matching parent PID"
+      "description": "Select processes with matching parent PID",
+      "takes_value": true,
+      "value_type": { "type": "Process" }
     },
     {
       "long": "--terminal",
@@ -44,7 +48,9 @@
     {
       "long": "--uid",
       "short": "-u",
-      "description": "Match by effective user ID"
+      "description": "Match by effective user ID",
+      "takes_value": true,
+      "value_type": { "type": "User" }
     }
   ],
   "arguments": [

@@ -1,0 +1,24 @@
+{
+  "command": "minikube",
+  "description": "Run Kubernetes locally",
+  "global_options": [
+    { "short": "-p", "long": "--profile", "description": "Minikube profile", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "minikube.profile" } } },
+    { "long": "--output", "description": "Output format", "takes_value": true, "value_type": { "type": "Choice", "data": ["text", "json"] } }
+  ],
+  "subcommands": [
+    { "name": "start", "description": "Start a cluster", "options": [{ "long": "--driver", "description": "Container or VM driver", "takes_value": true, "value_type": { "type": "Choice", "data": ["docker", "podman", "kvm2", "hyperkit", "virtualbox", "none"] } }, { "long": "--kubernetes-version", "description": "Kubernetes version", "takes_value": true, "value_type": { "type": "String" } }, { "long": "--cpus", "description": "CPU count", "takes_value": true, "value_type": { "type": "Number" } }, { "long": "--memory", "description": "Memory allocation", "takes_value": true, "value_type": { "type": "String" } }] },
+    { "name": "stop", "description": "Stop a cluster" },
+    { "name": "delete", "description": "Delete a cluster", "options": [{ "long": "--all", "description": "Delete all profiles" }] },
+    { "name": "status", "description": "Show cluster status" },
+    { "name": "pause", "description": "Pause a cluster" },
+    { "name": "unpause", "description": "Resume a cluster" },
+    { "name": "profile", "description": "Get or list profiles", "subcommands": [{ "name": "list", "description": "List profiles" }] },
+    { "name": "dashboard", "description": "Open the Kubernetes dashboard" },
+    { "name": "service", "description": "Access a Kubernetes service", "arguments": [{ "name": "service", "description": "Service name" }] },
+    { "name": "ssh", "description": "Log in to a node" },
+    { "name": "kubectl", "description": "Run kubectl against the cluster" },
+    { "name": "addons", "description": "Manage addons", "subcommands": [{ "name": "list", "description": "List addons" }, { "name": "enable", "description": "Enable an addon" }, { "name": "disable", "description": "Disable an addon" }] },
+    { "name": "image", "description": "Manage images", "subcommands": [{ "name": "load", "description": "Load an image" }, { "name": "build", "description": "Build an image" }, { "name": "list", "description": "List images" }, { "name": "rm", "description": "Remove an image" }] },
+    { "name": "version", "description": "Print version information" }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "command": "act",
+  "description": "Run GitHub Actions locally",
+  "global_options": [
+    { "short": "-j", "long": "--job", "description": "Run a specific job", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-W", "long": "--workflows", "description": "Workflow file or directory", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["yml", "yaml"] } } },
+    { "short": "-P", "long": "--platform", "description": "Platform image mapping", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--secret-file", "description": "Secrets file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+    { "long": "--var-file", "description": "Variables file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+    { "long": "--env-file", "description": "Environment file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+    { "short": "-n", "long": "--dryrun", "description": "Validate without running containers" },
+    { "short": "-l", "long": "--list", "description": "List workflows and jobs" },
+    { "short": "-v", "long": "--verbose", "description": "Enable verbose logging" }
+  ],
+  "arguments": [
+    { "name": "event", "description": "GitHub event name", "required": false, "type": { "type": "Choice", "data": ["push", "pull_request", "workflow_dispatch", "schedule", "release"] } }
+  ]
+}

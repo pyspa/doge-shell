@@ -408,6 +408,7 @@ pub struct IntegratedCompletionEngine {
     /// Short lived completion cache
     cache: CompletionCache<EnhancedCandidate>,
     framework_cache: RwLock<HashMap<String, CompletionFrameworkKind>>,
+    shell_jobs: RwLock<Vec<(usize, String, String)>>,
     dynamic: DynamicCompletionProvider,
 
     /// Shell environment (for dynamic completion)
@@ -425,9 +426,20 @@ impl IntegratedCompletionEngine {
 
             cache: CompletionCache::new(Duration::from_millis(DEFAULT_CACHE_TTL_MS)),
             framework_cache: RwLock::new(HashMap::new()),
+            shell_jobs: RwLock::new(Vec::new()),
             dynamic: DynamicCompletionProvider::new(environment.clone()),
             environment,
         }
+    }
+
+    pub(crate) fn set_shell_jobs(&self, jobs: Vec<(usize, String, String)>) {
+        let mut current = self.shell_jobs.write();
+        if *current == jobs {
+            return;
+        }
+        *current = jobs;
+        self.cache.clear();
+        self.framework_cache.write().clear();
     }
 
     /// Initialize the command completion database
@@ -938,6 +950,10 @@ impl IntegratedCompletionEngine {
             return Vec::new();
         };
 
+        if provider == "shell.job" {
+            return self.collect_shell_job_candidates(&parsed_command_line.current_token);
+        }
+
         self.dynamic.collect_declared_dynamic_candidates(
             &provider,
             scope.as_deref(),
@@ -1133,6 +1149,9 @@ impl IntegratedCompletionEngine {
 
         if let ArgumentType::Dynamic { provider, scope } = arg_type {
             drop(db_lock);
+            if provider == "shell.job" {
+                return self.collect_shell_job_candidates(&parsed_command_line.current_token);
+            }
             return self.dynamic.collect_declared_dynamic_candidates(
                 &provider,
                 scope.as_deref(),
@@ -1156,6 +1175,41 @@ impl IntegratedCompletionEngine {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    fn collect_shell_job_candidates(&self, current_token: &str) -> Vec<EnhancedCandidate> {
+        let jobs = self.shell_jobs.read();
+        let mut candidates = Vec::with_capacity(jobs.len() + 2);
+
+        if let Some((_, command, state)) = jobs.last() {
+            candidates.push(EnhancedCandidate {
+                text: "%+".to_string(),
+                description: Some(format!("current job: {command} ({state})")),
+                candidate_type: CandidateType::Argument,
+                priority: 160,
+            });
+        }
+        if jobs.len() >= 2
+            && let Some((_, command, state)) = jobs.get(jobs.len() - 2)
+        {
+            candidates.push(EnhancedCandidate {
+                text: "%-".to_string(),
+                description: Some(format!("previous job: {command} ({state})")),
+                candidate_type: CandidateType::Argument,
+                priority: 155,
+            });
+        }
+        candidates.extend(
+            jobs.iter()
+                .map(|(job_id, command, state)| EnhancedCandidate {
+                    text: format!("%{job_id}"),
+                    description: Some(format!("{command} ({state})")),
+                    candidate_type: CandidateType::Argument,
+                    priority: 150,
+                }),
+        );
+        candidates.retain(|candidate| matches_prefix(current_token, &candidate.text));
+        candidates
     }
 
     fn collect_pm_candidates(
@@ -1859,7 +1913,10 @@ fn git_subcommand_accepts_paths(parsed_command_line: &ParsedCommandLine) -> bool
     }
 
     matches!(
-        parsed_command_line.subcommand_path.first().map(String::as_str),
+        parsed_command_line
+            .subcommand_path
+            .first()
+            .map(String::as_str),
         Some("checkout") | Some("restore")
     )
 }
@@ -2444,6 +2501,43 @@ mod tests {
     fn test_integrated_completion_engine_creation() {
         let engine = IntegratedCompletionEngine::new(Environment::new());
         assert!(engine.loader.is_none());
+    }
+
+    #[tokio::test]
+    async fn shell_job_completion_tracks_live_job_snapshot() {
+        let mut engine = IntegratedCompletionEngine::new(Environment::new());
+        engine.initialize_command_completion().unwrap();
+        engine.set_shell_jobs(vec![
+            (1, "sleep 30".to_string(), "Running".to_string()),
+            (2, "vim".to_string(), "Stopped".to_string()),
+        ]);
+        let dir = tempdir().unwrap();
+
+        let result = engine.complete("fg %", 4, dir.path(), 50, None).await;
+        let texts = result
+            .candidates
+            .iter()
+            .map(|candidate| candidate.text.as_str())
+            .collect::<Vec<_>>();
+        for expected in ["%+", "%-", "%1", "%2"] {
+            assert!(
+                texts.contains(&expected),
+                "missing job candidate {expected}: {texts:?}"
+            );
+        }
+
+        engine.set_shell_jobs(vec![(3, "tail -f log".to_string(), "Running".to_string())]);
+        let result = engine.complete("fg %", 4, dir.path(), 50, None).await;
+        let texts = result
+            .candidates
+            .iter()
+            .map(|candidate| candidate.text.as_str())
+            .collect::<Vec<_>>();
+        assert!(texts.contains(&"%+"));
+        assert!(texts.contains(&"%3"));
+        assert!(!texts.contains(&"%-"));
+        assert!(!texts.contains(&"%1"));
+        assert!(!texts.contains(&"%2"));
     }
 
     fn engine_with_variable(name: &str, value: &str) -> IntegratedCompletionEngine {
@@ -3090,9 +3184,16 @@ mod tests {
             .await;
 
         assert!(
-            result.candidates.iter().any(|c| c.text.contains("features")),
+            result
+                .candidates
+                .iter()
+                .any(|c| c.text.contains("features")),
             "expected working-tree file `features.txt` among {:?}",
-            result.candidates.iter().map(|c| &c.text).collect::<Vec<_>>()
+            result
+                .candidates
+                .iter()
+                .map(|c| &c.text)
+                .collect::<Vec<_>>()
         );
     }
 

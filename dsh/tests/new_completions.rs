@@ -388,7 +388,7 @@ fn test_dev_cli_completions_use_dynamic_providers() {
 }
 
 #[test]
-fn test_chown_owner_group_precision_gap_is_documented() {
+fn test_basic_commands_use_precise_dynamic_and_value_completions() {
     let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repo_root = root_dir.parent().unwrap();
     let completions_dir = repo_root.join("completions");
@@ -404,8 +404,12 @@ fn test_chown_owner_group_precision_gap_is_documented() {
         .first()
         .expect("missing chown owner/group argument");
     assert!(
-        matches!(owner_group.arg_type, Some(ArgumentType::User)),
-        "chown owner/group should keep user completion until grouped owner[:group] completion exists"
+        matches!(
+            owner_group.arg_type,
+            Some(ArgumentType::Dynamic { ref provider, .. })
+                if provider == "system.owner_group"
+        ),
+        "chown owner/group should complete owner[:group] values"
     );
 
     let from = chown_completion
@@ -414,11 +418,65 @@ fn test_chown_owner_group_precision_gap_is_documented() {
         .find(|option| option.long.as_deref() == Some("--from"))
         .expect("missing chown --from option");
     assert!(
-        matches!(from.value_type(), Some(ArgumentType::String)),
-        "chown --from intentionally remains String to avoid generating user x group combinations"
+        matches!(
+            from.value_type(),
+            Some(ArgumentType::Dynamic { provider, .. })
+                if provider == "system.owner_group"
+        ),
+        "chown --from should complete owner[:group] values"
     );
-    // TODO: Add a focused owner[:group] completion strategy that completes the
-    // group side after ':' without precomputing the full user x group matrix.
+
+    for (command, provider) in [
+        ("man", "man.page"),
+        ("fg", "shell.job"),
+        ("bg", "shell.job"),
+        ("tar", "archive.entry"),
+    ] {
+        let completion = loader
+            .load_command_completion(command)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{command} completion not found in json"));
+        assert!(
+            completion.arguments.iter().any(|argument| matches!(
+                argument.arg_type,
+                Some(ArgumentType::Dynamic {
+                    provider: ref actual,
+                    ..
+                }) if actual == provider
+            )),
+            "{command} should use dynamic provider {provider}"
+        );
+    }
+
+    let unzip = loader
+        .load_command_completion("unzip")
+        .unwrap()
+        .expect("unzip completion not found in json");
+    assert!(
+        matches!(
+            unzip.arguments.get(1).and_then(|argument| argument.arg_type.as_ref()),
+            Some(ArgumentType::Dynamic { provider, .. }) if provider == "archive.entry"
+        ),
+        "unzip members should use archive entry completion"
+    );
+
+    for (command, expected_type) in [
+        ("cat", ArgumentType::File { extensions: None }),
+        ("mkdir", ArgumentType::Directory),
+    ] {
+        let completion = loader
+            .load_command_completion(command)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{command} completion not found in json"));
+        assert_eq!(
+            completion
+                .arguments
+                .first()
+                .and_then(|argument| argument.arg_type.clone()),
+            Some(expected_type),
+            "{command} should use a filesystem-aware argument type"
+        );
+    }
 }
 
 #[test]

@@ -1,0 +1,16 @@
+{
+  "command": "delta",
+  "description": "Syntax-highlighting pager for git and diff output",
+  "global_options": [
+    { "short": "-s", "long": "--side-by-side", "description": "Display a side-by-side diff" },
+    { "short": "-n", "long": "--line-numbers", "description": "Display line numbers" },
+    { "long": "--navigate", "description": "Enable file navigation" },
+    { "long": "--dark", "description": "Use dark-background colors" },
+    { "long": "--light", "description": "Use light-background colors" },
+    { "long": "--syntax-theme", "description": "Syntax highlighting theme", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--features", "description": "Delta feature set", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-w", "long": "--width", "description": "Output width", "takes_value": true, "value_type": { "type": "Number" } },
+    { "long": "--max-line-length", "description": "Maximum line length", "takes_value": true, "value_type": { "type": "Number" } }
+  ],
+  "arguments": [{ "name": "file", "description": "Diff input file", "required": false, "multiple": true, "type": { "type": "File", "data": {} } }]
+}

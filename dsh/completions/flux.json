@@ -1,0 +1,24 @@
+{
+  "command": "flux",
+  "description": "Flux GitOps toolkit CLI",
+  "global_options": [
+    { "long": "--context", "description": "Kubernetes context", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "kubectl.context" } } },
+    { "short": "-n", "long": "--namespace", "description": "Kubernetes namespace", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "kubectl.namespace" } } },
+    { "long": "--kubeconfig", "description": "Path to kubeconfig", "takes_value": true, "value_type": { "type": "File", "data": {} } }
+  ],
+  "subcommands": [
+    { "name": "bootstrap", "description": "Bootstrap Flux", "subcommands": [{ "name": "github", "description": "Bootstrap from GitHub" }, { "name": "gitlab", "description": "Bootstrap from GitLab" }, { "name": "gitea", "description": "Bootstrap from Gitea" }, { "name": "git", "description": "Bootstrap from a Git repository" }] },
+    { "name": "check", "description": "Check prerequisites and installation" },
+    { "name": "create", "description": "Create Flux resources", "subcommands": [{ "name": "source", "description": "Create a source" }, { "name": "kustomization", "description": "Create a Kustomization" }, { "name": "helmrelease", "description": "Create a HelmRelease" }] },
+    { "name": "delete", "description": "Delete Flux resources" },
+    { "name": "export", "description": "Export Flux resources" },
+    { "name": "get", "description": "Get Flux resources", "subcommands": [{ "name": "all", "description": "Get all resources" }, { "name": "sources", "description": "Get sources" }, { "name": "kustomizations", "description": "Get Kustomizations" }, { "name": "helmreleases", "description": "Get HelmReleases" }] },
+    { "name": "reconcile", "description": "Reconcile Flux resources" },
+    { "name": "resume", "description": "Resume Flux resources" },
+    { "name": "suspend", "description": "Suspend Flux resources" },
+    { "name": "logs", "description": "Display Flux logs" },
+    { "name": "trace", "description": "Trace a Kubernetes object" },
+    { "name": "uninstall", "description": "Uninstall Flux" },
+    { "name": "version", "description": "Print version information" }
+  ]
+}

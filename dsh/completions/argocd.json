@@ -1,0 +1,37 @@
+{
+  "command": "argocd",
+  "description": "Declarative GitOps continuous delivery for Kubernetes",
+  "global_options": [
+    { "long": "--server", "description": "Argo CD server address", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--grpc-web", "description": "Use gRPC-web protocol" },
+    { "long": "--plaintext", "description": "Disable TLS" },
+    { "long": "--insecure", "description": "Skip certificate verification" },
+    { "long": "--context", "description": "Argo CD context", "takes_value": true, "value_type": { "type": "String" } }
+  ],
+  "subcommands": [
+    { "name": "login", "description": "Log in to an Argo CD server", "arguments": [{ "name": "server", "description": "Server address" }] },
+    { "name": "logout", "description": "Log out from an Argo CD server" },
+    { "name": "version", "description": "Print version information" },
+    { "name": "context", "description": "Switch between contexts" },
+    {
+      "name": "app", "description": "Manage applications",
+      "subcommands": [
+        { "name": "list", "description": "List applications" },
+        { "name": "get", "description": "Show application details", "arguments": [{ "name": "application", "description": "Application name" }] },
+        { "name": "create", "description": "Create an application" },
+        { "name": "set", "description": "Update application parameters" },
+        { "name": "sync", "description": "Synchronize an application" },
+        { "name": "wait", "description": "Wait for an application to reach a state" },
+        { "name": "delete", "description": "Delete an application" },
+        { "name": "diff", "description": "Show application differences" },
+        { "name": "history", "description": "Show deployment history" },
+        { "name": "rollback", "description": "Roll back an application" }
+      ]
+    },
+    { "name": "cluster", "description": "Manage cluster credentials", "subcommands": [{ "name": "list", "description": "List clusters" }, { "name": "add", "description": "Add a cluster" }, { "name": "get", "description": "Show cluster details" }, { "name": "rm", "description": "Remove a cluster" }] },
+    { "name": "repo", "description": "Manage repository credentials", "subcommands": [{ "name": "list", "description": "List repositories" }, { "name": "add", "description": "Add a repository" }, { "name": "get", "description": "Show repository details" }, { "name": "rm", "description": "Remove a repository" }] },
+    { "name": "proj", "description": "Manage projects", "subcommands": [{ "name": "list", "description": "List projects" }, { "name": "get", "description": "Show a project" }, { "name": "create", "description": "Create a project" }, { "name": "delete", "description": "Delete a project" }] },
+    { "name": "account", "description": "Manage accounts" },
+    { "name": "admin", "description": "Administrative commands" }
+  ]
+}

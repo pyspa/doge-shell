@@ -1,0 +1,20 @@
+{
+  "command": "ollama",
+  "description": "Run and manage local language models",
+  "subcommands": [
+    { "name": "serve", "description": "Start the Ollama server" },
+    { "name": "create", "description": "Create a model", "options": [{ "short": "-f", "long": "--file", "description": "Modelfile path", "takes_value": true, "value_type": { "type": "File", "data": {} } }], "arguments": [{ "name": "model", "description": "New model name" }] },
+    { "name": "show", "description": "Show model information", "arguments": [{ "name": "model", "description": "Installed model", "type": { "type": "Dynamic", "data": { "provider": "ollama.model" } } }] },
+    { "name": "run", "description": "Run a model", "arguments": [{ "name": "model", "description": "Installed model", "type": { "type": "Dynamic", "data": { "provider": "ollama.model" } } }, { "name": "prompt", "description": "Prompt text", "required": false }] },
+    { "name": "stop", "description": "Stop a running model", "arguments": [{ "name": "model", "description": "Model name", "type": { "type": "Dynamic", "data": { "provider": "ollama.model" } } }] },
+    { "name": "pull", "description": "Download a model", "arguments": [{ "name": "model", "description": "Model name" }] },
+    { "name": "push", "description": "Upload a model", "arguments": [{ "name": "model", "description": "Installed model", "type": { "type": "Dynamic", "data": { "provider": "ollama.model" } } }] },
+    { "name": "list", "description": "List installed models", "aliases": ["ls"] },
+    { "name": "ps", "description": "List running models" },
+    { "name": "cp", "description": "Copy a model", "arguments": [{ "name": "source", "description": "Installed model", "type": { "type": "Dynamic", "data": { "provider": "ollama.model" } } }, { "name": "destination", "description": "Destination model name" }] },
+    { "name": "rm", "description": "Remove models", "arguments": [{ "name": "model", "description": "Installed model", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "ollama.model" } } }] },
+    { "name": "launch", "description": "Configure and launch an integration", "options": [{ "long": "--model", "description": "Model to use", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "ollama.model" } } }], "arguments": [{ "name": "integration", "description": "Integration", "required": false, "type": { "type": "Choice", "data": ["claude", "opencode", "codex", "droid"] } }] },
+    { "name": "signin", "description": "Sign in to Ollama" },
+    { "name": "signout", "description": "Sign out of Ollama" }
+  ]
+}

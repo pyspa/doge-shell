@@ -1,0 +1,26 @@
+{
+  "command": "helmfile",
+  "description": "Declaratively deploy Helm charts",
+  "global_options": [
+    { "short": "-f", "long": "--file", "description": "Helmfile state file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["yaml", "yml"] } } },
+    { "short": "-e", "long": "--environment", "description": "Environment name", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-l", "long": "--selector", "description": "Release label selector", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--kube-context", "description": "Kubernetes context", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "kubectl.context" } } },
+    { "short": "-n", "long": "--namespace", "description": "Kubernetes namespace", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "kubectl.namespace" } } },
+    { "long": "--state-values-file", "description": "State values file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["yaml", "yml"] } } }
+  ],
+  "subcommands": [
+    { "name": "apply", "description": "Apply detected changes" },
+    { "name": "sync", "description": "Synchronize all releases" },
+    { "name": "diff", "description": "Show release differences" },
+    { "name": "template", "description": "Render release templates" },
+    { "name": "lint", "description": "Lint releases" },
+    { "name": "destroy", "description": "Uninstall releases" },
+    { "name": "test", "description": "Run release tests" },
+    { "name": "status", "description": "Show release status" },
+    { "name": "fetch", "description": "Download charts" },
+    { "name": "deps", "description": "Update chart dependencies" },
+    { "name": "repos", "description": "Add chart repositories" },
+    { "name": "write-values", "description": "Write computed values" }
+  ]
+}

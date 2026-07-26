@@ -1,0 +1,26 @@
+{
+  "command": "kind",
+  "description": "Kubernetes IN Docker",
+  "global_options": [{ "long": "--loglevel", "description": "Logging level", "takes_value": true, "value_type": { "type": "Number" } }],
+  "subcommands": [
+    {
+      "name": "create", "description": "Create kind resources",
+      "subcommands": [{
+        "name": "cluster", "description": "Create a cluster",
+        "options": [
+          { "long": "--name", "description": "Cluster name", "takes_value": true, "value_type": { "type": "String" } },
+          { "long": "--config", "description": "Cluster config file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["yaml", "yml"] } } },
+          { "long": "--image", "description": "Node image", "takes_value": true, "value_type": { "type": "String" } },
+          { "long": "--kubeconfig", "description": "Kubeconfig output path", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+          { "long": "--wait", "description": "Wait timeout", "takes_value": true, "value_type": { "type": "String" } }
+        ]
+      }]
+    },
+    { "name": "delete", "description": "Delete kind resources", "subcommands": [{ "name": "cluster", "description": "Delete a cluster", "options": [{ "long": "--name", "description": "Cluster name", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "kind.cluster" } } }] }, { "name": "clusters", "description": "Delete multiple clusters" }] },
+    { "name": "get", "description": "List kind resources", "subcommands": [{ "name": "clusters", "description": "List clusters" }, { "name": "nodes", "description": "List cluster nodes", "options": [{ "long": "--name", "description": "Cluster name", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "kind.cluster" } } }] }, { "name": "kubeconfig", "description": "Print kubeconfig", "options": [{ "long": "--name", "description": "Cluster name", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "kind.cluster" } } }] }] },
+    { "name": "load", "description": "Load images into a cluster", "subcommands": [{ "name": "docker-image", "description": "Load Docker images", "options": [{ "long": "--name", "description": "Cluster name", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "kind.cluster" } } }], "arguments": [{ "name": "image", "description": "Docker image", "multiple": true }] }, { "name": "image-archive", "description": "Load an image archive", "arguments": [{ "name": "archive", "description": "Image archive", "type": { "type": "File", "data": {} } }] }] },
+    { "name": "export", "description": "Export cluster data", "subcommands": [{ "name": "kubeconfig", "description": "Export kubeconfig", "options": [{ "long": "--name", "description": "Cluster name", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "kind.cluster" } } }] }, { "name": "logs", "description": "Export cluster logs", "options": [{ "long": "--name", "description": "Cluster name", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "kind.cluster" } } }] }] },
+    { "name": "build", "description": "Build a node image" },
+    { "name": "version", "description": "Print version information" }
+  ]
+}

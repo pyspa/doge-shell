@@ -85,6 +85,11 @@ impl<T: CacheableCandidate> CompletionCache<T> {
         guard.insert(key, CacheEntry::new(candidates, self.default_ttl));
     }
 
+    pub fn clear(&self) {
+        self.entries.write().clear();
+        self.pending.write().clear();
+    }
+
     pub fn mark_pending(&self, key: String) -> bool {
         self.pending.write().insert(key)
     }

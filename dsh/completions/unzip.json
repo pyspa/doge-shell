@@ -31,5 +31,19 @@
       "description": "Quiet mode"
     }
   ],
+  "arguments": [
+    {
+      "name": "archive",
+      "description": "ZIP archive",
+      "type": { "type": "File", "data": { "extensions": ["zip"] } }
+    },
+    {
+      "name": "member",
+      "description": "Archive member",
+      "required": false,
+      "multiple": true,
+      "type": { "type": "Dynamic", "data": { "provider": "archive.entry" } }
+    }
+  ],
   "subcommands": []
 }

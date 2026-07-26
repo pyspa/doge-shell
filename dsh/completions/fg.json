@@ -2,5 +2,13 @@
   "command": "fg",
   "description": "Bring jobs to foreground",
   "global_options": [],
+  "arguments": [
+    {
+      "name": "job",
+      "description": "Job specification",
+      "required": false,
+      "type": { "type": "Dynamic", "data": { "provider": "shell.job" } }
+    }
+  ],
   "subcommands": []
 }

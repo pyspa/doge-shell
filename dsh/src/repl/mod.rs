@@ -429,6 +429,16 @@ impl<'a> Repl<'a> {
         key_handlers::auxiliary::check_background_jobs(self, output).await
     }
 
+    pub(crate) fn sync_completion_jobs(&self) {
+        self.integrated_completion.set_shell_jobs(
+            self.shell
+                .wait_jobs
+                .iter()
+                .map(|job| (job.job_id, job.cmd.clone(), job.state.to_string()))
+                .collect(),
+        );
+    }
+
     pub(crate) async fn handle_event(&mut self, ev: ShellEvent) -> Result<ReplControlFlow> {
         handler::handle_event(self, ev).await
     }

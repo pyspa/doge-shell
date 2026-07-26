@@ -32,7 +32,9 @@
     },
     {
       "long": "--exclude",
-      "description": "Exclude files matching PATTERN"
+      "description": "Exclude files matching PATTERN",
+      "takes_value": true,
+      "value_type": { "type": "String" }
     },
     {
       "short": "-n",
@@ -42,7 +44,9 @@
     {
       "short": "-e",
       "long": "--rsh",
-      "description": "Specify the remote shell to use"
+      "description": "Specify the remote shell to use",
+      "takes_value": true,
+      "value_type": { "type": "Command" }
     },
     {
       "long": "--progress",
@@ -54,7 +58,9 @@
     },
     {
       "long": "--include",
-      "description": "Include files matching PATTERN"
+      "description": "Include files matching PATTERN",
+      "takes_value": true,
+      "value_type": { "type": "String" }
     },
     {
       "short": "-h",
@@ -79,12 +85,13 @@
     {
       "name": "source",
       "description": "Source file/dir or [user@]host:path",
-      "type": { "type": "String" }
+      "type": { "type": "File", "data": {} }
     },
     {
       "name": "destination",
       "description": "Destination file/dir or [user@]host:path",
-      "type": { "type": "String" }
+      "multiple": true,
+      "type": { "type": "File", "data": {} }
     }
   ]
 }

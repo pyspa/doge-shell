@@ -169,7 +169,11 @@ mod tests {
 
     #[test]
     fn prefix_options_win_over_fuzzy() {
-        let options = vec![opt("--verbose", "v"), opt("--version", "V"), opt("--all", "a")];
+        let options = vec![
+            opt("--verbose", "v"),
+            opt("--version", "V"),
+            opt("--all", "a"),
+        ];
         let got = long_texts(&options, "--ver");
         assert!(got.contains(&"--verbose".to_string()));
         assert!(got.contains(&"--version".to_string()));

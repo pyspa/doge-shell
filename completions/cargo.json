@@ -38,7 +38,9 @@
         },
         {
           "long": "--features",
-          "description": "Space or comma separated list of features to activate"
+          "description": "Space or comma separated list of features to activate",
+          "takes_value": true,
+          "value_type": { "type": "Dynamic", "data": { "provider": "cargo.feature" } }
         },
         {
           "long": "--package",
@@ -78,6 +80,12 @@
         {
           "long": "--release",
           "description": "Build artifacts in release mode, with optimizations"
+        },
+        {
+          "long": "--features",
+          "description": "Features to activate",
+          "takes_value": true,
+          "value_type": { "type": "Dynamic", "data": { "provider": "cargo.feature" } }
         },
         {
           "long": "--bin",
@@ -128,6 +136,12 @@
         {
           "long": "--release",
           "description": "Build artifacts in release mode, with optimizations"
+        },
+        {
+          "long": "--features",
+          "description": "Features to activate",
+          "takes_value": true,
+          "value_type": { "type": "Dynamic", "data": { "provider": "cargo.feature" } }
         },
         {
           "long": "--lib",
@@ -298,6 +312,12 @@
           "description": "Check artifacts in release mode, with optimizations"
         },
         {
+          "long": "--features",
+          "description": "Features to activate",
+          "takes_value": true,
+          "value_type": { "type": "Dynamic", "data": { "provider": "cargo.feature" } }
+        },
+        {
           "long": "--package",
           "short": "-p",
           "description": "Package to check",
@@ -325,6 +345,12 @@
         {
           "long": "--fix",
           "description": "Automatically apply lint suggestions"
+        },
+        {
+          "long": "--features",
+          "description": "Features to activate",
+          "takes_value": true,
+          "value_type": { "type": "Dynamic", "data": { "provider": "cargo.feature" } }
         },
         {
           "long": "--allow-dirty",
@@ -381,6 +407,12 @@
       "description": "Run benchmarks",
       "options": [
         {
+          "long": "--features",
+          "description": "Features to activate",
+          "takes_value": true,
+          "value_type": { "type": "Dynamic", "data": { "provider": "cargo.feature" } }
+        },
+        {
           "long": "--package",
           "short": "-p",
           "description": "Package to benchmark",
@@ -407,6 +439,12 @@
       "name": "doc",
       "description": "Build a package's documentation",
       "options": [
+        {
+          "long": "--features",
+          "description": "Features to activate",
+          "takes_value": true,
+          "value_type": { "type": "Dynamic", "data": { "provider": "cargo.feature" } }
+        },
         {
           "long": "--open",
           "description": "Open docs in a browser after building them"

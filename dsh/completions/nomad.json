@@ -1,0 +1,24 @@
+{
+  "command": "nomad",
+  "description": "Nomad workload orchestrator CLI",
+  "global_options": [
+    { "long": "--address", "description": "Nomad server address", "takes_value": true, "value_type": { "type": "Url" } },
+    { "long": "--region", "description": "Nomad region", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--namespace", "description": "Nomad namespace", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--token", "description": "ACL token", "takes_value": true, "value_type": { "type": "String" } }
+  ],
+  "subcommands": [
+    { "name": "agent", "description": "Run a Nomad agent", "options": [{ "long": "--config", "description": "Configuration file or directory", "takes_value": true, "value_type": { "type": "File", "data": {} } }, { "long": "--dev", "description": "Run a development agent" }] },
+    { "name": "job", "description": "Manage jobs", "subcommands": [{ "name": "run", "description": "Run a job", "arguments": [{ "name": "jobfile", "description": "Job specification", "type": { "type": "File", "data": { "extensions": ["hcl", "json"] } } }] }, { "name": "plan", "description": "Plan a job" }, { "name": "status", "description": "Show job status" }, { "name": "stop", "description": "Stop a job" }, { "name": "restart", "description": "Restart allocations" }, { "name": "history", "description": "Show job history" }, { "name": "inspect", "description": "Inspect a job" }] },
+    { "name": "alloc", "description": "Manage allocations", "subcommands": [{ "name": "status", "description": "Show allocation status" }, { "name": "logs", "description": "Show allocation logs" }, { "name": "exec", "description": "Execute a command in an allocation" }, { "name": "stop", "description": "Stop an allocation" }] },
+    { "name": "node", "description": "Manage client nodes" },
+    { "name": "server", "description": "Manage server members" },
+    { "name": "deployment", "description": "Manage deployments" },
+    { "name": "namespace", "description": "Manage namespaces" },
+    { "name": "volume", "description": "Manage volumes" },
+    { "name": "acl", "description": "Manage ACL policies and tokens" },
+    { "name": "operator", "description": "Operator-specific commands" },
+    { "name": "var", "description": "Manage variables" },
+    { "name": "version", "description": "Print version information" }
+  ]
+}

@@ -53,7 +53,8 @@
       "description": "change the owner and/or group of each file only if its current owner and/or group match those specified here.",
       "takes_value": true,
       "value_type": {
-        "type": "String"
+        "type": "Dynamic",
+        "data": { "provider": "system.owner_group" }
       }
     },
     {
@@ -79,7 +80,8 @@
       "name": "owner_group",
       "description": "User:group to set (e.g., user, user:group)",
       "type": {
-        "type": "User"
+        "type": "Dynamic",
+        "data": { "provider": "system.owner_group" }
       }
     },
     {

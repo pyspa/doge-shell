@@ -28,5 +28,13 @@
       "description": "Ignore case when searching"
     }
   ],
+  "arguments": [
+    {
+      "name": "page",
+      "description": "Manual page name",
+      "multiple": true,
+      "type": { "type": "Dynamic", "data": { "provider": "man.page" } }
+    }
+  ],
   "subcommands": []
 }

@@ -899,6 +899,47 @@ mod tests {
     }
 
     #[test]
+    fn balanced_completion_batch_exposes_representative_subcommands() {
+        let loader = JsonCompletionLoader::new();
+        for (command, expected_subcommand) in [
+            ("act", None),
+            ("argocd", Some("app")),
+            ("chezmoi", Some("apply")),
+            ("delta", None),
+            ("flux", Some("reconcile")),
+            ("helmfile", Some("sync")),
+            ("kind", Some("create")),
+            ("k3d", Some("cluster")),
+            ("minikube", Some("start")),
+            ("nomad", Some("job")),
+            ("ollama", Some("run")),
+            ("pre-commit", Some("install")),
+            ("starship", Some("init")),
+            ("vault", Some("login")),
+            ("wezterm", Some("cli")),
+        ] {
+            let completion = loader
+                .load_command_completion(command)
+                .unwrap_or_else(|error| panic!("failed to load {command}: {error}"))
+                .unwrap_or_else(|| panic!("missing completion for {command}"));
+            if let Some(expected) = expected_subcommand {
+                assert!(
+                    completion
+                        .subcommands
+                        .iter()
+                        .any(|subcommand| subcommand.name == expected),
+                    "{command} should expose {expected}"
+                );
+            } else {
+                assert!(
+                    !completion.global_options.is_empty(),
+                    "{command} should expose options"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_load_real_git_completion() {
         let loader = JsonCompletionLoader::new();
 

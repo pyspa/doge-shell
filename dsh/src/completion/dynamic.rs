@@ -2,6 +2,8 @@ use super::integrated::{CandidateType, EnhancedCandidate, matches_prefix};
 use super::parser::{CompletionContext, ParsedCommandLine};
 use super::shell_path::normalize_path_token;
 use super::subprocess;
+use crate::completion::command::CompletionType;
+use crate::completion::generators::filesystem::FileSystemGenerator;
 use crate::environment::Environment;
 use anyhow::Result;
 use dsh_builtin::{project_context, task};
@@ -99,6 +101,7 @@ enum CargoMetadataValueKind {
     Package,
     Bin,
     Example,
+    Feature,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -310,6 +313,26 @@ impl DynamicCompletionProvider {
     ) -> Vec<EnhancedCandidate> {
         let current_token = parsed_command_line.current_token.as_str();
         match provider {
+            "archive.entry" => {
+                self.collect_archive_entry_candidates(parsed_command_line, current_dir, cached_only)
+            }
+            "git.alias" => {
+                self.collect_git_alias_candidates(current_dir, current_token, cached_only)
+            }
+            "git.config_key" => {
+                self.collect_git_config_key_candidates(current_dir, current_token, cached_only)
+            }
+            "brew.installed" => self.collect_brew_installed_candidates(current_token, cached_only),
+            "cargo.feature" => {
+                self.collect_cargo_feature_candidates(current_dir, current_token, cached_only)
+            }
+            "kind.cluster" => self.collect_kind_cluster_candidates(current_token, cached_only),
+            "k3d.cluster" => self.collect_k3d_cluster_candidates(current_token, cached_only),
+            "minikube.profile" => {
+                self.collect_minikube_profile_candidates(current_token, cached_only)
+            }
+            "man.page" => self.collect_man_page_candidates(current_token, cached_only),
+            "ollama.model" => self.collect_ollama_model_candidates(current_token, cached_only),
             "git.branch" => {
                 self.collect_git_branch_candidates(current_dir, current_token, cached_only)
             }
@@ -714,6 +737,8 @@ impl DynamicCompletionProvider {
             "shell.abbr" => self.collect_shell_abbr_candidates(current_token),
             "shell.alias" => self.collect_shell_alias_candidates(current_token),
             "shell.env_var" => self.collect_shell_env_var_candidates(current_token),
+            "shell.job" => Vec::new(),
+            "system.owner_group" => self.collect_owner_group_candidates(current_token, cached_only),
             "podman.image" => self.collect_container_image_candidates(
                 "podman",
                 current_dir,
@@ -931,10 +956,25 @@ impl DynamicCompletionProvider {
         current_dir: &Path,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
+        let current_token = parsed_command_line.current_token.as_str();
         let Some(primary_subcommand) = parsed_command_line.subcommand_path.first() else {
+            // At the subcommand position (`git co<TAB>`), offer user-defined
+            // git aliases alongside the built-in subcommands (from JSON).
+            if matches!(
+                parsed_command_line.completion_context,
+                CompletionContext::SubCommand
+            ) {
+                return self
+                    .collect_git_alias_candidates(current_dir, current_token, cached_only)
+                    .into_iter()
+                    .map(|mut candidate| {
+                        candidate.candidate_type = CandidateType::SubCommand;
+                        candidate
+                    })
+                    .collect();
+            }
             return Vec::new();
         };
-        let current_token = parsed_command_line.current_token.as_str();
         let inferred_subcommand_arg_index =
             parsed_command_line.subcommand_path.len().saturating_sub(2);
 
@@ -3010,6 +3050,334 @@ impl DynamicCompletionProvider {
         )
     }
 
+    /// User-defined git aliases (`git config --get-regexp ^alias.`), surfaced at
+    /// the subcommand position (`git co<TAB>`).
+    fn collect_git_alias_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let scope_dir = self.cached_project_root(current_dir);
+        let command_path = self.resolve_command_path("git");
+        self.collect_cached_value_candidates(
+            "git",
+            "alias",
+            scope_dir,
+            current_token,
+            "git alias",
+            cached_only,
+            {
+                let current_dir = current_dir.to_path_buf();
+                move || {
+                    let Some(command_path) = command_path else {
+                        return Ok(Vec::new());
+                    };
+                    let lines = run_command_lines(
+                        &command_path,
+                        &["config", "--get-regexp", "^alias\\."],
+                        &current_dir,
+                    )?;
+                    let mut values = Vec::new();
+                    for line in lines {
+                        // e.g. "alias.co checkout" -> "co"
+                        if let Some(rest) = line.strip_prefix("alias.")
+                            && let Some(name) = rest.split_whitespace().next()
+                        {
+                            values.push(name.to_string());
+                        }
+                    }
+                    Ok(dedup_sorted(values))
+                }
+            },
+        )
+    }
+
+    /// Existing git config keys (`git config --name-only --list`), for
+    /// `git config <key>` completion.
+    fn collect_git_config_key_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let scope_dir = self.cached_project_root(current_dir);
+        let command_path = self.resolve_command_path("git");
+        self.collect_cached_value_candidates(
+            "git",
+            "config-key",
+            scope_dir,
+            current_token,
+            "git config key",
+            cached_only,
+            {
+                let current_dir = current_dir.to_path_buf();
+                move || {
+                    let Some(command_path) = command_path else {
+                        return Ok(Vec::new());
+                    };
+                    let lines = run_command_lines(
+                        &command_path,
+                        &["config", "--name-only", "--list"],
+                        &current_dir,
+                    )?;
+                    Ok(dedup_sorted(lines))
+                }
+            },
+        )
+    }
+
+    /// Homebrew-installed formulae and casks (`brew list`), for
+    /// `brew uninstall`/`brew upgrade` completion. Global (no project scope).
+    fn collect_brew_installed_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("brew");
+        // brew is machine-global; use a fixed scope so the cache is shared
+        // across working directories.
+        let scope_dir = PathBuf::from("/");
+        self.collect_cached_value_candidates(
+            "brew",
+            "installed",
+            scope_dir,
+            current_token,
+            "brew installed",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                let mut values =
+                    run_command_lines(&command_path, &["list", "--formula"], Path::new("/"))?;
+                if let Ok(casks) =
+                    run_command_lines(&command_path, &["list", "--cask"], Path::new("/"))
+                {
+                    values.extend(casks);
+                }
+                Ok(dedup_sorted(values))
+            },
+        )
+    }
+
+    fn collect_cargo_feature_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let (completed_prefix, active_token) = cargo_feature_token_parts(current_token);
+        let mut candidates = self.collect_cargo_metadata_candidates(
+            current_dir,
+            active_token,
+            CargoMetadataValueKind::Feature,
+            "cargo feature",
+            cached_only,
+        );
+        if !completed_prefix.is_empty() {
+            for candidate in &mut candidates {
+                candidate.text.insert_str(0, completed_prefix);
+            }
+        }
+        candidates
+    }
+
+    fn collect_kind_cluster_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_global_command_candidates(
+            "kind",
+            "cluster",
+            current_token,
+            "kind cluster",
+            &["get", "clusters"],
+            parse_non_empty_lines,
+            cached_only,
+        )
+    }
+
+    fn collect_k3d_cluster_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_global_command_candidates(
+            "k3d",
+            "cluster",
+            current_token,
+            "k3d cluster",
+            &["cluster", "list", "--no-headers"],
+            parse_first_column_lines,
+            cached_only,
+        )
+    }
+
+    fn collect_minikube_profile_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("minikube");
+        self.collect_cached_value_candidates(
+            "minikube",
+            "profile",
+            PathBuf::from("/"),
+            current_token,
+            "minikube profile",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                let output = run_command_stdout(
+                    &command_path,
+                    &["profile", "list", "-o", "json"],
+                    Path::new("/"),
+                )?;
+                Ok(parse_minikube_profiles(&output))
+            },
+        )
+    }
+
+    fn collect_ollama_model_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_global_command_candidates(
+            "ollama",
+            "model",
+            current_token,
+            "ollama model",
+            &["list"],
+            parse_first_column_lines,
+            cached_only,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn collect_global_command_candidates(
+        &self,
+        executable: &'static str,
+        value_kind: &'static str,
+        current_token: &str,
+        description: &str,
+        args: &'static [&'static str],
+        parser: fn(&[String]) -> Vec<String>,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path(executable);
+        self.collect_cached_value_candidates(
+            executable,
+            value_kind,
+            PathBuf::from("/"),
+            current_token,
+            description,
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parser(&run_command_lines(
+                    &command_path,
+                    args,
+                    Path::new("/"),
+                )?))
+            },
+        )
+    }
+
+    fn collect_man_page_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let configured_manpath = self.environment.read().get_var("MANPATH");
+        let roots = man_page_roots(configured_manpath.as_deref());
+        let scope = roots
+            .first()
+            .cloned()
+            .unwrap_or_else(|| PathBuf::from("/usr/share/man"));
+        self.collect_cached_value_candidates(
+            "man",
+            "page",
+            scope,
+            current_token,
+            "manual page",
+            cached_only,
+            move || Ok(load_man_page_names(&roots)),
+        )
+    }
+
+    fn collect_owner_group_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let values = self.load_or_lookup_command_values(
+            "system",
+            "owner-group",
+            PathBuf::from("/etc"),
+            cached_only,
+            || Ok(load_owner_group_values()),
+        );
+        owner_group_candidates(&values, current_token)
+    }
+
+    fn collect_archive_entry_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_name = parsed_command_line.command.as_str();
+        let archive = match command_name {
+            "tar" if tar_reads_archive(parsed_command_line) => {
+                selected_tar_archive(parsed_command_line, current_dir)
+            }
+            "unzip" => selected_unzip_archive(parsed_command_line, current_dir),
+            _ => None,
+        };
+
+        let Some(archive) = archive else {
+            if cached_only {
+                return Vec::new();
+            }
+            return archive_file_candidates(parsed_command_line.current_token.as_str());
+        };
+
+        let command_path = self.resolve_command_path(command_name);
+        let archive_arg = archive.to_string_lossy().to_string();
+        let current_dir = current_dir.to_path_buf();
+        let executable = if command_name == "tar" {
+            "tar"
+        } else {
+            "unzip"
+        };
+        self.collect_cached_value_candidates(
+            executable,
+            "archive-entry",
+            canonicalize_path(&archive),
+            parsed_command_line.current_token.as_str(),
+            "archive entry",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                let args = if executable == "tar" {
+                    vec!["-tf", archive_arg.as_str()]
+                } else {
+                    vec!["-Z1", archive_arg.as_str()]
+                };
+                run_command_lines(&command_path, &args, &current_dir)
+            },
+        )
+    }
+
     fn collect_git_remote_branch_candidates(
         &self,
         current_dir: &Path,
@@ -3504,6 +3872,7 @@ impl DynamicCompletionProvider {
             CargoMetadataValueKind::Package => "package",
             CargoMetadataValueKind::Bin => "bin",
             CargoMetadataValueKind::Example => "example",
+            CargoMetadataValueKind::Feature => "feature",
         };
         self.collect_cached_value_candidates(
             "cargo",
@@ -4956,6 +5325,35 @@ fn parse_first_fields(lines: &[String]) -> Vec<String> {
     )
 }
 
+fn parse_first_column_lines(lines: &[String]) -> Vec<String> {
+    parse_first_fields(lines)
+        .into_iter()
+        .filter(|value| !value.eq_ignore_ascii_case("name"))
+        .collect()
+}
+
+fn parse_minikube_profiles(output: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(output) else {
+        return Vec::new();
+    };
+    let mut profiles = Vec::new();
+    for group in ["valid", "invalid"] {
+        let Some(entries) = value.get(group).and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        for entry in entries {
+            if let Some(name) = entry
+                .get("Name")
+                .or_else(|| entry.get("name"))
+                .and_then(serde_json::Value::as_str)
+            {
+                profiles.push(name.to_string());
+            }
+        }
+    }
+    dedup_sorted(profiles)
+}
+
 fn parse_whitespace_values(lines: &[String]) -> Vec<String> {
     dedup_sorted(
         lines
@@ -5018,6 +5416,93 @@ fn completion_words(parsed_command_line: &ParsedCommandLine) -> Vec<&str> {
         .iter()
         .chain(parsed_command_line.raw_args.iter())
         .map(String::as_str)
+        .collect()
+}
+
+fn tar_reads_archive(parsed_command_line: &ParsedCommandLine) -> bool {
+    completion_words(parsed_command_line)
+        .into_iter()
+        .any(|word| {
+            matches!(
+                word,
+                "-x" | "--extract" | "--get" | "-t" | "--list" | "x" | "t"
+            ) || word
+                .strip_prefix('-')
+                .filter(|flags| !flags.starts_with('-'))
+                .is_some_and(|flags| flags.contains('x') || flags.contains('t'))
+        })
+}
+
+fn selected_tar_archive(
+    parsed_command_line: &ParsedCommandLine,
+    current_dir: &Path,
+) -> Option<PathBuf> {
+    let words = completion_words(parsed_command_line);
+    for (index, word) in words.iter().enumerate() {
+        if let Some(value) = word.strip_prefix("--file=") {
+            return archive_path_from_token(current_dir, value);
+        }
+        if matches!(*word, "-f" | "--file") {
+            return words
+                .get(index + 1)
+                .and_then(|value| archive_path_from_token(current_dir, value));
+        }
+        if word
+            .strip_prefix('-')
+            .filter(|flags| !flags.starts_with('-'))
+            .is_some_and(|flags| flags.contains('f'))
+            || (!word.starts_with('-')
+                && word.chars().all(|ch| ch.is_ascii_alphabetic())
+                && word.contains('f')
+                && (word.contains('x') || word.contains('t')))
+        {
+            return words
+                .get(index + 1)
+                .and_then(|value| archive_path_from_token(current_dir, value));
+        }
+    }
+    None
+}
+
+fn selected_unzip_archive(
+    parsed_command_line: &ParsedCommandLine,
+    current_dir: &Path,
+) -> Option<PathBuf> {
+    parsed_command_line
+        .specified_arguments
+        .first()
+        .filter(|value| !value.is_empty() && *value != &parsed_command_line.current_token)
+        .and_then(|value| archive_path_from_token(current_dir, value))
+}
+
+fn archive_path_from_token(current_dir: &Path, token: &str) -> Option<PathBuf> {
+    if token.is_empty() || token.starts_with('-') {
+        return None;
+    }
+    let path = PathBuf::from(normalize_path_token(token));
+    Some(if path.is_absolute() {
+        path
+    } else {
+        current_dir.join(path)
+    })
+}
+
+fn archive_file_candidates(current_token: &str) -> Vec<EnhancedCandidate> {
+    FileSystemGenerator::generate_file_candidates(current_token)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|candidate| {
+            let candidate_type = match candidate.completion_type {
+                CompletionType::Directory => CandidateType::Directory,
+                _ => CandidateType::File,
+            };
+            EnhancedCandidate {
+                text: candidate.text,
+                description: candidate.description,
+                candidate_type,
+                priority: candidate.priority,
+            }
+        })
         .collect()
 }
 
@@ -5380,6 +5865,14 @@ fn parse_cargo_metadata_values(output: &str, kind: CargoMetadataValueKind) -> Ve
                     values.push(name.to_string());
                 }
             }
+            CargoMetadataValueKind::Feature => {
+                if let Some(features) = package
+                    .get("features")
+                    .and_then(|features| features.as_object())
+                {
+                    values.extend(features.keys().cloned());
+                }
+            }
             CargoMetadataValueKind::Bin | CargoMetadataValueKind::Example => {
                 let Some(targets) = package
                     .get("targets")
@@ -5390,7 +5883,9 @@ fn parse_cargo_metadata_values(output: &str, kind: CargoMetadataValueKind) -> Ve
                 let expected_kind = match kind {
                     CargoMetadataValueKind::Bin => "bin",
                     CargoMetadataValueKind::Example => "example",
-                    CargoMetadataValueKind::Package => unreachable!(),
+                    CargoMetadataValueKind::Package | CargoMetadataValueKind::Feature => {
+                        unreachable!()
+                    }
                 };
                 for target in targets {
                     let Some(kinds) = target.get("kind").and_then(|kinds| kinds.as_array()) else {
@@ -5412,6 +5907,13 @@ fn parse_cargo_metadata_values(output: &str, kind: CargoMetadataValueKind) -> Ve
     dedup_sorted(values)
 }
 
+fn cargo_feature_token_parts(token: &str) -> (&str, &str) {
+    token
+        .rfind(',')
+        .map(|comma| token.split_at(comma + 1))
+        .unwrap_or(("", token))
+}
+
 fn ssh_config_scope() -> PathBuf {
     dirs::home_dir()
         .map(|home| home.join(".ssh"))
@@ -5429,6 +5931,110 @@ fn load_ssh_hosts() -> Vec<String> {
         ));
     }
     dedup_sorted(values)
+}
+
+fn man_page_roots(configured_manpath: Option<&str>) -> Vec<PathBuf> {
+    let mut roots = configured_manpath
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| std::env::split_paths(value).collect::<Vec<_>>())
+        .unwrap_or_default();
+    roots.extend([
+        PathBuf::from("/usr/local/share/man"),
+        PathBuf::from("/usr/share/man"),
+    ]);
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.join(".local/share/man"));
+    }
+    roots.sort();
+    roots.dedup();
+    roots.retain(|path| path.is_dir());
+    roots
+}
+
+fn load_man_page_names(roots: &[PathBuf]) -> Vec<String> {
+    let mut values = Vec::new();
+    for root in roots {
+        collect_man_page_names(root, 0, &mut values);
+    }
+    dedup_sorted(values)
+}
+
+fn collect_man_page_names(dir: &Path, depth: usize, values: &mut Vec<String>) {
+    if depth > 2 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_man_page_names(&path, depth + 1, values);
+            continue;
+        }
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if let Some(page) = man_page_name_from_file(file_name) {
+            values.push(page.to_string());
+        }
+    }
+}
+
+fn man_page_name_from_file(file_name: &str) -> Option<&str> {
+    let mut stem = file_name;
+    for extension in [".gz", ".xz", ".bz2", ".zst", ".lzma"] {
+        if let Some(stripped) = stem.strip_suffix(extension) {
+            stem = stripped;
+            break;
+        }
+    }
+    let (page, section) = stem.rsplit_once('.')?;
+    (!page.is_empty() && !section.is_empty()).then_some(page)
+}
+
+fn load_owner_group_values() -> Vec<String> {
+    let mut values = Vec::new();
+    if let Ok(contents) = fs::read_to_string("/etc/passwd") {
+        values.extend(contents.lines().filter_map(|line| {
+            let name = line.split(':').next()?;
+            (!name.is_empty() && !name.starts_with('#')).then(|| format!("u:{name}"))
+        }));
+    }
+    if let Ok(contents) = fs::read_to_string("/etc/group") {
+        values.extend(contents.lines().filter_map(|line| {
+            let name = line.split(':').next()?;
+            (!name.is_empty() && !name.starts_with('#')).then(|| format!("g:{name}"))
+        }));
+    }
+    dedup_sorted(values)
+}
+
+fn owner_group_candidates(values: &[String], current_token: &str) -> Vec<EnhancedCandidate> {
+    let group_context = current_token.rsplit_once(':');
+    values
+        .iter()
+        .filter_map(|encoded| {
+            let (kind, value) = encoded.split_once(':')?;
+            let (text, description) = if let Some((owner, group_prefix)) = group_context {
+                if kind != "g" || !matches_prefix(group_prefix, value) {
+                    return None;
+                }
+                (format!("{owner}:{value}"), "group")
+            } else {
+                if kind != "u" || !matches_prefix(current_token, value) {
+                    return None;
+                }
+                (value.to_string(), "user")
+            };
+            Some(EnhancedCandidate {
+                text,
+                description: Some(description.to_string()),
+                candidate_type: CandidateType::Argument,
+                priority: 140,
+            })
+        })
+        .collect()
 }
 
 fn parse_ssh_config_hosts(contents: &str) -> Vec<String> {
@@ -5495,7 +6101,7 @@ fn format_ssh_host_candidate_text(
     } else {
         host
     };
-    if command_name == "rsync" {
+    if matches!(command_name, "scp" | "rsync") {
         text.push(':');
     }
     text
@@ -5949,6 +6555,11 @@ mod tests {
           "packages": [
             {
               "name": "app",
+              "features": {
+                "default": ["cli"],
+                "cli": [],
+                "serde": []
+              },
               "targets": [
                 { "name": "app", "kind": ["bin"] },
                 { "name": "demo", "kind": ["example"] },
@@ -5957,6 +6568,10 @@ mod tests {
             },
             {
               "name": "lib",
+              "features": {
+                "serde": [],
+                "tokio": []
+              },
               "targets": [
                 { "name": "tool", "kind": ["bin"] }
               ]
@@ -5975,6 +6590,38 @@ mod tests {
         assert_eq!(
             parse_cargo_metadata_values(metadata, CargoMetadataValueKind::Example),
             vec!["demo".to_string()]
+        );
+        assert_eq!(
+            parse_cargo_metadata_values(metadata, CargoMetadataValueKind::Feature),
+            vec![
+                "cli".to_string(),
+                "default".to_string(),
+                "serde".to_string(),
+                "tokio".to_string()
+            ]
+        );
+        assert_eq!(cargo_feature_token_parts("serde,to"), ("serde,", "to"));
+        assert_eq!(cargo_feature_token_parts("serde"), ("", "serde"));
+    }
+
+    #[test]
+    fn cluster_and_model_parsers_ignore_headers_and_read_profiles() {
+        assert_eq!(
+            parse_first_column_lines(&[
+                "NAME ID SIZE".to_string(),
+                "llama3.2:latest abc 2 GB".to_string(),
+                "qwen3:8b def 5 GB".to_string(),
+            ]),
+            vec!["llama3.2:latest".to_string(), "qwen3:8b".to_string()]
+        );
+        assert_eq!(
+            parse_minikube_profiles(
+                r#"{
+                  "valid": [{"Name": "dev"}, {"Name": "prod"}],
+                  "invalid": [{"name": "broken"}]
+                }"#
+            ),
+            vec!["broken".to_string(), "dev".to_string(), "prod".to_string()]
         );
     }
 
@@ -6002,12 +6649,82 @@ mod tests {
             "alice@dev"
         );
         assert_eq!(
+            format_ssh_host_candidate_text("scp", Some("alice"), "dev".to_string()),
+            "alice@dev:"
+        );
+        assert_eq!(
             format_ssh_host_candidate_text("rsync", Some("alice"), "dev".to_string()),
             "alice@dev:"
         );
         assert_eq!(
             format_ssh_host_candidate_text("rsync", None, "dev".to_string()),
             "dev:"
+        );
+    }
+
+    #[test]
+    fn basic_dynamic_value_helpers_preserve_completion_context() {
+        assert_eq!(man_page_name_from_file("printf.1.gz"), Some("printf"));
+        assert_eq!(
+            man_page_name_from_file("systemd.service.5"),
+            Some("systemd.service")
+        );
+        assert_eq!(man_page_name_from_file("README"), None);
+
+        let values = vec![
+            "g:staff".to_string(),
+            "g:storage".to_string(),
+            "u:alice".to_string(),
+            "u:bob".to_string(),
+        ];
+        assert_eq!(
+            owner_group_candidates(&values, "ali")
+                .into_iter()
+                .map(|candidate| candidate.text)
+                .collect::<Vec<_>>(),
+            vec!["alice"]
+        );
+        assert_eq!(
+            owner_group_candidates(&values, "alice:st")
+                .into_iter()
+                .map(|candidate| candidate.text)
+                .collect::<Vec<_>>(),
+            vec!["alice:staff", "alice:storage"]
+        );
+        assert_eq!(
+            owner_group_candidates(&values, ":staf")
+                .into_iter()
+                .map(|candidate| candidate.text)
+                .collect::<Vec<_>>(),
+            vec![":staff"]
+        );
+    }
+
+    #[test]
+    fn archive_helpers_find_read_archive_without_treating_create_as_read() {
+        let dir = Path::new("/work");
+
+        let tar = parsed("tar -xzf backup.tar.gz etc/");
+        assert!(tar_reads_archive(&tar));
+        assert_eq!(
+            selected_tar_archive(&tar, dir),
+            Some(dir.join("backup.tar.gz"))
+        );
+
+        let tar = parsed("tar --extract --file=backup.tar member");
+        assert!(tar_reads_archive(&tar));
+        assert_eq!(
+            selected_tar_archive(&tar, dir),
+            Some(dir.join("backup.tar"))
+        );
+
+        let tar = parsed("tar -cf backup.tar src/");
+        assert!(!tar_reads_archive(&tar));
+
+        let unzip = parsed("unzip backup.zip etc/");
+        assert_eq!(
+            selected_unzip_archive(&unzip, dir),
+            Some(dir.join("backup.zip"))
         );
     }
 

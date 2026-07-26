@@ -126,6 +126,8 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
         input_text, cursor_pos
     );
 
+    repl.sync_completion_jobs();
+
     // Get completion candidates from the integrated engine.
     //
     // `complete()` performs synchronous, potentially blocking work (dynamic

@@ -62,7 +62,9 @@
   "arguments": [
     {
       "name": "files",
-      "description": "Files to concatenate (default: standard input)"
+      "description": "Files to concatenate (default: standard input)",
+      "multiple": true,
+      "type": { "type": "File", "data": {} }
     }
   ]
 }

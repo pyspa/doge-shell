@@ -31,7 +31,7 @@
         { "long": "--zap", "description": "Remove files associated with a cask" }
       ],
       "arguments": [
-        { "name": "formula_or_cask", "description": "Installed formula or cask", "multiple": true }
+        { "name": "formula_or_cask", "description": "Installed formula or cask", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "brew.installed" } } }
       ]
     },
     { "name": "update", "description": "Fetch latest Homebrew and formulae" },
@@ -39,7 +39,7 @@
       "name": "upgrade",
       "description": "Upgrade outdated formulae and casks",
       "arguments": [
-        { "name": "formula_or_cask", "description": "Optional formula or cask", "required": false, "multiple": true }
+        { "name": "formula_or_cask", "description": "Optional formula or cask", "required": false, "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "brew.installed" } } }
       ]
     },
     { "name": "list", "description": "List installed formulae and casks" },
@@ -62,9 +62,9 @@
       "description": "Manage background services",
       "subcommands": [
         { "name": "list", "description": "List services" },
-        { "name": "start", "description": "Start a service", "arguments": [{ "name": "formula", "description": "Formula service" }] },
-        { "name": "stop", "description": "Stop a service", "arguments": [{ "name": "formula", "description": "Formula service" }] },
-        { "name": "restart", "description": "Restart a service", "arguments": [{ "name": "formula", "description": "Formula service" }] }
+        { "name": "start", "description": "Start a service", "arguments": [{ "name": "formula", "description": "Formula service", "type": { "type": "Dynamic", "data": { "provider": "brew.installed" } } }] },
+        { "name": "stop", "description": "Stop a service", "arguments": [{ "name": "formula", "description": "Formula service", "type": { "type": "Dynamic", "data": { "provider": "brew.installed" } } }] },
+        { "name": "restart", "description": "Restart a service", "arguments": [{ "name": "formula", "description": "Formula service", "type": { "type": "Dynamic", "data": { "provider": "brew.installed" } } }] }
       ]
     }
   ]

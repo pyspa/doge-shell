@@ -89,6 +89,7 @@ impl<'a> Repl<'a> {
 
         if candidates.is_empty() {
             let current_dir = self.prompt.read().current_path().to_path_buf();
+            self.sync_completion_jobs();
             if let Some(full) = self.integrated_completion.ghost_completion(
                 current_input.as_str(),
                 cursor_pos,

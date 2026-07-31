@@ -83,33 +83,31 @@ pub enum AiEvent {
     CommandExplanationError { input: String },
 }
 
-pub struct Repl<'a> {
-    pub shell: &'a mut Shell,
-    pub(crate) input: Input,
+pub(crate) struct TerminalUiState {
     pub(crate) columns: usize,
     pub(crate) lines: usize,
     pub(crate) tmode: Option<Termios>,
-    pub(crate) history_search: Option<String>,
-    pub(crate) start_completion: bool,
-    pub(crate) completion: Completion,
-    pub(crate) integrated_completion: IntegratedCompletionEngine,
     pub(crate) prompt: Arc<RwLock<Prompt>>,
-    // Cached prompt mark and its display width to avoid recomputation on each redraw
     pub(crate) prompt_mark_cache: String,
     pub(crate) prompt_mark_width: usize,
     pub(crate) ctrl_c_state: DoublePressState,
     pub(crate) esc_state: DoublePressState,
-    pub(crate) ctrl_x_pressed: bool,
-    pub(crate) state: ReplState,
-    // short-term cache for history-based completion to reduce lock/sort frequency
+    pub(crate) last_drawn_cursor_y: usize,
+    pub(crate) last_preprompt_plain: Option<String>,
+}
+
+pub(crate) struct CompletionUiState {
+    pub(crate) start_completion: bool,
+    pub(crate) completion: Completion,
+    pub(crate) integrated_completion: IntegratedCompletionEngine,
     pub(crate) cache: HistoryCache,
+    pub(crate) completion_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
+}
+
+pub(crate) struct AiUiState {
     pub(crate) suggestion_manager: SuggestionManager,
     pub(crate) input_preferences: InputPreferences,
     pub(crate) ai_pending_shown: bool,
-    pub(crate) services: ReplServices,
-    pub(crate) git_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
-    pub(crate) last_git_update: Option<Instant>,
-    pub(crate) git_task_inflight: Arc<AtomicBool>,
     pub(crate) last_explanation: Option<String>,
     pub(crate) auto_fix_suggestion: Option<String>,
     pub(crate) pending_ai_explanation_input: Option<String>,
@@ -117,25 +115,30 @@ pub struct Repl<'a> {
     pub(crate) last_input_change_time: Instant,
     pub(crate) ai_rx: tokio::sync::mpsc::UnboundedReceiver<AiEvent>,
     pub(crate) ai_tx: tokio::sync::mpsc::UnboundedSender<AiEvent>,
-    pub(crate) history_sync_last_check: Instant,
-    pub(crate) completion_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
-    /// Flag to indicate argument explanation needs refresh (debounced)
     pub(crate) explanation_dirty: bool,
-    /// Cache for syntax highlighting to avoid re-parsing unchanged input
     pub(crate) last_analyzed_input: String,
     pub(crate) last_analysis_result: Option<CachedInputAnalysis>,
-    /// Handle to the background GitHub task, allowing cancellation on drop
+}
+
+pub(crate) struct BackgroundTasks {
+    pub(crate) git_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
+    pub(crate) last_git_update: Option<Instant>,
+    pub(crate) git_task_inflight: Arc<AtomicBool>,
+    pub(crate) history_sync_last_check: Instant,
     pub(crate) github_task: Option<tokio::task::JoinHandle<()>>,
-    /// Y coordinate of the cursor in the previously drawn input to allow proper clearing backward
-    pub(crate) last_drawn_cursor_y: usize,
-    /// The last drawn preprompt with ANSI codes stripped, or `None` in
-    /// continuation mode, which draws no preprompt at all.
-    ///
-    /// Kept as text rather than a row count because the number of rows it
-    /// occupies depends on the terminal width, which changes under our feet on
-    /// resize. Anything that erases and re-emits the preprompt asks
-    /// [`Repl::preprompt_rows`] for the count at the *current* width.
-    pub(crate) last_preprompt_plain: Option<String>,
+}
+
+pub struct Repl<'a> {
+    pub shell: &'a mut Shell,
+    pub(crate) input: Input,
+    pub(crate) history_search: Option<String>,
+    pub(crate) ctrl_x_pressed: bool,
+    pub(crate) state: ReplState,
+    pub(crate) services: ReplServices,
+    pub(crate) terminal_ui: TerminalUiState,
+    pub(crate) completion_ui: CompletionUiState,
+    pub(crate) ai_ui: AiUiState,
+    pub(crate) background_tasks: BackgroundTasks,
 }
 
 /// Whether Ctrl-R should use the pre-picker skim flow.
@@ -148,7 +151,7 @@ fn history_picker_backend_is_skim() -> bool {
 impl<'a> Drop for Repl<'a> {
     fn drop(&mut self) {
         // Cancel background task
-        if let Some(handle) = self.github_task.take() {
+        if let Some(handle) = self.background_tasks.github_task.take() {
             handle.abort();
         };
 
@@ -174,7 +177,6 @@ impl<'a> Repl<'a> {
 
         // Initialize completion notifier channel
         let (completion_tx, completion_rx) = tokio::sync::mpsc::unbounded_channel();
-        completion_lib::set_completion_notifier(completion_tx);
 
         let current = std::env::current_dir().unwrap_or_else(|e| {
             warn!(
@@ -194,6 +196,7 @@ impl<'a> Repl<'a> {
         shell
             .environment
             .write()
+            .variable_state
             .chpwd_hooks
             .push(Box::new(Arc::clone(&prompt)));
         let input_config = InputConfig::default();
@@ -268,18 +271,18 @@ impl<'a> Repl<'a> {
 
             // ... (in Repl::new)
 
-            let allowlist = envronment.read().execute_allowlist.clone();
+            let allowlist = envronment.read().policy_state.execute_allowlist.clone();
             let service = Arc::new(LiveAiService::new(
                 client,
-                envronment.read().mcp_manager.clone(),
-                envronment.read().safety_level.clone(),
+                envronment.read().integration_state.mcp_manager.clone(),
+                envronment.read().policy_state.safety_level.clone(),
                 shell.safety_guard.clone(),
                 Some(confirmation::ReplConfirmationHandler::new()),
                 allowlist,
             ));
 
             // Store in environment so ShellProxy can access it
-            envronment.write().ai_service = Some(service.clone());
+            envronment.write().integration_state.ai_service = Some(service.clone());
             ai_service = Some(service);
         }
         suggestion_manager.set_preferences(input_preferences);
@@ -290,51 +293,65 @@ impl<'a> Repl<'a> {
 
         // Setup AI event channel
         let (ai_tx, ai_rx) = tokio::sync::mpsc::unbounded_channel();
+        let integrated_completion = IntegratedCompletionEngine::new(envronment);
+        integrated_completion.set_notifier(completion_tx.clone());
+        shell.completion_runtime = Some(integrated_completion.runtime());
+        // Legacy path completion still uses its own cache; keep it connected
+        // until that cache is moved behind CompletionRuntime as well.
+        completion_lib::set_completion_notifier(completion_tx);
 
         Repl {
             shell,
             input: Input::new(input_config),
-            columns: 0,
-            lines: 0,
-            tmode: None,
             history_search: None,
-            start_completion: false,
-            completion: Completion::new(),
-            integrated_completion: IntegratedCompletionEngine::new(envronment),
-            prompt: Arc::clone(&prompt),
-            prompt_mark_cache,
-            prompt_mark_width,
-            ctrl_c_state: DoublePressState::new(3000), // 3 seconds for Ctrl+C
-            esc_state: DoublePressState::new(400),     // 400ms for Esc (sudo toggle)
             ctrl_x_pressed: false,
             state: ReplState::new(current.clone()),
-            cache: HistoryCache::new(Duration::from_millis(300)),
-            suggestion_manager,
-            input_preferences,
-            ai_pending_shown: false,
             services: ReplServices::new(
                 ai_service,
                 command_timing::create_shared_timing(),
                 Arc::clone(&prompt),
             ),
-            git_rx,
-            last_git_update: None,
-            git_task_inflight: Arc::new(AtomicBool::new(false)),
-            last_explanation: None,
-            auto_fix_suggestion: None,
-            pending_ai_explanation_input: None,
-            current_ai_explanation: None,
-            last_input_change_time: Instant::now(),
-            ai_rx,
-            ai_tx,
-            history_sync_last_check: Instant::now(),
-            completion_rx,
-            explanation_dirty: false,
-            last_analyzed_input: String::new(),
-            last_analysis_result: None,
-            github_task: Some(github_task),
-            last_drawn_cursor_y: 0,
-            last_preprompt_plain: None,
+            terminal_ui: TerminalUiState {
+                columns: 0,
+                lines: 0,
+                tmode: None,
+                prompt: Arc::clone(&prompt),
+                prompt_mark_cache,
+                prompt_mark_width,
+                ctrl_c_state: DoublePressState::new(3000),
+                esc_state: DoublePressState::new(400),
+                last_drawn_cursor_y: 0,
+                last_preprompt_plain: None,
+            },
+            completion_ui: CompletionUiState {
+                start_completion: false,
+                completion: Completion::new(),
+                integrated_completion,
+                cache: HistoryCache::new(Duration::from_millis(300)),
+                completion_rx,
+            },
+            ai_ui: AiUiState {
+                suggestion_manager,
+                input_preferences,
+                ai_pending_shown: false,
+                last_explanation: None,
+                auto_fix_suggestion: None,
+                pending_ai_explanation_input: None,
+                current_ai_explanation: None,
+                last_input_change_time: Instant::now(),
+                ai_rx,
+                ai_tx,
+                explanation_dirty: false,
+                last_analyzed_input: String::new(),
+                last_analysis_result: None,
+            },
+            background_tasks: BackgroundTasks {
+                git_rx,
+                last_git_update: None,
+                git_task_inflight: Arc::new(AtomicBool::new(false)),
+                history_sync_last_check: Instant::now(),
+                github_task: Some(github_task),
+            },
         }
     }
 
@@ -417,16 +434,20 @@ impl<'a> Repl<'a> {
             warn!("Failed to get terminal size: {}, using default 80x24", e);
             (80, 24)
         });
-        self.columns = screen_size.0 as usize;
+        self.terminal_ui.columns = screen_size.0 as usize;
 
         // Initialize integrated completion engine
         debug!("Initializing integrated completion engine (this may use cached JSON data)...");
-        if let Err(e) = self.integrated_completion.initialize_command_completion() {
+        if let Err(e) = self
+            .completion_ui
+            .integrated_completion
+            .initialize_command_completion()
+        {
             warn!("Failed to initialize command completion: {}", e);
         } else {
             debug!("Integrated completion engine initialized successfully");
         }
-        self.lines = screen_size.1 as usize;
+        self.terminal_ui.lines = screen_size.1 as usize;
         enable_raw_mode().ok();
         let mut renderer = TerminalRenderer::new();
         queue!(renderer, EnableBracketedPaste).ok();
@@ -438,7 +459,7 @@ impl<'a> Repl<'a> {
     }
 
     pub(crate) fn sync_completion_jobs(&self) {
-        self.integrated_completion.set_shell_jobs(
+        self.completion_ui.integrated_completion.set_shell_jobs(
             self.shell
                 .wait_jobs
                 .iter()
@@ -454,14 +475,14 @@ impl<'a> Repl<'a> {
     pub(crate) async fn handle_key_event(&mut self, ev: &KeyEvent) -> Result<ReplControlFlow> {
         let result = handler::handle_key_event(self, ev).await;
         // Mark explanation as dirty for debounced refresh
-        self.explanation_dirty = true;
+        self.ai_ui.explanation_dirty = true;
         result
     }
 
     fn refresh_argument_explanation(&mut self) {
         let input = self.input.to_string();
         let cursor = self.input.cursor();
-        let explanation_to_show = if let Some(ref ai_exp) = self.current_ai_explanation {
+        let explanation_to_show = if let Some(ref ai_exp) = self.ai_ui.current_ai_explanation {
             Some(format!("\u{2728} {}", ai_exp))
         } else {
             self.services
@@ -469,13 +490,13 @@ impl<'a> Repl<'a> {
                 .get_explanation(&input, cursor)
         };
 
-        if explanation_to_show != self.last_explanation {
-            self.last_explanation = explanation_to_show.clone();
+        if explanation_to_show != self.ai_ui.last_explanation {
+            self.ai_ui.last_explanation = explanation_to_show.clone();
 
             use crossterm::{QueueableCommand, cursor, style::Print, terminal};
             use std::io::Write;
 
-            if self.columns == 0 {
+            if self.terminal_ui.columns == 0 {
                 return;
             }
 
@@ -553,9 +574,9 @@ impl<'a> Repl<'a> {
 
     fn sync_input_preferences(&mut self) {
         let prefs = self.shell.environment.read().input_preferences();
-        if prefs != self.input_preferences {
-            self.input_preferences = prefs;
-            self.suggestion_manager.engine.set_preferences(prefs);
+        if prefs != self.ai_ui.input_preferences {
+            self.ai_ui.input_preferences = prefs;
+            self.ai_ui.suggestion_manager.engine.set_preferences(prefs);
             // If explanation was just enabled, we don't necessarily need to reset the timer here,
             // as the next event or tick will handle it.
         }
@@ -574,7 +595,7 @@ impl<'a> Repl<'a> {
     }
 
     pub(crate) fn accept_suggestion(&mut self, mode: SuggestionAcceptMode) -> bool {
-        let suggestion = match self.suggestion_manager.active.clone() {
+        let suggestion = match self.ai_ui.suggestion_manager.active.clone() {
             Some(state) => state,
             None => return false,
         };
@@ -602,7 +623,7 @@ impl<'a> Repl<'a> {
 
         if matches!(mode, SuggestionAcceptMode::Full) && inserted_all {
             self.learn_suggestion(&suggestion.full);
-            self.suggestion_manager.clear();
+            self.ai_ui.suggestion_manager.clear();
         }
 
         true
@@ -631,10 +652,10 @@ impl<'a> Repl<'a> {
     fn get_completion_from_history(&mut self, input: &str) -> Option<String> {
         let now = Instant::now();
         // Try cached match-sorted list first if still fresh and prefix unchanged
-        if let Some(last_time) = self.cache.time
-            && now.duration_since(last_time) <= self.cache.ttl
-            && self.cache.prefix.starts_with(input)
-            && let Some(ref list) = self.cache.match_sorted
+        if let Some(last_time) = self.completion_ui.cache.time
+            && now.duration_since(last_time) <= self.completion_ui.cache.ttl
+            && self.completion_ui.cache.prefix.starts_with(input)
+            && let Some(ref list) = self.completion_ui.cache.match_sorted
             && let Some(top) = list.iter().find(|it| it.item.starts_with(input))
         {
             let entry = top.item.clone();
@@ -676,9 +697,9 @@ impl<'a> Repl<'a> {
     /// Zero in continuation mode. Recomputed on each call so a resize between
     /// drawing and erasing cannot leave a stale count behind.
     pub(crate) fn preprompt_rows(&self) -> usize {
-        match &self.last_preprompt_plain {
+        match &self.terminal_ui.last_preprompt_plain {
             None => 0,
-            Some(plain) => render::preprompt_rows(plain, self.columns),
+            Some(plain) => render::preprompt_rows(plain, self.terminal_ui.columns),
         }
     }
 
@@ -696,7 +717,8 @@ impl<'a> Repl<'a> {
             self.shell.pgid,
         )
         .context("failed tcsetpgrp");
-        self.tmode = match tcgetattr(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }) {
+        self.terminal_ui.tmode = match tcgetattr(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) })
+        {
             Ok(tmode) => Some(tmode),
             Err(e) => {
                 warn!("Failed to get terminal attributes: {}", e);
@@ -722,14 +744,14 @@ impl<'a> Repl<'a> {
                 },
                 _ = event_loop.ai_refresh.tick() => {
                     let mut need_redraw = false;
-                    if self.input_preferences.ai_backfill
+                    if self.ai_ui.input_preferences.ai_backfill
                         && self.input.completion.is_none()
                         && self.refresh_inline_suggestion()
                     {
                         need_redraw = true;
                     }
 
-                    if self.suggestion_manager.engine.ai_pending() != self.ai_pending_shown {
+                    if self.ai_ui.suggestion_manager.engine.ai_pending() != self.ai_ui.ai_pending_shown {
                         need_redraw = true;
                     }
 
@@ -741,23 +763,23 @@ impl<'a> Repl<'a> {
                 }
                 _ = event_loop.explanation_refresh.tick() => {
                     // Debounced argument explanation refresh
-                    if self.explanation_dirty {
-                        self.explanation_dirty = false;
+                    if self.ai_ui.explanation_dirty {
+                        self.ai_ui.explanation_dirty = false;
                         self.refresh_argument_explanation();
                     }
                 }
                 // Dedicated idle timer for AI command explanation.
                 // This future is stored outside the loop so it does NOT reset on every iteration.
                 _ = event_loop.idle_sleep.as_mut() => {
-                    if self.input_preferences.ai_explanation
+                    if self.ai_ui.input_preferences.ai_explanation
                         && self.services.ai.is_some()
                         && !self.input.is_empty()
-                        && self.pending_ai_explanation_input.as_deref() != Some(self.input.as_str())
-                        && self.current_ai_explanation.is_none()
+                        && self.ai_ui.pending_ai_explanation_input.as_deref() != Some(self.input.as_str())
+                        && self.ai_ui.current_ai_explanation.is_none()
                     {
                         let input_str = self.input.as_str().to_string();
-                        self.pending_ai_explanation_input = Some(input_str.clone());
-                        let ai_tx = self.ai_tx.clone();
+                        self.ai_ui.pending_ai_explanation_input = Some(input_str.clone());
+                        let ai_tx = self.ai_ui.ai_tx.clone();
                         let service_opt = self.services.ai.clone();
 
                         tokio::spawn(async move {
@@ -786,13 +808,13 @@ impl<'a> Repl<'a> {
                     // After firing, reset to a very long sleep so it doesn't fire again immediately.
                     event_loop.reset_idle(Duration::from_secs(3600));
                 }
-                Some(_) = self.git_rx.recv() => {
+                Some(_) = self.background_tasks.git_rx.recv() => {
                     self.handle_git_refresh_request();
                 }
-                Some(_) = self.completion_rx.recv() => {
+                Some(_) = self.completion_ui.completion_rx.recv() => {
                     self.handle_completion_refresh();
                 }
-                Some(ai_event) = self.ai_rx.recv() => {
+                Some(ai_event) = self.ai_ui.ai_rx.recv() => {
                     self.handle_ai_event(ai_event);
                 }
                 maybe_event = reader.next() => {
@@ -909,11 +931,11 @@ impl<'a> Repl<'a> {
                             if current_cwd != self.state.last_cwd {
                                 self.state.last_cwd = current_cwd.clone();
 
-                                if self.input_preferences.ai_backfill {
+                                if self.ai_ui.input_preferences.ai_backfill {
                                     debug!("CWD changed to {:?}, triggering AI prefetch", self.state.last_cwd);
                                     let files = self.get_directory_listing();
                                     let files_vec: Vec<String> = files.lines().map(String::from).collect();
-                                    self.suggestion_manager.engine.prefetch(
+                                    self.ai_ui.suggestion_manager.engine.prefetch(
                                         Some(self.state.last_cwd.to_string_lossy().to_string()),
                                         Arc::new(files_vec),
                                         Some(self.state.last_status)
@@ -926,13 +948,13 @@ impl<'a> Repl<'a> {
                                 self.state.stopped_jobs_warned = false;
 
                                 // Invalidate git cache and trigger re-check
-                                self.prompt.write().invalidate_git_cache();
+                                self.terminal_ui.prompt.write().invalidate_git_cache();
 
                                 // Trigger git check
                                 // We can send to git_rx (via git_tx which we assume we have somehow? No, we don't have git_tx here)
-                                // We DO have self.git_rx, but we can't send to it.
+                                // We DO have self.background_tasks.git_rx, but we can't send to it.
                                 // We have prompt.git_sender!
-                                self.prompt.read().trigger_git_check();
+                                self.terminal_ui.prompt.read().trigger_git_check();
 
                                 // Trigger auto-fix if failed
                                 if self.state.last_status != 0 {
@@ -948,15 +970,15 @@ impl<'a> Repl<'a> {
                     }
                     // Reset the idle explanation timer on every key event if enabled.
                     // This ensures the 5-second countdown restarts after each keypress.
-                    if self.input_preferences.ai_explanation {
+                    if self.ai_ui.input_preferences.ai_explanation {
                         event_loop.reset_idle(Duration::from_secs(5));
                     }
                 }
             };
 
-            if self.start_completion {
+            if self.completion_ui.start_completion {
                 // show completion
-                self.start_completion = false;
+                self.completion_ui.start_completion = false;
             }
             if self.state.should_exit || self.shell.exited.is_some() {
                 debug!("Shell exiting normally");
@@ -991,7 +1013,7 @@ impl<'a> Repl<'a> {
         }
         self.check_background_jobs(true).await?;
 
-        if self.history_sync_last_check.elapsed() > Duration::from_secs(30) {
+        if self.background_tasks.history_sync_last_check.elapsed() > Duration::from_secs(30) {
             if let Some(ref history) = self.shell.path_history
                 && let Some(mut history) = history.try_lock()
             {
@@ -1002,7 +1024,7 @@ impl<'a> Repl<'a> {
             {
                 let _ = history.reload();
             }
-            self.history_sync_last_check = Instant::now();
+            self.background_tasks.history_sync_last_check = Instant::now();
         }
 
         let _ = self.shell.exec_input_timeout_hooks();
@@ -1012,11 +1034,12 @@ impl<'a> Repl<'a> {
 
     fn handle_git_refresh_request(&mut self) {
         let now = Instant::now();
-        let is_throttled = self.last_git_update.is_some_and(|last| {
+        let is_throttled = self.background_tasks.last_git_update.is_some_and(|last| {
             now.duration_since(last) < Duration::from_millis(GIT_STATUS_THROTTLE_MS)
         });
         if is_throttled
             || self
+                .background_tasks
                 .git_task_inflight
                 .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
                 .is_err()
@@ -1024,9 +1047,9 @@ impl<'a> Repl<'a> {
             return;
         }
 
-        self.last_git_update = Some(now);
-        let prompt = Arc::clone(&self.prompt);
-        let inflight = Arc::clone(&self.git_task_inflight);
+        self.background_tasks.last_git_update = Some(now);
+        let prompt = Arc::clone(&self.terminal_ui.prompt);
+        let inflight = Arc::clone(&self.background_tasks.git_task_inflight);
         tokio::spawn(async move {
             if prompt.read().needs_git_check {
                 let cwd = prompt.read().current_dir.clone();
@@ -1054,7 +1077,7 @@ impl<'a> Repl<'a> {
     fn handle_ai_event(&mut self, event: AiEvent) {
         match event {
             AiEvent::AutoFix(fix) => {
-                self.auto_fix_suggestion = Some(fix);
+                self.ai_ui.auto_fix_suggestion = Some(fix);
                 if self.input.as_str().is_empty() {
                     let mut renderer = TerminalRenderer::new();
                     self.print_input(&mut renderer, false, false);
@@ -1063,13 +1086,13 @@ impl<'a> Repl<'a> {
             }
             AiEvent::CommandExplanation { input, explanation } => {
                 if self.input.as_str() == input {
-                    self.current_ai_explanation = Some(explanation);
-                    self.explanation_dirty = true;
+                    self.ai_ui.current_ai_explanation = Some(explanation);
+                    self.ai_ui.explanation_dirty = true;
                 }
             }
             AiEvent::CommandExplanationError { input } => {
-                if self.pending_ai_explanation_input.as_deref() == Some(input.as_str()) {
-                    self.pending_ai_explanation_input = None;
+                if self.ai_ui.pending_ai_explanation_input.as_deref() == Some(input.as_str()) {
+                    self.ai_ui.pending_ai_explanation_input = None;
                 }
             }
         }
@@ -1429,7 +1452,10 @@ mod tests {
         let env = Environment::new();
         {
             let mut writer = env.write();
-            writer.alias.insert("ll".to_string(), "ls -al".to_string());
+            writer
+                .variable_state
+                .alias
+                .insert("ll".to_string(), "ls -al".to_string());
         }
 
         let mut shell = Shell::new(env.clone());
@@ -1506,16 +1532,16 @@ mod ai_tests {
         repl.state.last_status = 127;
 
         // Enable auto_fix
-        repl.input_preferences.auto_fix = true;
+        repl.ai_ui.input_preferences.auto_fix = true;
 
         repl.trigger_auto_fix();
 
         // Wait for the background task to complete and send the result
-        if let Some(AiEvent::AutoFix(fix)) = repl.ai_rx.recv().await {
-            repl.auto_fix_suggestion = Some(fix);
+        if let Some(AiEvent::AutoFix(fix)) = repl.ai_ui.ai_rx.recv().await {
+            repl.ai_ui.auto_fix_suggestion = Some(fix);
         }
 
-        assert_eq!(repl.auto_fix_suggestion, Some("ls -la".to_string()));
+        assert_eq!(repl.ai_ui.auto_fix_suggestion, Some("ls -la".to_string()));
     }
 
     #[tokio::test]

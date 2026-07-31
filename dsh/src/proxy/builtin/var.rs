@@ -36,6 +36,7 @@ pub fn execute_var(shell: &mut Shell, ctx: &Context, _argv: Vec<String>) -> Resu
     let vars: Vec<Var> = shell
         .environment
         .read()
+        .variable_state
         .variables
         .iter()
         .map(|x| Var {
@@ -68,6 +69,11 @@ pub fn execute_read(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Resu
         }
     };
 
-    shell.environment.write().variables.insert(key, output);
+    shell
+        .environment
+        .write()
+        .variable_state
+        .variables
+        .insert(key, output);
     Ok(())
 }

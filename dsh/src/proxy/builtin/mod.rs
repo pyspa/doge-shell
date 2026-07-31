@@ -8,7 +8,6 @@ pub mod exit;
 pub mod history;
 pub mod jobs;
 pub mod lisp;
-pub mod registry;
 pub mod reload;
 pub mod var;
 pub mod z;

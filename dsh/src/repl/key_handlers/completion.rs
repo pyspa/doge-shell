@@ -16,28 +16,28 @@ pub(crate) fn handle_accept_suggestion_word(repl: &mut Repl<'_>) -> bool {
 }
 
 pub(crate) fn handle_accept_suggestion_full(repl: &mut Repl<'_>) -> bool {
-    if repl.input.is_empty() && repl.auto_fix_suggestion.is_some() {
-        if let Some(fix) = repl.auto_fix_suggestion.take() {
+    if repl.input.is_empty() && repl.ai_ui.auto_fix_suggestion.is_some() {
+        if let Some(fix) = repl.ai_ui.auto_fix_suggestion.take() {
             repl.input.reset(fix);
             repl.refresh_inline_suggestion(); // clear potential other suggestions
             return true; // reset_completion = true
         }
     } else if repl.accept_active_suggestion() {
-        repl.completion.clear();
+        repl.completion_ui.completion.clear();
         return true; // reset_completion = true
     }
     false
 }
 
 pub(crate) fn handle_rotate_suggestion_forward(repl: &mut Repl<'_>) -> bool {
-    if repl.suggestion_manager.rotate(1) {
+    if repl.ai_ui.suggestion_manager.rotate(1) {
         return false; // reset_completion = false
     }
     false
 }
 
 pub(crate) fn handle_rotate_suggestion_backward(repl: &mut Repl<'_>) -> bool {
-    if repl.suggestion_manager.rotate(-1) {
+    if repl.ai_ui.suggestion_manager.rotate(-1) {
         return false; // reset_completion = false
     }
     false
@@ -47,13 +47,13 @@ pub(crate) fn handle_accept_completion(repl: &mut Repl<'_>) {
     if let Some(comp) = &repl.input.completion.take() {
         repl.input.reset(comp.to_string());
     }
-    repl.completion.clear();
+    repl.completion_ui.completion.clear();
 }
 
 pub(crate) fn handle_cancel_completion(repl: &mut Repl<'_>) {
-    if repl.input.completion.is_some() || repl.suggestion_manager.active.is_some() {
-        repl.completion.clear();
-        repl.suggestion_manager.clear();
+    if repl.input.completion.is_some() || repl.ai_ui.suggestion_manager.active.is_some() {
+        repl.completion_ui.completion.clear();
+        repl.ai_ui.suggestion_manager.clear();
         let mut renderer = TerminalRenderer::new();
         repl.print_input(&mut renderer, true, true);
         renderer.flush().ok();
@@ -72,7 +72,7 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
                     new_input.push_str("| ");
                     new_input.push_str(&expanded);
                     repl.input.reset(new_input);
-                    repl.completion.clear();
+                    repl.completion_ui.completion.clear();
                     return Ok(ReplControlFlow::Continue);
                 }
             }
@@ -87,7 +87,7 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
         match repl.run_generative_command(&generative_query).await {
             Ok(expanded) => {
                 repl.input.reset(expanded);
-                repl.completion.clear();
+                repl.completion_ui.completion.clear();
                 return Ok(ReplControlFlow::Continue);
             }
             Err(e) => {
@@ -104,7 +104,7 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
         .map(|query| query.chars().count());
 
     // Get the current prompt text and input text for completion display context
-    let prompt_text = repl.prompt.read().mark.clone();
+    let prompt_text = repl.terminal_ui.prompt.read().mark.clone();
     let input_text = repl.input.to_string();
 
     debug!(
@@ -118,7 +118,7 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
         .exec_completion_hooks(&input_text, repl.input.cursor());
 
     // Use the new integrated completion engine with current directory context
-    let current_dir = repl.prompt.read().current_path().to_path_buf();
+    let current_dir = repl.terminal_ui.prompt.read().current_path().to_path_buf();
     let cursor_pos = repl.input.cursor();
 
     debug!(
@@ -136,6 +136,7 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
         framework: completion_framework,
         replacement_range,
     } = repl
+        .completion_ui
         .integrated_completion
         .complete(
             input_text.as_str(),
@@ -159,8 +160,10 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
         let selection_query = replacement_query_owned.as_deref().or(completion_query);
 
         // If integrated engine returned candidates, show them with skim selector
-        let completion_candidates: Vec<completion::Candidate> =
-            repl.integrated_completion.to_candidates(engine_candidates);
+        let completion_candidates: Vec<completion::Candidate> = repl
+            .completion_ui
+            .integrated_completion
+            .to_candidates(engine_candidates);
         let completion_candidates = completion::shell_path::format_candidates_for_token(
             completion_candidates,
             selection_query,
@@ -187,7 +190,7 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
                     }
                     repl.input.insert_str(val.as_str());
                 }
-                repl.start_completion = true;
+                repl.completion_ui.start_completion = true;
                 return Ok(ReplControlFlow::Continue);
             }
             completion::CompletionSelection::Interactive(items, query) => {
@@ -258,7 +261,7 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
     }
 
     // Force a redraw after completion to update the display
-    repl.start_completion = true;
+    repl.completion_ui.start_completion = true;
     Ok(ReplControlFlow::Continue)
 }
 

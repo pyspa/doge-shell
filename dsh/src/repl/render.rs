@@ -12,17 +12,21 @@ use std::io::Write;
 use tracing::debug;
 
 pub(crate) fn restore_cursor_position<W: Write>(repl: &Repl<'_>, out: &mut W, extra_lines: usize) {
-    let (cursor_x, cursor_y) = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
+    let (cursor_x, cursor_y) = repl
+        .input
+        .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
 
     let mut cursor_display_pos = cursor_x;
 
-    if repl.columns > 0 {
-        cursor_display_pos = cursor_display_pos.min(repl.columns.saturating_sub(1));
+    if repl.terminal_ui.columns > 0 {
+        cursor_display_pos = cursor_display_pos.min(repl.terminal_ui.columns.saturating_sub(1));
     } else {
         cursor_display_pos = cursor_display_pos.min(1000);
     }
 
-    let input_lines = repl.input.line_count(repl.columns, repl.prompt_mark_width);
+    let input_lines = repl
+        .input
+        .line_count(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
     let current_y = (input_lines.saturating_sub(1)) + extra_lines;
     let move_up = current_y.saturating_sub(cursor_y);
 
@@ -100,15 +104,15 @@ pub(crate) fn redraw_prompt(repl: &mut Repl<'_>, out: &mut impl Write) {
 fn print_prompt_inner(repl: &mut Repl<'_>, out: &mut impl Write, new_prompt: bool) {
     // A full prompt establishes a new input drawing origin. Any previous input
     // redraw height belongs to the old prompt and must not clear later output.
-    repl.last_drawn_cursor_y = 0;
+    repl.terminal_ui.last_drawn_cursor_y = 0;
 
     if !repl.state.multiline_buffer.is_empty() {
         let continuation_prompt = "..> ";
         out.write_all(continuation_prompt.as_bytes()).ok();
-        repl.prompt_mark_cache = continuation_prompt.to_string();
-        repl.prompt_mark_width = 4; // length of "..> "
+        repl.terminal_ui.prompt_mark_cache = continuation_prompt.to_string();
+        repl.terminal_ui.prompt_mark_width = 4; // length of "..> "
         // Continuation mode draws no preprompt line.
-        repl.last_preprompt_plain = None;
+        repl.terminal_ui.last_preprompt_plain = None;
         return;
     }
 
@@ -140,13 +144,13 @@ fn print_prompt_inner(repl: &mut Repl<'_>, out: &mut impl Write, new_prompt: boo
     let mut buffer = Vec::new();
     let new_mark;
     {
-        let mut prompt = repl.prompt.write();
+        let mut prompt = repl.terminal_ui.prompt.write();
         prompt.update_status(repl.state.last_status, repl.state.last_duration);
         prompt.print_preprompt(&mut buffer);
         new_mark = prompt.mark.clone();
     }
 
-    repl.last_preprompt_plain =
+    repl.terminal_ui.last_preprompt_plain =
         Some(console::strip_ansi_codes(&String::from_utf8_lossy(&buffer)).into_owned());
 
     // Perform I/O without holding the lock
@@ -154,14 +158,15 @@ fn print_prompt_inner(repl: &mut Repl<'_>, out: &mut impl Write, new_prompt: boo
     out.write_all(b"\r\n").ok();
 
     // Update cached mark and width in case mark changed
-    if repl.prompt_mark_cache != new_mark {
-        repl.prompt_mark_cache = new_mark;
-        repl.prompt_mark_width = display_width(&repl.prompt_mark_cache);
+    if repl.terminal_ui.prompt_mark_cache != new_mark {
+        repl.terminal_ui.prompt_mark_cache = new_mark;
+        repl.terminal_ui.prompt_mark_width = display_width(&repl.terminal_ui.prompt_mark_cache);
     }
 
     // draw mark only (defer flushing to caller for batching)
     out.write_all(b"\r").ok();
-    out.write_all(repl.prompt_mark_cache.as_bytes()).ok();
+    out.write_all(repl.terminal_ui.prompt_mark_cache.as_bytes())
+        .ok();
     // no out.flush() here
 }
 
@@ -245,14 +250,14 @@ pub(crate) fn compute_color_ranges_from_pairs<'p>(
 pub(crate) fn print_above_prompt<W: Write>(repl: &mut Repl<'_>, out: &mut W, lines: &[String]) {
     // `columns == 0` means we never sized the terminal (non-tty); the same
     // guard `render_transient_prompt_to` uses.
-    if lines.is_empty() || repl.columns == 0 {
+    if lines.is_empty() || repl.terminal_ui.columns == 0 {
         return;
     }
 
     // Move back over the whole prompt so it can be re-emitted below the notice.
     // The preprompt wraps when it is wider than the terminal, so ask for the
     // row count at the current width rather than assuming a single line.
-    let up = repl.last_drawn_cursor_y + repl.preprompt_rows();
+    let up = repl.terminal_ui.last_drawn_cursor_y + repl.preprompt_rows();
 
     queue!(out, cursor::Hide, cursor::MoveToColumn(0)).ok();
     if up > 0 {
@@ -273,7 +278,7 @@ pub(crate) fn print_above_prompt<W: Write>(repl: &mut Repl<'_>, out: &mut W, lin
     // The argument explanation is drawn below the input via
     // SavePosition/RestorePosition and was wiped by the Clear above. Nulling the
     // cache makes the 200ms debounce redraw it.
-    repl.last_explanation = None;
+    repl.ai_ui.last_explanation = None;
 }
 
 pub fn print_input(
@@ -288,7 +293,7 @@ pub fn print_input(
     // Extract values needed before any mutable borrow of repl
     let is_empty = repl.input.is_empty();
     let input_string = repl.input.as_str().to_owned(); // Must allocate here to avoid E0502 when calling &mut repl methods
-    let _prompt_display_width = repl.prompt_mark_width; // cached at new()/print_prompt()
+    let _prompt_display_width = repl.terminal_ui.prompt_mark_width; // cached at new()/print_prompt()
     let history_match_ranges = repl.input.color_ranges.as_ref().and_then(|ranges| {
         let ranges: Vec<_> = ranges
             .iter()
@@ -303,14 +308,14 @@ pub fn print_input(
         repl.input.completion = None;
         repl.input.color_ranges = None;
         repl.input.can_execute = false;
-        repl.last_analyzed_input.clear();
-        repl.last_analysis_result = None;
+        repl.ai_ui.last_analyzed_input.clear();
+        repl.ai_ui.last_analysis_result = None;
     } else {
         // Safe to use &mut repl now because input_string is owned
         completion = repl.get_completion_from_history(&input_string);
 
-        if repl.last_analyzed_input == input_string
-            && let Some(analysis) = repl.last_analysis_result.as_ref()
+        if repl.ai_ui.last_analyzed_input == input_string
+            && let Some(analysis) = repl.ai_ui.last_analysis_result.as_ref()
         {
             let completion_full = analysis.completion_full.clone();
             let analysis_completion = analysis.completion.clone();
@@ -318,8 +323,8 @@ pub fn print_input(
         } else {
             let analysis = repl.analyze_input(&input_string, completion.clone());
             apply_fresh_analysis(repl, &mut completion, analysis);
-            repl.last_analyzed_input.clear();
-            repl.last_analyzed_input.push_str(&input_string);
+            repl.ai_ui.last_analyzed_input.clear();
+            repl.ai_ui.last_analyzed_input.push_str(&input_string);
         }
     }
 
@@ -332,36 +337,42 @@ pub fn print_input(
             repl.refresh_inline_suggestion();
         }
     } else {
-        repl.suggestion_manager.clear();
+        repl.ai_ui.suggestion_manager.clear();
     }
 
     // Auto-fix ghost text logic
     let mut ai_suggestion_text = None;
-    if is_empty && repl.auto_fix_suggestion.is_some() {
-        ai_suggestion_text = repl.auto_fix_suggestion.as_deref();
+    if is_empty && repl.ai_ui.auto_fix_suggestion.is_some() {
+        ai_suggestion_text = repl.ai_ui.auto_fix_suggestion.as_deref();
     }
 
     let ghost_suffix = if completion.is_none() {
-        repl.suggestion_manager.suffix(&input_string)
+        repl.ai_ui.suggestion_manager.suffix(&input_string)
     } else {
         None
     };
 
-    let ai_pending_now = repl.suggestion_manager.engine.ai_pending();
+    let ai_pending_now = repl.ai_ui.suggestion_manager.engine.ai_pending();
 
     // Clear the current line and redraw prompt mark + input
-    if repl.last_drawn_cursor_y > 0 {
-        queue!(out, cursor::MoveUp(repl.last_drawn_cursor_y as u16)).ok();
+    if repl.terminal_ui.last_drawn_cursor_y > 0 {
+        queue!(
+            out,
+            cursor::MoveUp(repl.terminal_ui.last_drawn_cursor_y as u16)
+        )
+        .ok();
     }
     queue!(out, Print("\r"), Clear(ClearType::FromCursorDown)).ok();
 
     // Only redraw the prompt mark (not the full preprompt)
     // Use cached prompt mark without re-locking prompt
-    queue!(out, Print(repl.prompt_mark_cache.as_str())).ok();
+    queue!(out, Print(repl.terminal_ui.prompt_mark_cache.as_str())).ok();
 
     // Set new cursor Y
-    let (_, new_y) = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
-    repl.last_drawn_cursor_y = new_y;
+    let (_, new_y) = repl
+        .input
+        .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
+    repl.terminal_ui.last_drawn_cursor_y = new_y;
 
     // OSC 133 B: Command start
     out.write_all(b"\x1b]133;B\x1b\\").ok();
@@ -384,7 +395,7 @@ pub fn print_input(
         queue!(out, Print(" ⧗")).ok();
     }
 
-    repl.ai_pending_shown = ai_pending_now;
+    repl.ai_ui.ai_pending_shown = ai_pending_now;
 
     let ghost_extra_lines = if let Some(suffix) = ghost_suffix.as_deref() {
         suffix.chars().filter(|&c| c == '\n').count()
@@ -447,7 +458,7 @@ fn apply_fresh_analysis(
 
     repl.input.color_ranges = color_ranges;
     repl.input.can_execute = can_execute;
-    repl.last_analysis_result = Some(CachedInputAnalysis {
+    repl.ai_ui.last_analysis_result = Some(CachedInputAnalysis {
         completion_full,
         completion: analysis_completion,
     });
@@ -551,10 +562,12 @@ fn has_ai_pipe_query(input: &str) -> bool {
 
 fn render_hint_if_room(repl: &Repl<'_>, out: &mut impl Write, hint: &'static str) {
     let hint_width = display_width(hint);
-    let input_visual_end = repl.prompt_mark_width + repl.input.display_width();
+    let input_visual_end = repl.terminal_ui.prompt_mark_width + repl.input.display_width();
 
-    if repl.columns > hint_width && repl.columns.saturating_sub(hint_width) > input_visual_end + 2 {
-        let col = repl.columns - hint_width;
+    if repl.terminal_ui.columns > hint_width
+        && repl.terminal_ui.columns.saturating_sub(hint_width) > input_visual_end + 2
+    {
+        let col = repl.terminal_ui.columns - hint_width;
         queue!(
             out,
             cursor::MoveToColumn(col as u16),
@@ -632,12 +645,12 @@ mod tests {
     async fn print_prompt_resets_previous_input_redraw_height() {
         let mut shell = Shell::new(Environment::new());
         let mut repl = Repl::new(&mut shell);
-        repl.last_drawn_cursor_y = 3;
+        repl.terminal_ui.last_drawn_cursor_y = 3;
 
         let mut output = Vec::new();
         print_prompt(&mut repl, &mut output);
 
-        assert_eq!(repl.last_drawn_cursor_y, 0);
+        assert_eq!(repl.terminal_ui.last_drawn_cursor_y, 0);
     }
 
     #[tokio::test]
@@ -645,12 +658,12 @@ mod tests {
         let mut shell = Shell::new(Environment::new());
         let mut repl = Repl::new(&mut shell);
         repl.state.multiline_buffer = "echo one\n".to_string();
-        repl.last_drawn_cursor_y = 2;
+        repl.terminal_ui.last_drawn_cursor_y = 2;
 
         let mut output = Vec::new();
         print_prompt(&mut repl, &mut output);
 
-        assert_eq!(repl.last_drawn_cursor_y, 0);
+        assert_eq!(repl.terminal_ui.last_drawn_cursor_y, 0);
         assert_eq!(output, b"..> ");
     }
 
@@ -658,10 +671,10 @@ mod tests {
     async fn print_input_after_prompt_does_not_clear_using_stale_height() {
         let mut shell = Shell::new(Environment::new());
         let mut repl = Repl::new(&mut shell);
-        repl.columns = 20;
-        repl.prompt_mark_cache = "> ".to_string();
-        repl.prompt_mark_width = 2;
-        repl.last_drawn_cursor_y = 3;
+        repl.terminal_ui.columns = 20;
+        repl.terminal_ui.prompt_mark_cache = "> ".to_string();
+        repl.terminal_ui.prompt_mark_width = 2;
+        repl.terminal_ui.last_drawn_cursor_y = 3;
 
         let mut prompt_output = Vec::new();
         print_prompt(&mut repl, &mut prompt_output);
@@ -671,22 +684,22 @@ mod tests {
         print_input(&mut repl, &mut input_output, true, false);
 
         assert!(!contains_bytes(&input_output, b"\x1b[3A"));
-        assert_eq!(repl.last_drawn_cursor_y, 0);
+        assert_eq!(repl.terminal_ui.last_drawn_cursor_y, 0);
     }
 
     #[tokio::test]
     async fn print_input_still_tracks_current_multiline_height() {
         let mut shell = Shell::new(Environment::new());
         let mut repl = Repl::new(&mut shell);
-        repl.columns = 8;
-        repl.prompt_mark_cache = "> ".to_string();
-        repl.prompt_mark_width = 2;
+        repl.terminal_ui.columns = 8;
+        repl.terminal_ui.prompt_mark_cache = "> ".to_string();
+        repl.terminal_ui.prompt_mark_width = 2;
         repl.input.reset("abcdefg".to_string());
 
         let mut output = Vec::new();
         print_input(&mut repl, &mut output, true, false);
 
-        assert_eq!(repl.last_drawn_cursor_y, 1);
+        assert_eq!(repl.terminal_ui.last_drawn_cursor_y, 1);
     }
 
     #[test]
@@ -717,13 +730,13 @@ mod tests {
         // fragment on screen whenever the path is wider than the terminal.
         let mut shell = Shell::new(Environment::new());
         let mut repl = Repl::new(&mut shell);
-        repl.columns = 20;
-        repl.prompt_mark_cache = "> ".to_string();
-        repl.prompt_mark_width = 2;
+        repl.terminal_ui.columns = 20;
+        repl.terminal_ui.prompt_mark_cache = "> ".to_string();
+        repl.terminal_ui.prompt_mark_width = 2;
         repl.input.reset("abc".to_string());
-        repl.last_drawn_cursor_y = 0;
+        repl.terminal_ui.last_drawn_cursor_y = 0;
         // 45 columns of preprompt at 20 wide = 3 rows.
-        repl.last_preprompt_plain = Some("p".repeat(45));
+        repl.terminal_ui.last_preprompt_plain = Some("p".repeat(45));
         assert_eq!(repl.preprompt_rows(), 3);
 
         let mut output = Vec::new();
@@ -740,9 +753,9 @@ mod tests {
         // block with no matching OSC 133 D.
         let mut shell = Shell::new(Environment::new());
         let mut repl = Repl::new(&mut shell);
-        repl.columns = 40;
-        repl.prompt_mark_cache = "> ".to_string();
-        repl.prompt_mark_width = 2;
+        repl.terminal_ui.columns = 40;
+        repl.terminal_ui.prompt_mark_cache = "> ".to_string();
+        repl.terminal_ui.prompt_mark_width = 2;
 
         let mut output = Vec::new();
         print_above_prompt(&mut repl, &mut output, &["done".to_string()]);
@@ -755,7 +768,7 @@ mod tests {
     async fn print_prompt_emits_prompt_start_but_redraw_prompt_does_not() {
         let mut shell = Shell::new(Environment::new());
         let mut repl = Repl::new(&mut shell);
-        repl.columns = 40;
+        repl.terminal_ui.columns = 40;
 
         let mut fresh = Vec::new();
         print_prompt(&mut repl, &mut fresh);
@@ -770,13 +783,13 @@ mod tests {
     async fn print_prompt_records_the_preprompt_for_row_counting() {
         let mut shell = Shell::new(Environment::new());
         let mut repl = Repl::new(&mut shell);
-        repl.columns = 40;
+        repl.terminal_ui.columns = 40;
 
         let mut output = Vec::new();
         print_prompt(&mut repl, &mut output);
 
         // Recorded ANSI-stripped so the row count reflects display width.
-        let plain = repl.last_preprompt_plain.as_deref().unwrap();
+        let plain = repl.terminal_ui.last_preprompt_plain.as_deref().unwrap();
         assert!(!plain.contains('\x1b'));
         assert!(repl.preprompt_rows() >= 1);
     }
@@ -785,13 +798,13 @@ mod tests {
     async fn continuation_prompt_reports_no_preprompt_rows() {
         let mut shell = Shell::new(Environment::new());
         let mut repl = Repl::new(&mut shell);
-        repl.columns = 40;
+        repl.terminal_ui.columns = 40;
         repl.state.multiline_buffer = "echo one\n".to_string();
 
         let mut output = Vec::new();
         print_prompt(&mut repl, &mut output);
 
-        assert!(repl.last_preprompt_plain.is_none());
+        assert!(repl.terminal_ui.last_preprompt_plain.is_none());
         assert_eq!(repl.preprompt_rows(), 0);
     }
 
@@ -799,12 +812,12 @@ mod tests {
     async fn print_above_prompt_moves_past_preprompt_and_clears() {
         let mut shell = Shell::new(Environment::new());
         let mut repl = Repl::new(&mut shell);
-        repl.columns = 40;
-        repl.prompt_mark_cache = "> ".to_string();
-        repl.prompt_mark_width = 2;
+        repl.terminal_ui.columns = 40;
+        repl.terminal_ui.prompt_mark_cache = "> ".to_string();
+        repl.terminal_ui.prompt_mark_width = 2;
         repl.input.reset("abc".to_string());
-        repl.last_drawn_cursor_y = 0;
-        repl.last_preprompt_plain = Some("~/repo".to_string());
+        repl.terminal_ui.last_drawn_cursor_y = 0;
+        repl.terminal_ui.last_preprompt_plain = Some("~/repo".to_string());
 
         let mut output = Vec::new();
         print_above_prompt(&mut repl, &mut output, &["[1]+  Done  sleep 1".to_string()]);
@@ -819,11 +832,11 @@ mod tests {
     async fn print_above_prompt_in_continuation_mode_skips_preprompt_line() {
         let mut shell = Shell::new(Environment::new());
         let mut repl = Repl::new(&mut shell);
-        repl.columns = 40;
-        repl.prompt_mark_cache = "..> ".to_string();
-        repl.prompt_mark_width = 4;
+        repl.terminal_ui.columns = 40;
+        repl.terminal_ui.prompt_mark_cache = "..> ".to_string();
+        repl.terminal_ui.prompt_mark_width = 4;
         repl.state.multiline_buffer = "echo one\n".to_string();
-        repl.last_drawn_cursor_y = 0;
+        repl.terminal_ui.last_drawn_cursor_y = 0;
 
         let mut output = Vec::new();
         print_above_prompt(&mut repl, &mut output, &["[1]+  Done  x".to_string()]);
@@ -837,13 +850,13 @@ mod tests {
     async fn print_above_prompt_multiline_input_moves_up_cursor_row_plus_one() {
         let mut shell = Shell::new(Environment::new());
         let mut repl = Repl::new(&mut shell);
-        repl.columns = 8;
-        repl.prompt_mark_cache = "> ".to_string();
-        repl.prompt_mark_width = 2;
+        repl.terminal_ui.columns = 8;
+        repl.terminal_ui.prompt_mark_cache = "> ".to_string();
+        repl.terminal_ui.prompt_mark_width = 2;
         repl.input.reset("abcdefg".to_string());
         // "> abcdefg" wraps at 8 columns, so the cursor sits on row 1.
-        repl.last_drawn_cursor_y = 1;
-        repl.last_preprompt_plain = Some("~".to_string());
+        repl.terminal_ui.last_drawn_cursor_y = 1;
+        repl.terminal_ui.last_preprompt_plain = Some("~".to_string());
 
         let mut output = Vec::new();
         print_above_prompt(&mut repl, &mut output, &["done".to_string()]);
@@ -856,7 +869,7 @@ mod tests {
     async fn print_above_prompt_noop_when_columns_zero() {
         let mut shell = Shell::new(Environment::new());
         let mut repl = Repl::new(&mut shell);
-        repl.columns = 0;
+        repl.terminal_ui.columns = 0;
 
         let mut output = Vec::new();
         print_above_prompt(&mut repl, &mut output, &["done".to_string()]);
@@ -868,7 +881,7 @@ mod tests {
     async fn print_above_prompt_noop_when_no_lines() {
         let mut shell = Shell::new(Environment::new());
         let mut repl = Repl::new(&mut shell);
-        repl.columns = 40;
+        repl.terminal_ui.columns = 40;
 
         let mut output = Vec::new();
         print_above_prompt(&mut repl, &mut output, &[]);
@@ -880,9 +893,9 @@ mod tests {
     async fn print_above_prompt_preserves_input_buffer() {
         let mut shell = Shell::new(Environment::new());
         let mut repl = Repl::new(&mut shell);
-        repl.columns = 40;
-        repl.prompt_mark_cache = "> ".to_string();
-        repl.prompt_mark_width = 2;
+        repl.terminal_ui.columns = 40;
+        repl.terminal_ui.prompt_mark_cache = "> ".to_string();
+        repl.terminal_ui.prompt_mark_width = 2;
         repl.input.reset("git comm".to_string());
 
         let mut output = Vec::new();
@@ -900,15 +913,15 @@ mod tests {
     async fn print_above_prompt_clears_last_explanation() {
         let mut shell = Shell::new(Environment::new());
         let mut repl = Repl::new(&mut shell);
-        repl.columns = 40;
-        repl.prompt_mark_cache = "> ".to_string();
-        repl.prompt_mark_width = 2;
-        repl.last_explanation = Some("stale hint".to_string());
+        repl.terminal_ui.columns = 40;
+        repl.terminal_ui.prompt_mark_cache = "> ".to_string();
+        repl.terminal_ui.prompt_mark_width = 2;
+        repl.ai_ui.last_explanation = Some("stale hint".to_string());
 
         let mut output = Vec::new();
         print_above_prompt(&mut repl, &mut output, &["done".to_string()]);
 
-        assert!(repl.last_explanation.is_none());
+        assert!(repl.ai_ui.last_explanation.is_none());
     }
 
     #[test]

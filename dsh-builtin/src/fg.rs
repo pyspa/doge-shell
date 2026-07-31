@@ -1,4 +1,5 @@
-use super::ShellProxy;
+use super::{CoreShellAction, ShellProxy};
+use crate::capability::ExecutionCapability;
 use dsh_types::{Context, ExitStatus};
 
 /// Built-in fg command description
@@ -10,7 +11,7 @@ pub fn description() -> &'static str {
 /// Brings a background job to the foreground for interactive execution
 /// Part of the shell's job control system for managing process execution
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
-    match proxy.dispatch(ctx, "fg", argv) {
+    match proxy.dispatch_core(ctx, CoreShellAction::Foreground, argv) {
         Ok(_) => ExitStatus::ExitedWith(0),
         Err(e) => {
             // Report any errors that occur during job foregrounding

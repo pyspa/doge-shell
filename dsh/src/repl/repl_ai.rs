@@ -39,7 +39,7 @@ impl<'a> Repl<'a> {
     pub(crate) fn trigger_auto_fix(&self) {
         if self.state.last_status != 0
             && !self.state.last_command_string.is_empty()
-            && self.input_preferences.auto_fix
+            && self.ai_ui.input_preferences.auto_fix
             && let Some(service) = &self.services.ai
         {
             if is_auto_fix_blocked(&self.state.last_command_string) {
@@ -54,7 +54,7 @@ impl<'a> Repl<'a> {
                 .read()
                 .get_var("OUT")
                 .unwrap_or_default();
-            let tx = self.ai_tx.clone();
+            let tx = self.ai_ui.ai_tx.clone();
 
             tokio::spawn(async move {
                 if let Ok(fixed) =
@@ -69,8 +69,8 @@ impl<'a> Repl<'a> {
 
     pub(crate) fn refresh_inline_suggestion(&mut self) -> bool {
         if self.input.completion.is_some() {
-            let had_suggestion = !self.suggestion_manager.candidates.is_empty();
-            self.suggestion_manager.clear();
+            let had_suggestion = !self.ai_ui.suggestion_manager.candidates.is_empty();
+            self.ai_ui.suggestion_manager.clear();
             return had_suggestion;
         }
 
@@ -81,16 +81,16 @@ impl<'a> Repl<'a> {
 
         // History stays first. Integrated JSON/dynamic ghost text should beat
         // generic path lookahead, and AI remains the final fallback.
-        let mut candidates = self.suggestion_manager.engine.predict_history(
+        let mut candidates = self.ai_ui.suggestion_manager.engine.predict_history(
             current_input.as_str(),
             cursor_pos,
             history_ref,
         );
 
         if candidates.is_empty() {
-            let current_dir = self.prompt.read().current_path().to_path_buf();
+            let current_dir = self.terminal_ui.prompt.read().current_path().to_path_buf();
             self.sync_completion_jobs();
-            if let Some(full) = self.integrated_completion.ghost_completion(
+            if let Some(full) = self.completion_ui.integrated_completion.ghost_completion(
                 current_input.as_str(),
                 cursor_pos,
                 &current_dir,
@@ -114,7 +114,7 @@ impl<'a> Repl<'a> {
         }
 
         // If no deterministic candidates are available, try AI with full context.
-        if candidates.is_empty() && self.input_preferences.ai_backfill {
+        if candidates.is_empty() && self.ai_ui.input_preferences.ai_backfill {
             let (cwd, files) = {
                 self.trigger_file_context_update();
                 let cache = self.services.file_context.read();
@@ -124,25 +124,30 @@ impl<'a> Repl<'a> {
                 )
             };
 
-            if let Some(state) = self.suggestion_manager.engine.ai_suggestion_with_context(
-                &current_input,
-                cursor_pos,
-                history_ref,
-                cwd,
-                files,
-                Some(self.state.last_status),
-            ) {
+            if let Some(state) = self
+                .ai_ui
+                .suggestion_manager
+                .engine
+                .ai_suggestion_with_context(
+                    &current_input,
+                    cursor_pos,
+                    history_ref,
+                    cwd,
+                    files,
+                    Some(self.state.last_status),
+                )
+            {
                 candidates.push(state);
             }
         }
 
-        self.suggestion_manager.update_candidates(candidates);
-        self.suggestion_manager.active.is_some()
+        self.ai_ui.suggestion_manager.update_candidates(candidates);
+        self.ai_ui.suggestion_manager.active.is_some()
     }
 
     pub(crate) async fn force_ai_suggestion(&mut self) -> bool {
-        self.completion.clear();
-        self.suggestion_manager.clear();
+        self.completion_ui.completion.clear();
+        self.ai_ui.suggestion_manager.clear();
 
         self.sync_input_preferences();
         let history_ref = self.shell.cmd_history.as_ref();
@@ -181,17 +186,22 @@ impl<'a> Repl<'a> {
 
         tracing::debug!("force_ai_suggestion: waiting for response...");
         loop {
-            if let Some(state) = self.suggestion_manager.engine.ai_suggestion_with_context(
-                &current_input,
-                cursor_pos,
-                history_ref,
-                cwd.clone(),
-                files.clone(),
-                Some(self.state.last_status),
-            ) {
+            if let Some(state) = self
+                .ai_ui
+                .suggestion_manager
+                .engine
+                .ai_suggestion_with_context(
+                    &current_input,
+                    cursor_pos,
+                    history_ref,
+                    cwd.clone(),
+                    files.clone(),
+                    Some(self.state.last_status),
+                )
+            {
                 tracing::debug!("force_ai_suggestion: got state {:?}", state);
                 let candidates = vec![state];
-                self.suggestion_manager.update_candidates(candidates);
+                self.ai_ui.suggestion_manager.update_candidates(candidates);
                 return true;
             }
 
@@ -203,7 +213,7 @@ impl<'a> Repl<'a> {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
 
-        self.suggestion_manager.active.is_some()
+        self.ai_ui.suggestion_manager.active.is_some()
     }
 }
 

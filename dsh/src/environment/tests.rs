@@ -1,6 +1,7 @@
 //! Tests for the environment module.
 
 use super::*;
+use dsh_types::output_history::OutputEntry;
 use std::path::Path;
 
 fn init() {
@@ -27,6 +28,7 @@ fn test_extend() {
     let env = Environment::new();
     let env1 = Arc::clone(&env);
     env.write()
+        .variable_state
         .variables
         .insert("test".to_string(), "value".to_string());
 
@@ -34,18 +36,91 @@ fn test_extend() {
     let env2_clone = Arc::clone(&env2);
 
     env2.write()
+        .variable_state
         .variables
         .insert("test2".to_string(), "value2".to_string());
 
     let env2_clone = env2_clone.read();
-    let v = env2_clone.variables.get("test");
+    let v = env2_clone.variable_state.variables.get("test");
     assert_eq!("value".to_string(), *v.unwrap());
     assert_eq!(
         "value2".to_string(),
-        *env2_clone.variables.get("test2").unwrap()
+        *env2_clone.variable_state.variables.get("test2").unwrap()
     );
 
-    assert_eq!(2, env1.read().variables.len());
+    assert_eq!(2, env1.read().variable_state.variables.len());
+}
+
+#[test]
+fn extend_copies_shares_and_resets_state_by_group() {
+    let parent = Environment::new();
+    {
+        let mut parent = parent.write();
+        parent
+            .variable_state
+            .alias
+            .insert("ll".to_string(), "ls -l".to_string());
+        parent.completion_state.input_preferences.auto_pair = true;
+        parent
+            .completion_state
+            .command_cache
+            .write()
+            .insert("git".to_string(), Some("/usr/bin/git".to_string()));
+        *parent.completion_state.executable_names.write() = vec!["git".to_string()];
+        parent
+            .session_output_state
+            .output_history
+            .push(OutputEntry::new(
+                "echo".to_string(),
+                "ok".to_string(),
+                String::new(),
+                0,
+            ));
+        parent
+            .policy_state
+            .secret_manager
+            .add_pattern("CUSTOM_[A-Z]+")
+            .unwrap();
+    }
+
+    let child = Environment::extend(parent.clone());
+    let parent_guard = parent.read();
+    let child_guard = child.read();
+
+    assert_eq!(
+        child_guard.variable_state.alias.get("ll"),
+        Some(&"ls -l".to_string())
+    );
+    assert!(child_guard.completion_state.input_preferences.auto_pair);
+    assert!(Arc::ptr_eq(
+        &parent_guard.integration_state.mcp_manager,
+        &child_guard.integration_state.mcp_manager
+    ));
+    assert!(Arc::ptr_eq(
+        &parent_guard.policy_state.execute_allowlist,
+        &child_guard.policy_state.execute_allowlist
+    ));
+    assert!(Arc::ptr_eq(
+        &parent_guard.policy_state.safety_level,
+        &child_guard.policy_state.safety_level
+    ));
+    assert!(child_guard.completion_state.command_cache.read().is_empty());
+    assert!(
+        child_guard
+            .completion_state
+            .executable_names
+            .read()
+            .is_empty()
+    );
+    assert_eq!(child_guard.session_output_state.output_history.len(), 0);
+    assert!(
+        !child_guard
+            .policy_state
+            .secret_manager
+            .list_patterns()
+            .iter()
+            .any(|pattern| pattern == "CUSTOM_[A-Z]+")
+    );
 }
 
 #[test]
@@ -55,7 +130,14 @@ fn lookup_caches_misses() {
     let missing = "definitely-not-a-command-12345";
 
     assert_eq!(None, env.read().lookup(missing));
-    assert_eq!(Some(&None), env.read().command_cache.read().get(missing));
+    assert_eq!(
+        Some(&None),
+        env.read()
+            .completion_state
+            .command_cache
+            .read()
+            .get(missing)
+    );
 }
 
 #[test]
@@ -76,6 +158,7 @@ fn test_resolve_alias() {
     init();
     let env = Environment::new();
     env.write()
+        .variable_state
         .alias
         .insert("ll".to_string(), "ls -la".to_string());
 
@@ -91,6 +174,7 @@ fn test_resolve_alias() {
 #[test]
 fn auto_enables_ai_backfill_when_api_key_present() {
     init();
+    let _guard = crate::test_env_lock();
 
     let key = "AI_CHAT_API_KEY";
     let previous = std::env::var(key).ok();
@@ -155,14 +239,18 @@ fn test_system_env_updates_refresh_path_and_child_env() {
         let mut guard = env.write();
         guard.set_system_env_var("PATH".to_string(), "/tmp/bin:/usr/bin".to_string());
         guard
+            .variable_state
             .variables
             .insert("EXPORTED_ONLY".to_string(), "value".to_string());
-        guard.exported_vars.insert("EXPORTED_ONLY".to_string());
+        guard
+            .variable_state
+            .exported_vars
+            .insert("EXPORTED_ONLY".to_string());
     }
 
     let guard = env.read();
     assert_eq!(
-        guard.paths,
+        guard.variable_state.paths,
         vec!["/tmp/bin".to_string(), "/usr/bin".to_string()]
     );
 
@@ -183,11 +271,11 @@ fn test_unset_system_env_updates_z_exclude() {
         let mut guard = env.write();
         guard.set_system_env_var("Z_EXCLUDE".to_string(), "/tmp:/var".to_string());
         assert_eq!(
-            guard.z_exclude,
+            guard.variable_state.z_exclude,
             vec!["/tmp".to_string(), "/var".to_string()]
         );
         guard.unset_system_env_var("Z_EXCLUDE");
     }
 
-    assert!(env.read().z_exclude.is_empty());
+    assert!(env.read().variable_state.z_exclude.is_empty());
 }

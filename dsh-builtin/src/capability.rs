@@ -1,4 +1,4 @@
-use crate::{ProxyFuture, ShellProxy};
+use crate::{CoreShellAction, ProxyFuture, ShellProxy};
 use anyhow::Result;
 use dsh_types::Context;
 use dsh_types::command_block::CommandBlock;
@@ -44,6 +44,12 @@ impl<T: ShellProxy + ?Sized> EnvironmentCapability for T {
 /// Command execution operations used by builtins.
 pub trait ExecutionCapability {
     fn dispatch_command(&mut self, ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()>;
+    fn dispatch_core(
+        &mut self,
+        ctx: &Context,
+        action: CoreShellAction,
+        argv: Vec<String>,
+    ) -> Result<()>;
     fn change_directory(&mut self, path: &str) -> Result<()>;
     fn request_eval(&mut self, command: String) -> Result<()>;
     fn capture(&mut self, ctx: &Context, command: &str) -> Result<(i32, String, String)>;
@@ -52,6 +58,15 @@ pub trait ExecutionCapability {
 impl<T: ShellProxy + ?Sized> ExecutionCapability for T {
     fn dispatch_command(&mut self, ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()> {
         ShellProxy::dispatch(self, ctx, cmd, argv)
+    }
+
+    fn dispatch_core(
+        &mut self,
+        ctx: &Context,
+        action: CoreShellAction,
+        argv: Vec<String>,
+    ) -> Result<()> {
+        ShellProxy::dispatch_core_action(self, ctx, action, argv)
     }
 
     fn change_directory(&mut self, path: &str) -> Result<()> {

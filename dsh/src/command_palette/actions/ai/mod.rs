@@ -11,7 +11,12 @@ pub mod suggest_commands;
 
 /// Get the AI service from the shell environment
 pub fn get_ai_service(shell: &Shell) -> Option<Arc<dyn AiService + Send + Sync>> {
-    shell.environment.read().ai_service.clone()
+    shell
+        .environment
+        .read()
+        .integration_state
+        .ai_service
+        .clone()
 }
 
 /// Helper to get directory listing for AI context

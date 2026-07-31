@@ -167,7 +167,7 @@ mod tests {
         let environment = Environment::new();
         let mut shell = Shell::new(environment);
         let mut repl = Repl::new(&mut shell);
-        repl.columns = 80;
+        repl.terminal_ui.columns = 80;
 
         let result =
             handler::handle_key_event(&mut repl, &key(KeyCode::Char('o'), KeyModifiers::CONTROL))
@@ -187,6 +187,7 @@ mod tests {
         shell
             .environment
             .write()
+            .session_output_state
             .command_blocks
             .push(CommandBlock::new(
                 "cargo test".to_string(),
@@ -283,7 +284,7 @@ mod tests {
         let environment = Environment::new();
         let mut shell = Shell::new(environment);
         let mut repl = Repl::new(&mut shell);
-        repl.columns = 80;
+        repl.terminal_ui.columns = 80;
         repl.input.reset("in progress".to_string());
 
         crate::repl::key_handlers::auxiliary::check_background_jobs(&mut repl, true)
@@ -299,9 +300,9 @@ mod tests {
         let environment = Environment::new();
         let mut shell = Shell::new(environment);
         let mut repl = Repl::new(&mut shell);
-        repl.columns = 80;
-        repl.lines = 24;
-        repl.last_drawn_cursor_y = 3;
+        repl.terminal_ui.columns = 80;
+        repl.terminal_ui.lines = 24;
+        repl.terminal_ui.last_drawn_cursor_y = 3;
 
         let result = handler::handle_event(
             &mut repl,
@@ -311,11 +312,11 @@ mod tests {
         .unwrap();
 
         assert!(matches!(result, ReplControlFlow::Continue));
-        assert_eq!(repl.columns, 120);
-        assert_eq!(repl.lines, 40);
+        assert_eq!(repl.terminal_ui.columns, 120);
+        assert_eq!(repl.terminal_ui.lines, 40);
         // Stale geometry must be dropped: it was measured against the old width.
         // With an empty buffer the cursor is back on the mark row.
-        assert_eq!(repl.last_drawn_cursor_y, 0);
+        assert_eq!(repl.terminal_ui.last_drawn_cursor_y, 0);
     }
 
     #[tokio::test]
@@ -323,13 +324,13 @@ mod tests {
         let environment = Environment::new();
         let mut shell = Shell::new(environment);
         let mut repl = Repl::new(&mut shell);
-        repl.columns = 120;
-        repl.lines = 40;
-        repl.prompt_mark_cache = "> ".to_string();
-        repl.prompt_mark_width = 2;
+        repl.terminal_ui.columns = 120;
+        repl.terminal_ui.lines = 40;
+        repl.terminal_ui.prompt_mark_cache = "> ".to_string();
+        repl.terminal_ui.prompt_mark_width = 2;
         repl.input.reset("a".repeat(35));
         // Fits on one row at 120 columns.
-        repl.last_drawn_cursor_y = 0;
+        repl.terminal_ui.last_drawn_cursor_y = 0;
 
         handler::handle_event(
             &mut repl,
@@ -340,8 +341,8 @@ mod tests {
 
         // "> " + 35 chars = 37 columns, which at 16 wide puts the cursor on
         // row 2. `print_input` needs that count to move back up to the mark.
-        assert_eq!(repl.columns, 16);
-        assert_eq!(repl.last_drawn_cursor_y, 2);
+        assert_eq!(repl.terminal_ui.columns, 16);
+        assert_eq!(repl.terminal_ui.last_drawn_cursor_y, 2);
     }
 
     #[tokio::test]
@@ -351,11 +352,11 @@ mod tests {
         let environment = Environment::new();
         let mut shell = Shell::new(environment);
         let mut repl = Repl::new(&mut shell);
-        repl.columns = 120;
-        repl.lines = 40;
-        repl.prompt_mark_cache = "> ".to_string();
-        repl.prompt_mark_width = 2;
-        repl.last_preprompt_plain = Some("~/repo".to_string());
+        repl.terminal_ui.columns = 120;
+        repl.terminal_ui.lines = 40;
+        repl.terminal_ui.prompt_mark_cache = "> ".to_string();
+        repl.terminal_ui.prompt_mark_width = 2;
+        repl.terminal_ui.last_preprompt_plain = Some("~/repo".to_string());
 
         handler::handle_event(
             &mut repl,
@@ -365,7 +366,10 @@ mod tests {
         .unwrap();
 
         // The recorded preprompt is untouched: nothing re-rendered it.
-        assert_eq!(repl.last_preprompt_plain.as_deref(), Some("~/repo"));
+        assert_eq!(
+            repl.terminal_ui.last_preprompt_plain.as_deref(),
+            Some("~/repo")
+        );
     }
 
     #[tokio::test]
@@ -373,9 +377,9 @@ mod tests {
         let environment = Environment::new();
         let mut shell = Shell::new(environment);
         let mut repl = Repl::new(&mut shell);
-        repl.columns = 80;
-        repl.lines = 24;
-        repl.last_drawn_cursor_y = 3;
+        repl.terminal_ui.columns = 80;
+        repl.terminal_ui.lines = 24;
+        repl.terminal_ui.last_drawn_cursor_y = 3;
 
         handler::handle_event(
             &mut repl,
@@ -384,9 +388,9 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(repl.columns, 80);
-        assert_eq!(repl.lines, 24);
-        assert_eq!(repl.last_drawn_cursor_y, 3);
+        assert_eq!(repl.terminal_ui.columns, 80);
+        assert_eq!(repl.terminal_ui.lines, 24);
+        assert_eq!(repl.terminal_ui.last_drawn_cursor_y, 3);
     }
 
     #[tokio::test]

@@ -1,4 +1,5 @@
-use super::ShellProxy;
+use super::{CoreShellAction, ShellProxy};
+use crate::capability::ExecutionCapability;
 use dsh_types::{Context, ExitStatus};
 
 /// Built-in reload command description
@@ -36,7 +37,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 
 /// Performs the actual config reload by delegating to the shell
 fn perform_reload(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
-    match proxy.dispatch(ctx, "reload", vec!["reload".to_string()]) {
+    match proxy.dispatch_core(ctx, CoreShellAction::Reload, vec!["reload".to_string()]) {
         Ok(_) => ExitStatus::ExitedWith(0),
         Err(err) => {
             ctx.write_stderr(&format!("reload: {err}")).ok();

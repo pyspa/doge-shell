@@ -271,7 +271,12 @@ pub async fn capture_output_and_history(
         };
 
         let entry = OutputEntry::new(job.cmd.clone(), stdout_stripped, stderr_stripped, exit_code);
-        shell.environment.write().output_history.push(entry);
+        shell
+            .environment
+            .write()
+            .session_output_state
+            .output_history
+            .push(entry);
     }
     Ok(())
 }
@@ -539,7 +544,12 @@ mod tests {
         assert!(job.pty.is_none());
         assert!(job.pty_mode.is_none());
         assert_eq!(
-            shell.environment.read().output_history.last_stdout(),
+            shell
+                .environment
+                .read()
+                .session_output_state
+                .output_history
+                .last_stdout(),
             Some("late pty output")
         );
     }

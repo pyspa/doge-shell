@@ -1,4 +1,5 @@
-use super::ShellProxy;
+use super::{CoreShellAction, ShellProxy};
+use crate::capability::ExecutionCapability;
 use dsh_types::{Context, ExitStatus};
 
 /// Built-in lisp command description
@@ -16,7 +17,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         ExitStatus::ExitedWith(1)
     } else {
         // Delegate Lisp evaluation to the shell's Lisp interpreter
-        match proxy.dispatch(ctx, "lisp", argv) {
+        match proxy.dispatch_core(ctx, CoreShellAction::Lisp, argv) {
             Ok(_) => ExitStatus::ExitedWith(0),
             Err(err) => {
                 let _ = ctx.write_stderr(&format!("lisp: {err}"));
@@ -30,7 +31,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 /// Executes Lisp scripts from files or runs Lisp code in batch mode
 /// Provides error handling for Lisp execution failures
 pub fn run(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
-    match proxy.dispatch(ctx, "lisp-run", argv) {
+    match proxy.dispatch_core(ctx, CoreShellAction::LispRun, argv) {
         Ok(_) => ExitStatus::ExitedWith(0),
         // Return error status if Lisp execution fails
         _ => ExitStatus::ExitedWith(1),

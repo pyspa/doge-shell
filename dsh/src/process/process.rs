@@ -143,12 +143,13 @@ impl Process {
 
         // Calculate minimal capacity to avoid re-allocations
         // (system vars + exported vars, though some might overlap)
-        let estimated_cap = env_guard.system_env_vars.len() + env_guard.exported_vars.len();
+        let estimated_cap = env_guard.variable_state.system_env_vars.len()
+            + env_guard.variable_state.exported_vars.len();
         let mut envp: Vec<CString> = Vec::with_capacity(estimated_cap + 2); // +2 for TERM, LS_COLORS fallback
 
         // 1. Add system vars that are NOT overridden by exported vars
-        for (key, val) in &env_guard.system_env_vars {
-            if !env_guard.exported_vars.contains(key) {
+        for (key, val) in &env_guard.variable_state.system_env_vars {
+            if !env_guard.variable_state.exported_vars.contains(key) {
                 // Special handling for TERM: if empty, skip so we can default it later
                 if key == "TERM" && val.is_empty() {
                     continue;
@@ -167,8 +168,8 @@ impl Process {
         let mut ls_colors_set = false;
 
         // 2. Add exported vars (overriding system vars)
-        for key in &env_guard.exported_vars {
-            if let Some(value) = env_guard.variables.get(key) {
+        for key in &env_guard.variable_state.exported_vars {
+            if let Some(value) = env_guard.variable_state.variables.get(key) {
                 if key == "TERM" {
                     if value.is_empty() {
                         continue;
@@ -187,10 +188,10 @@ impl Process {
 
         // Check whether TERM was already copied from system vars or exported shell vars.
         if !term_set {
-            if env_guard.exported_vars.contains("TERM") {
+            if env_guard.variable_state.exported_vars.contains("TERM") {
                 // Exported but missing/empty TERM is treated as unset and falls back below.
             } else {
-                if let Some(val) = env_guard.system_env_vars.get("TERM")
+                if let Some(val) = env_guard.variable_state.system_env_vars.get("TERM")
                     && !val.is_empty()
                 {
                     term_set = true;
@@ -199,8 +200,11 @@ impl Process {
         }
 
         if !ls_colors_set
-            && (env_guard.exported_vars.contains("LS_COLORS")
-                || env_guard.system_env_vars.contains_key("LS_COLORS"))
+            && (env_guard.variable_state.exported_vars.contains("LS_COLORS")
+                || env_guard
+                    .variable_state
+                    .system_env_vars
+                    .contains_key("LS_COLORS"))
         {
             ls_colors_set = true;
         }
@@ -457,9 +461,12 @@ mod tests {
         let env_arc = Environment::new();
         {
             let mut env = env_arc.write();
-            env.variables
+            env.variable_state
+                .variables
                 .insert("TEST_VAR".to_string(), "test_value".to_string());
-            env.exported_vars.insert("TEST_VAR".to_string());
+            env.variable_state
+                .exported_vars
+                .insert("TEST_VAR".to_string());
         }
 
         let process = Process::new(
@@ -503,20 +510,27 @@ mod tests {
         {
             let mut env = env_arc.write();
             // Clear default system vars to have a predictable test state
-            env.system_env_vars.clear();
+            env.variable_state.system_env_vars.clear();
 
             // 1. Set a system var
-            env.system_env_vars
+            env.variable_state
+                .system_env_vars
                 .insert("SYSTEM_VAR".into(), "sys_val".into());
             // 2. Set an exported var
-            env.exported_vars.insert("EXPORTED_VAR".into());
-            env.variables
+            env.variable_state
+                .exported_vars
+                .insert("EXPORTED_VAR".into());
+            env.variable_state
+                .variables
                 .insert("EXPORTED_VAR".into(), "exp_val".into());
             // 3. Set a var that is both (override)
-            env.system_env_vars
+            env.variable_state
+                .system_env_vars
                 .insert("OVERRIDDEN".into(), "old_val".into());
-            env.exported_vars.insert("OVERRIDDEN".into());
-            env.variables.insert("OVERRIDDEN".into(), "new_val".into());
+            env.variable_state.exported_vars.insert("OVERRIDDEN".into());
+            env.variable_state
+                .variables
+                .insert("OVERRIDDEN".into(), "new_val".into());
         }
 
         let process = Process::new("echo".into(), vec![]);
@@ -545,8 +559,10 @@ mod tests {
         let env_arc = Environment::new();
         {
             let mut env = env_arc.write();
-            env.system_env_vars.clear();
-            env.system_env_vars.insert("TERM".into(), "dumb".into());
+            env.variable_state.system_env_vars.clear();
+            env.variable_state
+                .system_env_vars
+                .insert("TERM".into(), "dumb".into());
         }
         let process = Process::new("echo".into(), vec![]);
         let prepared = process.prepare_execution(env_arc).unwrap();
@@ -562,9 +578,11 @@ mod tests {
         let env_arc = Environment::new();
         {
             let mut env = env_arc.write();
-            env.system_env_vars.clear();
-            env.exported_vars.insert("TERM".into());
-            env.variables.insert("TERM".into(), "".into());
+            env.variable_state.system_env_vars.clear();
+            env.variable_state.exported_vars.insert("TERM".into());
+            env.variable_state
+                .variables
+                .insert("TERM".into(), "".into());
         }
 
         let process = Process::new("echo".into(), vec![]);
@@ -580,8 +598,10 @@ mod tests {
         let env_arc = Environment::new();
         {
             let mut env = env_arc.write();
-            env.system_env_vars.clear();
-            env.system_env_vars.insert("TERM".into(), "".into());
+            env.variable_state.system_env_vars.clear();
+            env.variable_state
+                .system_env_vars
+                .insert("TERM".into(), "".into());
         }
 
         let process = Process::new("echo".into(), vec![]);

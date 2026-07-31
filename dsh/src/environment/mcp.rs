@@ -6,7 +6,7 @@ use dsh_types::mcp::McpServerConfig;
 impl Environment {
     /// Clear all MCP server configurations.
     pub fn clear_mcp_servers(&mut self) {
-        self.mcp_servers.clear();
+        self.integration_state.mcp_servers.clear();
     }
 
     /// Add an MCP server configuration.
@@ -15,16 +15,21 @@ impl Environment {
         // The actual connection happens asynchronously via reload_mcp_config() later.
         if !self.startup_mode {
             // Try to add to the active manager first (synchronously blocking)
-            if let Err(e) = self.mcp_manager.write().add_server_blocking(server.clone()) {
+            if let Err(e) = self
+                .integration_state
+                .mcp_manager
+                .write()
+                .add_server_blocking(server.clone())
+            {
                 eprintln!("Failed to register MCP server: {}", e);
             }
         }
-        self.mcp_servers.push(server);
+        self.integration_state.mcp_servers.push(server);
     }
 
     /// Get all MCP server configurations.
     pub fn mcp_servers(&self) -> &[McpServerConfig] {
-        &self.mcp_servers
+        &self.integration_state.mcp_servers
     }
 
     /// Replace MCP server configurations atomically.
@@ -32,17 +37,17 @@ impl Environment {
     /// This only updates the desired configuration set.
     /// Active manager reload is handled separately by `Shell::reload_mcp_config`.
     pub fn replace_mcp_servers(&mut self, servers: Vec<McpServerConfig>) {
-        self.mcp_servers = servers;
+        self.integration_state.mcp_servers = servers;
     }
 
     /// Clear the execute allowlist.
     pub fn clear_execute_allowlist(&self) {
-        self.execute_allowlist.write().clear();
+        self.policy_state.execute_allowlist.write().clear();
     }
 
     /// Add an entry to the execute allowlist.
     pub fn add_execute_allowlist_entry(&self, entry: String) {
-        let mut allowlist = self.execute_allowlist.write();
+        let mut allowlist = self.policy_state.execute_allowlist.write();
         if !allowlist.contains(&entry) {
             allowlist.push(entry);
         }
@@ -50,6 +55,6 @@ impl Environment {
 
     /// Get the execute allowlist.
     pub fn execute_allowlist(&self) -> Vec<String> {
-        self.execute_allowlist.read().clone()
+        self.policy_state.execute_allowlist.read().clone()
     }
 }

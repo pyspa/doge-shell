@@ -15,7 +15,7 @@ pub fn exec_chpwd_hooks(shell: &mut Shell, pwd: &str) -> Result<()> {
 
     {
         let env_guard = shell.environment.read();
-        for hook in &env_guard.chpwd_hooks {
+        for hook in &env_guard.variable_state.chpwd_hooks {
             hook.call(pwd, Arc::clone(&shell.environment))?;
         }
     }
@@ -43,6 +43,7 @@ pub fn exec_chpwd_hooks(shell: &mut Shell, pwd: &str) -> Result<()> {
             shell
                 .environment
                 .write()
+                .variable_state
                 .variables
                 .insert("DSH_PROJECT".to_string(), name.clone());
             debug!("Entered project: {}", name);
@@ -55,7 +56,12 @@ pub fn exec_chpwd_hooks(shell: &mut Shell, pwd: &str) -> Result<()> {
                 debug!("Failed to execute on-project-switch-hooks: {}", e);
             }
         } else {
-            shell.environment.write().variables.remove("DSH_PROJECT");
+            shell
+                .environment
+                .write()
+                .variable_state
+                .variables
+                .remove("DSH_PROJECT");
             debug!("Left project");
         }
     }

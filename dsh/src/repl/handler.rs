@@ -57,7 +57,7 @@ pub(crate) async fn handle_event(repl: &mut Repl<'_>, ev: ShellEvent) -> Result<
 /// Apply a terminal resize.
 ///
 /// Every wrapping calculation (`Input::cursor_pos`, `Input::line_count`,
-/// `render_transient_prompt_to`, `render_hint_if_room`) reads `repl.columns`,
+/// `render_transient_prompt_to`, `render_hint_if_room`) reads `repl.terminal_ui.columns`,
 /// which is otherwise only set once in `Repl::setup()`. Without this the whole
 /// render path keeps using the pre-resize width.
 ///
@@ -67,12 +67,12 @@ pub(crate) async fn handle_event(repl: &mut Repl<'_>, ev: ShellEvent) -> Result<
 pub(crate) fn handle_resize(repl: &mut Repl<'_>, cols: u16, rows: u16) {
     let cols = cols as usize;
     let rows = rows as usize;
-    if cols == repl.columns && rows == repl.lines {
+    if cols == repl.terminal_ui.columns && rows == repl.terminal_ui.lines {
         return;
     }
 
-    repl.columns = cols;
-    repl.lines = rows;
+    repl.terminal_ui.columns = cols;
+    repl.terminal_ui.lines = rows;
 
     if cols == 0 {
         return;
@@ -82,8 +82,10 @@ pub(crate) fn handle_resize(repl: &mut Repl<'_>, cols: u16, rows: u16) {
     // rewrapped the input line, so the row the cursor now sits on is the one
     // implied by the new width — recompute it before `print_input` uses it to
     // move back up to the prompt mark.
-    let (_, cursor_y) = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
-    repl.last_drawn_cursor_y = cursor_y;
+    let (_, cursor_y) = repl
+        .input
+        .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
+    repl.terminal_ui.last_drawn_cursor_y = cursor_y;
 
     let mut renderer = TerminalRenderer::new();
     repl.print_input(&mut renderer, false, false);
@@ -104,11 +106,11 @@ pub(crate) async fn handle_key_event(
 
     let redraw = true;
     let mut reset_completion = false;
-    let _prompt_w = repl.prompt_mark_width;
+    let _prompt_w = repl.terminal_ui.prompt_mark_width;
 
     // Reset Ctrl+C state on any key input other than Ctrl+C
     if !matches!((ev.code, ev.modifiers), (KeyCode::Char('c'), CTRL)) {
-        repl.ctrl_c_state.reset();
+        repl.terminal_ui.ctrl_c_state.reset();
     }
 
     // Handle Ctrl-x prefix
@@ -125,8 +127,8 @@ pub(crate) async fn handle_key_event(
             match open_editor(repl.input.as_str(), "sh") {
                 Ok(content) => {
                     repl.input.reset(content);
-                    repl.last_input_change_time = std::time::Instant::now();
-                    repl.current_ai_explanation = None;
+                    repl.ai_ui.last_input_change_time = std::time::Instant::now();
+                    repl.ai_ui.current_ai_explanation = None;
 
                     let mut renderer = TerminalRenderer::new();
                     repl.print_prompt(&mut renderer);
@@ -146,13 +148,13 @@ pub(crate) async fn handle_key_event(
     let ctx = KeyContext {
         cursor_at_end: repl.input.cursor() == repl.input.len(),
         input_empty: repl.input.is_empty(),
-        has_suggestion: repl.suggestion_manager.active.is_some()
-            || (repl.input.is_empty() && repl.auto_fix_suggestion.is_some()),
+        has_suggestion: repl.ai_ui.suggestion_manager.active.is_some()
+            || (repl.input.is_empty() && repl.ai_ui.auto_fix_suggestion.is_some()),
         has_completion: repl.input.completion.is_some(),
-        completion_mode: repl.completion.completion_mode(),
+        completion_mode: repl.completion_ui.completion.completion_mode(),
         cursor_at_start: repl.input.cursor() == 0,
         next_char: repl.input.char_at(repl.input.cursor()),
-        auto_pair: repl.input_preferences.auto_pair,
+        auto_pair: repl.ai_ui.input_preferences.auto_pair,
         multiline_active: !repl.state.multiline_buffer.is_empty(),
     };
 
@@ -214,7 +216,13 @@ pub(crate) async fn handle_key_event(
         }
         KeyAction::ExpandAbbreviationAndInsertSpace => {
             if let Some(word) = repl.input.get_current_word_for_abbr()
-                && let Some(expansion) = repl.shell.environment.read().abbreviations.get(&word)
+                && let Some(expansion) = repl
+                    .shell
+                    .environment
+                    .read()
+                    .variable_state
+                    .abbreviations
+                    .get(&word)
             {
                 let expansion = expansion.clone();
                 if repl.input.replace_current_word(&expansion) {
@@ -223,8 +231,12 @@ pub(crate) async fn handle_key_event(
             }
 
             repl.input.insert(' ');
-            if repl.completion.is_changed(repl.input.as_str()) {
-                repl.completion.clear();
+            if repl
+                .completion_ui
+                .completion
+                .is_changed(repl.input.as_str())
+            {
+                repl.completion_ui.completion.clear();
             }
         }
         KeyAction::InsertPairedChar { open, close } => {
@@ -291,9 +303,9 @@ pub(crate) async fn handle_key_event(
             }
         },
         KeyAction::Execute => {
-            repl.current_ai_explanation = None;
-            repl.pending_ai_explanation_input = None;
-            repl.last_explanation = None;
+            repl.ai_ui.current_ai_explanation = None;
+            repl.ai_ui.pending_ai_explanation_input = None;
+            repl.ai_ui.last_explanation = None;
             return Ok(ReplControlFlow::ExecuteCurrentInput);
         }
         KeyAction::ExecuteBackground => {
@@ -322,7 +334,7 @@ pub(crate) async fn handle_key_event(
             {
                 editing::handle_paste_event(repl, &content).await?;
                 // repl.input.insert_str(&content); // handle_paste_event does this + normalize
-                // repl.completion.clear(); // handled in handle_paste_event?
+                // repl.completion_ui.completion.clear(); // handled in handle_paste_event?
                 // handle_paste_event calls replace, but logic says safe paste.
                 // editing::handle_paste_event implements safe paste.
             }
@@ -331,9 +343,9 @@ pub(crate) async fn handle_key_event(
             // Already handled via Ctrl-x state check
         }
         KeyAction::ToggleSudo => {
-            if repl.esc_state.on_pressed() {
+            if repl.terminal_ui.esc_state.on_pressed() {
                 repl.toggle_sudo().await?;
-                repl.esc_state.reset();
+                repl.terminal_ui.esc_state.reset();
             }
             return Ok(ReplControlFlow::Continue);
         }
@@ -371,9 +383,9 @@ pub(crate) async fn handle_key_event(
             | KeyAction::HistorySearch
             | KeyAction::AiWatchCurrentInput
     ) {
-        repl.last_input_change_time = std::time::Instant::now();
-        repl.current_ai_explanation = None;
-        repl.pending_ai_explanation_input = None;
+        repl.ai_ui.last_input_change_time = std::time::Instant::now();
+        repl.ai_ui.current_ai_explanation = None;
+        repl.ai_ui.pending_ai_explanation_input = None;
     }
 
     // On execute or interrupt, clear explanation state and erase the explanation line
@@ -381,9 +393,9 @@ pub(crate) async fn handle_key_event(
         action,
         KeyAction::Execute | KeyAction::ExecuteBackground | KeyAction::Interrupt
     ) {
-        repl.current_ai_explanation = None;
-        repl.pending_ai_explanation_input = None;
-        repl.last_explanation = None;
+        repl.ai_ui.current_ai_explanation = None;
+        repl.ai_ui.pending_ai_explanation_input = None;
+        repl.ai_ui.last_explanation = None;
     }
 
     if redraw {

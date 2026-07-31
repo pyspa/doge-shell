@@ -232,7 +232,7 @@ pub(crate) fn command_is_valid(repl: &Repl<'_>, word: &str) -> bool {
             return true;
         }
 
-        if env.alias.contains_key(word) {
+        if env.variable_state.alias.contains_key(word) {
             return true;
         }
     }

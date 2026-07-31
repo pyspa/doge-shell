@@ -297,6 +297,7 @@ fn eval_inner(
                             .borrow_mut()
                             .shell_env
                             .write()
+                            .variable_state
                             .variables
                             .insert(format!("${symbol}"), result.to_string());
                         // OPTIMIZED: Move result instead of clone when possible
@@ -309,7 +310,7 @@ fn eval_inner(
                     })?;
                     debug!(
                         "variables {:?}",
-                        let_env.borrow().shell_env.read().variables
+                        let_env.borrow().shell_env.read().variable_state.variables
                     );
                     eval_block_inner(let_env, body.into_iter(), context)
                 }

@@ -9,7 +9,12 @@ use anyhow::Result;
 use dsh_types::Context;
 
 pub fn execute(shell: &mut Shell, ctx: &Context, _argv: Vec<String>) -> Result<()> {
-    let blocks = shell.environment.read().command_blocks.get_all_blocks();
+    let blocks = shell
+        .environment
+        .read()
+        .session_output_state
+        .command_blocks
+        .get_all_blocks();
     if blocks.is_empty() {
         ctx.write_stdout("No command blocks available.")?;
         return Ok(());

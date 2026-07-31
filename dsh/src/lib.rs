@@ -9,6 +9,7 @@ use nix::unistd::isatty;
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::fd::BorrowedFd;
 use std::os::unix::io::AsRawFd;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use tracing::debug;
@@ -47,6 +48,13 @@ pub mod terminal;
 pub mod utils;
 
 use crate::errors::display_user_error;
+
+#[cfg(test)]
+pub(crate) fn test_env_lock() -> parking_lot::MutexGuard<'static, ()> {
+    static LOCK: std::sync::LazyLock<parking_lot::Mutex<()>> =
+        std::sync::LazyLock::new(|| parking_lot::Mutex::new(()));
+    LOCK.lock()
+}
 
 /// Custom error type representing normal exit
 #[derive(Debug)]
@@ -112,6 +120,59 @@ pub enum SubCommand {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RunMode {
+    Interactive,
+    Command(String),
+    Lisp(String),
+    Notebook(PathBuf),
+}
+
+impl RunMode {
+    fn from_cli(cli: &Cli) -> Self {
+        if let Some(script) = &cli.lisp {
+            Self::Lisp(script.clone())
+        } else if let Some(command) = &cli.command {
+            Self::Command(command.clone())
+        } else if let Some(path) = &cli.notebook {
+            Self::Notebook(PathBuf::from(path))
+        } else {
+            Self::Interactive
+        }
+    }
+
+    fn needs_interactive_services(&self) -> bool {
+        matches!(self, Self::Interactive | Self::Notebook(_))
+    }
+}
+
+/// Owns work that is useful only while an interactive shell is alive.
+///
+/// Short-lived filesystem loader threads are joined when they have already
+/// completed and are otherwise detached so shutdown never waits on filesystem
+/// I/O. In particular, these tasks must not run on Tokio's blocking pool,
+/// because runtime shutdown waits for started `spawn_blocking` work.
+#[derive(Default)]
+struct StartupBackgroundTasks {
+    loader_threads: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl StartupBackgroundTasks {
+    fn push_loader(&mut self, thread: std::thread::JoinHandle<()>) {
+        self.loader_threads.push(thread);
+    }
+}
+
+impl Drop for StartupBackgroundTasks {
+    fn drop(&mut self) {
+        for thread in self.loader_threads.drain(..) {
+            if thread.is_finished() {
+                let _ = thread.join();
+            }
+        }
+    }
+}
+
 pub fn lib_main() -> ExitCode {
     if let Err(err) = init_tracing() {
         eprintln!("Failed to initialize tracing: {err}");
@@ -150,73 +211,80 @@ pub async fn run_shell() -> ExitCode {
         }
     }
 
+    let run_mode = RunMode::from_cli(&cli);
     let env = Environment::new();
     let mut shell = Shell::new(env);
+    let mut startup_tasks = StartupBackgroundTasks::default();
 
-    // Initialize command history (Async)
-    let cmd_history = std::sync::Arc::new(parking_lot::Mutex::new(crate::history::History::new()));
-    shell.cmd_history = Some(cmd_history.clone());
+    if run_mode.needs_interactive_services() {
+        // Initialize command history (Async)
+        let cmd_history =
+            std::sync::Arc::new(parking_lot::Mutex::new(crate::history::History::new()));
+        shell.cmd_history = Some(cmd_history.clone());
 
-    std::thread::spawn(move || {
-        match crate::history::History::from_file("dsh_cmd_history") {
-            Ok(mut history) => {
-                // Preload recent history (fast, immediate)
-                let min_timestamp = match history.load_recent(1000) {
-                    Ok(ts) => ts,
-                    Err(e) => {
-                        tracing::warn!("Failed to load recent history items: {}", e);
-                        0
+        startup_tasks.push_loader(std::thread::spawn(move || {
+            match crate::history::History::from_file("dsh_cmd_history") {
+                Ok(mut history) => {
+                    // Preload recent history (fast, immediate)
+                    let min_timestamp = match history.load_recent(1000) {
+                        Ok(ts) => ts,
+                        Err(e) => {
+                            tracing::warn!("Failed to load recent history items: {}", e);
+                            0
+                        }
+                    };
+                    history.start_background_writer();
+
+                    // Swap shared history immediately so user has something
+                    {
+                        *cmd_history.lock() = history.clone();
                     }
-                };
-                history.start_background_writer();
 
-                // Swap shared history immediately so user has something
-                {
-                    *cmd_history.lock() = history.clone();
-                }
-
-                // Load the rest of history in background (slower)
-                if min_timestamp > 0 {
-                    match history.load_older_than(min_timestamp, 9000) {
-                        Ok(entries) => {
-                            if !entries.is_empty() {
-                                let mut locked = cmd_history.lock();
-                                locked.prepend(entries);
+                    // Load the rest of history in background (slower)
+                    if min_timestamp > 0 {
+                        match history.load_older_than(min_timestamp, 9000) {
+                            Ok(entries) => {
+                                if !entries.is_empty() {
+                                    let mut locked = cmd_history.lock();
+                                    locked.prepend(entries);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to load remaining history: {}", e);
                             }
                         }
-                        Err(e) => {
-                            tracing::warn!("Failed to load remaining history: {}", e);
-                        }
                     }
                 }
+                Err(e) => {
+                    tracing::warn!("Failed to load command history: {}", e);
+                }
             }
-            Err(e) => {
-                tracing::warn!("Failed to load command history: {}", e);
-            }
-        }
-    });
+        }));
 
-    // Initialize directory history (Async)
-    let path_history = std::sync::Arc::new(parking_lot::Mutex::new(
-        crate::history::FrecencyHistory::new(),
-    ));
-    shell.path_history = Some(path_history.clone());
+        // Initialize directory history (Async)
+        let path_history = std::sync::Arc::new(parking_lot::Mutex::new(
+            crate::history::FrecencyHistory::new(),
+        ));
+        shell.path_history = Some(path_history.clone());
 
-    std::thread::spawn(move || {
-        match crate::history::FrecencyHistory::from_file("dsh_directory_history") {
-            Ok(mut history) => {
-                history.start_background_writer();
-                *path_history.lock() = history;
+        startup_tasks.push_loader(std::thread::spawn(move || {
+            match crate::history::FrecencyHistory::from_file("dsh_directory_history") {
+                Ok(mut history) => {
+                    history.start_background_writer();
+                    *path_history.lock() = history;
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to load directory history: {}", e);
+                }
             }
-            Err(e) => {
-                tracing::warn!("Failed to load directory history: {}", e);
-            }
-        }
-    });
+        }));
+    }
 
-    // Initialize Notebook Mode if requested
-    if let Some(notebook_path) = cli.notebook {
-        if let Err(e) = shell.open_notebook(std::path::PathBuf::from(notebook_path)) {
+    // Notebook setup remains independent from the execution mode for CLI
+    // compatibility: `--notebook file -c ...` and `--notebook file -l ...`
+    // historically opened the notebook before running the one-shot command.
+    if let Some(notebook_path) = cli.notebook.as_deref() {
+        if let Err(e) = shell.open_notebook(PathBuf::from(notebook_path)) {
             tracing::error!("Failed to open notebook: {}", e);
             eprintln!("Error opening notebook: {}", e);
             // Decide whether to continue or exit. Continuing without notebook mode is safer but warning is needed.
@@ -239,43 +307,43 @@ pub async fn run_shell() -> ExitCode {
     // Disable startup mode
     shell.environment.write().startup_mode = false;
 
-    // Reload MCP configuration from environment after config.lisp execution
-    shell.reload_mcp_config();
+    if run_mode.needs_interactive_services() {
+        // MCP connections and executable discovery are interactive services.
+        shell.reload_mcp_config();
 
-    // Prewarm executable names cache in background for faster command prefix search
-    {
-        let paths = shell.environment.read().paths.clone();
-        let names_arc = std::sync::Arc::clone(&shell.environment.read().executable_names);
+        // Prewarm executable names cache in background for faster command prefix search.
+        let paths = shell.environment.read().variable_state.paths.clone();
+        let names_arc =
+            std::sync::Arc::clone(&shell.environment.read().completion_state.executable_names);
         if let Some(names) = crate::environment::load_cached_executables(&paths) {
             *names_arc.write() = names.clone();
             let set: std::collections::BTreeSet<String> = names.into_iter().collect();
             crate::completion::generator::set_global_system_commands(set);
         }
-        tokio::spawn(async move {
-            let sorted = tokio::task::spawn_blocking(move || {
+        let prewarm_thread = std::thread::Builder::new()
+            .name("dsh-executable-prewarm".to_string())
+            .spawn(move || {
                 let names = crate::environment::collect_executables(&paths);
                 let _ = crate::environment::save_cached_executables(&paths, &names);
-                names
-            })
-            .await
-            .ok();
-            if let Some(names) = sorted {
                 *names_arc.write() = names;
                 let set: std::collections::BTreeSet<String> =
                     names_arc.read().iter().cloned().collect();
                 crate::completion::generator::set_global_system_commands(set);
+            });
+        match prewarm_thread {
+            Ok(thread) => startup_tasks.push_loader(thread),
+            Err(err) => {
+                tracing::warn!("Failed to start executable prewarm thread: {err}");
             }
-        });
+        }
     }
 
     let mut ctx = create_context(&shell);
 
-    if let Some(lisp_script) = cli.lisp.as_deref() {
-        execute_lisp(&mut shell, &mut ctx, lisp_script).await
-    } else if let Some(command) = cli.command.as_deref() {
-        execute_command(&mut shell, &mut ctx, command).await
-    } else {
-        run_interactive(&mut shell, &mut ctx).await
+    match run_mode {
+        RunMode::Lisp(script) => execute_lisp(&mut shell, &mut ctx, &script).await,
+        RunMode::Command(command) => execute_command(&mut shell, &mut ctx, &command).await,
+        RunMode::Interactive | RunMode::Notebook(_) => run_interactive(&mut shell, &mut ctx).await,
     }
 }
 
@@ -334,9 +402,9 @@ pub async fn handle_completion_command(
         }
     };
 
-    let mcp_manager = env.read().mcp_manager.clone();
-    let safety_level = env.read().safety_level.clone();
-    let allowlist = env.read().execute_allowlist.clone();
+    let mcp_manager = env.read().integration_state.mcp_manager.clone();
+    let safety_level = env.read().policy_state.safety_level.clone();
+    let allowlist = env.read().policy_state.execute_allowlist.clone();
     let safety_guard = Arc::new(crate::safety::SafetyGuard::new());
 
     let service = crate::ai_features::LiveAiService::new(
@@ -693,9 +761,9 @@ pub async fn execute_command(shell: &mut Shell, _ctx: &mut Context, command: &st
         if config.api_key().is_some()
             && let Ok(client) = ChatGptClient::try_from_config(&config)
         {
-            let mcp_manager = env_handle.read().mcp_manager.clone();
-            let safety_level = env_handle.read().safety_level.clone();
-            let allowlist = env_handle.read().execute_allowlist.clone();
+            let mcp_manager = env_handle.read().integration_state.mcp_manager.clone();
+            let safety_level = env_handle.read().policy_state.safety_level.clone();
+            let allowlist = env_handle.read().policy_state.execute_allowlist.clone();
             let service = Arc::new(crate::ai_features::LiveAiService::new(
                 client,
                 mcp_manager,
@@ -704,7 +772,7 @@ pub async fn execute_command(shell: &mut Shell, _ctx: &mut Context, command: &st
                 None,
                 allowlist,
             ));
-            shell.environment.write().ai_service = Some(service);
+            shell.environment.write().integration_state.ai_service = Some(service);
         }
     }
 
@@ -825,6 +893,54 @@ mod tests {
     use std::fs;
     use std::thread;
     use std::time::Duration;
+
+    #[test]
+    fn run_mode_limits_interactive_services_to_interactive_and_notebook() {
+        let base = Cli {
+            command: None,
+            lisp: None,
+            notebook: None,
+            subcommand: None,
+        };
+        assert!(RunMode::from_cli(&base).needs_interactive_services());
+
+        let notebook = Cli {
+            notebook: Some("session.md".to_string()),
+            ..base
+        };
+        assert!(RunMode::from_cli(&notebook).needs_interactive_services());
+
+        let command = Cli {
+            command: Some("true".to_string()),
+            notebook: None,
+            ..notebook
+        };
+        assert!(!RunMode::from_cli(&command).needs_interactive_services());
+
+        let lisp = Cli {
+            command: None,
+            lisp: Some("(+ 1 2)".to_string()),
+            ..command
+        };
+        assert!(!RunMode::from_cli(&lisp).needs_interactive_services());
+    }
+
+    #[test]
+    fn startup_background_tasks_do_not_wait_for_running_loader_threads() {
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let mut tasks = StartupBackgroundTasks::default();
+        tasks.push_loader(std::thread::spawn(move || {
+            let _ = release_rx.recv_timeout(Duration::from_secs(2));
+        }));
+
+        let started = std::time::Instant::now();
+        drop(tasks);
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "dropping startup tasks waited for a running filesystem loader"
+        );
+        let _ = release_tx.send(());
+    }
 
     #[test]
     #[ignore] // Ignore in normal test runs (for manual execution)

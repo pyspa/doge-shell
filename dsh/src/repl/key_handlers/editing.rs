@@ -9,15 +9,19 @@ use tracing::warn;
 /// Handle inserting a character.
 pub(crate) fn handle_insert_char(repl: &mut Repl<'_>, ch: char) {
     repl.input.insert(ch);
-    if repl.completion.is_changed(repl.input.as_str()) {
-        repl.completion.clear();
+    if repl
+        .completion_ui
+        .completion
+        .is_changed(repl.input.as_str())
+    {
+        repl.completion_ui.completion.clear();
     }
 }
 
 /// Handle backspace. Returns true if completion should be reset.
 pub(crate) fn handle_backspace(repl: &mut Repl<'_>) -> bool {
     let cursor = repl.input.cursor();
-    if repl.input_preferences.auto_pair && cursor > 0 && cursor < repl.input.len() {
+    if repl.ai_ui.input_preferences.auto_pair && cursor > 0 && cursor < repl.input.len() {
         let prev_char = repl.input.char_at(cursor - 1);
         let next_char = repl.input.char_at(cursor);
 
@@ -30,7 +34,7 @@ pub(crate) fn handle_backspace(repl: &mut Repl<'_>) -> bool {
     }
 
     repl.input.backspace();
-    repl.completion.clear();
+    repl.completion_ui.completion.clear();
     repl.input.color_ranges = None;
     true // reset_completion = true
 }
@@ -40,7 +44,7 @@ pub(crate) fn handle_yank(repl: &mut Repl<'_>) -> bool {
     if !repl.input.yank() {
         return false;
     }
-    repl.completion.clear();
+    repl.completion_ui.completion.clear();
     repl.input.color_ranges = None;
     true
 }
@@ -50,7 +54,7 @@ pub(crate) fn handle_undo(repl: &mut Repl<'_>) -> bool {
     if !repl.input.undo() {
         return false;
     }
-    repl.completion.clear();
+    repl.completion_ui.completion.clear();
     true
 }
 
@@ -59,7 +63,7 @@ pub(crate) fn handle_redo(repl: &mut Repl<'_>) -> bool {
     if !repl.input.redo() {
         return false;
     }
-    repl.completion.clear();
+    repl.completion_ui.completion.clear();
     true
 }
 
@@ -67,7 +71,7 @@ pub(crate) fn handle_redo(repl: &mut Repl<'_>) -> bool {
 /// non-empty line). `Input::delete_char` is a no-op at end of buffer.
 pub(crate) fn handle_delete_char_forward(repl: &mut Repl<'_>) -> bool {
     repl.input.delete_char();
-    repl.completion.clear();
+    repl.completion_ui.completion.clear();
     repl.input.color_ranges = None;
     true // reset_completion = true
 }
@@ -92,8 +96,12 @@ pub(crate) fn handle_insert_paired_char(repl: &mut Repl<'_>, open: char, close: 
     repl.input.insert(close);
     repl.input.move_by(-1);
 
-    if repl.completion.is_changed(repl.input.as_str()) {
-        repl.completion.clear();
+    if repl
+        .completion_ui
+        .completion
+        .is_changed(repl.input.as_str())
+    {
+        repl.completion_ui.completion.clear();
     }
 }
 
@@ -101,9 +109,13 @@ pub(crate) async fn handle_overtype_closing_bracket(
     repl: &mut Repl<'_>,
     _prev_cursor_disp: usize,
 ) -> Result<ReplControlFlow> {
-    let prev_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
+    let prev_pos = repl
+        .input
+        .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
     repl.input.move_by(1);
-    let new_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
+    let new_pos = repl
+        .input
+        .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
 
     let mut renderer = TerminalRenderer::new();
     repl.move_cursor_relative(&mut renderer, prev_pos, new_pos);

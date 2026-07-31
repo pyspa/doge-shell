@@ -2,7 +2,9 @@
 //!
 //! This command provides a CLI interface for managing MCP servers.
 
-use crate::ShellProxy;
+use crate::capability::ExecutionCapability;
+use crate::{CoreShellAction, ShellProxy};
+use anyhow::Result;
 use dsh_types::{Context, ExitStatus};
 
 pub fn description() -> &'static str {
@@ -70,11 +72,7 @@ Examples:
 }
 
 fn cmd_status(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
-    if let Err(e) = proxy.dispatch(
-        ctx,
-        "lisp",
-        vec!["lisp".to_string(), "(mcp-status)".to_string()],
-    ) {
+    if let Err(e) = dispatch_lisp(ctx, proxy, "(mcp-status)".to_string()) {
         eprintln!("Error: {}", e);
         return ExitStatus::ExitedWith(1);
     }
@@ -83,7 +81,7 @@ fn cmd_status(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
 
 fn cmd_connect(ctx: &Context, label: &str, proxy: &mut dyn ShellProxy) -> ExitStatus {
     let code = format!("(mcp-connect \"{}\")", label);
-    if let Err(e) = proxy.dispatch(ctx, "lisp", vec!["lisp".to_string(), code]) {
+    if let Err(e) = dispatch_lisp(ctx, proxy, code) {
         eprintln!("Error: {}", e);
         return ExitStatus::ExitedWith(1);
     }
@@ -92,7 +90,7 @@ fn cmd_connect(ctx: &Context, label: &str, proxy: &mut dyn ShellProxy) -> ExitSt
 
 fn cmd_disconnect(ctx: &Context, label: &str, proxy: &mut dyn ShellProxy) -> ExitStatus {
     let code = format!("(mcp-disconnect \"{}\")", label);
-    if let Err(e) = proxy.dispatch(ctx, "lisp", vec!["lisp".to_string(), code]) {
+    if let Err(e) = dispatch_lisp(ctx, proxy, code) {
         eprintln!("Error: {}", e);
         return ExitStatus::ExitedWith(1);
     }
@@ -100,11 +98,7 @@ fn cmd_disconnect(ctx: &Context, label: &str, proxy: &mut dyn ShellProxy) -> Exi
 }
 
 fn cmd_disconnect_all(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
-    if let Err(e) = proxy.dispatch(
-        ctx,
-        "lisp",
-        vec!["lisp".to_string(), "(mcp-disconnect-all)".to_string()],
-    ) {
+    if let Err(e) = dispatch_lisp(ctx, proxy, "(mcp-disconnect-all)".to_string()) {
         eprintln!("Error: {}", e);
         return ExitStatus::ExitedWith(1);
     }
@@ -112,11 +106,7 @@ fn cmd_disconnect_all(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
 }
 
 fn cmd_list(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
-    if let Err(e) = proxy.dispatch(
-        ctx,
-        "lisp",
-        vec!["lisp".to_string(), "(mcp-list)".to_string()],
-    ) {
+    if let Err(e) = dispatch_lisp(ctx, proxy, "(mcp-list)".to_string()) {
         eprintln!("Error: {}", e);
         return ExitStatus::ExitedWith(1);
     }
@@ -124,13 +114,13 @@ fn cmd_list(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
 }
 
 fn cmd_tools(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
-    if let Err(e) = proxy.dispatch(
-        ctx,
-        "lisp",
-        vec!["lisp".to_string(), "(mcp-list-tools)".to_string()],
-    ) {
+    if let Err(e) = dispatch_lisp(ctx, proxy, "(mcp-list-tools)".to_string()) {
         eprintln!("Error: {}", e);
         return ExitStatus::ExitedWith(1);
     }
     ExitStatus::ExitedWith(0)
+}
+
+fn dispatch_lisp(ctx: &Context, proxy: &mut dyn ShellProxy, code: String) -> Result<()> {
+    proxy.dispatch_core(ctx, CoreShellAction::Lisp, vec!["lisp".to_string(), code])
 }

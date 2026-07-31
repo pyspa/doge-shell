@@ -10,8 +10,8 @@ use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 use tracing::warn;
 
@@ -25,7 +25,10 @@ mod linux;
 mod project;
 mod registry;
 mod runner;
+mod runtime;
 mod worker;
+
+pub(crate) use runtime::CompletionRuntime;
 
 use cache::{
     CommandValueCacheEntry, CommandValueErrorEntry, ComposeCacheEntry, DynamicCommandCacheKey,
@@ -93,6 +96,18 @@ pub(crate) enum FishFallbackMode {
     Disabled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CachePolicy {
+    CachedOnly,
+    RefreshInBackground,
+}
+
+impl CachePolicy {
+    fn is_cached_only(self) -> bool {
+        matches!(self, Self::CachedOnly)
+    }
+}
+
 impl FishFallbackMode {
     fn label(self) -> &'static str {
         match self {
@@ -115,6 +130,7 @@ pub(crate) struct DynamicCompletionProvider {
     environment: Arc<RwLock<Environment>>,
     cache: Arc<RwLock<ProjectDynamicCache>>,
     refresh_generation: AtomicU64,
+    runtime: Arc<CompletionRuntime>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -128,13 +144,11 @@ struct DynamicCompletionDiagnostics {
     last_refresh: Option<Instant>,
     last_external: Option<String>,
     provider_lines: Vec<String>,
+    queue_dropped_total: u64,
 }
 
-static DYNAMIC_COMPLETION_DIAGNOSTICS: LazyLock<RwLock<DynamicCompletionDiagnostics>> =
-    LazyLock::new(|| RwLock::new(DynamicCompletionDiagnostics::default()));
-
-pub(crate) fn diagnostics_lines() -> Vec<String> {
-    let diagnostics = DYNAMIC_COMPLETION_DIAGNOSTICS.read().clone();
+fn diagnostics_lines(runtime: &CompletionRuntime) -> Vec<String> {
+    let diagnostics = runtime.diagnostics.read().clone();
     let refresh = diagnostics
         .last_refresh
         .map(|instant| format!("{}ms-ago", instant.elapsed().as_millis()))
@@ -149,12 +163,13 @@ pub(crate) fn diagnostics_lines() -> Vec<String> {
             diagnostics.command_entries, diagnostics.command_pending
         ),
         format!(
-            "completion-cache external entries={} pending={} fish={} limit={} pruned={} timeout={}ms last={}",
+            "completion-cache external entries={} pending={} fish={} limit={} pruned={} dropped={} timeout={}ms last={}",
             diagnostics.external_entries,
             diagnostics.external_pending,
             diagnostics.external_fish_entries,
             EXTERNAL_COMPLETION_CACHE_LIMIT,
             diagnostics.external_pruned_total,
+            diagnostics.queue_dropped_total,
             runner::timeout().as_millis(),
             external
         ),
@@ -189,10 +204,18 @@ fn fish_fallback_mode_from_env(environment: &Environment) -> FishFallbackMode {
 
 impl DynamicCompletionProvider {
     pub(crate) fn new(environment: Arc<RwLock<Environment>>) -> Self {
+        Self::with_runtime(environment, Arc::new(CompletionRuntime::new()))
+    }
+
+    pub(crate) fn with_runtime(
+        environment: Arc<RwLock<Environment>>,
+        runtime: Arc<CompletionRuntime>,
+    ) -> Self {
         Self {
             environment,
             cache: Arc::new(RwLock::new(ProjectDynamicCache::default())),
             refresh_generation: AtomicU64::new(0),
+            runtime,
         }
     }
 
@@ -250,14 +273,14 @@ impl DynamicCompletionProvider {
         scope: Option<&str>,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
-        cached_only: bool,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
         self.try_collect_declared_dynamic_candidates(
             provider,
             scope,
             parsed_command_line,
             current_dir,
-            cached_only,
+            cache_policy,
         )
         .unwrap_or_else(|| {
             warn!("Unknown dynamic completion provider: {provider}");
@@ -271,8 +294,11 @@ impl DynamicCompletionProvider {
         scope: Option<&str>,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
-        cached_only: bool,
+        cache_policy: CachePolicy,
     ) -> Option<Vec<EnhancedCandidate>> {
+        let registration = registry::registration(provider)?;
+        let provider = registration.id.as_str();
+        let cached_only = cache_policy.is_cached_only();
         let current_token = parsed_command_line.current_token.as_str();
         Some(match provider {
             "archive.entry" => {
@@ -780,6 +806,7 @@ impl DynamicCompletionProvider {
         let values = self
             .environment
             .read()
+            .variable_state
             .alias
             .keys()
             .cloned()
@@ -791,6 +818,7 @@ impl DynamicCompletionProvider {
         let values = self
             .environment
             .read()
+            .variable_state
             .abbreviations
             .keys()
             .cloned()
@@ -802,6 +830,7 @@ impl DynamicCompletionProvider {
         let mut values = self
             .environment
             .read()
+            .variable_state
             .system_env_vars
             .keys()
             .cloned()
@@ -4375,24 +4404,29 @@ impl DynamicCompletionProvider {
                 let values = entry.values.clone();
                 let start_refresh = entry.cached_at.elapsed() >= ttl
                     && cache.command_pending.insert(cache_key.clone());
-                update_diagnostics_from_cache(&cache, None);
+                update_diagnostics_from_cache(&self.runtime, &cache, None);
                 drop(cache);
                 if start_refresh {
                     self.mark_refresh_scheduled();
-                    spawn_command_refresh(self.cache.clone(), cache_key, loader);
+                    spawn_command_refresh(
+                        self.runtime.clone(),
+                        self.cache.clone(),
+                        cache_key,
+                        loader,
+                    );
                 }
                 return values;
             }
 
             if !cache.command_pending.insert(cache_key.clone()) {
-                update_diagnostics_from_cache(&cache, None);
+                update_diagnostics_from_cache(&self.runtime, &cache, None);
                 return Vec::new();
             }
-            update_diagnostics_from_cache(&cache, None);
+            update_diagnostics_from_cache(&self.runtime, &cache, None);
         }
 
         self.mark_refresh_scheduled();
-        spawn_command_refresh(self.cache.clone(), cache_key, loader);
+        spawn_command_refresh(self.runtime.clone(), self.cache.clone(), cache_key, loader);
         Vec::new()
     }
 
@@ -4430,24 +4464,33 @@ impl DynamicCompletionProvider {
                 {
                     start_refresh = true;
                 }
-                update_diagnostics_from_cache(&cache, None);
+                update_diagnostics_from_cache(&self.runtime, &cache, None);
                 drop(cache);
                 if start_refresh {
                     self.mark_refresh_scheduled();
-                    spawn_external_refresh(self.cache.clone(), cache_key, loader);
+                    spawn_external_refresh(
+                        self.runtime.clone(),
+                        self.cache.clone(),
+                        cache_key,
+                        loader,
+                    );
                 }
                 return Ok(candidates);
             }
 
             if !cache.external_pending.insert(cache_key.clone()) {
-                update_diagnostics_from_cache(&cache, None);
+                update_diagnostics_from_cache(&self.runtime, &cache, None);
                 return Ok(Vec::new());
             }
-            update_diagnostics_from_cache(&cache, Some("external initial-load".to_string()));
+            update_diagnostics_from_cache(
+                &self.runtime,
+                &cache,
+                Some("external initial-load".to_string()),
+            );
         }
 
         self.mark_refresh_scheduled();
-        spawn_external_refresh(self.cache.clone(), cache_key, loader);
+        spawn_external_refresh(self.runtime.clone(), self.cache.clone(), cache_key, loader);
         Ok(Vec::new())
     }
 
@@ -4461,13 +4504,17 @@ fn canonicalize_path(path: &Path) -> PathBuf {
 }
 
 fn spawn_command_refresh<F>(
+    runtime: Arc<CompletionRuntime>,
     cache: Arc<RwLock<ProjectDynamicCache>>,
     cache_key: DynamicCommandCacheKey,
     loader: F,
 ) where
     F: FnOnce() -> Result<Vec<String>> + Send + 'static,
 {
-    worker::submit_command(move || {
+    let rejected_cache = cache.clone();
+    let rejected_key = cache_key.clone();
+    let job_runtime = runtime.clone();
+    if !runtime.submit_command(Box::new(move || {
         let load_started = Instant::now();
         let result = loader();
         let load_duration = load_started.elapsed();
@@ -4485,8 +4532,8 @@ fn spawn_command_refresh<F>(
                         last_error: None,
                     },
                 );
-                update_diagnostics_from_cache(&cache, None);
-                crate::completion::notify_completion_update();
+                update_diagnostics_from_cache(&job_runtime, &cache, None);
+                job_runtime.notify();
             }
             Err(err) => {
                 warn!("Dynamic command completion refresh failed: {}", err);
@@ -4498,13 +4545,19 @@ fn spawn_command_refresh<F>(
                         error: err.to_string(),
                     },
                 );
-                update_diagnostics_from_cache(&cache, None);
+                update_diagnostics_from_cache(&job_runtime, &cache, None);
             }
         }
-    });
+    })) {
+        let mut cache = rejected_cache.write();
+        cache.command_pending.remove(&rejected_key);
+        runtime.record_queue_drop("dynamic command");
+        update_diagnostics_from_cache(&runtime, &cache, None);
+    }
 }
 
 fn spawn_external_refresh<F>(
+    runtime: Arc<CompletionRuntime>,
     cache: Arc<RwLock<ProjectDynamicCache>>,
     cache_key: ExternalCompletionCacheKey,
     loader: F,
@@ -4512,39 +4565,60 @@ fn spawn_external_refresh<F>(
     F: FnOnce() -> Result<Vec<EnhancedCandidate>> + Send + 'static,
 {
     let is_fish = cache_key.command_template.starts_with("fish-fallback:");
-    worker::submit_external(is_fish, move || {
-        let result = loader();
-        let mut cache = cache.write();
-        cache.external_pending.remove(&cache_key);
-        match result {
-            Ok(candidates) => {
-                if candidates.is_empty() {
+    let rejected_cache = cache.clone();
+    let rejected_key = cache_key.clone();
+    let job_runtime = runtime.clone();
+    if !runtime.submit_external(
+        is_fish,
+        Box::new(move || {
+            let result = loader();
+            let mut cache = cache.write();
+            cache.external_pending.remove(&cache_key);
+            match result {
+                Ok(candidates) => {
+                    if candidates.is_empty() {
+                        update_diagnostics_from_cache(
+                            &job_runtime,
+                            &cache,
+                            Some("external refresh empty".to_string()),
+                        );
+                    } else {
+                        insert_external_cache_entry(
+                            &mut cache,
+                            cache_key,
+                            ExternalCompletionCacheEntry {
+                                candidates,
+                                cached_at: Instant::now(),
+                            },
+                        );
+                        update_diagnostics_from_cache(
+                            &job_runtime,
+                            &cache,
+                            Some("external refresh ok".to_string()),
+                        );
+                        job_runtime.notify();
+                    }
+                }
+                Err(err) => {
+                    warn!("External completer refresh failed: {}", err);
                     update_diagnostics_from_cache(
+                        &job_runtime,
                         &cache,
-                        Some("external refresh empty".to_string()),
+                        Some(format!("external refresh error: {err}")),
                     );
-                } else {
-                    insert_external_cache_entry(
-                        &mut cache,
-                        cache_key,
-                        ExternalCompletionCacheEntry {
-                            candidates,
-                            cached_at: Instant::now(),
-                        },
-                    );
-                    update_diagnostics_from_cache(&cache, Some("external refresh ok".to_string()));
-                    crate::completion::notify_completion_update();
                 }
             }
-            Err(err) => {
-                warn!("External completer refresh failed: {}", err);
-                update_diagnostics_from_cache(
-                    &cache,
-                    Some(format!("external refresh error: {err}")),
-                );
-            }
-        }
-    });
+        }),
+    ) {
+        let mut cache = rejected_cache.write();
+        cache.external_pending.remove(&rejected_key);
+        runtime.record_queue_drop(if is_fish { "fish" } else { "external" });
+        update_diagnostics_from_cache(
+            &runtime,
+            &cache,
+            Some("external refresh dropped: queue full".to_string()),
+        );
+    }
 }
 
 fn insert_external_cache_entry(
@@ -4579,8 +4653,12 @@ fn prune_external_cache(cache: &mut ProjectDynamicCache) {
     }
 }
 
-fn update_diagnostics_from_cache(cache: &ProjectDynamicCache, last_external: Option<String>) {
-    let mut diagnostics = DYNAMIC_COMPLETION_DIAGNOSTICS.write();
+fn update_diagnostics_from_cache(
+    runtime: &CompletionRuntime,
+    cache: &ProjectDynamicCache,
+    last_external: Option<String>,
+) {
+    let mut diagnostics = runtime.diagnostics.write();
     diagnostics.command_entries = cache.commands.len();
     diagnostics.command_pending = cache.command_pending.len();
     diagnostics.external_entries = cache.external.len();
@@ -6051,11 +6129,11 @@ mod tests {
             assert!(
                 provider
                     .try_collect_declared_dynamic_candidates(
-                        registration.id,
+                        registration.id.as_str(),
                         None,
                         &parsed,
                         &current_dir,
-                        true,
+                        CachePolicy::CachedOnly,
                     )
                     .is_some(),
                 "registered provider '{}' ({:?}) has no dispatch arm",
@@ -6063,6 +6141,43 @@ mod tests {
                 registration.family
             );
         }
+    }
+
+    #[test]
+    fn full_worker_queue_restores_pending_state() {
+        let runtime = Arc::new(CompletionRuntime::with_worker_counts(
+            runtime::CompletionWorkerCounts::new(1, 1, 1),
+        ));
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+        assert!(runtime.submit_command(Box::new(move || {
+            started_tx.send(()).unwrap();
+            let _ = release_rx.recv_timeout(Duration::from_secs(2));
+        })));
+        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        for _ in 0..4 {
+            assert!(runtime.submit_command(Box::new(|| {})));
+        }
+
+        let provider = DynamicCompletionProvider::with_runtime(Environment::new(), runtime.clone());
+        assert!(
+            provider
+                .load_command_values(
+                    DynamicCommandCacheKind::GitBranch,
+                    PathBuf::from("/queue-full"),
+                    || Ok(vec!["should-not-run".to_string()]),
+                )
+                .is_empty()
+        );
+        assert!(!provider.has_pending_refresh());
+        assert!(
+            runtime
+                .diagnostics_lines()
+                .iter()
+                .any(|line| line.contains("dropped=1"))
+        );
+
+        release_tx.send(()).unwrap();
     }
 
     #[test]
@@ -6415,7 +6530,7 @@ mod tests {
         let environment = Environment::new();
         {
             let mut env = environment.write();
-            env.paths = vec![bin_dir.display().to_string()];
+            env.variable_state.paths = vec![bin_dir.display().to_string()];
             env.clear_command_cache();
         }
         let provider = DynamicCompletionProvider::new(environment);
@@ -6424,7 +6539,7 @@ mod tests {
             None,
             &parsed("journalctl --user-unit ssh"),
             dir.path(),
-            false,
+            CachePolicy::RefreshInBackground,
         );
         assert!(cold.is_empty(), "cold provider must not block TAB");
         assert!(wait_until(Duration::from_secs(20), || {
@@ -6434,7 +6549,7 @@ mod tests {
                     None,
                     &parsed("journalctl --user-unit ssh"),
                     dir.path(),
-                    true,
+                    CachePolicy::CachedOnly,
                 )
                 .iter()
                 .any(|candidate| candidate.text == "ssh.service")
@@ -6444,7 +6559,7 @@ mod tests {
             None,
             &parsed("journalctl --user-unit ssh"),
             dir.path(),
-            true,
+            CachePolicy::CachedOnly,
         );
 
         assert!(
@@ -6579,10 +6694,14 @@ mod tests {
         let environment = Environment::new();
         {
             let mut env = environment.write();
-            env.alias.insert("gs".to_string(), "git status".to_string());
-            env.abbreviations
+            env.variable_state
+                .alias
+                .insert("gs".to_string(), "git status".to_string());
+            env.variable_state
+                .abbreviations
                 .insert("gco".to_string(), "git checkout".to_string());
-            env.system_env_vars
+            env.variable_state
+                .system_env_vars
                 .insert("DSH_TEST_ENV".to_string(), "1".to_string());
         }
         let provider = DynamicCompletionProvider::new(environment);
@@ -6594,7 +6713,7 @@ mod tests {
                     None,
                     &parsed("unalias g"),
                     Path::new("/tmp"),
-                    false,
+                    CachePolicy::RefreshInBackground,
                 )
                 .iter()
                 .any(|candidate| candidate.text == "gs")
@@ -6606,7 +6725,7 @@ mod tests {
                     None,
                     &parsed("abbr erase gc"),
                     Path::new("/tmp"),
-                    false,
+                    CachePolicy::RefreshInBackground,
                 )
                 .iter()
                 .any(|candidate| candidate.text == "gco")
@@ -6618,7 +6737,7 @@ mod tests {
                     None,
                     &parsed("unset DSH_TEST"),
                     Path::new("/tmp"),
-                    false,
+                    CachePolicy::RefreshInBackground,
                 )
                 .iter()
                 .any(|candidate| candidate.text == "DSH_TEST_ENV")
@@ -6639,7 +6758,7 @@ mod tests {
         let environment = Environment::new();
         {
             let mut env = environment.write();
-            env.paths = vec![bin_dir.display().to_string()];
+            env.variable_state.paths = vec![bin_dir.display().to_string()];
             env.clear_command_cache();
         }
         let provider = DynamicCompletionProvider::new(environment);
@@ -6648,7 +6767,7 @@ mod tests {
             None,
             &parsed("helm --kube-context prod -n apps status ap"),
             dir.path(),
-            false,
+            CachePolicy::RefreshInBackground,
         );
         assert!(cold.is_empty(), "cold provider must not block TAB");
         assert!(wait_until(Duration::from_secs(20), || {
@@ -6658,7 +6777,7 @@ mod tests {
                     None,
                     &parsed("helm --kube-context prod -n apps status ap"),
                     dir.path(),
-                    true,
+                    CachePolicy::CachedOnly,
                 )
                 .iter()
                 .any(|candidate| candidate.text == "api")
@@ -6668,7 +6787,7 @@ mod tests {
             None,
             &parsed("helm --kube-context prod -n apps status ap"),
             dir.path(),
-            true,
+            CachePolicy::CachedOnly,
         );
 
         assert!(candidates.iter().any(|candidate| candidate.text == "api"));
@@ -6884,7 +7003,7 @@ volumes:
             None,
             &parsed,
             dir.path(),
-            false,
+            CachePolicy::RefreshInBackground,
         );
 
         assert!(
@@ -7067,7 +7186,7 @@ volumes:
         let environment = Environment::new();
         {
             let mut env = environment.write();
-            env.paths = vec![bin_dir.display().to_string()];
+            env.variable_state.paths = vec![bin_dir.display().to_string()];
             env.clear_command_cache();
         }
         let provider = DynamicCompletionProvider::new(environment);
@@ -7238,7 +7357,7 @@ volumes:
         );
 
         let environment = Environment::new();
-        environment.write().variables.insert(
+        environment.write().variable_state.variables.insert(
             "DSH_EXTERNAL_COMPLETER".to_string(),
             script.display().to_string(),
         );
@@ -7324,7 +7443,7 @@ volumes:
         let environment = Environment::new();
         {
             let mut env = environment.write();
-            env.paths = vec![];
+            env.variable_state.paths = vec![];
             env.clear_command_cache();
         }
         let provider = DynamicCompletionProvider::new(environment);
@@ -7339,8 +7458,9 @@ volumes:
         let environment = Environment::new();
         {
             let mut env = environment.write();
-            env.paths = vec![];
-            env.variables
+            env.variable_state.paths = vec![];
+            env.variable_state
+                .variables
                 .insert("DSH_COMPLETION_FISH_FALLBACK".to_string(), "1".to_string());
             env.clear_command_cache();
         }
@@ -7361,8 +7481,9 @@ volumes:
         let disabled_environment = Environment::new();
         {
             let mut env = disabled_environment.write();
-            env.paths = vec![bin_dir.display().to_string()];
-            env.variables
+            env.variable_state.paths = vec![bin_dir.display().to_string()];
+            env.variable_state
+                .variables
                 .insert("DSH_COMPLETION_FISH_FALLBACK".to_string(), "0".to_string());
             env.clear_command_cache();
         }
@@ -7390,7 +7511,7 @@ volumes:
         let environment = Environment::new();
         {
             let mut env = environment.write();
-            env.paths = vec![bin_dir.display().to_string()];
+            env.variable_state.paths = vec![bin_dir.display().to_string()];
             env.clear_command_cache();
         }
         let provider = DynamicCompletionProvider::new(environment);
@@ -7427,8 +7548,9 @@ volumes:
         let slow_environment = Environment::new();
         {
             let mut env = slow_environment.write();
-            env.paths = vec![slow_bin.display().to_string()];
-            env.variables
+            env.variable_state.paths = vec![slow_bin.display().to_string()];
+            env.variable_state
+                .variables
                 .insert("DSH_COMPLETION_FISH_FALLBACK".to_string(), "1".to_string());
             env.clear_command_cache();
         }
@@ -7481,7 +7603,7 @@ volumes:
         write_executable_script(&script, "#!/bin/sh\nexit 42\n");
 
         let environment = Environment::new();
-        environment.write().variables.insert(
+        environment.write().variable_state.variables.insert(
             "DSH_EXTERNAL_COMPLETER".to_string(),
             script.display().to_string(),
         );
@@ -7519,7 +7641,7 @@ volumes:
         );
 
         let environment = Environment::new();
-        environment.write().variables.insert(
+        environment.write().variable_state.variables.insert(
             "DSH_EXTERNAL_COMPLETER".to_string(),
             script.display().to_string(),
         );
@@ -7575,7 +7697,7 @@ volumes:
         );
 
         let environment = Environment::new();
-        environment.write().variables.insert(
+        environment.write().variable_state.variables.insert(
             "DSH_EXTERNAL_COMPLETER".to_string(),
             script.display().to_string(),
         );

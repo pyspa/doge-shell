@@ -397,7 +397,7 @@ pub fn parse_command(
             shell.exec_command_not_found_hooks(cmd);
 
             // Try to find similar commands for suggestion
-            let paths = shell.environment.read().paths.clone();
+            let paths = shell.environment.read().variable_state.paths.clone();
             let builtins: Vec<String> = dsh_builtin::get_all_commands()
                 .iter()
                 .map(|(name, _)| name.to_string())

@@ -71,6 +71,63 @@ mod uuid;
 mod var;
 mod z;
 
+/// Shell-owned operations that cannot be implemented inside `dsh-builtin`.
+///
+/// Public builtin names remain strings at the CLI boundary, but the handoff to
+/// the shell core is exhaustive and typed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoreShellAction {
+    Exit,
+    History,
+    Reload,
+    Z,
+    BlocksTui,
+    Jobs,
+    Foreground,
+    Background,
+    Lisp,
+    LispRun,
+    Var,
+    Read,
+}
+
+impl CoreShellAction {
+    pub const fn command_name(self) -> &'static str {
+        match self {
+            Self::Exit => "exit",
+            Self::History => "history",
+            Self::Reload => "reload",
+            Self::Z => "z",
+            Self::BlocksTui => "blocks-tui",
+            Self::Jobs => "jobs",
+            Self::Foreground => "fg",
+            Self::Background => "bg",
+            Self::Lisp => "lisp",
+            Self::LispRun => "lisp-run",
+            Self::Var => "var",
+            Self::Read => "read",
+        }
+    }
+
+    pub fn from_command_name(command: &str) -> Option<Self> {
+        Some(match command {
+            "exit" => Self::Exit,
+            "history" => Self::History,
+            "reload" => Self::Reload,
+            "z" => Self::Z,
+            "blocks-tui" => Self::BlocksTui,
+            "jobs" => Self::Jobs,
+            "fg" => Self::Foreground,
+            "bg" => Self::Background,
+            "lisp" => Self::Lisp,
+            "lisp-run" => Self::LispRun,
+            "var" => Self::Var,
+            "read" => Self::Read,
+            _ => return None,
+        })
+    }
+}
+
 /// Trait that provides an interface for builtin commands to interact with the shell
 /// This allows builtin commands to perform shell operations without direct coupling
 pub trait ShellProxy {
@@ -89,6 +146,19 @@ pub trait ShellProxy {
     /// Dispatches a command to the shell's command execution system
     /// Used for commands that need to be handled by the main shell logic
     fn dispatch(&mut self, ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()>;
+
+    /// Typed compatibility facade for operations owned by the shell core.
+    ///
+    /// Existing proxy implementations continue to work through `dispatch`;
+    /// the real shell overrides this to avoid a second string registry.
+    fn dispatch_core_action(
+        &mut self,
+        ctx: &Context,
+        action: CoreShellAction,
+        argv: Vec<String>,
+    ) -> Result<()> {
+        self.dispatch(ctx, action.command_name(), argv)
+    }
 
     /// Saves a command output entry to the shell's history
     fn save_output_history(&mut self, _entry: OutputEntry) {}
@@ -803,5 +873,31 @@ mod shell_proxy_tests {
 
         assert!(!proxy.confirm_action("dangerous?").unwrap());
         assert_eq!(proxy.safety_level(), SafetyLevel::Normal);
+    }
+
+    #[test]
+    fn core_shell_actions_round_trip_through_compatibility_names() {
+        let actions = [
+            CoreShellAction::Exit,
+            CoreShellAction::History,
+            CoreShellAction::Reload,
+            CoreShellAction::Z,
+            CoreShellAction::BlocksTui,
+            CoreShellAction::Jobs,
+            CoreShellAction::Foreground,
+            CoreShellAction::Background,
+            CoreShellAction::Lisp,
+            CoreShellAction::LispRun,
+            CoreShellAction::Var,
+            CoreShellAction::Read,
+        ];
+
+        for action in actions {
+            assert_eq!(
+                CoreShellAction::from_command_name(action.command_name()),
+                Some(action)
+            );
+        }
+        assert_eq!(CoreShellAction::from_command_name("external"), None);
     }
 }

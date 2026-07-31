@@ -51,35 +51,49 @@ pub trait ChangePwdHook: Send + Sync {
 }
 
 /// Shell environment configuration and state.
-pub struct Environment {
-    pub alias: HashMap<String, String>,
-    pub abbreviations: HashMap<String, String>,
-    pub paths: Vec<String>,
-    pub variables: HashMap<String, String>,
-    pub exported_vars: HashSet<String>,
-    pub direnv_roots: Vec<DirEnvironment>,
-    pub chpwd_hooks: Vec<Box<dyn ChangePwdHook + Send + Sync>>,
-    pub mcp_servers: Vec<McpServerConfig>,
-    pub mcp_manager: Arc<RwLock<McpManager>>,
-    pub execute_allowlist: Arc<RwLock<Vec<String>>>,
-    pub system_env_vars: HashMap<String, String>,
-    pub input_preferences: InputPreferences,
-    pub safety_level: Arc<RwLock<crate::safety::SafetyLevel>>,
-    /// Cache for PATH command lookups to avoid repeated filesystem access
+pub(crate) struct VariableState {
+    pub(crate) alias: HashMap<String, String>,
+    pub(crate) abbreviations: HashMap<String, String>,
+    pub(crate) paths: Vec<String>,
+    pub(crate) variables: HashMap<String, String>,
+    pub(crate) exported_vars: HashSet<String>,
+    pub(crate) direnv_roots: Vec<DirEnvironment>,
+    pub(crate) chpwd_hooks: Vec<Box<dyn ChangePwdHook + Send + Sync>>,
+    pub(crate) system_env_vars: HashMap<String, String>,
+    pub(crate) z_exclude: Vec<String>,
+}
+
+pub(crate) struct PolicyState {
+    pub(crate) execute_allowlist: Arc<RwLock<Vec<String>>>,
+    pub(crate) safety_level: Arc<RwLock<crate::safety::SafetyLevel>>,
+    pub(crate) secret_manager: SecretManager,
+}
+
+pub(crate) struct IntegrationState {
+    pub(crate) mcp_servers: Vec<McpServerConfig>,
+    pub(crate) mcp_manager: Arc<RwLock<McpManager>>,
+    pub(crate) ai_service: Option<Arc<dyn AiService + Send + Sync>>,
+}
+
+pub(crate) struct SessionOutputState {
+    pub(crate) output_history: OutputHistory,
+    pub(crate) command_blocks: CommandBlockHistory,
+}
+
+pub(crate) struct CompletionState {
+    pub(crate) input_preferences: InputPreferences,
     pub(crate) command_cache: RwLock<HashMap<String, Option<String>>>,
-    /// Prewarmed list of executable names from PATH directories for fast prefix search
-    pub executable_names: Arc<RwLock<Vec<String>>>,
-    /// Output history for $OUT[N] and $ERR[N] variables
-    pub output_history: OutputHistory,
-    /// Session-local command blocks for richer execution records
-    pub command_blocks: CommandBlockHistory,
-    pub ai_service: Option<Arc<dyn AiService + Send + Sync>>,
-    /// Z command exclusion patterns
-    pub z_exclude: Vec<String>,
+    pub(crate) executable_names: Arc<RwLock<Vec<String>>>,
+}
+
+pub struct Environment {
+    pub(crate) variable_state: VariableState,
+    pub(crate) policy_state: PolicyState,
+    pub(crate) integration_state: IntegrationState,
+    pub(crate) session_output_state: SessionOutputState,
+    pub(crate) completion_state: CompletionState,
     /// Flags if the shell is currently in startup mode (e.g. running config.lisp)
-    pub startup_mode: bool,
-    /// Secret manager for handling sensitive information
-    pub secret_manager: SecretManager,
+    pub(crate) startup_mode: bool,
 }
 
 fn default_input_preferences() -> InputPreferences {
@@ -123,33 +137,43 @@ impl Environment {
         debug!("default path {:?}", &paths);
 
         let env_arc = Arc::new(RwLock::new(Environment {
-            alias: HashMap::new(),
-            abbreviations: HashMap::new(),
-            variables: HashMap::new(),
-            exported_vars: HashSet::new(),
-            paths,
-            direnv_roots: Vec::new(),
-            chpwd_hooks: Vec::new(),
-            mcp_servers: Vec::new(),
-            mcp_manager: Arc::new(RwLock::new(McpManager::default())),
-            execute_allowlist: Arc::new(RwLock::new(Vec::new())),
-            system_env_vars,
-            input_preferences: default_input_preferences(),
-            safety_level: Arc::new(RwLock::new(crate::safety::SafetyLevel::Normal)),
-
-            command_cache: RwLock::new(HashMap::new()),
-            executable_names: Arc::new(RwLock::new(Vec::new())),
-            output_history: OutputHistory::new(),
-            command_blocks: CommandBlockHistory::new(),
-            ai_service: None,
-            z_exclude,
+            variable_state: VariableState {
+                alias: HashMap::new(),
+                abbreviations: HashMap::new(),
+                variables: HashMap::new(),
+                exported_vars: HashSet::new(),
+                paths,
+                direnv_roots: Vec::new(),
+                chpwd_hooks: Vec::new(),
+                system_env_vars,
+                z_exclude,
+            },
+            policy_state: PolicyState {
+                execute_allowlist: Arc::new(RwLock::new(Vec::new())),
+                safety_level: Arc::new(RwLock::new(crate::safety::SafetyLevel::Normal)),
+                secret_manager: SecretManager::new(),
+            },
+            integration_state: IntegrationState {
+                mcp_servers: Vec::new(),
+                mcp_manager: Arc::new(RwLock::new(McpManager::default())),
+                ai_service: None,
+            },
+            session_output_state: SessionOutputState {
+                output_history: OutputHistory::new(),
+                command_blocks: CommandBlockHistory::new(),
+            },
+            completion_state: CompletionState {
+                input_preferences: default_input_preferences(),
+                command_cache: RwLock::new(HashMap::new()),
+                executable_names: Arc::new(RwLock::new(Vec::new())),
+            },
             startup_mode: false,
-            secret_manager: SecretManager::new(),
         }));
 
         {
             let mut env = env_arc.write();
-            env.variables
+            env.variable_state
+                .variables
                 .insert("SAFETY_LEVEL".to_string(), "normal".to_string());
         }
 
@@ -158,58 +182,71 @@ impl Environment {
 
     /// Create a child environment that inherits from the parent.
     pub fn extend(parent: Arc<RwLock<Environment>>) -> Arc<RwLock<Self>> {
-        let alias = parent.read().alias.clone();
-        let abbreviations = parent.read().abbreviations.clone();
-        let paths = parent.read().paths.clone();
-        let variables = parent.read().variables.clone();
-        let exported_vars = parent.read().exported_vars.clone();
-        let direnv_roots = parent.read().direnv_roots.clone();
-        let mcp_servers = parent.read().mcp_servers.clone();
-        let mcp_manager = parent.read().mcp_manager.clone();
-        let execute_allowlist = parent.read().execute_allowlist.clone();
-        let input_preferences = parent.read().input_preferences;
-        let system_env_vars = parent.read().system_env_vars.clone();
-        let safety_level = parent.read().safety_level.clone();
+        let variable_state = {
+            let parent = parent.read();
+            VariableState {
+                alias: parent.variable_state.alias.clone(),
+                abbreviations: parent.variable_state.abbreviations.clone(),
+                paths: parent.variable_state.paths.clone(),
+                variables: parent.variable_state.variables.clone(),
+                exported_vars: parent.variable_state.exported_vars.clone(),
+                direnv_roots: parent.variable_state.direnv_roots.clone(),
+                chpwd_hooks: Vec::new(),
+                system_env_vars: parent.variable_state.system_env_vars.clone(),
+                z_exclude: parent.variable_state.z_exclude.clone(),
+            }
+        };
+        let (integration_state, policy_state, completion_state) = {
+            let parent = parent.read();
+            (
+                IntegrationState {
+                    mcp_servers: parent.integration_state.mcp_servers.clone(),
+                    mcp_manager: parent.integration_state.mcp_manager.clone(),
+                    ai_service: parent.integration_state.ai_service.clone(),
+                },
+                PolicyState {
+                    execute_allowlist: parent.policy_state.execute_allowlist.clone(),
+                    safety_level: parent.policy_state.safety_level.clone(),
+                    secret_manager: SecretManager::new(),
+                },
+                CompletionState {
+                    input_preferences: parent.completion_state.input_preferences,
+                    command_cache: RwLock::new(HashMap::new()),
+                    executable_names: Arc::new(RwLock::new(Vec::new())),
+                },
+            )
+        };
 
         Arc::new(RwLock::new(Environment {
-            alias,
-            abbreviations,
-            variables,
-            exported_vars,
-            paths,
-            direnv_roots,
-            chpwd_hooks: Vec::new(),
-            mcp_servers,
-            mcp_manager,
-            execute_allowlist,
-            system_env_vars,
-            input_preferences,
-            safety_level,
-            command_cache: RwLock::new(HashMap::new()),
-            executable_names: Arc::new(RwLock::new(Vec::new())),
-            output_history: OutputHistory::new(),
-            command_blocks: CommandBlockHistory::new(),
-            ai_service: parent.read().ai_service.clone(),
-            z_exclude: parent.read().z_exclude.clone(),
+            variable_state,
+            policy_state,
+            integration_state,
+            session_output_state: SessionOutputState {
+                output_history: OutputHistory::new(),
+                command_blocks: CommandBlockHistory::new(),
+            },
+            completion_state,
             startup_mode: false, // Extended environments (subshells) are not in startup mode
-            secret_manager: SecretManager::new(),
         }))
     }
 }
 
 impl std::fmt::Debug for Environment {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
-        let execute_allowlist_len = self.execute_allowlist.read().len();
+        let execute_allowlist_len = self.policy_state.execute_allowlist.read().len();
         f.debug_struct("Environment")
-            .field("alias", &self.alias)
-            .field("abbreviations", &self.abbreviations)
-            .field("direnv_paths", &self.direnv_roots)
-            .field("paths", &self.paths)
-            .field("variables_count", &self.variables.len())
-            .field("exported_vars", &self.exported_vars)
-            .field("mcp_servers", &self.mcp_servers)
+            .field("alias", &self.variable_state.alias)
+            .field("abbreviations", &self.variable_state.abbreviations)
+            .field("direnv_paths", &self.variable_state.direnv_roots)
+            .field("paths", &self.variable_state.paths)
+            .field("variables_count", &self.variable_state.variables.len())
+            .field("exported_vars", &self.variable_state.exported_vars)
+            .field("mcp_servers", &self.integration_state.mcp_servers)
             .field("execute_allowlist_len", &execute_allowlist_len)
-            .field("input_preferences", &self.input_preferences)
+            .field(
+                "input_preferences",
+                &self.completion_state.input_preferences,
+            )
             .finish()
     }
 }

@@ -33,8 +33,8 @@ fn test_mcp_add_stdio() {
     run_lisp(env, code).unwrap();
 
     let env_read = shell_env.read();
-    assert_eq!(env_read.mcp_servers.len(), 1);
-    let server = &env_read.mcp_servers[0];
+    assert_eq!(env_read.integration_state.mcp_servers.len(), 1);
+    let server = &env_read.integration_state.mcp_servers[0];
     assert_eq!(server.label, "test-stdio");
     assert_eq!(server.description, Some("Stdio Server".to_string()));
 
@@ -63,8 +63,8 @@ fn test_mcp_add_sse() {
     run_lisp(env, code).unwrap();
 
     let env_read = shell_env.read();
-    assert_eq!(env_read.mcp_servers.len(), 1);
-    let server = &env_read.mcp_servers[0];
+    assert_eq!(env_read.integration_state.mcp_servers.len(), 1);
+    let server = &env_read.integration_state.mcp_servers[0];
     assert_eq!(server.label, "test-sse");
     assert_eq!(server.description, Some("SSE Server".to_string()));
 
@@ -84,8 +84,8 @@ fn test_mcp_add_http() {
     run_lisp(env, code).unwrap();
 
     let env_read = shell_env.read();
-    assert_eq!(env_read.mcp_servers.len(), 1);
-    let server = &env_read.mcp_servers[0];
+    assert_eq!(env_read.integration_state.mcp_servers.len(), 1);
+    let server = &env_read.integration_state.mcp_servers[0];
     assert_eq!(server.label, "test-http");
     assert_eq!(server.description, Some("HTTP Server".to_string()));
 
@@ -143,12 +143,12 @@ fn test_mcp_clear() {
     run_lisp(env.clone(), r#"(mcp-add-sse "s1" "url1")"#).unwrap();
     run_lisp(env.clone(), r#"(mcp-add-sse "s2" "url2")"#).unwrap();
 
-    assert_eq!(shell_env.read().mcp_servers.len(), 2);
+    assert_eq!(shell_env.read().integration_state.mcp_servers.len(), 2);
 
     // Clear
     run_lisp(env.clone(), "(mcp-clear)").unwrap();
 
-    assert_eq!(shell_env.read().mcp_servers.len(), 0);
+    assert_eq!(shell_env.read().integration_state.mcp_servers.len(), 0);
 }
 
 #[test]
@@ -159,7 +159,7 @@ fn test_chat_execute_allowlist() {
 
     {
         let env_read = shell_env.read();
-        let allowlist = env_read.execute_allowlist.read();
+        let allowlist = env_read.policy_state.execute_allowlist.read();
         assert_eq!(allowlist.len(), 2);
         assert!(allowlist.contains(&"ls".to_string()));
         assert!(allowlist.contains(&"grep".to_string()));
@@ -167,5 +167,8 @@ fn test_chat_execute_allowlist() {
 
     run_lisp(env.clone(), "(chat-execute-clear)").unwrap();
 
-    assert_eq!(shell_env.read().execute_allowlist.read().len(), 0);
+    assert_eq!(
+        shell_env.read().policy_state.execute_allowlist.read().len(),
+        0
+    );
 }

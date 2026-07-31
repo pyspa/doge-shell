@@ -89,8 +89,8 @@ fn case_insensitive_match_ranges(input: &str, word: &str) -> Vec<(usize, usize, 
 
 pub(crate) fn handle_history_previous(repl: &mut Repl<'_>) {
     // If completion menu is active, use it for navigation
-    if repl.completion.completion_mode() {
-        if let Some(item) = repl.completion.backward() {
+    if repl.completion_ui.completion.completion_mode() {
+        if let Some(item) = repl.completion_ui.completion.backward() {
             apply_history_item(&mut repl.input, item);
         }
         return;
@@ -122,8 +122,8 @@ pub(crate) fn handle_history_previous(repl: &mut Repl<'_>) {
 }
 
 pub(crate) fn handle_history_next(repl: &mut Repl<'_>) {
-    if repl.completion.completion_mode() {
-        if let Some(item) = repl.completion.forward() {
+    if repl.completion_ui.completion.completion_mode() {
+        if let Some(item) = repl.completion_ui.completion.forward() {
             apply_history_item(&mut repl.input, item);
         }
         return;
@@ -164,10 +164,14 @@ pub(crate) async fn handle_cursor_left(
 ) -> Result<ReplControlFlow> {
     if repl.input.cursor() > 0 {
         repl.input.completion = None;
-        let prev_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
+        let prev_pos = repl
+            .input
+            .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
         repl.input.move_by(-1);
-        let new_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
-        repl.completion.clear();
+        let new_pos = repl
+            .input
+            .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
+        repl.completion_ui.completion.clear();
 
         let mut renderer = TerminalRenderer::new();
         repl.move_cursor_relative(&mut renderer, prev_pos, new_pos);
@@ -185,10 +189,14 @@ pub(crate) async fn handle_cursor_right(
     _prev_cursor_disp: usize,
 ) -> Result<ReplControlFlow> {
     if repl.input.cursor() < repl.input.len() {
-        let prev_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
+        let prev_pos = repl
+            .input
+            .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
         repl.input.move_by(1);
-        let new_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
-        repl.completion.clear();
+        let new_pos = repl
+            .input
+            .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
+        repl.completion_ui.completion.clear();
 
         let mut renderer = TerminalRenderer::new();
         repl.move_cursor_relative(&mut renderer, prev_pos, new_pos);
@@ -204,10 +212,14 @@ pub(crate) async fn handle_cursor_word_left(
     repl: &mut Repl<'_>,
     _prev_cursor_disp: usize,
 ) -> Result<ReplControlFlow> {
-    let prev_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
+    let prev_pos = repl
+        .input
+        .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
     repl.input.move_word_left();
-    let new_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
-    repl.completion.clear();
+    let new_pos = repl
+        .input
+        .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
+    repl.completion_ui.completion.clear();
 
     let mut renderer = TerminalRenderer::new();
     repl.move_cursor_relative(&mut renderer, prev_pos, new_pos);
@@ -220,10 +232,14 @@ pub(crate) async fn handle_cursor_word_right(
     repl: &mut Repl<'_>,
     _prev_cursor_disp: usize,
 ) -> Result<ReplControlFlow> {
-    let prev_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
+    let prev_pos = repl
+        .input
+        .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
     repl.input.move_word_right();
-    let new_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
-    repl.completion.clear();
+    let new_pos = repl
+        .input
+        .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
+    repl.completion_ui.completion.clear();
 
     let mut renderer = TerminalRenderer::new();
     repl.move_cursor_relative(&mut renderer, prev_pos, new_pos);
@@ -236,9 +252,13 @@ pub(crate) async fn handle_cursor_to_begin(
     repl: &mut Repl<'_>,
     _prev_cursor_disp: usize,
 ) -> Result<ReplControlFlow> {
-    let prev_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
+    let prev_pos = repl
+        .input
+        .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
     repl.input.move_to_begin();
-    let new_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
+    let new_pos = repl
+        .input
+        .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
 
     let mut renderer = TerminalRenderer::new();
     repl.move_cursor_relative(&mut renderer, prev_pos, new_pos);
@@ -250,9 +270,13 @@ pub(crate) async fn handle_cursor_to_end(
     repl: &mut Repl<'_>,
     _prev_cursor_disp: usize,
 ) -> Result<ReplControlFlow> {
-    let prev_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
+    let prev_pos = repl
+        .input
+        .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
     repl.input.move_to_end();
-    let new_pos = repl.input.cursor_pos(repl.columns, repl.prompt_mark_width);
+    let new_pos = repl
+        .input
+        .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
 
     let mut renderer = TerminalRenderer::new();
     repl.move_cursor_relative(&mut renderer, prev_pos, new_pos);

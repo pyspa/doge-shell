@@ -48,8 +48,8 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
             repl.state.multiline_buffer.push_str(&current_input);
             repl.state.multiline_buffer.push('\n');
             repl.input.clear();
-            repl.completion.clear();
-            repl.suggestion_manager.clear();
+            repl.completion_ui.completion.clear();
+            repl.ai_ui.suggestion_manager.clear();
 
             write_command_boundary(b"\r\n");
             let mut renderer = TerminalRenderer::new();
@@ -100,7 +100,13 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
     // Handle abbreviation expansion on Enter if cursor is at end of a word
     if ai_watch_request.is_none()
         && let Some(word) = repl.input.get_current_word_for_abbr()
-        && let Some(expansion) = repl.shell.environment.read().abbreviations.get(&word)
+        && let Some(expansion) = repl
+            .shell
+            .environment
+            .read()
+            .variable_state
+            .abbreviations
+            .get(&word)
     {
         let expansion = expansion.clone();
         if repl.input.replace_current_word(&expansion) {
@@ -116,12 +122,13 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
         .shell
         .environment
         .read()
+        .completion_state
         .input_preferences
         .transient_prompt
     {
         let mut stdout = std::io::stdout();
-        let prompt_width = repl.prompt_mark_width;
-        let cols = repl.columns;
+        let prompt_width = repl.terminal_ui.prompt_mark_width;
+        let cols = repl.terminal_ui.columns;
 
         render_transient_prompt_to(&mut stdout, &repl.input, prompt_width, cols as u16).ok();
     }
@@ -144,8 +151,8 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
         }
     }
 
-    if repl.prompt.read().has_git_root() {
-        repl.prompt.read().trigger_git_check();
+    if repl.terminal_ui.prompt.read().has_git_root() {
+        repl.terminal_ui.prompt.read().trigger_git_check();
     }
 
     // After command execution, show new prompt
@@ -163,12 +170,18 @@ async fn execute_shell_command(
     let start_time = Instant::now();
     let command_timestamp = SystemTime::now();
     repl.state.last_command_string = input_str.clone();
-    repl.completion.clear();
-    let output_start_id = repl.shell.environment.read().output_history.latest_id();
+    repl.completion_ui.completion.clear();
+    let output_start_id = repl
+        .shell
+        .environment
+        .read()
+        .session_output_state
+        .output_history
+        .latest_id();
     let cwd = std::env::current_dir()
         .ok()
         .map(|path| path.to_string_lossy().into_owned());
-    let shell_tmode = match get_tmode_safe(&repl.tmode) {
+    let shell_tmode = match get_tmode_safe(&repl.terminal_ui.tmode) {
         Ok(tmode) => tmode,
         Err(e) => {
             warn!("Cannot get terminal mode: {}", e);
@@ -214,7 +227,7 @@ async fn execute_shell_command(
     // OSC 133 D: Command finished
     write_terminal_control(format!("\x1b]133;D;{exit_code}\x1b\\").as_bytes());
 
-    repl.cache.invalidate();
+    repl.completion_ui.cache.invalidate();
 
     // Record command timing statistics
     let elapsed = start_time.elapsed();
@@ -235,6 +248,7 @@ async fn execute_shell_command(
         .shell
         .environment
         .read()
+        .session_output_state
         .output_history
         .entries_after_id(output_start_id);
     let observed_output = output_observer.as_ref().and_then(snapshot_observed_output);
@@ -272,16 +286,26 @@ async fn execute_shell_command(
         apply_observed_output_to_block(&mut block, output);
     }
     block.timestamp = command_timestamp;
-    repl.shell.environment.write().command_blocks.push(block);
+    repl.shell
+        .environment
+        .write()
+        .session_output_state
+        .command_blocks
+        .push(block);
 
     // Auto-Notify logic
     {
-        let prefs = repl.shell.environment.read().input_preferences;
+        let prefs = repl
+            .shell
+            .environment
+            .read()
+            .completion_state
+            .input_preferences;
         crate::repl::notify::notify_command_finished(&prefs, &input_str, elapsed, exit_code);
     }
 
     repl.input.clear();
-    repl.suggestion_manager.clear();
+    repl.ai_ui.suggestion_manager.clear();
     repl.state.last_command_time = Some(Instant::now());
     repl.state.last_duration = Some(elapsed);
 
@@ -292,6 +316,7 @@ async fn execute_shell_command(
             .shell
             .environment
             .read()
+            .completion_state
             .input_preferences
             .auto_diagnose
     {
@@ -418,10 +443,10 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
     print!("\r\n");
     if !repl.input.is_empty() {
         let start_time = Instant::now();
-        repl.completion.clear();
+        repl.completion_ui.completion.clear();
         let input = repl.input.to_string();
         repl.state.last_command_string = input.clone();
-        let shell_tmode = match get_tmode_safe(&repl.tmode) {
+        let shell_tmode = match get_tmode_safe(&repl.terminal_ui.tmode) {
             Ok(tmode) => tmode,
             Err(e) => {
                 warn!("Cannot get terminal mode for background execution: {}", e);
@@ -459,17 +484,17 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
         // OSC 133 D: Command finished
         write_terminal_control(format!("\x1b]133;D;{exit_code}\x1b\\").as_bytes());
 
-        repl.cache.invalidate();
+        repl.completion_ui.cache.invalidate();
         repl.input.clear();
-        repl.suggestion_manager.clear();
+        repl.ai_ui.suggestion_manager.clear();
         let elapsed = start_time.elapsed();
         repl.shell
             .record_history_outcome(&input, exit_code, elapsed);
         repl.state.last_duration = Some(elapsed);
     }
 
-    if repl.prompt.read().has_git_root() {
-        repl.prompt.read().trigger_git_check();
+    if repl.terminal_ui.prompt.read().has_git_root() {
+        repl.terminal_ui.prompt.read().trigger_git_check();
     }
 
     // After command execution, show new prompt
@@ -507,7 +532,7 @@ pub(crate) fn handle_resume_last_job(repl: &mut Repl<'_>) -> Result<()> {
         return Ok(());
     };
 
-    let shell_tmode = match get_tmode_safe(&repl.tmode) {
+    let shell_tmode = match get_tmode_safe(&repl.terminal_ui.tmode) {
         Ok(tmode) => tmode,
         Err(e) => {
             warn!("Cannot get terminal mode for resume: {}", e);
@@ -537,7 +562,7 @@ pub(crate) fn handle_interrupt(repl: &mut Repl<'_>) -> Result<()> {
     let mut renderer = TerminalRenderer::new();
 
     let should_exit = if cfg!(debug_assertions) {
-        repl.ctrl_c_state.on_pressed()
+        repl.terminal_ui.ctrl_c_state.on_pressed()
     } else {
         false
     };
@@ -566,7 +591,7 @@ pub(crate) fn handle_interrupt(repl: &mut Repl<'_>) -> Result<()> {
         renderer.flush().ok();
         repl.input.clear();
         repl.state.multiline_buffer.clear();
-        repl.suggestion_manager.clear();
+        repl.ai_ui.suggestion_manager.clear();
         repl.stop_history_mode();
         Ok(())
     }

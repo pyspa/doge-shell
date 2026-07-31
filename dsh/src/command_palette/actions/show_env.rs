@@ -25,7 +25,7 @@ impl Action for ShowEnvAction {
         // From shell environment
         {
             let env = shell.environment.read();
-            for (key, value) in &env.variables {
+            for (key, value) in &env.variable_state.variables {
                 env_vars.push(format!("{}={}", key, value));
             }
         }

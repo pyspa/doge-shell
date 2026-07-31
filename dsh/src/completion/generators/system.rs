@@ -225,9 +225,7 @@ mod tests {
 
     #[test]
     fn system_command_candidates_scan_path() {
-        static PATH_LOCK: LazyLock<parking_lot::Mutex<()>> =
-            LazyLock::new(|| parking_lot::Mutex::new(()));
-        let _guard = PATH_LOCK.lock();
+        let _guard = crate::test_env_lock();
 
         let dir = tempdir().unwrap();
         let cmd_path = dir.path().join("my-test-cmd");

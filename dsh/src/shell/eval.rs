@@ -53,6 +53,7 @@ pub async fn eval_str(
         let filtered_cmd = shell
             .environment
             .read()
+            .policy_state
             .secret_manager
             .process_for_history(&input);
 
@@ -128,8 +129,8 @@ pub async fn eval_str(
 
         {
             let environment = shell.environment.read();
-            let safety_level_guard = environment.safety_level.read();
-            let allowlist_guard = environment.execute_allowlist.read();
+            let safety_level_guard = environment.policy_state.safety_level.read();
+            let allowlist_guard = environment.policy_state.execute_allowlist.read();
 
             match shell
                 .safety_guard
@@ -158,6 +159,7 @@ pub async fn eval_str(
                             shell
                                 .environment
                                 .read()
+                                .policy_state
                                 .execute_allowlist
                                 .write()
                                 .extend(jobs.iter().map(|j| j.cmd.clone()));
@@ -241,7 +243,12 @@ pub async fn eval_str(
             {
                 use dsh_types::output_history::OutputEntry;
                 let entry = OutputEntry::new(job.cmd.clone(), stdout.clone(), stderr.clone(), exit);
-                shell.environment.write().output_history.push(entry);
+                shell
+                    .environment
+                    .write()
+                    .session_output_state
+                    .output_history
+                    .push(entry);
                 debug!(
                     "Captured output for '{}': {} bytes stdout, {} bytes stderr",
                     job.cmd,

@@ -188,8 +188,12 @@ fn expand_alias_preserves_input_redirect() {
     let mut pairs = ShellParser::parse(Rule::simple_command, "cat < input.txt")
         .unwrap_or_else(|e| panic!("{}", e));
     let alias_simple = pairs.next().unwrap();
-    let tokens = expand_alias_tilde(alias_simple, &env.read().alias, &PathBuf::from("."))
-        .expect("tokenize redirect");
+    let tokens = expand_alias_tilde(
+        alias_simple,
+        &env.read().variable_state.alias,
+        &PathBuf::from("."),
+    )
+    .expect("tokenize redirect");
     assert_eq!(tokens, vec!["cat", "<", "input.txt"]);
 
     let result =
@@ -463,9 +467,11 @@ fn test_expand_alias() -> Result<()> {
     let env = crate::environment::Environment::new();
 
     env.write()
+        .variable_state
         .alias
         .insert("alias".to_string(), "echo 'test' | sk ".to_string());
     env.write()
+        .variable_state
         .variables
         .insert("$FOO".to_string(), "BAR".to_string());
 
@@ -520,9 +526,13 @@ fn test_simple_alias_like_ll() -> Result<()> {
     let env = crate::environment::Environment::new();
 
     env.write()
+        .variable_state
         .alias
         .insert("ll".to_string(), "exa -al".to_string());
-    env.write().alias.insert("g".to_string(), "git".to_string());
+    env.write()
+        .variable_state
+        .alias
+        .insert("g".to_string(), "git".to_string());
 
     // Test simple alias 'll'
     let input = r#"ll"#.to_string();
@@ -958,7 +968,7 @@ fn test_glob_expansion() -> Result<()> {
     File::create(&path_b)?;
 
     let env = crate::environment::Environment::new();
-    let alias = &env.read().alias;
+    let alias = &env.read().variable_state.alias;
 
     // Test *.txt expansion
     let pairs = ShellParser::parse(Rule::glob_word, "*.txt").unwrap_or_else(|e| panic!("{}", e));
@@ -989,7 +999,7 @@ fn test_glob_no_match() -> Result<()> {
     File::create(&path)?;
 
     let env = crate::environment::Environment::new();
-    let alias = &env.read().alias;
+    let alias = &env.read().variable_state.alias;
 
     // Pattern matches nothing
     let pairs = ShellParser::parse(Rule::glob_word, "*.rs").unwrap_or_else(|e| panic!("{}", e));
@@ -1012,7 +1022,7 @@ fn test_glob_question_mark() -> Result<()> {
     File::create(dir.path().join("fileA.txt"))?;
 
     let env = crate::environment::Environment::new();
-    let alias = &env.read().alias;
+    let alias = &env.read().variable_state.alias;
 
     let pairs =
         ShellParser::parse(Rule::glob_word, "file?.txt").unwrap_or_else(|e| panic!("{}", e));
@@ -1037,7 +1047,7 @@ fn test_glob_character_class() -> Result<()> {
     File::create(dir.path().join("fileA.txt"))?;
 
     let env = crate::environment::Environment::new();
-    let alias = &env.read().alias;
+    let alias = &env.read().variable_state.alias;
 
     let pairs =
         ShellParser::parse(Rule::glob_word, "file[0-9].txt").unwrap_or_else(|e| panic!("{}", e));
@@ -1063,7 +1073,7 @@ fn test_glob_subdirectory() -> Result<()> {
     File::create(subdir.join("test.rs"))?;
 
     let env = crate::environment::Environment::new();
-    let alias = &env.read().alias;
+    let alias = &env.read().variable_state.alias;
 
     let pairs = ShellParser::parse(Rule::glob_word, "sub/*.rs").unwrap_or_else(|e| panic!("{}", e));
 
@@ -1092,7 +1102,7 @@ fn test_recursive_glob() -> Result<()> {
     File::create(nested.join("deep.rs"))?;
 
     let env = crate::environment::Environment::new();
-    let alias = &env.read().alias;
+    let alias = &env.read().variable_state.alias;
 
     // Test **/*.rs
     let pairs = ShellParser::parse(Rule::glob_word, "**/*.rs").unwrap_or_else(|e| panic!("{}", e));

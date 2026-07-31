@@ -62,23 +62,27 @@ struct EnvironmentSnapshot {
 impl EnvironmentSnapshot {
     fn capture(env: &Environment) -> Self {
         Self {
-            alias: env.alias.clone(),
-            abbreviations: env.abbreviations.clone(),
-            paths: env.paths.clone(),
-            variables: env.variables.clone(),
-            exported_vars: env.exported_vars.clone(),
-            direnv_roots: env.direnv_roots.clone(),
+            alias: env.variable_state.alias.clone(),
+            abbreviations: env.variable_state.abbreviations.clone(),
+            paths: env.variable_state.paths.clone(),
+            variables: env.variable_state.variables.clone(),
+            exported_vars: env.variable_state.exported_vars.clone(),
+            direnv_roots: env.variable_state.direnv_roots.clone(),
             mcp_servers: env.mcp_servers().to_vec(),
-            mcp_runtime_state: env.mcp_manager.read().snapshot_runtime_state(),
-            execute_allowlist: env.execute_allowlist.read().clone(),
-            system_env_vars: env.system_env_vars.clone(),
-            input_preferences: env.input_preferences,
-            safety_level: env.safety_level.read().clone(),
-            command_cache: env.command_cache.read().clone(),
-            executable_names: env.executable_names.read().clone(),
-            z_exclude: env.z_exclude.clone(),
+            mcp_runtime_state: env
+                .integration_state
+                .mcp_manager
+                .read()
+                .snapshot_runtime_state(),
+            execute_allowlist: env.policy_state.execute_allowlist.read().clone(),
+            system_env_vars: env.variable_state.system_env_vars.clone(),
+            input_preferences: env.completion_state.input_preferences,
+            safety_level: env.policy_state.safety_level.read().clone(),
+            command_cache: env.completion_state.command_cache.read().clone(),
+            executable_names: env.completion_state.executable_names.read().clone(),
+            z_exclude: env.variable_state.z_exclude.clone(),
             startup_mode: env.startup_mode,
-            secret_manager: env.secret_manager.snapshot(),
+            secret_manager: env.policy_state.secret_manager.snapshot(),
         }
     }
 }
@@ -146,25 +150,28 @@ impl LispEngine {
 
     fn restore_environment_snapshot(&self, snapshot: EnvironmentSnapshot) {
         let mut env = self.shell_env.write();
-        env.alias = snapshot.alias;
-        env.abbreviations = snapshot.abbreviations;
-        env.paths = snapshot.paths;
-        env.variables = snapshot.variables;
-        env.exported_vars = snapshot.exported_vars;
-        env.direnv_roots = snapshot.direnv_roots;
+        env.variable_state.alias = snapshot.alias;
+        env.variable_state.abbreviations = snapshot.abbreviations;
+        env.variable_state.paths = snapshot.paths;
+        env.variable_state.variables = snapshot.variables;
+        env.variable_state.exported_vars = snapshot.exported_vars;
+        env.variable_state.direnv_roots = snapshot.direnv_roots;
         env.replace_mcp_servers(snapshot.mcp_servers);
-        env.mcp_manager
+        env.integration_state
+            .mcp_manager
             .write()
             .restore_runtime_state(snapshot.mcp_runtime_state);
-        *env.execute_allowlist.write() = snapshot.execute_allowlist;
-        env.system_env_vars = snapshot.system_env_vars;
-        env.input_preferences = snapshot.input_preferences;
-        *env.safety_level.write() = snapshot.safety_level;
-        *env.command_cache.write() = snapshot.command_cache;
-        *env.executable_names.write() = snapshot.executable_names;
-        env.z_exclude = snapshot.z_exclude;
+        *env.policy_state.execute_allowlist.write() = snapshot.execute_allowlist;
+        env.variable_state.system_env_vars = snapshot.system_env_vars;
+        env.completion_state.input_preferences = snapshot.input_preferences;
+        *env.policy_state.safety_level.write() = snapshot.safety_level;
+        *env.completion_state.command_cache.write() = snapshot.command_cache;
+        *env.completion_state.executable_names.write() = snapshot.executable_names;
+        env.variable_state.z_exclude = snapshot.z_exclude;
         env.startup_mode = snapshot.startup_mode;
-        env.secret_manager.restore(snapshot.secret_manager);
+        env.policy_state
+            .secret_manager
+            .restore(snapshot.secret_manager);
     }
 
     pub fn run(&self, src: &str) -> anyhow::Result<Value> {
@@ -399,10 +406,7 @@ mod tests {
 
     use super::*;
     use std::ffi::OsString;
-    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
-
-    static CONFIG_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn init() {
         let _ = tracing_subscriber::fmt::try_init();
@@ -412,7 +416,7 @@ mod tests {
     where
         F: FnOnce(),
     {
-        let _guard = CONFIG_ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env_lock();
         let previous = std::env::var_os("XDG_CONFIG_HOME");
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -563,17 +567,17 @@ mod tests {
                 assert_eq!(env_read.mcp_servers()[0].label, "stable");
                 assert!(!env_read.startup_mode);
                 assert_eq!(
-                    env_read.alias.get("stable-alias"),
+                    env_read.variable_state.alias.get("stable-alias"),
                     Some(&"echo stable".to_string())
                 );
                 assert_eq!(
-                    env_read.variables.get("STABLE_VAR"),
+                    env_read.variable_state.variables.get("STABLE_VAR"),
                     Some(&"stable".to_string())
                 );
-                let allowlist = env_read.execute_allowlist.read().clone();
+                let allowlist = env_read.policy_state.execute_allowlist.read().clone();
                 assert_eq!(allowlist, vec!["ls".to_string()]);
                 assert_eq!(
-                    env_read.secret_manager.history_mode(),
+                    env_read.policy_state.secret_manager.history_mode(),
                     crate::secrets::SecretHistoryMode::Redact
                 );
             }
@@ -581,7 +585,7 @@ mod tests {
 
             let mcp_runtime_before = {
                 let env_read = env.read();
-                let manager = env_read.mcp_manager.read();
+                let manager = env_read.integration_state.mcp_manager.read();
                 let mut snapshot = manager.snapshot_runtime_state();
                 snapshot
                     .session_meta
@@ -622,22 +626,26 @@ mod tests {
             assert_eq!(env_read.mcp_servers()[0].label, "stable");
             assert!(!env_read.startup_mode);
             assert_eq!(
-                env_read.alias.get("stable-alias"),
+                env_read.variable_state.alias.get("stable-alias"),
                 Some(&"echo stable".to_string())
             );
-            assert!(!env_read.alias.contains_key("broken-alias"));
+            assert!(!env_read.variable_state.alias.contains_key("broken-alias"));
             assert_eq!(
-                env_read.variables.get("STABLE_VAR"),
+                env_read.variable_state.variables.get("STABLE_VAR"),
                 Some(&"stable".to_string())
             );
-            assert!(!env_read.variables.contains_key("BROKEN_VAR"));
+            assert!(!env_read.variable_state.variables.contains_key("BROKEN_VAR"));
             assert_eq!(
-                env_read.secret_manager.history_mode(),
+                env_read.policy_state.secret_manager.history_mode(),
                 crate::secrets::SecretHistoryMode::Redact
             );
-            let allowlist = env_read.execute_allowlist.read().clone();
+            let allowlist = env_read.policy_state.execute_allowlist.read().clone();
             assert_eq!(allowlist, vec!["ls".to_string()]);
-            let mcp_runtime_after = env_read.mcp_manager.read().snapshot_runtime_state();
+            let mcp_runtime_after = env_read
+                .integration_state
+                .mcp_manager
+                .read()
+                .snapshot_runtime_state();
             assert_eq!(mcp_runtime_after, mcp_runtime_before);
 
             assert!(engine.borrow().has("stable-func"));

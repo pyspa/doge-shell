@@ -17,7 +17,12 @@ use async_trait::async_trait;
 /// execute, and silently deferring the execution is worse than making the user
 /// press Enter.
 pub async fn select_block_command(shell: &mut Shell) -> Result<Option<String>> {
-    let blocks = shell.environment.read().command_blocks.get_all_blocks();
+    let blocks = shell
+        .environment
+        .read()
+        .session_output_state
+        .command_blocks
+        .get_all_blocks();
     if blocks.is_empty() {
         println!("No command blocks recorded yet.");
         return Ok(None);

@@ -1,4 +1,5 @@
-use super::ShellProxy;
+use super::{CoreShellAction, ShellProxy};
+use crate::capability::ExecutionCapability;
 use dsh_types::{Context, ExitStatus};
 
 /// Built-in var command description
@@ -11,7 +12,7 @@ pub fn description() -> &'static str {
 /// Delegates to the shell's variable management system for listing and manipulation
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     // Delegate variable operations to the shell's variable management system
-    if let Err(e) = proxy.dispatch(ctx, "var", argv) {
+    if let Err(e) = proxy.dispatch_core(ctx, CoreShellAction::Var, argv) {
         let _ = ctx.write_stderr(&format!("Error: {}\n", e));
         return ExitStatus::ExitedWith(1);
     }

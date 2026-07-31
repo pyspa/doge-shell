@@ -330,7 +330,7 @@ pub fn parse_with_expansion<'a>(
 
     if !has_meta {
         let env_read = environment.read();
-        if env_read.alias.is_empty() {
+        if env_read.variable_state.alias.is_empty() {
             return Ok((std::borrow::Cow::Borrowed(input), Some(pairs)));
         }
     }
@@ -343,7 +343,7 @@ pub fn parse_with_expansion<'a>(
         // We iterate over a clone of pairs to check for expansion triggers
         // This is cheaper than re-parsing if we can avoid expansion
         for pair in pairs.clone() {
-            if check_expansion_needed(pair, &env_read.alias) {
+            if check_expansion_needed(pair, &env_read.variable_state.alias) {
                 needs_expansion = true;
                 break;
             }
@@ -466,17 +466,29 @@ fn expand_command_alias(
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::simple_command => {
-                    let args = expand_alias_tilde(inner_pair, &env_guard.alias, _current_dir)?;
+                    let args = expand_alias_tilde(
+                        inner_pair,
+                        &env_guard.variable_state.alias,
+                        _current_dir,
+                    )?;
                     expand_var_args(args, &env_guard, &mut buf);
                 }
                 Rule::simple_command_bg => {
-                    let args = expand_alias_tilde(inner_pair, &env_guard.alias, _current_dir)?;
+                    let args = expand_alias_tilde(
+                        inner_pair,
+                        &env_guard.variable_state.alias,
+                        _current_dir,
+                    )?;
                     expand_var_args(args, &env_guard, &mut buf);
                     buf.push("&".to_string());
                 }
                 Rule::pipe_command => {
                     buf.push("|".to_string());
-                    let args = expand_alias_tilde(inner_pair, &env_guard.alias, _current_dir)?;
+                    let args = expand_alias_tilde(
+                        inner_pair,
+                        &env_guard.variable_state.alias,
+                        _current_dir,
+                    )?;
                     expand_var_args(args, &env_guard, &mut buf);
                 }
                 Rule::struct_pipe_command => {

@@ -2,7 +2,7 @@ use super::cache::CompletionCache;
 use super::command::{
     ArgumentType, CommandCompletionDatabase, CommandOption, CompletionCandidate, SubCommand,
 };
-use super::dynamic::DynamicCompletionProvider;
+use super::dynamic::{CachePolicy, CompletionRuntime, DynamicCompletionProvider};
 
 use super::framework::CompletionFrameworkKind;
 
@@ -418,6 +418,7 @@ pub struct IntegratedCompletionEngine {
     framework_cache: RwLock<HashMap<String, CompletionFrameworkKind>>,
     shell_jobs: RwLock<Vec<(usize, String, String)>>,
     dynamic: DynamicCompletionProvider,
+    runtime: Arc<CompletionRuntime>,
 
     /// Shell environment (for dynamic completion)
     pub environment: Arc<RwLock<Environment>>,
@@ -426,6 +427,7 @@ pub struct IntegratedCompletionEngine {
 impl IntegratedCompletionEngine {
     /// Create a new integrated completion engine
     pub fn new(environment: Arc<RwLock<Environment>>) -> Self {
+        let runtime = Arc::new(CompletionRuntime::new());
         Self {
             command_completion: Arc::new(Mutex::new(CommandCompletionDatabase::new())),
             loader: None,
@@ -436,9 +438,18 @@ impl IntegratedCompletionEngine {
             cache: CompletionCache::new(Duration::from_millis(DEFAULT_CACHE_TTL_MS)),
             framework_cache: RwLock::new(HashMap::new()),
             shell_jobs: RwLock::new(Vec::new()),
-            dynamic: DynamicCompletionProvider::new(environment.clone()),
+            dynamic: DynamicCompletionProvider::with_runtime(environment.clone(), runtime.clone()),
+            runtime,
             environment,
         }
+    }
+
+    pub(crate) fn set_notifier(&self, sender: tokio::sync::mpsc::UnboundedSender<()>) {
+        self.runtime.set_notifier(sender);
+    }
+
+    pub(crate) fn runtime(&self) -> Arc<CompletionRuntime> {
+        self.runtime.clone()
     }
 
     pub(crate) fn set_shell_jobs(&self, jobs: Vec<(usize, String, String)>) {
@@ -802,8 +813,8 @@ impl IntegratedCompletionEngine {
         let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         {
             let env = self.environment.read();
-            names.extend(env.system_env_vars.keys().cloned());
-            names.extend(env.variables.keys().cloned());
+            names.extend(env.variable_state.system_env_vars.keys().cloned());
+            names.extend(env.variable_state.variables.keys().cloned());
         }
         names.extend(std::env::vars().map(|(key, _)| key));
 
@@ -944,7 +955,7 @@ impl IntegratedCompletionEngine {
         candidates.extend(self.collect_declared_dynamic_candidates(
             request,
             parsed_command_line,
-            false,
+            CachePolicy::RefreshInBackground,
         ));
 
         // `git checkout`/`git restore` accept BOTH refs and working-tree paths.
@@ -982,7 +993,7 @@ impl IntegratedCompletionEngine {
         &self,
         request: &CompletionRequest,
         parsed_command_line: &parser::ParsedCommandLine,
-        cached_only: bool,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
         let Some(ArgumentType::Dynamic { provider, scope }) =
             self.argument_type_for_completion_context(parsed_command_line)
@@ -999,7 +1010,7 @@ impl IntegratedCompletionEngine {
             scope.as_deref(),
             parsed_command_line,
             request.current_dir,
-            cached_only,
+            cache_policy,
         )
     }
 
@@ -1197,7 +1208,7 @@ impl IntegratedCompletionEngine {
                 scope.as_deref(),
                 parsed_command_line,
                 current_dir,
-                true,
+                CachePolicy::CachedOnly,
             );
         }
 
@@ -2529,7 +2540,7 @@ mod tests {
         let environment = Environment::new();
         {
             let mut env = environment.write();
-            env.paths = vec![bin_dir.display().to_string()];
+            env.variable_state.paths = vec![bin_dir.display().to_string()];
             env.clear_command_cache();
         }
         let mut engine = IntegratedCompletionEngine::new(environment);
@@ -2584,6 +2595,7 @@ mod tests {
         let environment = Environment::new();
         environment
             .write()
+            .variable_state
             .variables
             .insert(name.to_string(), value.to_string());
         IntegratedCompletionEngine::new(environment)
@@ -3122,8 +3134,8 @@ mod tests {
         let environment = Environment::new();
         {
             let mut env = environment.write();
-            env.paths = vec![bin_dir.display().to_string()];
-            env.variables.insert(
+            env.variable_state.paths = vec![bin_dir.display().to_string()];
+            env.variable_state.variables.insert(
                 "DSH_EXTERNAL_COMPLETER".to_string(),
                 format!(
                     "printf 'external-branch\\tExternal completer\\n'; printf called > {}",
@@ -3465,7 +3477,7 @@ mod tests {
         let environment = Environment::new();
         {
             let mut env = environment.write();
-            env.paths = vec![bin_dir.display().to_string()];
+            env.variable_state.paths = vec![bin_dir.display().to_string()];
             env.clear_command_cache();
         }
         let mut engine = IntegratedCompletionEngine::new(environment);
@@ -3502,7 +3514,7 @@ mod tests {
         let environment = Environment::new();
         {
             let mut env = environment.write();
-            env.paths = vec![bin_dir.display().to_string()];
+            env.variable_state.paths = vec![bin_dir.display().to_string()];
             env.clear_command_cache();
         }
         let mut engine = IntegratedCompletionEngine::new(environment);
@@ -3564,7 +3576,7 @@ mod tests {
         let environment = Environment::new();
         {
             let mut env = environment.write();
-            env.paths = vec![bin_dir.display().to_string()];
+            env.variable_state.paths = vec![bin_dir.display().to_string()];
             env.clear_command_cache();
         }
         let mut engine = IntegratedCompletionEngine::new(environment);
@@ -3641,7 +3653,7 @@ mod tests {
         let environment = Environment::new();
         {
             let mut env = environment.write();
-            env.paths = vec![bin_dir.display().to_string()];
+            env.variable_state.paths = vec![bin_dir.display().to_string()];
             env.clear_command_cache();
         }
         let mut engine = IntegratedCompletionEngine::new(environment);
@@ -4032,7 +4044,7 @@ mod tests {
     async fn external_completer_runs_as_fallback() {
         let dir = tempdir().unwrap();
         let environment = Environment::new();
-        environment.write().variables.insert(
+        environment.write().variable_state.variables.insert(
             "DSH_EXTERNAL_COMPLETER".to_string(),
             "printf 'zzint-alpha\\tExternal completer\\n'; printf 'unrelated-candidate\\tExternal completer\\n'"
                 .to_string(),
@@ -4070,7 +4082,7 @@ mod tests {
         let environment = Environment::new();
         {
             let mut env = environment.write();
-            env.paths = vec![bin_dir.display().to_string()];
+            env.variable_state.paths = vec![bin_dir.display().to_string()];
             env.clear_command_cache();
         }
         let mut engine = IntegratedCompletionEngine::new(environment);
@@ -4126,7 +4138,7 @@ mod tests {
         let environment = Environment::new();
         {
             let mut env = environment.write();
-            env.paths = vec![bin_dir.display().to_string()];
+            env.variable_state.paths = vec![bin_dir.display().to_string()];
             env.clear_command_cache();
         }
         let mut engine = IntegratedCompletionEngine::new(environment);

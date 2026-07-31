@@ -50,7 +50,7 @@ pub fn set_env(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtime
         let guard = SafetyGuard::new();
         let env_ref = env.borrow();
         let shell_env = env_ref.shell_env.read();
-        let safety_level = shell_env.safety_level.read();
+        let safety_level = shell_env.policy_state.safety_level.read();
 
         if args.len() > 1 {
             let val_str = &args[1].to_string(); // Approximate value check
@@ -107,7 +107,7 @@ pub fn set_variable(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
         let guard = SafetyGuard::new();
         let env_ref = env.borrow();
         let shell_env = env_ref.shell_env.read();
-        let safety_level = shell_env.safety_level.read();
+        let safety_level = shell_env.policy_state.safety_level.read();
 
         match guard.check_environment_modification(&key, &val, &safety_level) {
             SafetyResult::Allowed => {}
@@ -122,7 +122,12 @@ pub fn set_variable(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
 
     let display_val = redact_value_for_log(&key, &val);
     debug!("set variable {} {}", &key, display_val);
-    env.borrow().shell_env.write().variables.insert(key, val);
+    env.borrow()
+        .shell_env
+        .write()
+        .variable_state
+        .variables
+        .insert(key, val);
     Ok(Value::NIL)
 }
 
@@ -138,6 +143,7 @@ pub fn alias(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeEr
     env.borrow()
         .shell_env
         .write()
+        .variable_state
         .alias
         .insert(alias.to_string(), command.to_string());
     Ok(Value::NIL)
@@ -158,6 +164,7 @@ pub fn abbr(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeErr
     env.borrow()
         .shell_env
         .write()
+        .variable_state
         .abbreviations
         .insert(name.to_string(), expansion.to_string());
     Ok(Value::NIL)
@@ -170,7 +177,12 @@ pub fn allow_direnv(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
         // Create DirEnvironment with error handling
         match DirEnvironment::new(root.to_string()) {
             Ok(direnv) => {
-                env.borrow().shell_env.write().direnv_roots.push(direnv);
+                env.borrow()
+                    .shell_env
+                    .write()
+                    .variable_state
+                    .direnv_roots
+                    .push(direnv);
             }
             Err(e) => {
                 eprintln!("Warning: Failed to create direnv for {root}: {e}");
@@ -187,6 +199,7 @@ pub fn add_path(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
         env.borrow()
             .shell_env
             .write()
+            .variable_state
             .paths
             .insert(0, path.to_string());
     }
@@ -215,8 +228,8 @@ pub fn command(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtime
 
         let env_ref = env.borrow();
         let shell_env = env_ref.shell_env.read();
-        let safety_level = shell_env.safety_level.read();
-        let allowlist = shell_env.execute_allowlist.read();
+        let safety_level = shell_env.policy_state.safety_level.read();
+        let allowlist = shell_env.policy_state.execute_allowlist.read();
 
         match guard.check_command(&safety_level, &cmd, &cmd_args, &allowlist) {
             SafetyResult::Allowed => {
@@ -338,7 +351,14 @@ pub fn block_sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
 
 pub fn safety_level(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     if args.is_empty() {
-        let level = env.borrow().shell_env.read().safety_level.read().clone();
+        let level = env
+            .borrow()
+            .shell_env
+            .read()
+            .policy_state
+            .safety_level
+            .read()
+            .clone();
         return Ok(Value::String(format!("{:?}", level).to_lowercase()));
     }
 
@@ -351,8 +371,8 @@ pub fn safety_level(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
     {
         let env_ref = env.borrow();
         let mut shell_env = env_ref.shell_env.write();
-        *shell_env.safety_level.write() = level.clone();
-        shell_env.variables.insert(
+        *shell_env.policy_state.safety_level.write() = level.clone();
+        shell_env.variable_state.variables.insert(
             "SAFETY_LEVEL".to_string(),
             format!("{:?}", level).to_lowercase(),
         );
@@ -364,7 +384,12 @@ pub fn safety_level(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
 pub fn pref_auto_pair(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     if args.is_empty() {
         return Ok(Value::from(
-            env.borrow().shell_env.read().input_preferences.auto_pair,
+            env.borrow()
+                .shell_env
+                .read()
+                .completion_state
+                .input_preferences
+                .auto_pair,
         ));
     }
 
@@ -384,6 +409,7 @@ pub fn pref_auto_notify(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value
             env.borrow()
                 .shell_env
                 .read()
+                .completion_state
                 .input_preferences
                 .auto_notify_enabled,
         ));
@@ -405,6 +431,7 @@ pub fn pref_ai_explanation(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Va
             env.borrow()
                 .shell_env
                 .read()
+                .completion_state
                 .input_preferences
                 .ai_explanation,
         ));
@@ -508,6 +535,7 @@ pub fn secret_add_pattern(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Val
     env.borrow()
         .shell_env
         .read()
+        .policy_state
         .secret_manager
         .add_pattern(&pattern)
         .map_err(|e| RuntimeError::new(&e))?;
@@ -529,6 +557,7 @@ pub fn secret_add_keyword(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Val
     env.borrow()
         .shell_env
         .read()
+        .policy_state
         .secret_manager
         .add_keyword(&keyword);
 
@@ -542,7 +571,13 @@ pub fn secret_list_patterns(
     env: Rc<RefCell<Env>>,
     _args: Vec<Value>,
 ) -> Result<Value, RuntimeError> {
-    let patterns = env.borrow().shell_env.read().secret_manager.list_patterns();
+    let patterns = env
+        .borrow()
+        .shell_env
+        .read()
+        .policy_state
+        .secret_manager
+        .list_patterns();
 
     let result: Vec<Value> = patterns.into_iter().map(Value::String).collect();
     Ok(Value::List(result.into_iter().collect()))
@@ -555,7 +590,13 @@ pub fn secret_history_mode(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Va
 
     if args.is_empty() {
         // Return current mode
-        let mode = env.borrow().shell_env.read().secret_manager.history_mode();
+        let mode = env
+            .borrow()
+            .shell_env
+            .read()
+            .policy_state
+            .secret_manager
+            .history_mode();
         let mode_str = match mode {
             SecretHistoryMode::Skip => "skip",
             SecretHistoryMode::Redact => "redact",
@@ -572,6 +613,7 @@ pub fn secret_history_mode(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Va
     env.borrow()
         .shell_env
         .read()
+        .policy_state
         .secret_manager
         .set_history_mode(mode);
 
@@ -594,6 +636,7 @@ pub fn secret_set(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runt
     env.borrow()
         .shell_env
         .read()
+        .policy_state
         .secret_manager
         .set_session_secret(&key, &value);
 
@@ -614,6 +657,7 @@ pub fn secret_get(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runt
         .borrow()
         .shell_env
         .read()
+        .policy_state
         .secret_manager
         .get_session_secret(&key);
 
@@ -629,6 +673,7 @@ pub fn secret_clear(env: Rc<RefCell<Env>>, _args: Vec<Value>) -> Result<Value, R
     env.borrow()
         .shell_env
         .read()
+        .policy_state
         .secret_manager
         .clear_session_secrets();
 

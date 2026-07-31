@@ -424,7 +424,7 @@ async fn collect_current_context_candidates(
 
     if !only_path {
         // Paths cloning for thread safety
-        let paths = environment.read().paths.clone();
+        let paths = environment.read().variable_state.paths.clone();
         let query_str = query_str.to_string();
 
         let mut command_items =
@@ -541,6 +541,7 @@ mod tests {
 
     #[test]
     fn default_framework_switches_to_skim_via_env() {
+        let _guard = crate::test_env_lock();
         let original = std::env::var("DSH_COMPLETION_FRAMEWORK").ok();
         unsafe {
             std::env::set_var("DSH_COMPLETION_FRAMEWORK", "skim");

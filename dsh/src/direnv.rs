@@ -48,7 +48,12 @@ impl DirEnvironment {
             return Ok(());
         }
 
-        let mut env_path = env.system_env_vars.get("PATH").cloned().unwrap_or_default();
+        let mut env_path = env
+            .variable_state
+            .system_env_vars
+            .get("PATH")
+            .cloned()
+            .unwrap_or_default();
         for entry in &self.entries {
             match entry {
                 Entry::Env(env_entry) => {
@@ -169,18 +174,18 @@ pub fn check_path(pwd: &Path, environment: Arc<RwLock<Environment>>) -> Result<(
     let mut out = BufWriter::new(out);
 
     let mut idx = 0;
-    while idx < environment.direnv_roots.len() {
+    while idx < environment.variable_state.direnv_roots.len() {
         let should_load = {
-            let env = &environment.direnv_roots[idx];
+            let env = &environment.variable_state.direnv_roots[idx];
             pwd.starts_with(&env.path) && !env.loaded
         };
         let should_unload = {
-            let env = &environment.direnv_roots[idx];
+            let env = &environment.variable_state.direnv_roots[idx];
             !pwd.starts_with(&env.path) && env.loaded
         };
 
         if should_load {
-            let mut dir_env = environment.direnv_roots.remove(idx);
+            let mut dir_env = environment.variable_state.direnv_roots.remove(idx);
             dir_env.read_env_file()?;
             out.write_fmt(format_args!("direnv: loading {}\n", dir_env.path))
                 .ok();
@@ -188,14 +193,14 @@ pub fn check_path(pwd: &Path, environment: Arc<RwLock<Environment>>) -> Result<(
             dir_env.set_env(environment, &mut out)?;
             out.write_all(b"\n").ok();
             dir_env.loaded = true;
-            environment.direnv_roots.insert(idx, dir_env);
+            environment.variable_state.direnv_roots.insert(idx, dir_env);
         } else if should_unload {
-            let mut dir_env = environment.direnv_roots.remove(idx);
+            let mut dir_env = environment.variable_state.direnv_roots.remove(idx);
             out.write_fmt(format_args!("direnv: unloading {}\n", dir_env.path))
                 .ok();
             dir_env.remove_env(environment);
             dir_env.loaded = false;
-            environment.direnv_roots.insert(idx, dir_env);
+            environment.variable_state.direnv_roots.insert(idx, dir_env);
         }
 
         idx += 1;

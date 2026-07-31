@@ -1,4 +1,5 @@
-use super::ShellProxy;
+use super::{CoreShellAction, ShellProxy};
+use crate::capability::ExecutionCapability;
 use dsh_types::{Context, ExitStatus};
 
 /// Built-in history command description
@@ -11,7 +12,7 @@ pub fn description() -> &'static str {
 /// This command shows previously executed commands for user reference
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     // Delegate history display to the shell's internal history management
-    match proxy.dispatch(ctx, "history", argv) {
+    match proxy.dispatch_core(ctx, CoreShellAction::History, argv) {
         Ok(_) => ExitStatus::ExitedWith(0),
         Err(err) => {
             let _ = ctx.write_stderr(&format!("history: {err}"));

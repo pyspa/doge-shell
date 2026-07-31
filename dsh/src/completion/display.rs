@@ -990,6 +990,7 @@ mod tests {
 
     #[test]
     fn completion_config_default_uses_env_override() {
+        let _guard = crate::test_env_lock();
         let original = std::env::var(COMPLETION_MAX_ITEMS_ENV).ok();
         unsafe {
             std::env::set_var(COMPLETION_MAX_ITEMS_ENV, "42");

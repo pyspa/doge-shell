@@ -1,15 +1,16 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::{Arc, LazyLock, Mutex, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 
-type Job = Box<dyn FnOnce() + Send + 'static>;
+pub(super) type Job = Box<dyn FnOnce() + Send + 'static>;
 
-struct CompletionWorkerPool {
-    sender: mpsc::Sender<Job>,
+pub(super) struct CompletionWorkerPool {
+    sender: mpsc::SyncSender<Job>,
 }
 
 impl CompletionWorkerPool {
-    fn new(name: &'static str, worker_count: usize) -> Self {
-        let (sender, receiver) = mpsc::channel::<Job>();
+    pub(super) fn new(name: &'static str, worker_count: usize) -> Self {
+        let worker_count = worker_count.max(1);
+        let (sender, receiver) = mpsc::sync_channel::<Job>(worker_count * 4);
         let receiver = Arc::new(Mutex::new(receiver));
 
         for index in 0..worker_count {
@@ -36,41 +37,10 @@ impl CompletionWorkerPool {
         Self { sender }
     }
 
-    fn submit(&self, job: Job) {
-        self.sender
-            .send(job)
-            .expect("completion worker pool must remain available");
-    }
-}
-
-#[cfg(test)]
-fn command_worker_count() -> usize {
-    32
-}
-
-#[cfg(not(test))]
-fn command_worker_count() -> usize {
-    std::thread::available_parallelism()
-        .map(|count| count.get().clamp(2, 8))
-        .unwrap_or(4)
-}
-
-static COMMAND_WORKERS: LazyLock<CompletionWorkerPool> =
-    LazyLock::new(|| CompletionWorkerPool::new("dynamic", command_worker_count()));
-static EXTERNAL_WORKERS: LazyLock<CompletionWorkerPool> =
-    LazyLock::new(|| CompletionWorkerPool::new("external", 4));
-static FISH_WORKERS: LazyLock<CompletionWorkerPool> =
-    LazyLock::new(|| CompletionWorkerPool::new("fish", 4));
-
-pub(super) fn submit_command(job: impl FnOnce() + Send + 'static) {
-    COMMAND_WORKERS.submit(Box::new(job));
-}
-
-pub(super) fn submit_external(is_fish: bool, job: impl FnOnce() + Send + 'static) {
-    if is_fish {
-        FISH_WORKERS.submit(Box::new(job));
-    } else {
-        EXTERNAL_WORKERS.submit(Box::new(job));
+    /// Never waits for capacity. A full queue is deliberately reported to the
+    /// caller so TAB handling can discard refresh work and restore pending state.
+    pub(super) fn try_submit(&self, job: Job) -> bool {
+        self.sender.try_send(job).is_ok()
     }
 }
 
@@ -81,9 +51,10 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn submitted_jobs_run_on_separate_named_workers() {
+    fn submitted_job_runs_on_named_worker() {
+        let pool = CompletionWorkerPool::new("test", 1);
         let (sender, receiver) = mpsc::channel();
-        submit_command(move || {
+        assert!(pool.try_submit(Box::new(move || {
             sender
                 .send(
                     std::thread::current()
@@ -92,24 +63,9 @@ mod tests {
                         .to_string(),
                 )
                 .unwrap();
-        });
+        })));
 
         let thread_name = receiver.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert!(thread_name.starts_with("dsh-completion-dynamic-"));
-
-        let (sender, receiver) = mpsc::channel();
-        submit_external(true, move || {
-            sender
-                .send(
-                    std::thread::current()
-                        .name()
-                        .unwrap_or_default()
-                        .to_string(),
-                )
-                .unwrap();
-        });
-
-        let thread_name = receiver.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert!(thread_name.starts_with("dsh-completion-fish-"));
+        assert!(thread_name.starts_with("dsh-completion-test-"));
     }
 }

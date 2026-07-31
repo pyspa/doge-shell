@@ -1,4 +1,5 @@
-use super::ShellProxy;
+use super::{CoreShellAction, ShellProxy};
+use crate::capability::ExecutionCapability;
 use dsh_types::{Context, ExitStatus};
 use tracing::debug;
 
@@ -13,7 +14,7 @@ pub fn description() -> &'static str {
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     debug!("call z");
     // Delegate to shell's frecency-based directory navigation system
-    match proxy.dispatch(ctx, "z", argv) {
+    match proxy.dispatch_core(ctx, CoreShellAction::Z, argv) {
         Ok(()) => ExitStatus::ExitedWith(0),
         Err(e) => {
             debug!("z command failed: {}", e);

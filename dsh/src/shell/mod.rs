@@ -41,6 +41,7 @@ pub struct Shell {
     pub notebook_session: Option<NotebookSession>,
     pub safety_guard: Arc<crate::safety::SafetyGuard>,
     pub github_status: Option<Arc<RwLock<crate::github::GitHubStatus>>>,
+    pub(crate) completion_runtime: Option<Arc<crate::completion::dynamic::CompletionRuntime>>,
     pub session_id: String,
     pending_eval_commands: VecDeque<String>,
     pending_eval_drain_active: Arc<AtomicBool>,
@@ -93,6 +94,7 @@ impl Shell {
             notebook_session: None,
             safety_guard,
             github_status: None,
+            completion_runtime: None,
             session_id: xid::new().to_string(),
             pending_eval_commands: VecDeque::new(),
             pending_eval_drain_active: Arc::new(AtomicBool::new(false)),
@@ -274,7 +276,7 @@ impl Shell {
 
         let processed = {
             let env = self.environment.read();
-            env.secret_manager.process_for_history(input)
+            env.policy_state.secret_manager.process_for_history(input)
         };
         let Some(command) = processed else {
             return;
@@ -301,7 +303,12 @@ impl Shell {
 
     pub fn reload_mcp_config(&self) {
         let mcp_servers = self.environment.read().mcp_servers().to_vec();
-        let mcp_manager = self.environment.read().mcp_manager.clone();
+        let mcp_manager = self
+            .environment
+            .read()
+            .integration_state
+            .mcp_manager
+            .clone();
 
         tokio::spawn(async move {
             let current_servers = mcp_manager.read().server_configs();
@@ -386,7 +393,8 @@ mod tests {
         async fn run_observed(command: &str) -> dsh_types::observed_output::ObservedOutputSnapshot {
             let environment = crate::environment::Environment::new();
             let mut shell = Shell::new(environment);
-            *shell.environment.read().safety_level.write() = crate::safety::SafetyLevel::Loose;
+            *shell.environment.read().policy_state.safety_level.write() =
+                crate::safety::SafetyLevel::Loose;
             let observer = ObservedOutput::shared(1024);
             let mut ctx = dsh_types::Context::new_safe(shell.pid, shell.pgid, true);
             ctx.interactive = false;
@@ -424,7 +432,8 @@ mod tests {
 
         let environment = crate::environment::Environment::new();
         let mut shell = Shell::new(environment);
-        *shell.environment.read().safety_level.write() = crate::safety::SafetyLevel::Loose;
+        *shell.environment.read().policy_state.safety_level.write() =
+            crate::safety::SafetyLevel::Loose;
         let mut ctx = dsh_types::Context::new_safe(shell.pid, shell.pgid, true);
         ctx.interactive = false;
 

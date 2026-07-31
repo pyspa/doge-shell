@@ -50,6 +50,7 @@ pub(crate) fn handle_open_block_browser(repl: &mut Repl<'_>) -> Result<ReplContr
         .shell
         .environment
         .read()
+        .session_output_state
         .command_blocks
         .get_all_blocks();
     if blocks.is_empty() {
@@ -80,7 +81,7 @@ pub(crate) fn handle_clear_screen(repl: &mut Repl<'_>) -> Result<ReplControlFlow
     repl.print_prompt(&mut renderer);
     renderer.flush().ok();
     repl.input.clear();
-    repl.suggestion_manager.clear();
+    repl.ai_ui.suggestion_manager.clear();
     Ok(ReplControlFlow::Continue)
 }
 
@@ -129,7 +130,12 @@ pub(crate) async fn check_background_jobs(repl: &mut Repl<'_>, output: bool) -> 
 }
 
 fn notify_desktop_for_jobs(repl: &Repl<'_>, completed: &[Job]) {
-    let prefs = repl.shell.environment.read().input_preferences;
+    let prefs = repl
+        .shell
+        .environment
+        .read()
+        .completion_state
+        .input_preferences;
     if !prefs.auto_notify_enabled {
         return;
     }

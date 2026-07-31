@@ -398,13 +398,19 @@ async fn explain_block_async(
 /// in the builtin registry and reached through `dispatch`; falls back to the
 /// plain list when there is no terminal to draw on.
 fn open_tui(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    use crate::CoreShellAction;
+    use crate::capability::ExecutionCapability;
     use std::io::IsTerminal;
 
     if !std::io::stdout().is_terminal() {
         return list_blocks(ctx, proxy, 20, false, false);
     }
 
-    match proxy.dispatch(ctx, "blocks-tui", vec!["blocks-tui".to_string()]) {
+    match proxy.dispatch_core(
+        ctx,
+        CoreShellAction::BlocksTui,
+        vec!["blocks-tui".to_string()],
+    ) {
         Ok(()) => ExitStatus::ExitedWith(0),
         Err(err) => {
             let _ = ctx.write_stderr(&format!("blocks: {err}"));

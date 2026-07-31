@@ -136,7 +136,7 @@ pub fn register(env: &mut Env) {
         Value::NativeFunc(|env, _args| {
             let env_borrow = env.borrow();
             let env_read = env_borrow.shell_env.read();
-            let manager = env_read.mcp_manager.read();
+            let manager = env_read.integration_state.mcp_manager.read();
             let tools = manager.tool_definitions();
 
             if tools.is_empty() {
@@ -183,7 +183,7 @@ pub fn register(env: &mut Env) {
         Value::NativeFunc(|env, _args| {
             let env_borrow = env.borrow();
             let env_read = env_borrow.shell_env.read();
-            let manager = env_read.mcp_manager.read();
+            let manager = env_read.integration_state.mcp_manager.read();
             let statuses = manager.get_status();
 
             if statuses.is_empty() {
@@ -245,7 +245,7 @@ pub fn register(env: &mut Env) {
 
             let env_borrow = env.borrow();
             let env_read = env_borrow.shell_env.read();
-            let manager = env_read.mcp_manager.read();
+            let manager = env_read.integration_state.mcp_manager.read();
 
             match manager.connect(label) {
                 Ok(()) => {
@@ -268,7 +268,7 @@ pub fn register(env: &mut Env) {
 
             let env_borrow = env.borrow();
             let env_read = env_borrow.shell_env.read();
-            let manager = env_read.mcp_manager.read();
+            let manager = env_read.integration_state.mcp_manager.read();
 
             match manager.disconnect(label) {
                 Ok(()) => {
@@ -289,7 +289,7 @@ pub fn register(env: &mut Env) {
         Value::NativeFunc(|env, _args| {
             let env_borrow = env.borrow();
             let env_read = env_borrow.shell_env.read();
-            let manager = env_read.mcp_manager.read();
+            let manager = env_read.integration_state.mcp_manager.read();
 
             manager.disconnect_all();
             println!("Disconnected from all MCP servers");

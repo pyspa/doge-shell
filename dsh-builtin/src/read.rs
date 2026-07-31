@@ -1,4 +1,5 @@
-use super::ShellProxy;
+use super::{CoreShellAction, ShellProxy};
+use crate::capability::ExecutionCapability;
 use dsh_types::{Context, ExitStatus};
 
 /// Built-in read command description
@@ -11,7 +12,7 @@ pub fn description() -> &'static str {
 /// Commonly used in shell scripts for interactive input collection
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     // Delegate input reading to the shell's input handling system
-    match proxy.dispatch(ctx, "read", argv) {
+    match proxy.dispatch_core(ctx, CoreShellAction::Read, argv) {
         Ok(_) => ExitStatus::ExitedWith(0),
         Err(e) => {
             let _ = ctx.write_stderr(&format!("read: {}\n", e));

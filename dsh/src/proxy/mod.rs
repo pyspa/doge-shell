@@ -8,7 +8,7 @@ mod external;
 
 use crate::shell::Shell;
 use anyhow::{Context as _, Result};
-use dsh_builtin::ShellProxy;
+use dsh_builtin::{CoreShellAction, ShellProxy};
 use dsh_types::{Context, mcp::McpServerConfig};
 use globmatch;
 use std::fs::OpenOptions;
@@ -97,7 +97,7 @@ impl ShellProxy for Shell {
         // Check exclusions
         {
             let env = self.environment.read();
-            for pattern in &env.z_exclude {
+            for pattern in &env.variable_state.z_exclude {
                 if let Ok(matcher) = globmatch::Builder::new(pattern).build("/")
                     && matcher.is_match(path.into())
                 {
@@ -115,7 +115,11 @@ impl ShellProxy for Shell {
     }
 
     fn save_output_history(&mut self, entry: dsh_types::output_history::OutputEntry) {
-        self.environment.write().output_history.push(entry);
+        self.environment
+            .write()
+            .session_output_state
+            .output_history
+            .push(entry);
     }
 
     fn changepwd(&mut self, path: &str) -> Result<()> {
@@ -124,6 +128,7 @@ impl ShellProxy for Shell {
             let old_pwd = current.to_string_lossy().into_owned();
             self.environment
                 .write()
+                .variable_state
                 .variables
                 .insert("OLDPWD".to_string(), old_pwd);
         }
@@ -143,16 +148,40 @@ impl ShellProxy for Shell {
     }
 
     fn insert_path(&mut self, idx: usize, path: &str) {
-        self.environment.write().paths.insert(idx, path.to_string());
+        self.environment
+            .write()
+            .variable_state
+            .paths
+            .insert(idx, path.to_string());
     }
 
     fn dispatch(&mut self, ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()> {
-        use builtin::registry::BUILTIN_REGISTRY;
-
-        if let Some(handler) = BUILTIN_REGISTRY.get(cmd) {
-            handler(self, ctx, argv)
+        if let Some(action) = CoreShellAction::from_command_name(cmd) {
+            self.dispatch_core_action(ctx, action, argv)
         } else {
             external::execute(ctx, cmd, argv, self.environment.clone())
+        }
+    }
+
+    fn dispatch_core_action(
+        &mut self,
+        ctx: &Context,
+        action: CoreShellAction,
+        argv: Vec<String>,
+    ) -> Result<()> {
+        match action {
+            CoreShellAction::Exit => builtin::exit::execute(self, ctx, argv),
+            CoreShellAction::History => builtin::history::execute(self, ctx, argv),
+            CoreShellAction::Reload => builtin::reload::execute(self, ctx, argv),
+            CoreShellAction::Z => builtin::z::execute(self, ctx, argv),
+            CoreShellAction::BlocksTui => builtin::blocks_tui::execute(self, ctx, argv),
+            CoreShellAction::Jobs => builtin::jobs::execute_jobs(self, ctx, argv),
+            CoreShellAction::Foreground => builtin::jobs::execute_fg(self, ctx, argv),
+            CoreShellAction::Background => builtin::jobs::execute_bg(self, ctx, argv),
+            CoreShellAction::Lisp => builtin::lisp::execute_lisp(self, ctx, argv),
+            CoreShellAction::LispRun => builtin::lisp::execute_lisp_run(self, ctx, argv),
+            CoreShellAction::Var => builtin::var::execute_var(self, ctx, argv),
+            CoreShellAction::Read => builtin::var::execute_read(self, ctx, argv),
         }
     }
 
@@ -171,13 +200,18 @@ impl ShellProxy for Shell {
     }
 
     fn set_var(&mut self, key: String, value: String) {
-        self.environment.write().variables.insert(key, value);
+        self.environment
+            .write()
+            .variable_state
+            .variables
+            .insert(key, value);
     }
 
     fn set_env_var(&mut self, key: String, value: String) {
         let masked = if self
             .environment
             .read()
+            .policy_state
             .secret_manager
             .is_sensitive_key(&key)
         {
@@ -192,6 +226,7 @@ impl ShellProxy for Shell {
     fn is_direnv_allowed(&self, path: &std::path::Path) -> bool {
         self.environment
             .read()
+            .variable_state
             .direnv_roots
             .iter()
             .any(|root| is_same_direnv_root(path, Path::new(&root.path)))
@@ -204,23 +239,33 @@ impl ShellProxy for Shell {
 
     fn get_alias(&mut self, name: &str) -> Option<String> {
         debug!("Getting alias for: {}", name);
-        self.environment.read().alias.get(name).cloned()
+        self.environment
+            .read()
+            .variable_state
+            .alias
+            .get(name)
+            .cloned()
     }
 
     fn set_alias(&mut self, name: String, command: String) {
         debug!("Setting alias: {} = {}", name, command);
-        self.environment.write().alias.insert(name, command);
+        self.environment
+            .write()
+            .variable_state
+            .alias
+            .insert(name, command);
     }
 
     fn list_aliases(&mut self) -> std::collections::HashMap<String, String> {
         debug!("Listing all aliases");
-        self.environment.read().alias.clone()
+        self.environment.read().variable_state.alias.clone()
     }
 
     fn add_abbr(&mut self, name: String, expansion: String) {
         debug!("Adding abbreviation: {} = {}", name, expansion);
         self.environment
             .write()
+            .variable_state
             .abbreviations
             .insert(name, expansion);
     }
@@ -229,6 +274,7 @@ impl ShellProxy for Shell {
         debug!("Removing abbreviation: {}", name);
         self.environment
             .write()
+            .variable_state
             .abbreviations
             .remove(name)
             .is_some()
@@ -238,6 +284,7 @@ impl ShellProxy for Shell {
         debug!("Listing all abbreviations");
         self.environment
             .read()
+            .variable_state
             .abbreviations
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
@@ -246,7 +293,12 @@ impl ShellProxy for Shell {
 
     fn get_abbr(&self, name: &str) -> Option<String> {
         debug!("Getting abbreviation for: {}", name);
-        self.environment.read().abbreviations.get(name).cloned()
+        self.environment
+            .read()
+            .variable_state
+            .abbreviations
+            .get(name)
+            .cloned()
     }
 
     fn list_mcp_servers(&mut self) -> Vec<McpServerConfig> {
@@ -306,10 +358,12 @@ impl ShellProxy for Shell {
     // New method implementations for export
     fn list_exported_vars(&self) -> Vec<(String, String)> {
         let env = self.environment.read();
-        env.exported_vars
+        env.variable_state
+            .exported_vars
             .iter()
             .filter_map(|key| {
-                env.variables
+                env.variable_state
+                    .variables
                     .get(key)
                     .map(|value| (key.clone(), value.clone()))
             })
@@ -318,20 +372,20 @@ impl ShellProxy for Shell {
 
     fn export_var(&mut self, key: &str) -> bool {
         let mut env = self.environment.write();
-        if env.variables.contains_key(key) {
-            env.exported_vars.insert(key.to_string());
+        if env.variable_state.variables.contains_key(key) {
+            env.variable_state.exported_vars.insert(key.to_string());
             true
         } else {
             // Also allow exporting non-existent variables, they will be exported if set later.
-            env.exported_vars.insert(key.to_string());
+            env.variable_state.exported_vars.insert(key.to_string());
             false
         }
     }
 
     fn set_and_export_var(&mut self, key: String, value: String) {
         let mut env = self.environment.write();
-        env.variables.insert(key.clone(), value);
-        env.exported_vars.insert(key);
+        env.variable_state.variables.insert(key.clone(), value);
+        env.variable_state.exported_vars.insert(key);
     }
 
     fn get_current_dir(&self) -> Result<std::path::PathBuf> {
@@ -346,11 +400,22 @@ impl ShellProxy for Shell {
     }
 
     fn executable_cache_len(&self) -> Option<usize> {
-        Some(self.environment.read().executable_names.read().len())
+        Some(
+            self.environment
+                .read()
+                .completion_state
+                .executable_names
+                .read()
+                .len(),
+        )
     }
 
     fn completion_diagnostics(&self) -> Vec<String> {
-        let mut lines = crate::completion::dynamic::diagnostics_lines();
+        let mut lines = self
+            .completion_runtime
+            .as_ref()
+            .map(|runtime| runtime.diagnostics_lines())
+            .unwrap_or_else(|| vec!["completion-cache runtime inactive".to_string()]);
         let environment = self.environment.read();
         let fish_mode = crate::completion::dynamic::fish_fallback_mode_label(&environment);
         let fish_path = environment
@@ -398,24 +463,32 @@ impl ShellProxy for Shell {
     }
 
     fn get_full_output_history(&self) -> Vec<dsh_types::output_history::OutputEntry> {
-        self.environment.read().output_history.get_all_entries()
+        self.environment
+            .read()
+            .session_output_state
+            .output_history
+            .get_all_entries()
     }
 
     fn clear_output_history(&mut self) -> usize {
         let mut environment = self.environment.write();
-        let removed = environment.output_history.len();
-        environment.output_history.clear();
+        let removed = environment.session_output_state.output_history.len();
+        environment.session_output_state.output_history.clear();
         removed
     }
 
     fn get_command_blocks(&self) -> Vec<dsh_types::command_block::CommandBlock> {
-        self.environment.read().command_blocks.get_all_blocks()
+        self.environment
+            .read()
+            .session_output_state
+            .command_blocks
+            .get_all_blocks()
     }
 
     fn clear_command_blocks(&mut self) -> usize {
         let mut environment = self.environment.write();
-        let removed = environment.command_blocks.len();
-        environment.command_blocks.clear();
+        let removed = environment.session_output_state.command_blocks.len();
+        environment.session_output_state.command_blocks.clear();
         removed
     }
 
@@ -451,7 +524,7 @@ impl ShellProxy for Shell {
         command_name: &'a str,
         help_text: &'a str,
     ) -> dsh_builtin::ProxyFuture<'a, String> {
-        let service = self.environment.read().ai_service.clone();
+        let service = self.environment.read().integration_state.ai_service.clone();
         let command_name = command_name.to_string();
         let help_text = help_text.to_string();
         Box::pin(async move {
@@ -469,7 +542,7 @@ impl ShellProxy for Shell {
         &'a mut self,
         messages: Vec<serde_json::Value>,
     ) -> dsh_builtin::ProxyFuture<'a, String> {
-        let service = self.environment.read().ai_service.clone();
+        let service = self.environment.read().integration_state.ai_service.clone();
         Box::pin(async move {
             let service = service.ok_or_else(|| anyhow::anyhow!("AI service not available"))?;
             service.send_request(messages, Some(0.7)).await

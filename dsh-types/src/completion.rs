@@ -1,3 +1,7 @@
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
+use std::str::FromStr;
+
 pub const DYNAMIC_COMPLETION_PROVIDERS: &[&str] = &[
     "ansible.inventory_host",
     "apk.installed_package",
@@ -112,10 +116,79 @@ pub const DYNAMIC_COMPLETION_PROVIDERS: &[&str] = &[
     "zypper.installed_package",
 ];
 
+/// A validated dynamic completion provider identifier.
+///
+/// The wire representation intentionally remains the existing provider string
+/// so completion JSON stays backwards compatible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DynamicProviderId(&'static str);
+
+impl DynamicProviderId {
+    pub fn parse(provider: &str) -> Option<Self> {
+        let index = DYNAMIC_COMPLETION_PROVIDERS.binary_search(&provider).ok()?;
+        Some(Self(DYNAMIC_COMPLETION_PROVIDERS[index]))
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        self.0
+    }
+
+    pub fn all() -> impl ExactSizeIterator<Item = Self> {
+        DYNAMIC_COMPLETION_PROVIDERS.iter().copied().map(Self)
+    }
+}
+
+impl fmt::Display for DynamicProviderId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl FromStr for DynamicProviderId {
+    type Err = String;
+
+    fn from_str(provider: &str) -> Result<Self, Self::Err> {
+        Self::parse(provider)
+            .ok_or_else(|| format!("unknown dynamic completion provider: {provider}"))
+    }
+}
+
+impl TryFrom<String> for DynamicProviderId {
+    type Error = String;
+
+    fn try_from(provider: String) -> Result<Self, Self::Error> {
+        provider.parse()
+    }
+}
+
+impl From<DynamicProviderId> for String {
+    fn from(provider: DynamicProviderId) -> Self {
+        provider.0.to_string()
+    }
+}
+
+impl Serialize for DynamicProviderId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for DynamicProviderId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let provider = String::deserialize(deserializer)?;
+        Self::parse(&provider)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown provider: {provider}")))
+    }
+}
+
 pub fn is_known_dynamic_completion_provider(provider: &str) -> bool {
-    DYNAMIC_COMPLETION_PROVIDERS
-        .binary_search(&provider)
-        .is_ok()
+    DynamicProviderId::parse(provider).is_some()
 }
 
 #[cfg(test)]
@@ -131,5 +204,27 @@ mod tests {
                 window
             );
         }
+    }
+
+    #[test]
+    fn every_provider_round_trips_through_typed_id_and_json() {
+        let ids = DynamicProviderId::all().collect::<Vec<_>>();
+        assert_eq!(ids.len(), DYNAMIC_COMPLETION_PROVIDERS.len());
+
+        for id in ids {
+            assert_eq!(DynamicProviderId::parse(id.as_str()), Some(id));
+            let json = serde_json::to_string(&id).unwrap();
+            assert_eq!(json, format!("\"{}\"", id.as_str()));
+            assert_eq!(
+                serde_json::from_str::<DynamicProviderId>(&json).unwrap(),
+                id
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_provider_is_rejected() {
+        assert!("git.not-a-provider".parse::<DynamicProviderId>().is_err());
+        assert!(serde_json::from_str::<DynamicProviderId>("\"git.not-a-provider\"").is_err());
     }
 }

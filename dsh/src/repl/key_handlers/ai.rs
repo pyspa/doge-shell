@@ -19,10 +19,10 @@ pub(crate) async fn handle_ai_explain_command(repl: &mut Repl<'_>) {
         let input_str = repl.input.as_str().to_string();
 
         // Clear any existing explanation so the new one takes precedence
-        repl.current_ai_explanation = None;
-        repl.pending_ai_explanation_input = Some(input_str.clone());
+        repl.ai_ui.current_ai_explanation = None;
+        repl.ai_ui.pending_ai_explanation_input = Some(input_str.clone());
 
-        let ai_tx = repl.ai_tx.clone();
+        let ai_tx = repl.ai_ui.ai_tx.clone();
         let service = repl.services.ai.clone().unwrap();
 
         tokio::spawn(async move {
@@ -46,19 +46,19 @@ pub(crate) async fn handle_ai_explain_command(repl: &mut Repl<'_>) {
 pub(crate) async fn handle_ai_smart_commit(repl: &mut Repl<'_>) -> Result<ReplControlFlow> {
     // Replace Smart Git Commit logic with "aic" command execution
     repl.input.reset("aic".to_string());
-    repl.current_ai_explanation = None;
-    repl.pending_ai_explanation_input = None;
-    repl.last_explanation = None;
+    repl.ai_ui.current_ai_explanation = None;
+    repl.ai_ui.pending_ai_explanation_input = None;
+    repl.ai_ui.last_explanation = None;
     Ok(ReplControlFlow::ExecuteCurrentInput)
 }
 
 pub(crate) fn handle_ai_watch_current_input(repl: &mut Repl<'_>) {
     if let Some(next) = crate::repl::ai_watch::wrap_current_input(repl.input.as_str()) {
         repl.input.reset(next);
-        repl.current_ai_explanation = None;
-        repl.pending_ai_explanation_input = None;
-        repl.last_explanation = None;
-        repl.suggestion_manager.clear();
+        repl.ai_ui.current_ai_explanation = None;
+        repl.ai_ui.pending_ai_explanation_input = None;
+        repl.ai_ui.last_explanation = None;
+        repl.ai_ui.suggestion_manager.clear();
     }
 }
 
@@ -90,6 +90,7 @@ pub(crate) async fn handle_ai_diagnose(repl: &mut Repl<'_>) -> Result<()> {
         .shell
         .environment
         .read()
+        .session_output_state
         .output_history
         .get_stderr(1)
         .map(|s| s.to_string())

@@ -1,4 +1,4 @@
-use dsh_types::completion::DYNAMIC_COMPLETION_PROVIDERS;
+use dsh_types::completion::DynamicProviderId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProviderFamily {
@@ -13,28 +13,24 @@ pub(crate) enum ProviderFamily {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ProviderRegistration {
-    pub id: &'static str,
+    pub id: DynamicProviderId,
     pub family: ProviderFamily,
 }
 
 pub(crate) fn registration(provider: &str) -> Option<ProviderRegistration> {
-    let index = DYNAMIC_COMPLETION_PROVIDERS.binary_search(&provider).ok()?;
-    let id = DYNAMIC_COMPLETION_PROVIDERS[index];
+    let id = DynamicProviderId::parse(provider)?;
     Some(ProviderRegistration {
         id,
-        family: family_for(id),
+        family: family_for(id.as_str()),
     })
 }
 
 #[cfg(test)]
 pub(crate) fn registrations() -> impl Iterator<Item = ProviderRegistration> {
-    DYNAMIC_COMPLETION_PROVIDERS
-        .iter()
-        .copied()
-        .map(|id| ProviderRegistration {
-            id,
-            family: family_for(id),
-        })
+    DynamicProviderId::all().map(|id| ProviderRegistration {
+        id,
+        family: family_for(id.as_str()),
+    })
 }
 
 fn family_for(provider: &str) -> ProviderFamily {

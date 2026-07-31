@@ -339,7 +339,7 @@ async fn probe_repl_print_input(iterations: usize) -> ProbeResult {
     shell.cmd_history = Some(Arc::new(ParkingMutex::new(History::new())));
 
     let mut repl = Repl::new(&mut shell);
-    repl.columns = 120;
+    repl.terminal_ui.columns = 120;
     repl.input.reset("git status --short".to_string());
 
     let elapsed = measure(iterations, || {
@@ -369,12 +369,12 @@ async fn probe_repl_print_input_with_suggestion(iterations: usize) -> ProbeResul
     shell.cmd_history = Some(Arc::new(ParkingMutex::new(History::new())));
 
     let mut repl = Repl::new(&mut shell);
-    repl.columns = 120;
+    repl.terminal_ui.columns = 120;
     repl.input.reset("git status --short".to_string());
 
     let elapsed = measure(iterations, || {
-        repl.last_analyzed_input.clear();
-        repl.last_analysis_result = None;
+        repl.ai_ui.last_analyzed_input.clear();
+        repl.ai_ui.last_analysis_result = None;
         let mut out = Vec::with_capacity(512);
         repl.print_input(&mut out, false, true);
         black_box(out.len());
@@ -395,12 +395,12 @@ async fn probe_repl_print_input_reanalyze(iterations: usize) -> ProbeResult {
     shell.cmd_history = Some(Arc::new(ParkingMutex::new(History::new())));
 
     let mut repl = Repl::new(&mut shell);
-    repl.columns = 120;
+    repl.terminal_ui.columns = 120;
     repl.input.reset("git status --short".to_string());
 
     let elapsed = measure(iterations, || {
-        repl.last_analyzed_input.clear();
-        repl.last_analysis_result = None;
+        repl.ai_ui.last_analyzed_input.clear();
+        repl.ai_ui.last_analysis_result = None;
         let mut out = Vec::with_capacity(512);
         repl.print_input(&mut out, false, false);
         black_box(out.len());
@@ -447,7 +447,7 @@ async fn probe_repl_analyze_input_case(
     shell.cmd_history = Some(Arc::new(ParkingMutex::new(History::new())));
 
     let mut repl = Repl::new(&mut shell);
-    repl.columns = 120;
+    repl.terminal_ui.columns = 120;
     repl.input.reset(input.to_string());
 
     let elapsed = measure(iterations, || {
@@ -476,7 +476,7 @@ fn completion_engine_with_paths(paths: Vec<String>) -> IntegratedCompletionEngin
     let environment = Environment::new();
     {
         let mut env = environment.write();
-        env.paths = paths;
+        env.variable_state.paths = paths;
         env.clear_command_cache();
     }
     let mut engine = IntegratedCompletionEngine::new(environment);

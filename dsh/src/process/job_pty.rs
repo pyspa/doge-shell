@@ -1,4 +1,4 @@
-use super::async_io::{AsyncPtyMasterWriter, AsyncStdin, NonBlockingFdGuard};
+use super::async_io::{AsyncPtyMasterWriter, AsyncStdin};
 use super::job::Job;
 use super::job_process::JobProcess;
 use super::pty::{Pty, PtyMode};
@@ -10,8 +10,7 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dsh_types::Context;
 use libc::{STDIN_FILENO, STDOUT_FILENO};
 use std::os::unix::io::{AsRawFd, IntoRawFd, RawFd};
-use tokio::io::unix::AsyncFd;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 const DSH_NO_PTY_ENV: &str = "DSH_NO_PTY";
 
@@ -159,18 +158,25 @@ pub async fn setup_pty(job: &mut Job, ctx: &mut Context) -> Result<Option<RawFd>
 }
 
 pub async fn setup_pty_input_proxy(job: &mut Job, pty_in: Pty) {
-    match AsyncPtyMasterWriter::new(pty_in.master.into_raw_fd()) {
+    match AsyncPtyMasterWriter::new(pty_in.master) {
         Ok(mut master_write) => {
             let input_task = tokio::spawn(async move {
-                let _nonblock = NonBlockingFdGuard::new(STDIN_FILENO);
-                match AsyncFd::new(STDIN_FILENO) {
-                    Ok(fd) => {
-                        let mut async_stdin: AsyncStdin = AsyncStdin { inner: fd };
-                        let _ = tokio::io::copy(&mut async_stdin, &mut master_write).await;
+                match AsyncStdin::open_tty() {
+                    Ok(mut async_stdin) => {
+                        if let Err(err) = tokio::io::copy(&mut async_stdin, &mut master_write).await
+                        {
+                            debug!("PTY input proxy stopped: {}", err);
+                        }
                     }
-                    Err(_) => {
+                    Err(err) => {
+                        warn!(
+                            "Failed to open an independent /dev/tty input handle, falling back to Tokio stdin: {}",
+                            err
+                        );
                         let mut std_stdin = tokio::io::stdin();
-                        let _ = tokio::io::copy(&mut std_stdin, &mut master_write).await;
+                        if let Err(err) = tokio::io::copy(&mut std_stdin, &mut master_write).await {
+                            debug!("Fallback PTY input proxy stopped: {}", err);
+                        }
                     }
                 }
             });
@@ -191,6 +197,7 @@ pub async fn cleanup_pty_tasks(job: &mut Job) {
     stop_pty_input_proxy(job).await;
     if let Some(output_task) = job.pty_output_task.take() {
         output_task.abort();
+        let _ = output_task.await;
     }
     job.pty = None;
     job.pty_mode = None;
@@ -236,8 +243,8 @@ pub async fn capture_output_and_history(
     if let Some(output_task) = job.pty_output_task.take() {
         match output_task.await {
             Ok(Ok(output)) => stdout_cap = output,
-            Ok(Err(e)) => error!("PTY output task failed: {}", e),
-            Err(e) => error!("PTY output task join error: {}", e),
+            Ok(Err(e)) => return Err(e),
+            Err(e) => return Err(e.into()),
         }
     } else {
         let mut monitors_iter = job.monitors.iter();

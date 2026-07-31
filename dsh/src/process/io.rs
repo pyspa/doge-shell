@@ -326,7 +326,15 @@ impl PtyMonitor {
     }
 
     pub async fn process_output(&mut self) -> Result<()> {
+        self.process_output_with(flush_stdout_bytes).await
+    }
+
+    async fn process_output_with<F>(&mut self, mut flush_stdout: F) -> Result<()>
+    where
+        F: FnMut(&[u8]) -> std::io::Result<()>,
+    {
         let mut buf = [0u8; 4096];
+        let mut stdout_error = None;
 
         loop {
             // Use timeout to avoid blocking indefinitely when PTY is closed
@@ -359,8 +367,11 @@ impl PtyMonitor {
                     let data = &buf[..n];
                     let display_bytes = self.display_buffer.push_chunk(data);
 
-                    if let Err(e) = flush_stdout_bytes(&display_bytes) {
-                        tracing::error!("PtyMonitor: Failed to flush stdout: {}", e);
+                    if stdout_error.is_none()
+                        && let Err(err) = flush_stdout(&display_bytes)
+                            .context("PtyMonitor: failed to flush stdout")
+                    {
+                        stdout_error = Some(err);
                     }
 
                     // Capture
@@ -400,12 +411,19 @@ impl PtyMonitor {
             }
         }
 
-        // Final flush to ensure all output is displayed
+        // Flush pending control bytes unless an earlier display write failed.
         let remaining = self.display_buffer.finish();
-        if let Err(e) = flush_stdout_bytes(&remaining) {
-            tracing::error!("PtyMonitor: Failed to flush final stdout bytes: {}", e);
+        if stdout_error.is_none()
+            && let Err(err) =
+                flush_stdout(&remaining).context("PtyMonitor: failed to flush final stdout bytes")
+        {
+            stdout_error = Some(err);
         }
-        Ok(())
+
+        match stdout_error {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
     }
 }
 
@@ -470,10 +488,12 @@ pub(crate) fn handle_output_redirect(
 
 #[cfg(test)]
 mod tests {
-    use super::{MONITOR_TIMEOUT, OutputMonitor, PtyDisplayBuffer, append_output_chunk};
+    use super::{
+        MONITOR_TIMEOUT, OutputMonitor, PtyDisplayBuffer, PtyMonitor, append_output_chunk,
+    };
     use dsh_types::observed_output::ObservedStream;
     use nix::unistd::pipe;
-    use std::io::Write as _;
+    use std::io::{ErrorKind, Write as _};
     use std::os::fd::{FromRawFd, IntoRawFd};
     use std::time::Duration;
 
@@ -643,5 +663,37 @@ mod tests {
         monitor.drain_to_eof().await.expect("drain to eof");
         writer.await.expect("writer task");
         assert_eq!(monitor.captured_output, "late output");
+    }
+
+    #[tokio::test]
+    async fn pty_monitor_drains_to_eof_after_stdout_failure() {
+        let (read_fd, write_fd) = pipe().expect("pipe");
+        let mut monitor = PtyMonitor::new(read_fd.into_raw_fd(), None).expect("create monitor");
+        let mut writer = unsafe { std::fs::File::from_raw_fd(write_fd.into_raw_fd()) };
+        let expected = vec![b'x'; 8192];
+        writer.write_all(&expected).expect("write output");
+        drop(writer);
+
+        let mut flush_calls = 0;
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            monitor.process_output_with(|_| {
+                flush_calls += 1;
+                Err(std::io::Error::new(
+                    ErrorKind::BrokenPipe,
+                    "test stdout failure",
+                ))
+            }),
+        )
+        .await
+        .expect("monitor did not drain to EOF");
+
+        let err = result.expect_err("stdout failure should propagate after draining");
+        assert!(
+            err.to_string()
+                .contains("PtyMonitor: failed to flush stdout")
+        );
+        assert_eq!(flush_calls, 1);
+        assert_eq!(monitor.captured_output, expected);
     }
 }

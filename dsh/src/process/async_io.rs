@@ -1,12 +1,39 @@
-use nix::libc::{F_GETFL, F_SETFL, O_NONBLOCK};
-use std::os::unix::io::RawFd;
+use std::fs::{File, OpenOptions};
+use std::os::fd::{AsRawFd, BorrowedFd};
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::Path;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::unix::AsyncFd;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWrite, Interest, ReadBuf};
 
 pub struct AsyncStdin {
-    pub inner: AsyncFd<RawFd>,
+    inner: AsyncFd<File>,
+}
+
+impl AsyncStdin {
+    pub fn open_tty() -> std::io::Result<Self> {
+        // On macOS, kqueue rejects the special /dev/tty alias with EINVAL.
+        // Resolve fd 0 to the underlying terminal device, then open a distinct
+        // file description so O_NONBLOCK cannot leak to stdout.
+        let stdin = unsafe { BorrowedFd::borrow_raw(libc::STDIN_FILENO) };
+        Self::open_tty_from_fd(stdin)
+    }
+
+    fn open_tty_from_fd(fd: BorrowedFd<'_>) -> std::io::Result<Self> {
+        let path = nix::unistd::ttyname(fd).map_err(std::io::Error::from)?;
+        Self::open_path(&path)
+    }
+
+    fn open_path(path: &Path) -> std::io::Result<Self> {
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+            .open(path)?;
+        Ok(Self {
+            inner: AsyncFd::with_interest(file, Interest::READABLE)?,
+        })
+    }
 }
 
 impl AsyncRead for AsyncStdin {
@@ -22,11 +49,11 @@ impl AsyncRead for AsyncStdin {
                 Poll::Pending => return Poll::Pending,
             };
 
-            let fd = self.inner.get_ref();
+            let fd = self.inner.get_ref().as_raw_fd();
             // SAFETY: FFI call to read from raw fd
             let res = unsafe {
                 libc::read(
-                    *fd,
+                    fd,
                     buf.unfilled_mut().as_mut_ptr() as *mut libc::c_void,
                     buf.remaining(),
                 )
@@ -50,13 +77,13 @@ impl AsyncRead for AsyncStdin {
 }
 
 pub struct AsyncPtyMasterWriter {
-    inner: AsyncFd<RawFd>,
+    inner: AsyncFd<File>,
 }
 
 impl AsyncPtyMasterWriter {
-    pub fn new(fd: RawFd) -> std::io::Result<Self> {
+    pub fn new(file: File) -> std::io::Result<Self> {
         Ok(Self {
-            inner: AsyncFd::new(fd)?,
+            inner: AsyncFd::with_interest(file, Interest::WRITABLE)?,
         })
     }
 }
@@ -74,9 +101,9 @@ impl AsyncWrite for AsyncPtyMasterWriter {
                 Poll::Pending => return Poll::Pending,
             };
 
-            let fd = self.inner.get_ref();
+            let fd = self.inner.get_ref().as_raw_fd();
             // SAFETY: FFI call to write to raw fd
-            let res = unsafe { libc::write(*fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
+            let res = unsafe { libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
 
             if res < 0 {
                 let err = std::io::Error::last_os_error();
@@ -100,33 +127,30 @@ impl AsyncWrite for AsyncPtyMasterWriter {
     }
 }
 
-pub struct NonBlockingFdGuard {
-    fd: RawFd,
-    orig_flags: Option<libc::c_int>,
-}
+#[cfg(test)]
+mod tests {
+    use super::AsyncStdin;
+    use crate::process::Pty;
+    use nix::fcntl::{FcntlArg, OFlag, fcntl};
+    use std::os::fd::AsFd;
 
-impl NonBlockingFdGuard {
-    pub fn new(fd: RawFd) -> Self {
-        let orig_flags = unsafe { libc::fcntl(fd, F_GETFL) };
-        if orig_flags >= 0 {
-            unsafe { libc::fcntl(fd, F_SETFL, orig_flags | O_NONBLOCK) };
-            Self {
-                fd,
-                orig_flags: Some(orig_flags),
-            }
-        } else {
-            Self {
-                fd,
-                orig_flags: None,
-            }
-        }
-    }
-}
+    #[tokio::test]
+    async fn nonblocking_tty_reader_does_not_change_existing_handle_flags() {
+        let pty = Pty::new().expect("create pty");
+        let original_flags =
+            OFlag::from_bits_truncate(fcntl(&pty.slave, FcntlArg::F_GETFL).expect("get flags"));
 
-impl Drop for NonBlockingFdGuard {
-    fn drop(&mut self) {
-        if let Some(flags) = self.orig_flags {
-            unsafe { libc::fcntl(self.fd, F_SETFL, flags) };
-        }
+        let reader =
+            AsyncStdin::open_tty_from_fd(pty.slave.as_fd()).expect("open independent tty reader");
+
+        let unchanged_flags =
+            OFlag::from_bits_truncate(fcntl(&pty.slave, FcntlArg::F_GETFL).expect("get flags"));
+        let reader_flags = OFlag::from_bits_truncate(
+            fcntl(reader.inner.get_ref(), FcntlArg::F_GETFL).expect("get reader flags"),
+        );
+
+        assert_eq!(unchanged_flags, original_flags);
+        assert!(!original_flags.contains(OFlag::O_NONBLOCK));
+        assert!(reader_flags.contains(OFlag::O_NONBLOCK));
     }
 }

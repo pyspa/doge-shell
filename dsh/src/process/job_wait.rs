@@ -37,6 +37,42 @@ enum KnownWaitResult {
     NoChildren,
 }
 
+/// Poll delay bounds for the `WNOHANG` wait loops.
+///
+/// The first `waitpid` of a loop runs immediately after `fork`, so it practically
+/// always reports `StillAlive`. With a single fixed delay every command — even one
+/// that exits in a millisecond — paid that delay before the shell noticed and
+/// redrew the prompt. Starting small and backing off keeps short commands snappy
+/// while long-running jobs settle on a cheap poll rate.
+const WAIT_POLL_MIN: Duration = Duration::from_millis(1);
+const WAIT_POLL_MAX: Duration = Duration::from_millis(20);
+
+#[derive(Debug, Clone, Copy)]
+struct WaitBackoff {
+    delay: Duration,
+}
+
+impl WaitBackoff {
+    fn new() -> Self {
+        Self {
+            delay: WAIT_POLL_MIN,
+        }
+    }
+
+    /// Delay to sleep before the next `waitpid`, doubling up to [`WAIT_POLL_MAX`].
+    fn next_delay(&mut self) -> Duration {
+        let delay = self.delay;
+        self.delay = (self.delay * 2).min(WAIT_POLL_MAX);
+        delay
+    }
+
+    /// A process just changed state; its siblings are likely to follow shortly,
+    /// so go back to polling tightly.
+    fn reset(&mut self) {
+        self.delay = WAIT_POLL_MIN;
+    }
+}
+
 pub async fn put_in_foreground(job: &mut Job, no_hang: bool, cont: bool) -> Result<()> {
     debug!(
         "put_in_foreground: id: {} pgid {:?} no_hang: {} cont: {}",
@@ -198,11 +234,12 @@ pub fn wait_job_sync(job: &mut Job, no_hang: bool) -> Result<()> {
 
 pub fn wait_process_sync(job: &mut Job) -> Result<()> {
     let mut send_killpg = false;
+    let mut backoff = WaitBackoff::new();
     loop {
         let (pid, state) = match wait_known_processes(job, WaitPidFlag::WUNTRACED) {
             Ok(KnownWaitResult::State(pid, state)) => (pid, state),
             Ok(KnownWaitResult::StillAlive) => {
-                std::thread::sleep(Duration::from_millis(50));
+                std::thread::sleep(backoff.next_delay());
                 continue;
             }
             Ok(KnownWaitResult::NoChildren) | Err(nix::errno::Errno::ECHILD) => {
@@ -219,6 +256,7 @@ pub fn wait_process_sync(job: &mut Job) -> Result<()> {
         };
 
         job.set_process_state(pid, state);
+        backoff.reset();
 
         debug!(
             "fin waitpid pgid:{:?} pid:{:?} state:{:?}",
@@ -293,6 +331,7 @@ pub fn wait_process_sync(job: &mut Job) -> Result<()> {
 pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
     debug!("wait_process_no_hang started for job: {}", job.id);
     let mut send_killpg = false;
+    let mut backoff = WaitBackoff::new();
     loop {
         if crate::process::signal::check_and_clear_sigint() {
             debug!("wait_process_no_hang: Detected SIGINT in parent shell, forwarding to job");
@@ -317,7 +356,7 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
         {
             Ok(Ok(KnownWaitResult::State(pid, state))) => (pid, state),
             Ok(Ok(KnownWaitResult::StillAlive)) => {
-                time::sleep(Duration::from_millis(100)).await;
+                time::sleep(backoff.next_delay()).await;
                 continue;
             }
             Ok(Ok(KnownWaitResult::NoChildren)) | Ok(Err(nix::errno::Errno::ECHILD)) => {
@@ -337,6 +376,7 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
 
         check_background_all_output(job).await?;
         job.set_process_state(pid, state);
+        backoff.reset();
 
         debug!("fin wait: pid:{:?}", pid);
 
@@ -391,6 +431,7 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
 pub fn wait_process_no_hang_sync(job: &mut Job) -> Result<()> {
     debug!("wait_process_no_hang_sync started for job: {}", job.id);
     let mut send_killpg = false;
+    let mut backoff = WaitBackoff::new();
     loop {
         if crate::process::signal::check_and_clear_sigint() {
             debug!("wait_process_no_hang_sync: Detected SIGINT in parent shell, forwarding to job");
@@ -409,7 +450,7 @@ pub fn wait_process_no_hang_sync(job: &mut Job) -> Result<()> {
             match wait_known_processes(job, WaitPidFlag::WUNTRACED | WaitPidFlag::WNOHANG) {
                 Ok(KnownWaitResult::State(pid, state)) => (pid, state),
                 Ok(KnownWaitResult::StillAlive) => {
-                    std::thread::sleep(Duration::from_millis(100));
+                    std::thread::sleep(backoff.next_delay());
                     continue;
                 }
                 Ok(KnownWaitResult::NoChildren) | Err(nix::errno::Errno::ECHILD) => {
@@ -426,6 +467,7 @@ pub fn wait_process_no_hang_sync(job: &mut Job) -> Result<()> {
             };
 
         job.set_process_state(pid, state);
+        backoff.reset();
 
         debug!("fin wait: pid:{:?}", pid);
 

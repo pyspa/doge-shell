@@ -7,7 +7,7 @@ use pest::Span;
 use pest::iterators::Pairs;
 use std::cmp::min;
 use std::fmt;
-use std::io::{BufWriter, Write};
+use std::io::Write;
 use unicode_width::UnicodeWidthChar;
 
 const INITIAL_CAP: usize = 256;
@@ -744,19 +744,22 @@ impl Input {
         parser::get_words_from_pairs(pairs, self.cursor)
     }
 
+    /// Write the input line (and any ghost suffix) into `out`.
+    ///
+    /// `out` is the caller's frame buffer, not the terminal: it must not be
+    /// flushed here. The redraw writes the clear sequence, the prompt mark, this
+    /// line, the hint and the cursor restore into one buffer so the terminal sees
+    /// a single atomic frame; flushing mid-way would split it across writes.
     pub fn print<W: Write>(&self, out: &mut W, ghost_suffix: Option<&str>) {
-        let mut writer = BufWriter::new(out);
-
         if let Some(color_ranges) = &self.color_ranges {
             // Write colored segments directly to reduce allocation
-            self.write_colored_ranges_to(&mut writer, color_ranges).ok();
+            self.write_colored_ranges_to(out, color_ranges).ok();
         } else {
             for (i, line) in self.as_str().split('\n').enumerate() {
                 if i > 0 {
-                    writer.write_all(b"\r\n").ok();
+                    out.write_all(b"\r\n").ok();
                 }
-                writer
-                    .write_fmt(format_args!("{}", line.with(self.config.fg_color)))
+                out.write_fmt(format_args!("{}", line.with(self.config.fg_color)))
                     .ok();
             }
         }
@@ -764,16 +767,12 @@ impl Input {
         if let Some(suffix) = ghost_suffix.filter(|s| !s.is_empty()) {
             for (i, line) in suffix.split('\n').enumerate() {
                 if i > 0 {
-                    writer.write_all(b"\r\n").ok();
+                    out.write_all(b"\r\n").ok();
                 }
-                writer
-                    .write_fmt(format_args!("{}", line.with(self.config.ghost_color)))
+                out.write_fmt(format_args!("{}", line.with(self.config.ghost_color)))
                     .ok();
             }
         }
-
-        // Ensure all buffered output is written immediately
-        writer.flush().ok();
     }
 
     /// Write colored string from color ranges directly to writer
@@ -877,28 +876,23 @@ impl Input {
         self.config.ghost_color
     }
 
+    /// Append the inline completion candidate to the caller's frame buffer.
+    /// Like [`Input::print`], this must not flush — see that method's note.
     pub fn print_candidates<W: Write>(&mut self, out: &mut W, completion: String) {
-        let mut writer = BufWriter::new(out);
         let current_byte = self.byte_index();
         let is_end = current_byte == self.input.len();
 
-        // Write colored completion directly to the writer
-        writer
-            .write_fmt(format_args!(
-                "{}",
-                completion.with(self.config.completion_color)
-            ))
-            .ok();
+        out.write_fmt(format_args!(
+            "{}",
+            completion.with(self.config.completion_color)
+        ))
+        .ok();
 
         if !is_end {
             let tmp = &self.input[current_byte..];
-            writer
-                .write_fmt(format_args!("{}", tmp.with(self.config.fg_color)))
+            out.write_fmt(format_args!("{}", tmp.with(self.config.fg_color)))
                 .ok();
         }
-
-        // Ensure all buffered output is written immediately
-        writer.flush().ok();
     }
 
     pub fn split_current_pos(&self) -> Option<(&str, &str)> {

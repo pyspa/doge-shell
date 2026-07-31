@@ -2,7 +2,6 @@ use super::{DynamicCompletionProvider, dedup_sorted, run_command_lines};
 use crate::completion::integrated::EnhancedCandidate;
 use crate::completion::parser::ParsedCommandLine;
 use crate::completion::shell_path::normalize_path_token;
-use dsh_builtin::project_context;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -13,7 +12,7 @@ impl DynamicCompletionProvider {
         current_token: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let project_root = project_context::find_project_root(current_dir);
+        let project_root = self.cached_project_root(current_dir);
         self.collect_cached_value_candidates(
             "python",
             "project-dependency",
@@ -31,7 +30,7 @@ impl DynamicCompletionProvider {
         current_token: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let project_root = project_context::find_project_root(current_dir);
+        let project_root = self.cached_project_root(current_dir);
         let bin_root = find_node_bin_root(current_dir).unwrap_or_else(|| project_root.clone());
         self.collect_cached_value_candidates(
             "node",
@@ -51,7 +50,7 @@ impl DynamicCompletionProvider {
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
         let project_root = find_node_workspace_root(current_dir)
-            .unwrap_or_else(|| project_context::find_project_root(current_dir));
+            .unwrap_or_else(|| self.cached_project_root(current_dir));
         self.collect_cached_value_candidates(
             "node",
             "workspace",
@@ -69,7 +68,7 @@ impl DynamicCompletionProvider {
         current_token: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let project_root = project_context::find_project_root(current_dir);
+        let project_root = self.cached_project_root(current_dir);
         self.collect_cached_value_candidates(
             "python",
             "module",
@@ -88,7 +87,7 @@ impl DynamicCompletionProvider {
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
         let command_path = self.resolve_command_path("go");
-        let project_root = project_context::find_project_root(current_dir);
+        let project_root = self.cached_project_root(current_dir);
         self.collect_cached_value_candidates(
             "go",
             "package",
@@ -193,8 +192,8 @@ impl DynamicCompletionProvider {
         current_token: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let maven_root = find_maven_root(current_dir)
-            .unwrap_or_else(|| project_context::find_project_root(current_dir));
+        let maven_root =
+            find_maven_root(current_dir).unwrap_or_else(|| self.cached_project_root(current_dir));
         self.collect_cached_value_candidates(
             "maven",
             "profile",
@@ -212,8 +211,8 @@ impl DynamicCompletionProvider {
         current_token: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let maven_root = find_maven_root(current_dir)
-            .unwrap_or_else(|| project_context::find_project_root(current_dir));
+        let maven_root =
+            find_maven_root(current_dir).unwrap_or_else(|| self.cached_project_root(current_dir));
         self.collect_cached_value_candidates(
             "maven",
             "module",
@@ -232,7 +231,7 @@ impl DynamicCompletionProvider {
         current_token: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let project_root = project_context::find_project_root(current_dir);
+        let project_root = self.cached_project_root(current_dir);
         let inventory_paths = selected_ansible_inventory_paths(
             parsed_command_line,
             current_dir,
@@ -264,7 +263,7 @@ impl DynamicCompletionProvider {
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
         let terraform_root = find_terraform_root(current_dir)
-            .unwrap_or_else(|| project_context::find_project_root(current_dir));
+            .unwrap_or_else(|| self.cached_project_root(current_dir));
         self.collect_cached_value_candidates(
             "terraform",
             "workspace",

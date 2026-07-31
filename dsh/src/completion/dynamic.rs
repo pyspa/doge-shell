@@ -20,6 +20,10 @@ mod dev;
 mod linux;
 
 const DYNAMIC_COMMAND_CACHE_TTL_MS: u64 = 1000;
+/// Project roots do not move while the shell sits at a prompt, and finding one
+/// costs a `canonicalize` plus a marker probe per ancestor directory, so this
+/// cache is kept far longer than the dynamic command values cache.
+const PROJECT_ROOT_CACHE_TTL_MS: u64 = 30_000;
 const COMPLETION_COMMAND_TIMEOUT: Duration = Duration::from_millis(1500);
 const EXTERNAL_COMPLETION_CACHE_LIMIT: usize = 128;
 const JS_PROJECT_TASK_SOURCES: &[&str] = &["npm", "pnpm", "yarn", "bun"];
@@ -268,9 +272,9 @@ impl DynamicCompletionProvider {
         }
     }
 
-    fn cached_project_root(&self, current_dir: &Path) -> PathBuf {
+    pub(crate) fn cached_project_root(&self, current_dir: &Path) -> PathBuf {
         let key = current_dir.to_path_buf();
-        let ttl = Duration::from_millis(DYNAMIC_COMMAND_CACHE_TTL_MS);
+        let ttl = Duration::from_millis(PROJECT_ROOT_CACHE_TTL_MS);
         {
             let cache = self.cache.read();
             if let Some(entry) = cache.project_roots.get(&key)
@@ -1818,7 +1822,7 @@ impl DynamicCompletionProvider {
         self.collect_cached_value_candidates(
             "gh",
             value_kind,
-            project_context::find_project_root(&current_dir),
+            self.cached_project_root(&current_dir),
             parsed_command_line.current_token.as_str(),
             description,
             cached_only,
@@ -3867,7 +3871,7 @@ impl DynamicCompletionProvider {
     ) -> Vec<EnhancedCandidate> {
         let command_path = self.resolve_command_path("cargo");
         let current_dir = current_dir.to_path_buf();
-        let scope_dir = project_context::find_project_root(&current_dir);
+        let scope_dir = self.cached_project_root(&current_dir);
         let value_kind = match kind {
             CargoMetadataValueKind::Package => "package",
             CargoMetadataValueKind::Bin => "bin",
@@ -4123,7 +4127,7 @@ impl DynamicCompletionProvider {
             return Vec::new();
         }
 
-        let project_root = project_context::find_project_root(current_dir);
+        let project_root = self.cached_project_root(current_dir);
         let package_json = project_root.join("package.json");
         self.collect_cached_value_candidates(
             command_name,
@@ -4247,7 +4251,7 @@ impl DynamicCompletionProvider {
     }
 
     fn load_project_tasks(&self, current_dir: &Path) -> Result<Vec<task::TaskInfo>> {
-        let project_root = project_context::find_project_root(current_dir);
+        let project_root = self.cached_project_root(current_dir);
         let cache_key = TaskCacheKey {
             project_root: project_root.clone(),
             sources: Vec::new(),
@@ -4270,7 +4274,7 @@ impl DynamicCompletionProvider {
     }
 
     fn lookup_project_tasks(&self, current_dir: &Path) -> Vec<task::TaskInfo> {
-        let project_root = project_context::find_project_root(current_dir);
+        let project_root = self.cached_project_root(current_dir);
         let cache_key = TaskCacheKey {
             project_root: project_root.clone(),
             sources: Vec::new(),
@@ -4285,7 +4289,7 @@ impl DynamicCompletionProvider {
         current_dir: &Path,
         sources: &[&str],
     ) -> Result<Vec<task::TaskInfo>> {
-        let project_root = project_context::find_project_root(current_dir);
+        let project_root = self.cached_project_root(current_dir);
         let cache_key = TaskCacheKey {
             project_root: project_root.clone(),
             sources: normalized_task_sources(sources),
@@ -4312,7 +4316,7 @@ impl DynamicCompletionProvider {
         current_dir: &Path,
         sources: &[&str],
     ) -> Vec<task::TaskInfo> {
-        let project_root = project_context::find_project_root(current_dir);
+        let project_root = self.cached_project_root(current_dir);
         let cache_key = TaskCacheKey {
             project_root: project_root.clone(),
             sources: normalized_task_sources(sources),

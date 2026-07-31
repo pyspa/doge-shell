@@ -309,12 +309,19 @@ pub fn is_path_cached(path: &Path) -> bool {
 
     let parent_str = parent.display().to_string();
 
-    // Only check cache, don't trigger background load
-    if let Some(hit) = PATH_COMPLETION_CACHE.lookup(&parent_str) {
+    // Only check cache, don't trigger background load.
+    //
+    // `get_entry` rather than `lookup`: this is a membership test, and `lookup`
+    // both walks every byte prefix of the key and clones the whole candidate Vec
+    // (up to MAX_RESULT Strings). This runs once per argument-ish highlight range
+    // on every keystroke, so the clone is the dominant cost. The prefix walk is
+    // also wrong for directory keys — it can match an unrelated directory whose
+    // path happens to be a prefix of this one (`/home/ma` vs `/home/ma2`).
+    if let Some(candidates) = PATH_COMPLETION_CACHE.get_entry(&parent_str) {
         let path_str = path.display().to_string();
         let search = path_str.trim_end_matches(std::path::MAIN_SEPARATOR);
 
-        for cand in hit.candidates {
+        for cand in candidates.iter() {
             if let Candidate::Path(p) = cand {
                 let p_clean = p.trim_end_matches(std::path::MAIN_SEPARATOR);
                 if p_clean == search {

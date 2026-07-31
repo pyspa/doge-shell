@@ -47,6 +47,7 @@ pub fn run_default_probes(iterations: usize) -> Vec<ProbeResult> {
         probe_prompt_render(iterations),
         runtime.block_on(probe_repl_print_input(iterations)),
         runtime.block_on(probe_repl_print_input_reanalyze(iterations)),
+        runtime.block_on(probe_repl_print_input_with_suggestion(iterations)),
     ]
 }
 
@@ -343,6 +344,36 @@ async fn probe_repl_print_input(iterations: usize) -> ProbeResult {
 
     ProbeResult {
         name: "repl_print_input",
+        iterations,
+        elapsed,
+    }
+}
+
+/// Same as `probe_repl_print_input`, but with `refresh_suggestion = true` so the
+/// ghost-text path (history prediction, integrated/dynamic completion lookups)
+/// is included. The other `print_input` probes pass `false` and therefore skip
+/// the most expensive part of a real keystroke.
+async fn probe_repl_print_input_with_suggestion(iterations: usize) -> ProbeResult {
+    let environment = Environment::new();
+    let mut shell = Shell::new(environment);
+    shell.cmd_history = Some(Arc::new(ParkingMutex::new(History::new())));
+
+    let mut repl = Repl::new(&mut shell);
+    repl.columns = 120;
+    repl.input.reset("git status --short".to_string());
+
+    let elapsed = measure(iterations, || {
+        repl.last_analyzed_input.clear();
+        repl.last_analysis_result = None;
+        let mut out = Vec::with_capacity(512);
+        repl.print_input(&mut out, false, true);
+        black_box(out.len());
+    });
+
+    std::mem::forget(repl);
+
+    ProbeResult {
+        name: "repl_print_input_with_suggestion",
         iterations,
         elapsed,
     }

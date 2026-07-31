@@ -27,6 +27,10 @@ use tracing::{debug, warn};
 
 const DEFAULT_CACHE_TTL_MS: u64 = 3000;
 const HISTORY_BOOST_SCAN_LIMIT: usize = 512;
+/// How long "this command has no JSON completion definition" is trusted. Long
+/// enough that typing never re-stats the same name, short enough that a
+/// definition written mid-session (`comp-gen`) starts working without a restart.
+const MISSING_COMPLETION_TTL: Duration = Duration::from_secs(30);
 const HISTORY_BOOST_SCORE_CAP: u32 = 5000;
 const JS_TASK_SOURCES: &[&str] = &["npm", "pnpm", "yarn", "bun"];
 const DENO_TASK_SOURCES: &[&str] = &["deno"];
@@ -399,6 +403,10 @@ pub struct IntegratedCompletionEngine {
     /// JSON-based command completion
     command_completion: Arc<Mutex<CommandCompletionDatabase>>,
     loader: Option<JsonCompletionLoader>,
+    /// Commands recently found to have no JSON definition, so the loader is not
+    /// re-run for them on every keystroke. TTL-bounded so a definition created
+    /// mid-session (e.g. by `comp-gen`) is still picked up.
+    missing_command_completions: RwLock<HashMap<String, Instant>>,
     /// Command line parser
     parser: CommandLineParser,
     parsed_cache: RwLock<Option<ParsedCommandLineCache>>,
@@ -421,6 +429,7 @@ impl IntegratedCompletionEngine {
         Self {
             command_completion: Arc::new(Mutex::new(CommandCompletionDatabase::new())),
             loader: None,
+            missing_command_completions: RwLock::new(HashMap::new()),
             parser: CommandLineParser::new(),
             parsed_cache: RwLock::new(None),
 
@@ -495,23 +504,48 @@ impl IntegratedCompletionEngine {
             return;
         };
 
-        let mut db = self.command_completion.lock();
-        if db.get_command(command_name).is_some() {
+        // The lock is released before the loader runs: `load_command_completion`
+        // stats several directories, and every keystroke reaches this method.
+        {
+            let db = self.command_completion.lock();
+            if db.get_command(command_name).is_some() {
+                return;
+            }
+        }
+
+        // Most command names typed at a prompt have no JSON definition — that
+        // includes every prefix of a name as it is being typed — so without this
+        // the same directory stats are repeated on every keystroke, forever.
+        if let Some(checked_at) = self.missing_command_completions.read().get(command_name)
+            && checked_at.elapsed() < MISSING_COMPLETION_TTL
+        {
             return;
         }
 
         debug!("Lazy loading completion for command: {}", command_name);
         match loader.load_command_completion(command_name) {
             Ok(Some(completion)) => {
-                db.add_command(completion);
+                self.missing_command_completions
+                    .write()
+                    .remove(command_name);
+                self.command_completion.lock().add_command(completion);
             }
             Ok(None) => {
                 debug!("No completion definition found for {}", command_name);
+                self.remember_missing_command_completion(command_name);
             }
             Err(e) => {
                 warn!("Failed to load completion for {}: {}", command_name, e);
+                self.remember_missing_command_completion(command_name);
             }
         }
+    }
+
+    fn remember_missing_command_completion(&self, command_name: &str) {
+        let now = Instant::now();
+        let mut missing = self.missing_command_completions.write();
+        missing.retain(|_, checked_at| now.duration_since(*checked_at) < MISSING_COMPLETION_TTL);
+        missing.insert(command_name.to_string(), now);
     }
 
     /// Execute integrated completion

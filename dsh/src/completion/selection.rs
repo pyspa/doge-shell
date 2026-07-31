@@ -203,10 +203,13 @@ fn completion_from_lisp_with_prompt(
 ) -> CompletionSelection {
     // Pass current input as argument to lisp function
     let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
-    let environment = Arc::clone(&lisp_engine.borrow().shell_env);
+    let autocompletion = {
+        let engine = lisp_engine.borrow();
+        Rc::clone(&engine.env.borrow().autocompletion)
+    };
 
     // 1. completion from autocomplete
-    for compl in environment.read().autocompletion.iter() {
+    for compl in autocompletion.borrow().iter() {
         let cmd_str = compl.target.to_string();
         // debug!("match cmd:'{}' in:'{}'", cmd_str, replace_space(input));
         if replace_space(input.as_str()).starts_with(cmd_str.as_str()) {

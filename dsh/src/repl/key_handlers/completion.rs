@@ -128,30 +128,23 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
 
     repl.sync_completion_jobs();
 
-    // Get completion candidates from the integrated engine.
-    //
-    // `complete()` performs synchronous, potentially blocking work (dynamic
-    // completion may run external commands with a timeout of up to ~1.5s on a
-    // cold cache). Drive it via `block_in_place` so the multi-threaded runtime
-    // can keep making progress on other tasks while this worker is blocked,
-    // mirroring the pattern used in `shell::eval::launch_subshell`.
+    // Cold dynamic providers only schedule work on their dedicated workers.
+    // The initial TAB therefore returns static/cached candidates immediately;
+    // the completion notifier asks the REPL to refresh when dynamic data lands.
     let CompletionResult {
         candidates: engine_candidates,
         framework: completion_framework,
         replacement_range,
-    } = {
-        let engine = &repl.integrated_completion;
-        let history = repl.shell.cmd_history.as_ref();
-        let input_ref = input_text.as_str();
-        let dir_ref = current_dir.as_path();
-        tokio::task::block_in_place(|| {
-            futures::executor::block_on(engine.complete(
-                input_ref, cursor_pos, dir_ref,
-                MAX_RESULT, // maximum number of candidates to return
-                history,
-            ))
-        })
-    };
+    } = repl
+        .integrated_completion
+        .complete(
+            input_text.as_str(),
+            cursor_pos,
+            current_dir.as_path(),
+            MAX_RESULT,
+            repl.shell.cmd_history.as_ref(),
+        )
+        .await;
 
     debug!(
         "IntegratedCompletionEngine returned {} candidates (framework: {:?})",

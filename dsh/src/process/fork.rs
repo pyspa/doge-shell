@@ -45,7 +45,7 @@ pub(crate) fn fork_builtin_process(
             // Execute the builtin command
             // Note: process.launch might still use tracing internally if not careful.
             // Ideally builtins should be careful too, but at least we removed the immediate logging.
-            if let Err(_e) = process.launch(ctx, shell) {
+            if let Err(_e) = process.launch_sync(ctx, shell) {
                 std::process::exit(1);
             }
 

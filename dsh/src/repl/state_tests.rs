@@ -98,7 +98,7 @@ mod tests {
                 .unwrap();
 
         assert!(matches!(result, ReplControlFlow::Continue));
-        assert!(repl.should_exit);
+        assert!(repl.state.should_exit);
     }
 
     #[tokio::test]
@@ -114,7 +114,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(repl.input.as_str(), "bc");
-        assert!(!repl.should_exit);
+        assert!(!repl.state.should_exit);
     }
 
     #[tokio::test]
@@ -158,7 +158,7 @@ mod tests {
                 .unwrap();
 
         assert!(matches!(result, ReplControlFlow::Continue));
-        assert!(!repl.should_exit);
+        assert!(!repl.state.should_exit);
         assert_eq!(repl.input.as_str(), "");
     }
 

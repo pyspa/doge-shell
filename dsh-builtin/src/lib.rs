@@ -4,8 +4,9 @@ use dsh_types::{
     output_history::OutputEntry, safety_policy::SafetyLevel,
 };
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::LazyLock;
-use std::sync::Mutex;
 use tracing::debug;
 
 // Builtin command modules
@@ -32,9 +33,11 @@ mod safety_policy;
 pub use chatgpt::execute_chat_message;
 pub use chatgpt::{McpConnectionStatus, McpManager, McpRuntimeStateSnapshot, McpServerStatus};
 mod bookmark;
+pub mod capability;
 pub mod command_timing;
 mod commit_ai;
 pub mod comp_gen;
+pub mod completion_generation;
 mod dmv;
 mod fg;
 pub mod ga;
@@ -224,21 +227,24 @@ pub trait ShellProxy {
         Err(anyhow::anyhow!("open_editor not implemented"))
     }
 
-    /// Generates a command completion JSON definition using AI
-    /// Returns the JSON string on success
-    fn generate_command_completion(
-        &mut self,
-        _command_name: &str,
-        _help_text: &str,
-    ) -> Result<String> {
-        Err(anyhow::anyhow!(
-            "generate_command_completion not implemented"
-        ))
+    fn generate_command_completion_async<'a>(
+        &'a mut self,
+        _command_name: &'a str,
+        _help_text: &'a str,
+    ) -> ProxyFuture<'a, String> {
+        Box::pin(async move {
+            Err(anyhow::anyhow!(
+                "generate_command_completion_async not implemented"
+            ))
+        })
     }
 
-    /// Ask AI for a response given a list of messages
-    fn ask_ai(&mut self, _messages: Vec<serde_json::Value>) -> Result<String> {
-        Err(anyhow::anyhow!("ask_ai not implemented"))
+    /// Ask AI for a response given a list of messages.
+    fn ask_ai_async<'a>(
+        &'a mut self,
+        _messages: Vec<serde_json::Value>,
+    ) -> ProxyFuture<'a, String> {
+        Box::pin(async move { Err(anyhow::anyhow!("ask_ai_async not implemented")) })
     }
 
     /// Triggers a Lisp hook by name with arguments
@@ -336,6 +342,9 @@ pub trait ShellProxy {
     }
 }
 
+pub type ProxyFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + 'a>>;
+pub type BuiltinFuture<'a> = Pin<Box<dyn Future<Output = ExitStatus> + 'a>>;
+
 pub(crate) fn dispatch_shell_command(
     ctx: &Context,
     proxy: &mut dyn ShellProxy,
@@ -344,453 +353,328 @@ pub(crate) fn dispatch_shell_command(
     proxy.dispatch(ctx, "sh", vec!["-c".to_string(), command])
 }
 
-use std::any::Any;
-
-/// Trait representing a builtin command with its description
-pub trait BuiltinCommandTrait: Send + Sync {
-    /// Execute the builtin command
-    fn execute(&self, ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus;
-    /// Get the description of the builtin command
-    fn description(&self) -> &'static str;
-    /// Get the command function directly
-    fn as_any(&self) -> &dyn Any;
-}
-
-/// Implementation of the trait for function pointers
-pub struct BuiltinCommandFn {
-    pub func: fn(&Context, Vec<String>, &mut dyn ShellProxy) -> ExitStatus,
+/// Immutable builtin command metadata.
+#[derive(Debug, Clone, Copy)]
+pub struct BuiltinSpec {
+    pub handler: BuiltinHandler,
     pub description: &'static str,
 }
 
-impl BuiltinCommandFn {
+impl BuiltinSpec {
     pub fn new(
         func: fn(&Context, Vec<String>, &mut dyn ShellProxy) -> ExitStatus,
         description: &'static str,
     ) -> Self {
-        Self { func, description }
-    }
-}
-
-/// Type alias for the builtin command function type to reduce complexity
-type BuiltinFn = fn(&Context, Vec<String>, &mut dyn ShellProxy) -> ExitStatus;
-
-impl BuiltinCommandTrait for BuiltinCommandFn {
-    fn execute(&self, ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
-        (self.func)(ctx, argv, proxy)
-    }
-
-    fn description(&self) -> &'static str {
-        self.description
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-/// Global registry of all builtin commands
-/// Uses lazy initialization and mutex for thread-safe access
-pub static BUILTIN_COMMAND: LazyLock<Mutex<HashMap<&str, Box<dyn BuiltinCommandTrait>>>> =
-    LazyLock::new(|| {
-        let mut builtin = HashMap::new();
-
-        // Core shell commands
-        builtin.insert(
-            "exit",
-            Box::new(BuiltinCommandFn::new(exit, exit_description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "cd",
-            Box::new(BuiltinCommandFn::new(cd::command, cd::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "history",
-            Box::new(BuiltinCommandFn::new(
-                history::command,
-                history::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-
-        // Navigation and directory management
-        builtin.insert(
-            "z",
-            Box::new(BuiltinCommandFn::new(z::command, z::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-
-        // Job control commands
-        builtin.insert(
-            "jobs",
-            Box::new(BuiltinCommandFn::new(jobs::command, jobs::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "fg",
-            Box::new(BuiltinCommandFn::new(fg::command, fg::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "bg",
-            Box::new(BuiltinCommandFn::new(bg::command, bg::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-
-        // Include command
-        builtin.insert(
-            "include",
-            Box::new(BuiltinCommandFn::new(
-                include::command,
-                include::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-        // Scripting and configuration
-        builtin.insert(
-            "lisp",
-            Box::new(BuiltinCommandFn::new(lisp::command, lisp::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "set",
-            Box::new(BuiltinCommandFn::new(set::command, set::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "var",
-            Box::new(BuiltinCommandFn::new(var::command, var::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "read",
-            Box::new(BuiltinCommandFn::new(read::command, read::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "abbr",
-            Box::new(BuiltinCommandFn::new(abbr::command, abbr::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "alias",
-            Box::new(BuiltinCommandFn::new(alias::command, alias::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "export",
-            Box::new(BuiltinCommandFn::new(
-                export::command,
-                export::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-
-        // AI integration commands
-
-        builtin.insert(
-            "chat_prompt",
-            Box::new(BuiltinCommandFn::new(
-                chatgpt::chat_prompt,
-                chatgpt::chat_prompt_description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "chat_model",
-            Box::new(BuiltinCommandFn::new(
-                chatgpt::chat_model,
-                chatgpt::chat_model_description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-
-        // Safety commands
-        builtin.insert(
-            "safe-run",
-            Box::new(BuiltinCommandFn::new(
-                safe_run::command,
-                safe_run::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "ai-watch",
-            Box::new(BuiltinCommandFn::new(
-                ai_watch::command,
-                ai_watch::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-
-        builtin.insert(
-            "comp-gen",
-            Box::new(BuiltinCommandFn::new(
-                comp_gen::command,
-                comp_gen::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-
-        // Git integration commands
-        builtin.insert(
-            "ai-commit",
-            Box::new(BuiltinCommandFn::new(
-                commit_ai::command,
-                commit_ai::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-        // Alias for ai-commit
-        builtin.insert(
-            "aic",
-            Box::new(BuiltinCommandFn::new(
-                commit_ai::command,
-                commit_ai::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-
-        builtin.insert(
-            "glog",
-            Box::new(BuiltinCommandFn::new(glog::command, glog::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "gco",
-            Box::new(BuiltinCommandFn::new(gco::command, gco::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "ga",
-            Box::new(BuiltinCommandFn::new(ga::command, ga::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "gwt",
-            Box::new(BuiltinCommandFn::new(gwt::command, gwt::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "gh-notify",
-            Box::new(BuiltinCommandFn::new(
-                gh_notify::command,
-                gh_notify::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "gpr",
-            Box::new(BuiltinCommandFn::new(gpr::command, gpr::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-
-        // Utility commands
-        builtin.insert(
-            "add_path",
-            Box::new(BuiltinCommandFn::new(
-                add_path::command,
-                add_path::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "serve",
-            Box::new(BuiltinCommandFn::new(serve::command, serve::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "uuid",
-            Box::new(BuiltinCommandFn::new(uuid::command, uuid::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "dmv",
-            Box::new(BuiltinCommandFn::new(dmv::command, dmv::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "reload",
-            Box::new(BuiltinCommandFn::new(
-                reload::command,
-                reload::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "help",
-            Box::new(BuiltinCommandFn::new(help::command, help::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-
-        // Emacs integration commands
-        builtin.insert(
-            "eview",
-            Box::new(BuiltinCommandFn::new(eview::command, eview::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "magit",
-            Box::new(BuiltinCommandFn::new(magit::command, magit::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "eproject",
-            Box::new(BuiltinCommandFn::new(
-                eproject::command,
-                eproject::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-
-        // Notebook commands
-        builtin.insert(
-            "notebook-play",
-            Box::new(BuiltinCommandFn::new(
-                notebook_play::command,
-                notebook_play::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-
-        // Performance and statistics commands
-        builtin.insert(
-            "timing",
-            Box::new(BuiltinCommandFn::new(
-                command_timing::command,
-                command_timing::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-
-        // Output history command
-        builtin.insert(
-            "out",
-            Box::new(BuiltinCommandFn::new(out::command, out::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "__dsh_print_last_stdout",
-            Box::new(BuiltinCommandFn::new(
-                out::print_last_stdout,
-                out::print_last_stdout_description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-
-        builtin.insert(
-            "tm",
-            Box::new(BuiltinCommandFn::new(tm::command, tm::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "blocks",
-            Box::new(BuiltinCommandFn::new(
-                blocks::command,
-                blocks::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-
-        // Dashboard command
-        builtin.insert(
-            "dashboard",
-            Box::new(BuiltinCommandFn::new(
-                dashboard::command,
-                dashboard::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "doctor",
-            Box::new(BuiltinCommandFn::new(
-                doctor::command,
-                doctor::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-
-        // Project Management command
-        builtin.insert(
-            "procs",
-            Box::new(BuiltinCommandFn::new(procs::command, procs::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-
-        builtin.insert(
-            "project",
-            Box::new(BuiltinCommandFn::new(
-                project::command,
-                project::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "pm",
-            Box::new(BuiltinCommandFn::new(
-                project::command,
-                project::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-        builtin.insert(
-            "pj",
-            Box::new(BuiltinCommandFn::new(
-                project::command,
-                project::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-
-        // MCP management command
-        builtin.insert(
-            "mcp",
-            Box::new(BuiltinCommandFn::new(mcp::command, mcp::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-
-        // Snippet management command
-        builtin.insert(
-            "snippet",
-            Box::new(BuiltinCommandFn::new(
-                snippet::command,
-                snippet::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-
-        // Bookmark management command
-        builtin.insert(
-            "bookmark",
-            Box::new(BuiltinCommandFn::new(
-                bookmark::command,
-                bookmark::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-
-        // Task runner command
-        builtin.insert(
-            "task",
-            Box::new(BuiltinCommandFn::new(task::command, task::description()))
-                as Box<dyn BuiltinCommandTrait>,
-        );
-
-        // Trigger command
-        builtin.insert(
-            "trigger",
-            Box::new(BuiltinCommandFn::new(
-                trigger::command,
-                trigger::description(),
-            )) as Box<dyn BuiltinCommandTrait>,
-        );
-
-        Mutex::new(builtin)
-    });
-
-/// Retrieves a builtin command function by name
-/// Returns None if the command is not found
-pub fn get_command(name: &str) -> Option<BuiltinFn> {
-    if let Ok(builtin) = BUILTIN_COMMAND.lock() {
-        // Find the BuiltinCommandFn inside the trait object and extract its func
-        for (key, cmd) in builtin.iter() {
-            if *key == name {
-                // Since we created BuiltinCommandFn instances, we can downcast them
-                if let Some(builtin_cmd) = cmd.as_any().downcast_ref::<BuiltinCommandFn>() {
-                    return Some(builtin_cmd.func);
-                }
-            }
+        Self {
+            handler: BuiltinHandler::Sync(func),
+            description,
         }
     }
-    None
+
+    pub fn new_async(fallback: BuiltinFn, run: AsyncBuiltinFn, description: &'static str) -> Self {
+        Self {
+            handler: BuiltinHandler::Async { run, fallback },
+            description,
+        }
+    }
+}
+
+/// Type alias for the builtin command function type to reduce complexity.
+pub type BuiltinFn = fn(&Context, Vec<String>, &mut dyn ShellProxy) -> ExitStatus;
+pub type AsyncBuiltinFn =
+    for<'a> fn(&'a Context, Vec<String>, &'a mut dyn ShellProxy) -> BuiltinFuture<'a>;
+
+#[derive(Clone, Copy)]
+pub enum BuiltinHandler {
+    Sync(BuiltinFn),
+    Async {
+        run: AsyncBuiltinFn,
+        fallback: BuiltinFn,
+    },
+}
+
+impl std::fmt::Debug for BuiltinHandler {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Sync(_) => formatter.write_str("BuiltinHandler::Sync"),
+            Self::Async { .. } => formatter.write_str("BuiltinHandler::Async"),
+        }
+    }
+}
+
+impl BuiltinHandler {
+    pub async fn execute(
+        self,
+        ctx: &Context,
+        argv: Vec<String>,
+        proxy: &mut dyn ShellProxy,
+    ) -> ExitStatus {
+        match self {
+            Self::Sync(run) => run(ctx, argv, proxy),
+            Self::Async { run, .. } => run(ctx, argv, proxy).await,
+        }
+    }
+
+    pub fn execute_sync(
+        self,
+        ctx: &Context,
+        argv: Vec<String>,
+        proxy: &mut dyn ShellProxy,
+    ) -> ExitStatus {
+        match self {
+            Self::Sync(run) | Self::Async { fallback: run, .. } => run(ctx, argv, proxy),
+        }
+    }
+}
+
+impl BuiltinSpec {
+    pub fn execute_sync(
+        &self,
+        ctx: &Context,
+        argv: Vec<String>,
+        proxy: &mut dyn ShellProxy,
+    ) -> ExitStatus {
+        self.handler.execute_sync(ctx, argv, proxy)
+    }
+}
+
+/// Immutable registry of all builtin commands.
+pub static BUILTIN_COMMAND: LazyLock<HashMap<&'static str, BuiltinSpec>> = LazyLock::new(|| {
+    let mut builtin = HashMap::new();
+
+    // Core shell commands
+    builtin.insert("exit", BuiltinSpec::new(exit, exit_description()));
+    builtin.insert("cd", BuiltinSpec::new(cd::command, cd::description()));
+    builtin.insert(
+        "history",
+        BuiltinSpec::new(history::command, history::description()),
+    );
+
+    // Navigation and directory management
+    builtin.insert("z", BuiltinSpec::new(z::command, z::description()));
+
+    // Job control commands
+    builtin.insert("jobs", BuiltinSpec::new(jobs::command, jobs::description()));
+    builtin.insert("fg", BuiltinSpec::new(fg::command, fg::description()));
+    builtin.insert("bg", BuiltinSpec::new(bg::command, bg::description()));
+
+    // Include command
+    builtin.insert(
+        "include",
+        BuiltinSpec::new(include::command, include::description()),
+    );
+    // Scripting and configuration
+    builtin.insert("lisp", BuiltinSpec::new(lisp::command, lisp::description()));
+    builtin.insert("set", BuiltinSpec::new(set::command, set::description()));
+    builtin.insert("var", BuiltinSpec::new(var::command, var::description()));
+    builtin.insert("read", BuiltinSpec::new(read::command, read::description()));
+    builtin.insert("abbr", BuiltinSpec::new(abbr::command, abbr::description()));
+    builtin.insert(
+        "alias",
+        BuiltinSpec::new(alias::command, alias::description()),
+    );
+    builtin.insert(
+        "export",
+        BuiltinSpec::new(export::command, export::description()),
+    );
+
+    // AI integration commands
+
+    builtin.insert(
+        "chat_prompt",
+        BuiltinSpec::new(chatgpt::chat_prompt, chatgpt::chat_prompt_description()),
+    );
+    builtin.insert(
+        "chat_model",
+        BuiltinSpec::new(chatgpt::chat_model, chatgpt::chat_model_description()),
+    );
+
+    // Safety commands
+    builtin.insert(
+        "safe-run",
+        BuiltinSpec::new(safe_run::command, safe_run::description()),
+    );
+    builtin.insert(
+        "ai-watch",
+        BuiltinSpec::new(ai_watch::command, ai_watch::description()),
+    );
+
+    builtin.insert(
+        "comp-gen",
+        BuiltinSpec::new_async(
+            comp_gen::command,
+            comp_gen::command_async,
+            comp_gen::description(),
+        ),
+    );
+
+    // Git integration commands
+    builtin.insert(
+        "ai-commit",
+        BuiltinSpec::new(commit_ai::command, commit_ai::description()),
+    );
+    // Alias for ai-commit
+    builtin.insert(
+        "aic",
+        BuiltinSpec::new(commit_ai::command, commit_ai::description()),
+    );
+
+    builtin.insert("glog", BuiltinSpec::new(glog::command, glog::description()));
+    builtin.insert("gco", BuiltinSpec::new(gco::command, gco::description()));
+    builtin.insert("ga", BuiltinSpec::new(ga::command, ga::description()));
+    builtin.insert("gwt", BuiltinSpec::new(gwt::command, gwt::description()));
+    builtin.insert(
+        "gh-notify",
+        BuiltinSpec::new(gh_notify::command, gh_notify::description()),
+    );
+    builtin.insert("gpr", BuiltinSpec::new(gpr::command, gpr::description()));
+
+    // Utility commands
+    builtin.insert(
+        "add_path",
+        BuiltinSpec::new(add_path::command, add_path::description()),
+    );
+    builtin.insert(
+        "serve",
+        BuiltinSpec::new(serve::command, serve::description()),
+    );
+    builtin.insert("uuid", BuiltinSpec::new(uuid::command, uuid::description()));
+    builtin.insert("dmv", BuiltinSpec::new(dmv::command, dmv::description()));
+    builtin.insert(
+        "reload",
+        BuiltinSpec::new(reload::command, reload::description()),
+    );
+    builtin.insert("help", BuiltinSpec::new(help::command, help::description()));
+
+    // Emacs integration commands
+    builtin.insert(
+        "eview",
+        BuiltinSpec::new(eview::command, eview::description()),
+    );
+    builtin.insert(
+        "magit",
+        BuiltinSpec::new(magit::command, magit::description()),
+    );
+    builtin.insert(
+        "eproject",
+        BuiltinSpec::new(eproject::command, eproject::description()),
+    );
+
+    // Notebook commands
+    builtin.insert(
+        "notebook-play",
+        BuiltinSpec::new(notebook_play::command, notebook_play::description()),
+    );
+
+    // Performance and statistics commands
+    builtin.insert(
+        "timing",
+        BuiltinSpec::new(command_timing::command, command_timing::description()),
+    );
+
+    // Output history command
+    builtin.insert("out", BuiltinSpec::new(out::command, out::description()));
+    builtin.insert(
+        "__dsh_print_last_stdout",
+        BuiltinSpec::new(out::print_last_stdout, out::print_last_stdout_description()),
+    );
+
+    builtin.insert("tm", BuiltinSpec::new(tm::command, tm::description()));
+    builtin.insert(
+        "blocks",
+        BuiltinSpec::new_async(
+            blocks::command,
+            blocks::command_async,
+            blocks::description(),
+        ),
+    );
+
+    // Dashboard command
+    builtin.insert(
+        "dashboard",
+        BuiltinSpec::new(dashboard::command, dashboard::description()),
+    );
+    builtin.insert(
+        "doctor",
+        BuiltinSpec::new(doctor::command, doctor::description()),
+    );
+
+    // Project Management command
+    builtin.insert(
+        "procs",
+        BuiltinSpec::new(procs::command, procs::description()),
+    );
+
+    builtin.insert(
+        "project",
+        BuiltinSpec::new(project::command, project::description()),
+    );
+    builtin.insert(
+        "pm",
+        BuiltinSpec::new(project::command, project::description()),
+    );
+    builtin.insert(
+        "pj",
+        BuiltinSpec::new(project::command, project::description()),
+    );
+
+    // MCP management command
+    builtin.insert("mcp", BuiltinSpec::new(mcp::command, mcp::description()));
+
+    // Snippet management command
+    builtin.insert(
+        "snippet",
+        BuiltinSpec::new(snippet::command, snippet::description()),
+    );
+
+    // Bookmark management command
+    builtin.insert(
+        "bookmark",
+        BuiltinSpec::new(bookmark::command, bookmark::description()),
+    );
+
+    // Task runner command
+    builtin.insert("task", BuiltinSpec::new(task::command, task::description()));
+
+    // Trigger command
+    builtin.insert(
+        "trigger",
+        BuiltinSpec::new(trigger::command, trigger::description()),
+    );
+
+    builtin
+});
+
+/// Retrieves an inherently synchronous builtin command by name.
+///
+/// Async handlers deliberately return `None`; callers that execute arbitrary
+/// builtins must use [`get_handler`] so they cannot accidentally bypass the
+/// async implementation through its fork-only fallback.
+pub fn get_command(name: &str) -> Option<BuiltinFn> {
+    BUILTIN_COMMAND
+        .get(name)
+        .and_then(|spec| match spec.handler {
+            BuiltinHandler::Sync(run) => Some(run),
+            BuiltinHandler::Async { .. } => None,
+        })
+}
+
+pub fn get_handler(name: &str) -> Option<BuiltinHandler> {
+    BUILTIN_COMMAND.get(name).map(|spec| spec.handler)
+}
+
+pub fn is_builtin(name: &str) -> bool {
+    BUILTIN_COMMAND.contains_key(name)
 }
 
 /// Get all builtin commands with their descriptions
 pub fn get_all_commands() -> Vec<(&'static str, &'static str)> {
-    if let Ok(builtin) = BUILTIN_COMMAND.lock() {
-        builtin
-            .iter()
-            .map(|(name, cmd)| (*name, cmd.description()))
-            .collect()
-    } else {
-        Vec::new()
-    }
+    let mut commands = BUILTIN_COMMAND
+        .iter()
+        .map(|(name, spec)| (*name, spec.description))
+        .collect::<Vec<_>>();
+    commands.sort_unstable_by_key(|(name, _)| *name);
+    commands
 }
 
 /// Built-in exit command description
@@ -898,6 +782,19 @@ mod shell_proxy_tests {
         fn get_lisp_var(&self, _key: &str) -> Option<String> {
             None
         }
+    }
+
+    #[test]
+    fn comp_gen_is_registered_with_an_async_handler() {
+        assert!(matches!(
+            get_handler("comp-gen"),
+            Some(BuiltinHandler::Async { .. })
+        ));
+        assert!(is_builtin("comp-gen"));
+        assert!(
+            get_command("comp-gen").is_none(),
+            "async builtins must not be exposed as synchronous command functions"
+        );
     }
 
     #[test]

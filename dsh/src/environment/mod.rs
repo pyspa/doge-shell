@@ -23,7 +23,6 @@ mod variables;
 mod tests;
 
 use crate::ai_features::AiService;
-use crate::completion::AutoComplete;
 use crate::direnv::DirEnvironment;
 use crate::secrets::SecretManager;
 use crate::shell::APP_NAME;
@@ -46,27 +45,6 @@ use tracing::debug;
 
 const EXECUTABLE_CACHE_FILE: &str = "executable_names.json";
 
-/// Wrapper to force Send/Sync on types that are effectively confined to the main thread
-/// or not accessed in background threads (like autocompletion closures).
-#[derive(Debug, Clone)]
-pub struct UnsafeSend<T>(pub T);
-
-unsafe impl<T> Send for UnsafeSend<T> {}
-unsafe impl<T> Sync for UnsafeSend<T> {}
-
-impl<T> std::ops::Deref for UnsafeSend<T> {
-    type Target = T;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<T> std::ops::DerefMut for UnsafeSend<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 /// Hook called when the current directory changes.
 pub trait ChangePwdHook: Send + Sync {
     fn call(&self, pwd: &std::path::Path, env: Arc<RwLock<Environment>>) -> Result<()>;
@@ -76,7 +54,6 @@ pub trait ChangePwdHook: Send + Sync {
 pub struct Environment {
     pub alias: HashMap<String, String>,
     pub abbreviations: HashMap<String, String>,
-    pub autocompletion: UnsafeSend<Vec<AutoComplete>>,
     pub paths: Vec<String>,
     pub variables: HashMap<String, String>,
     pub exported_vars: HashSet<String>,
@@ -145,13 +122,9 @@ impl Environment {
 
         debug!("default path {:?}", &paths);
 
-        // `Environment` is not Send/Sync because of `UnsafeSend<autocompletion>`;
-        // it is intentionally confined to the main thread. See `UnsafeSend`.
-        #[allow(clippy::arc_with_non_send_sync)]
         let env_arc = Arc::new(RwLock::new(Environment {
             alias: HashMap::new(),
             abbreviations: HashMap::new(),
-            autocompletion: UnsafeSend(Vec::new()),
             variables: HashMap::new(),
             exported_vars: HashSet::new(),
             paths,
@@ -188,7 +161,6 @@ impl Environment {
         let alias = parent.read().alias.clone();
         let abbreviations = parent.read().abbreviations.clone();
         let paths = parent.read().paths.clone();
-        let autocompletion = parent.read().autocompletion.clone();
         let variables = parent.read().variables.clone();
         let exported_vars = parent.read().exported_vars.clone();
         let direnv_roots = parent.read().direnv_roots.clone();
@@ -199,12 +171,9 @@ impl Environment {
         let system_env_vars = parent.read().system_env_vars.clone();
         let safety_level = parent.read().safety_level.clone();
 
-        // See note above: `Environment` is main-thread-confined by design.
-        #[allow(clippy::arc_with_non_send_sync)]
         Arc::new(RwLock::new(Environment {
             alias,
             abbreviations,
-            autocompletion,
             variables,
             exported_vars,
             paths,
@@ -234,7 +203,6 @@ impl std::fmt::Debug for Environment {
         f.debug_struct("Environment")
             .field("alias", &self.alias)
             .field("abbreviations", &self.abbreviations)
-            .field("autocompletion", &self.autocompletion)
             .field("direnv_paths", &self.direnv_roots)
             .field("paths", &self.paths)
             .field("variables_count", &self.variables.len())

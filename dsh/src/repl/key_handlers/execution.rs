@@ -38,15 +38,15 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
     // Multiline Check
     {
         let current_input = repl.input.as_str().to_string();
-        let combined_input = if !repl.multiline_buffer.is_empty() {
-            format!("{}{}", repl.multiline_buffer, current_input)
+        let combined_input = if !repl.state.multiline_buffer.is_empty() {
+            format!("{}{}", repl.state.multiline_buffer, current_input)
         } else {
             current_input.clone()
         };
 
         if crate::parser::is_incomplete_input(&combined_input) {
-            repl.multiline_buffer.push_str(&current_input);
-            repl.multiline_buffer.push('\n');
+            repl.state.multiline_buffer.push_str(&current_input);
+            repl.state.multiline_buffer.push('\n');
             repl.input.clear();
             repl.completion.clear();
             repl.suggestion_manager.clear();
@@ -56,10 +56,10 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
             repl.print_prompt(&mut renderer);
             renderer.flush().ok();
             return Ok(());
-        } else if !repl.multiline_buffer.is_empty() {
+        } else if !repl.state.multiline_buffer.is_empty() {
             // Complete!
             repl.input.reset(combined_input);
-            repl.multiline_buffer.clear();
+            repl.state.multiline_buffer.clear();
         }
     }
 
@@ -82,7 +82,7 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
         }
     };
 
-    if ai_watch_request.is_some() && repl.ai_service.is_none() {
+    if ai_watch_request.is_some() && repl.services.ai.is_none() {
         let mut renderer = TerminalRenderer::new();
         queue!(
             renderer,
@@ -162,7 +162,7 @@ async fn execute_shell_command(
 ) -> Result<()> {
     let start_time = Instant::now();
     let command_timestamp = SystemTime::now();
-    repl.last_command_string = input_str.clone();
+    repl.state.last_command_string = input_str.clone();
     repl.completion.clear();
     let output_start_id = repl.shell.environment.read().output_history.latest_id();
     let cwd = std::env::current_dir()
@@ -201,12 +201,12 @@ async fn execute_shell_command(
     {
         Ok(code) => {
             debug!("exit: {} : {:?}", input_str, code);
-            repl.last_status = code;
+            repl.state.last_status = code;
             code
         }
         Err(err) => {
             display_user_error(&err, false);
-            repl.last_status = 1;
+            repl.state.last_status = 1;
             1
         }
     };
@@ -219,7 +219,7 @@ async fn execute_shell_command(
     // Record command timing statistics
     let elapsed = start_time.elapsed();
     if let Some(cmd_name) = command_timing::extract_command_name(&input_str) {
-        let mut timing = repl.command_timing.write();
+        let mut timing = repl.services.command_timing.write();
         timing.record(&cmd_name, exit_code, elapsed);
         if let Some(path) = command_timing::get_timing_file_path()
             && let Err(e) = timing.save_to_file_if_due(&path)
@@ -282,12 +282,12 @@ async fn execute_shell_command(
 
     repl.input.clear();
     repl.suggestion_manager.clear();
-    repl.last_command_time = Some(Instant::now());
-    repl.last_duration = Some(elapsed);
+    repl.state.last_command_time = Some(Instant::now());
+    repl.state.last_duration = Some(elapsed);
 
     // Show error diagnosis hint if auto_diagnose is enabled
     if exit_code != 0
-        && repl.ai_service.is_some()
+        && repl.services.ai.is_some()
         && repl
             .shell
             .environment
@@ -311,7 +311,7 @@ async fn summarize_ai_watch(
     exit_code: i32,
     elapsed: std::time::Duration,
 ) -> Option<AiWatchSummary> {
-    let service = repl.ai_service.clone()?;
+    let service = repl.services.ai.clone()?;
     let status = if exit_code == 0 {
         "completed"
     } else {
@@ -420,7 +420,7 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
         let start_time = Instant::now();
         repl.completion.clear();
         let input = repl.input.to_string();
-        repl.last_command_string = input.clone();
+        repl.state.last_command_string = input.clone();
         let shell_tmode = match get_tmode_safe(&repl.tmode) {
             Ok(tmode) => tmode,
             Err(e) => {
@@ -446,12 +446,12 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
 
         let exit_code = match repl.shell.eval_str(&mut ctx, input.clone(), true).await {
             Ok(code) => {
-                repl.last_status = code;
+                repl.state.last_status = code;
                 code
             }
             Err(err) => {
                 display_user_error(&err, false);
-                repl.last_status = 1;
+                repl.state.last_status = 1;
                 1
             }
         };
@@ -465,7 +465,7 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
         let elapsed = start_time.elapsed();
         repl.shell
             .record_history_outcome(&input, exit_code, elapsed);
-        repl.last_duration = Some(elapsed);
+        repl.state.last_duration = Some(elapsed);
     }
 
     if repl.prompt.read().has_git_root() {
@@ -488,7 +488,7 @@ pub(crate) fn handle_eof(repl: &mut Repl<'_>) -> Result<()> {
     let mut renderer = TerminalRenderer::new();
     queue!(renderer, Print("\r\nexit\r\n")).ok();
     renderer.flush().ok();
-    repl.should_exit = true;
+    repl.state.should_exit = true;
     Ok(())
 }
 
@@ -545,7 +545,7 @@ pub(crate) fn handle_interrupt(repl: &mut Repl<'_>) -> Result<()> {
     if should_exit {
         queue!(renderer, Print("\r\nExiting shell...\r\n")).ok();
         renderer.flush().ok();
-        repl.should_exit = true;
+        repl.state.should_exit = true;
         Ok(())
     } else {
         if cfg!(debug_assertions) {
@@ -565,7 +565,7 @@ pub(crate) fn handle_interrupt(repl: &mut Repl<'_>) -> Result<()> {
         repl.print_prompt(&mut renderer);
         renderer.flush().ok();
         repl.input.clear();
-        repl.multiline_buffer.clear();
+        repl.state.multiline_buffer.clear();
         repl.suggestion_manager.clear();
         repl.stop_history_mode();
         Ok(())

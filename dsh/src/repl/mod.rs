@@ -1,5 +1,5 @@
 use crate::ai_features::{self, AiService, LiveAiService};
-use crate::command_timing::{self, SharedCommandTiming};
+use crate::command_timing;
 use crate::completion::integrated::IntegratedCompletionEngine;
 use crate::completion::{self as completion_lib, Completion};
 
@@ -39,6 +39,7 @@ use std::os::fd::BorrowedFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+#[cfg(test)]
 use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 use tracing::{debug, warn};
 
@@ -52,13 +53,17 @@ mod cache;
 use cache::*;
 pub(crate) mod ai_watch;
 pub mod confirmation;
+mod event_loop;
 mod handler;
 pub(crate) mod job_notify;
 pub mod key_action;
 mod key_handlers;
 pub(crate) mod notify;
+mod prompt_refresh;
 mod render;
+mod services;
 mod suggestion_manager;
+mod terminal_state;
 
 pub mod completion;
 mod input_analysis;
@@ -66,6 +71,7 @@ pub mod macro_utils;
 mod repl_ai; // Extracted AI logic
 
 pub(crate) use input_analysis::{CachedInputAnalysis, InputAnalysis};
+use services::ReplServices;
 
 /// Format directory entries for AI context
 /// This is a pure function for testability
@@ -94,26 +100,16 @@ pub struct Repl<'a> {
     pub(crate) ctrl_c_state: DoublePressState,
     pub(crate) esc_state: DoublePressState,
     pub(crate) ctrl_x_pressed: bool,
-    pub(crate) should_exit: bool,
-    pub(crate) last_command_time: Option<Instant>,
-    pub(crate) last_duration: Option<Duration>,
-    pub(crate) last_status: i32,
+    pub(crate) state: ReplState,
     // short-term cache for history-based completion to reduce lock/sort frequency
     pub(crate) cache: HistoryCache,
     pub(crate) suggestion_manager: SuggestionManager,
     pub(crate) input_preferences: InputPreferences,
     pub(crate) ai_pending_shown: bool,
-    pub(crate) ai_service: Option<Arc<dyn AiService + Send + Sync>>,
-    pub(crate) command_timing: SharedCommandTiming,
-    pub(crate) last_command_string: String,
-    pub(crate) stopped_jobs_warned: bool,
-    pub(crate) multiline_buffer: String,
-    pub(crate) last_cwd: std::path::PathBuf,
+    pub(crate) services: ReplServices,
     pub(crate) git_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
     pub(crate) last_git_update: Option<Instant>,
     pub(crate) git_task_inflight: Arc<AtomicBool>,
-    pub(crate) file_context_cache: Arc<RwLock<FileContextCache>>,
-    pub(crate) argument_explainer: crate::argument_explainer::ArgumentExplainer,
     pub(crate) last_explanation: Option<String>,
     pub(crate) auto_fix_suggestion: Option<String>,
     pub(crate) pending_ai_explanation_input: Option<String>,
@@ -164,7 +160,7 @@ impl<'a> Drop for Repl<'a> {
         self.save_history();
         // Save command timing statistics
         if let Some(path) = command_timing::get_timing_file_path()
-            && let Err(e) = self.command_timing.write().save_to_file(&path)
+            && let Err(e) = self.services.command_timing.write().save_to_file(&path)
         {
             warn!("Failed to save command timing: {}", e);
         }
@@ -305,31 +301,25 @@ impl<'a> Repl<'a> {
             start_completion: false,
             completion: Completion::new(),
             integrated_completion: IntegratedCompletionEngine::new(envronment),
-            prompt,
+            prompt: Arc::clone(&prompt),
             prompt_mark_cache,
             prompt_mark_width,
             ctrl_c_state: DoublePressState::new(3000), // 3 seconds for Ctrl+C
             esc_state: DoublePressState::new(400),     // 400ms for Esc (sudo toggle)
             ctrl_x_pressed: false,
-            should_exit: false,
-            last_command_time: None,
-            last_duration: None,
-            last_status: 0,
+            state: ReplState::new(current.clone()),
             cache: HistoryCache::new(Duration::from_millis(300)),
             suggestion_manager,
             input_preferences,
             ai_pending_shown: false,
-            ai_service,
-            command_timing: command_timing::create_shared_timing(),
-            last_command_string: String::new(),
-            stopped_jobs_warned: false,
-            multiline_buffer: String::new(),
-            last_cwd: current.clone(),
+            services: ReplServices::new(
+                ai_service,
+                command_timing::create_shared_timing(),
+                Arc::clone(&prompt),
+            ),
             git_rx,
             last_git_update: None,
             git_task_inflight: Arc::new(AtomicBool::new(false)),
-            file_context_cache: Arc::new(RwLock::new(FileContextCache::new())),
-            argument_explainer: crate::argument_explainer::ArgumentExplainer::new(),
             last_explanation: None,
             auto_fix_suggestion: None,
             pending_ai_explanation_input: None,
@@ -349,7 +339,7 @@ impl<'a> Repl<'a> {
     }
 
     pub(crate) fn trigger_file_context_update(&self) {
-        let cache = self.file_context_cache.clone();
+        let cache = self.services.file_context.clone();
         tokio::task::spawn_blocking(move || {
             let cwd = match std::env::current_dir() {
                 Ok(p) => p,
@@ -474,7 +464,9 @@ impl<'a> Repl<'a> {
         let explanation_to_show = if let Some(ref ai_exp) = self.current_ai_explanation {
             Some(format!("\u{2728} {}", ai_exp))
         } else {
-            self.argument_explainer.get_explanation(&input, cursor)
+            self.services
+                .argument_explainer
+                .get_explanation(&input, cursor)
         };
 
         if explanation_to_show != self.last_explanation {
@@ -721,139 +713,14 @@ impl<'a> Repl<'a> {
         self.shell.check_job_state().await?;
 
         let _last_save_time = Instant::now();
-        let mut background_interval = interval_at(
-            TokioInstant::now() + Duration::from_millis(1000),
-            Duration::from_millis(1000),
-        );
-        background_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        let mut ai_refresh_interval = interval_at(
-            TokioInstant::now() + Duration::from_millis(AI_SUGGESTION_REFRESH_MS),
-            Duration::from_millis(AI_SUGGESTION_REFRESH_MS),
-        );
-        ai_refresh_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-        // Debounced interval for argument explanation refresh (200ms)
-        const EXPLANATION_REFRESH_MS: u64 = 200;
-        let mut explanation_refresh_interval = interval_at(
-            TokioInstant::now() + Duration::from_millis(EXPLANATION_REFRESH_MS),
-            Duration::from_millis(EXPLANATION_REFRESH_MS),
-        );
-        explanation_refresh_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-        // Idle timer for AI explanation - stored OUTSIDE the loop so it persists across select iterations.
-        // Reset this when input changes, not on every loop iteration.
-        let mut idle_sleep: std::pin::Pin<Box<tokio::time::Sleep>> =
-            Box::pin(tokio::time::sleep(Duration::from_secs(5)));
+        let mut event_loop = event_loop::ReplEventLoop::new(AI_SUGGESTION_REFRESH_MS);
 
         loop {
             tokio::select! {
-                _ = background_interval.tick() => {
-                    // Save history every 30 seconds if there have been changes
-                    self.save_history_periodic();
-                    if let Some(path) = command_timing::get_timing_file_path()
-                        && let Err(e) = self.command_timing.write().save_to_file_if_due(&path)
-                    {
-                        warn!("Failed to save command timing: {}", e);
-                    }
-                    self.check_background_jobs(true).await?;
-
-                    // Reload path history every 30 seconds to sync with other processes
-                    if self.history_sync_last_check.elapsed() > Duration::from_secs(30) {
-                        if let Some(ref history) = self.shell.path_history
-                            && let Some(mut history) = history.try_lock() {
-                                 let _ = history.reload();
-                            }
-                        if let Some(ref history) = self.shell.cmd_history
-                            && let Some(mut history) = history.try_lock() {
-                                 let _ = history.reload();
-                            }
-                        self.history_sync_last_check = Instant::now();
-                    }
-
-                    // Execute input-timeout hooks (called periodically when idle)
-                    let _ = self.shell.exec_input_timeout_hooks();
-
-                    let prompt = Arc::clone(&self.prompt);
-
-                    // Check for Rust version
-                    if prompt.read().needs_rust_check() {
-                        let p_clone = Arc::clone(&prompt);
-                        tokio::spawn(async move {
-                            if let Some(version) = crate::prompt::fetch_rust_version_async().await {
-                                p_clone.write().update_rust_version(Some(version));
-                            } else {
-                                p_clone.write().mark_rust_check_failed();
-                            }
-                        });
-                    }
-
-                    // Check for Node version
-                    if prompt.read().needs_node_check() {
-                         let p_clone = Arc::clone(&prompt);
-                         tokio::spawn(async move {
-                            if let Some(version) = crate::prompt::fetch_node_version_async().await {
-                                p_clone.write().update_node_version(Some(version));
-                            } else {
-                                p_clone.write().mark_node_check_failed();
-                            }
-                        });
-                    }
-
-                    // Check for Python version
-                    if prompt.read().needs_python_check() {
-                         let p_clone = Arc::clone(&prompt);
-                         tokio::spawn(async move {
-                            if let Some(version) = crate::prompt::fetch_python_version_async().await {
-                                p_clone.write().update_python_version(Some(version));
-                            } else {
-                                p_clone.write().mark_python_check_failed();
-                            }
-                        });
-                    }
-
-                    // Check for Go version
-                    if prompt.read().needs_go_check() {
-                         let p_clone = Arc::clone(&prompt);
-                         tokio::spawn(async move {
-                            if let Some(version) = crate::prompt::fetch_go_version_async().await {
-                                p_clone.write().update_go_version(Some(version));
-                            } else {
-                                p_clone.write().mark_go_check_failed();
-                            }
-                        });
-                    }
-
-                    // Cloud Context Checks
-                    if prompt.read().should_check_k8s() {
-                         let p_clone = Arc::clone(&prompt);
-                         tokio::spawn(async move {
-                            if let Some((context, namespace)) = crate::prompt::fetch_k8s_info_async().await {
-                                p_clone.write().update_k8s_info(Some(context), namespace);
-                            } else {
-                                p_clone.write().mark_k8s_check_failed();
-                            }
-                        });
-                    }
-
-                    if prompt.read().should_check_aws() {
-                        // AWS is fast (env var), can do inline or spawn
-                        let profile = crate::prompt::fetch_aws_profile();
-                        prompt.write().update_aws_profile(profile);
-                    }
-
-                    if prompt.read().should_check_docker() {
-                         let p_clone = Arc::clone(&prompt);
-                         tokio::spawn(async move {
-                            if let Some(context) = crate::prompt::fetch_docker_context_async().await {
-                                p_clone.write().update_docker_context(Some(context));
-                            } else {
-                                p_clone.write().mark_docker_check_failed();
-                            }
-                        });
-                    }
-
+                _ = event_loop.background.tick() => {
+                    self.handle_background_tick().await?;
                 },
-                _ = ai_refresh_interval.tick() => {
+                _ = event_loop.ai_refresh.tick() => {
                     let mut need_redraw = false;
                     if self.input_preferences.ai_backfill
                         && self.input.completion.is_none()
@@ -872,7 +739,7 @@ impl<'a> Repl<'a> {
                         renderer.flush().ok();
                     }
                 }
-                _ = explanation_refresh_interval.tick() => {
+                _ = event_loop.explanation_refresh.tick() => {
                     // Debounced argument explanation refresh
                     if self.explanation_dirty {
                         self.explanation_dirty = false;
@@ -881,9 +748,9 @@ impl<'a> Repl<'a> {
                 }
                 // Dedicated idle timer for AI command explanation.
                 // This future is stored outside the loop so it does NOT reset on every iteration.
-                _ = idle_sleep.as_mut() => {
+                _ = event_loop.idle_sleep.as_mut() => {
                     if self.input_preferences.ai_explanation
-                        && self.ai_service.is_some()
+                        && self.services.ai.is_some()
                         && !self.input.is_empty()
                         && self.pending_ai_explanation_input.as_deref() != Some(self.input.as_str())
                         && self.current_ai_explanation.is_none()
@@ -891,7 +758,7 @@ impl<'a> Repl<'a> {
                         let input_str = self.input.as_str().to_string();
                         self.pending_ai_explanation_input = Some(input_str.clone());
                         let ai_tx = self.ai_tx.clone();
-                        let service_opt = self.ai_service.clone();
+                        let service_opt = self.services.ai.clone();
 
                         tokio::spawn(async move {
                             if let Some(service) = service_opt {
@@ -917,80 +784,19 @@ impl<'a> Repl<'a> {
                         });
                     }
                     // After firing, reset to a very long sleep so it doesn't fire again immediately.
-                    idle_sleep.as_mut().reset(TokioInstant::now() + Duration::from_secs(3600));
+                    event_loop.reset_idle(Duration::from_secs(3600));
                 }
                 Some(_) = self.git_rx.recv() => {
-                    let now = Instant::now();
-                    let is_throttled = self
-                        .last_git_update
-                        .is_some_and(|last| now.duration_since(last) < Duration::from_millis(GIT_STATUS_THROTTLE_MS));
-
-                    if !is_throttled
-                        && self
-                            .git_task_inflight
-                            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                            .is_ok()
-                    {
-                        self.last_git_update = Some(now);
-                        let prompt = Arc::clone(&self.prompt);
-                        let inflight = Arc::clone(&self.git_task_inflight);
-                        tokio::spawn(async move {
-                            // Check if we need to discover/update git root (async)
-                            let needs_root_check = prompt.read().needs_git_check;
-                            if needs_root_check {
-                                let cwd = prompt.read().current_dir.clone();
-                                let root = crate::prompt::find_git_root_async(cwd).await;
-                                prompt.write().update_git_root(root);
-                            }
-
-                            // Fetch status if we have a git root (always fetch on event)
-                            if prompt.read().has_git_root() {
-                                let path = prompt.read().current_path().to_path_buf();
-                                if let Some(status) = crate::prompt::fetch_git_status_async(&path).await {
-                                    prompt.write().update_git_status(Some(status));
-                                }
-                            }
-                            inflight.store(false, Ordering::SeqCst);
-                        });
-                    }
+                    self.handle_git_refresh_request();
                 }
                 Some(_) = self.completion_rx.recv() => {
-                    // Handle path completion update (background scan finished)
-                    if self.input.completion.is_none()
-                        && self.refresh_inline_suggestion()
-                    {
-                         let mut renderer = TerminalRenderer::new();
-                         self.print_input(&mut renderer, false, false);
-                         renderer.flush().ok();
-                    }
+                    self.handle_completion_refresh();
                 }
                 Some(ai_event) = self.ai_rx.recv() => {
-                    match ai_event {
-                        AiEvent::AutoFix(fix) => {
-                            self.auto_fix_suggestion = Some(fix);
-                             // Force redraw if input is empty to show the suggestion
-                            if self.input.as_str().is_empty() {
-                                let mut renderer = TerminalRenderer::new();
-                                self.print_input(&mut renderer, false, false);
-                                renderer.flush().ok();
-                            }
-                        }
-                        AiEvent::CommandExplanation { input, explanation } => {
-                            // Only apply if the input hasn't changed since the request
-                            if self.input.as_str() == input {
-                                self.current_ai_explanation = Some(explanation);
-                                self.explanation_dirty = true;
-                            }
-                        }
-                        AiEvent::CommandExplanationError { input } => {
-                            if self.pending_ai_explanation_input.as_deref() == Some(input.as_str()) {
-                                self.pending_ai_explanation_input = None;
-                            }
-                        }
-                    }
+                    self.handle_ai_event(ai_event);
                 }
                 maybe_event = reader.next() => {
-                    let old_last_time = self.last_command_time;
+                    let old_last_time = self.state.last_command_time;
                     match maybe_event {
                         Some(Ok(event)) => {
                             match self.handle_event(ShellEvent::Input(event)).await {
@@ -1029,11 +835,9 @@ impl<'a> Repl<'a> {
                                     // Drop reader to release stdin lock
                                     drop(reader);
 
-                                    // Disable raw mode so Skim/interactive command controls terminal
-                                    disable_raw_mode().ok();
-
                                     // Execute the interactive closure
                                     let mut execute_after = false;
+                                    let raw_mode_pause = terminal_state::RawModePause::new();
                                     match closure() {
                                         Ok(Some(action)) => {
                                             use crate::repl::state::InteractiveAction;
@@ -1069,9 +873,7 @@ impl<'a> Repl<'a> {
                                             self.shell.print_error(format!("Interactive session failed: {}\r\n", e));
                                         }
                                     }
-
-                                    // Re-enable raw mode
-                                    enable_raw_mode().ok();
+                                    drop(raw_mode_pause);
 
                                     if execute_after {
                                         // `handle_execute` emits the OSC 133 boundaries, manages
@@ -1104,24 +906,24 @@ impl<'a> Repl<'a> {
 
                             // Check for CWD change and trigger AI prefetch
                             let current_cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
-                            if current_cwd != self.last_cwd {
-                                self.last_cwd = current_cwd.clone();
+                            if current_cwd != self.state.last_cwd {
+                                self.state.last_cwd = current_cwd.clone();
 
                                 if self.input_preferences.ai_backfill {
-                                    debug!("CWD changed to {:?}, triggering AI prefetch", self.last_cwd);
+                                    debug!("CWD changed to {:?}, triggering AI prefetch", self.state.last_cwd);
                                     let files = self.get_directory_listing();
                                     let files_vec: Vec<String> = files.lines().map(String::from).collect();
                                     self.suggestion_manager.engine.prefetch(
-                                        Some(self.last_cwd.to_string_lossy().to_string()),
+                                        Some(self.state.last_cwd.to_string_lossy().to_string()),
                                         Arc::new(files_vec),
-                                        Some(self.last_status)
+                                        Some(self.state.last_status)
                                     );
                                 }
                             }
 
                             // Reset stopped jobs warning if a command was executed
-                             if self.last_command_time != old_last_time {
-                                self.stopped_jobs_warned = false;
+                             if self.state.last_command_time != old_last_time {
+                                self.state.stopped_jobs_warned = false;
 
                                 // Invalidate git cache and trigger re-check
                                 self.prompt.write().invalidate_git_cache();
@@ -1133,7 +935,7 @@ impl<'a> Repl<'a> {
                                 self.prompt.read().trigger_git_check();
 
                                 // Trigger auto-fix if failed
-                                if self.last_status != 0 {
+                                if self.state.last_status != 0 {
                                     self.trigger_auto_fix();
                                 }
                             }
@@ -1147,7 +949,7 @@ impl<'a> Repl<'a> {
                     // Reset the idle explanation timer on every key event if enabled.
                     // This ensures the 5-second countdown restarts after each keypress.
                     if self.input_preferences.ai_explanation {
-                        idle_sleep.as_mut().reset(TokioInstant::now() + Duration::from_secs(5));
+                        event_loop.reset_idle(Duration::from_secs(5));
                     }
                 }
             };
@@ -1156,15 +958,15 @@ impl<'a> Repl<'a> {
                 // show completion
                 self.start_completion = false;
             }
-            if self.should_exit || self.shell.exited.is_some() {
+            if self.state.should_exit || self.shell.exited.is_some() {
                 debug!("Shell exiting normally");
                 if !self.shell.wait_jobs.is_empty() {
                     // Allow one retry to exit with stopped jobs
-                    if !self.stopped_jobs_warned {
+                    if !self.state.stopped_jobs_warned {
                         self.shell
                             .print_error("There are stopped jobs.\r\n".to_string());
-                        self.stopped_jobs_warned = true;
-                        self.should_exit = false;
+                        self.state.stopped_jobs_warned = true;
+                        self.state.should_exit = false;
                         self.shell.exited = None;
                         continue;
                     }
@@ -1174,6 +976,103 @@ impl<'a> Repl<'a> {
         }
         self.shell.kill_wait_jobs()?;
         Ok(())
+    }
+
+    async fn handle_background_tick(&mut self) -> Result<()> {
+        self.save_history_periodic();
+        if let Some(path) = command_timing::get_timing_file_path()
+            && let Err(e) = self
+                .services
+                .command_timing
+                .write()
+                .save_to_file_if_due(&path)
+        {
+            warn!("Failed to save command timing: {}", e);
+        }
+        self.check_background_jobs(true).await?;
+
+        if self.history_sync_last_check.elapsed() > Duration::from_secs(30) {
+            if let Some(ref history) = self.shell.path_history
+                && let Some(mut history) = history.try_lock()
+            {
+                let _ = history.reload();
+            }
+            if let Some(ref history) = self.shell.cmd_history
+                && let Some(mut history) = history.try_lock()
+            {
+                let _ = history.reload();
+            }
+            self.history_sync_last_check = Instant::now();
+        }
+
+        let _ = self.shell.exec_input_timeout_hooks();
+        self.services.prompt_refresh.schedule();
+        Ok(())
+    }
+
+    fn handle_git_refresh_request(&mut self) {
+        let now = Instant::now();
+        let is_throttled = self.last_git_update.is_some_and(|last| {
+            now.duration_since(last) < Duration::from_millis(GIT_STATUS_THROTTLE_MS)
+        });
+        if is_throttled
+            || self
+                .git_task_inflight
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+        {
+            return;
+        }
+
+        self.last_git_update = Some(now);
+        let prompt = Arc::clone(&self.prompt);
+        let inflight = Arc::clone(&self.git_task_inflight);
+        tokio::spawn(async move {
+            if prompt.read().needs_git_check {
+                let cwd = prompt.read().current_dir.clone();
+                let root = crate::prompt::find_git_root_async(cwd).await;
+                prompt.write().update_git_root(root);
+            }
+            if prompt.read().has_git_root() {
+                let path = prompt.read().current_path().to_path_buf();
+                if let Some(status) = crate::prompt::fetch_git_status_async(&path).await {
+                    prompt.write().update_git_status(Some(status));
+                }
+            }
+            inflight.store(false, Ordering::SeqCst);
+        });
+    }
+
+    fn handle_completion_refresh(&mut self) {
+        if self.input.completion.is_none() && self.refresh_inline_suggestion() {
+            let mut renderer = TerminalRenderer::new();
+            self.print_input(&mut renderer, false, false);
+            renderer.flush().ok();
+        }
+    }
+
+    fn handle_ai_event(&mut self, event: AiEvent) {
+        match event {
+            AiEvent::AutoFix(fix) => {
+                self.auto_fix_suggestion = Some(fix);
+                if self.input.as_str().is_empty() {
+                    let mut renderer = TerminalRenderer::new();
+                    self.print_input(&mut renderer, false, false);
+                    renderer.flush().ok();
+                }
+            }
+            AiEvent::CommandExplanation { input, explanation } => {
+                if self.input.as_str() == input {
+                    self.current_ai_explanation = Some(explanation);
+                    self.explanation_dirty = true;
+                }
+            }
+            AiEvent::CommandExplanationError { input } => {
+                if self.pending_ai_explanation_input.as_deref() == Some(input.as_str()) {
+                    self.pending_ai_explanation_input = None;
+                }
+            }
+        }
     }
 
     /// Largest history snapshot handed to the interactive picker.
@@ -1301,7 +1200,8 @@ impl<'a> Repl<'a> {
 
     async fn expand_smart_pipe(&self, query: String) -> Result<String> {
         let service = self
-            .ai_service
+            .services
+            .ai
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("AI client not configured"))?;
         ai_features::expand_smart_pipe(service.as_ref(), &query).await
@@ -1309,7 +1209,8 @@ impl<'a> Repl<'a> {
 
     async fn run_generative_command(&self, query: &str) -> Result<String> {
         let service = self
-            .ai_service
+            .services
+            .ai
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("AI client not configured"))?;
         ai_features::run_generative_command(service.as_ref(), query).await
@@ -1401,7 +1302,7 @@ impl<'a> Repl<'a> {
         };
 
         // Check if AI service is available
-        let Some(_service) = self.ai_service.clone() else {
+        let Some(_service) = self.services.ai.clone() else {
             queue!(
                 renderer,
                 Print("❌ AI service not configured. Set OPENAI_API_KEY or AI_CHAT_API_KEY.\r\n")
@@ -1426,8 +1327,8 @@ impl<'a> Repl<'a> {
         let ctx = Context::new_safe(getpid(), getpid(), true);
         execute_chat_message(&ctx, &mut *self.shell, &message, None);
 
-        self.last_status = exit_code;
-        self.last_command_string = command;
+        self.state.last_status = exit_code;
+        self.state.last_command_string = command;
 
         renderer.flush().ok();
         self.print_prompt(&mut renderer);
@@ -1598,11 +1499,11 @@ mod ai_tests {
 
         // Setup mock AI service
         let service = Arc::new(MockAiService::new(r#"{"command": "ls", "args": ["-la"]}"#));
-        repl.ai_service = Some(service);
+        repl.services.ai = Some(service);
 
         // Setup failed state
-        repl.last_command_string = "lss -la".to_string();
-        repl.last_status = 127;
+        repl.state.last_command_string = "lss -la".to_string();
+        repl.state.last_status = 127;
 
         // Enable auto_fix
         repl.input_preferences.auto_fix = true;

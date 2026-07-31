@@ -140,12 +140,12 @@ impl Action for BuiltinCommandAction {
 
     async fn execute(&self, shell: &mut Shell, input: &str) -> Result<()> {
         let (command, argv) = self.build_invocation(input);
-        let Some(command_fn) = dsh_builtin::get_command(command) else {
+        let Some(handler) = dsh_builtin::get_handler(command) else {
             return Err(anyhow::anyhow!("builtin command not found: {command}"));
         };
 
         let ctx = Context::new_safe(shell.pid, shell.pgid, true);
-        match command_fn(&ctx, argv, shell) {
+        match handler.execute(&ctx, argv, shell).await {
             ExitStatus::ExitedWith(0) => Ok(()),
             ExitStatus::ExitedWith(code) => Err(anyhow::anyhow!(
                 "builtin command `{command}` exited with {code}"

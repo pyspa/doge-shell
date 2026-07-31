@@ -1123,6 +1123,7 @@ fn load_terraform_workspaces(root: &Path) -> Vec<String> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::time::Duration;
     use tempfile::tempdir;
 
     #[test]
@@ -1197,7 +1198,7 @@ mkdocs = "^1"
 
         assert_eq!(
             find_node_bin_root(&package_dir).as_deref(),
-            Some(dir.path())
+            Some(dir.path().canonicalize().unwrap().as_path())
         );
     }
 
@@ -1249,7 +1250,7 @@ mkdocs = "^1"
 
         assert_eq!(
             find_node_workspace_root(&web_dir).as_deref(),
-            Some(dir.path())
+            Some(dir.path().canonicalize().unwrap().as_path())
         );
         assert_eq!(
             load_node_workspaces(dir.path()),
@@ -1425,10 +1426,33 @@ all:
         fs::write(bin_dir.join("vite"), "").unwrap();
 
         let provider = DynamicCompletionProvider::new(crate::environment::Environment::new());
-        let py = provider.collect_python_project_dependency_candidates(dir.path(), "req", false);
+        let started = std::time::Instant::now();
+        let py = loop {
+            let candidates =
+                provider.collect_python_project_dependency_candidates(dir.path(), "req", false);
+            if !candidates.is_empty() {
+                break candidates;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "timed out waiting for Python dependency cache refresh"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
         assert_eq!(py[0].text, "requests");
 
-        let node = provider.collect_node_bin_candidates(dir.path(), "vi", false);
+        let started = std::time::Instant::now();
+        let node = loop {
+            let candidates = provider.collect_node_bin_candidates(dir.path(), "vi", false);
+            if !candidates.is_empty() {
+                break candidates;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "timed out waiting for Node binary cache refresh"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
         assert_eq!(node[0].text, "vite");
     }
 }

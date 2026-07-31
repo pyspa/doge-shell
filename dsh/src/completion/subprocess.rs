@@ -11,6 +11,16 @@ const READ_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const EXIT_DRAIN_GRACE: Duration = Duration::from_millis(200);
 const MAX_STDOUT_BYTES: usize = 1024 * 1024;
 
+#[cfg(test)]
+static EXTERNAL_PROCESS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn external_process_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    EXTERNAL_PROCESS_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DrainStatus {
     Eof,
@@ -256,6 +266,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn timeout_kills_descendants_in_process_group() {
+        let _guard = external_process_test_guard();
         let dir = tempdir().unwrap();
         let script = dir.path().join("holds-stdout.sh");
         let survived = dir.path().join("survived.txt");

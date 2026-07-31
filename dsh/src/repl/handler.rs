@@ -153,7 +153,7 @@ pub(crate) async fn handle_key_event(
         cursor_at_start: repl.input.cursor() == 0,
         next_char: repl.input.char_at(repl.input.cursor()),
         auto_pair: repl.input_preferences.auto_pair,
-        multiline_active: !repl.multiline_buffer.is_empty(),
+        multiline_active: !repl.state.multiline_buffer.is_empty(),
     };
 
     // Determine action using pure function

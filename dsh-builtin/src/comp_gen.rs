@@ -1,13 +1,13 @@
-use crate::ShellProxy;
+use crate::capability::AiCapability;
+use crate::completion_generation::CompletionGenerationService;
+use crate::{BuiltinFuture, ShellProxy};
 use anyhow::{Context as _, Result, bail};
 use dsh_types::completion::{DYNAMIC_COMPLETION_PROVIDERS, is_known_dynamic_completion_provider};
 use dsh_types::{Context, ExitStatus};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Description for the comp-gen command
 pub fn description() -> &'static str {
@@ -23,7 +23,7 @@ pub fn description() -> &'static str {
 /// This command fetches the help text for the specified command (using `man` or `--help`),
 /// sends it to the AI service to generate a JSON completion definition,
 /// and saves the result to `~/.config/dsh/completions/<command_name>.json`.
-pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+pub fn command(ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy) -> ExitStatus {
     if argv.iter().any(|arg| arg == "--help" || arg == "-h") {
         ctx.write_stdout(usage()).ok();
         return ExitStatus::ExitedWith(0);
@@ -39,11 +39,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         }
     };
 
-    let CompGenAction::Generate {
-        options,
-        command_name,
-    } = action
-    else {
+    let CompGenAction::Generate { .. } = action else {
         return match action {
             CompGenAction::ListDynamicProviders => {
                 ctx.write_stdout(&dynamic_provider_list()).ok();
@@ -63,36 +59,103 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         };
     };
 
-    let log_to_stderr = options.stdout;
-    match generate_completion(ctx, proxy, &command_name, log_to_stderr) {
-        Ok(json) => {
-            if options.check_only {
-                ctx.write_stdout("OK\n").ok();
-                return ExitStatus::ExitedWith(0);
+    ctx.write_stderr("comp-gen: AI generation requires foreground async execution")
+        .ok();
+    ExitStatus::ExitedWith(1)
+}
+
+pub fn command_async<'a>(
+    ctx: &'a Context,
+    argv: Vec<String>,
+    proxy: &'a mut dyn ShellProxy,
+) -> BuiltinFuture<'a> {
+    Box::pin(async move {
+        if argv.iter().any(|arg| arg == "--help" || arg == "-h") {
+            ctx.write_stdout(usage()).ok();
+            return ExitStatus::ExitedWith(0);
+        }
+
+        let action = match parse_args(&argv[1..]) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                ctx.write_stderr(&format!("Error: {:#}\n", e)).ok();
+                ctx.write_stderr(usage()).ok();
+                return ExitStatus::ExitedWith(1);
             }
-            if options.stdout {
-                ctx.write_stdout(&format!("{json}\n")).ok();
-                return ExitStatus::ExitedWith(0);
+        };
+
+        let CompGenAction::Generate {
+            options,
+            command_name,
+        } = action
+        else {
+            return run_non_generate_action(ctx, action);
+        };
+
+        let log_to_stderr = options.stdout;
+        let json = match generate_completion_async(ctx, proxy, &command_name, log_to_stderr).await {
+            Ok(json) => json,
+            Err(e) => {
+                ctx.write_stderr(&format!("Error: {:#}", e)).ok();
+                return ExitStatus::ExitedWith(1);
             }
-            match save_completion_json(&command_name, &json) {
-                Ok(path) => {
-                    ctx.write_stdout(&format!(
-                        "Completion generated and saved to {}",
-                        path.display()
-                    ))
-                    .ok();
-                    ExitStatus::ExitedWith(0)
-                }
-                Err(e) => {
-                    ctx.write_stderr(&format!("Error: {:#}", e)).ok();
-                    ExitStatus::ExitedWith(1)
-                }
+        };
+
+        if options.check_only {
+            ctx.write_stdout("OK\n").ok();
+            return ExitStatus::ExitedWith(0);
+        }
+        if options.stdout {
+            ctx.write_stdout(&format!("{json}\n")).ok();
+            return ExitStatus::ExitedWith(0);
+        }
+
+        let path = match CompletionGenerationService::default_output_path(&command_name) {
+            Ok(path) => path,
+            Err(e) => {
+                ctx.write_stderr(&format!("Error: {:#}", e)).ok();
+                return ExitStatus::ExitedWith(1);
+            }
+        };
+        match CompletionGenerationService::write_json_atomic(
+            &path,
+            &json,
+            &command_name,
+            options.force,
+        ) {
+            Ok(()) => {
+                ctx.write_stdout(&format!(
+                    "Completion generated and saved to {}",
+                    path.display()
+                ))
+                .ok();
+                ExitStatus::ExitedWith(0)
+            }
+            Err(e) => {
+                ctx.write_stderr(&format!("Error: {:#}", e)).ok();
+                ExitStatus::ExitedWith(1)
             }
         }
-        Err(e) => {
-            ctx.write_stderr(&format!("Error: {:#}", e)).ok();
-            ExitStatus::ExitedWith(1)
+    })
+}
+
+fn run_non_generate_action(ctx: &Context, action: CompGenAction) -> ExitStatus {
+    match action {
+        CompGenAction::ListDynamicProviders => {
+            ctx.write_stdout(&dynamic_provider_list()).ok();
+            ExitStatus::ExitedWith(0)
         }
+        CompGenAction::Audit { dir } => match audit_completion_dir(&dir) {
+            Ok(output) => {
+                ctx.write_stdout(&output).ok();
+                ExitStatus::ExitedWith(0)
+            }
+            Err(e) => {
+                ctx.write_stderr(&format!("Error: {:#}", e)).ok();
+                ExitStatus::ExitedWith(1)
+            }
+        },
+        CompGenAction::Generate { .. } => unreachable!(),
     }
 }
 
@@ -100,6 +163,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 struct CompGenOptions {
     stdout: bool,
     check_only: bool,
+    force: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,13 +179,14 @@ enum CompGenAction {
 }
 
 fn usage() -> &'static str {
-    r#"Usage: comp-gen [--stdout] [--check] <command>
+    r#"Usage: comp-gen [--stdout] [--check] [--force] <command>
        comp-gen --list-dynamic-providers
        comp-gen --audit [completion-dir]
 
 Options:
   --stdout                  Print generated JSON to stdout instead of saving
   --check                   Validate generated JSON and exit (no save)
+  --force                   Atomically replace an existing completion file
   --list-dynamic-providers  Print known Dynamic provider ids
   --audit [completion-dir]  Summarize JSON command/type/provider coverage
   -h, --help                Show this help message
@@ -136,6 +201,7 @@ fn parse_args(args: &[String]) -> Result<CompGenAction> {
     let mut options = CompGenOptions {
         stdout: false,
         check_only: false,
+        force: false,
     };
     let mut command_name: Option<String> = None;
     let mut list_dynamic_providers = false;
@@ -146,6 +212,7 @@ fn parse_args(args: &[String]) -> Result<CompGenAction> {
         match arg.as_str() {
             "--stdout" => options.stdout = true,
             "--check" => options.check_only = true,
+            "--force" => options.force = true,
             "--list-dynamic-providers" => list_dynamic_providers = true,
             "--audit" => {
                 if audit_dir.is_some() {
@@ -174,11 +241,16 @@ fn parse_args(args: &[String]) -> Result<CompGenAction> {
     if mode_count > 1 {
         bail!("Only one listing/audit mode may be specified");
     }
-    if mode_count > 0 && (options.stdout || options.check_only || command_name.is_some()) {
+    if mode_count > 0
+        && (options.stdout || options.check_only || options.force || command_name.is_some())
+    {
         bail!("Listing/audit modes cannot be combined with generation options or <command>");
     }
     if options.stdout && options.check_only {
         bail!("--stdout and --check cannot be used together");
+    }
+    if options.force && (options.stdout || options.check_only) {
+        bail!("--force can only be used when saving a generated completion");
     }
     if list_dynamic_providers {
         return Ok(CompGenAction::ListDynamicProviders);
@@ -194,9 +266,9 @@ fn parse_args(args: &[String]) -> Result<CompGenAction> {
     })
 }
 
-fn generate_completion(
+async fn generate_completion_async(
     ctx: &Context,
-    proxy: &mut dyn ShellProxy,
+    proxy: &mut (impl AiCapability + ?Sized),
     command_name: &str,
     log_to_stderr: bool,
 ) -> Result<String> {
@@ -205,76 +277,15 @@ fn generate_completion(
         log_to_stderr,
         &format!("Fetching help text for '{}'...", command_name),
     );
-
-    // Try man first, then --help
-    let help_text = get_help_text(command_name)?;
-    if help_text.trim().is_empty() {
-        return Err(anyhow::anyhow!(
-            "Could not retrieve help text for '{}'. \nPlease ensure the command is installed and has a manual page or supports --help.",
-            command_name
-        ));
-    }
-
+    let help_text = CompletionGenerationService::collect_help_text(command_name)?;
     log(
         ctx,
         log_to_stderr,
         "Generating completion JSON via AI (this may take a moment)...",
     );
-    let json = proxy.generate_command_completion(command_name, &help_text)?;
-
-    // Validate JSON before saving
-    validate_completion_json(&json, command_name)?;
-
+    let json = proxy.generate_completion(command_name, &help_text).await?;
+    CompletionGenerationService::validate_json(&json, command_name)?;
     Ok(json)
-}
-
-fn save_completion_json(command_name: &str, json: &str) -> Result<std::path::PathBuf> {
-    // Save to file
-    // We use "dsh" suffix for config, but the app name constant is "dsh".
-    // The environment uses "doge-shell" or "dsh"?
-    // dsh/src/shell/mod.rs: pub const APP_NAME: &str = "dsh";
-    // So "dsh" is likely correct for XDG prefix.
-    let xdg_dirs = xdg::BaseDirectories::with_prefix("dsh");
-
-    // Ensure completions directory exists
-    // place_config_file creates the directory structure if missing
-    let filename = format!("completions/{}.json", command_name);
-    let path = xdg_dirs.place_config_file(filename)?;
-
-    let mut file = std::fs::File::create(&path)?;
-    file.write_all(json.as_bytes())?;
-
-    Ok(path)
-}
-
-fn get_help_text(command_name: &str) -> Result<String> {
-    // 1. Try `man -P cat <command>` to avoid pagination
-    let man_output = Command::new("man")
-        .arg("-P")
-        .arg("cat")
-        .arg(command_name)
-        .output();
-
-    if let Ok(output) = man_output
-        && output.status.success()
-    {
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        if !stdout.trim().is_empty() {
-            return Ok(stdout);
-        }
-    }
-
-    // 2. Fallback to `<command> --help`
-    // Note: We execute the command here. This implies trust in the command.
-    let help_output = Command::new(command_name).arg("--help").output();
-
-    if let Ok(output) = help_output
-        && output.status.success()
-    {
-        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
-    }
-
-    Ok(String::new())
 }
 
 fn log(ctx: &Context, to_stderr: bool, message: &str) {
@@ -533,7 +544,7 @@ fn audit_argument_type_value(value: &Value, audit: &mut CompletionAudit) {
     }
 }
 
-fn validate_completion_json(json: &str, expected_command: &str) -> Result<()> {
+pub(crate) fn validate_completion_json(json: &str, expected_command: &str) -> Result<()> {
     let value: Value = serde_json::from_str(json).context("AI returned invalid JSON")?;
     let obj = value
         .as_object()

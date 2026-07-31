@@ -1,11 +1,26 @@
 use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
+use std::borrow::Cow;
 use tabled::{Table, Tabled};
 
-#[derive(Tabled)]
 struct AliasEntry {
     alias: String,
     command: String,
+}
+
+impl Tabled for AliasEntry {
+    const LENGTH: usize = 2;
+
+    fn fields(&self) -> Vec<Cow<'_, str>> {
+        vec![
+            Cow::Borrowed(self.alias.as_str()),
+            Cow::Borrowed(self.command.as_str()),
+        ]
+    }
+
+    fn headers() -> Vec<Cow<'static, str>> {
+        vec![Cow::Borrowed("alias"), Cow::Borrowed("command")]
+    }
 }
 
 /// Built-in alias command description

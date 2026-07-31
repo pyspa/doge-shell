@@ -286,45 +286,21 @@ pub async fn handle_completion_command(
 ) -> ExitCode {
     use crate::ai_features::generate_completion_json;
     use crate::environment::Environment;
+    use dsh_builtin::completion_generation::CompletionGenerationService;
     use dsh_openai::{ChatGptClient, OpenAiConfig};
-    use std::fs;
-    use std::process::Command;
-    use tracing::{debug, error, info, warn};
+    use std::path::PathBuf;
+    use tracing::{debug, error, info};
 
     info!("Generating completion for command: {}", command);
 
-    // Get help text from the command
-    let help_output = Command::new("sh")
-        .arg("-c")
-        .arg(format!("{} --help", command))
-        .stdin(std::process::Stdio::inherit())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output();
-
-    let help_text = match help_output {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            if stdout.is_empty() && !stderr.is_empty() {
-                // Some commands output help to stderr
-                stderr
-            } else {
-                stdout
-            }
-        }
+    let help_text = match CompletionGenerationService::collect_help_text(&command) {
+        Ok(help_text) => help_text,
         Err(e) => {
-            error!("Failed to execute '{} --help': {}", command, e);
+            error!("Failed to collect help for '{}': {:#}", command, e);
             eprintln!("Error: Failed to get help text for '{}': {}", command, e);
             return ExitCode::FAILURE;
         }
     };
-
-    if help_text.trim().is_empty() {
-        warn!("No help text returned from '{} --help'", command);
-        eprintln!("Warning: No help text returned from '{} --help'", command);
-        return ExitCode::FAILURE;
-    }
 
     debug!("Got help text ({} chars)", help_text.len());
 
@@ -382,52 +358,43 @@ pub async fn handle_completion_command(
         }
     };
 
-    // Validate JSON
-    let parsed: serde_json::Value = match serde_json::from_str(&completion_json) {
-        Ok(v) => v,
-        Err(e) => {
-            error!("Generated completion is not valid JSON: {}", e);
-            eprintln!("Error: Generated completion is not valid JSON: {}", e);
-            eprintln!("Raw output: {}", completion_json);
-            return ExitCode::FAILURE;
-        }
+    if let Err(e) = CompletionGenerationService::validate_json(&completion_json, &command) {
+        error!("Generated completion failed validation: {:#}", e);
+        eprintln!("Error: Generated completion failed validation: {e:#}");
+        return ExitCode::FAILURE;
+    }
+
+    let output_path = match output {
+        Some(path) => PathBuf::from(path),
+        None => match CompletionGenerationService::default_output_path(&command) {
+            Ok(path) => path,
+            Err(e) => {
+                error!("Failed to resolve completion output path: {:#}", e);
+                eprintln!("Error: Failed to resolve completion output path: {e:#}");
+                return ExitCode::FAILURE;
+            }
+        },
     };
 
-    // Determine output path
-    let output_path = output.unwrap_or_else(|| {
-        let config_dir = xdg::BaseDirectories::with_prefix("dsh")
-            .get_config_home()
-            .unwrap_or_else(|| std::path::PathBuf::from("."));
-        let completions_dir = config_dir.join("completions");
-        fs::create_dir_all(&completions_dir).unwrap();
-        completions_dir
-            .join(format!("{}.json", command))
-            .to_string_lossy()
-            .to_string()
-    });
-
-    // Check if file exists and force flag
-    if std::path::Path::new(&output_path).exists() && !force {
-        error!(
-            "Completion file already exists: {}. Use --force to overwrite.",
-            output_path
-        );
-        eprintln!(
-            "Error: Completion file already exists: {}. Use --force to overwrite.",
-            output_path
-        );
-        return ExitCode::FAILURE;
+    match CompletionGenerationService::write_json_atomic(
+        &output_path,
+        &completion_json,
+        &command,
+        force,
+    ) {
+        Ok(()) => {}
+        Err(e) => {
+            error!("Failed to write completion file: {:#}", e);
+            eprintln!("Error: Failed to write completion file: {e:#}");
+            return ExitCode::FAILURE;
+        }
     }
 
-    // Write the completion file
-    if let Err(e) = fs::write(&output_path, serde_json::to_string_pretty(&parsed).unwrap()) {
-        error!("Failed to write completion file: {}", e);
-        eprintln!("Error: Failed to write completion file: {}", e);
-        return ExitCode::FAILURE;
-    }
-
-    info!("Completion written to: {}", output_path);
-    println!("Completion generated and saved to: {}", output_path);
+    info!("Completion written to: {}", output_path.display());
+    println!(
+        "Completion generated and saved to: {}",
+        output_path.display()
+    );
     ExitCode::SUCCESS
 }
 

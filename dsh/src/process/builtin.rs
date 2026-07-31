@@ -1,4 +1,5 @@
 use anyhow::Result;
+use dsh_builtin::BuiltinHandler;
 use dsh_types::{Context, ExitStatus};
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::unistd::Pid;
@@ -12,7 +13,7 @@ use crate::shell::Shell;
 #[derive(Clone)]
 pub struct BuiltinProcess {
     pub(crate) name: String,
-    pub(crate) cmd_fn: fn(&Context, Vec<String>, &mut dyn dsh_builtin::ShellProxy) -> ExitStatus,
+    pub(crate) handler: BuiltinHandler,
     pub(crate) argv: Vec<String>,
     pub(crate) state: ProcessState, // completed, stopped,
     pub pid: Option<Pid>,
@@ -52,9 +53,13 @@ impl BuiltinProcess {
         cmd_fn: fn(&Context, Vec<String>, &mut dyn dsh_builtin::ShellProxy) -> ExitStatus,
         argv: Vec<String>,
     ) -> Self {
+        Self::new_handler(name, BuiltinHandler::Sync(cmd_fn), argv)
+    }
+
+    pub fn new_handler(name: String, handler: BuiltinHandler, argv: Vec<String>) -> Self {
         BuiltinProcess {
             name,
-            cmd_fn,
+            handler,
             argv,
             state: ProcessState::Running,
             pid: None,
@@ -92,8 +97,19 @@ impl BuiltinProcess {
         }
     }
 
-    pub fn launch(&mut self, ctx: &mut Context, shell: &mut Shell) -> Result<()> {
-        let exit = (self.cmd_fn)(ctx, self.argv.to_vec(), shell);
+    pub async fn launch(&mut self, ctx: &mut Context, shell: &mut Shell) -> Result<()> {
+        let exit = self.handler.execute(ctx, self.argv.to_vec(), shell).await;
+        self.finish(exit);
+        Ok(())
+    }
+
+    pub fn launch_sync(&mut self, ctx: &mut Context, shell: &mut Shell) -> Result<()> {
+        let exit = self.handler.execute_sync(ctx, self.argv.to_vec(), shell);
+        self.finish(exit);
+        Ok(())
+    }
+
+    fn finish(&mut self, exit: ExitStatus) {
         match exit {
             ExitStatus::ExitedWith(code) => {
                 if code >= 0 {
@@ -115,7 +131,6 @@ impl BuiltinProcess {
                 );
             }
         }
-        Ok(())
     }
 
     pub(crate) fn update_state(&mut self) -> Option<ProcessState> {
@@ -164,6 +179,14 @@ mod tests {
         ExitStatus::ExitedWith(-1)
     }
 
+    fn builtin_exit_async<'a>(
+        _ctx: &'a Context,
+        _argv: Vec<String>,
+        _proxy: &'a mut dyn dsh_builtin::ShellProxy,
+    ) -> dsh_builtin::BuiltinFuture<'a> {
+        Box::pin(async { ExitStatus::ExitedWith(9) })
+    }
+
     fn launch_state(
         cmd_fn: fn(&Context, Vec<String>, &mut dyn dsh_builtin::ShellProxy) -> ExitStatus,
     ) -> ProcessState {
@@ -175,8 +198,7 @@ mod tests {
         let mut ctx = test_context();
         let mut shell = test_shell();
 
-        process
-            .launch(&mut ctx, &mut shell)
+        futures::executor::block_on(process.launch(&mut ctx, &mut shell))
             .expect("builtin launch should succeed");
 
         process.state
@@ -204,5 +226,41 @@ mod tests {
             launch_state(builtin_exit_negative),
             ProcessState::Completed(1, None)
         );
+    }
+
+    #[test]
+    fn launch_awaits_async_builtin_handler() {
+        let mut process = BuiltinProcess::new_handler(
+            "test-async-builtin".to_string(),
+            BuiltinHandler::Async {
+                run: builtin_exit_async,
+                fallback: builtin_exit_zero,
+            },
+            vec!["test-async-builtin".into()],
+        );
+        let mut ctx = test_context();
+        let mut shell = test_shell();
+
+        futures::executor::block_on(process.launch(&mut ctx, &mut shell)).unwrap();
+
+        assert_eq!(process.state, ProcessState::Completed(9, None));
+    }
+
+    #[test]
+    fn launch_sync_uses_async_builtin_fallback() {
+        let mut process = BuiltinProcess::new_handler(
+            "test-async-builtin".to_string(),
+            BuiltinHandler::Async {
+                run: builtin_exit_async,
+                fallback: builtin_exit_zero,
+            },
+            vec!["test-async-builtin".into()],
+        );
+        let mut ctx = test_context();
+        let mut shell = test_shell();
+
+        process.launch_sync(&mut ctx, &mut shell).unwrap();
+
+        assert_eq!(process.state, ProcessState::Completed(0, None));
     }
 }

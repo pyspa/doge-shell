@@ -1,5 +1,33 @@
 use crossterm::event::Event;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
+
+#[derive(Debug)]
+pub(crate) struct ReplState {
+    pub should_exit: bool,
+    pub last_command_time: Option<Instant>,
+    pub last_duration: Option<Duration>,
+    pub last_status: i32,
+    pub last_command_string: String,
+    pub stopped_jobs_warned: bool,
+    pub multiline_buffer: String,
+    pub last_cwd: PathBuf,
+}
+
+impl ReplState {
+    pub fn new(current_dir: PathBuf) -> Self {
+        Self {
+            should_exit: false,
+            last_command_time: None,
+            last_duration: None,
+            last_status: 0,
+            last_command_string: String::new(),
+            stopped_jobs_warned: false,
+            multiline_buffer: String::new(),
+            last_cwd: current_dir,
+        }
+    }
+}
 
 #[derive(Eq, PartialEq)]
 pub enum ShellEvent {

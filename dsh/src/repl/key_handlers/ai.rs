@@ -15,7 +15,7 @@ pub(crate) async fn handle_force_ai_suggestion(repl: &mut Repl<'_>) {
 
 pub(crate) async fn handle_ai_explain_command(repl: &mut Repl<'_>) {
     // Only proceed if we have an AI service configured and the input is not empty
-    if repl.ai_service.is_some() && !repl.input.is_empty() {
+    if repl.services.ai.is_some() && !repl.input.is_empty() {
         let input_str = repl.input.as_str().to_string();
 
         // Clear any existing explanation so the new one takes precedence
@@ -23,7 +23,7 @@ pub(crate) async fn handle_ai_explain_command(repl: &mut Repl<'_>) {
         repl.pending_ai_explanation_input = Some(input_str.clone());
 
         let ai_tx = repl.ai_tx.clone();
-        let service = repl.ai_service.clone().unwrap();
+        let service = repl.services.ai.clone().unwrap();
 
         tokio::spawn(async move {
             match crate::ai_features::explain_command_inline(service.as_ref(), &input_str).await {
@@ -65,7 +65,7 @@ pub(crate) fn handle_ai_watch_current_input(repl: &mut Repl<'_>) {
 pub(crate) async fn handle_ai_diagnose(repl: &mut Repl<'_>) -> Result<()> {
     let mut renderer = TerminalRenderer::new();
 
-    if repl.ai_service.is_none() {
+    if repl.services.ai.is_none() {
         queue!(renderer, Print("\r\n⚠️ AI service is not configured. Set OPENAI_API_KEY or configure dsh to use AI features.\r\n")).ok();
         renderer.flush().ok();
         repl.print_prompt(&mut renderer);
@@ -73,7 +73,7 @@ pub(crate) async fn handle_ai_diagnose(repl: &mut Repl<'_>) -> Result<()> {
         return Ok(());
     }
 
-    if repl.last_status == 0 {
+    if repl.state.last_status == 0 {
         queue!(
             renderer,
             Print("\r\n💡 The previous command succeeded (exit code 0). No error to diagnose.\r\n")
@@ -85,7 +85,7 @@ pub(crate) async fn handle_ai_diagnose(repl: &mut Repl<'_>) -> Result<()> {
         return Ok(());
     }
 
-    let command = repl.last_command_string.clone();
+    let command = repl.state.last_command_string.clone();
     let output = repl
         .shell
         .environment
@@ -94,9 +94,9 @@ pub(crate) async fn handle_ai_diagnose(repl: &mut Repl<'_>) -> Result<()> {
         .get_stderr(1)
         .map(|s| s.to_string())
         .unwrap_or_default();
-    let exit_code = repl.last_status;
+    let exit_code = repl.state.last_status;
 
-    if let Some(service) = &repl.ai_service {
+    if let Some(service) = &repl.services.ai {
         let context = DiagnosticContext {
             command: command.clone(),
             output: output.clone(),

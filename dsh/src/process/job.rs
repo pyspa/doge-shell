@@ -171,7 +171,10 @@ impl Job {
                 process.get_cmd()
             );
 
-            if let Err(e) = self.launch_process(ctx, shell, &mut process, pty_child) {
+            if let Err(e) = self
+                .launch_process(ctx, shell, &mut process, pty_child)
+                .await
+            {
                 error!(
                     "JOB_LAUNCH_PROCESS_ERROR: Failed to launch process for job {}: {}",
                     self.job_id, e
@@ -222,7 +225,7 @@ impl Job {
         job_pty::capture_output_and_history(self, ctx, shell).await
     }
 
-    fn launch_process(
+    async fn launch_process(
         &mut self,
         ctx: &mut Context,
         shell: &mut Shell,
@@ -243,8 +246,9 @@ impl Job {
         }
 
         // Use launch for automatic capture (modified internal logic)
-        let (pid, mut next_process) =
-            process.launch(ctx, shell, &self.redirect, self.stdout, pty)?;
+        let (pid, mut next_process) = process
+            .launch(ctx, shell, &self.redirect, self.stdout, pty)
+            .await?;
         if self.pid.is_none() {
             self.pid = Some(pid); // set process pid
         }
@@ -366,10 +370,9 @@ impl Job {
         }
 
         // run next pipeline process
-        if let Some(Err(err)) = next_process
-            .take()
-            .as_mut()
-            .map(|process| self.launch_process(ctx, shell, process, pty))
+        if let Some(mut next_process) = next_process.take()
+            && let Err(err) =
+                Box::pin(self.launch_process(ctx, shell, &mut next_process, pty)).await
         {
             debug!("err {:?}", err);
             return Err(err);

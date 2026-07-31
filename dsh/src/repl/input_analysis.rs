@@ -237,7 +237,7 @@ pub(crate) fn command_is_valid(repl: &Repl<'_>, word: &str) -> bool {
         }
     }
 
-    if dsh_builtin::get_command(word).is_some() {
+    if dsh_builtin::is_builtin(word) {
         return true;
     }
 

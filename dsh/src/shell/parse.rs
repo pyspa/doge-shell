@@ -369,8 +369,8 @@ pub fn parse_command(
     }
 
     let cmd = argv[0].as_str();
-    if let Some(cmd_fn) = dsh_builtin::get_command(cmd) {
-        let builtin = process::BuiltinProcess::new(cmd.to_string(), cmd_fn, argv);
+    if let Some(handler) = dsh_builtin::get_handler(cmd) {
+        let builtin = process::BuiltinProcess::new_handler(cmd.to_string(), handler, argv);
         current_job.set_process(JobProcess::Builtin(builtin));
     } else if shell.lisp_engine.borrow().is_export(cmd) {
         let cmd_fn = dsh_builtin::lisp::run;
@@ -383,10 +383,10 @@ pub fn parse_command(
             current_job.set_process(JobProcess::Command(process));
             current_job.foreground = ctx.foreground;
         } else if dirs::is_dir(cmd) {
-            if let Some(cmd_fn) = dsh_builtin::get_command("cd") {
-                let builtin = process::BuiltinProcess::new(
+            if let Some(handler) = dsh_builtin::get_handler("cd") {
+                let builtin = process::BuiltinProcess::new_handler(
                     cmd.to_string(),
-                    cmd_fn,
+                    handler,
                     vec!["cd".to_string(), cmd.to_string()],
                 );
                 current_job.set_process(JobProcess::Builtin(builtin));

@@ -220,11 +220,8 @@ fn eval_inner(
                     };
                     debug!("add autocomplete {entry:?}");
 
-                    env.borrow_mut()
-                        .shell_env
-                        .write()
-                        .autocompletion
-                        .push(entry);
+                    let autocompletion = Rc::clone(&env.borrow().autocompletion);
+                    autocompletion.borrow_mut().push(entry);
 
                     Ok(Value::NIL)
                 }

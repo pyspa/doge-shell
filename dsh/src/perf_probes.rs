@@ -23,6 +23,16 @@ pub struct ProbeResult {
 }
 
 pub fn run_default_probes(iterations: usize) -> Vec<ProbeResult> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return std::thread::spawn(move || run_default_probes_outside_runtime(iterations))
+            .join()
+            .expect("latency probe thread must complete");
+    }
+
+    run_default_probes_outside_runtime(iterations)
+}
+
+fn run_default_probes_outside_runtime(iterations: usize) -> Vec<ProbeResult> {
     let iterations = iterations.max(1);
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime for latency probes");
 
@@ -534,5 +544,11 @@ mod tests {
         assert!(names.contains(&"integrated_completion_kubectl_subcommand_warm"));
         assert!(names.contains(&"integrated_completion_static_json_warm"));
         assert!(results.iter().all(|result| result.iterations >= 1));
+    }
+
+    #[tokio::test]
+    async fn default_probes_can_run_inside_tokio_runtime() {
+        let results = run_default_probes(1);
+        assert!(!results.is_empty());
     }
 }

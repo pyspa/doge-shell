@@ -104,6 +104,7 @@ impl LispEngine {
             EnvironmentSnapshot::capture(&env)
         };
         let lisp_entries_snapshot = self.env.borrow().snapshot_entries();
+        let lisp_autocompletion_snapshot = self.env.borrow().snapshot_autocompletion();
         let action_registry_snapshot = crate::command_palette::REGISTRY.read().snapshot_actions();
         let process_env_snapshot: HashMap<OsString, OsString> = std::env::vars_os().collect();
 
@@ -130,6 +131,9 @@ impl LispEngine {
                 // config evaluation does not leave the shell in a broken state.
                 self.restore_environment_snapshot(env_snapshot);
                 self.env.borrow_mut().restore_entries(lisp_entries_snapshot);
+                self.env
+                    .borrow()
+                    .restore_autocompletion(lisp_autocompletion_snapshot);
                 crate::command_palette::REGISTRY
                     .write()
                     .restore_actions(action_registry_snapshot);

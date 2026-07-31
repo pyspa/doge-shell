@@ -102,7 +102,7 @@ fn print_prompt_inner(repl: &mut Repl<'_>, out: &mut impl Write, new_prompt: boo
     // redraw height belongs to the old prompt and must not clear later output.
     repl.last_drawn_cursor_y = 0;
 
-    if !repl.multiline_buffer.is_empty() {
+    if !repl.state.multiline_buffer.is_empty() {
         let continuation_prompt = "..> ";
         out.write_all(continuation_prompt.as_bytes()).ok();
         repl.prompt_mark_cache = continuation_prompt.to_string();
@@ -141,7 +141,7 @@ fn print_prompt_inner(repl: &mut Repl<'_>, out: &mut impl Write, new_prompt: boo
     let new_mark;
     {
         let mut prompt = repl.prompt.write();
-        prompt.update_status(repl.last_status, repl.last_duration);
+        prompt.update_status(repl.state.last_status, repl.state.last_duration);
         prompt.print_preprompt(&mut buffer);
         new_mark = prompt.mark.clone();
     }
@@ -644,7 +644,7 @@ mod tests {
     async fn continuation_prompt_resets_previous_input_redraw_height() {
         let mut shell = Shell::new(Environment::new());
         let mut repl = Repl::new(&mut shell);
-        repl.multiline_buffer = "echo one\n".to_string();
+        repl.state.multiline_buffer = "echo one\n".to_string();
         repl.last_drawn_cursor_y = 2;
 
         let mut output = Vec::new();
@@ -786,7 +786,7 @@ mod tests {
         let mut shell = Shell::new(Environment::new());
         let mut repl = Repl::new(&mut shell);
         repl.columns = 40;
-        repl.multiline_buffer = "echo one\n".to_string();
+        repl.state.multiline_buffer = "echo one\n".to_string();
 
         let mut output = Vec::new();
         print_prompt(&mut repl, &mut output);
@@ -822,7 +822,7 @@ mod tests {
         repl.columns = 40;
         repl.prompt_mark_cache = "..> ".to_string();
         repl.prompt_mark_width = 4;
-        repl.multiline_buffer = "echo one\n".to_string();
+        repl.state.multiline_buffer = "echo one\n".to_string();
         repl.last_drawn_cursor_y = 0;
 
         let mut output = Vec::new();

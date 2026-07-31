@@ -1,4 +1,5 @@
-use super::ShellProxy;
+use super::{BuiltinFuture, ShellProxy};
+use crate::capability::AiCapability;
 use dsh_types::command_block::CommandBlock;
 use dsh_types::{Context, ExitStatus};
 use serde_json::json;
@@ -26,7 +27,10 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         BlocksMode::Show { index, output } => show_block(ctx, proxy, index, output),
         BlocksMode::Command(index) => print_command(ctx, proxy, index),
         BlocksMode::Rerun(index) => rerun_block(ctx, proxy, index),
-        BlocksMode::Explain(index) => explain_block(ctx, proxy, index),
+        BlocksMode::Explain(_) => {
+            let _ = ctx.write_stderr("blocks: AI explanation requires foreground async execution");
+            ExitStatus::ExitedWith(1)
+        }
         BlocksMode::Clear => clear_blocks(ctx, proxy),
         BlocksMode::Tui => open_tui(ctx, proxy),
         BlocksMode::Help => {
@@ -34,6 +38,41 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
             ExitStatus::ExitedWith(0)
         }
     }
+}
+
+pub fn command_async<'a>(
+    ctx: &'a Context,
+    argv: Vec<String>,
+    proxy: &'a mut dyn ShellProxy,
+) -> BuiltinFuture<'a> {
+    Box::pin(async move {
+        let options = match parse_options(&argv[1..]) {
+            Ok(options) => options,
+            Err(err) => {
+                let _ = ctx.write_stderr(&format!("blocks: {err}"));
+                let _ = ctx.write_stderr(help_text());
+                return ExitStatus::ExitedWith(1);
+            }
+        };
+
+        match options.mode {
+            BlocksMode::List {
+                limit,
+                failed,
+                watched,
+            } => list_blocks(ctx, proxy, limit, failed, watched),
+            BlocksMode::Show { index, output } => show_block(ctx, proxy, index, output),
+            BlocksMode::Command(index) => print_command(ctx, proxy, index),
+            BlocksMode::Rerun(index) => rerun_block(ctx, proxy, index),
+            BlocksMode::Explain(index) => explain_block_async(ctx, proxy, index).await,
+            BlocksMode::Clear => clear_blocks(ctx, proxy),
+            BlocksMode::Tui => open_tui(ctx, proxy),
+            BlocksMode::Help => {
+                let _ = ctx.write_stdout(help_text());
+                ExitStatus::ExitedWith(0)
+            }
+        }
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -310,7 +349,11 @@ fn rerun_block(ctx: &Context, proxy: &mut dyn ShellProxy, index: usize) -> ExitS
     }
 }
 
-fn explain_block(ctx: &Context, proxy: &mut dyn ShellProxy, index: usize) -> ExitStatus {
+async fn explain_block_async(
+    ctx: &Context,
+    proxy: &mut dyn ShellProxy,
+    index: usize,
+) -> ExitStatus {
     let Some(block) = get_block(proxy, index) else {
         let _ = ctx.write_stderr(&format!("blocks: no block at index {index}"));
         return ExitStatus::ExitedWith(1);
@@ -337,7 +380,7 @@ fn explain_block(ctx: &Context, proxy: &mut dyn ShellProxy, index: usize) -> Exi
         }),
     ];
 
-    match proxy.ask_ai(messages) {
+    match proxy.ask(messages).await {
         Ok(response) => {
             let _ = ctx.write_stdout(&response);
             ExitStatus::ExitedWith(0)
@@ -550,10 +593,12 @@ mod tests {
         fn confirm_action(&mut self, _message: &str) -> anyhow::Result<bool> {
             Ok(true)
         }
-        fn ask_ai(&mut self, _messages: Vec<serde_json::Value>) -> anyhow::Result<String> {
-            self.ai_response
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("no ai"))
+        fn ask_ai_async<'a>(
+            &'a mut self,
+            _messages: Vec<serde_json::Value>,
+        ) -> crate::ProxyFuture<'a, String> {
+            let response = self.ai_response.clone();
+            Box::pin(async move { response.ok_or_else(|| anyhow::anyhow!("no ai")) })
         }
         fn get_command_blocks(&self) -> Vec<CommandBlock> {
             self.blocks.clone()
@@ -800,16 +845,17 @@ mod tests {
         assert!(proxy.requested_eval.is_empty());
     }
 
-    #[test]
-    fn explain_uses_ai() {
+    #[tokio::test]
+    async fn explain_uses_ai() {
         let ctx = Context::new_safe(nix::unistd::getpid(), nix::unistd::getpid(), true);
         let mut proxy = MockShellProxy::new(vec![block("echo hi", 0, true)]);
 
-        let status = command(
+        let status = command_async(
             &ctx,
             vec!["blocks".to_string(), "explain".to_string(), "1".to_string()],
             &mut proxy,
-        );
+        )
+        .await;
 
         assert_eq!(status, ExitStatus::ExitedWith(0));
     }

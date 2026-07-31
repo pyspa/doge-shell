@@ -5,15 +5,37 @@ use crate::shell::Shell;
 use anyhow::Result;
 use dsh_types::Context;
 use nix::sys::signal::{Signal, killpg};
+use std::borrow::Cow;
 use tabled::{Table, Tabled};
 use tracing::{debug, error, warn};
 
-#[derive(Tabled)]
 struct Job {
     job: usize,
     pid: i32,
     state: String,
     command: String,
+}
+
+impl Tabled for Job {
+    const LENGTH: usize = 4;
+
+    fn fields(&self) -> Vec<Cow<'_, str>> {
+        vec![
+            Cow::Owned(self.job.to_string()),
+            Cow::Owned(self.pid.to_string()),
+            Cow::Borrowed(self.state.as_str()),
+            Cow::Borrowed(self.command.as_str()),
+        ]
+    }
+
+    fn headers() -> Vec<Cow<'static, str>> {
+        vec![
+            Cow::Borrowed("job"),
+            Cow::Borrowed("pid"),
+            Cow::Borrowed("state"),
+            Cow::Borrowed("command"),
+        ]
+    }
 }
 
 /// Parse job specification (e.g., "%1", "1", "%+", "%-").

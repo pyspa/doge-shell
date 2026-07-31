@@ -245,13 +245,6 @@ mod tests {
         fn open_editor(&mut self, _content: &str, _extension: &str) -> anyhow::Result<String> {
             Ok(String::new())
         }
-        fn generate_command_completion(
-            &mut self,
-            _command_name: &str,
-            _help_text: &str,
-        ) -> anyhow::Result<String> {
-            Ok(String::new())
-        }
     }
 
     #[test]

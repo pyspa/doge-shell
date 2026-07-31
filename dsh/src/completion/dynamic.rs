@@ -1,30 +1,44 @@
 use super::integrated::{CandidateType, EnhancedCandidate, matches_prefix};
 use super::parser::{CompletionContext, ParsedCommandLine};
 use super::shell_path::normalize_path_token;
-use super::subprocess;
 use crate::completion::command::CompletionType;
 use crate::completion::generators::filesystem::FileSystemGenerator;
 use crate::environment::Environment;
 use anyhow::Result;
 use dsh_builtin::{project_context, task};
-use dsh_types::completion::is_known_dynamic_completion_provider;
 use parking_lot::RwLock;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 use tracing::warn;
 
+mod cache;
+mod container;
 mod dev;
+mod external;
+mod git;
+mod kubernetes;
 mod linux;
+mod project;
+mod registry;
+mod runner;
+mod worker;
+
+use cache::{
+    CommandValueCacheEntry, CommandValueErrorEntry, ComposeCacheEntry, DynamicCommandCacheKey,
+    DynamicCommandCacheKind, ExternalCompletionCacheEntry, ExternalCompletionCacheKey,
+    FileMetadataSignature, ProjectDynamicCache, ProjectRootCacheEntry, TaskCacheEntry,
+    TaskCacheKey,
+};
 
 const DYNAMIC_COMMAND_CACHE_TTL_MS: u64 = 1000;
 /// Project roots do not move while the shell sits at a prompt, and finding one
 /// costs a `canonicalize` plus a marker probe per ancestor directory, so this
 /// cache is kept far longer than the dynamic command values cache.
 const PROJECT_ROOT_CACHE_TTL_MS: u64 = 30_000;
-const COMPLETION_COMMAND_TIMEOUT: Duration = Duration::from_millis(1500);
 const EXTERNAL_COMPLETION_CACHE_LIMIT: usize = 128;
 const JS_PROJECT_TASK_SOURCES: &[&str] = &["npm", "pnpm", "yarn", "bun"];
 const DENO_PROJECT_TASK_SOURCES: &[&str] = &["deno"];
@@ -36,25 +50,6 @@ const JUST_PROJECT_TASK_SOURCES: &[&str] = &["just"];
 const MAKE_PROJECT_TASK_SOURCES: &[&str] = &["make"];
 const GRADLE_PROJECT_TASK_SOURCES: &[&str] = &["gradle"];
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct FileMetadataSignature {
-    exists: bool,
-    modified: Option<SystemTime>,
-    len: u64,
-}
-
-#[derive(Debug, Clone)]
-struct TaskCacheEntry {
-    signature: Vec<FileMetadataSignature>,
-    tasks: Vec<task::TaskInfo>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct TaskCacheKey {
-    project_root: PathBuf,
-    sources: Vec<String>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProjectTaskCandidateText {
     Name,
@@ -65,39 +60,6 @@ enum ProjectTaskCandidateText {
 struct ProjectTaskCompletionConfig {
     sources: &'static [&'static str],
     candidate_text: ProjectTaskCandidateText,
-}
-
-#[derive(Debug, Clone)]
-struct ComposeCacheEntry {
-    signature: FileMetadataSignature,
-    services: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-struct CommandValueCacheEntry {
-    values: Vec<String>,
-    cached_at: Instant,
-    last_load_duration: Option<Duration>,
-    last_error: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct CommandValueErrorEntry {
-    recorded_at: Instant,
-    last_load_duration: Duration,
-    error: String,
-}
-
-#[derive(Debug, Clone)]
-struct ProjectRootCacheEntry {
-    project_root: PathBuf,
-    cached_at: Instant,
-}
-
-#[derive(Debug, Clone)]
-struct ExternalCompletionCacheEntry {
-    candidates: Vec<EnhancedCandidate>,
-    cached_at: Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,49 +111,10 @@ struct NmcliCompletionSpec<'a> {
     parser: fn(&[String]) -> Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum DynamicCommandCacheKind {
-    GitBranch,
-    GitRemote,
-    GitWorktree,
-    KubectlContext,
-    KubectlNamespace,
-    CommandValue { command: String, value_kind: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct DynamicCommandCacheKey {
-    kind: DynamicCommandCacheKind,
-    scope_dir: PathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct ExternalCompletionCacheKey {
-    command_template: String,
-    current_dir: PathBuf,
-    input: String,
-    cursor_pos: usize,
-    command: String,
-    current_token: String,
-    subcommand_path: String,
-}
-
-#[derive(Debug, Default)]
-struct ProjectDynamicCache {
-    tasks: HashMap<TaskCacheKey, TaskCacheEntry>,
-    compose_services: HashMap<PathBuf, ComposeCacheEntry>,
-    commands: HashMap<DynamicCommandCacheKey, CommandValueCacheEntry>,
-    command_errors: HashMap<DynamicCommandCacheKey, CommandValueErrorEntry>,
-    command_pending: HashSet<DynamicCommandCacheKey>,
-    external: HashMap<ExternalCompletionCacheKey, ExternalCompletionCacheEntry>,
-    external_pending: HashSet<ExternalCompletionCacheKey>,
-    external_pruned_total: usize,
-    project_roots: HashMap<PathBuf, ProjectRootCacheEntry>,
-}
-
 pub(crate) struct DynamicCompletionProvider {
     environment: Arc<RwLock<Environment>>,
     cache: Arc<RwLock<ProjectDynamicCache>>,
+    refresh_generation: AtomicU64,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -232,7 +155,7 @@ pub(crate) fn diagnostics_lines() -> Vec<String> {
             diagnostics.external_fish_entries,
             EXTERNAL_COMPLETION_CACHE_LIMIT,
             diagnostics.external_pruned_total,
-            COMPLETION_COMMAND_TIMEOUT.as_millis(),
+            runner::timeout().as_millis(),
             external
         ),
         format!("completion-cache last-refresh {refresh}"),
@@ -242,7 +165,7 @@ pub(crate) fn diagnostics_lines() -> Vec<String> {
 }
 
 pub(crate) fn is_known_declared_dynamic_provider(provider: &str) -> bool {
-    is_known_dynamic_completion_provider(provider)
+    registry::registration(provider).is_some()
 }
 
 pub(crate) fn fish_fallback_mode_label(environment: &Environment) -> &'static str {
@@ -269,7 +192,21 @@ impl DynamicCompletionProvider {
         Self {
             environment,
             cache: Arc::new(RwLock::new(ProjectDynamicCache::default())),
+            refresh_generation: AtomicU64::new(0),
         }
+    }
+
+    pub(crate) fn refresh_generation(&self) -> u64 {
+        self.refresh_generation.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn has_pending_refresh(&self) -> bool {
+        let cache = self.cache.read();
+        !cache.command_pending.is_empty() || !cache.external_pending.is_empty()
+    }
+
+    fn mark_refresh_scheduled(&self) {
+        self.refresh_generation.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn cached_project_root(&self, current_dir: &Path) -> PathBuf {
@@ -315,8 +252,29 @@ impl DynamicCompletionProvider {
         current_dir: &Path,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
+        self.try_collect_declared_dynamic_candidates(
+            provider,
+            scope,
+            parsed_command_line,
+            current_dir,
+            cached_only,
+        )
+        .unwrap_or_else(|| {
+            warn!("Unknown dynamic completion provider: {provider}");
+            Vec::new()
+        })
+    }
+
+    fn try_collect_declared_dynamic_candidates(
+        &self,
+        provider: &str,
+        scope: Option<&str>,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        cached_only: bool,
+    ) -> Option<Vec<EnhancedCandidate>> {
         let current_token = parsed_command_line.current_token.as_str();
-        match provider {
+        Some(match provider {
             "archive.entry" => {
                 self.collect_archive_entry_candidates(parsed_command_line, current_dir, cached_only)
             }
@@ -449,15 +407,16 @@ impl DynamicCompletionProvider {
             ),
             "kubectl.resource_name" => scope
                 .or_else(|| {
-                    split_kubectl_resource_name_token(current_token).map(|(resource, _)| resource)
+                    kubernetes::split_resource_name_token(current_token)
+                        .map(|(resource, _)| resource)
                 })
-                .or_else(|| selected_kubectl_resource(parsed_command_line))
+                .or_else(|| kubernetes::selected_resource(parsed_command_line))
                 .map(|resource| {
                     self.collect_kubectl_resource_name_candidates_for_token(
                         current_dir,
                         resource,
                         current_token,
-                        selected_kubectl_namespace(parsed_command_line),
+                        kubernetes::selected_namespace(parsed_command_line),
                         cached_only,
                     )
                 })
@@ -533,7 +492,7 @@ impl DynamicCompletionProvider {
                 cached_only,
             ),
             "project.task" => {
-                if let Some(config) = project_task_completion_config(scope, parsed_command_line) {
+                if let Some(config) = project::completion_config(scope, parsed_command_line) {
                     self.collect_project_task_candidates_for_sources_with_mode(
                         parsed_command_line,
                         current_dir,
@@ -782,11 +741,8 @@ impl DynamicCompletionProvider {
             "zpool.pool" => {
                 self.collect_zpool_pool_candidates(current_dir, current_token, cached_only)
             }
-            _ => {
-                warn!("Unknown dynamic completion provider: {provider}");
-                Vec::new()
-            }
-        }
+            _ => return None,
+        })
     }
 
     fn collect_task_candidates_with_mode(
@@ -862,8 +818,9 @@ impl DynamicCompletionProvider {
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
         let command_path = self.resolve_command_path("helm");
-        let namespace = selected_kubectl_namespace(parsed_command_line).map(str::to_string);
-        let kube_context = selected_helm_kube_context(parsed_command_line).map(str::to_string);
+        let namespace = kubernetes::selected_namespace(parsed_command_line).map(str::to_string);
+        let kube_context =
+            kubernetes::selected_helm_context(parsed_command_line).map(str::to_string);
         let value_kind = format!(
             "release:{}:{}",
             namespace.as_deref().unwrap_or("_"),
@@ -881,7 +838,7 @@ impl DynamicCompletionProvider {
                 let Some(command_path) = command_path else {
                     return Ok(Vec::new());
                 };
-                let mut command = subprocess::command(&command_path);
+                let mut command = runner::command(&command_path);
                 command.arg("list").arg("--short").current_dir(&current_dir);
                 if let Some(namespace) = namespace.as_deref() {
                     command.arg("--namespace").arg(namespace);
@@ -936,6 +893,16 @@ impl DynamicCompletionProvider {
 
     fn fish_fallback_enabled(&self) -> bool {
         fish_fallback_mode_from_env(&self.environment.read()) != FishFallbackMode::Disabled
+    }
+
+    pub(crate) fn has_async_fallback(&self) -> bool {
+        let environment = self.environment.read();
+        let has_external = environment
+            .get_var("DSH_EXTERNAL_COMPLETER")
+            .is_some_and(|value| !value.trim().is_empty());
+        let has_fish = fish_fallback_mode_from_env(&environment) != FishFallbackMode::Disabled
+            && environment.lookup("fish").is_some();
+        has_external || has_fish
     }
 
     pub(crate) fn collect_git_candidates(
@@ -1269,15 +1236,17 @@ impl DynamicCompletionProvider {
                 _ => Vec::new(),
             },
             CompletionContext::SubCommand | CompletionContext::Argument { .. } => {
-                let words = kubectl_positional_words(parsed_command_line);
+                let words = kubernetes::positional_words(parsed_command_line);
                 if words.len() >= 2 && words[0] == "config" && words[1] == "use-context" {
                     self.collect_kubectl_context_candidates(current_dir, current_token, cached_only)
                 } else if matches!(
                     words.first().copied(),
                     Some("get" | "describe" | "delete" | "edit" | "create" | "apply")
                 ) {
-                    let namespace = selected_kubectl_namespace(parsed_command_line);
-                    if let Some((resource, _)) = split_kubectl_resource_name_token(current_token) {
+                    let namespace = kubernetes::selected_namespace(parsed_command_line);
+                    if let Some((resource, _)) =
+                        kubernetes::split_resource_name_token(current_token)
+                    {
                         self.collect_kubectl_resource_name_candidates_for_token(
                             current_dir,
                             resource,
@@ -1285,7 +1254,9 @@ impl DynamicCompletionProvider {
                             namespace,
                             cached_only,
                         )
-                    } else if let Some(resource) = selected_kubectl_resource(parsed_command_line) {
+                    } else if let Some(resource) =
+                        kubernetes::selected_resource(parsed_command_line)
+                    {
                         if resource == current_token {
                             self.collect_kubectl_resource_type_candidates(
                                 current_dir,
@@ -2871,7 +2842,7 @@ impl DynamicCompletionProvider {
             .into_iter()
             .filter(|task| sources.contains(&task.source.as_str()))
             .filter_map(|task| {
-                let text = project_task_candidate_text(&task, candidate_text);
+                let text = project::candidate_text(&task, candidate_text);
                 matches_prefix(current_token, &text).then_some((task, text))
             })
             .map(|(task, text)| EnhancedCandidate {
@@ -3040,7 +3011,7 @@ impl DynamicCompletionProvider {
                         &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
                         &current_dir,
                     )?;
-                    values.extend(parse_git_remote_branches(
+                    values.extend(git::parse_remote_branches(
                         &run_command_lines(
                             &command_path,
                             &["for-each-ref", "--format=%(refname:short)", "refs/remotes"],
@@ -3412,7 +3383,7 @@ impl DynamicCompletionProvider {
                     let Some(command_path) = command_path else {
                         return Ok(Vec::new());
                     };
-                    Ok(parse_git_remote_branches(
+                    Ok(git::parse_remote_branches(
                         &run_command_lines(
                             &command_path,
                             &["for-each-ref", "--format=%(refname:short)", "refs/remotes"],
@@ -3460,7 +3431,7 @@ impl DynamicCompletionProvider {
                         &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
                         &current_dir,
                     )?;
-                    values.extend(parse_git_remote_branches(
+                    values.extend(git::parse_remote_branches(
                         &run_command_lines(
                             &command_path,
                             &["for-each-ref", "--format=%(refname:short)", "refs/remotes"],
@@ -3564,7 +3535,7 @@ impl DynamicCompletionProvider {
                     let Some(command_path) = command_path else {
                         return Ok(Vec::new());
                     };
-                    Ok(parse_git_stash_refs(&run_command_lines(
+                    Ok(git::parse_stash_refs(&run_command_lines(
                         &command_path,
                         &["stash", "list"],
                         &current_dir,
@@ -3595,7 +3566,7 @@ impl DynamicCompletionProvider {
                     let Some(command_path) = command_path else {
                         return Ok(Vec::new());
                     };
-                    Ok(parse_git_status_porcelain_paths(&run_command_stdout(
+                    Ok(git::parse_status_porcelain_paths(&run_command_stdout(
                         &command_path,
                         &["status", "--porcelain", "-z"],
                         &current_dir,
@@ -3735,7 +3706,7 @@ impl DynamicCompletionProvider {
             current_token,
             &format!("{executable} image"),
             &["images", "--format", "{{.Repository}}:{{.Tag}}"],
-            parse_container_images,
+            container::parse_images,
             cached_only,
         )
     }
@@ -4053,7 +4024,7 @@ impl DynamicCompletionProvider {
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
         if let Some((token_resource, name_prefix)) =
-            split_kubectl_resource_name_token(current_token)
+            kubernetes::split_resource_name_token(current_token)
         {
             return self
                 .collect_kubectl_resource_name_candidates(
@@ -4407,6 +4378,7 @@ impl DynamicCompletionProvider {
                 update_diagnostics_from_cache(&cache, None);
                 drop(cache);
                 if start_refresh {
+                    self.mark_refresh_scheduled();
                     spawn_command_refresh(self.cache.clone(), cache_key, loader);
                 }
                 return values;
@@ -4419,40 +4391,9 @@ impl DynamicCompletionProvider {
             update_diagnostics_from_cache(&cache, None);
         }
 
-        let load_started = Instant::now();
-        let result = loader();
-        let load_duration = load_started.elapsed();
-        let mut cache = self.cache.write();
-        cache.command_pending.remove(&cache_key);
-        match result {
-            Ok(values) => {
-                cache.command_errors.remove(&cache_key);
-                cache.commands.insert(
-                    cache_key,
-                    CommandValueCacheEntry {
-                        values: values.clone(),
-                        cached_at: Instant::now(),
-                        last_load_duration: Some(load_duration),
-                        last_error: None,
-                    },
-                );
-                update_diagnostics_from_cache(&cache, None);
-                values
-            }
-            Err(err) => {
-                warn!("Dynamic command completion initial load failed: {}", err);
-                cache.command_errors.insert(
-                    cache_key,
-                    CommandValueErrorEntry {
-                        recorded_at: Instant::now(),
-                        last_load_duration: load_duration,
-                        error: err.to_string(),
-                    },
-                );
-                update_diagnostics_from_cache(&cache, None);
-                Vec::new()
-            }
-        }
+        self.mark_refresh_scheduled();
+        spawn_command_refresh(self.cache.clone(), cache_key, loader);
+        Vec::new()
     }
 
     fn lookup_command_values(
@@ -4492,6 +4433,7 @@ impl DynamicCompletionProvider {
                 update_diagnostics_from_cache(&cache, None);
                 drop(cache);
                 if start_refresh {
+                    self.mark_refresh_scheduled();
                     spawn_external_refresh(self.cache.clone(), cache_key, loader);
                 }
                 return Ok(candidates);
@@ -4504,31 +4446,9 @@ impl DynamicCompletionProvider {
             update_diagnostics_from_cache(&cache, Some("external initial-load".to_string()));
         }
 
-        let result = loader();
-        let mut cache = self.cache.write();
-        cache.external_pending.remove(&cache_key);
-        match result {
-            Ok(candidates) => {
-                if candidates.is_empty() {
-                    update_diagnostics_from_cache(&cache, Some("external empty".to_string()));
-                } else {
-                    insert_external_cache_entry(
-                        &mut cache,
-                        cache_key,
-                        ExternalCompletionCacheEntry {
-                            candidates: candidates.clone(),
-                            cached_at: Instant::now(),
-                        },
-                    );
-                    update_diagnostics_from_cache(&cache, Some("external ok".to_string()));
-                }
-                Ok(candidates)
-            }
-            Err(err) => {
-                update_diagnostics_from_cache(&cache, Some(format!("external error: {err}")));
-                Err(err)
-            }
-        }
+        self.mark_refresh_scheduled();
+        spawn_external_refresh(self.cache.clone(), cache_key, loader);
+        Ok(Vec::new())
     }
 
     fn resolve_command_path(&self, command_name: &str) -> Option<String> {
@@ -4547,7 +4467,7 @@ fn spawn_command_refresh<F>(
 ) where
     F: FnOnce() -> Result<Vec<String>> + Send + 'static,
 {
-    std::thread::spawn(move || {
+    worker::submit_command(move || {
         let load_started = Instant::now();
         let result = loader();
         let load_duration = load_started.elapsed();
@@ -4591,7 +4511,8 @@ fn spawn_external_refresh<F>(
 ) where
     F: FnOnce() -> Result<Vec<EnhancedCandidate>> + Send + 'static,
 {
-    std::thread::spawn(move || {
+    let is_fish = cache_key.command_template.starts_with("fish-fallback:");
+    worker::submit_external(is_fish, move || {
         let result = loader();
         let mut cache = cache.write();
         cache.external_pending.remove(&cache_key);
@@ -5088,7 +5009,7 @@ fn parse_compose_service_names(path: &Path) -> Result<Vec<String>> {
 fn run_external_completer_for_key(
     key: &ExternalCompletionCacheKey,
 ) -> Result<Vec<EnhancedCandidate>> {
-    let mut command = subprocess::shell_command(&key.command_template);
+    let mut command = runner::shell_command(&key.command_template);
     command
         .current_dir(&key.current_dir)
         .env("DSH_COMPLETION_INPUT", &key.input)
@@ -5100,7 +5021,7 @@ fn run_external_completer_for_key(
     let lines = collect_command_lines(command)?;
     Ok(lines
         .into_iter()
-        .filter_map(|line| parse_external_completion_line(&line, &key.current_token))
+        .filter_map(|line| external::parse_line(&line, &key.current_token))
         .collect())
 }
 
@@ -5108,7 +5029,7 @@ fn run_fish_completer_for_key(
     command_path: &str,
     key: &ExternalCompletionCacheKey,
 ) -> Result<Vec<EnhancedCandidate>> {
-    let mut command = subprocess::command(command_path);
+    let mut command = runner::command(command_path);
     command
         .arg("-c")
         .arg("complete -C \"$argv[1]\"")
@@ -5119,166 +5040,29 @@ fn run_fish_completer_for_key(
     let lines = collect_command_lines(command)?;
     Ok(lines
         .into_iter()
-        .filter_map(|line| parse_fish_completion_line(&line, &key.current_token))
+        .filter_map(|line| external::parse_fish_line(&line, &key.current_token))
         .collect())
 }
 
-fn parse_external_completion_line(line: &str, current_token: &str) -> Option<EnhancedCandidate> {
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    if trimmed.starts_with('{')
-        && let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed)
-        && let Some(object) = value.as_object()
-    {
-        let text = object.get("text").and_then(|value| value.as_str())?;
-        let replacement = object
-            .get("replacement")
-            .and_then(|value| value.as_str())
-            .unwrap_or(text)
-            .trim();
-        if replacement.is_empty() || !matches_prefix(current_token, replacement) {
-            return None;
-        }
-
-        let mut description = object
-            .get("description")
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
-        if description.is_none() && replacement != text {
-            description = Some(text.to_string());
-        }
-
-        let candidate_type = object
-            .get("type")
-            .and_then(|value| value.as_str())
-            .and_then(parse_external_candidate_type)
-            .unwrap_or(CandidateType::Argument);
-        let priority = object
-            .get("priority")
-            .and_then(|value| value.as_u64())
-            .and_then(|value| u32::try_from(value).ok())
-            .unwrap_or(200);
-
-        return Some(EnhancedCandidate {
-            text: replacement.to_string(),
-            description,
-            candidate_type,
-            priority,
-        });
-    }
-
-    let (text, description) = if let Some((text, description)) = trimmed.split_once('\t') {
-        (text.trim(), Some(description.trim().to_string()))
-    } else {
-        (trimmed, None)
-    };
-
-    if text.is_empty() || !matches_fish_prefix(current_token, text) {
-        return None;
-    }
-
-    Some(EnhancedCandidate {
-        text: text.to_string(),
-        description,
-        candidate_type: CandidateType::Argument,
-        priority: 200,
-    })
-}
-
-fn parse_external_candidate_type(value: &str) -> Option<CandidateType> {
-    match value {
-        "subcommand" | "SubCommand" => Some(CandidateType::SubCommand),
-        "short-option" | "short_option" | "ShortOption" => Some(CandidateType::ShortOption),
-        "long-option" | "long_option" | "LongOption" => Some(CandidateType::LongOption),
-        "argument" | "Argument" => Some(CandidateType::Argument),
-        "file" | "File" => Some(CandidateType::File),
-        "directory" | "Directory" => Some(CandidateType::Directory),
-        "process" | "Process" => Some(CandidateType::Process),
-        "generic" | "Generic" => Some(CandidateType::Generic),
-        _ => None,
-    }
-}
-
-fn parse_fish_completion_line(line: &str, current_token: &str) -> Option<EnhancedCandidate> {
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let (text, description) = if let Some((text, description)) = trimmed.split_once('\t') {
-        (text.trim(), Some(description.trim().to_string()))
-    } else {
-        (trimmed, None)
-    };
-
-    if text.is_empty() || !matches_fish_prefix(current_token, text) {
-        return None;
-    }
-
-    let candidate_type = if text.ends_with('/') {
-        CandidateType::Directory
-    } else if text.starts_with("--") {
-        CandidateType::LongOption
-    } else if text.starts_with('-') {
-        CandidateType::ShortOption
-    } else {
-        CandidateType::Argument
-    };
-
-    Some(EnhancedCandidate {
-        text: text.to_string(),
-        description,
-        candidate_type,
-        // Keep fish as a broad, low-priority fallback so built-in JSON and
-        // project-aware dynamic providers win when both sources know a value.
-        priority: 35,
-    })
-}
-
-fn matches_fish_prefix(current_token: &str, text: &str) -> bool {
-    if matches_prefix(current_token, text) || text.starts_with(current_token) {
-        return true;
-    }
-
-    let quote_stripped = current_token.trim_start_matches(['\'', '"']);
-    if quote_stripped != current_token
-        && (matches_prefix(quote_stripped, text) || text.starts_with(quote_stripped))
-    {
-        return true;
-    }
-
-    let normalized_current_token = normalize_path_token(current_token);
-    normalized_current_token != current_token
-        && (matches_prefix(&normalized_current_token, text)
-            || text.starts_with(&normalized_current_token))
-}
-
 fn run_command_stdout(command_path: &str, args: &[&str], current_dir: &Path) -> Result<String> {
-    let mut command = subprocess::command(command_path);
+    let mut command = runner::command(command_path);
     command.args(args).current_dir(current_dir);
-    subprocess::collect_stdout(command, COMPLETION_COMMAND_TIMEOUT)
+    runner::collect_stdout(command)
 }
 
 fn run_command_lines(command_path: &str, args: &[&str], current_dir: &Path) -> Result<Vec<String>> {
-    let mut command = subprocess::command(command_path);
+    let mut command = runner::command(command_path);
     command.args(args).current_dir(current_dir);
     collect_command_lines(command)
 }
 
 fn collect_command_lines(command: std::process::Command) -> Result<Vec<String>> {
-    Ok(
-        subprocess::collect_stdout(command, COMPLETION_COMMAND_TIMEOUT)?
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(str::to_string)
-            .collect(),
-    )
+    Ok(runner::collect_stdout(command)?
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 fn dedup_sorted(mut values: Vec<String>) -> Vec<String> {
@@ -5307,17 +5091,6 @@ fn shell_state_candidates(
             priority: 140,
         })
         .collect()
-}
-
-fn parse_container_images(lines: &[String]) -> Vec<String> {
-    dedup_sorted(
-        lines
-            .iter()
-            .map(|line| line.trim())
-            .filter(|image| !image.contains("<none>"))
-            .map(str::to_string)
-            .collect(),
-    )
 }
 
 fn parse_first_fields(lines: &[String]) -> Vec<String> {
@@ -5510,148 +5283,6 @@ fn archive_file_candidates(current_token: &str) -> Vec<EnhancedCandidate> {
         .collect()
 }
 
-fn kubectl_positional_words(parsed_command_line: &ParsedCommandLine) -> Vec<&str> {
-    let mut positionals = Vec::new();
-    let mut skip_next_value = false;
-
-    for token in completion_words(parsed_command_line) {
-        if skip_next_value {
-            skip_next_value = false;
-            continue;
-        }
-
-        if kubectl_option_takes_value(token) {
-            skip_next_value = true;
-            continue;
-        }
-
-        if is_inline_kubectl_option_value(token) || token.starts_with('-') {
-            continue;
-        }
-
-        positionals.push(token);
-    }
-
-    positionals
-}
-
-fn selected_kubectl_resource(parsed_command_line: &ParsedCommandLine) -> Option<&str> {
-    let current_token = parsed_command_line.current_token.as_str();
-    let words = kubectl_positional_words(parsed_command_line);
-    let command = words.first().copied()?;
-    if !matches!(
-        command,
-        "get" | "describe" | "delete" | "edit" | "create" | "apply"
-    ) {
-        return None;
-    }
-
-    let resource = words.get(1).copied()?;
-    if resource == current_token || resource.contains('/') {
-        return None;
-    }
-
-    Some(resource)
-}
-
-fn selected_kubectl_namespace(parsed_command_line: &ParsedCommandLine) -> Option<&str> {
-    let words = completion_words(parsed_command_line);
-    for (index, token) in words.iter().enumerate() {
-        if *token == "-n" || *token == "--namespace" {
-            let Some(value) = words.get(index + 1).copied() else {
-                continue;
-            };
-            if !value.is_empty() && !value.starts_with('-') {
-                return Some(value);
-            }
-        }
-
-        if let Some(value) = token
-            .strip_prefix("--namespace=")
-            .or_else(|| token.strip_prefix("-n="))
-            .or_else(|| token.strip_prefix("-n").filter(|value| !value.is_empty()))
-            && !value.is_empty()
-        {
-            return Some(value);
-        }
-    }
-
-    None
-}
-
-fn selected_helm_kube_context(parsed_command_line: &ParsedCommandLine) -> Option<&str> {
-    let words = completion_words(parsed_command_line);
-    for (index, token) in words.iter().enumerate() {
-        if *token == "--kube-context" {
-            let Some(value) = words.get(index + 1).copied() else {
-                continue;
-            };
-            if !value.is_empty() && !value.starts_with('-') {
-                return Some(value);
-            }
-        }
-
-        if let Some(value) = token.strip_prefix("--kube-context=")
-            && !value.is_empty()
-        {
-            return Some(value);
-        }
-    }
-
-    None
-}
-
-fn split_kubectl_resource_name_token(token: &str) -> Option<(&str, &str)> {
-    let (resource, name_prefix) = token.split_once('/')?;
-    if resource.is_empty() {
-        return None;
-    }
-    Some((resource, name_prefix))
-}
-
-fn kubectl_option_takes_value(token: &str) -> bool {
-    matches!(
-        token,
-        "-n" | "--namespace"
-            | "--context"
-            | "--kubeconfig"
-            | "-o"
-            | "--output"
-            | "-l"
-            | "--selector"
-            | "--field-selector"
-            | "-f"
-            | "--filename"
-            | "-k"
-            | "--kustomize"
-            | "--as"
-            | "--as-group"
-            | "--cluster"
-            | "--server"
-            | "--token"
-            | "--user"
-    )
-}
-
-fn is_inline_kubectl_option_value(token: &str) -> bool {
-    token.starts_with("--namespace=")
-        || token.starts_with("-n=")
-        || (token.starts_with("-n") && token.len() > 2)
-        || token.starts_with("--context=")
-        || token.starts_with("--kubeconfig=")
-        || token.starts_with("--output=")
-        || token.starts_with("--selector=")
-        || token.starts_with("--field-selector=")
-        || token.starts_with("--filename=")
-        || token.starts_with("--kustomize=")
-        || token.starts_with("--as=")
-        || token.starts_with("--as-group=")
-        || token.starts_with("--cluster=")
-        || token.starts_with("--server=")
-        || token.starts_with("--token=")
-        || token.starts_with("--user=")
-}
-
 fn systemctl_unit_kind_for_context(parsed_command_line: &ParsedCommandLine) -> SystemdUnitListKind {
     parsed_command_line
         .subcommand_path
@@ -5707,71 +5338,6 @@ fn selected_systemd_manager_scope(
     }
 }
 
-fn project_task_completion_config(
-    scope: Option<&str>,
-    parsed_command_line: &ParsedCommandLine,
-) -> Option<ProjectTaskCompletionConfig> {
-    if let Some(scope_sources) = scope.and_then(project_task_sources_for_scope) {
-        return Some(ProjectTaskCompletionConfig {
-            sources: scope_sources,
-            candidate_text: project_task_candidate_text_for_scope(scope),
-        });
-    }
-
-    let sources: &'static [&'static str] = match parsed_command_line.command.as_str() {
-        "npm" | "pnpm" | "yarn" | "bun" => Some(JS_PROJECT_TASK_SOURCES),
-        "deno" => Some(DENO_PROJECT_TASK_SOURCES),
-        "turbo" => Some(TURBO_PROJECT_TASK_SOURCES),
-        "nx" => Some(NX_PROJECT_TASK_SOURCES),
-        "mise" => Some(MISE_PROJECT_TASK_SOURCES),
-        "task" => Some(TASKFILE_PROJECT_TASK_SOURCES),
-        "just" => Some(JUST_PROJECT_TASK_SOURCES),
-        "make" => Some(MAKE_PROJECT_TASK_SOURCES),
-        "gradle" | "gradlew" => Some(GRADLE_PROJECT_TASK_SOURCES),
-        _ => None,
-    }?;
-    Some(ProjectTaskCompletionConfig {
-        sources,
-        candidate_text: ProjectTaskCandidateText::Name,
-    })
-}
-
-fn project_task_sources_for_scope(scope: &str) -> Option<&'static [&'static str]> {
-    match scope {
-        "js" | "package-json" | "npm" | "pnpm" | "yarn" | "bun" => Some(JS_PROJECT_TASK_SOURCES),
-        "deno" => Some(DENO_PROJECT_TASK_SOURCES),
-        "turbo" => Some(TURBO_PROJECT_TASK_SOURCES),
-        "nx" | "nx.run" => Some(NX_PROJECT_TASK_SOURCES),
-        "mise" => Some(MISE_PROJECT_TASK_SOURCES),
-        "taskfile" | "task" => Some(TASKFILE_PROJECT_TASK_SOURCES),
-        "just" => Some(JUST_PROJECT_TASK_SOURCES),
-        "make" => Some(MAKE_PROJECT_TASK_SOURCES),
-        "gradle" | "gradlew" => Some(GRADLE_PROJECT_TASK_SOURCES),
-        _ => None,
-    }
-}
-
-fn project_task_candidate_text_for_scope(scope: Option<&str>) -> ProjectTaskCandidateText {
-    match scope {
-        Some("nx.run") => ProjectTaskCandidateText::NxRunArgument,
-        _ => ProjectTaskCandidateText::Name,
-    }
-}
-
-fn project_task_candidate_text(
-    task: &task::TaskInfo,
-    candidate_text: ProjectTaskCandidateText,
-) -> String {
-    match candidate_text {
-        ProjectTaskCandidateText::Name => task.name.clone(),
-        ProjectTaskCandidateText::NxRunArgument => task
-            .command
-            .strip_prefix("nx run ")
-            .unwrap_or(&task.name)
-            .to_string(),
-    }
-}
-
 fn input_prefix_at_cursor(input: &str, cursor_pos: usize) -> String {
     input.chars().take(cursor_pos).collect()
 }
@@ -5788,65 +5354,6 @@ fn env_falsey(value: &str) -> bool {
         value.trim().to_ascii_lowercase().as_str(),
         "0" | "false" | "no" | "off"
     )
-}
-
-fn parse_git_remote_branches(lines: &[String], remote: Option<&str>) -> Vec<String> {
-    let mut values = Vec::new();
-    for line in lines {
-        if line.ends_with("/HEAD") || line == "HEAD" {
-            continue;
-        }
-        let Some((candidate_remote, branch)) = line.split_once('/') else {
-            continue;
-        };
-        if branch.is_empty() {
-            continue;
-        }
-        if let Some(remote) = remote
-            && !remote.is_empty()
-            && candidate_remote != remote
-        {
-            continue;
-        }
-        values.push(branch.to_string());
-    }
-    dedup_sorted(values)
-}
-
-fn parse_git_stash_refs(lines: &[String]) -> Vec<String> {
-    dedup_sorted(
-        lines
-            .iter()
-            .filter_map(|line| line.split(':').next().map(str::to_string))
-            .collect(),
-    )
-}
-
-fn parse_git_status_porcelain_paths(output: &str) -> Vec<String> {
-    let records = output
-        .split('\0')
-        .filter(|record| !record.is_empty())
-        .collect::<Vec<_>>();
-    let mut values = Vec::new();
-    let mut index = 0;
-    while index < records.len() {
-        let record = records[index];
-        if record.len() < 4 {
-            index += 1;
-            continue;
-        }
-        let status = &record[..2];
-        let path = record[3..].trim();
-        if !path.is_empty() {
-            values.push(path.to_string());
-        }
-        if status.contains('R') || status.contains('C') {
-            index += 2;
-        } else {
-            index += 1;
-        }
-    }
-    dedup_sorted(values)
 }
 
 fn parse_cargo_metadata_values(output: &str, kind: CargoMetadataValueKind) -> Vec<String> {
@@ -6535,6 +6042,30 @@ mod tests {
     }
 
     #[test]
+    fn every_registered_provider_has_a_dispatch_arm() {
+        let provider = DynamicCompletionProvider::new(Environment::new());
+        let parsed = parsed("");
+        let current_dir = std::env::current_dir().unwrap();
+
+        for registration in registry::registrations() {
+            assert!(
+                provider
+                    .try_collect_declared_dynamic_candidates(
+                        registration.id,
+                        None,
+                        &parsed,
+                        &current_dir,
+                        true,
+                    )
+                    .is_some(),
+                "registered provider '{}' ({:?}) has no dispatch arm",
+                registration.id,
+                registration.family
+            );
+        }
+    }
+
+    #[test]
     fn cached_value_matches_prefers_prefix_before_fuzzy_fallback() {
         let prefix_matches = cached_value_matches(
             vec![
@@ -6833,7 +6364,7 @@ mod tests {
         );
 
         assert_eq!(
-            parse_git_remote_branches(
+            git::parse_remote_branches(
                 &[
                     "origin/main".to_string(),
                     "upstream/dev".to_string(),
@@ -6844,14 +6375,14 @@ mod tests {
             vec!["main".to_string()]
         );
         assert_eq!(
-            parse_git_stash_refs(&[
+            git::parse_stash_refs(&[
                 "stash@{0}: WIP on main".to_string(),
                 "stash@{1}: On dev".to_string(),
             ]),
             vec!["stash@{0}".to_string(), "stash@{1}".to_string()]
         );
         assert_eq!(
-            parse_git_status_porcelain_paths(" M src/lib.rs\0R  src/new.rs\0src/old.rs\0"),
+            git::parse_status_porcelain_paths(" M src/lib.rs\0R  src/new.rs\0src/old.rs\0"),
             vec!["src/lib.rs".to_string(), "src/new.rs".to_string()]
         );
     }
@@ -6872,6 +6403,7 @@ mod tests {
 
     #[test]
     fn journalctl_user_unit_completion_queries_user_systemd_units() {
+        let _guard = crate::completion::subprocess::external_process_test_guard();
         let dir = tempdir().unwrap();
         let bin_dir = dir.path().join("bin");
         fs::create_dir_all(&bin_dir).unwrap();
@@ -6887,12 +6419,32 @@ mod tests {
             env.clear_command_cache();
         }
         let provider = DynamicCompletionProvider::new(environment);
-        let candidates = provider.collect_declared_dynamic_candidates(
+        let cold = provider.collect_declared_dynamic_candidates(
             "systemctl.unit",
             None,
             &parsed("journalctl --user-unit ssh"),
             dir.path(),
             false,
+        );
+        assert!(cold.is_empty(), "cold provider must not block TAB");
+        assert!(wait_until(Duration::from_secs(20), || {
+            provider
+                .collect_declared_dynamic_candidates(
+                    "systemctl.unit",
+                    None,
+                    &parsed("journalctl --user-unit ssh"),
+                    dir.path(),
+                    true,
+                )
+                .iter()
+                .any(|candidate| candidate.text == "ssh.service")
+        }));
+        let candidates = provider.collect_declared_dynamic_candidates(
+            "systemctl.unit",
+            None,
+            &parsed("journalctl --user-unit ssh"),
+            dir.path(),
+            true,
         );
 
         assert!(
@@ -6939,7 +6491,7 @@ mod tests {
         let provider = DynamicCompletionProvider::new(Environment::new());
         let scope = PathBuf::from("/tmp/dsh-cache-scope");
 
-        let first = provider.collect_cached_value_candidates(
+        let first_miss = provider.collect_cached_value_candidates(
             "alpha",
             "value",
             scope.clone(),
@@ -6948,7 +6500,7 @@ mod tests {
             false,
             || Ok(vec!["one".to_string()]),
         );
-        let second = provider.collect_cached_value_candidates(
+        let second_miss = provider.collect_cached_value_candidates(
             "beta",
             "value",
             scope.clone(),
@@ -6957,16 +6509,50 @@ mod tests {
             false,
             || Ok(vec!["two".to_string()]),
         );
-        let different_kind = provider.collect_cached_value_candidates(
+        let different_kind_miss = provider.collect_cached_value_candidates(
             "alpha",
             "other",
-            scope,
+            scope.clone(),
             "t",
             "test",
             false,
             || Ok(vec!["three".to_string()]),
         );
 
+        assert!(first_miss.is_empty());
+        assert!(second_miss.is_empty());
+        assert!(different_kind_miss.is_empty());
+        assert!(wait_until(Duration::from_secs(20), || {
+            provider.cache.read().commands.len() == 3
+        }));
+
+        let first = provider.collect_cached_value_candidates(
+            "alpha",
+            "value",
+            scope.clone(),
+            "o",
+            "test",
+            true,
+            || panic!("cached lookup must not run loader"),
+        );
+        let second = provider.collect_cached_value_candidates(
+            "beta",
+            "value",
+            scope.clone(),
+            "t",
+            "test",
+            true,
+            || panic!("cached lookup must not run loader"),
+        );
+        let different_kind = provider.collect_cached_value_candidates(
+            "alpha",
+            "other",
+            scope,
+            "t",
+            "test",
+            true,
+            || panic!("cached lookup must not run loader"),
+        );
         assert_eq!(first[0].text, "one");
         assert_eq!(second[0].text, "two");
         assert_eq!(different_kind[0].text, "three");
@@ -7041,6 +6627,7 @@ mod tests {
 
     #[test]
     fn helm_release_completion_passes_namespace_and_context() {
+        let _guard = crate::completion::subprocess::external_process_test_guard();
         let dir = tempdir().unwrap();
         let bin_dir = dir.path().join("bin");
         fs::create_dir_all(&bin_dir).unwrap();
@@ -7056,12 +6643,32 @@ mod tests {
             env.clear_command_cache();
         }
         let provider = DynamicCompletionProvider::new(environment);
-        let candidates = provider.collect_declared_dynamic_candidates(
+        let cold = provider.collect_declared_dynamic_candidates(
             "helm.release",
             None,
             &parsed("helm --kube-context prod -n apps status ap"),
             dir.path(),
             false,
+        );
+        assert!(cold.is_empty(), "cold provider must not block TAB");
+        assert!(wait_until(Duration::from_secs(20), || {
+            provider
+                .collect_declared_dynamic_candidates(
+                    "helm.release",
+                    None,
+                    &parsed("helm --kube-context prod -n apps status ap"),
+                    dir.path(),
+                    true,
+                )
+                .iter()
+                .any(|candidate| candidate.text == "api")
+        }));
+        let candidates = provider.collect_declared_dynamic_candidates(
+            "helm.release",
+            None,
+            &parsed("helm --kube-context prod -n apps status ap"),
+            dir.path(),
+            true,
         );
 
         assert!(candidates.iter().any(|candidate| candidate.text == "api"));
@@ -7438,6 +7045,7 @@ volumes:
 
     #[test]
     fn kubectl_resource_name_completion_respects_namespace_and_resource_name_token() {
+        let _guard = crate::completion::subprocess::external_process_test_guard();
         let dir = tempdir().unwrap();
         let bin_dir = dir.path().join("bin");
         fs::create_dir_all(&bin_dir).unwrap();
@@ -7464,6 +7072,15 @@ volumes:
         }
         let provider = DynamicCompletionProvider::new(environment);
 
+        let cold =
+            provider.collect_kubectl_candidates(&parsed("kubectl get -n prod pods ap"), dir.path());
+        assert!(cold.is_empty(), "cold provider must not block TAB");
+        assert!(wait_until(Duration::from_secs(20), || {
+            provider
+                .collect_kubectl_candidates(&parsed("kubectl get -n prod pods ap"), dir.path())
+                .iter()
+                .any(|candidate| candidate.text == "api")
+        }));
         let names =
             provider.collect_kubectl_candidates(&parsed("kubectl get -n prod pods ap"), dir.path());
         assert!(
@@ -7475,6 +7092,18 @@ volumes:
             "get\n-n\nprod\npods\n-o\njsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}\n"
         );
 
+        let resource_name_cold =
+            provider.collect_kubectl_candidates(&parsed("kubectl get pods/ap"), dir.path());
+        assert!(
+            resource_name_cold.is_empty(),
+            "a new namespace/resource cache key should schedule a worker"
+        );
+        assert!(wait_until(Duration::from_secs(20), || {
+            provider
+                .collect_kubectl_candidates(&parsed("kubectl get pods/ap"), dir.path())
+                .iter()
+                .any(|candidate| candidate.text == "pods/api")
+        }));
         let resource_name =
             provider.collect_kubectl_candidates(&parsed("kubectl get pods/ap"), dir.path());
         assert!(
@@ -7490,42 +7119,69 @@ volumes:
         let dir = tempdir().unwrap();
         let root = dir.path().join("repo");
         let nested = root.join("apps").join("web");
-        let bin_dir = dir.path().join("bin");
         fs::create_dir_all(&nested).unwrap();
-        fs::create_dir_all(&bin_dir).unwrap();
         fs::write(root.join("package.json"), "{\"name\":\"demo\"}\n").unwrap();
 
-        let counter = dir.path().join("git-count");
-        let git = bin_dir.join("git");
-        fs::write(
-            &git,
-            format!(
-                "#!/bin/sh\ncount_file=\"{}\"\ncount=0\nif [ -f \"$count_file\" ]; then\n  count=$(cat \"$count_file\")\nfi\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$count_file\"\nif [ \"$1\" = \"for-each-ref\" ]; then\n  printf 'feature/cache\\nmain\\n'\nfi\n",
-                counter.display()
-            ),
-        )
-        .unwrap();
-        let mut permissions = fs::metadata(&git).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&git, permissions).unwrap();
+        let provider = DynamicCompletionProvider::new(Environment::new());
+        let load_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let fake_loader = || {
+            let load_count = Arc::clone(&load_count);
+            move || {
+                load_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(vec!["feature/cache".to_string(), "main".to_string()])
+            }
+        };
+        let root_scope = provider.cached_project_root(&root);
 
-        let environment = Environment::new();
-        {
-            let mut env = environment.write();
-            env.paths = vec![bin_dir.display().to_string()];
-            env.clear_command_cache();
-        }
-        let provider = DynamicCompletionProvider::new(environment);
-
-        let first_candidates = provider.collect_git_branch_candidates(&root, "fe", false);
+        let cold_candidates = provider.collect_cached_command_candidates(
+            DynamicCommandCacheKind::GitBranch,
+            root_scope.clone(),
+            "fe",
+            "git branch",
+            false,
+            fake_loader(),
+        );
+        assert!(
+            cold_candidates.is_empty(),
+            "first miss should schedule git branch completion"
+        );
+        assert!(wait_until(Duration::from_secs(20), || {
+            provider
+                .collect_cached_command_candidates(
+                    DynamicCommandCacheKind::GitBranch,
+                    root_scope.clone(),
+                    "fe",
+                    "git branch",
+                    true,
+                    fake_loader(),
+                )
+                .iter()
+                .any(|candidate| candidate.text == "feature/cache")
+        }));
+        let first_candidates = provider.collect_cached_command_candidates(
+            DynamicCommandCacheKind::GitBranch,
+            root_scope,
+            "fe",
+            "git branch",
+            true,
+            fake_loader(),
+        );
         assert!(
             first_candidates
                 .iter()
                 .any(|candidate| candidate.text == "feature/cache"),
-            "first miss should synchronously fetch git branch completion"
+            "worker result should be available from the cache"
         );
 
-        let nested_candidates = provider.collect_git_branch_candidates(&nested, "ma", false);
+        let nested_scope = provider.cached_project_root(&nested);
+        let nested_candidates = provider.collect_cached_command_candidates(
+            DynamicCommandCacheKind::GitBranch,
+            nested_scope.clone(),
+            "ma",
+            "git branch",
+            false,
+            fake_loader(),
+        );
         assert!(
             nested_candidates
                 .iter()
@@ -7534,13 +7190,20 @@ volumes:
         );
 
         assert_eq!(
-            fs::read_to_string(&counter).unwrap(),
-            "1",
+            load_count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
             "git command should run once within the same project root"
         );
 
         std::thread::sleep(Duration::from_millis(DYNAMIC_COMMAND_CACHE_TTL_MS + 50));
-        let refreshed_candidates = provider.collect_git_branch_candidates(&nested, "fe", false);
+        let refreshed_candidates = provider.collect_cached_command_candidates(
+            DynamicCommandCacheKind::GitBranch,
+            nested_scope,
+            "fe",
+            "git branch",
+            false,
+            fake_loader(),
+        );
         assert!(
             refreshed_candidates
                 .iter()
@@ -7549,14 +7212,16 @@ volumes:
         );
 
         assert!(
-            wait_until(Duration::from_secs(2), || fs::read_to_string(&counter)
-                .is_ok_and(|count| count == "2")),
+            wait_until(Duration::from_secs(20), || {
+                load_count.load(std::sync::atomic::Ordering::SeqCst) == 2
+            }),
             "git command should run again after ttl expiry"
         );
     }
 
     #[test]
     fn external_completer_parses_filters_and_receives_context() {
+        let _guard = crate::completion::subprocess::external_process_test_guard();
         let dir = tempdir().unwrap();
         let script = dir.path().join("external-completer.sh");
         write_executable_script(
@@ -7580,6 +7245,17 @@ volumes:
         let provider = DynamicCompletionProvider::new(environment);
         let input = "unknown-command zzext";
 
+        let cold =
+            provider.collect_external_candidates(dir.path(), input, input.len(), &parsed(input));
+        assert!(
+            cold.is_empty(),
+            "cold external completer must not block TAB"
+        );
+        assert!(wait_until(Duration::from_secs(20), || {
+            !provider
+                .collect_external_candidates(dir.path(), input, input.len(), &parsed(input))
+                .is_empty()
+        }));
         let candidates =
             provider.collect_external_candidates(dir.path(), input, input.len(), &parsed(input));
 
@@ -7597,7 +7273,7 @@ volumes:
 
     #[test]
     fn external_completer_parses_jsonl_candidates_and_legacy_fallback() {
-        let json_candidate = parse_external_completion_line(
+        let json_candidate = external::parse_line(
             r#"{"text":"display alpha","description":"JSON alpha","type":"long-option","priority":240,"replacement":"--alpha"}"#,
             "--al",
         )
@@ -7607,15 +7283,14 @@ volumes:
         assert_eq!(json_candidate.candidate_type, CandidateType::LongOption);
         assert_eq!(json_candidate.priority, 240);
 
-        let invalid_json_candidate = parse_external_completion_line("{not-json", "{not").unwrap();
+        let invalid_json_candidate = external::parse_line("{not-json", "{not").unwrap();
         assert_eq!(invalid_json_candidate.text, "{not-json");
         assert_eq!(
             invalid_json_candidate.candidate_type,
             CandidateType::Argument
         );
 
-        let legacy_candidate =
-            parse_external_completion_line("zzext-alpha\tExternal alpha", "zz").unwrap();
+        let legacy_candidate = external::parse_line("zzext-alpha\tExternal alpha", "zz").unwrap();
         assert_eq!(legacy_candidate.text, "zzext-alpha");
         assert_eq!(
             legacy_candidate.description.as_deref(),
@@ -7625,25 +7300,26 @@ volumes:
 
     #[test]
     fn fish_fallback_parses_tab_descriptions_and_low_priority() {
-        let candidate = parse_fish_completion_line("checkout\tSwitch branches", "che").unwrap();
+        let candidate = external::parse_fish_line("checkout\tSwitch branches", "che").unwrap();
         assert_eq!(candidate.text, "checkout");
         assert_eq!(candidate.description.as_deref(), Some("Switch branches"));
         assert_eq!(candidate.candidate_type, CandidateType::Argument);
         assert_eq!(candidate.priority, 35);
 
-        let option = parse_fish_completion_line("--help\tShow help", "--he").unwrap();
+        let option = external::parse_fish_line("--help\tShow help", "--he").unwrap();
         assert_eq!(option.candidate_type, CandidateType::LongOption);
 
-        assert!(matches_fish_prefix("'zz", "zz/"));
-        let quoted_path = parse_fish_completion_line("zz/\tQuoted path", "'zz").unwrap();
+        assert!(external::matches_fish_prefix("'zz", "zz/"));
+        let quoted_path = external::parse_fish_line("zz/\tQuoted path", "'zz").unwrap();
         assert_eq!(quoted_path.candidate_type, CandidateType::Directory);
         assert_eq!(quoted_path.description.as_deref(), Some("Quoted path"));
 
-        assert!(parse_fish_completion_line("checkout\tSwitch branches", "zz").is_none());
+        assert!(external::parse_fish_line("checkout\tSwitch branches", "zz").is_none());
     }
 
     #[test]
     fn fish_fallback_auto_requires_fish_command_and_respects_disable() {
+        let _guard = crate::completion::subprocess::external_process_test_guard();
         let dir = tempdir().unwrap();
         let environment = Environment::new();
         {
@@ -7701,6 +7377,7 @@ volumes:
 
     #[test]
     fn fish_fallback_runs_with_cursor_prefix_and_timeout() {
+        let _guard = crate::completion::subprocess::external_process_test_guard();
         let dir = tempdir().unwrap();
         let bin_dir = dir.path().join("bin");
         fs::create_dir_all(&bin_dir).unwrap();
@@ -7721,6 +7398,14 @@ volumes:
         let cursor = "unknown zzfish".len();
 
         let parsed_at_cursor = CommandLineParser::new().parse(input, cursor);
+        let cold =
+            provider.collect_fish_fallback_candidates(dir.path(), input, cursor, &parsed_at_cursor);
+        assert!(cold.is_empty(), "cold fish fallback must not block TAB");
+        assert!(wait_until(Duration::from_secs(20), || {
+            !provider
+                .collect_fish_fallback_candidates(dir.path(), input, cursor, &parsed_at_cursor)
+                .is_empty()
+        }));
         let candidates =
             provider.collect_fish_fallback_candidates(dir.path(), input, cursor, &parsed_at_cursor);
 
@@ -7756,11 +7441,15 @@ volumes:
             &parsed("slow la"),
         );
         assert!(slow_candidates.is_empty());
-        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(
+            started.elapsed() < Duration::from_secs(8),
+            "the test runner lock may queue this probe, but it must remain bounded"
+        );
     }
 
     #[test]
     fn timed_out_completion_command_kills_stdout_holding_descendants() {
+        let _guard = crate::completion::subprocess::external_process_test_guard();
         let dir = tempdir().unwrap();
         let script = dir.path().join("holds-stdout.sh");
         let survived = dir.path().join("survived.txt");
@@ -7773,7 +7462,10 @@ volumes:
         let output = run_command_stdout(script.to_str().unwrap(), &[], dir.path()).unwrap();
 
         assert_eq!(output, "");
-        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(
+            started.elapsed() < Duration::from_secs(8),
+            "the test runner lock may queue this probe, but it must remain bounded"
+        );
         std::thread::sleep(Duration::from_millis(1200));
         assert!(
             !survived.exists(),
@@ -7783,6 +7475,7 @@ volumes:
 
     #[test]
     fn external_completer_failure_returns_empty_candidates() {
+        let _guard = crate::completion::subprocess::external_process_test_guard();
         let dir = tempdir().unwrap();
         let script = dir.path().join("external-completer-fails.sh");
         write_executable_script(&script, "#!/bin/sh\nexit 42\n");
@@ -7803,6 +7496,7 @@ volumes:
 
     #[test]
     fn external_completer_returns_stale_candidates_while_refreshing() {
+        let _guard = crate::completion::subprocess::external_process_test_guard();
         let dir = tempdir().unwrap();
         let script = dir.path().join("external-completer-refresh.sh");
         let counter = dir.path().join("external-count");
@@ -7832,6 +7526,18 @@ volumes:
         let provider = DynamicCompletionProvider::new(environment);
         let input = "unknown-command zzext";
 
+        let cold =
+            provider.collect_external_candidates(dir.path(), input, input.len(), &parsed(input));
+        assert!(
+            cold.is_empty(),
+            "cold external completer must not block TAB"
+        );
+        assert!(wait_until(Duration::from_secs(20), || {
+            provider
+                .collect_external_candidates(dir.path(), input, input.len(), &parsed(input))
+                .first()
+                .is_some_and(|candidate| candidate.text == "zzext-alpha")
+        }));
         let first =
             provider.collect_external_candidates(dir.path(), input, input.len(), &parsed(input));
         assert_eq!(first[0].text, "zzext-alpha");
@@ -7842,13 +7548,13 @@ volumes:
         assert_eq!(stale[0].text, "zzext-alpha");
 
         assert!(
-            wait_until(Duration::from_secs(2), || fs::read_to_string(&counter)
+            wait_until(Duration::from_secs(20), || fs::read_to_string(&counter)
                 .is_ok_and(|count| count == "2")),
             "external completer should refresh in background"
         );
 
         assert!(
-            wait_until(Duration::from_secs(2), || {
+            wait_until(Duration::from_secs(20), || {
                 provider
                     .collect_external_candidates(dir.path(), input, input.len(), &parsed(input))
                     .first()
@@ -7860,6 +7566,7 @@ volumes:
 
     #[test]
     fn external_completion_cache_prunes_oldest_entries() {
+        let _guard = crate::completion::subprocess::external_process_test_guard();
         let dir = tempdir().unwrap();
         let script = dir.path().join("external-completer-cache.sh");
         write_executable_script(
@@ -7878,7 +7585,7 @@ volumes:
             let input = format!("unknown-command zz{index}");
             let expected = format!("zz{index}-candidate");
             assert!(
-                wait_until(Duration::from_secs(2), || provider
+                wait_until(Duration::from_secs(20), || provider
                     .collect_external_candidates(dir.path(), &input, input.len(), &parsed(&input))
                     .first()
                     .is_some_and(|candidate| candidate.text == expected)),

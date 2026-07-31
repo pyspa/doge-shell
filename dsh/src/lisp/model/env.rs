@@ -1,4 +1,5 @@
 use super::{RuntimeError, Symbol, Value};
+use crate::completion::AutoComplete;
 use crate::environment::Environment;
 use parking_lot::RwLock;
 use std::cell::RefCell;
@@ -12,6 +13,12 @@ use std::{collections::HashMap, fmt::Debug};
 pub struct Env {
     parent: Option<Rc<RefCell<Env>>>,
     entries: HashMap<Symbol, Value>,
+    /// Lisp completion callbacks are deliberately main-thread-local.
+    ///
+    /// They may contain `Value::Lambda`, which owns `Rc<RefCell<_>>` state and
+    /// therefore must never be placed in the shared, `Send + Sync`
+    /// [`Environment`].
+    pub autocompletion: Rc<RefCell<Vec<AutoComplete>>>,
     pub shell_env: Arc<RwLock<Environment>>,
 }
 
@@ -21,6 +28,7 @@ impl Env {
         Self {
             parent: None,
             entries: HashMap::new(),
+            autocompletion: Rc::new(RefCell::new(Vec::new())),
             shell_env,
         }
     }
@@ -28,9 +36,11 @@ impl Env {
     /// Create a new environment extending the given environment
     pub fn extend(parent: Rc<RefCell<Env>>) -> Self {
         let shell_env = Arc::clone(&parent.borrow_mut().shell_env);
+        let autocompletion = Rc::clone(&parent.borrow().autocompletion);
         Self {
             parent: Some(parent),
             entries: HashMap::new(),
+            autocompletion,
             shell_env,
         }
     }
@@ -92,6 +102,14 @@ impl Env {
     /// Restore environment bindings from a snapshot.
     pub fn restore_entries(&mut self, entries: HashMap<Symbol, Value>) {
         self.entries = entries;
+    }
+
+    pub fn snapshot_autocompletion(&self) -> Vec<AutoComplete> {
+        self.autocompletion.borrow().clone()
+    }
+
+    pub fn restore_autocompletion(&self, autocompletion: Vec<AutoComplete>) {
+        *self.autocompletion.borrow_mut() = autocompletion;
     }
 
     fn display_recursive(&self, output: &mut String, depth: i32) {

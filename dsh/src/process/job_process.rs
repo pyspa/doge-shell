@@ -285,7 +285,7 @@ impl JobProcess {
         matches!(self, JobProcess::Command(_))
     }
 
-    pub(crate) fn launch(
+    pub(crate) async fn launch(
         &mut self,
         ctx: &mut Context,
         shell: &mut Shell,
@@ -368,7 +368,7 @@ impl JobProcess {
             JobProcess::Builtin(process) => {
                 if ctx.foreground {
                     process.pid = Some(current_pid);
-                    process.launch(ctx, shell)?;
+                    process.launch(ctx, shell).await?;
                     current_pid
                 } else {
                     // Fork for background execution

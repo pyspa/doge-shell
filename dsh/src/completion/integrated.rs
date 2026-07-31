@@ -346,7 +346,7 @@ impl<'a> CandidateAggregator<'a> {
 
     fn extend(&mut self, batch: CandidateBatch) -> bool {
         if batch.candidates.is_empty() {
-            return true;
+            return !batch.exclusive;
         }
 
         debug!(
@@ -568,7 +568,10 @@ impl IntegratedCompletionEngine {
         let parsed_command_line = self.convert_to_parsed_command_line(input, cursor_pos);
         let replacement_range =
             completion_replacement_range(input, cursor_pos, &parsed_command_line);
-        let cache_allowed = completion_cache_allowed(&parsed_command_line);
+        let dynamic_generation = self.dynamic.refresh_generation();
+        let mut cache_allowed = completion_cache_allowed(&parsed_command_line)
+            && !self.dynamic.has_async_fallback()
+            && !self.dynamic.has_pending_refresh();
         timing.mark("parse");
 
         // Variable ($VAR / ${VAR) and user-home (~user) references are completed
@@ -624,6 +627,9 @@ impl IntegratedCompletionEngine {
 
         // 1. Project-aware dynamic completion
         let dynamic_batch = self.collect_dynamic_candidates(&request, &parsed_command_line);
+        cache_allowed = cache_allowed
+            && dynamic_generation == self.dynamic.refresh_generation()
+            && !self.dynamic.has_pending_refresh();
         timing.mark("dynamic");
         if !aggregator.extend(dynamic_batch) {
             let mut results = aggregator.finalize(history);
@@ -950,10 +956,10 @@ impl IntegratedCompletionEngine {
             candidates.extend(self.file_candidates_for_token(&parsed_command_line.current_token));
         }
 
-        if candidates.is_empty() {
-            CandidateBatch::empty()
-        } else if dynamic_candidates_are_exclusive(parsed_command_line) {
+        if dynamic_candidates_are_exclusive(parsed_command_line) {
             CandidateBatch::exclusive_with_framework(candidates, CompletionFrameworkKind::Skim)
+        } else if candidates.is_empty() {
+            CandidateBatch::empty()
         } else {
             CandidateBatch::inclusive_with_framework(candidates, CompletionFrameworkKind::Skim)
         }
@@ -2505,7 +2511,7 @@ mod tests {
                 .map(|candidate| candidate.text.clone())
                 .collect();
             assert!(
-                start.elapsed() < Duration::from_secs(2),
+                start.elapsed() < Duration::from_secs(20),
                 "timed out waiting for completion candidate {expected} for input {input}; last candidates: {last_candidates:?}"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -2993,16 +2999,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dynamic_command_static_subcommand_uses_completion_cache() {
+    async fn dynamic_command_static_subcommand_caches_after_refresh_settles() {
         let dir = tempdir().unwrap();
-        let environment = Environment::new();
-        {
-            let mut env = environment.write();
-            env.paths.clear();
-            env.clear_command_cache();
-        }
-        let mut engine = IntegratedCompletionEngine::new(environment);
-        engine.initialize_command_completion().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        write_executable_script(
+            &bin_dir.join("git"),
+            "#!/bin/sh\nif [ \"$1\" = \"config\" ]; then printf 'alias.cheat status\\n'; fi\n",
+        );
+        let engine = engine_with_path(&bin_dir);
 
         let input = "git che";
         let first = engine
@@ -3015,22 +3020,23 @@ mod tests {
                 .any(|candidate| candidate.text == "checkout"),
             "expected git checkout from JSON subcommand completion"
         );
+        assert!(
+            engine.cache.lookup(input).is_none(),
+            "a cold dynamic refresh must keep the partial result out of the top-level cache"
+        );
 
-        let cached = engine
-            .cache
-            .lookup(input)
-            .expect("expected top-level cache");
+        let second = wait_for_candidate(&engine, input, dir.path(), "cheat").await;
+        let cached = engine.cache.lookup(input).expect(
+            "the complete result should become cacheable after the dynamic refresh settles",
+        );
         assert!(cached.exact);
         assert!(
             cached
                 .candidates
                 .iter()
-                .any(|candidate| candidate.text == "checkout")
+                .any(|candidate| candidate.text == "cheat")
         );
 
-        let second = engine
-            .complete(input, input.len(), dir.path(), 50, None)
-            .await;
         let first_texts = first
             .candidates
             .iter()
@@ -3041,7 +3047,9 @@ mod tests {
             .iter()
             .map(|candidate| candidate.text.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(second_texts, first_texts);
+        assert!(second_texts.contains(&"checkout"));
+        assert!(second_texts.contains(&"cheat"));
+        assert!(!first_texts.contains(&"cheat"));
     }
 
     #[tokio::test]
@@ -3128,9 +3136,7 @@ mod tests {
         engine.initialize_command_completion().unwrap();
 
         let input = "git checkout feat";
-        let result = engine
-            .complete(input, input.len(), dir.path(), 50, None)
-            .await;
+        let result = wait_for_candidate(&engine, input, dir.path(), "feature/probe").await;
 
         assert!(
             result
@@ -4036,9 +4042,7 @@ mod tests {
         engine.initialize_command_completion().unwrap();
 
         let input = "unknown-command zzint";
-        let result = engine
-            .complete(input, input.len(), dir.path(), 50, None)
-            .await;
+        let result = wait_for_candidate(&engine, input, dir.path(), "zzint-alpha").await;
 
         assert!(
             result
@@ -4086,7 +4090,7 @@ mod tests {
                 break result;
             }
             assert!(
-                started.elapsed() < Duration::from_secs(2),
+                started.elapsed() < Duration::from_secs(20),
                 "expected unique fish fallback candidate to be merged"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -4142,7 +4146,7 @@ mod tests {
                 break result;
             }
             assert!(
-                started.elapsed() < Duration::from_secs(2),
+                started.elapsed() < Duration::from_secs(20),
                 "expected fish fallback for String positional argument"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -4369,9 +4373,7 @@ fi
         engine.initialize_command_completion().unwrap();
 
         let input = "npm uninstall rea";
-        let result = engine
-            .complete(input, input.len(), dir.path(), 50, None)
-            .await;
+        let result = wait_for_candidate(&engine, input, dir.path(), "react").await;
 
         assert!(
             result

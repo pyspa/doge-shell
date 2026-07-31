@@ -8,6 +8,12 @@ fn init() {
 }
 
 #[test]
+fn environment_is_send_and_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Environment>();
+}
+
+#[test]
 fn test_lookup() {
     init();
     let env = Environment::new();

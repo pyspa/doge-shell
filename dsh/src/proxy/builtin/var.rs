@@ -3,15 +3,30 @@
 use crate::shell::Shell;
 use anyhow::{Context as _, Result};
 use dsh_types::Context;
+use std::borrow::Cow;
 use std::fs::File;
 use std::io::prelude::*;
 use std::os::unix::io::FromRawFd;
 use tabled::{Table, Tabled};
 
-#[derive(Tabled)]
 struct Var {
     key: String,
     value: String,
+}
+
+impl Tabled for Var {
+    const LENGTH: usize = 2;
+
+    fn fields(&self) -> Vec<Cow<'_, str>> {
+        vec![
+            Cow::Borrowed(self.key.as_str()),
+            Cow::Borrowed(self.value.as_str()),
+        ]
+    }
+
+    fn headers() -> Vec<Cow<'static, str>> {
+        vec![Cow::Borrowed("key"), Cow::Borrowed("value")]
+    }
 }
 
 /// Execute the `var` builtin command.

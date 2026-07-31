@@ -83,7 +83,7 @@ impl Action for ProjectCockpitAction {
 
         for step in Self::steps() {
             let _ = ctx.write_stdout(&format!("== {} ==", step.title));
-            let Some(command_fn) = dsh_builtin::get_command(step.command) else {
+            let Some(handler) = dsh_builtin::get_handler(step.command) else {
                 let _ = ctx.write_stderr(&format!(
                     "project cockpit: builtin command not found: {}",
                     step.command
@@ -92,7 +92,7 @@ impl Action for ProjectCockpitAction {
             };
 
             let argv = Self::step_argv(step);
-            match command_fn(&ctx, argv, shell) {
+            match handler.execute(&ctx, argv, shell).await {
                 ExitStatus::ExitedWith(0)
                 | ExitStatus::Running(_)
                 | ExitStatus::Break

@@ -446,58 +446,34 @@ impl ShellProxy for Shell {
         Ok((exit_code, stdout, stderr))
     }
 
-    fn generate_command_completion(
-        &mut self,
-        command_name: &str,
-        help_text: &str,
-    ) -> Result<String> {
+    fn generate_command_completion_async<'a>(
+        &'a mut self,
+        command_name: &'a str,
+        help_text: &'a str,
+    ) -> dsh_builtin::ProxyFuture<'a, String> {
+        let service = self.environment.read().ai_service.clone();
         let command_name = command_name.to_string();
         let help_text = help_text.to_string();
-
-        let ai_service = self.environment.read().ai_service.clone();
-        if let Some(service) = ai_service {
-            // Using std::thread::spawn to avoid "Cannot start a runtime from within a runtime" panic
-            // This isolates the blocking operation from the current Tokio runtime
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|e| anyhow::anyhow!("Failed to create runtime: {}", e))?;
-
-                rt.block_on(async move {
-                    crate::ai_features::generate_completion_json(
-                        service.as_ref(),
-                        &command_name,
-                        &help_text,
-                    )
-                    .await
-                })
-            })
-            .join()
-            .map_err(|_| anyhow::anyhow!("Thread panicked"))?
-        } else {
-            Err(anyhow::anyhow!("AI service not available"))
-        }
+        Box::pin(async move {
+            let service = service.ok_or_else(|| anyhow::anyhow!("AI service not available"))?;
+            crate::ai_features::generate_completion_json(
+                service.as_ref(),
+                &command_name,
+                &help_text,
+            )
+            .await
+        })
     }
 
-    fn ask_ai(&mut self, messages: Vec<serde_json::Value>) -> Result<String> {
-        let ai_service = self.environment.read().ai_service.clone();
-        if let Some(service) = ai_service {
-            // Using std::thread::spawn to avoid "Cannot start a runtime from within a runtime" panic
-            // This isolates the blocking operation from the current Tokio runtime
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|e| anyhow::anyhow!("Failed to create runtime: {}", e))?;
-
-                rt.block_on(async move { service.send_request(messages, Some(0.7)).await })
-            })
-            .join()
-            .map_err(|_| anyhow::anyhow!("Thread panicked"))?
-        } else {
-            Err(anyhow::anyhow!("AI service not available"))
-        }
+    fn ask_ai_async<'a>(
+        &'a mut self,
+        messages: Vec<serde_json::Value>,
+    ) -> dsh_builtin::ProxyFuture<'a, String> {
+        let service = self.environment.read().ai_service.clone();
+        Box::pin(async move {
+            let service = service.ok_or_else(|| anyhow::anyhow!("AI service not available"))?;
+            service.send_request(messages, Some(0.7)).await
+        })
     }
 
     fn open_editor(&mut self, content: &str, extension: &str) -> Result<String> {

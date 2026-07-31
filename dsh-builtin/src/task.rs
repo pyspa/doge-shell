@@ -5,6 +5,7 @@ use dsh_types::{Context, ExitStatus};
 use regex::Regex;
 use serde::Serialize;
 use skim::prelude::*;
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
@@ -16,14 +17,31 @@ pub fn description() -> &'static str {
     "Run project-specific tasks (npm, cargo, gradle, make, deno, just, etc.)"
 }
 
-#[derive(Debug, Clone, Serialize, Tabled)]
+#[derive(Debug, Clone, Serialize)]
 struct Task {
-    #[tabled(rename = "Source")]
     source: String,
-    #[tabled(rename = "Task")]
     name: String,
-    #[tabled(rename = "Command")]
     command: String,
+}
+
+impl Tabled for Task {
+    const LENGTH: usize = 3;
+
+    fn fields(&self) -> Vec<Cow<'_, str>> {
+        vec![
+            Cow::Borrowed(self.source.as_str()),
+            Cow::Borrowed(self.name.as_str()),
+            Cow::Borrowed(self.command.as_str()),
+        ]
+    }
+
+    fn headers() -> Vec<Cow<'static, str>> {
+        vec![
+            Cow::Borrowed("Source"),
+            Cow::Borrowed("Task"),
+            Cow::Borrowed("Command"),
+        ]
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -25,6 +25,7 @@ serde.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
 sysinfo.workspace = true
 crossterm.workspace = true
+tempfile = "3.8"
 
 getopts = "0.2"
 regex = "1.11"
@@ -48,6 +49,3 @@ tokio-util = "0.7"
 httpdate = "1.0"
 notify = "8.2.0"
 ratatui.workspace = true
-
-[dev-dependencies]
-tempfile = "3.8"

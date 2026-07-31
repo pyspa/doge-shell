@@ -37,17 +37,17 @@ pub fn get_directory_listing_content(path: &std::path::Path) -> Vec<String> {
 
 impl<'a> Repl<'a> {
     pub(crate) fn trigger_auto_fix(&self) {
-        if self.last_status != 0
-            && !self.last_command_string.is_empty()
+        if self.state.last_status != 0
+            && !self.state.last_command_string.is_empty()
             && self.input_preferences.auto_fix
-            && let Some(service) = &self.ai_service
+            && let Some(service) = &self.services.ai
         {
-            if is_auto_fix_blocked(&self.last_command_string) {
+            if is_auto_fix_blocked(&self.state.last_command_string) {
                 return;
             }
             let service = service.clone();
-            let command = self.last_command_string.clone();
-            let status = self.last_status;
+            let command = self.state.last_command_string.clone();
+            let status = self.state.last_status;
             let output = self
                 .shell
                 .environment
@@ -117,7 +117,7 @@ impl<'a> Repl<'a> {
         if candidates.is_empty() && self.input_preferences.ai_backfill {
             let (cwd, files) = {
                 self.trigger_file_context_update();
-                let cache = self.file_context_cache.read();
+                let cache = self.services.file_context.read();
                 (
                     Some(cache.path.to_string_lossy().to_string()),
                     cache.files.clone(),
@@ -130,7 +130,7 @@ impl<'a> Repl<'a> {
                 history_ref,
                 cwd,
                 files,
-                Some(self.last_status),
+                Some(self.state.last_status),
             ) {
                 candidates.push(state);
             }
@@ -156,7 +156,7 @@ impl<'a> Repl<'a> {
         // actually `force_ai_suggestion` loop waits for AI.
 
         let (cwd, files) = {
-            let cache = self.file_context_cache.clone();
+            let cache = self.services.file_context.clone();
             let (cwd, files) = tokio::task::spawn_blocking(move || {
                 let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
                 // Reuse the logic? Or just force update cache?
@@ -187,7 +187,7 @@ impl<'a> Repl<'a> {
                 history_ref,
                 cwd.clone(),
                 files.clone(),
-                Some(self.last_status),
+                Some(self.state.last_status),
             ) {
                 tracing::debug!("force_ai_suggestion: got state {:?}", state);
                 let candidates = vec![state];

@@ -193,7 +193,7 @@ mod tests {
         // `--all` fully typed, TAB pressed. The parser records `--all` in
         // specified_options; it must NOT be excluded from its own completion
         // even though it prefixes `--all-match`.
-        let options = vec![opt("--all", "a"), opt("--all-match", "am")];
+        let options = [opt("--all", "a"), opt("--all-match", "am")];
         let mut p = parsed("--all");
         p.specified_options = vec!["--all".to_string()];
         let refs: Vec<&CommandOption> = options.iter().collect();
@@ -209,7 +209,7 @@ mod tests {
     fn previously_specified_option_is_still_excluded() {
         // `--foo` was specified earlier; now completing a fresh `--` token.
         // `--foo` must be excluded, `--bar` offered.
-        let options = vec![opt("--foo", "f"), opt("--bar", "b")];
+        let options = [opt("--foo", "f"), opt("--bar", "b")];
         let mut p = parsed("--");
         p.specified_options = vec!["--foo".to_string(), "--".to_string()];
         let refs: Vec<&CommandOption> = options.iter().collect();

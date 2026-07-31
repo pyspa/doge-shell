@@ -1,14 +1,35 @@
 use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
+use std::borrow::Cow;
 use tabled::{Table, Tabled};
 
-#[derive(Tabled)]
 struct SnippetEntry {
     name: String,
     command: String,
     description: String,
-    #[tabled(rename = "uses")]
     use_count: i64,
+}
+
+impl Tabled for SnippetEntry {
+    const LENGTH: usize = 4;
+
+    fn fields(&self) -> Vec<Cow<'_, str>> {
+        vec![
+            Cow::Borrowed(self.name.as_str()),
+            Cow::Borrowed(self.command.as_str()),
+            Cow::Borrowed(self.description.as_str()),
+            Cow::Owned(self.use_count.to_string()),
+        ]
+    }
+
+    fn headers() -> Vec<Cow<'static, str>> {
+        vec![
+            Cow::Borrowed("name"),
+            Cow::Borrowed("command"),
+            Cow::Borrowed("description"),
+            Cow::Borrowed("uses"),
+        ]
+    }
 }
 
 /// Built-in snippet command description

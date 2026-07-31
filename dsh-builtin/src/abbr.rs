@@ -1,11 +1,26 @@
 use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
+use std::borrow::Cow;
 use tabled::{Table, Tabled};
 
-#[derive(Tabled)]
 struct AbbrEntry {
     name: String,
     expansion: String,
+}
+
+impl Tabled for AbbrEntry {
+    const LENGTH: usize = 2;
+
+    fn fields(&self) -> Vec<Cow<'_, str>> {
+        vec![
+            Cow::Borrowed(self.name.as_str()),
+            Cow::Borrowed(self.expansion.as_str()),
+        ]
+    }
+
+    fn headers() -> Vec<Cow<'static, str>> {
+        vec![Cow::Borrowed("name"), Cow::Borrowed("expansion")]
+    }
 }
 
 /// Built-in abbr command description

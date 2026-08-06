@@ -31,6 +31,9 @@ impl Snippet {
     }
 }
 
+/// Filename of the snippet database inside the shell's data directory.
+pub const SNIPPET_DB_FILE: &str = "dsh_snippets.db";
+
 /// Manages command snippets with SQLite storage
 #[derive(Debug, Clone)]
 pub struct SnippetManager {
@@ -50,6 +53,27 @@ impl SnippetManager {
 
     pub fn with_db(db: Db) -> Self {
         SnippetManager { db: Some(db) }
+    }
+
+    /// Opens the manager backed by the shell's snippet database.
+    ///
+    /// Returns `None` (with a warning) when the data directory or the database
+    /// cannot be opened; callers degrade to "no snippets" rather than failing.
+    pub fn open_default() -> Option<Self> {
+        let path = match crate::environment::get_data_file(SNIPPET_DB_FILE) {
+            Ok(path) => path,
+            Err(err) => {
+                tracing::warn!("Failed to locate snippet database: {}", err);
+                return None;
+            }
+        };
+        match Db::new(path) {
+            Ok(db) => Some(Self::with_db(db)),
+            Err(err) => {
+                tracing::warn!("Failed to open snippet database: {}", err);
+                None
+            }
+        }
     }
 
     /// Add a new snippet

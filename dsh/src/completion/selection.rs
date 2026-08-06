@@ -170,6 +170,13 @@ pub async fn input_completion(
         return res;
     }
 
+    // Try directory-stack index completion (`cd -N`, `pushd +N`, `popd +N`)
+    let stack_res =
+        completion_for_dir_stack(input, repl, query, prompt_text, input_text, framework);
+    if let CompletionSelection::Selected(_) | CompletionSelection::Interactive(..) = stack_res {
+        return stack_res;
+    }
+
     // Try z completion
     let z_res = completion_for_z(input, repl, query, prompt_text, input_text, framework);
     if let CompletionSelection::Selected(_) | CompletionSelection::Interactive(..) = z_res {
@@ -263,6 +270,50 @@ fn completion_from_lisp_with_prompt(
         }
     }
     CompletionSelection::None
+}
+
+/// Completes `+N` / `-N` directory-stack indices for `cd`, `pushd` and `popd`.
+///
+/// Only fires once the token already starts with `+` or `-`. Without that guard
+/// a bare `popd <TAB>` would be answered here instead of by ordinary filesystem
+/// completion, and the sign is what disambiguates "stack index" from "path".
+pub fn completion_for_dir_stack(
+    input: &Input,
+    repl: &Repl,
+    query: Option<&str>,
+    prompt_text: &str,
+    input_text: &str,
+    framework: CompletionFrameworkKind,
+) -> CompletionSelection {
+    let line = input.as_str();
+    let command = line.split_whitespace().next().unwrap_or("");
+    if !matches!(command, "cd" | "pushd" | "popd") {
+        return CompletionSelection::None;
+    }
+
+    let token = query.unwrap_or("");
+    let Some(sign) = token.chars().next().filter(|c| *c == '+' || *c == '-') else {
+        return CompletionSelection::None;
+    };
+    // Anything after the sign must still be a partial number.
+    if !token[1..].bytes().all(|b| b.is_ascii_digit()) {
+        return CompletionSelection::None;
+    }
+
+    let stack = repl.shell.environment.read().dir_stack.clone();
+    // Entry 0 is the current directory. `popd +0` drops it (same as bare
+    // `popd`), but `cd +0` would be a no-op, so hide it there.
+    let first = if command == "cd" { 1 } else { 0 };
+
+    let candidates: Vec<Candidate> = stack
+        .iter()
+        .enumerate()
+        .skip(first)
+        .filter(|(index, _)| format!("{sign}{index}").starts_with(token))
+        .map(|(index, path)| Candidate::Item(format!("{sign}{index}"), path.clone()))
+        .collect();
+
+    select_completion_items(candidates, query, prompt_text, input_text, framework)
 }
 
 pub fn completion_for_z(

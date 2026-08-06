@@ -61,6 +61,13 @@ pub(crate) struct VariableState {
     pub(crate) chpwd_hooks: Vec<Box<dyn ChangePwdHook + Send + Sync>>,
     pub(crate) system_env_vars: HashMap<String, String>,
     pub(crate) z_exclude: Vec<String>,
+    /// User key bindings from `config.lisp`, layered over the built-in table.
+    ///
+    /// Lives here rather than in `Repl` because `config.lisp` runs before the
+    /// REPL exists, and alongside `abbreviations` because it is configuration
+    /// with the same lifecycle — including being rolled back by
+    /// `EnvironmentSnapshot` when the config fails to load.
+    pub(crate) keybindings: crate::repl::keybind::KeyBindings,
 }
 
 pub(crate) struct PolicyState {
@@ -92,6 +99,26 @@ pub struct Environment {
     pub(crate) integration_state: IntegrationState,
     pub(crate) session_output_state: SessionOutputState,
     pub(crate) completion_state: CompletionState,
+    /// The `pushd`/`popd` directory stack, bash-style: slot 0 is always the
+    /// current directory.
+    ///
+    /// `changepwd` keeps slot 0 in sync, so plain `cd` replaces the top without
+    /// disturbing what is underneath — and `dirs -v` numbering lines up with
+    /// `cd -N`. Empty until the first directory change; `dirs` then falls back
+    /// to `$PWD`.
+    ///
+    /// Deliberately outside `variable_state`: this is runtime navigation state,
+    /// not configuration, so `EnvironmentSnapshot` must not roll it back when
+    /// `config.lisp` fails.
+    pub(crate) dir_stack: Vec<String>,
+    /// Periodic tasks registered with `sched`.
+    ///
+    /// Shared with the background runner, which is why it is an `Arc` rather
+    /// than a plain field. It lives on `Environment` (not on `Repl`) because
+    /// `config.lisp` runs before the REPL is constructed and may register
+    /// tasks. Like [`Environment::dir_stack`], it is runtime state and is not
+    /// rolled back by `EnvironmentSnapshot`.
+    pub(crate) scheduler: crate::scheduler::SharedScheduler,
     /// Flags if the shell is currently in startup mode (e.g. running config.lisp)
     pub(crate) startup_mode: bool,
 }
@@ -147,6 +174,7 @@ impl Environment {
                 chpwd_hooks: Vec::new(),
                 system_env_vars,
                 z_exclude,
+                keybindings: crate::repl::keybind::KeyBindings::with_defaults(),
             },
             policy_state: PolicyState {
                 execute_allowlist: Arc::new(RwLock::new(Vec::new())),
@@ -167,6 +195,8 @@ impl Environment {
                 command_cache: RwLock::new(HashMap::new()),
                 executable_names: Arc::new(RwLock::new(Vec::new())),
             },
+            dir_stack: Vec::new(),
+            scheduler: crate::scheduler::SchedulerState::shared(),
             startup_mode: false,
         }));
 
@@ -194,6 +224,7 @@ impl Environment {
                 chpwd_hooks: Vec::new(),
                 system_env_vars: parent.variable_state.system_env_vars.clone(),
                 z_exclude: parent.variable_state.z_exclude.clone(),
+                keybindings: parent.variable_state.keybindings.clone(),
             }
         };
         let (integration_state, policy_state, completion_state) = {
@@ -226,6 +257,12 @@ impl Environment {
                 command_blocks: CommandBlockHistory::new(),
             },
             completion_state,
+            // A subshell gets a fresh stack: popping in a subshell must not
+            // move the parent shell.
+            dir_stack: Vec::new(),
+            // Likewise a fresh scheduler: only the interactive session runs a
+            // task runner, so a subshell's tasks would never fire anyway.
+            scheduler: crate::scheduler::SchedulerState::shared(),
             startup_mode: false, // Extended environments (subshells) are not in startup mode
         }))
     }

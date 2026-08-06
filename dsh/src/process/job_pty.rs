@@ -91,6 +91,18 @@ pub(crate) fn uses_full_pty_proxy(job: &Job) -> bool {
 }
 
 pub async fn setup_pty(job: &mut Job, ctx: &mut Context) -> Result<Option<RawFd>> {
+    setup_pty_with(job, ctx, AsyncStdin::open_tty).await
+}
+
+/// See [`setup_pty_input_proxy_with`] for why the input source is injectable.
+pub(crate) async fn setup_pty_with<F>(
+    job: &mut Job,
+    ctx: &mut Context,
+    open_input: F,
+) -> Result<Option<RawFd>>
+where
+    F: FnOnce() -> std::io::Result<AsyncStdin> + Send + 'static,
+{
     if !should_create_pty(ctx, job.disable_pty, std::env::var(DSH_NO_PTY_ENV).is_ok()) {
         return Ok(None);
     }
@@ -124,7 +136,7 @@ pub async fn setup_pty(job: &mut Job, ctx: &mut Context) -> Result<Option<RawFd>
                     if pty_mode == PtyMode::FullProxy {
                         match pty.try_clone() {
                             Ok(pty_in) => {
-                                setup_pty_input_proxy(job, pty_in).await;
+                                setup_pty_input_proxy_with(job, pty_in, open_input).await;
                             }
                             Err(e) => {
                                 // A clone failure here is transient (e.g. fd
@@ -158,17 +170,29 @@ pub async fn setup_pty(job: &mut Job, ctx: &mut Context) -> Result<Option<RawFd>
 }
 
 pub async fn setup_pty_input_proxy(job: &mut Job, pty_in: Pty) {
+    setup_pty_input_proxy_with(job, pty_in, AsyncStdin::open_tty).await
+}
+
+/// `open_input` exists so tests can point the proxy at a PTY of their own.
+/// The default opens the *real* controlling terminal, which under `cargo test`
+/// means swallowing the developer's keystrokes.
+pub(crate) async fn setup_pty_input_proxy_with<F>(job: &mut Job, pty_in: Pty, open_input: F)
+where
+    F: FnOnce() -> std::io::Result<AsyncStdin> + Send + 'static,
+{
     match AsyncPtyMasterWriter::new(pty_in.master) {
         Ok(mut master_write) => {
             let input_task = tokio::spawn(async move {
-                match AsyncStdin::open_tty() {
+                match open_input() {
                     Ok(mut async_stdin) => {
                         if let Err(err) = tokio::io::copy(&mut async_stdin, &mut master_write).await
                         {
                             debug!("PTY input proxy stopped: {}", err);
                         }
                     }
-                    Err(err) => {
+                    // Falling back to stdin means reading the real terminal, so
+                    // it is off-limits when we do not own it (tests).
+                    Err(err) if crate::terminal::terminal_control_enabled() => {
                         warn!(
                             "Failed to open an independent /dev/tty input handle, falling back to Tokio stdin: {}",
                             err
@@ -177,6 +201,9 @@ pub async fn setup_pty_input_proxy(job: &mut Job, pty_in: Pty) {
                         if let Err(err) = tokio::io::copy(&mut std_stdin, &mut master_write).await {
                             debug!("Fallback PTY input proxy stopped: {}", err);
                         }
+                    }
+                    Err(err) => {
+                        debug!("PTY input proxy not started: {}", err);
                     }
                 }
             });
@@ -284,8 +311,9 @@ pub async fn capture_output_and_history(
 #[cfg(test)]
 mod tests {
     use super::{
-        capture_output_and_history, cleanup_pty_tasks, is_builtin_job, setup_pty,
-        should_create_pty, should_enable_foreground_pty_raw_mode, uses_full_pty_proxy,
+        AsyncStdin, capture_output_and_history, cleanup_pty_tasks, is_builtin_job, setup_pty,
+        setup_pty_with, should_create_pty, should_enable_foreground_pty_raw_mode,
+        uses_full_pty_proxy,
     };
     use crate::environment::Environment;
     use crate::process::pty::PtyMode;
@@ -296,6 +324,7 @@ mod tests {
     use dsh_types::terminal::{ShellMode, TerminalState};
     use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
     use nix::unistd::Pid;
+    use std::os::fd::{AsRawFd, BorrowedFd};
     use std::time::Duration;
     use tokio::sync::oneshot;
 
@@ -445,7 +474,17 @@ mod tests {
             false,
         );
 
-        let slave = setup_pty(&mut job, &mut ctx).await.expect("setup pty");
+        // The production opener reads the real controlling terminal, which
+        // would eat the keystrokes of whoever is running `cargo test`. Give
+        // the proxy a PTY of its own instead. `scratch` outlives the proxy
+        // task so the reopen below cannot fail into the stdin fallback.
+        let scratch = Pty::new().expect("scratch pty for the input proxy");
+        let scratch_fd = scratch.slave.as_raw_fd();
+        let slave = setup_pty_with(&mut job, &mut ctx, move || {
+            AsyncStdin::open_tty_from_fd(unsafe { BorrowedFd::borrow_raw(scratch_fd) })
+        })
+        .await
+        .expect("setup pty");
 
         assert!(slave.is_some());
         assert_eq!(job.pty_mode, Some(PtyMode::FullProxy));
@@ -454,6 +493,7 @@ mod tests {
         assert!(job.pty_input_task.is_some());
 
         cleanup_pty_tasks(&mut job).await;
+        drop(scratch);
     }
 
     #[tokio::test]

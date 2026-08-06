@@ -1,0 +1,11 @@
+{
+  "command": "dirs",
+  "description": "Show the directory stack",
+  "global_options": [
+    { "short": "-v", "description": "One entry per line, numbered" },
+    { "short": "-p", "description": "One entry per line, unnumbered" },
+    { "short": "-l", "description": "Print full paths instead of shortening $HOME to ~" },
+    { "short": "-c", "description": "Clear the stack, keeping the current directory" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ]
+}

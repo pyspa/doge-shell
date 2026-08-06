@@ -96,6 +96,11 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
         }
     }
 
+    // The inline grid measures the terminal and draws at its bottom edge, so
+    // the reserved status row has to come back first.
+    let _status_pause =
+        crate::repl::status_line::StatusLinePause::new(repl.terminal_ui.status_line.clone());
+
     // Extract the current word at cursor position for completion query
     let completion_query_owned = completion_query_for_input(&repl.input);
     let completion_query = completion_query_owned.as_deref();

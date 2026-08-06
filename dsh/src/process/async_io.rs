@@ -20,7 +20,7 @@ impl AsyncStdin {
         Self::open_tty_from_fd(stdin)
     }
 
-    fn open_tty_from_fd(fd: BorrowedFd<'_>) -> std::io::Result<Self> {
+    pub(crate) fn open_tty_from_fd(fd: BorrowedFd<'_>) -> std::io::Result<Self> {
         let path = nix::unistd::ttyname(fd).map_err(std::io::Error::from)?;
         Self::open_path(&path)
     }

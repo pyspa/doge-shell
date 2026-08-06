@@ -82,6 +82,10 @@ pub(crate) fn handle_clear_screen(repl: &mut Repl<'_>) -> Result<ReplControlFlow
     renderer.flush().ok();
     repl.input.clear();
     repl.ai_ui.suggestion_manager.clear();
+    // `Clear(All)` wipes the status line's reserved row as well — the scroll
+    // region does not protect against erasure — so force a repaint.
+    repl.terminal_ui.status_line.borrow_mut().invalidate();
+    repl.refresh_status_line();
     Ok(ReplControlFlow::Continue)
 }
 

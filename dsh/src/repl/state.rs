@@ -12,6 +12,11 @@ pub(crate) struct ReplState {
     pub stopped_jobs_warned: bool,
     pub multiline_buffer: String,
     pub last_cwd: PathBuf,
+    /// In-flight `Alt+.` run. Cleared by any other action so the next press
+    /// restarts from the newest command.
+    pub last_arg: Option<crate::repl::last_arg::LastArgState>,
+    /// Remaining `{{placeholder}}` stops from the last inserted snippet.
+    pub placeholders: Option<crate::repl::placeholder::PlaceholderState>,
 }
 
 impl ReplState {
@@ -25,6 +30,8 @@ impl ReplState {
             stopped_jobs_warned: false,
             multiline_buffer: String::new(),
             last_cwd: current_dir,
+            last_arg: None,
+            placeholders: None,
         }
     }
 }

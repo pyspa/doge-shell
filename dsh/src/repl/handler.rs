@@ -1,5 +1,7 @@
 use crate::repl::Repl;
 use crate::repl::key_action::{KeyAction, KeyContext, determine_key_action};
+use crate::repl::keybind::{BoundAction, Resolved};
+use crate::repl::render;
 use crate::repl::state::{ReplControlFlow, ShellEvent};
 use crate::terminal::renderer::TerminalRenderer;
 use crate::utils::editor::open_editor;
@@ -71,12 +73,27 @@ pub(crate) fn handle_resize(repl: &mut Repl<'_>, cols: u16, rows: u16) {
         return;
     }
 
+    // The scroll region is expressed in absolute rows, so it has to be torn
+    // down at the *old* height and re-established at the new one.
+    let mut renderer = TerminalRenderer::new();
+    repl.terminal_ui
+        .status_line
+        .borrow_mut()
+        .disarm(&mut renderer);
+    renderer.flush().ok();
+
     repl.terminal_ui.columns = cols;
     repl.terminal_ui.lines = rows;
+    repl.terminal_ui
+        .status_line
+        .borrow_mut()
+        .set_size(cols as u16, rows as u16);
 
     if cols == 0 {
         return;
     }
+
+    repl.refresh_status_line();
 
     // The recorded cursor row was measured at the old width. The terminal
     // rewrapped the input line, so the row the cursor now sits on is the one
@@ -92,6 +109,43 @@ pub(crate) fn handle_resize(repl: &mut Repl<'_>, cols: u16, rows: u16) {
     if let Err(e) = renderer.flush() {
         warn!("Failed to redraw after resize: {}", e);
     }
+}
+
+/// Whether an action makes the snippet placeholder stops meaningless.
+///
+/// Ordinary editing keeps them (they are re-anchored by the length delta).
+/// Listed here are the actions that replace the buffer with unrelated text, or
+/// end the line entirely, where a char-offset delta cannot describe what
+/// happened.
+fn placeholders_invalidated_by(action: &KeyAction) -> bool {
+    matches!(
+        action,
+        KeyAction::Execute
+            | KeyAction::ExecuteBackground
+            | KeyAction::Interrupt
+            | KeyAction::Eof
+            | KeyAction::HistoryPrevious
+            | KeyAction::HistoryNext
+            | KeyAction::HistorySearch
+            | KeyAction::Undo
+            | KeyAction::Redo
+            | KeyAction::OpenEditor
+            | KeyAction::OpenBlockBrowser
+            | KeyAction::OpenCommandPalette
+            | KeyAction::MacroRecord
+            | KeyAction::ResumeLastJob
+            | KeyAction::ToggleSudo
+            | KeyAction::AiAutoFix
+            | KeyAction::AiSmartCommit
+            | KeyAction::AiDiagnose
+            | KeyAction::AiExplainCommand
+            | KeyAction::AiWatchCurrentInput
+            | KeyAction::ForceAiSuggestion
+            | KeyAction::AcceptSuggestionFull
+            | KeyAction::AcceptSuggestionWord
+            | KeyAction::RotateSuggestionForward
+            | KeyAction::RotateSuggestionBackward
+    )
 }
 
 pub(crate) async fn handle_key_event(
@@ -113,36 +167,39 @@ pub(crate) async fn handle_key_event(
         repl.terminal_ui.ctrl_c_state.reset();
     }
 
-    // Handle Ctrl-x prefix
-    if matches!((ev.code, ev.modifiers), (KeyCode::Char('x'), CTRL)) {
-        repl.ctrl_x_pressed = true;
-        return Ok(ReplControlFlow::Continue);
-    }
+    // --- User key bindings, layered in front of the built-in table ---
+    //
+    // The environment lock is taken and released here: dispatching below needs
+    // `&mut repl`, and a Lisp binding re-enters the environment for writing.
+    let resolved = {
+        let environment = repl.shell.environment.clone();
+        let bindings = environment.read();
+        bindings
+            .variable_state
+            .keybindings
+            .resolve(&mut repl.pending_chord, ev)
+    };
 
-    // If Ctrl-x was pressed, check for secondary key
-    if repl.ctrl_x_pressed {
-        repl.ctrl_x_pressed = false; // Reset state
-        if matches!((ev.code, ev.modifiers), (KeyCode::Char('e'), CTRL)) {
-            // Ctrl-x Ctrl-e detected
-            match open_editor(repl.input.as_str(), "sh") {
-                Ok(content) => {
-                    repl.input.reset(content);
-                    repl.ai_ui.last_input_change_time = std::time::Instant::now();
-                    repl.ai_ui.current_ai_explanation = None;
-
-                    let mut renderer = TerminalRenderer::new();
-                    repl.print_prompt(&mut renderer);
-                    repl.print_input(&mut renderer, true, true);
-                    renderer.flush()?;
-                    return Ok(ReplControlFlow::Continue);
-                }
-                Err(e) => {
-                    warn!("Failed to open editor: {}", e);
-                    return Ok(ReplControlFlow::Continue);
-                }
-            }
+    let bound_action = match resolved {
+        Resolved::Pending => return Ok(ReplControlFlow::Continue),
+        Resolved::Unbound(sequence) => {
+            // A chord that goes nowhere drops the prefix and lets the key that
+            // ended it do its normal job — what the hardcoded Ctrl-x handling
+            // did before this layer existed.
+            //
+            // Consuming the key instead would mean an accidental Ctrl-x makes
+            // the next Enter silently not run the command, and an accidental
+            // Ctrl-x eats the next character typed. Neither is acceptable for a
+            // prefix that sits next to Ctrl-c and Ctrl-z.
+            debug!("key sequence not bound, falling through: {}", sequence);
+            None
         }
-    }
+        Resolved::Bound(BoundAction::Lisp(function)) => {
+            return run_lisp_binding(repl, &function);
+        }
+        Resolved::Bound(BoundAction::Action(action)) => Some(action),
+        Resolved::Fallthrough => None,
+    };
 
     // --- KeyAction-based dispatch for simple actions ---
     let ctx = KeyContext {
@@ -158,11 +215,60 @@ pub(crate) async fn handle_key_event(
         multiline_active: !repl.state.multiline_buffer.is_empty(),
     };
 
-    // Determine action using pure function
-    let action = determine_key_action(ev, &ctx);
+    // A user binding wins outright; otherwise fall back to the built-in table.
+    let action = match bound_action {
+        Some(action) => action,
+        None => determine_key_action(ev, &ctx),
+    };
+
+    // `Alt+.` is run-scoped: any other action ends the run, so the next press
+    // starts over from the newest command. Keyed off the action rather than the
+    // raw key so a rebound key keeps working.
+    if !matches!(action, KeyAction::InsertLastArgument) {
+        repl.state.last_arg = None;
+    }
+
+    // Placeholder stops must survive ordinary editing — filling a value in is
+    // the whole point — so they are only dropped by actions that replace the
+    // line wholesale or leave it. Everything else re-anchors them below.
+    if placeholders_invalidated_by(&action) {
+        repl.state.placeholders = None;
+    }
+    let placeholder_anchor = repl
+        .state
+        .placeholders
+        .as_ref()
+        .map(|_| (repl.input.cursor(), repl.input.len()));
 
     // Handle actions
     match action {
+        KeyAction::InsertLastArgument => {
+            reset_completion = input_shortcuts::handle_insert_last_argument(repl);
+        }
+        KeyAction::InsertSnippet => {
+            let inserted = input_shortcuts::handle_insert_snippet(repl);
+            reset_completion = inserted;
+            if inserted {
+                // The picker painted over the prompt; put it back before the
+                // trailing redraw refreshes the input line.
+                //
+                // `redraw_prompt`, not `print_prompt`: this is the same command
+                // line, so emitting a fresh OSC 133 A (with no matching D) and
+                // re-running the pre-prompt hooks would open a bogus command
+                // block in shell-integration-aware terminals. And it only runs
+                // when the picker actually drew — bailing early (no snippets,
+                // database unavailable) must leave the screen alone.
+                let mut renderer = TerminalRenderer::new();
+                render::redraw_prompt(repl, &mut renderer);
+                renderer.flush().ok();
+            }
+        }
+        KeyAction::NextPlaceholder => {
+            input_shortcuts::handle_placeholder_step(repl, true);
+        }
+        KeyAction::PrevPlaceholder => {
+            input_shortcuts::handle_placeholder_step(repl, false);
+        }
         KeyAction::MacroRecord => {
             auxiliary::handle_macro_record(repl).await?;
         }
@@ -340,7 +446,27 @@ pub(crate) async fn handle_key_event(
             }
         }
         KeyAction::OpenEditor => {
-            // Already handled via Ctrl-x state check
+            // vim/emacs paint the whole screen; hand it over intact.
+            let _status_pause = crate::repl::status_line::StatusLinePause::new(
+                repl.terminal_ui.status_line.clone(),
+            );
+            match open_editor(repl.input.as_str(), "sh") {
+                Ok(content) => {
+                    repl.input.reset(content);
+                    repl.ai_ui.last_input_change_time = std::time::Instant::now();
+                    repl.ai_ui.current_ai_explanation = None;
+
+                    let mut renderer = TerminalRenderer::new();
+                    repl.print_prompt(&mut renderer);
+                    repl.print_input(&mut renderer, true, true);
+                    renderer.flush()?;
+                    return Ok(ReplControlFlow::Continue);
+                }
+                Err(e) => {
+                    warn!("Failed to open editor: {}", e);
+                    return Ok(ReplControlFlow::Continue);
+                }
+            }
         }
         KeyAction::ToggleSudo => {
             if repl.terminal_ui.esc_state.on_pressed() {
@@ -355,6 +481,20 @@ pub(crate) async fn handle_key_event(
         KeyAction::Unsupported => {
             warn!("unsupported key event: {:?}", ev);
         }
+    }
+
+    // Re-anchor the snippet stops against whatever the action did to the
+    // buffer. Measuring the length change is enough for insert/delete edits;
+    // the actions that rewrite the line arbitrarily were dropped above.
+    if let Some((cursor_before, len_before)) = placeholder_anchor
+        && let Some(state) = repl.state.placeholders.as_mut()
+        && !matches!(
+            action,
+            KeyAction::NextPlaceholder | KeyAction::PrevPlaceholder
+        )
+    {
+        let delta = repl.input.len() as isize - len_before as isize;
+        state.adjust(cursor_before, delta);
     }
 
     // Determine if input was likely modified by the action.
@@ -382,6 +522,8 @@ pub(crate) async fn handle_key_event(
             | KeyAction::HistoryNext
             | KeyAction::HistorySearch
             | KeyAction::AiWatchCurrentInput
+            | KeyAction::InsertLastArgument
+            | KeyAction::InsertSnippet
     ) {
         repl.ai_ui.last_input_change_time = std::time::Instant::now();
         repl.ai_ui.current_ai_explanation = None;
@@ -405,5 +547,52 @@ pub(crate) async fn handle_key_event(
     }
     // Note: For cursor-only movements (redraw=false), cursor positioning
     // is handled directly in the key event handlers to avoid full redraw
+    Ok(ReplControlFlow::Continue)
+}
+
+/// Runs a key bound to a Lisp function.
+///
+/// The function receives the current input and cursor position. If it returns
+/// a string, that string is inserted at the cursor; any other value leaves the
+/// buffer alone, which is how a binding does something purely side-effecting.
+///
+/// The call is synchronous, so a slow function blocks the prompt — the same
+/// property Command Palette Lisp actions have.
+fn run_lisp_binding(repl: &mut Repl<'_>, function: &str) -> Result<ReplControlFlow> {
+    use crate::lisp::Value;
+
+    let args = vec![
+        Value::String(repl.input.as_str().to_string()),
+        Value::Int(repl.input.cursor() as i64),
+    ];
+
+    // The engine is an `Rc<RefCell<..>>` shared with the shell; clone the
+    // handle so no borrow is held across the call, which may re-enter the
+    // shell environment.
+    let engine = std::rc::Rc::clone(&repl.shell.lisp_engine);
+    let result = engine.borrow().run_func_values(function, args);
+
+    let mut changed = false;
+    match result {
+        Ok(Value::String(text)) if !text.is_empty() => {
+            repl.input.insert_str(&text);
+            changed = true;
+        }
+        Ok(_) => {}
+        Err(err) => {
+            // A broken binding must not take the shell down with it.
+            warn!("key binding '{}' failed: {}", function, err);
+        }
+    }
+
+    if changed {
+        repl.ai_ui.last_input_change_time = std::time::Instant::now();
+        repl.ai_ui.current_ai_explanation = None;
+        repl.ai_ui.pending_ai_explanation_input = None;
+    }
+
+    let mut renderer = TerminalRenderer::new();
+    repl.print_input(&mut renderer, changed, true);
+    renderer.flush().ok();
     Ok(ReplControlFlow::Continue)
 }

@@ -6,9 +6,21 @@
 - parser / AST / redirect / expansion / brace
   - Read: `dsh/src/parser/`
   - Validate: `cargo test -p doge-shell`
-- prompt / right prompt / transient / terminal UI
-  - Read: `dsh/src/prompt/`, `dsh/src/terminal/`, `dsh/src/repl/`
+- prompt / right prompt / transient / terminal UI / status line
+  - Read: `dsh/src/prompt/`, `dsh/src/terminal/`, `dsh/src/repl/`, `dsh/src/repl/status_line.rs`
   - Validate: `cargo test -p doge-shell`
+- key bindings / chords / bind / KeyAction
+  - Read: `dsh/src/repl/keybind/`, `dsh/src/repl/key_action.rs`, `dsh/src/repl/handler.rs`, `dsh/src/lisp/keybind.rs`
+  - Validate: `cargo test -p doge-shell`
+- insert-last-argument / snippet insert / `{{placeholder}}` stops
+  - Read: `dsh/src/repl/last_arg.rs`, `dsh/src/repl/placeholder.rs`, `dsh/src/repl/key_handlers/input_shortcuts.rs`, `dsh/src/snippet.rs`
+  - Validate: `cargo test -p doge-shell`
+- scheduled tasks / sched / periodic background work
+  - Read: `dsh/src/scheduler/`, `dsh-builtin/src/sched.rs`, `dsh-types/src/schedule.rs`, `dsh/src/lisp/sched.rs`
+  - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-builtin` for CLI changes and `cargo test -p dsh-types` for shared types
+- directory stack / pushd / popd / dirs / cd -N
+  - Read: `dsh-builtin/src/dirstack.rs`, `dsh-builtin/src/cd.rs`, `dsh/src/proxy/mod.rs`
+  - Validate: `cargo test -p dsh-builtin`; add `cargo test -p doge-shell` when `changepwd` behavior changes
 - process / PTY / job / raw terminal / colored output
   - Read: `dsh/src/process/`, `dsh/src/shell/eval.rs`, `dsh/src/terminal/`
   - Validate: `cargo test -p doge-shell`

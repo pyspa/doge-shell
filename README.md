@@ -25,6 +25,7 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 - **Context-Aware History**: Prioritizes commands based on the current directory or Git repository context
 - **Queryable History**: Search history by text, scope, exit status, and duration with the `history` command
 - **Directory Navigation**: Smart directory history and jump with `z` command
+- **Directory Stack**: `pushd` / `popd` / `dirs`, plus `cd -N` to jump straight to a numbered entry
 - **Path Management**: Dynamic PATH management with `add_path` command
 - **Job Control**: Background job management with `jobs`, `bg`, `fg` commands
 - **Aliases**: Command aliasing with `alias` command
@@ -43,6 +44,8 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 - **Job Notifications**: Finished background jobs are reported as `[1]+  Done  <cmd>` above the prompt without disturbing what you are typing
 - **Inline Argument Explainer**: Displays real-time descriptions of command arguments and options below the prompt as you type
 - **Transient Prompt**: Automatically collapses the prompt after command execution to keep the terminal clean
+- **Status Line**: Optional bottom-row line with scheduled tasks, jobs, git and GitHub state (off by default)
+- **Custom Key Bindings**: Rebind any key or chord from `config.lisp` with `bind`, including to Lisp functions
 
 ### 🛡️ Safety Guard
 
@@ -146,6 +149,7 @@ Seamlessly handle structured data (JSON, CSV, Tables) within the shell pipeline.
 - **Web Server**: Built-in static file server with `serve` command
 - **Configuration Reload**: Runtime configuration reloading with `reload` command
 - **Trigger Command**: Monitor file changes matching a glob pattern and automatically execute commands. Results are captured in the [output history](#command-output-history).
+- **Scheduled Tasks**: Run a command every 30s/5m/1h in the background with `sched`, quietly by default and reporting only on failure or changed output
 ### Project Manager
 
 Organize and switch between workspaces efficiently with the integrated Project Manager.
@@ -195,6 +199,9 @@ The shell includes many built-in commands:
 | `cd`                | Change directory                                                                                                           |
 | `history`           | Search and filter command history                                                                                          |
 | `z`                 | Jump to frequently used directories (use `-i` or `--interactive` for selection, `-` for previous directory, `-l` for list) |
+| `pushd`             | Push a directory onto the directory stack and change to it                                                                 |
+| `popd`              | Pop a directory off the directory stack and change to it                                                                   |
+| `dirs`              | Show the directory stack                                                                                                   |
 | `jobs`              | Show background jobs                                                                                                       |
 | `fg`                | Bring job to foreground                                                                                                    |
 | `bg`                | Send job to background                                                                                                     |
@@ -237,6 +244,7 @@ The shell includes many built-in commands:
 | `ai-commit` / `aic` | Generate commit message using AI                                                                                           |
 | `tm`                | Search and retrieve past command outputs                                                                                   |
 | `trigger`           | Monitor file changes and execute commands (saves output to history)                                                        |
+| `sched`             | Run a command periodically in the background for this session                                                              |
 | `notebook-play`     | Play a notebook file (execute code blocks interactively)                                                                   |
 | `eproject`          | Open current project in Emacs                                                                                              |
 | `eview`             | Pipe content to external editor                                                                                            |
@@ -273,13 +281,12 @@ The embedded Lisp interpreter includes many built-in functions:
 - `pref-auto-pair` - Configure automatic pairing of quotes/brackets
 - `pref-auto-notify` - Configure automatic notification
 - `pref-ai-explanation` - Configure AI-powered command explanations
+- `pref-status-line` - Enable the bottom-row [status line](#status-line) (off by default)
 - `set-auto-fix-enabled` - Enable or disable AI auto-fix
 - `safety-level` - Configure safety level (`loose`, `normal`, `strict`)
 - `set-notify-config` - Configure notification behavior
 - `allow-direnv` - Configure direnv roots
 - `edit` - Open a file in the external editor
-
-### Interactive UI Functions
 
 ### Interactive UI Functions
 
@@ -291,6 +298,25 @@ The embedded Lisp interpreter includes many built-in functions:
 
 - `register-action` - Register a custom action in the Command Palette.
   - Usage: `(register-action "Name" "Description" "function-name")`
+
+### Scheduled Task Functions
+
+- `sched-add` - Register a periodic task
+  - Usage: `(sched-add "<name>" "<interval>" "<command>" ["<notify-policy>"])`
+- `sched-remove` / `sched-pause` / `sched-resume` - Manage a task by name or id
+- `sched-list` - List the registered tasks (the `sched list` command is easier from the prompt)
+
+See [Scheduled Tasks](#scheduled-tasks) for intervals and notify policies.
+
+### Key Binding Functions
+
+- `bind` - Bind a key or chord to an action or Lisp function
+  - Usage: `(bind "ctrl-g" "cancel-completion")`, `(bind "ctrl-x s" "insert-snippet")`
+- `unbind` - Remove a binding so the key falls back to its built-in meaning
+- `list-bindings` - List the configured bindings
+- `list-bind-actions` - List every action name `bind` accepts
+
+See [Custom Key Bindings](#custom-key-bindings) for the key syntax and precedence rules.
 
 ### Hook System Functions
 
@@ -350,9 +376,12 @@ Some interactive commands may require disabling the built-in PTY. You have two o
 
 Create a `~/.config/dsh/config.lisp` file to configure your shell:
 
+> **Note**: the whole file is evaluated as a single `(begin ...)` form. If any expression fails,
+> the shell rolls the environment back and **none** of the configuration takes effect, so keep an
+> eye on the error printed at startup.
+
 ```lisp
 ;; Example configuration
-(setq prompt "🐶 > ")
 (alias "ls" "ls --color=auto")
 (alias "ll" "ls -alF")
 (alias "la" "ls -A")
@@ -648,6 +677,159 @@ Many blocks legitimately have no output: it is only captured for a foreground
 external command that is not redirected, not part of a pipeline, and not
 PTY-proxied. The browser says so rather than showing an empty pane.
 
+### Status Line
+
+An optional line pinned to the bottom row, showing scheduled tasks, background jobs,
+git state and GitHub notifications:
+
+```
+⏱ 3 failing 1   ⚙ 2 jobs    main ●4 ↑1   🐙 5
+```
+
+**Off by default.** Enable it in `config.lisp`:
+
+```lisp
+(pref-status-line t)
+```
+
+`DSH_STATUS_LINE=0` forces it off regardless, and it stays off on a non-terminal or a
+terminal shorter than three rows.
+
+It works by reserving a scroll region (DECSTBM) so the bottom row sits outside the
+scrolling area — the prompt, command output and job notices are unaffected. The region
+is released whenever something else needs the whole screen (`Ctrl+R`, `Ctrl+O`, `Alt+x`,
+tab completion, `$EDITOR`, and any foreground command) and restored afterwards, and it
+is always released on exit.
+
+Everything shown is read from caches the shell already maintains, so the status line
+never adds work to the prompt. It is off by default because DECSTBM support varies
+between terminals.
+
+### Scheduled Tasks
+
+`sched` runs a command on a repeating interval in the background:
+
+```bash
+sched add 5m git fetch --all            # every 5 minutes
+sched add --name prs --on change 10m gh pr list
+sched add --quiet 30s 'df -h /'
+sched list                              # id, interval, next run, last result
+sched log prs                           # recent runs
+sched rm prs
+sched pause                             # stop everything, keeping the task list
+sched resume
+```
+
+Intervals are `30s` / `5m` / `1h` — between 5 seconds and 24 hours. There is no cron
+syntax: tasks do not outlive the shell, so wall-clock scheduling would be misleading.
+
+**Nothing is printed on a normal run.** Output goes to the [output history](#command-output-history)
+and [command blocks](#command-blocks), reachable with `out`, `blocks` and `tm`. `out` and `tm`
+label the run `sched:<name> <command>` so it is distinguishable from something you typed;
+the command block keeps the plain command so `blocks rerun` still works. Whether a run
+interrupts you is set by `--on`:
+
+| `--on`      | Reports                                              |
+| ----------- | ---------------------------------------------------- |
+| `never`     | Nothing (`--quiet` is a shorthand)                   |
+| `failure`   | The command started failing, and again when it recovers |
+| `change`    | The output differs from the previous run              |
+| `both`      | Either of the above — **default**                    |
+| `always`    | Every run                                            |
+
+Failures report on the *transition*, not on every run: a task failing every 30 seconds
+says so once, then again when it recovers.
+
+Notices appear above the prompt without disturbing what you are typing, and a desktop
+notification follows if `pref-auto-notify` is on.
+
+**Commands run under `sh -c`**, in the directory where you registered them, with stdin
+on `/dev/null` and in their own process group. So they cannot steal the terminal or be
+hit by `Ctrl+C` at the prompt — but shell aliases, abbreviations, builtins and Lisp
+functions are **not** available inside them. Write out the full command, or wrap it in a
+script.
+
+A run that overruns its own interval is skipped rather than stacked, at most two tasks
+run at once, and each run is killed after its timeout (60s by default, capped to the
+interval).
+
+Tasks are session-scoped. To make them permanent, put `sched-add` in `config.lisp` —
+`sched list --lisp` prints exactly those lines for the tasks you have now:
+
+```lisp
+(sched-add "fetch" "5m" "git fetch --all")
+(sched-add "prs" "10m" "gh pr list" "change")
+```
+
+### Snippets
+
+`Alt+;` opens the snippet list (managed with the `snippet` command) and inserts the
+chosen command at the cursor. Typing a character dismisses the list instead of
+selecting — this inserts a whole command, so an accidental keystroke should not
+commit to one.
+
+A snippet body can carry `{{name}}` or `{{name:default}}` markers. On insertion each
+marker is replaced by its default (nothing, when there is no default) and the cursor
+lands on the first one. `Alt+n` and `Alt+p` cycle through the remaining stops.
+
+```bash
+snippet add deploy 'kubectl rollout restart deploy/{{name}} -n {{ns:default}}'
+```
+
+Inserting that gives `kubectl rollout restart deploy/ -n default` with the cursor
+after `deploy/`; type the deployment name, then `Alt+n` moves onto `default`. The stops
+follow your edits, so filling one in does not throw the others off.
+
+They are dropped once you leave the line — running the command, recalling history,
+undo/redo, or opening the editor or a picker.
+
+Note that `Tab` is left alone — it stays completion, so paths can still be completed
+while filling in a placeholder.
+
+### Insert Last Argument
+
+`Alt+.` inserts the last argument of the previous command, and each repeat replaces
+it with the argument from the command before that. Quoting is preserved, so
+`"hello world"` comes back as one argument.
+
+Because history stores one row per distinct command string, the walk is over
+*distinct commands*, not over individual executions — the same caveat that applies to
+[History Search](#history-search). Adjacent duplicates are skipped so repeated
+presses always show something new.
+
+### Directory Stack
+
+`pushd` / `popd` / `dirs` work the way they do in bash: slot 0 of the stack is always
+the current directory, so a plain `cd` replaces the top without disturbing what is
+underneath.
+
+```bash
+dirs -v          # 0  ~/src/doge-shell
+pushd /tmp       # /tmp ~/src/doge-shell
+pushd ~/notes    # ~/notes /tmp ~/src/doge-shell
+pushd            # swap the top two: /tmp ~/notes ~/src/doge-shell
+popd             # back to ~/notes
+dirs -c          # clear everything but the current directory
+```
+
+`dirs` takes `-v` (numbered, one per line), `-p` (one per line), `-l` (full paths
+instead of `~`), and `-c` (clear).
+
+Any entry can be addressed by its `dirs -v` number:
+
+```bash
+cd -2            # jump to entry 2, rotating it to the top
+pushd +2         # same thing
+popd +1          # drop entry 1 without moving
+```
+
+**One difference from bash**: `+N` and `-N` mean the same thing here — "entry N as
+printed by `dirs -v`". bash counts `-N` from the other end, which is a daily papercut
+for no real gain. A bare `cd -` still means `$OLDPWD`, unchanged.
+
+`pushd` and `popd` go through the same code path as `cd`, so directory frecency (`z`),
+`$OLDPWD` and `*on-chdir-hooks*` all keep working.
+
 ### Import History
 
 Import command history from other shells:
@@ -749,14 +931,69 @@ include setup.sh
 - `Ctrl+Y` - Yank back the text removed by the last `Ctrl+K` / `Ctrl+U` / `Ctrl+W`
 - `Ctrl+_` - Undo the last edit (undo steps break at word boundaries)
 - `Alt+/` - Redo
+- `Alt+.` (or `Alt+_`) - Insert the last argument of the previous command; press again to walk further back
+- `Alt+;` - Pick a snippet and insert it at the cursor
+- `Alt+n` / `Alt+p` - Jump to the next / previous `{{placeholder}}` of an inserted snippet
 - `Alt+x` - Open Command Palette
 - `Esc` (double press) - Toggle `sudo` prefix for the current command
 - `Ctrl+x Ctrl+e` - Edit current input in external editor (`$VISUAL` or `$EDITOR`)
+
+All of the above are defaults and can be changed — see [Custom Key Bindings](#custom-key-bindings).
+
 - `Alt+Enter` - Execute command in background
 - `Alt+s` - Force AI suggestion
 - `Alt+[` / `Alt+]` - Rotate through suggestions
 - `Alt+w` - Wrap the current input with `ai-watch --`
 - `Alt+m` - Open Macro Recorder
+
+### Custom Key Bindings
+
+Keys can be rebound from `config.lisp`:
+
+```lisp
+(bind "ctrl-g" "cancel-completion")
+(bind "alt-." "insert-last-argument")
+(bind "ctrl-x s" "insert-snippet")   ; multi-key chords work
+(bind "f5" "trigger-completion")
+(unbind "ctrl-x ctrl-e")             ; back to the built-in meaning
+```
+
+`list-bindings` shows what is configured and `list-bind-actions` every name `bind`
+accepts. Both are Lisp functions, so from the prompt they go through `lisp`:
+
+```bash
+lisp "(print (list-bindings))"
+lisp "(print (list-bind-actions))"
+```
+
+Key syntax is `[modifier-]*key`, with `-` or `+` as the separator. Modifiers are
+`ctrl`/`c`, `alt`/`m`/`meta`, `shift`/`s` and `super`. Key names are a single character
+(`a`, `.`, `/`) or one of `enter`, `tab`, `shift-tab`, `space`, `esc`, `backspace`,
+`delete`, `insert`, `home`, `end`, `pageup`, `pagedown`, `up`, `down`, `left`, `right`,
+`f1`–`f12`. Chords are strokes separated by spaces.
+
+**A bound key wins unconditionally.** Several built-in bindings are context-sensitive —
+`Right` accepts a suggestion when one is showing, `Esc` toggles `sudo` only when no
+completion is open, `Ctrl+D` is EOF only on an empty line. Rebinding such a key replaces
+all of that with the single action you named. This is the same rule as zsh's `bindkey`
+and fish's `bind`.
+
+If the name is not a built-in action it is taken as a Lisp function, called with the
+current input and cursor position. Returning a string inserts it at the cursor;
+returning anything else leaves the buffer alone:
+
+```lisp
+(fn insert-date (input cursor)
+  (sh! "date +%Y-%m-%d"))
+(bind "ctrl-t" "insert-date")
+```
+
+The call is synchronous, so a slow function blocks the prompt — the same caveat as
+Command Palette Lisp actions.
+
+`Ctrl+x Ctrl+e` (edit in `$EDITOR`) is itself a default binding and can be unbound or
+moved. A chord that goes nowhere (`Ctrl+x q`) drops the prefix and lets the second key
+do its normal job, so a stray `Ctrl+x` never costs you a keystroke.
 
 ### History Search
 

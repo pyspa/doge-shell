@@ -311,6 +311,11 @@ impl Input {
         }
     }
 
+    /// Moves the cursor to an absolute char offset, clamped to the buffer.
+    pub fn move_to(&mut self, position: usize) {
+        self.cursor = min(self.len(), position);
+    }
+
     pub fn move_by(&mut self, offset: isize) {
         if offset < 0 {
             self.cursor = self.cursor.saturating_sub(offset.unsigned_abs());

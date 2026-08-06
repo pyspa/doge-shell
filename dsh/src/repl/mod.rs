@@ -58,12 +58,16 @@ mod handler;
 pub(crate) mod job_notify;
 pub mod key_action;
 mod key_handlers;
+pub(crate) mod keybind;
+pub(crate) mod last_arg;
 pub(crate) mod notify;
+pub(crate) mod placeholder;
 mod prompt_refresh;
 mod render;
 mod services;
+pub(crate) mod status_line;
 mod suggestion_manager;
-mod terminal_state;
+pub(crate) mod terminal_state;
 
 pub mod completion;
 mod input_analysis;
@@ -94,6 +98,8 @@ pub(crate) struct TerminalUiState {
     pub(crate) esc_state: DoublePressState,
     pub(crate) last_drawn_cursor_y: usize,
     pub(crate) last_preprompt_plain: Option<String>,
+    /// Optional bottom-row status line. Disabled by default.
+    pub(crate) status_line: status_line::SharedStatusLine,
 }
 
 pub(crate) struct CompletionUiState {
@@ -126,13 +132,18 @@ pub(crate) struct BackgroundTasks {
     pub(crate) git_task_inflight: Arc<AtomicBool>,
     pub(crate) history_sync_last_check: Instant,
     pub(crate) github_task: Option<tokio::task::JoinHandle<()>>,
+    /// Finished `sched` runs, reported by the scheduler runner.
+    pub(crate) sched_rx: tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::SchedulerEvent>,
+    pub(crate) sched_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 pub struct Repl<'a> {
     pub shell: &'a mut Shell,
     pub(crate) input: Input,
     pub(crate) history_search: Option<String>,
-    pub(crate) ctrl_x_pressed: bool,
+    /// Strokes collected so far for a multi-key binding such as
+    /// `Ctrl-x Ctrl-e`. Empty when no chord is in progress.
+    pub(crate) pending_chord: crate::repl::keybind::chord::Chord,
     pub(crate) state: ReplState,
     pub(crate) services: ReplServices,
     pub(crate) terminal_ui: TerminalUiState,
@@ -150,16 +161,31 @@ fn history_picker_backend_is_skim() -> bool {
 
 impl<'a> Drop for Repl<'a> {
     fn drop(&mut self) {
-        // Cancel background task
+        // Cancel background tasks. Aborting the scheduler is what makes
+        // scheduled work session-scoped; in-flight children die with it
+        // because `exec` sets `kill_on_drop`.
         if let Some(handle) = self.background_tasks.github_task.take() {
             handle.abort();
         };
+        if let Some(handle) = self.background_tasks.sched_task.take() {
+            handle.abort();
+        };
 
-        let mut renderer = TerminalRenderer::new();
-        queue!(renderer, crossterm::event::DisableBracketedPaste).ok();
-        renderer.flush().ok();
+        // Tests build and drop `Repl` dozens of times; without this gate each
+        // drop writes escape sequences to the terminal running `cargo test`.
+        if crate::terminal::terminal_control_enabled() {
+            let mut renderer = TerminalRenderer::new();
+            // Release the scroll margin before leaving raw mode. A terminal left
+            // with a stale DECSTBM region looks broken to whatever runs next.
+            self.terminal_ui
+                .status_line
+                .borrow_mut()
+                .disarm(&mut renderer);
+            queue!(renderer, crossterm::event::DisableBracketedPaste).ok();
+            renderer.flush().ok();
 
-        disable_raw_mode().ok();
+            disable_raw_mode().ok();
+        }
         self.save_history();
         // Save command timing statistics
         if let Some(path) = command_timing::get_timing_file_path()
@@ -259,6 +285,16 @@ impl<'a> Repl<'a> {
         // Set github_status in shell as well for proxy access
         shell.github_status = Some(status_for_github);
 
+        // The scheduler runner shares the task list with `Environment` and
+        // reports finished runs back over this channel. Spawned here rather
+        // than driven from `handle_background_tick`, because that tick is
+        // awaited inside the key-event select: a slow task would freeze input.
+        let (sched_tx, sched_rx) = tokio::sync::mpsc::unbounded_channel();
+        let sched_task = tokio::spawn(crate::scheduler::runner::scheduler_task(
+            shell.environment.read().scheduler.clone(),
+            sched_tx,
+        ));
+
         let prompt_mark_cache = prompt.read().mark.clone();
         let prompt_mark_width = display_width(&prompt_mark_cache);
 
@@ -304,7 +340,7 @@ impl<'a> Repl<'a> {
             shell,
             input: Input::new(input_config),
             history_search: None,
-            ctrl_x_pressed: false,
+            pending_chord: Vec::new(),
             state: ReplState::new(current.clone()),
             services: ReplServices::new(
                 ai_service,
@@ -322,6 +358,7 @@ impl<'a> Repl<'a> {
                 esc_state: DoublePressState::new(400),
                 last_drawn_cursor_y: 0,
                 last_preprompt_plain: None,
+                status_line: status_line::shared(input_preferences.status_line),
             },
             completion_ui: CompletionUiState {
                 start_completion: false,
@@ -351,6 +388,8 @@ impl<'a> Repl<'a> {
                 git_task_inflight: Arc::new(AtomicBool::new(false)),
                 history_sync_last_check: Instant::now(),
                 github_task: Some(github_task),
+                sched_rx,
+                sched_task: Some(sched_task),
             },
         }
     }
@@ -435,6 +474,11 @@ impl<'a> Repl<'a> {
             (80, 24)
         });
         self.terminal_ui.columns = screen_size.0 as usize;
+        self.terminal_ui.lines = screen_size.1 as usize;
+        self.terminal_ui
+            .status_line
+            .borrow_mut()
+            .set_size(screen_size.0, screen_size.1);
 
         // Initialize integrated completion engine
         debug!("Initializing integrated completion engine (this may use cached JSON data)...");
@@ -811,6 +855,9 @@ impl<'a> Repl<'a> {
                 Some(_) = self.background_tasks.git_rx.recv() => {
                     self.handle_git_refresh_request();
                 }
+                Some(event) = self.background_tasks.sched_rx.recv() => {
+                    self.handle_scheduler_event(event);
+                }
                 Some(_) = self.completion_ui.completion_rx.recv() => {
                     self.handle_completion_refresh();
                 }
@@ -828,7 +875,16 @@ impl<'a> Repl<'a> {
                                 Ok(ReplControlFlow::ExecuteCurrentInput) => {
                                     drop(reader);
 
-                                    match key_handlers::execution::handle_execute(self).await {
+                                    // The child owns the screen; it must not
+                                    // inherit a scroll margin it knows nothing
+                                    // about.
+                                    let status_pause = status_line::StatusLinePause::new(
+                                        self.terminal_ui.status_line.clone(),
+                                    );
+                                    let result = key_handlers::execution::handle_execute(self).await;
+                                    drop(status_pause);
+
+                                    match result {
                                         Ok(()) => {}
                                         Err(err) => {
                                             self.shell.print_error(format!("Error: {err:?}\r"));
@@ -841,9 +897,15 @@ impl<'a> Repl<'a> {
                                 Ok(ReplControlFlow::OpenCommandPalette) => {
                                     drop(reader);
 
-                                    match key_handlers::auxiliary::handle_open_command_palette(self)
-                                        .await
-                                    {
+                                    let status_pause = status_line::StatusLinePause::new(
+                                        self.terminal_ui.status_line.clone(),
+                                    );
+                                    let result =
+                                        key_handlers::auxiliary::handle_open_command_palette(self)
+                                            .await;
+                                    drop(status_pause);
+
+                                    match result {
                                         Ok(_) => {}
                                         Err(err) => {
                                             self.shell.print_error(format!("Error: {err:?}\r"));
@@ -860,6 +922,11 @@ impl<'a> Repl<'a> {
                                     // Execute the interactive closure
                                     let mut execute_after = false;
                                     let raw_mode_pause = terminal_state::RawModePause::new();
+                                    // Full-screen pickers (history, blocks,
+                                    // skim) need the whole terminal.
+                                    let status_pause = status_line::StatusLinePause::new(
+                                        self.terminal_ui.status_line.clone(),
+                                    );
                                     match closure() {
                                         Ok(Some(action)) => {
                                             use crate::repl::state::InteractiveAction;
@@ -898,10 +965,18 @@ impl<'a> Repl<'a> {
                                     drop(raw_mode_pause);
 
                                     if execute_after {
+                                        // Keep the status line paused across the child too.
+                                        // Re-arming first would hand the foreground process a
+                                        // scroll region it knows nothing about, so a full-screen
+                                        // command would lose its bottom row — while the same
+                                        // command typed and Entered works fine.
+                                        //
                                         // `handle_execute` emits the OSC 133 boundaries, manages
                                         // raw mode around the child, and draws the next prompt
                                         // itself, so it must run instead of the redraw below.
-                                        match key_handlers::execution::handle_execute(self).await {
+                                        let result = key_handlers::execution::handle_execute(self).await;
+                                        drop(status_pause);
+                                        match result {
                                             Ok(()) => {}
                                             Err(err) => {
                                                 self.shell.print_error(format!("Error: {err:?}\r"));
@@ -909,6 +984,7 @@ impl<'a> Repl<'a> {
                                             }
                                         }
                                     } else {
+                                        drop(status_pause);
                                         // Redraw prompt
                                         let mut renderer = TerminalRenderer::new();
                                         self.print_prompt(&mut renderer);
@@ -1029,7 +1105,131 @@ impl<'a> Repl<'a> {
 
         let _ = self.shell.exec_input_timeout_hooks();
         self.services.prompt_refresh.schedule();
+        self.refresh_status_line();
         Ok(())
+    }
+
+    /// Redraws the status line from cached state.
+    ///
+    /// Cheap and idempotent: `render` skips the write when nothing changed, so
+    /// calling it on every 1-second tick costs nothing while the shell is idle.
+    pub(crate) fn refresh_status_line(&mut self) {
+        // Re-read the preference each time so `(pref-status-line t)` and
+        // `reload` take effect without restarting the shell.
+        let wanted = self
+            .shell
+            .environment
+            .read()
+            .completion_state
+            .input_preferences
+            .status_line;
+
+        {
+            let mut status = self.terminal_ui.status_line.borrow_mut();
+            if status.is_enabled() != wanted {
+                if !wanted {
+                    // Turning it off has to give the row back.
+                    let mut renderer = TerminalRenderer::new();
+                    status.disarm(&mut renderer);
+                    renderer.flush().ok();
+                }
+                status.set_enabled(wanted);
+            }
+            if !status.is_enabled() {
+                return;
+            }
+        }
+
+        let scheduler = self.shell.environment.read().scheduler.clone();
+        let job_count = self.shell.wait_jobs.len();
+        let (git, github) = {
+            let prompt = self.terminal_ui.prompt.read();
+            (
+                prompt.get_git_status_cached(),
+                prompt
+                    .github_status
+                    .as_ref()
+                    .map(|status| status.read().clone()),
+            )
+        };
+
+        let content =
+            status_line::compose(&scheduler.read(), job_count, git.as_ref(), github.as_ref());
+
+        let mut renderer = TerminalRenderer::new();
+        self.terminal_ui
+            .status_line
+            .borrow_mut()
+            .render(&mut renderer, &content);
+        renderer.flush().ok();
+    }
+
+    /// Files a finished scheduled run and, if its policy says so, tells the
+    /// user about it.
+    ///
+    /// Runs on the REPL task, so it is never concurrent with a redraw. While a
+    /// foreground command is executing the select loop is not polled at all,
+    /// which is what keeps these notices from landing in the middle of another
+    /// command's output — they queue and appear at the next prompt.
+    fn handle_scheduler_event(&mut self, event: crate::scheduler::SchedulerEvent) {
+        // `out` and `tm` only ever display this string, so it can carry a label
+        // marking the run as scheduled rather than typed.
+        let label = format!("sched:{} {}", event.name, event.command);
+
+        let entry = dsh_types::output_history::OutputEntry::new(
+            label,
+            event.stdout.clone(),
+            event.stderr.clone(),
+            event.exit_code,
+        );
+
+        {
+            let mut environment = self.shell.environment.write();
+            let history = &mut environment.session_output_state.output_history;
+            history.push(entry);
+            // `push` inserts at the front, so index 1 is the entry we just
+            // added. Taking the *last* one would attach some unrelated older
+            // command's output to this block.
+            let recorded: Vec<_> = history.get(1).cloned().into_iter().collect();
+
+            let block = dsh_types::command_block::CommandBlock::new(
+                // The block's command is what `blocks rerun` feeds back to the
+                // evaluator, so it has to stay executable — no `sched:` prefix
+                // here, unlike the output-history entry above.
+                event.command.clone(),
+                Some(event.cwd.clone()),
+                event.exit_code,
+                event.duration.as_millis() as u64,
+                &recorded,
+                None,
+            );
+            environment.session_output_state.command_blocks.push(block);
+        }
+
+        if !event.notify {
+            return;
+        }
+
+        let mut renderer = TerminalRenderer::new();
+        render::print_above_prompt(self, &mut renderer, &[event.notice()]);
+        renderer.flush().ok();
+        // `print_above_prompt` erased the reserved row; repaint now rather than
+        // leaving it blank until the next tick.
+        self.refresh_status_line();
+
+        let prefs = self
+            .shell
+            .environment
+            .read()
+            .completion_state
+            .input_preferences;
+        notify::notify_scheduled_task(
+            &prefs,
+            &event.name,
+            &event.command,
+            event.exit_code,
+            event.timed_out,
+        );
     }
 
     fn handle_git_refresh_request(&mut self) {

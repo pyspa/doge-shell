@@ -1,4 +1,9 @@
-/// Generate Lisp code for a macro definition
+/// Generate Lisp code for a macro definition.
+///
+/// Uses `fn` rather than `defun`: only `fn` marks the lambda as exported
+/// (`Lambda::export`), and command dispatch resolves user-defined names through
+/// `LispEngine::is_export`. A macro defined with `defun` would never be callable
+/// as a shell command.
 pub fn generate_macro_lisp(name: &str, commands: &[String]) -> String {
     let mut body = String::new();
     for cmd in commands {
@@ -9,7 +14,7 @@ pub fn generate_macro_lisp(name: &str, commands: &[String]) -> String {
         body.push_str(&format!("  (sh \"{}\")\n", escaped_quotes));
     }
 
-    format!("\n(defun {} ()\n{}\n)\n", name, body)
+    format!("\n(fn {} ()\n{}\n)\n", name, body)
 }
 
 #[cfg(test)]
@@ -20,8 +25,16 @@ mod tests {
     fn test_simple_command() {
         let commands = vec!["echo hello".to_string()];
         let lisp = generate_macro_lisp("test-macro", &commands);
-        assert!(lisp.contains("(defun test-macro ()"));
+        assert!(lisp.contains("(fn test-macro ()"));
         assert!(lisp.contains("  (sh \"echo hello\")"));
+    }
+
+    /// `defun` produces a non-exported lambda, which command dispatch skips.
+    /// Guard against a regression back to it.
+    #[test]
+    fn test_uses_exported_fn_form() {
+        let lisp = generate_macro_lisp("m", &["echo hi".to_string()]);
+        assert!(!lisp.contains("defun"));
     }
 
     #[test]

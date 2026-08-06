@@ -15,6 +15,8 @@ The `dsh/` directory uses the Cargo package name `doge-shell`, so prefer package
 
 Do not start with workspace-wide tests unless the change clearly crosses crate boundaries.
 
+Terminal-touching code (`dsh/src/repl/`, `dsh/src/terminal/`, `dsh/src/process/job_pty.rs`, `dsh/src/process/job_wait.rs`, `dsh/src/shell/eval.rs`): see the "テストと実端末" section of `invariants.md` first. If a run leaves the terminal misbehaving, `cargo test < /dev/null` isolates fd 0, and `reset` clears a stale DECSTBM margin that `stty sane` cannot.
+
 Never use `cargo test -p dsh`; the `dsh/` directory is the `doge-shell` package.
 
 Use `cargo test -p doge-shell --lib` only as a fallback for library-scoped edits when package-level tests are blocked by known macOS sandbox child-`dsh` tracing failures.

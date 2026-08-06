@@ -59,10 +59,15 @@ impl Action for JumpDirectoryAction {
         if let Some(item) = selected.first() {
             let dir_path = item.output().to_string();
 
-            // Change directory
-            if let Err(e) = std::env::set_current_dir(&dir_path) {
-                return Err(anyhow::anyhow!("Failed to change directory: {}", e));
-            }
+            // Go through `changepwd` rather than `set_current_dir`: that is the
+            // single place that records `$OLDPWD`, feeds directory frecency,
+            // runs `*on-chdir-hooks*` and keeps slot 0 of the `pushd` stack in
+            // step with the real cwd. Moving the shell behind its back leaves
+            // `dirs` describing a directory we are no longer in.
+            use dsh_builtin::ShellProxy;
+            shell
+                .changepwd(&dir_path)
+                .map_err(|e| anyhow::anyhow!("Failed to change directory: {}", e))?;
 
             println!("cd {}", dir_path);
         }

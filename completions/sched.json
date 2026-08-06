@@ -1,0 +1,36 @@
+{
+  "command": "sched",
+  "description": "Run a command periodically in the background for this session",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    {
+      "name": "add",
+      "description": "Register a periodic task",
+      "options": [
+        { "long": "--name", "description": "Reference name for the task", "takes_value": true, "value_type": { "type": "String" } },
+        { "long": "--on", "description": "Notify policy", "takes_value": true, "value_type": { "type": "Choice", "data": { "choices": ["never", "failure", "change", "both", "always"] } } },
+        { "long": "--quiet", "description": "Never notify (same as --on never)" },
+        { "long": "--timeout", "description": "Kill a run that takes longer", "takes_value": true, "value_type": { "type": "String" } }
+      ],
+      "arguments": [
+        { "name": "interval", "description": "Repeat interval, e.g. 30s, 5m, 1h", "type": { "type": "String" } },
+        { "name": "command", "description": "Command to run", "multiple": true, "type": { "type": "CommandWithArgs" } }
+      ]
+    },
+    {
+      "name": "list",
+      "description": "Show scheduled tasks",
+      "options": [
+        { "long": "--lisp", "description": "Print the config.lisp form instead" }
+      ]
+    },
+    { "name": "rm", "description": "Remove a task", "arguments": [{ "name": "task", "type": { "type": "String" } }] },
+    { "name": "run", "description": "Run a task once, now", "arguments": [{ "name": "task", "type": { "type": "String" } }] },
+    { "name": "pause", "description": "Pause a task, or the whole scheduler", "arguments": [{ "name": "task", "type": { "type": "String" } }] },
+    { "name": "resume", "description": "Resume a task, or the whole scheduler", "arguments": [{ "name": "task", "type": { "type": "String" } }] },
+    { "name": "log", "description": "Show recent runs", "arguments": [{ "name": "task", "type": { "type": "String" } }] },
+    { "name": "help", "description": "Show help" }
+  ]
+}

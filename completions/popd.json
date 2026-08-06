@@ -1,0 +1,16 @@
+{
+  "command": "popd",
+  "description": "Pop a directory off the directory stack and change to it",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [
+    {
+      "name": "index",
+      "description": "+N / -N to drop stack entry N instead of the top",
+      "type": {
+        "type": "String"
+      }
+    }
+  ]
+}

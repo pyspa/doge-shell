@@ -1,0 +1,16 @@
+{
+  "command": "pushd",
+  "description": "Push a directory onto the directory stack and change to it",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [
+    {
+      "name": "directory",
+      "description": "Directory to push, or +N / -N to rotate to stack entry N",
+      "type": {
+        "type": "Directory"
+      }
+    }
+  ]
+}

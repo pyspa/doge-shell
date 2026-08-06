@@ -2,7 +2,6 @@ pub mod eval;
 pub mod hooks;
 pub mod job;
 pub mod parse;
-pub mod terminal;
 
 use crate::environment::Environment;
 use crate::history::{FrecencyHistory, HistoryMetadata};
@@ -13,7 +12,7 @@ use dsh_types::notebook::NotebookSession;
 use dsh_types::{Context, ExitStatus};
 use libc::{STDIN_FILENO, c_int};
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
-use nix::unistd::{Pid, getpid};
+use nix::unistd::{Pid, getpgrp, getpid};
 use parking_lot::Mutex as ParkingMutex;
 use parking_lot::RwLock;
 use std::collections::VecDeque;
@@ -75,7 +74,11 @@ impl Drop for Shell {
 impl Shell {
     pub fn new(environment: Arc<RwLock<Environment>>) -> Self {
         let pid = getpid();
-        let pgid = pid;
+        // The real process group, not `pid`: dsh never calls `setpgid(0, 0)`,
+        // so when it is started from another shell (or from a test binary) the
+        // two differ, and `job_wait` would try to hand the terminal back to a
+        // process group that does not exist.
+        let pgid = getpgrp();
         let safety_guard = Arc::new(crate::safety::SafetyGuard::new());
 
         // Initialize Lisp engine

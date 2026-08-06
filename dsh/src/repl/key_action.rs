@@ -50,6 +50,15 @@ pub enum KeyAction {
     RotateSuggestionForward,
     RotateSuggestionBackward,
 
+    /// Insert the last argument of a previous command; repeat to walk further
+    /// back through history (readline's `insert-last-argument`).
+    InsertLastArgument,
+    /// Pick a snippet and insert it at the cursor.
+    InsertSnippet,
+    /// Move to the next / previous `{{placeholder}}` of an inserted snippet.
+    NextPlaceholder,
+    PrevPlaceholder,
+
     // Command execution
     Execute,
     ExecuteBackground,
@@ -225,6 +234,15 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
         (KeyCode::Char('w'), ALT) => KeyAction::AiWatchCurrentInput,
         (KeyCode::Char('m'), ALT) => KeyAction::MacroRecord,
 
+        // Input shortcuts.
+        //
+        // `Alt+_` is readline's alias for `Alt+.`. Matching ALT exactly keeps it
+        // clear of the `Ctrl+_` undo arm further down, which requires CTRL.
+        (KeyCode::Char('.'), ALT) | (KeyCode::Char('_'), ALT) => KeyAction::InsertLastArgument,
+        (KeyCode::Char(';'), ALT) => KeyAction::InsertSnippet,
+        (KeyCode::Char('n'), ALT) => KeyAction::NextPlaceholder,
+        (KeyCode::Char('p'), ALT) => KeyAction::PrevPlaceholder,
+
         // Tab: Completion
         (KeyCode::Tab, NONE) | (KeyCode::BackTab, NONE) => KeyAction::TriggerCompletion,
 
@@ -323,6 +341,65 @@ mod tests {
             next_char: None,
             auto_pair: false,
             multiline_active: false,
+        }
+    }
+
+    // === Input shortcuts (Alt+. / Alt+; / Alt+n / Alt+p) ===
+
+    #[test]
+    fn alt_dot_and_alt_underscore_insert_the_last_argument() {
+        let ctx = ctx_default();
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char('.'), ALT), &ctx),
+            KeyAction::InsertLastArgument
+        );
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char('_'), ALT), &ctx),
+            KeyAction::InsertLastArgument
+        );
+    }
+
+    /// `Ctrl+_` is undo and must not be captured by the `Alt+_` arm above it.
+    #[test]
+    fn ctrl_underscore_is_still_undo() {
+        let ctx = ctx_default();
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char('_'), CTRL), &ctx),
+            KeyAction::Undo
+        );
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char('/'), CTRL), &ctx),
+            KeyAction::Undo
+        );
+    }
+
+    #[test]
+    fn snippet_and_placeholder_keys_are_bound() {
+        let ctx = ctx_default();
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char(';'), ALT), &ctx),
+            KeyAction::InsertSnippet
+        );
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char('n'), ALT), &ctx),
+            KeyAction::NextPlaceholder
+        );
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char('p'), ALT), &ctx),
+            KeyAction::PrevPlaceholder
+        );
+    }
+
+    /// The new ALT bindings must not shadow plain typing.
+    #[test]
+    fn unmodified_versions_of_the_new_keys_still_insert_characters() {
+        let ctx = ctx_default();
+        for ch in ['.', ';', 'n', 'p', '_'] {
+            assert_eq!(
+                determine_key_action(&key(KeyCode::Char(ch), NONE), &ctx),
+                KeyAction::InsertChar(ch),
+                "plain '{ch}' should still be typed"
+            );
         }
     }
 

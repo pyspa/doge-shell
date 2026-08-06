@@ -13,6 +13,16 @@ use std::time::Duration;
 use tokio::time;
 use tracing::{debug, error};
 
+/// Whether this process may hand the real terminal to a job.
+///
+/// `isatty` alone is not enough: under `cargo test` the test binary inherits
+/// the developer's terminal on fd 0, so job control would retarget *their*
+/// terminal's foreground process group.
+fn owns_terminal() -> bool {
+    crate::terminal::terminal_control_enabled()
+        && isatty(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }).unwrap_or(false)
+}
+
 /// Report a job that just stopped, in the same `[1]+  Stopped  cmd` format bash
 /// uses. Without it Ctrl-Z looks like it did nothing.
 fn print_stopped_notice(job: &Job) {
@@ -79,7 +89,7 @@ pub async fn put_in_foreground(job: &mut Job, no_hang: bool, cont: bool) -> Resu
         job.id, job.pgid, no_hang, cont
     );
 
-    if !isatty(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }).unwrap_or(false) {
+    if !owns_terminal() {
         debug!("Not a terminal environment, skipping process group control");
         debug!("About to call wait_job with no_hang: {}", no_hang);
         wait_job(job, no_hang).await?;
@@ -139,7 +149,7 @@ pub fn put_in_foreground_sync(job: &mut Job, no_hang: bool, cont: bool) -> Resul
         job.id, job.pgid, no_hang, cont
     );
 
-    if !isatty(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }).unwrap_or(false) {
+    if !owns_terminal() {
         debug!("Not a terminal environment, skipping process group control");
         debug!("About to call wait_job_sync with no_hang: {}", no_hang);
         wait_job_sync(job, no_hang)?;
@@ -196,7 +206,7 @@ pub fn put_in_foreground_sync(job: &mut Job, no_hang: bool, cont: bool) -> Resul
 pub async fn put_in_background(job: &mut Job) -> Result<()> {
     debug!("put_in_background pgid {:?}", job.pgid,);
 
-    if !isatty(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }).unwrap_or(false) {
+    if !owns_terminal() {
         debug!("Not a terminal environment, skipping process group control");
         return Ok(());
     }

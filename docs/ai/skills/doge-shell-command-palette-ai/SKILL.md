@@ -10,4 +10,6 @@ description: Use for doge-shell command palette, AI actions, diagnose, explain, 
 - Read [../doge-shell-repo/references/package-map.md](../doge-shell-repo/references/package-map.md) before choosing cargo package names.
 - Default read targets are `dsh/src/command_palette/`, `dsh/src/ai_features/`, `dsh/src/argument_explainer.rs`, and `dsh-openai/src/` when client/config behavior is involved.
 - Keep chatgpt / MCP tool work in `$doge-shell-chat-tools`; this skill is for shell-side palette and AI action flows.
+- An action that changes directory must call `ShellProxy::changepwd`, never `std::env::set_current_dir` — see [../doge-shell-repo/references/invariants.md](../doge-shell-repo/references/invariants.md).
+- Palette and picker actions own the screen; they run through `ReplControlFlow::RunInteractive`, which pauses raw mode and the status line for them.
 - Validate touched packages: `cargo test -p doge-shell`; add `cargo test -p dsh-openai` only when OpenAI client/config code changes.

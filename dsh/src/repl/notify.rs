@@ -47,6 +47,43 @@ pub(crate) fn notify_command_finished(
     }
 }
 
+/// Send a desktop notification for a scheduled task that the notify policy
+/// decided is worth surfacing.
+///
+/// Deliberately not routed through [`notify_command_finished`]: that one
+/// suppresses anything faster than `auto_notify_threshold`, which is the right
+/// rule for "was this command slow enough that you walked away" and the wrong
+/// one for a task whose whole point is to report something. The
+/// `auto_notify_enabled` switch is still honoured.
+pub(crate) fn notify_scheduled_task(
+    prefs: &InputPreferences,
+    name: &str,
+    command: &str,
+    exit_code: i32,
+    timed_out: bool,
+) {
+    if !prefs.auto_notify_enabled {
+        return;
+    }
+
+    let summary = if timed_out {
+        format!("Scheduled task timed out: {name}")
+    } else if exit_code == 0 {
+        format!("Scheduled task: {name}")
+    } else {
+        format!("Scheduled task failed: {name}")
+    };
+
+    if let Err(e) = notify_rust::Notification::new()
+        .summary(&summary)
+        .body(preview_command(command).as_str())
+        .appname("doge-shell")
+        .show()
+    {
+        warn!("Failed to send desktop notification: {}", e);
+    }
+}
+
 /// Truncate on a character boundary — byte slicing here panics on multi-byte
 /// input such as a Japanese commit message.
 fn preview_command(cmd: &str) -> String {

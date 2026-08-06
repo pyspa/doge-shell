@@ -142,9 +142,86 @@ impl ShellProxy for Shell {
             path.to_string()
         };
 
+        // Slot 0 of the directory stack always mirrors the current directory,
+        // so plain `cd` replaces the top without disturbing what pushd stacked
+        // underneath. Every navigation path (cd, z, bookmark, pushd, popd)
+        // funnels through here, which is what keeps the stack honest.
+        {
+            let mut env = self.environment.write();
+            if env.dir_stack.is_empty() {
+                env.dir_stack.push(final_path.clone());
+            } else {
+                env.dir_stack[0] = final_path.clone();
+            }
+        }
+
         self.save_path_history(&final_path);
         self.exec_chpwd_hooks(&final_path)?;
         Ok(())
+    }
+
+    fn dir_stack(&self) -> Vec<String> {
+        self.environment.read().dir_stack.clone()
+    }
+
+    fn dir_stack_set(&mut self, stack: Vec<String>) {
+        self.environment.write().dir_stack = stack;
+    }
+
+    fn sched_add(&mut self, spec: dsh_types::schedule::SchedTaskSpec) -> Result<u64, String> {
+        // Snapshot the environment now: the task runs detached later, and
+        // should see the PATH and exports that were in effect when it was
+        // registered rather than whatever the session drifts to.
+        let (scheduler, env) = {
+            let environment = self.environment.read();
+            (
+                environment.scheduler.clone(),
+                environment.child_process_env(),
+            )
+        };
+
+        scheduler.write().add(spec, env)
+    }
+
+    fn sched_remove(&mut self, selector: &str) -> Result<String, String> {
+        let scheduler = self.environment.read().scheduler.clone();
+
+        scheduler.write().remove(selector)
+    }
+
+    fn sched_set_paused(&mut self, selector: &str, paused: bool) -> Result<String, String> {
+        let scheduler = self.environment.read().scheduler.clone();
+
+        scheduler.write().set_paused(selector, paused)
+    }
+
+    fn sched_trigger(&mut self, selector: &str) -> Result<String, String> {
+        let scheduler = self.environment.read().scheduler.clone();
+
+        scheduler.write().trigger(selector)
+    }
+
+    fn sched_list(&self) -> Vec<dsh_types::schedule::SchedTaskView> {
+        let scheduler = self.environment.read().scheduler.clone();
+
+        scheduler.read().views()
+    }
+
+    fn sched_as_lisp(&self) -> Vec<String> {
+        let scheduler = self.environment.read().scheduler.clone();
+
+        scheduler.read().as_lisp()
+    }
+
+    fn sched_enabled(&self) -> bool {
+        let scheduler = self.environment.read().scheduler.clone();
+
+        scheduler.read().enabled
+    }
+
+    fn sched_set_enabled(&mut self, enabled: bool) {
+        let scheduler = self.environment.read().scheduler.clone();
+        scheduler.write().set_enabled(enabled);
     }
 
     fn insert_path(&mut self, idx: usize, path: &str) {
@@ -554,132 +631,43 @@ impl ShellProxy for Shell {
     }
 
     fn add_snippet(&mut self, name: String, command: String, description: Option<String>) -> bool {
-        match crate::environment::get_data_file("dsh_snippets.db") {
-            Ok(db_path) => match crate::db::Db::new(db_path) {
-                Ok(db) => {
-                    let manager = crate::snippet::SnippetManager::with_db(db);
-                    manager.add(&name, &command, description.as_deref()).is_ok()
-                }
-                Err(e) => {
-                    warn!("Failed to open snippet database: {}", e);
-                    false
-                }
-            },
-            Err(e) => {
-                warn!("Failed to get snippet database path: {}", e);
-                false
-            }
-        }
+        crate::snippet::SnippetManager::open_default()
+            .is_some_and(|manager| manager.add(&name, &command, description.as_deref()).is_ok())
     }
 
     fn remove_snippet(&mut self, name: &str) -> bool {
-        match crate::environment::get_data_file("dsh_snippets.db") {
-            Ok(db_path) => match crate::db::Db::new(db_path) {
-                Ok(db) => {
-                    let manager = crate::snippet::SnippetManager::with_db(db);
-                    manager.remove(name).unwrap_or(false)
-                }
-                Err(e) => {
-                    warn!("Failed to open snippet database: {}", e);
-                    false
-                }
-            },
-            Err(e) => {
-                warn!("Failed to get snippet database path: {}", e);
-                false
-            }
-        }
+        crate::snippet::SnippetManager::open_default()
+            .is_some_and(|manager| manager.remove(name).unwrap_or(false))
     }
 
     fn list_snippets(&self) -> Vec<dsh_types::snippet::Snippet> {
-        match crate::environment::get_data_file("dsh_snippets.db") {
-            Ok(db_path) => match crate::db::Db::new(db_path) {
-                Ok(db) => {
-                    let manager = crate::snippet::SnippetManager::with_db(db);
-                    manager
-                        .list()
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|s| dsh_types::snippet::Snippet {
-                            id: s.id,
-                            name: s.name,
-                            command: s.command,
-                            description: s.description,
-                            tags: s.tags,
-                            created_at: s.created_at,
-                            last_used: s.last_used,
-                            use_count: s.use_count,
-                        })
-                        .collect()
-                }
-                Err(e) => {
-                    warn!("Failed to open snippet database: {}", e);
-                    Vec::new()
-                }
-            },
-            Err(e) => {
-                warn!("Failed to get snippet database path: {}", e);
-                Vec::new()
-            }
-        }
+        crate::snippet::SnippetManager::open_default()
+            .map(|manager| {
+                manager
+                    .list()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(to_wire_snippet)
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn get_snippet(&self, name: &str) -> Option<dsh_types::snippet::Snippet> {
-        match crate::environment::get_data_file("dsh_snippets.db") {
-            Ok(db_path) => match crate::db::Db::new(db_path) {
-                Ok(db) => {
-                    let manager = crate::snippet::SnippetManager::with_db(db);
-                    manager
-                        .get(name)
-                        .ok()
-                        .flatten()
-                        .map(|s| dsh_types::snippet::Snippet {
-                            id: s.id,
-                            name: s.name,
-                            command: s.command,
-                            description: s.description,
-                            tags: s.tags,
-                            created_at: s.created_at,
-                            last_used: s.last_used,
-                            use_count: s.use_count,
-                        })
-                }
-                Err(e) => {
-                    warn!("Failed to open snippet database: {}", e);
-                    None
-                }
-            },
-            Err(e) => {
-                warn!("Failed to get snippet database path: {}", e);
-                None
-            }
-        }
+        crate::snippet::SnippetManager::open_default()?
+            .get(name)
+            .ok()
+            .flatten()
+            .map(to_wire_snippet)
     }
 
     fn update_snippet(&mut self, name: &str, command: &str, description: Option<&str>) -> bool {
-        match crate::environment::get_data_file("dsh_snippets.db") {
-            Ok(db_path) => match crate::db::Db::new(db_path) {
-                Ok(db) => {
-                    let manager = crate::snippet::SnippetManager::with_db(db);
-                    manager.update(name, command, description).unwrap_or(false)
-                }
-                Err(e) => {
-                    warn!("Failed to open snippet database: {}", e);
-                    false
-                }
-            },
-            Err(e) => {
-                warn!("Failed to get snippet database path: {}", e);
-                false
-            }
-        }
+        crate::snippet::SnippetManager::open_default()
+            .is_some_and(|manager| manager.update(name, command, description).unwrap_or(false))
     }
 
     fn record_snippet_use(&mut self, name: &str) {
-        if let Ok(db_path) = crate::environment::get_data_file("dsh_snippets.db")
-            && let Ok(db) = crate::db::Db::new(db_path)
-        {
-            let manager = crate::snippet::SnippetManager::with_db(db);
+        if let Some(manager) = crate::snippet::SnippetManager::open_default() {
             let _ = manager.record_use(name);
         }
     }
@@ -858,6 +846,20 @@ impl ShellProxy for Shell {
             },
             Err(_) => None,
         }
+    }
+}
+
+/// Converts the shell-side snippet record into the shape builtins see.
+fn to_wire_snippet(snippet: crate::snippet::Snippet) -> dsh_types::snippet::Snippet {
+    dsh_types::snippet::Snippet {
+        id: snippet.id,
+        name: snippet.name,
+        command: snippet.command,
+        description: snippet.description,
+        tags: snippet.tags,
+        created_at: snippet.created_at,
+        last_used: snippet.last_used,
+        use_count: snippet.use_count,
     }
 }
 

@@ -38,6 +38,7 @@ pub mod command_timing;
 mod commit_ai;
 pub mod comp_gen;
 pub mod completion_generation;
+pub mod dirstack;
 mod dmv;
 mod fg;
 pub mod ga;
@@ -58,6 +59,7 @@ pub mod procs;
 pub mod project;
 pub mod project_context;
 mod read;
+pub mod sched;
 
 mod reload;
 pub mod serve;
@@ -168,6 +170,58 @@ pub trait ShellProxy {
 
     /// Changes the current working directory and updates shell state
     fn changepwd(&mut self, path: &str) -> Result<()>;
+
+    /// Returns the `pushd`/`popd` directory stack, slot 0 being the current
+    /// directory. Empty when the shell has not changed directory yet.
+    ///
+    /// Defaulted so the many test doubles of this trait keep compiling.
+    fn dir_stack(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Replaces the directory stack wholesale.
+    ///
+    /// Callers are expected to route the actual directory change through
+    /// [`ShellProxy::changepwd`] so path history and chpwd hooks still fire.
+    fn dir_stack_set(&mut self, _stack: Vec<String>) {}
+
+    /// Registers a periodic task, returning its id.
+    ///
+    /// All the scheduler hooks below are defaulted for the same reason as the
+    /// directory-stack pair: this trait has a large number of test doubles.
+    fn sched_add(&mut self, _spec: dsh_types::schedule::SchedTaskSpec) -> Result<u64, String> {
+        Err("scheduler unavailable".to_string())
+    }
+
+    fn sched_remove(&mut self, _selector: &str) -> Result<String, String> {
+        Err("scheduler unavailable".to_string())
+    }
+
+    /// Pauses or resumes one task.
+    fn sched_set_paused(&mut self, _selector: &str, _paused: bool) -> Result<String, String> {
+        Err("scheduler unavailable".to_string())
+    }
+
+    /// Makes a task due on the next scan.
+    fn sched_trigger(&mut self, _selector: &str) -> Result<String, String> {
+        Err("scheduler unavailable".to_string())
+    }
+
+    fn sched_list(&self) -> Vec<dsh_types::schedule::SchedTaskView> {
+        Vec::new()
+    }
+
+    /// `sched list --lisp`: the `sched-add` calls that recreate the task set.
+    fn sched_as_lisp(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Whether the scheduler as a whole is running.
+    fn sched_enabled(&self) -> bool {
+        false
+    }
+
+    fn sched_set_enabled(&mut self, _enabled: bool) {}
 
     /// Inserts a path at the specified index in the PATH environment variable
     fn insert_path(&mut self, index: usize, path: &str);
@@ -522,8 +576,24 @@ pub static BUILTIN_COMMAND: LazyLock<HashMap<&'static str, BuiltinSpec>> = LazyL
 
     // Navigation and directory management
     builtin.insert("z", BuiltinSpec::new(z::command, z::description()));
+    builtin.insert(
+        "pushd",
+        BuiltinSpec::new(dirstack::pushd_command, dirstack::pushd_description()),
+    );
+    builtin.insert(
+        "popd",
+        BuiltinSpec::new(dirstack::popd_command, dirstack::popd_description()),
+    );
+    builtin.insert(
+        "dirs",
+        BuiltinSpec::new(dirstack::dirs_command, dirstack::dirs_description()),
+    );
 
     // Job control commands
+    builtin.insert(
+        "sched",
+        BuiltinSpec::new(sched::command, sched::description()),
+    );
     builtin.insert("jobs", BuiltinSpec::new(jobs::command, jobs::description()));
     builtin.insert("fg", BuiltinSpec::new(fg::command, fg::description()));
     builtin.insert("bg", BuiltinSpec::new(bg::command, bg::description()));

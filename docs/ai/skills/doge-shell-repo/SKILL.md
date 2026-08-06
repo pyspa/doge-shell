@@ -10,6 +10,7 @@ description: Use when working in the doge-shell repository or doge-shell リポ�
 - Read [references/package-map.md](references/package-map.md) before choosing Cargo package names.
 - Read [references/read-boundaries.md](references/read-boundaries.md) before opening `README.md` or running broad tests.
 - Read [references/module-map.md](references/module-map.md) only when ownership is unclear.
+- Read [references/invariants.md](references/invariants.md) before editing cwd changes, `Environment` state, key dispatch, terminal drawing, output history, or the scheduler.
 - Read [references/test-scope.md](references/test-scope.md) before choosing cargo commands.
 - Open `README.md` only for user-facing docs, config examples, or feature behavior that is described there.
 - Prefer the smallest test or check that proves the change.

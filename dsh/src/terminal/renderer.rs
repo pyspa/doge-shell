@@ -2,6 +2,14 @@ const DEFAULT_BUFFER_CAPACITY: usize = 4096;
 use std::io::{self, Write};
 
 pub(crate) fn flush_stdout_bytes(bytes: &[u8]) -> io::Result<()> {
+    // Escape sequences bypass libtest's capture and land on the terminal that
+    // is running `cargo test` — cursor moves, `ED` erases and OSC 133 prompt
+    // markers included. Tests that care about rendering write into a `Vec<u8>`
+    // instead, so dropping the bytes here costs them nothing.
+    if !super::terminal_control_enabled() {
+        return Ok(());
+    }
+
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     write_all_with_wait(&mut handle, bytes, wait_stdout_writable)

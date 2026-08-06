@@ -184,6 +184,40 @@ impl CompletionFramework for SkimCompletionFramework {
     }
 }
 
+/// Runs the inline grid purely as a chooser and returns the picked candidate.
+///
+/// This is not word completion: callers insert the result wholesale, so a
+/// printable keystroke dismisses the list instead of being folded back into the
+/// token under the cursor the way [`InlineCompletionFramework::select`] does.
+pub fn pick_candidate(
+    items: Vec<Candidate>,
+    prompt_text: &str,
+    input_text: &str,
+) -> Option<String> {
+    if items.is_empty() {
+        return None;
+    }
+
+    let mut display = CompletionDisplay::new_with_config(
+        items,
+        prompt_text,
+        input_text,
+        CompletionConfig::default(),
+    );
+    let mut controller = CompletionInteraction::new(TerminalEventSource);
+
+    match controller.run(&mut display) {
+        Ok(CompletionOutcome::Submitted(value)) => Some(value),
+        Ok(_) => None,
+        Err(error) => {
+            warn!("Candidate picker failed: {}", error);
+            let _ = display.clear_display();
+            let _ = execute!(stdout(), cursor::Show);
+            None
+        }
+    }
+}
+
 pub fn select_with_framework_kind(
     kind: CompletionFrameworkKind,
     request: CompletionRequest<'_>,

@@ -42,6 +42,11 @@ pub struct InputPreferences {
     pub auto_pair: bool,
     /// When enabled, show AI command explanation after idle time
     pub ai_explanation: bool,
+    /// When enabled, pin a status line to the bottom row of the terminal.
+    ///
+    /// Off by default: it reserves a scroll region with DECSTBM, which not
+    /// every terminal handles well.
+    pub status_line: bool,
 }
 
 impl Default for InputPreferences {
@@ -56,6 +61,7 @@ impl Default for InputPreferences {
             auto_notify_threshold: 10,
             auto_pair: false,
             ai_explanation: false,
+            status_line: false,
         }
     }
 }

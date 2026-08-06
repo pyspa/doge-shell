@@ -35,6 +35,7 @@
 - `package-map.md`: ディレクトリ名と Cargo package 名のズレを避ける。
 - `module-map.md`: crate や主要ディレクトリの ownership を確認する。
 - `read-boundaries.md`: README や workspace 全体 test を開く条件を確認する。
+- `invariants.md`: cwd 変更、`Environment` の状態、キー入力、端末描画、出力履歴、スケジューラを触る前に読む。
 
 ## Skill 運用
 - canonical source は `docs/ai/skills/` に置く。

@@ -264,6 +264,10 @@ pub(crate) fn print_above_prompt<W: Write>(repl: &mut Repl<'_>, out: &mut W, lin
         queue!(out, cursor::MoveUp(up as u16)).ok();
     }
     queue!(out, Clear(ClearType::FromCursorDown)).ok();
+    // ED is not bounded by the DECSTBM scroll region, so that just wiped the
+    // status line's reserved row too. Drop its dedup cache so the next refresh
+    // repaints instead of deciding nothing changed.
+    repl.terminal_ui.status_line.borrow_mut().invalidate();
 
     for line in lines {
         out.write_all(line.as_bytes()).ok();

@@ -46,6 +46,13 @@ pub async fn eval_str(
     input: String,
     force_background: bool,
 ) -> Result<i32> {
+    // Every `enable_raw_mode()` below is gated on `ctx.interactive`, but the
+    // matching `disable_raw_mode()` is not, and nothing puts raw mode back on
+    // the error paths. Anchor the whole function to the state it was entered
+    // with so a caller that was not in raw mode (a test, a `-c` run) cannot
+    // exit with the terminal left raw.
+    let _raw_mode = crate::repl::terminal_state::RawModeRestore::new();
+
     if ctx.save_history
         && let Some(ref mut history) = shell.cmd_history
     {

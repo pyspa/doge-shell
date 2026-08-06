@@ -13,8 +13,28 @@ pub fn description() -> &'static str {
 /// - Absolute paths (starting with /)
 /// - Home directory paths (starting with ~)
 /// - Relative paths
+/// - `-` for the previous directory (`$OLDPWD`)
+/// - `-N` / `+N` for entry N of the directory stack (as numbered by `dirs -v`)
 /// - No argument (defaults to home directory)
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    // `cd -N` / `cd +N` jump into the directory stack. Checked before the
+    // `-` arm below, which is plain $OLDPWD and must keep working.
+    if let Some(index) = argv
+        .get(1)
+        .and_then(|arg| crate::dirstack::parse_stack_index(arg))
+    {
+        return match crate::dirstack::goto_stack_index(proxy, index) {
+            Ok(path) => {
+                ctx.write_stdout(&path).ok();
+                ExitStatus::ExitedWith(0)
+            }
+            Err(err) => {
+                ctx.write_stderr(&format!("cd: {err}")).ok();
+                ExitStatus::ExitedWith(1)
+            }
+        };
+    }
+
     // Get current directory for relative path resolution
     let current_dir = match std::env::current_dir() {
         Ok(dir) => dir,

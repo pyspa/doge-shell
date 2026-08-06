@@ -21,11 +21,13 @@ mod builtin;
 mod command_palette;
 mod default_environment;
 mod interpreter;
+mod keybind;
 mod macros;
 #[cfg(test)]
 mod mcp_tests;
 mod model;
 mod parser;
+mod sched;
 pub mod stdlib;
 mod stdlib_tests;
 mod utils;
@@ -55,6 +57,7 @@ struct EnvironmentSnapshot {
     command_cache: HashMap<String, Option<String>>,
     executable_names: Vec<String>,
     z_exclude: Vec<String>,
+    keybindings: crate::repl::keybind::KeyBindings,
     startup_mode: bool,
     secret_manager: SecretManagerSnapshot,
 }
@@ -81,6 +84,7 @@ impl EnvironmentSnapshot {
             command_cache: env.completion_state.command_cache.read().clone(),
             executable_names: env.completion_state.executable_names.read().clone(),
             z_exclude: env.variable_state.z_exclude.clone(),
+            keybindings: env.variable_state.keybindings.clone(),
             startup_mode: env.startup_mode,
             secret_manager: env.policy_state.secret_manager.snapshot(),
         }
@@ -168,6 +172,7 @@ impl LispEngine {
         *env.completion_state.command_cache.write() = snapshot.command_cache;
         *env.completion_state.executable_names.write() = snapshot.executable_names;
         env.variable_state.z_exclude = snapshot.z_exclude;
+        env.variable_state.keybindings = snapshot.keybindings;
         env.startup_mode = snapshot.startup_mode;
         env.policy_state
             .secret_manager
@@ -349,6 +354,10 @@ pub fn make_env(environment: Arc<RwLock<Environment>>) -> Rc<RefCell<Env>> {
     env.borrow_mut().define(
         Symbol::from("pref-ai-explanation"),
         Value::NativeFunc(builtin::pref_ai_explanation),
+    );
+    env.borrow_mut().define(
+        Symbol::from("pref-status-line"),
+        Value::NativeFunc(builtin::pref_status_line),
     );
 
     // Secret management functions
@@ -532,6 +541,135 @@ mod tests {
         // 4. (Optional) Check if it works without real Shell if possible,
         // but since execute() needs &mut Shell, we'll stop here for unit test
         // or just verify it doesn't panic when we look it up.
+    }
+
+    #[test]
+    fn bind_and_unbind_update_the_environment() {
+        init();
+        let env = Environment::new();
+        let engine = LispEngine::new(env.clone());
+
+        assert!(
+            engine
+                .borrow()
+                .run("(bind \"ctrl-g\" \"cancel-completion\")")
+                .is_ok()
+        );
+        assert!(
+            env.read()
+                .key_binding_descriptions()
+                .contains(&"ctrl-g -> cancel-completion".to_string())
+        );
+
+        // An unknown action name is taken as a Lisp function, not an error:
+        // the function may be defined later in config.lisp.
+        assert!(engine.borrow().run("(bind \"ctrl-t\" \"my-fn\")").is_ok());
+        assert!(
+            env.read()
+                .key_binding_descriptions()
+                .contains(&"ctrl-t -> lisp:my-fn".to_string())
+        );
+
+        assert!(engine.borrow().run("(unbind \"ctrl-g\")").is_ok());
+        assert!(
+            !env.read()
+                .key_binding_descriptions()
+                .iter()
+                .any(|line| line.starts_with("ctrl-g "))
+        );
+    }
+
+    #[test]
+    fn sched_add_registers_a_task_from_lisp() {
+        init();
+        let env = Environment::new();
+        let engine = LispEngine::new(env.clone());
+
+        let res = engine
+            .borrow()
+            .run("(sched-add \"fetch\" \"5m\" \"git fetch --all\" \"change\")");
+        assert!(res.is_ok(), "{res:?}");
+
+        let listed = env.read().sched_descriptions();
+        assert_eq!(
+            listed,
+            vec!["fetch every 5m -> git fetch --all".to_string()]
+        );
+
+        assert!(engine.borrow().run("(sched-pause \"fetch\")").is_ok());
+        assert!(env.read().sched_descriptions()[0].ends_with("(paused)"));
+
+        assert!(engine.borrow().run("(sched-remove \"fetch\")").is_ok());
+        assert!(env.read().sched_descriptions().is_empty());
+    }
+
+    #[test]
+    fn sched_add_rejects_bad_arguments() {
+        init();
+        let env = Environment::new();
+        let engine = LispEngine::new(env);
+
+        // Interval below the 5s floor.
+        assert!(
+            engine
+                .borrow()
+                .run("(sched-add \"a\" \"1s\" \"true\")")
+                .is_err()
+        );
+        assert!(
+            engine
+                .borrow()
+                .run("(sched-add \"a\" \"5x\" \"true\")")
+                .is_err()
+        );
+        assert!(
+            engine
+                .borrow()
+                .run("(sched-add \"a\" \"5m\" \"true\" \"sometimes\")")
+                .is_err()
+        );
+        assert!(engine.borrow().run("(sched-add \"a\" \"5m\")").is_err());
+    }
+
+    #[test]
+    fn bind_rejects_an_unparseable_key() {
+        init();
+        let env = Environment::new();
+        let engine = LispEngine::new(env);
+
+        assert!(
+            engine
+                .borrow()
+                .run("(bind \"ctrl-nope\" \"undo\")")
+                .is_err()
+        );
+        assert!(engine.borrow().run("(bind \"ctrl-g\")").is_err());
+    }
+
+    /// A failed config must not leave half-applied bindings behind.
+    #[test]
+    fn config_rollback_restores_key_bindings() {
+        init();
+        with_test_config_home(|| {
+            let env = Environment::new();
+            let engine = LispEngine::new(env.clone());
+
+            let config_path = environment::get_config_file(CONFIG_FILE).unwrap();
+            std::fs::write(
+                &config_path,
+                "(bind \"ctrl-g\" \"cancel-completion\")\n(this-does-not-exist)\n",
+            )
+            .unwrap();
+
+            assert!(engine.borrow().run_config_lisp().is_err());
+            assert!(
+                !env.read()
+                    .key_binding_descriptions()
+                    .iter()
+                    .any(|line| line.starts_with("ctrl-g ")),
+                "binding survived a failed config load"
+            );
+        });
     }
 
     #[test]

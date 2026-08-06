@@ -425,6 +425,33 @@ pub fn pref_auto_notify(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value
     Ok(Value::NIL)
 }
 
+/// `(pref-status-line [t])` — read or set whether a status line is pinned to
+/// the bottom row.
+///
+/// Takes effect at the next prompt. Off by default because it reserves a
+/// DECSTBM scroll region, which not every terminal handles cleanly.
+pub fn pref_status_line(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    if args.is_empty() {
+        return Ok(Value::from(
+            env.borrow()
+                .shell_env
+                .read()
+                .completion_state
+                .input_preferences
+                .status_line,
+        ));
+    }
+
+    let enabled = bool::from(&args[0]);
+
+    debug!("setting status-line to {:?}", enabled);
+    env.borrow()
+        .shell_env
+        .write()
+        .set_status_line_enabled(enabled);
+    Ok(Value::NIL)
+}
+
 pub fn pref_ai_explanation(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     if args.is_empty() {
         return Ok(Value::from(

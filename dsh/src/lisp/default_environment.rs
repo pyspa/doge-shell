@@ -49,6 +49,46 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
         Value::NativeFunc(crate::lisp::command_palette::register_action),
     );
 
+    // Key bindings
+    env.define(
+        Symbol::from("bind"),
+        Value::NativeFunc(crate::lisp::keybind::bind),
+    );
+    env.define(
+        Symbol::from("unbind"),
+        Value::NativeFunc(crate::lisp::keybind::unbind),
+    );
+    env.define(
+        Symbol::from("list-bindings"),
+        Value::NativeFunc(crate::lisp::keybind::list_bindings),
+    );
+    env.define(
+        Symbol::from("list-bind-actions"),
+        Value::NativeFunc(crate::lisp::keybind::list_bind_actions),
+    );
+
+    // Scheduled tasks
+    env.define(
+        Symbol::from("sched-add"),
+        Value::NativeFunc(crate::lisp::sched::sched_add),
+    );
+    env.define(
+        Symbol::from("sched-remove"),
+        Value::NativeFunc(crate::lisp::sched::sched_remove),
+    );
+    env.define(
+        Symbol::from("sched-pause"),
+        Value::NativeFunc(crate::lisp::sched::sched_pause),
+    );
+    env.define(
+        Symbol::from("sched-resume"),
+        Value::NativeFunc(crate::lisp::sched::sched_resume),
+    );
+    env.define(
+        Symbol::from("sched-list"),
+        Value::NativeFunc(crate::lisp::sched::sched_list),
+    );
+
     env.define(
         Symbol::from("selector"),
         Value::NativeFunc(|_env, args| {

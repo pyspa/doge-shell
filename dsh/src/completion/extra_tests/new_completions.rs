@@ -277,7 +277,10 @@ fn strengthened_json_completions_use_dynamic_providers() {
 fn linux_operations_json_completions_use_dynamic_providers() {
     let loader = JsonCompletionLoader::new();
     let providers = [
+        ("ip", "ip.netns"),
         ("ip", "ip.route_table"),
+        ("journalctl", "journalctl.identifier"),
+        ("machinectl", "machinectl.machine"),
         ("nft", "nft.table"),
         ("nft", "nft.chain"),
         ("lvm", "lvm.volume_group"),
@@ -292,6 +295,41 @@ fn linux_operations_json_completions_use_dynamic_providers() {
         ("ausearch", "audit.rule_key"),
         ("semodule", "selinux.module"),
         ("semanage", "selinux.module"),
+        ("systemctl", "systemctl.unit_file"),
+        ("ufw", "ufw.application"),
+    ];
+
+    for (command, provider) in providers {
+        let completion = loader
+            .load_command_completion(command)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{command} completion"));
+        assert!(
+            completion_uses_dynamic_provider(&completion, provider),
+            "{command} should use {provider}"
+        );
+    }
+}
+
+#[test]
+fn remote_cli_json_completions_use_dynamic_providers() {
+    let loader = JsonCompletionLoader::new();
+    let providers = [
+        ("gh", "gh.repository"),
+        ("glab", "glab.project"),
+        ("argocd", "argocd.application"),
+        ("flux", "kubectl.resource_name"),
+        ("aws", "aws.eks_cluster"),
+        ("gcloud", "gcloud.compute_instance"),
+        ("az", "az.resource_group"),
+        ("terraform", "terraform.resource"),
+        ("tofu", "terraform.resource"),
+        ("vault", "vault.policy"),
+        ("nomad", "nomad.job"),
+        ("rclone", "rclone.remote"),
+        ("restic", "restic.snapshot"),
+        ("flatpak", "flatpak.application"),
+        ("snap", "snap.package"),
     ];
 
     for (command, provider) in providers {

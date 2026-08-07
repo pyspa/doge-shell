@@ -10,7 +10,7 @@
     { "long": "--format", "description": "Output format", "takes_value": true, "value_type": { "type": "Choice", "data": ["table", "json", "yaml", "pretty", "raw"] } }
   ],
   "subcommands": [
-    { "name": "login", "description": "Authenticate to Vault", "options": [{ "short": "-m", "long": "--method", "description": "Authentication method", "takes_value": true, "value_type": { "type": "String" } }] },
+    { "name": "login", "description": "Authenticate to Vault", "options": [{ "short": "-m", "long": "--method", "description": "Authentication method", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "vault.auth_method" } } }] },
     { "name": "status", "description": "Print seal and HA status" },
     { "name": "server", "description": "Start a Vault server", "options": [{ "long": "--config", "description": "Configuration file or directory", "takes_value": true, "value_type": { "type": "File", "data": {} } }] },
     { "name": "read", "description": "Read data from Vault", "arguments": [{ "name": "path", "description": "Vault path" }] },
@@ -18,9 +18,9 @@
     { "name": "delete", "description": "Delete data from Vault", "arguments": [{ "name": "path", "description": "Vault path" }] },
     { "name": "list", "description": "List data from Vault", "arguments": [{ "name": "path", "description": "Vault path" }] },
     { "name": "kv", "description": "Interact with KV secrets", "subcommands": [{ "name": "get", "description": "Read a secret" }, { "name": "put", "description": "Write a secret" }, { "name": "patch", "description": "Patch a secret" }, { "name": "delete", "description": "Delete secret versions" }, { "name": "destroy", "description": "Destroy secret versions" }, { "name": "list", "description": "List secrets" }, { "name": "metadata", "description": "Manage secret metadata" }] },
-    { "name": "auth", "description": "Manage auth methods" },
-    { "name": "secrets", "description": "Manage secrets engines" },
-    { "name": "policy", "description": "Manage policies" },
+    { "name": "auth", "description": "Manage auth methods", "subcommands": [{ "name": "list", "description": "List auth methods" }, { "name": "disable", "description": "Disable an auth method", "arguments": [{ "name": "path", "type": { "type": "Dynamic", "data": { "provider": "vault.auth_method" } } }] }, { "name": "help", "description": "Show auth method help", "arguments": [{ "name": "path", "type": { "type": "Dynamic", "data": { "provider": "vault.auth_method" } } }] }, { "name": "tune", "description": "Tune an auth method", "arguments": [{ "name": "path", "type": { "type": "Dynamic", "data": { "provider": "vault.auth_method" } } }] }] },
+    { "name": "secrets", "description": "Manage secrets engines", "subcommands": [{ "name": "list", "description": "List secrets engines" }, { "name": "disable", "description": "Disable a secrets engine", "arguments": [{ "name": "path", "type": { "type": "Dynamic", "data": { "provider": "vault.secrets_engine" } } }] }, { "name": "move", "description": "Move a secrets engine", "arguments": [{ "name": "source", "type": { "type": "Dynamic", "data": { "provider": "vault.secrets_engine" } } }, { "name": "destination", "type": { "type": "String" } }] }, { "name": "tune", "description": "Tune a secrets engine", "arguments": [{ "name": "path", "type": { "type": "Dynamic", "data": { "provider": "vault.secrets_engine" } } }] }] },
+    { "name": "policy", "description": "Manage policies", "subcommands": [{ "name": "list", "description": "List policies" }, { "name": "read", "description": "Read a policy", "arguments": [{ "name": "name", "type": { "type": "Dynamic", "data": { "provider": "vault.policy" } } }] }, { "name": "delete", "description": "Delete a policy", "arguments": [{ "name": "name", "type": { "type": "Dynamic", "data": { "provider": "vault.policy" } } }] }, { "name": "write", "description": "Write a policy", "arguments": [{ "name": "name", "type": { "type": "Dynamic", "data": { "provider": "vault.policy" } } }, { "name": "file", "type": { "type": "File", "data": {} } }] }] },
     { "name": "token", "description": "Manage tokens" },
     { "name": "operator", "description": "Operator-specific commands" },
     { "name": "lease", "description": "Manage leases" },

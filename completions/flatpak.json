@@ -9,9 +9,10 @@
   ],
   "subcommands": [
     { "name": "install", "description": "Install application" },
-    { "name": "update", "description": "Update applications" },
-    { "name": "uninstall", "aliases": ["remove"], "description": "Uninstall application" },
-    { "name": "run", "description": "Run application" },
+    { "name": "update", "description": "Update applications", "arguments": [{ "name": "application", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "flatpak.application" } } }] },
+    { "name": "uninstall", "aliases": ["remove"], "description": "Uninstall application", "arguments": [{ "name": "application", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "flatpak.application" } } }] },
+    { "name": "run", "description": "Run application", "arguments": [{ "name": "application", "type": { "type": "Dynamic", "data": { "provider": "flatpak.application" } } }] },
+    { "name": "info", "description": "Show application information", "arguments": [{ "name": "application", "type": { "type": "Dynamic", "data": { "provider": "flatpak.application" } } }] },
     { "name": "list", "description": "List installed refs" },
     { "name": "search", "description": "Search remotes" },
     { "name": "remote-add", "description": "Add remote" },

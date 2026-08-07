@@ -11,8 +11,11 @@
     { "name": "init", "description": "Initialize repository" },
     { "name": "backup", "description": "Create backup", "arguments": [{ "name": "path", "multiple": true, "type": { "type": "File", "data": {} } }] },
     { "name": "snapshots", "description": "List snapshots" },
-    { "name": "restore", "description": "Restore snapshot", "arguments": [{ "name": "snapshot", "description": "Snapshot ID" }] },
-    { "name": "forget", "description": "Remove snapshots" },
+    { "name": "restore", "description": "Restore snapshot", "arguments": [{ "name": "snapshot", "description": "Snapshot ID", "type": { "type": "Dynamic", "data": { "provider": "restic.snapshot" } } }] },
+    { "name": "forget", "description": "Remove snapshots", "arguments": [{ "name": "snapshot", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "restic.snapshot" } } }] },
+    { "name": "diff", "description": "Compare snapshots", "arguments": [{ "name": "snapshot", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "restic.snapshot" } } }] },
+    { "name": "ls", "description": "List files in a snapshot", "arguments": [{ "name": "snapshot", "type": { "type": "Dynamic", "data": { "provider": "restic.snapshot" } } }] },
+    { "name": "tag", "description": "Modify snapshot tags", "arguments": [{ "name": "snapshot", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "restic.snapshot" } } }] },
     { "name": "prune", "description": "Prune repository" },
     { "name": "check", "description": "Check repository" },
     { "name": "mount", "description": "Mount repository", "arguments": [{ "name": "mountpoint", "type": { "type": "Directory" } }] }

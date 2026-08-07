@@ -36,6 +36,19 @@
       "description": "Reset firewall"
     },
     {
+      "name": "logging",
+      "description": "Set firewall logging level",
+      "arguments": [{ "name": "level", "type": { "type": "Choice", "data": ["on", "off", "low", "medium", "high", "full"] } }]
+    },
+    {
+      "name": "default",
+      "description": "Set the default firewall policy",
+      "arguments": [
+        { "name": "policy", "type": { "type": "Choice", "data": ["allow", "deny", "reject"] } },
+        { "name": "direction", "required": false, "type": { "type": "Choice", "data": ["incoming", "outgoing", "routed"] } }
+      ]
+    },
+    {
       "name": "allow",
       "description": "Add allow rule",
       "arguments": [
@@ -92,15 +105,20 @@
             {
               "name": "profile",
               "description": "Application profile",
-              "type": {
-                "type": "String"
-              }
+              "type": { "type": "Dynamic", "data": { "provider": "ufw.application" } }
             }
           ]
         },
         {
           "name": "update",
-          "description": "Update application profile rules"
+          "description": "Update application profile rules",
+          "arguments": [
+            {
+              "name": "profile",
+              "description": "Application profile",
+              "type": { "type": "Dynamic", "data": { "provider": "ufw.application" } }
+            }
+          ]
         }
       ]
     }

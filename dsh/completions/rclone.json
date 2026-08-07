@@ -13,9 +13,10 @@
     { "name": "copy", "description": "Copy files", "arguments": [{ "name": "source", "type": { "type": "File", "data": {} } }, { "name": "dest" }] },
     { "name": "sync", "description": "Sync source to destination", "arguments": [{ "name": "source", "type": { "type": "File", "data": {} } }, { "name": "dest" }] },
     { "name": "move", "description": "Move files", "arguments": [{ "name": "source", "type": { "type": "File", "data": {} } }, { "name": "dest" }] },
-    { "name": "ls", "description": "List objects", "arguments": [{ "name": "remote" }] },
-    { "name": "lsd", "description": "List directories", "arguments": [{ "name": "remote" }] },
-    { "name": "mount", "description": "Mount remote", "arguments": [{ "name": "remote" }, { "name": "mountpoint", "type": { "type": "Directory" } }] },
+    { "name": "listremotes", "description": "List configured remotes" },
+    { "name": "ls", "description": "List objects", "arguments": [{ "name": "remote", "type": { "type": "Dynamic", "data": { "provider": "rclone.remote" } } }] },
+    { "name": "lsd", "description": "List directories", "arguments": [{ "name": "remote", "type": { "type": "Dynamic", "data": { "provider": "rclone.remote" } } }] },
+    { "name": "mount", "description": "Mount remote", "arguments": [{ "name": "remote", "type": { "type": "Dynamic", "data": { "provider": "rclone.remote" } } }, { "name": "mountpoint", "type": { "type": "Directory" } }] },
     { "name": "config", "description": "Manage remotes" }
   ]
 }

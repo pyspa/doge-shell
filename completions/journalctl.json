@@ -69,6 +69,18 @@
       }
     },
     {
+      "short": "-t",
+      "long": "--identifier",
+      "description": "Show entries with the specified syslog identifier",
+      "takes_value": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "journalctl.identifier"
+        }
+      }
+    },
+    {
       "short": "-S",
       "long": "--since",
       "description": "Start showing entries on or newer than the specified date",
@@ -137,6 +149,41 @@
           "7"
         ]
       }
+    },
+    {
+      "short": "-g",
+      "long": "--grep",
+      "description": "Filter message text using a regular expression",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "short": "-r",
+      "long": "--reverse",
+      "description": "Show newest entries first"
+    },
+    {
+      "long": "--utc",
+      "description": "Express time in Coordinated Universal Time"
+    },
+    {
+      "short": "-x",
+      "long": "--catalog",
+      "description": "Add explanatory catalog text"
+    },
+    {
+      "long": "--list-boots",
+      "description": "List recorded boots"
+    },
+    {
+      "long": "--disk-usage",
+      "description": "Show journal disk usage"
+    },
+    {
+      "long": "--vacuum-time",
+      "description": "Remove archived journals older than a duration",
+      "takes_value": true,
+      "value_type": { "type": "String" }
     }
   ],
   "subcommands": []

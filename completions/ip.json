@@ -541,9 +541,7 @@
             {
               "name": "name",
               "description": "Namespace name",
-              "type": {
-                "type": "String"
-              }
+              "type": { "type": "Dynamic", "data": { "provider": "ip.netns" } }
             }
           ]
         },
@@ -567,9 +565,7 @@
             {
               "name": "name",
               "description": "Namespace name",
-              "type": {
-                "type": "String"
-              }
+              "type": { "type": "Dynamic", "data": { "provider": "ip.netns" } }
             },
             {
               "name": "command",

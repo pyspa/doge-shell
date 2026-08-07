@@ -1026,6 +1026,10 @@ Set `DSH_HISTORY_PICKER=skim` to fall back to the previous skim-based interface.
 
 TAB completion calls `fish -c 'complete -C ...'` automatically when `fish` is available in `PATH`. Leave `DSH_COMPLETION_FISH_FALLBACK` unset for auto mode, set it to `1`, `true`, `yes`, or `on` to force it on, or set it to `0`, `false`, `no`, or `off` to disable it. This fallback runs with a timeout, is cached with other external completion results, and is merged below built-in JSON and project-aware dynamic candidates.
 
+Built-in dynamic providers also complete live resource identifiers for supported tools such as `gh`, `glab`, `argocd`, cloud CLIs, Vault, Nomad, Terraform/OpenTofu, rclone, and restic. They invoke only read-only listing commands, run off the prompt thread, use a five-second command timeout and a 30-second cache, and quietly return no candidates when a CLI is missing, unauthenticated, or unavailable. Provider diagnostics report cache age and errors but never include tokens, passwords, or fetched secret contents.
+
+Linux operations use the same dynamic completion path for systemd units and machines, journal identifiers, network namespaces and links, firewall profiles, storage resources, processes, kernel modules, audit keys, and SELinux objects. Candidates reflect the current host while read-only probes remain cached and run outside the prompt thread.
+
 ## 💻 Command Palette
 
 Access all shell capabilities through a unified fuzzy-search interface, similar to VS Code's Command Palette.

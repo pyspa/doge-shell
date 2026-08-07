@@ -3,6 +3,13 @@
   "description": "GitHub CLI",
   "global_options": [
     {
+      "short": "-R",
+      "long": "--repo",
+      "description": "Select another repository",
+      "takes_value": true,
+      "value_type": { "type": "Dynamic", "data": { "provider": "gh.repository" } }
+    },
+    {
       "long": "--help",
       "description": "Show help"
     },
@@ -22,7 +29,13 @@
           "options": [
             { "short": "-s", "long": "--state", "description": "Filter by state (open, closed, merged, all)" },
             { "short": "-l", "long": "--label", "description": "Filter by label" },
-            { "short": "-a", "long": "--author", "description": "Filter by author" }
+            { "short": "-a", "long": "--author", "description": "Filter by author" },
+            { "short": "-A", "long": "--assignee", "description": "Filter by assignee", "takes_value": true, "value_type": { "type": "String" } },
+            { "short": "-B", "long": "--base", "description": "Filter by base branch", "takes_value": true, "value_type": { "type": "String" } },
+            { "short": "-H", "long": "--head", "description": "Filter by head branch", "takes_value": true, "value_type": { "type": "String" } },
+            { "short": "-L", "long": "--limit", "description": "Maximum number of items", "takes_value": true, "value_type": { "type": "Number" } },
+            { "short": "-S", "long": "--search", "description": "Search pull requests", "takes_value": true, "value_type": { "type": "String" } },
+            { "long": "--draft", "description": "Filter by draft state" }
           ]
         },
         {
@@ -32,7 +45,7 @@
             {
               "name": "number",
               "description": "PR number",
-              "type": { "type": "Number" }
+              "type": { "type": "Dynamic", "data": { "provider": "gh.pull_request" } }
             }
           ]
         },
@@ -43,16 +56,16 @@
             {
               "name": "number",
               "description": "PR number",
-              "type": { "type": "Number" }
+              "type": { "type": "Dynamic", "data": { "provider": "gh.pull_request" } }
             }
           ]
         },
         { "name": "create", "description": "Create a pull request" },
-        { "name": "close", "description": "Close a pull request" },
-        { "name": "merge", "description": "Merge a pull request" },
-        { "name": "ready", "description": "Mark a pull request as ready for review" },
-        { "name": "diff", "description": "View changes in a pull request" },
-        { "name": "comment", "description": "Add a comment to a pull request" }
+        { "name": "close", "description": "Close a pull request", "arguments": [{ "name": "number", "type": { "type": "Dynamic", "data": { "provider": "gh.pull_request" } } }] },
+        { "name": "merge", "description": "Merge a pull request", "arguments": [{ "name": "number", "type": { "type": "Dynamic", "data": { "provider": "gh.pull_request" } } }] },
+        { "name": "ready", "description": "Mark a pull request as ready for review", "arguments": [{ "name": "number", "type": { "type": "Dynamic", "data": { "provider": "gh.pull_request" } } }] },
+        { "name": "diff", "description": "View changes in a pull request", "arguments": [{ "name": "number", "type": { "type": "Dynamic", "data": { "provider": "gh.pull_request" } } }] },
+        { "name": "comment", "description": "Add a comment to a pull request", "arguments": [{ "name": "number", "type": { "type": "Dynamic", "data": { "provider": "gh.pull_request" } } }] }
       ]
     },
     {
@@ -75,24 +88,24 @@
             {
               "name": "number",
               "description": "Issue number",
-              "type": { "type": "Number" }
+              "type": { "type": "Dynamic", "data": { "provider": "gh.issue" } }
             }
           ]
         },
         { "name": "create", "description": "Create an issue" },
-        { "name": "close", "description": "Close an issue" },
-        { "name": "reopen", "description": "Reopen an issue" },
-        { "name": "comment", "description": "Add a comment to an issue" }
+        { "name": "close", "description": "Close an issue", "arguments": [{ "name": "number", "type": { "type": "Dynamic", "data": { "provider": "gh.issue" } } }] },
+        { "name": "reopen", "description": "Reopen an issue", "arguments": [{ "name": "number", "type": { "type": "Dynamic", "data": { "provider": "gh.issue" } } }] },
+        { "name": "comment", "description": "Add a comment to an issue", "arguments": [{ "name": "number", "type": { "type": "Dynamic", "data": { "provider": "gh.issue" } } }] }
       ]
     },
     {
       "name": "repo",
       "description": "Manage repositories",
       "subcommands": [
-        { "name": "clone", "description": "Clone a repository" },
+        { "name": "clone", "description": "Clone a repository", "arguments": [{ "name": "repository", "type": { "type": "Dynamic", "data": { "provider": "gh.repository" } } }] },
         { "name": "create", "description": "Create a repository" },
         { "name": "fork", "description": "Fork a repository" },
-        { "name": "view", "description": "View a repository" },
+        { "name": "view", "description": "View a repository", "arguments": [{ "name": "repository", "type": { "type": "Dynamic", "data": { "provider": "gh.repository" } } }] },
         { "name": "list", "description": "List repositories" }
       ]
     },
@@ -101,8 +114,8 @@
       "description": "View and run GitHub Actions workflows",
       "subcommands": [
         { "name": "list", "description": "List workflows" },
-        { "name": "run", "description": "Run a workflow" },
-        { "name": "view", "description": "View a workflow run" }
+        { "name": "run", "description": "Run a workflow", "arguments": [{ "name": "workflow", "type": { "type": "Dynamic", "data": { "provider": "gh.workflow" } } }] },
+        { "name": "view", "description": "View a workflow", "arguments": [{ "name": "workflow", "type": { "type": "Dynamic", "data": { "provider": "gh.workflow" } } }] }
       ]
     },
     {
@@ -117,14 +130,14 @@
             {
               "name": "run_id",
               "description": "Run ID",
-              "type": { "type": "Number" }
+              "type": { "type": "Dynamic", "data": { "provider": "gh.run" } }
             }
           ]
         },
-        { "name": "watch", "description": "Watch a run until it completes" },
-        { "name": "download", "description": "Download artifacts from a run" },
-        { "name": "rerun", "description": "Rerun a failed run" },
-        { "name": "cancel", "description": "Cancel a workflow run" }
+        { "name": "watch", "description": "Watch a run until it completes", "arguments": [{ "name": "run_id", "type": { "type": "Dynamic", "data": { "provider": "gh.run" } } }] },
+        { "name": "download", "description": "Download artifacts from a run", "arguments": [{ "name": "run_id", "type": { "type": "Dynamic", "data": { "provider": "gh.run" } } }] },
+        { "name": "rerun", "description": "Rerun a failed run", "arguments": [{ "name": "run_id", "type": { "type": "Dynamic", "data": { "provider": "gh.run" } } }] },
+        { "name": "cancel", "description": "Cancel a workflow run", "arguments": [{ "name": "run_id", "type": { "type": "Dynamic", "data": { "provider": "gh.run" } } }] }
       ]
     },
     {

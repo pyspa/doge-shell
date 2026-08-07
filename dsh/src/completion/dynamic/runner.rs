@@ -5,6 +5,7 @@ use std::time::Duration;
 use super::super::subprocess;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_millis(1500);
+pub(super) const REMOTE_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) fn command(program: &str) -> Command {
     subprocess::command(program)
@@ -16,6 +17,10 @@ pub(super) fn shell_command(template: &str) -> Command {
 
 pub(super) fn collect_stdout(command: Command) -> Result<String> {
     subprocess::collect_stdout(command, COMMAND_TIMEOUT)
+}
+
+pub(super) fn collect_stdout_with_timeout(command: Command, timeout: Duration) -> Result<String> {
+    subprocess::collect_stdout(command, timeout)
 }
 
 pub(super) const fn timeout() -> Duration {

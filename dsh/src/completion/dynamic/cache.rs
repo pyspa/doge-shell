@@ -90,6 +90,7 @@ pub(super) struct ProjectDynamicCache {
     pub commands: HashMap<DynamicCommandCacheKey, CommandValueCacheEntry>,
     pub command_errors: HashMap<DynamicCommandCacheKey, CommandValueErrorEntry>,
     pub command_pending: HashSet<DynamicCommandCacheKey>,
+    pub command_pruned_total: usize,
     pub external: HashMap<ExternalCompletionCacheKey, ExternalCompletionCacheEntry>,
     pub external_pending: HashSet<ExternalCompletionCacheKey>,
     pub external_pruned_total: usize,

@@ -236,7 +236,7 @@
           "description": "Unit name to enable",
           "required": true,
           "multiple": true,
-          "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit" } }
+          "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit_file" } }
         }
       ],
       "subcommands": []
@@ -260,7 +260,7 @@
           "description": "Unit name to disable",
           "required": true,
           "multiple": true,
-          "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit" } }
+          "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit_file" } }
         }
       ],
       "subcommands": []
@@ -344,7 +344,7 @@
           "multiple": true,
           "type": {
             "type": "Dynamic",
-            "data": { "provider": "systemctl.unit" }
+            "data": { "provider": "systemctl.unit_file" }
           }
         }
       ],
@@ -445,6 +445,14 @@
       ],
       "subcommands": []
     },
+    { "name": "try-restart", "description": "Restart active units", "arguments": [{ "name": "unit", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit" } } }] },
+    { "name": "reload-or-restart", "description": "Reload units when supported, otherwise restart", "arguments": [{ "name": "unit", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit" } } }] },
+    { "name": "show", "description": "Show unit or manager properties", "arguments": [{ "name": "unit", "multiple": true, "required": false, "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit" } } }] },
+    { "name": "cat", "description": "Show unit files and drop-ins", "arguments": [{ "name": "unit", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit_file" } } }] },
+    { "name": "edit", "description": "Edit unit files and drop-ins", "arguments": [{ "name": "unit", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit_file" } } }] },
+    { "name": "revert", "description": "Revert unit files to vendor versions", "arguments": [{ "name": "unit", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit_file" } } }] },
+    { "name": "reenable", "description": "Disable and enable unit files", "arguments": [{ "name": "unit", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit_file" } } }] },
+    { "name": "preset", "description": "Apply preset policy to unit files", "arguments": [{ "name": "unit", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit_file" } } }] },
     {
       "name": "daemon-reload",
       "description": "Reload systemd manager configuration",
@@ -472,7 +480,7 @@
           "description": "Unit name to mask",
           "required": true,
           "multiple": true,
-          "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit" } }
+          "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit_file" } }
         }
       ],
       "subcommands": []
@@ -488,7 +496,7 @@
           "description": "Unit name to unmask",
           "required": true,
           "multiple": true,
-          "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit" } }
+          "type": { "type": "Dynamic", "data": { "provider": "systemctl.unit_file" } }
         }
       ],
       "subcommands": []

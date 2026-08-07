@@ -39,9 +39,16 @@ pub(super) fn selected_resource(parsed_command_line: &ParsedCommandLine) -> Opti
 }
 
 pub(super) fn selected_namespace(parsed_command_line: &ParsedCommandLine) -> Option<&str> {
+    selected_option_value(parsed_command_line, &["-n", "--namespace"])
+}
+
+fn selected_option_value<'a>(
+    parsed_command_line: &'a ParsedCommandLine,
+    option_names: &[&str],
+) -> Option<&'a str> {
     let words = completion_words(parsed_command_line);
     for (index, token) in words.iter().enumerate() {
-        if *token == "-n" || *token == "--namespace" {
+        if option_names.contains(token) {
             let Some(value) = words.get(index + 1).copied() else {
                 continue;
             };
@@ -49,13 +56,19 @@ pub(super) fn selected_namespace(parsed_command_line: &ParsedCommandLine) -> Opt
                 return Some(value);
             }
         }
-        if let Some(value) = token
-            .strip_prefix("--namespace=")
-            .or_else(|| token.strip_prefix("-n="))
-            .or_else(|| token.strip_prefix("-n").filter(|value| !value.is_empty()))
-            && !value.is_empty()
-        {
-            return Some(value);
+        for option_name in option_names {
+            if let Some(value) = token
+                .strip_prefix(option_name)
+                .and_then(|value| value.strip_prefix('='))
+                .filter(|value| !value.is_empty())
+            {
+                return Some(value);
+            }
+            if *option_name == "-n"
+                && let Some(value) = token.strip_prefix("-n").filter(|value| !value.is_empty())
+            {
+                return Some(value);
+            }
         }
     }
     None

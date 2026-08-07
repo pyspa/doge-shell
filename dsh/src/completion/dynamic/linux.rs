@@ -4,6 +4,34 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 impl DynamicCompletionProvider {
+    pub(crate) fn collect_ip_netns_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("ip");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "ip",
+            "network-namespace",
+            current_dir.clone(),
+            current_token,
+            "network namespace",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parse_first_column_values(&run_command_lines(
+                    &command_path,
+                    &["netns", "list"],
+                    &current_dir,
+                )?))
+            },
+        )
+    }
+
     pub(crate) fn collect_ip_route_table_candidates(
         &self,
         current_token: &str,
@@ -321,6 +349,90 @@ impl DynamicCompletionProvider {
             },
         )
     }
+
+    pub(crate) fn collect_journalctl_identifier_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("journalctl");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "journalctl",
+            "identifier",
+            current_dir.clone(),
+            current_token,
+            "journal identifier",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parse_non_empty_lines(&run_command_lines(
+                    &command_path,
+                    &["--no-pager", "-F", "SYSLOG_IDENTIFIER"],
+                    &current_dir,
+                )?))
+            },
+        )
+    }
+
+    pub(crate) fn collect_machinectl_machine_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("machinectl");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "machinectl",
+            "machine",
+            current_dir.clone(),
+            current_token,
+            "systemd machine",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parse_first_column_values(&run_command_lines(
+                    &command_path,
+                    &["list", "--no-legend", "--no-pager"],
+                    &current_dir,
+                )?))
+            },
+        )
+    }
+
+    pub(crate) fn collect_ufw_application_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("ufw");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "ufw",
+            "application",
+            current_dir.clone(),
+            current_token,
+            "UFW application profile",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parse_ufw_applications(&run_command_lines(
+                    &command_path,
+                    &["app", "list"],
+                    &current_dir,
+                )?))
+            },
+        )
+    }
 }
 
 fn load_ip_route_tables(path: &Path) -> Vec<String> {
@@ -384,6 +496,17 @@ fn parse_first_column_values(lines: &[String]) -> Vec<String> {
         lines
             .iter()
             .filter_map(|line| line.split_whitespace().next().map(str::to_string))
+            .collect(),
+    )
+}
+
+fn parse_ufw_applications(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty() && !line.ends_with(':'))
+            .map(str::to_string)
             .collect(),
     )
 }
@@ -588,6 +711,14 @@ mod tests {
         assert_eq!(
             parse_btrfs_subvolumes(&["ID 256 gen 12 top level 5 path home".to_string()]),
             vec!["home".to_string()]
+        );
+        assert_eq!(
+            parse_ufw_applications(&[
+                "Available applications:".to_string(),
+                "  Nginx Full".to_string(),
+                "  OpenSSH".to_string(),
+            ]),
+            vec!["Nginx Full".to_string(), "OpenSSH".to_string()]
         );
     }
 

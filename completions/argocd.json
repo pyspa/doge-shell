@@ -6,31 +6,31 @@
     { "long": "--grpc-web", "description": "Use gRPC-web protocol" },
     { "long": "--plaintext", "description": "Disable TLS" },
     { "long": "--insecure", "description": "Skip certificate verification" },
-    { "long": "--context", "description": "Argo CD context", "takes_value": true, "value_type": { "type": "String" } }
+    { "long": "--argocd-context", "description": "Argo CD context", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "argocd.context" } } }
   ],
   "subcommands": [
     { "name": "login", "description": "Log in to an Argo CD server", "arguments": [{ "name": "server", "description": "Server address" }] },
     { "name": "logout", "description": "Log out from an Argo CD server" },
     { "name": "version", "description": "Print version information" },
-    { "name": "context", "description": "Switch between contexts" },
+    { "name": "context", "description": "Switch between contexts", "arguments": [{ "name": "context", "type": { "type": "Dynamic", "data": { "provider": "argocd.context" } } }] },
     {
       "name": "app", "description": "Manage applications",
       "subcommands": [
         { "name": "list", "description": "List applications" },
-        { "name": "get", "description": "Show application details", "arguments": [{ "name": "application", "description": "Application name" }] },
+        { "name": "get", "description": "Show application details", "arguments": [{ "name": "application", "description": "Application name", "type": { "type": "Dynamic", "data": { "provider": "argocd.application" } } }] },
         { "name": "create", "description": "Create an application" },
         { "name": "set", "description": "Update application parameters" },
-        { "name": "sync", "description": "Synchronize an application" },
-        { "name": "wait", "description": "Wait for an application to reach a state" },
-        { "name": "delete", "description": "Delete an application" },
-        { "name": "diff", "description": "Show application differences" },
-        { "name": "history", "description": "Show deployment history" },
-        { "name": "rollback", "description": "Roll back an application" }
+        { "name": "sync", "description": "Synchronize an application", "arguments": [{ "name": "application", "type": { "type": "Dynamic", "data": { "provider": "argocd.application" } } }] },
+        { "name": "wait", "description": "Wait for an application to reach a state", "arguments": [{ "name": "application", "type": { "type": "Dynamic", "data": { "provider": "argocd.application" } } }] },
+        { "name": "delete", "description": "Delete an application", "arguments": [{ "name": "application", "type": { "type": "Dynamic", "data": { "provider": "argocd.application" } } }] },
+        { "name": "diff", "description": "Show application differences", "arguments": [{ "name": "application", "type": { "type": "Dynamic", "data": { "provider": "argocd.application" } } }] },
+        { "name": "history", "description": "Show deployment history", "arguments": [{ "name": "application", "type": { "type": "Dynamic", "data": { "provider": "argocd.application" } } }] },
+        { "name": "rollback", "description": "Roll back an application", "arguments": [{ "name": "application", "type": { "type": "Dynamic", "data": { "provider": "argocd.application" } } }] }
       ]
     },
-    { "name": "cluster", "description": "Manage cluster credentials", "subcommands": [{ "name": "list", "description": "List clusters" }, { "name": "add", "description": "Add a cluster" }, { "name": "get", "description": "Show cluster details" }, { "name": "rm", "description": "Remove a cluster" }] },
-    { "name": "repo", "description": "Manage repository credentials", "subcommands": [{ "name": "list", "description": "List repositories" }, { "name": "add", "description": "Add a repository" }, { "name": "get", "description": "Show repository details" }, { "name": "rm", "description": "Remove a repository" }] },
-    { "name": "proj", "description": "Manage projects", "subcommands": [{ "name": "list", "description": "List projects" }, { "name": "get", "description": "Show a project" }, { "name": "create", "description": "Create a project" }, { "name": "delete", "description": "Delete a project" }] },
+    { "name": "cluster", "description": "Manage cluster credentials", "subcommands": [{ "name": "list", "description": "List clusters" }, { "name": "add", "description": "Add a cluster" }, { "name": "get", "description": "Show cluster details", "arguments": [{ "name": "cluster", "type": { "type": "Dynamic", "data": { "provider": "argocd.cluster" } } }] }, { "name": "rm", "description": "Remove a cluster", "arguments": [{ "name": "cluster", "type": { "type": "Dynamic", "data": { "provider": "argocd.cluster" } } }] }] },
+    { "name": "repo", "description": "Manage repository credentials", "subcommands": [{ "name": "list", "description": "List repositories" }, { "name": "add", "description": "Add a repository" }, { "name": "get", "description": "Show repository details", "arguments": [{ "name": "repository", "type": { "type": "Dynamic", "data": { "provider": "argocd.repository" } } }] }, { "name": "rm", "description": "Remove a repository", "arguments": [{ "name": "repository", "type": { "type": "Dynamic", "data": { "provider": "argocd.repository" } } }] }] },
+    { "name": "proj", "description": "Manage projects", "subcommands": [{ "name": "list", "description": "List projects", "options": [{ "short": "-o", "long": "--output", "description": "Output format", "takes_value": true, "value_type": { "type": "Choice", "data": ["json", "yaml", "wide", "name"] } }] }, { "name": "get", "description": "Show a project", "arguments": [{ "name": "project", "type": { "type": "Dynamic", "data": { "provider": "argocd.project" } } }] }, { "name": "create", "description": "Create a project" }, { "name": "delete", "description": "Delete a project", "arguments": [{ "name": "project", "type": { "type": "Dynamic", "data": { "provider": "argocd.project" } } }] }] },
     { "name": "account", "description": "Manage accounts" },
     { "name": "admin", "description": "Administrative commands" }
   ]

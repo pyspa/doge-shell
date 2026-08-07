@@ -14,16 +14,21 @@
       "options": [
         { "short": "-out", "description": "Write plan to file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
         { "short": "-var-file", "description": "Load variable file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["tfvars"] } } },
-        { "short": "-target", "description": "Resource address to target" },
+        { "short": "-target", "description": "Resource address to target", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "terraform.resource" } } },
         { "short": "-destroy", "description": "Create destroy plan" }
       ]
     },
     {
       "name": "apply",
       "description": "Apply changes",
+      "options": [{ "short": "-target", "description": "Resource address to target", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "terraform.resource" } } }],
       "arguments": [{ "name": "plan", "description": "Saved plan file", "required": false, "type": { "type": "File", "data": {} } }]
     },
-    { "name": "destroy", "description": "Destroy managed infrastructure" },
+    { "name": "destroy", "description": "Destroy managed infrastructure", "options": [{ "short": "-target", "description": "Resource address to target", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "terraform.resource" } } }] },
+    { "name": "import", "description": "Import existing infrastructure", "arguments": [{ "name": "address", "type": { "type": "Dynamic", "data": { "provider": "terraform.resource" } } }, { "name": "id", "type": { "type": "String" } }] },
+    { "name": "state", "description": "Manage state", "subcommands": [{ "name": "list", "description": "List resources" }, { "name": "show", "description": "Show a resource", "arguments": [{ "name": "address", "type": { "type": "Dynamic", "data": { "provider": "terraform.resource" } } }] }, { "name": "rm", "description": "Remove resources", "arguments": [{ "name": "address", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "terraform.resource" } } }] }, { "name": "mv", "description": "Move a resource", "arguments": [{ "name": "source", "type": { "type": "Dynamic", "data": { "provider": "terraform.resource" } } }, { "name": "destination", "type": { "type": "String" } }] }] },
+    { "name": "taint", "description": "Mark a resource as tainted", "arguments": [{ "name": "address", "type": { "type": "Dynamic", "data": { "provider": "terraform.resource" } } }] },
+    { "name": "untaint", "description": "Remove taint from a resource", "arguments": [{ "name": "address", "type": { "type": "Dynamic", "data": { "provider": "terraform.resource" } } }] },
     { "name": "validate", "description": "Validate configuration" },
     { "name": "fmt", "description": "Rewrite Terraform files to canonical format" },
     {

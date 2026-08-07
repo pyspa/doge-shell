@@ -22,6 +22,7 @@ mod external;
 mod git;
 mod kubernetes;
 mod linux;
+mod platform;
 mod project;
 mod registry;
 mod runner;
@@ -38,6 +39,10 @@ use cache::{
 };
 
 const DYNAMIC_COMMAND_CACHE_TTL_MS: u64 = 1000;
+const DYNAMIC_COMMAND_CACHE_LIMIT: usize = 256;
+const DYNAMIC_COMMAND_ERROR_BACKOFF_MS: u64 = 2000;
+const REMOTE_COMMAND_CACHE_TTL: Duration = Duration::from_secs(30);
+const REMOTE_COMMAND_ERROR_BACKOFF: Duration = Duration::from_secs(15);
 /// Project roots do not move while the shell sits at a prompt, and finding one
 /// costs a `canonicalize` plus a marker probe per ancestor directory, so this
 /// cache is kept far longer than the dynamic command values cache.
@@ -102,6 +107,23 @@ pub(crate) enum CachePolicy {
     RefreshInBackground,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct CommandQueryPolicy {
+    ttl: Duration,
+    error_backoff: Duration,
+}
+
+impl CommandQueryPolicy {
+    const LOCAL: Self = Self {
+        ttl: Duration::from_millis(DYNAMIC_COMMAND_CACHE_TTL_MS),
+        error_backoff: Duration::from_millis(DYNAMIC_COMMAND_ERROR_BACKOFF_MS),
+    };
+    const REMOTE: Self = Self {
+        ttl: REMOTE_COMMAND_CACHE_TTL,
+        error_backoff: REMOTE_COMMAND_ERROR_BACKOFF,
+    };
+}
+
 impl CachePolicy {
     fn is_cached_only(self) -> bool {
         matches!(self, Self::CachedOnly)
@@ -137,6 +159,7 @@ pub(crate) struct DynamicCompletionProvider {
 struct DynamicCompletionDiagnostics {
     command_entries: usize,
     command_pending: usize,
+    command_pruned_total: usize,
     external_entries: usize,
     external_pending: usize,
     external_fish_entries: usize,
@@ -159,8 +182,11 @@ fn diagnostics_lines(runtime: &CompletionRuntime) -> Vec<String> {
 
     let mut lines = vec![
         format!(
-            "completion-cache dynamic-command entries={} pending={}",
-            diagnostics.command_entries, diagnostics.command_pending
+            "completion-cache dynamic-command entries={} pending={} limit={} pruned={}",
+            diagnostics.command_entries,
+            diagnostics.command_pending,
+            DYNAMIC_COMMAND_CACHE_LIMIT,
+            diagnostics.command_pruned_total
         ),
         format!(
             "completion-cache external entries={} pending={} fish={} limit={} pruned={} dropped={} timeout={}ms last={}",
@@ -423,30 +449,24 @@ impl DynamicCompletionProvider {
             "kubectl.context" => {
                 self.collect_kubectl_context_candidates(current_dir, current_token, cached_only)
             }
-            "kubectl.namespace" => {
-                self.collect_kubectl_namespace_candidates(current_dir, current_token, cached_only)
-            }
-            "kubectl.resource_type" => self.collect_kubectl_resource_type_candidates(
+            "kubectl.namespace" => platform::collect_kubectl_declared(
+                self,
+                provider,
+                scope,
+                parsed_command_line,
                 current_dir,
-                current_token,
                 cached_only,
             ),
-            "kubectl.resource_name" => scope
-                .or_else(|| {
-                    kubernetes::split_resource_name_token(current_token)
-                        .map(|(resource, _)| resource)
-                })
-                .or_else(|| kubernetes::selected_resource(parsed_command_line))
-                .map(|resource| {
-                    self.collect_kubectl_resource_name_candidates_for_token(
-                        current_dir,
-                        resource,
-                        current_token,
-                        kubernetes::selected_namespace(parsed_command_line),
-                        cached_only,
-                    )
-                })
-                .unwrap_or_default(),
+            "kubectl.resource_type" | "kubectl.resource_name" => {
+                platform::collect_kubectl_declared(
+                    self,
+                    provider,
+                    scope,
+                    parsed_command_line,
+                    current_dir,
+                    cached_only,
+                )
+            }
             "systemctl.unit" => {
                 let kind = systemctl_unit_kind_for_context(parsed_command_line);
                 self.collect_systemd_unit_candidates(
@@ -469,6 +489,11 @@ impl DynamicCompletionProvider {
             "journalctl.boot" => {
                 self.collect_journalctl_boot_candidates(current_dir, current_token, cached_only)
             }
+            "journalctl.identifier" => self.collect_journalctl_identifier_candidates(
+                current_dir,
+                current_token,
+                cached_only,
+            ),
             "firewalld.zone" => {
                 self.collect_firewalld_zone_candidates(current_dir, current_token, cached_only)
             }
@@ -578,6 +603,9 @@ impl DynamicCompletionProvider {
             "loginctl.session" => {
                 self.collect_loginctl_session_candidates(current_dir, current_token, cached_only)
             }
+            "machinectl.machine" => {
+                self.collect_machinectl_machine_candidates(current_dir, current_token, cached_only)
+            }
             "loop.device" => {
                 self.collect_loop_device_candidates(current_dir, current_token, cached_only)
             }
@@ -602,6 +630,9 @@ impl DynamicCompletionProvider {
                 current_token,
                 cached_only,
             ),
+            "ufw.application" => {
+                self.collect_ufw_application_candidates(current_dir, current_token, cached_only)
+            }
             "tmux.session" => {
                 self.collect_tmux_session_candidates(current_dir, current_token, cached_only)
             }
@@ -692,6 +723,7 @@ impl DynamicCompletionProvider {
                 current_token,
                 cached_only,
             ),
+            "ip.netns" => self.collect_ip_netns_candidates(current_dir, current_token, cached_only),
             "ip.route_table" => self.collect_ip_route_table_candidates(current_token, cached_only),
             "btrfs.subvolume" => {
                 self.collect_btrfs_subvolume_candidates(current_dir, current_token, cached_only)
@@ -767,7 +799,15 @@ impl DynamicCompletionProvider {
             "zpool.pool" => {
                 self.collect_zpool_pool_candidates(current_dir, current_token, cached_only)
             }
-            _ => return None,
+            _ => {
+                return platform::collect(
+                    self,
+                    provider,
+                    parsed_command_line,
+                    current_dir,
+                    cached_only,
+                );
+            }
         })
     }
 
@@ -1507,6 +1547,7 @@ impl DynamicCompletionProvider {
             "ssh-host",
             scope,
             cached_only,
+            CommandQueryPolicy::LOCAL,
             loader,
         );
         let user_prefix = current_token
@@ -3326,6 +3367,7 @@ impl DynamicCompletionProvider {
             "owner-group",
             PathBuf::from("/etc"),
             cached_only,
+            CommandQueryPolicy::LOCAL,
             || Ok(load_owner_group_values()),
         );
         owner_group_candidates(&values, current_token)
@@ -3655,11 +3697,39 @@ impl DynamicCompletionProvider {
     where
         F: FnOnce() -> Result<Vec<String>> + Send + 'static,
     {
+        self.collect_cached_value_candidates_with_policy(
+            command_name,
+            value_kind,
+            scope_dir,
+            current_token,
+            description,
+            cached_only,
+            CommandQueryPolicy::LOCAL,
+            loader,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn collect_cached_value_candidates_with_policy<F>(
+        &self,
+        command_name: &str,
+        value_kind: &str,
+        scope_dir: PathBuf,
+        current_token: &str,
+        description: &str,
+        cached_only: bool,
+        query_policy: CommandQueryPolicy,
+        loader: F,
+    ) -> Vec<EnhancedCandidate>
+    where
+        F: FnOnce() -> Result<Vec<String>> + Send + 'static,
+    {
         let values = self.load_or_lookup_command_values(
             command_name,
             value_kind,
             scope_dir,
             cached_only,
+            query_policy,
             loader,
         );
 
@@ -3680,6 +3750,7 @@ impl DynamicCompletionProvider {
         value_kind: &str,
         scope_dir: PathBuf,
         cached_only: bool,
+        query_policy: CommandQueryPolicy,
         loader: F,
     ) -> Vec<String>
     where
@@ -3692,7 +3763,7 @@ impl DynamicCompletionProvider {
         if cached_only {
             self.lookup_command_values(kind, scope_dir)
         } else {
-            self.load_command_values(kind, scope_dir, loader)
+            self.load_command_values_with_policy(kind, scope_dir, query_policy, loader)
         }
     }
 
@@ -4395,14 +4466,31 @@ impl DynamicCompletionProvider {
     where
         F: FnOnce() -> Result<Vec<String>> + Send + 'static,
     {
+        self.load_command_values_with_policy(kind, scope_dir, CommandQueryPolicy::LOCAL, loader)
+    }
+
+    fn load_command_values_with_policy<F>(
+        &self,
+        kind: DynamicCommandCacheKind,
+        scope_dir: PathBuf,
+        query_policy: CommandQueryPolicy,
+        loader: F,
+    ) -> Vec<String>
+    where
+        F: FnOnce() -> Result<Vec<String>> + Send + 'static,
+    {
         let cache_key = DynamicCommandCacheKey { kind, scope_dir };
-        let ttl = Duration::from_millis(DYNAMIC_COMMAND_CACHE_TTL_MS);
 
         {
             let mut cache = self.cache.write();
             if let Some(entry) = cache.commands.get(&cache_key) {
                 let values = entry.values.clone();
-                let start_refresh = entry.cached_at.elapsed() >= ttl
+                let retry_allowed = cache
+                    .command_errors
+                    .get(&cache_key)
+                    .is_none_or(|error| error.recorded_at.elapsed() >= query_policy.error_backoff);
+                let start_refresh = entry.cached_at.elapsed() >= query_policy.ttl
+                    && retry_allowed
                     && cache.command_pending.insert(cache_key.clone());
                 update_diagnostics_from_cache(&self.runtime, &cache, None);
                 drop(cache);
@@ -4416,6 +4504,15 @@ impl DynamicCompletionProvider {
                     );
                 }
                 return values;
+            }
+
+            if cache
+                .command_errors
+                .get(&cache_key)
+                .is_some_and(|error| error.recorded_at.elapsed() < query_policy.error_backoff)
+            {
+                update_diagnostics_from_cache(&self.runtime, &cache, None);
+                return Vec::new();
             }
 
             if !cache.command_pending.insert(cache_key.clone()) {
@@ -4532,6 +4629,7 @@ fn spawn_command_refresh<F>(
                         last_error: None,
                     },
                 );
+                prune_command_cache(&mut cache);
                 update_diagnostics_from_cache(&job_runtime, &cache, None);
                 job_runtime.notify();
             }
@@ -4545,6 +4643,7 @@ fn spawn_command_refresh<F>(
                         error: err.to_string(),
                     },
                 );
+                prune_command_error_cache(&mut cache);
                 update_diagnostics_from_cache(&job_runtime, &cache, None);
             }
         }
@@ -4630,6 +4729,55 @@ fn insert_external_cache_entry(
     prune_external_cache(cache);
 }
 
+fn prune_command_cache(cache: &mut ProjectDynamicCache) {
+    let overflow = cache
+        .commands
+        .len()
+        .saturating_sub(DYNAMIC_COMMAND_CACHE_LIMIT);
+    if overflow == 0 {
+        return;
+    }
+
+    let mut keys = cache
+        .commands
+        .iter()
+        .filter(|(key, _)| !cache.command_pending.contains(*key))
+        .map(|(key, entry)| (key.clone(), entry.cached_at))
+        .collect::<Vec<_>>();
+    keys.sort_by_key(|(_, cached_at)| *cached_at);
+
+    for (key, _) in keys.into_iter().take(overflow) {
+        if cache.commands.remove(&key).is_some() {
+            cache.command_errors.remove(&key);
+            cache.command_pruned_total += 1;
+        }
+    }
+}
+
+fn prune_command_error_cache(cache: &mut ProjectDynamicCache) {
+    let overflow = cache
+        .command_errors
+        .len()
+        .saturating_sub(DYNAMIC_COMMAND_CACHE_LIMIT);
+    if overflow == 0 {
+        return;
+    }
+
+    let mut keys = cache
+        .command_errors
+        .iter()
+        .filter(|(key, _)| !cache.command_pending.contains(*key))
+        .map(|(key, entry)| (key.clone(), entry.recorded_at))
+        .collect::<Vec<_>>();
+    keys.sort_by_key(|(_, recorded_at)| *recorded_at);
+
+    for (key, _) in keys.into_iter().take(overflow) {
+        if cache.command_errors.remove(&key).is_some() {
+            cache.command_pruned_total += 1;
+        }
+    }
+}
+
 fn prune_external_cache(cache: &mut ProjectDynamicCache) {
     let overflow = cache
         .external
@@ -4661,6 +4809,7 @@ fn update_diagnostics_from_cache(
     let mut diagnostics = runtime.diagnostics.write();
     diagnostics.command_entries = cache.commands.len();
     diagnostics.command_pending = cache.command_pending.len();
+    diagnostics.command_pruned_total = cache.command_pruned_total;
     diagnostics.external_entries = cache.external.len();
     diagnostics.external_pending = cache.external_pending.len();
     diagnostics.external_fish_entries = cache
@@ -6197,6 +6346,90 @@ mod tests {
             "hf",
         );
         assert_eq!(fuzzy_matches, vec!["hotfix/feature"]);
+    }
+
+    #[test]
+    fn command_cache_prunes_oldest_entries_to_limit() {
+        let mut cache = ProjectDynamicCache::default();
+        for index in 0..=DYNAMIC_COMMAND_CACHE_LIMIT {
+            cache.commands.insert(
+                DynamicCommandCacheKey {
+                    kind: DynamicCommandCacheKind::CommandValue {
+                        command: "test".to_string(),
+                        value_kind: format!("value-{index}"),
+                    },
+                    scope_dir: PathBuf::from(format!("/scope-{index}")),
+                },
+                CommandValueCacheEntry {
+                    values: vec![index.to_string()],
+                    cached_at: Instant::now(),
+                    last_load_duration: None,
+                    last_error: None,
+                },
+            );
+        }
+
+        prune_command_cache(&mut cache);
+
+        assert_eq!(cache.commands.len(), DYNAMIC_COMMAND_CACHE_LIMIT);
+        assert_eq!(cache.command_pruned_total, 1);
+    }
+
+    #[test]
+    fn recent_command_error_suppresses_immediate_retry() {
+        let provider = DynamicCompletionProvider::new(Environment::new());
+        let kind = DynamicCommandCacheKind::CommandValue {
+            command: "remote".to_string(),
+            value_kind: "resource".to_string(),
+        };
+        let scope_dir = PathBuf::from("/remote-scope");
+        provider.cache.write().command_errors.insert(
+            DynamicCommandCacheKey {
+                kind: kind.clone(),
+                scope_dir: scope_dir.clone(),
+            },
+            CommandValueErrorEntry {
+                recorded_at: Instant::now(),
+                last_load_duration: Duration::from_millis(1),
+                error: "unauthenticated".to_string(),
+            },
+        );
+
+        let values = provider.load_command_values_with_policy(
+            kind,
+            scope_dir,
+            CommandQueryPolicy::REMOTE,
+            || panic!("loader should not run during backoff"),
+        );
+
+        assert!(values.is_empty());
+        assert!(!provider.has_pending_refresh());
+    }
+
+    #[test]
+    fn command_error_cache_prunes_oldest_entries_to_limit() {
+        let mut cache = ProjectDynamicCache::default();
+        for index in 0..=DYNAMIC_COMMAND_CACHE_LIMIT {
+            cache.command_errors.insert(
+                DynamicCommandCacheKey {
+                    kind: DynamicCommandCacheKind::CommandValue {
+                        command: "remote".to_string(),
+                        value_kind: format!("error-{index}"),
+                    },
+                    scope_dir: PathBuf::from(format!("/scope-{index}")),
+                },
+                CommandValueErrorEntry {
+                    recorded_at: Instant::now(),
+                    last_load_duration: Duration::from_millis(1),
+                    error: "failed".to_string(),
+                },
+            );
+        }
+
+        prune_command_error_cache(&mut cache);
+
+        assert_eq!(cache.command_errors.len(), DYNAMIC_COMMAND_CACHE_LIMIT);
+        assert_eq!(cache.command_pruned_total, 1);
     }
 
     #[test]

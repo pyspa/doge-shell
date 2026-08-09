@@ -1028,7 +1028,9 @@ TAB completion calls `fish -c 'complete -C ...'` automatically when `fish` is av
 
 Built-in dynamic providers also complete live resource identifiers for supported tools such as `gh`, `glab`, `argocd`, cloud CLIs, Vault, Nomad, Terraform/OpenTofu, rclone, and restic. They invoke only read-only listing commands, run off the prompt thread, use a five-second command timeout and a 30-second cache, and quietly return no candidates when a CLI is missing, unauthenticated, or unavailable. Provider diagnostics report cache age and errors but never include tokens, passwords, or fetched secret contents.
 
-Linux operations use the same dynamic completion path for systemd units and machines, journal identifiers, network namespaces and links, firewall profiles, storage resources, processes, kernel modules, audit keys, and SELinux objects. Candidates reflect the current host while read-only probes remain cached and run outside the prompt thread.
+Linux operations use the same dynamic completion path for systemd units and machines, journal identifiers, network namespaces and links, firewall profiles, storage resources, processes, kernel modules, audit keys, SELinux modules and booleans, wireless devices, device subsystems, and the login shells listed in `/etc/shells`. A `systemctl.unit` provider scope narrows candidates to a single unit type, so `systemd-run --slice` offers slices rather than every unit. Candidates reflect the current host while read-only probes remain cached and run outside the prompt thread.
+
+Developer toolchains are covered as well: `rustup` components and targets, crates installed with `cargo install`, `cargo` test and bench targets, `bat` themes and languages, `ripgrep` file types, `ffmpeg` encoders, decoders and formats, `go env` keys, `pipx`, `asdf` and `mise` installations, and VS Code extensions. Definitions that live in project files — `noxfile.py` sessions, `tox` environments, `hatch` environments, `pre-commit` hook ids, and `just` recipes and `make` targets through the shared project task provider — are parsed directly, so completion never imports or evaluates project code.
 
 ## 💻 Command Palette
 

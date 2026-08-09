@@ -10,7 +10,12 @@
     { "long": "-show_packets", "description": "Show packet information" },
     { "long": "-show_frames", "description": "Show frame information" },
     { "long": "-of", "description": "Set output format", "takes_value": true, "value_type": { "type": "Choice", "data": ["default", "compact", "csv", "flat", "ini", "json", "xml"] } },
-    { "long": "-select_streams", "description": "Select streams", "takes_value": true, "value_type": { "type": "String" } }
+    { "long": "-select_streams", "description": "Select streams", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-i", "description": "Input file or stream", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+    { "short": "-f", "description": "Force input format", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "ffmpeg.format" } } },
+    { "long": "-show_entries", "description": "Show only the listed entries", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "-count_frames", "description": "Count the number of frames per stream" },
+    { "long": "-hide_banner", "description": "Suppress the build banner" }
   ],
   "arguments": [
     {

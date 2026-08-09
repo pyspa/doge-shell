@@ -49,19 +49,85 @@
     {
       "name": "target",
       "description": "Manage targets",
+      "options": [
+        {
+          "long": "--toolchain",
+          "description": "Toolchain to operate on",
+          "takes_value": true,
+          "value_type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
+        }
+      ],
       "subcommands": [
         { "name": "list", "description": "List available targets" },
-        { "name": "add", "description": "Add a target" },
-        { "name": "remove", "description": "Remove a target" }
+        {
+          "name": "add",
+          "description": "Add a target",
+          "arguments": [
+            {
+              "name": "target",
+              "description": "Target triple to add",
+              "multiple": true,
+              "type": { "type": "Dynamic", "data": { "provider": "rustup.target" } }
+            }
+          ]
+        },
+        {
+          "name": "remove",
+          "description": "Remove a target",
+          "arguments": [
+            {
+              "name": "target",
+              "description": "Target triple to remove",
+              "multiple": true,
+              "type": { "type": "Dynamic", "data": { "provider": "rustup.target" } }
+            }
+          ]
+        }
       ]
     },
     {
       "name": "component",
       "description": "Manage components",
+      "options": [
+        {
+          "long": "--toolchain",
+          "description": "Toolchain to operate on",
+          "takes_value": true,
+          "value_type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
+        },
+        {
+          "long": "--target",
+          "description": "Target triple the component applies to",
+          "takes_value": true,
+          "value_type": { "type": "Dynamic", "data": { "provider": "rustup.target" } }
+        }
+      ],
       "subcommands": [
         { "name": "list", "description": "List components" },
-        { "name": "add", "description": "Add a component" },
-        { "name": "remove", "description": "Remove a component" }
+        {
+          "name": "add",
+          "description": "Add a component",
+          "arguments": [
+            {
+              "name": "component",
+              "description": "Component to add",
+              "multiple": true,
+              "type": { "type": "Dynamic", "data": { "provider": "rustup.component" } }
+            }
+          ]
+        },
+        {
+          "name": "remove",
+          "description": "Remove a component",
+          "arguments": [
+            {
+              "name": "component",
+              "description": "Component to remove",
+              "multiple": true,
+              "type": { "type": "Dynamic", "data": { "provider": "rustup.component" } }
+            }
+          ]
+        }
       ]
     },
     {
@@ -69,12 +135,37 @@
       "description": "Manage directory overrides",
       "subcommands": [
         { "name": "list", "description": "List overrides" },
-        { "name": "set", "description": "Set override for current directory" },
+        {
+          "name": "set",
+          "description": "Set override for current directory",
+          "arguments": [
+            {
+              "name": "toolchain",
+              "description": "Toolchain to pin",
+              "type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
+            }
+          ]
+        },
         { "name": "unset", "description": "Remove override" }
       ]
     },
-    { "name": "run", "description": "Run command with specific toolchain" },
-    { "name": "which", "description": "Show which binary runs for a command" },
+    {
+      "name": "run",
+      "description": "Run command with specific toolchain",
+      "arguments": [
+        {
+          "name": "toolchain",
+          "description": "Toolchain to run under",
+          "type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
+        },
+        { "name": "command", "description": "Command to run", "type": { "type": "CommandWithArgs" } }
+      ]
+    },
+    {
+      "name": "which",
+      "description": "Show which binary runs for a command",
+      "arguments": [{ "name": "command", "description": "Command name", "type": { "type": "Command" } }]
+    },
     { "name": "doc", "description": "Open documentation" },
     { "name": "self", "description": "Modify rustup itself",
       "subcommands": [

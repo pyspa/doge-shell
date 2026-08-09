@@ -100,7 +100,22 @@
     },
     {
       "name": "env",
-      "description": "Print Go environment information"
+      "description": "Print Go environment information",
+      "options": [
+        { "short": "-w", "description": "Change the default setting of the named variables" },
+        { "short": "-u", "description": "Unset the default setting of the named variables" },
+        { "long": "-json", "description": "Print the environment in JSON format" },
+        { "short": "-changed", "description": "Print only variables that differ from the default" }
+      ],
+      "arguments": [
+        {
+          "name": "variable",
+          "description": "Go environment variable",
+          "multiple": true,
+          "required": false,
+          "type": { "type": "Dynamic", "data": { "provider": "go.env_key" } }
+        }
+      ]
     },
     {
       "name": "version",

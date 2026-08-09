@@ -3,22 +3,17 @@
   "description": "List open files",
   "global_options": [
     {
-      "long": "--help",
       "short": "-h",
       "description": "Display help information"
     },
     {
-      "long": "--version",
       "short": "-v",
       "description": "Display version information"
-    }
-  ],
-  "subcommands": [],
-  "options": [
+    },
     {
-      "long": "-i",
       "short": "-i",
-      "description": "Select IPv4 and IPv6 files"
+      "description": "Select internet files, optionally filtered by [46][proto][@host][:port]",
+      "takes_value": true
     },
     {
       "long": "-i4",
@@ -29,76 +24,147 @@
       "description": "Select IPv6 files"
     },
     {
-      "long": "-p",
       "short": "-p",
-      "description": "Select files with listed PIDs"
+      "description": "Select files with listed PIDs",
+      "takes_value": true,
+      "multiple": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "system.process_pid"
+        }
+      }
     },
     {
-      "long": "-u",
       "short": "-u",
-      "description": "Select files for listed users"
+      "description": "Select files for listed users",
+      "takes_value": true,
+      "multiple": true,
+      "value_type": {
+        "type": "User"
+      }
     },
     {
-      "long": "-c",
+      "short": "-g",
+      "description": "Select files by process group ID",
+      "takes_value": true
+    },
+    {
       "short": "-c",
-      "description": "Select files with command name"
+      "description": "Select files with command name",
+      "takes_value": true,
+      "multiple": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "system.process_name"
+        }
+      }
     },
     {
-      "long": "-d",
       "short": "-d",
-      "description": "Select files with descriptor numbers"
+      "description": "Select files with descriptor numbers",
+      "takes_value": true
     },
     {
-      "long": "-a",
+      "short": "-k",
+      "description": "Read the kernel name list from the given file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
       "short": "-a",
       "description": "AND selections"
     },
     {
-      "long": "-o",
+      "short": "-o",
       "description": "Do not list file offset"
     },
     {
-      "long": "-n",
       "short": "-n",
       "description": "No host name translation"
     },
     {
-      "long": "-l",
+      "short": "-l",
       "description": "Inhibit conversion of user IDs to login names"
     },
     {
       "long": "+D",
-      "description": "Search for all open instances of directory D and the files and directories it contains at its top level"
+      "description": "Search all open files under the given directory tree",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
     },
     {
-      "long": "-N",
+      "long": "+d",
+      "description": "Search open files in the given directory, without descending",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-N",
       "description": "Select NFS files"
     },
     {
-      "long": "-P",
+      "short": "-P",
       "description": "Inhibit conversion of port numbers to port names for network files"
     },
     {
-      "long": "-r",
-      "description": "Repeat listing every t seconds"
+      "short": "-r",
+      "description": "Repeat listing every t seconds",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
-      "long": "-t",
+      "short": "-s",
+      "description": "Select files by protocol and state, or display file size",
+      "takes_value": true
+    },
+    {
+      "short": "-t",
       "description": "Produce terse output with process identifiers only"
     },
     {
-      "long": "-U",
+      "short": "-U",
       "description": "Select UNIX domain socket files"
     },
     {
       "long": "+c",
-      "description": "Set command width to W"
+      "description": "Set command width to W",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-F",
+      "description": "Produce field output for the listed field characters",
+      "takes_value": true
+    },
+    {
+      "short": "-X",
+      "description": "Skip reporting information that can hang lsof"
     }
   ],
+  "subcommands": [],
   "arguments": [
     {
       "name": "selection",
-      "description": "Process, file, or user selection criteria"
+      "description": "File or directory to report open handles for",
+      "required": false,
+      "multiple": true,
+      "type": {
+        "type": "File",
+        "data": {}
+      }
     }
   ]
 }

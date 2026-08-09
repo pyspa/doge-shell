@@ -1,1 +1,95 @@
-{"command":"setcap","description":"Set file capabilities","global_options":[{"short":"-r","long":"--remove","description":"Remove capability set"},{"short":"-v","long":"--validate","description":"Validate capability set"},{"short":"-n","long":"--rootid","description":"Set namespace root uid","takes_value":true,"value_type":{"type":"Number"}},{"short":"-h","long":"--help","description":"Show help"}],"arguments":[{"name":"capability","type":{"type":"String"}},{"name":"file","multiple":true,"type":{"type":"File","data":{}}}]}
+{
+  "command": "setcap",
+  "description": "Set file capabilities",
+  "global_options": [
+    {
+      "short": "-r",
+      "long": "--remove",
+      "description": "Remove capability set"
+    },
+    {
+      "short": "-v",
+      "long": "--validate",
+      "description": "Validate capability set"
+    },
+    {
+      "short": "-n",
+      "long": "--rootid",
+      "description": "Set namespace root uid",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show help"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "capability",
+      "type": {
+        "type": "Choice",
+        "data": [
+          "cap_audit_control",
+          "cap_audit_read",
+          "cap_audit_write",
+          "cap_block_suspend",
+          "cap_bpf",
+          "cap_checkpoint_restore",
+          "cap_chown",
+          "cap_dac_override",
+          "cap_dac_read_search",
+          "cap_fowner",
+          "cap_fsetid",
+          "cap_ipc_lock",
+          "cap_ipc_owner",
+          "cap_kill",
+          "cap_lease",
+          "cap_linux_immutable",
+          "cap_mac_admin",
+          "cap_mac_override",
+          "cap_mknod",
+          "cap_net_admin",
+          "cap_net_bind_service",
+          "cap_net_broadcast",
+          "cap_net_raw",
+          "cap_perfmon",
+          "cap_setfcap",
+          "cap_setgid",
+          "cap_setpcap",
+          "cap_setuid",
+          "cap_sys_admin",
+          "cap_sys_boot",
+          "cap_sys_chroot",
+          "cap_sys_module",
+          "cap_sys_nice",
+          "cap_sys_pacct",
+          "cap_sys_ptrace",
+          "cap_sys_rawio",
+          "cap_sys_resource",
+          "cap_sys_time",
+          "cap_sys_tty_config",
+          "cap_syslog",
+          "cap_wake_alarm",
+          "cap_net_bind_service+ep",
+          "cap_net_raw+ep",
+          "cap_sys_admin+ep",
+          "all=",
+          "="
+        ]
+      },
+      "description": "Capability set (e.g. cap_net_bind_service+ep)"
+    },
+    {
+      "name": "file",
+      "multiple": true,
+      "type": {
+        "type": "File",
+        "data": {}
+      }
+    }
+  ]
+}

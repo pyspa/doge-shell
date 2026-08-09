@@ -2,12 +2,104 @@
   "command": "lazygit",
   "description": "Terminal UI for git",
   "global_options": [
-    { "short": "-p", "long": "--path", "description": "Repository path", "takes_value": true, "value_type": { "type": "Directory" } },
-    { "short": "-w", "long": "--work-tree", "description": "Work tree path", "takes_value": true, "value_type": { "type": "Directory" } },
-    { "short": "-g", "long": "--git-dir", "description": "Git directory", "takes_value": true, "value_type": { "type": "Directory" } },
-    { "short": "-f", "long": "--filter", "description": "Path filter", "takes_value": true, "value_type": { "type": "String" } },
-    { "short": "-v", "long": "--version", "description": "Show version" },
-    { "short": "-h", "long": "--help", "description": "Show help" }
+    {
+      "short": "-p",
+      "long": "--path",
+      "description": "Repository path",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-w",
+      "long": "--work-tree",
+      "description": "Work tree path",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-g",
+      "long": "--git-dir",
+      "description": "Git directory",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-f",
+      "long": "--filter",
+      "description": "Path filter",
+      "takes_value": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "git.changed_path"
+        }
+      }
+    },
+    {
+      "short": "-v",
+      "long": "--version",
+      "description": "Show version"
+    },
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show help"
+    },
+    {
+      "short": "-ucd",
+      "long": "--use-config-dir",
+      "description": "Config directory",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-ucf",
+      "long": "--use-config-file",
+      "description": "Config file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-d",
+      "long": "--debug",
+      "description": "Run in debug mode"
+    },
+    {
+      "short": "-l",
+      "long": "--logs",
+      "description": "Tail the log file"
+    },
+    {
+      "long": "--screen-mode",
+      "description": "Initial screen mode",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "normal",
+          "half",
+          "full"
+        ]
+      }
+    }
   ],
-  "arguments": [{ "name": "path", "type": { "type": "Directory" } }]
+  "arguments": [
+    {
+      "name": "path",
+      "type": {
+        "type": "Directory"
+      }
+    }
+  ]
 }

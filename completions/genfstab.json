@@ -18,10 +18,26 @@
       "description": "Include pseudo-filesystems (proc, sys, etc.)"
     },
     {
-        "short": "-t",
-        "long": "--filesystems",
-        "description": "Specify a comma-separated list of filesystem types to include"
+      "short": "-t",
+      "long": "--filesystems",
+      "description": "Specify a comma-separated list of filesystem types to include"
+    },
+    {
+      "short": "-p",
+      "description": "Exclude pseudofs mounts (default)"
     }
   ],
-  "subcommands": []
+  "subcommands": [],
+  "arguments": [
+    {
+      "name": "root",
+      "description": "Mounted root directory",
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "mount.mountpoint"
+        }
+      }
+    }
+  ]
 }

@@ -137,6 +137,34 @@
           "big"
         ]
       }
+    },
+    {
+      "short": "-i",
+      "long": "--info",
+      "description": "Show internal TCP information"
+    },
+    {
+      "short": "-m",
+      "long": "--memory",
+      "description": "Show socket memory usage"
+    },
+    {
+      "long": "--interface",
+      "description": "Only show sockets bound to the given interface",
+      "takes_value": true,
+      "value_type": {
+        "type": "Interface"
+      }
+    },
+    {
+      "short": "-H",
+      "long": "--no-header",
+      "description": "Suppress the header line"
+    },
+    {
+      "short": "-Z",
+      "long": "--context",
+      "description": "Show the SELinux security context"
     }
   ]
 }

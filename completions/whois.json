@@ -33,7 +33,13 @@
   "arguments": [
     {
       "name": "object",
-      "description": "Domain or IP address to query"
+      "description": "Domain or IP address to query",
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "ssh.host"
+        }
+      }
     }
   ]
 }

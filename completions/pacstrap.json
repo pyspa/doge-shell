@@ -27,17 +27,35 @@
       "description": "Avoid copying the host's pacman machine-id to the target."
     },
     {
-        "short": "-N",
-        "description": "Run a minimal pacman configuration."
+      "short": "-N",
+      "description": "Run a minimal pacman configuration."
     },
     {
-        "short": "-U",
-        "description": "Copy the host's kernel and initramfs into the target."
+      "short": "-U",
+      "description": "Copy the host's kernel and initramfs into the target."
     },
     {
-        "short": "-d",
-        "description": "Allow pacstrap to be run as a non-root user."
+      "short": "-d",
+      "description": "Allow pacstrap to be run as a non-root user."
     }
   ],
-  "subcommands": []
+  "subcommands": [],
+  "arguments": [
+    {
+      "name": "root",
+      "description": "Target root directory",
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "mount.mountpoint"
+        }
+      }
+    },
+    {
+      "name": "package",
+      "description": "Packages to install",
+      "required": false,
+      "multiple": true
+    }
+  ]
 }

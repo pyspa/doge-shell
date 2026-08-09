@@ -65,7 +65,7 @@
       "takes_value": true,
       "description": "Name or ID of the primary group",
       "value_type": {
-        "type": "String"
+        "type": "Group"
       }
     },
     {
@@ -74,7 +74,7 @@
       "takes_value": true,
       "description": "List of supplementary groups",
       "value_type": {
-        "type": "String"
+        "type": "Group"
       }
     },
     {
@@ -149,9 +149,9 @@
       "takes_value": true,
       "description": "Login shell of the new account",
       "value_type": {
-        "type": "File",
+        "type": "Dynamic",
         "data": {
-          "extensions": []
+          "provider": "login.shell"
         }
       }
     },

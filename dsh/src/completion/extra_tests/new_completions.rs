@@ -295,8 +295,29 @@ fn linux_operations_json_completions_use_dynamic_providers() {
         ("ausearch", "audit.rule_key"),
         ("semodule", "selinux.module"),
         ("semanage", "selinux.module"),
+        ("semanage", "selinux.boolean"),
+        ("setsebool", "selinux.boolean"),
+        ("getsebool", "selinux.boolean"),
         ("systemctl", "systemctl.unit_file"),
+        ("systemd-run", "systemctl.unit"),
+        ("systemd-run", "machinectl.machine"),
         ("ufw", "ufw.application"),
+        ("iw", "wireless.device"),
+        ("udevadm", "udev.subsystem"),
+        ("chsh", "login.shell"),
+        ("useradd", "login.shell"),
+        ("usermod", "login.shell"),
+        ("modinfo", "kernel.module"),
+        ("rmmod", "kernel.module"),
+        ("modprobe", "kernel.module"),
+        ("lsof", "system.process_pid"),
+        ("lsof", "system.process_name"),
+        ("htop", "system.process_pid"),
+        ("apropos", "man.page"),
+        ("whatis", "man.page"),
+        ("ping", "ssh.host"),
+        ("traceroute", "ssh.host"),
+        ("dig", "ssh.host"),
     ];
 
     for (command, provider) in providers {
@@ -330,6 +351,49 @@ fn remote_cli_json_completions_use_dynamic_providers() {
         ("restic", "restic.snapshot"),
         ("flatpak", "flatpak.application"),
         ("snap", "snap.package"),
+    ];
+
+    for (command, provider) in providers {
+        let completion = loader
+            .load_command_completion(command)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{command} completion"));
+        assert!(
+            completion_uses_dynamic_provider(&completion, provider),
+            "{command} should use {provider}"
+        );
+    }
+}
+
+#[test]
+fn developer_toolchain_json_completions_use_dynamic_providers() {
+    let loader = JsonCompletionLoader::new();
+    let providers = [
+        ("rustup", "rustup.component"),
+        ("rustup", "rustup.target"),
+        ("rustup", "rustup.toolchain"),
+        ("cargo", "cargo.installed_binary"),
+        ("cargo", "cargo.test"),
+        ("cargo", "cargo.bench"),
+        ("bat", "bat.theme"),
+        ("bat", "bat.language"),
+        ("rg", "rg.file_type"),
+        ("ffmpeg", "ffmpeg.encoder"),
+        ("ffmpeg", "ffmpeg.decoder"),
+        ("ffmpeg", "ffmpeg.format"),
+        ("ffprobe", "ffmpeg.format"),
+        ("go", "go.env_key"),
+        ("pipx", "pipx.installed_package"),
+        ("asdf", "asdf.plugin"),
+        ("mise", "mise.tool"),
+        ("code", "code.extension"),
+        ("nox", "nox.session"),
+        ("tox", "tox.environment"),
+        ("hatch", "hatch.environment"),
+        ("pre-commit", "pre_commit.hook_id"),
+        ("just", "project.task"),
+        ("make", "project.task"),
+        ("git", "git.alias"),
     ];
 
     for (command, provider) in providers {

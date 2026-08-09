@@ -433,6 +433,143 @@ impl DynamicCompletionProvider {
             },
         )
     }
+
+    pub(crate) fn collect_wireless_device_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("iw");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "iw",
+            "wireless-device",
+            current_dir.clone(),
+            current_token,
+            "wireless device",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parse_iw_devices(&run_command_lines(
+                    &command_path,
+                    &["dev"],
+                    &current_dir,
+                )?))
+            },
+        )
+    }
+
+    pub(crate) fn collect_login_shell_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_cached_value_candidates(
+            "shells",
+            "login-shell",
+            PathBuf::from("/etc"),
+            current_token,
+            "login shell",
+            cached_only,
+            move || Ok(load_login_shells(Path::new("/etc/shells"))),
+        )
+    }
+
+    pub(crate) fn collect_udev_subsystem_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_cached_value_candidates(
+            "udevadm",
+            "subsystem",
+            PathBuf::from("/sys/class"),
+            current_token,
+            "device subsystem",
+            cached_only,
+            move || Ok(load_udev_subsystems(Path::new("/sys/class"))),
+        )
+    }
+
+    pub(crate) fn collect_selinux_boolean_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("getsebool");
+        self.collect_cached_value_candidates(
+            "getsebool",
+            "boolean",
+            PathBuf::from("/"),
+            current_token,
+            "SELinux boolean",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parse_selinux_booleans(&run_command_lines(
+                    &command_path,
+                    &["-a"],
+                    Path::new("/"),
+                )?))
+            },
+        )
+    }
+}
+
+/// Extracts interface names from `iw dev`, whose device rows are indented
+/// under each `phy#N` block as `Interface wlan0`.
+fn parse_iw_devices(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .filter_map(|line| line.trim().strip_prefix("Interface "))
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect(),
+    )
+}
+
+fn load_login_shells(path: &Path) -> Vec<String> {
+    let Ok(contents) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    dedup_sorted(
+        contents
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with('/'))
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+fn load_udev_subsystems(path: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(path) else {
+        return Vec::new();
+    };
+    dedup_sorted(
+        entries
+            .flatten()
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect(),
+    )
+}
+
+/// Extracts boolean names from `getsebool -a`, which prints `name --> on`.
+fn parse_selinux_booleans(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .filter_map(|line| line.split("-->").next())
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect(),
+    )
 }
 
 fn load_ip_route_tables(path: &Path) -> Vec<String> {
@@ -719,6 +856,45 @@ mod tests {
                 "  OpenSSH".to_string(),
             ]),
             vec!["Nginx Full".to_string(), "OpenSSH".to_string()]
+        );
+    }
+
+    #[test]
+    fn wireless_and_host_inventory_parsers_read_local_sources() {
+        assert_eq!(
+            parse_iw_devices(&[
+                "phy#0".to_string(),
+                "\tUnnamed/non-netdev interface".to_string(),
+                "\t\ttype P2P-device".to_string(),
+                "\tInterface wlan0".to_string(),
+            ]),
+            vec!["wlan0".to_string()]
+        );
+        assert_eq!(
+            parse_selinux_booleans(&[
+                "httpd_can_network_connect --> off".to_string(),
+                "samba_enable_home_dirs --> on".to_string(),
+            ]),
+            vec![
+                "httpd_can_network_connect".to_string(),
+                "samba_enable_home_dirs".to_string()
+            ]
+        );
+
+        let dir = tempdir().unwrap();
+        let shells = dir.path().join("shells");
+        fs::write(&shells, "# /etc/shells\n/bin/sh\n/usr/bin/fish\n\n").unwrap();
+        assert_eq!(
+            load_login_shells(&shells),
+            vec!["/bin/sh".to_string(), "/usr/bin/fish".to_string()]
+        );
+
+        let class = dir.path().join("class");
+        fs::create_dir_all(class.join("net")).unwrap();
+        fs::create_dir_all(class.join("block")).unwrap();
+        assert_eq!(
+            load_udev_subsystems(&class),
+            vec!["block".to_string(), "net".to_string()]
         );
     }
 

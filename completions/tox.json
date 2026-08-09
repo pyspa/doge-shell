@@ -3,16 +3,60 @@
   "description": "Python test environment automation",
   "global_options": [
     { "short": "-c", "long": "--conf", "description": "Config file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["ini", "toml"] } } },
-    { "short": "-e", "long": "--env", "description": "Environment list", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-e", "long": "--env", "description": "Environment list", "takes_value": true, "multiple": true, "value_type": { "type": "Dynamic", "data": { "provider": "tox.environment" } } },
+    { "short": "-f", "long": "--factors", "description": "Only run environments matching the given factors", "takes_value": true, "multiple": true, "value_type": { "type": "String" } },
     { "short": "-p", "long": "--parallel", "description": "Run environments in parallel", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-x", "long": "--override", "description": "Override a configuration value", "takes_value": true, "multiple": true, "value_type": { "type": "String" } },
     { "long": "--recreate", "description": "Recreate environments" },
+    { "long": "--notest", "description": "Skip the test commands" },
+    { "long": "--result-json", "description": "Write a JSON report", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["json"] } } },
     { "short": "-q", "long": "--quiet", "description": "Decrease verbosity" },
     { "short": "-v", "long": "--verbose", "description": "Increase verbosity" },
     { "short": "-h", "long": "--help", "description": "Show help" }
   ],
   "subcommands": [
-    { "name": "run", "description": "Run tox environments" },
-    { "name": "list", "description": "List environments" },
+    {
+      "name": "run",
+      "aliases": ["r"],
+      "description": "Run tox environments",
+      "options": [
+        { "short": "-e", "long": "--env", "description": "Environment list", "takes_value": true, "multiple": true, "value_type": { "type": "Dynamic", "data": { "provider": "tox.environment" } } },
+        { "long": "--recreate", "description": "Recreate environments" }
+      ]
+    },
+    {
+      "name": "run-parallel",
+      "aliases": ["p"],
+      "description": "Run tox environments in parallel",
+      "options": [
+        { "short": "-e", "long": "--env", "description": "Environment list", "takes_value": true, "multiple": true, "value_type": { "type": "Dynamic", "data": { "provider": "tox.environment" } } }
+      ]
+    },
+    {
+      "name": "list",
+      "aliases": ["l"],
+      "description": "List environments",
+      "options": [{ "short": "-d", "long": "--default", "description": "Only list the default environments" }]
+    },
+    {
+      "name": "config",
+      "aliases": ["c"],
+      "description": "Show the resolved configuration",
+      "options": [
+        { "short": "-e", "long": "--env", "description": "Environment list", "takes_value": true, "multiple": true, "value_type": { "type": "Dynamic", "data": { "provider": "tox.environment" } } }
+      ]
+    },
+    {
+      "name": "devenv",
+      "aliases": ["d"],
+      "description": "Create a development environment",
+      "options": [
+        { "short": "-e", "long": "--env", "description": "Environment to base the devenv on", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "tox.environment" } } }
+      ],
+      "arguments": [{ "name": "path", "description": "Devenv directory", "type": { "type": "Directory" } }]
+    },
+    { "name": "depends", "description": "Show the environment dependency graph" },
+    { "name": "exec", "description": "Run a command inside an environment" },
     { "name": "quickstart", "description": "Create starter configuration" }
   ]
 }

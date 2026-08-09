@@ -4,11 +4,28 @@
   "arguments": [
     {
       "name": "specifier",
-      "description": "Filesystem specifier",
+      "description": "Filesystem specifier (LABEL=, UUID=, PARTUUID=, PARTLABEL=)",
       "type": {
         "type": "Choice",
-        "data": ["LABEL=", "UUID=", "PARTUUID=", "PARTLABEL="]
+        "data": [
+          "LABEL=",
+          "UUID=",
+          "PARTUUID=",
+          "PARTLABEL="
+        ]
       }
+    }
+  ],
+  "global_options": [
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show help"
+    },
+    {
+      "short": "-V",
+      "long": "--version",
+      "description": "Show version"
     }
   ]
 }

@@ -3,14 +3,101 @@
   "description": "Python project manager",
   "global_options": [
     { "short": "-h", "long": "--help", "description": "Show help" },
-    { "long": "--version", "description": "Show version" }
+    { "long": "--version", "description": "Show version" },
+    {
+      "short": "-e",
+      "long": "--env",
+      "description": "Environment to operate on",
+      "takes_value": true,
+      "value_type": { "type": "Dynamic", "data": { "provider": "hatch.environment" } }
+    },
+    { "short": "-p", "long": "--project", "description": "Project to operate on", "takes_value": true },
+    { "long": "--data-dir", "description": "Data directory", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "short": "-v", "long": "--verbose", "description": "Increase verbosity" },
+    { "short": "-q", "long": "--quiet", "description": "Decrease verbosity" }
   ],
   "subcommands": [
-    { "name": "run", "description": "Run a command or script", "arguments": [{ "name": "command", "description": "Command", "type": { "type": "Command" } }] },
-    { "name": "env", "description": "Manage environments", "subcommands": [{ "name": "show", "description": "Show environments" }, { "name": "create", "description": "Create environment" }, { "name": "remove", "description": "Remove environment" }] },
-    { "name": "build", "description": "Build project" },
-    { "name": "publish", "description": "Publish distributions" },
+    {
+      "name": "run",
+      "description": "Run a command or script",
+      "arguments": [{ "name": "command", "description": "Command", "type": { "type": "Command" } }]
+    },
+    {
+      "name": "shell",
+      "description": "Enter an environment shell",
+      "arguments": [
+        {
+          "name": "environment",
+          "description": "Environment name",
+          "required": false,
+          "type": { "type": "Dynamic", "data": { "provider": "hatch.environment" } }
+        }
+      ]
+    },
+    {
+      "name": "env",
+      "description": "Manage environments",
+      "subcommands": [
+        { "name": "show", "description": "Show environments", "options": [{ "long": "--json", "description": "JSON output" }] },
+        {
+          "name": "create",
+          "description": "Create environment",
+          "arguments": [
+            {
+              "name": "environment",
+              "description": "Environment name",
+              "required": false,
+              "type": { "type": "Dynamic", "data": { "provider": "hatch.environment" } }
+            }
+          ]
+        },
+        {
+          "name": "remove",
+          "description": "Remove environment",
+          "arguments": [
+            {
+              "name": "environment",
+              "description": "Environment name",
+              "required": false,
+              "type": { "type": "Dynamic", "data": { "provider": "hatch.environment" } }
+            }
+          ]
+        },
+        { "name": "prune", "description": "Remove every environment" },
+        {
+          "name": "find",
+          "description": "Show the location of an environment",
+          "arguments": [
+            {
+              "name": "environment",
+              "description": "Environment name",
+              "required": false,
+              "type": { "type": "Dynamic", "data": { "provider": "hatch.environment" } }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "build",
+      "description": "Build project",
+      "options": [
+        { "short": "-t", "long": "--target", "description": "Build target", "takes_value": true, "multiple": true },
+        { "short": "-c", "long": "--clean", "description": "Clean before building" }
+      ]
+    },
+    {
+      "name": "publish",
+      "description": "Publish distributions",
+      "options": [
+        { "short": "-r", "long": "--repo", "description": "Repository to publish to", "takes_value": true },
+        { "short": "-u", "long": "--user", "description": "Username", "takes_value": true }
+      ]
+    },
     { "name": "version", "description": "Inspect or update project version" },
+    { "name": "test", "description": "Run the test suite" },
+    { "name": "fmt", "description": "Format and lint the project" },
+    { "name": "clean", "description": "Remove build artifacts" },
     { "name": "new", "description": "Create project" }
   ]
 }

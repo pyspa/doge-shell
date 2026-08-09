@@ -76,6 +76,8 @@ enum CargoMetadataValueKind {
     Bin,
     Example,
     Feature,
+    Test,
+    Bench,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +87,29 @@ enum SystemdUnitListKind {
     Enabled,
     Disabled,
     UnitFiles,
+}
+
+/// Everything that narrows a `systemctl list-units` / `list-unit-files` query:
+/// which listing to run, which manager to ask, and an optional `--type=` filter.
+#[derive(Debug, Clone, Copy)]
+struct SystemdUnitQuery {
+    kind: SystemdUnitListKind,
+    manager_scope: Option<SystemdManagerScope>,
+    unit_type: Option<&'static str>,
+}
+
+impl SystemdUnitQuery {
+    const fn new(
+        kind: SystemdUnitListKind,
+        manager_scope: Option<SystemdManagerScope>,
+        unit_type: Option<&'static str>,
+    ) -> Self {
+        Self {
+            kind,
+            manager_scope,
+            unit_type,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -472,8 +497,11 @@ impl DynamicCompletionProvider {
                 self.collect_systemd_unit_candidates(
                     current_dir,
                     current_token,
-                    kind,
-                    selected_systemd_manager_scope(parsed_command_line),
+                    SystemdUnitQuery::new(
+                        kind,
+                        selected_systemd_manager_scope(parsed_command_line),
+                        systemd_unit_type_filter(scope),
+                    ),
                     "systemd unit",
                     cached_only,
                 )
@@ -481,8 +509,11 @@ impl DynamicCompletionProvider {
             "systemctl.unit_file" => self.collect_systemd_unit_candidates(
                 current_dir,
                 current_token,
-                SystemdUnitListKind::UnitFiles,
-                selected_systemd_manager_scope(parsed_command_line),
+                SystemdUnitQuery::new(
+                    SystemdUnitListKind::UnitFiles,
+                    selected_systemd_manager_scope(parsed_command_line),
+                    systemd_unit_type_filter(scope),
+                ),
                 "systemd unit file",
                 cached_only,
             ),
@@ -686,7 +717,9 @@ impl DynamicCompletionProvider {
             "mount.mountpoint" => {
                 self.collect_mountpoint_candidates(current_dir, current_token, cached_only)
             }
-            "kernel.module" => self.collect_kernel_module_candidates(current_token, cached_only),
+            "kernel.module" => {
+                self.collect_kernel_module_candidates(scope, current_token, cached_only)
+            }
             "audit.rule_key" => self.collect_audit_rule_key_candidates(current_token, cached_only),
             "ansible.inventory_host" => self.collect_ansible_inventory_host_candidates(
                 parsed_command_line,
@@ -793,6 +826,78 @@ impl DynamicCompletionProvider {
                 parse_non_empty_lines,
                 cached_only,
             ),
+            "rustup.component" => {
+                self.collect_rustup_component_candidates(current_token, cached_only)
+            }
+            "rustup.target" => self.collect_rustup_target_candidates(current_token, cached_only),
+            "cargo.installed_binary" => {
+                self.collect_cargo_installed_binary_candidates(current_token, cached_only)
+            }
+            "cargo.test" => self.collect_cargo_metadata_candidates(
+                current_dir,
+                current_token,
+                CargoMetadataValueKind::Test,
+                "cargo test target",
+                cached_only,
+            ),
+            "cargo.bench" => self.collect_cargo_metadata_candidates(
+                current_dir,
+                current_token,
+                CargoMetadataValueKind::Bench,
+                "cargo bench target",
+                cached_only,
+            ),
+            "bat.theme" => self.collect_bat_theme_candidates(current_token, cached_only),
+            "bat.language" => self.collect_bat_language_candidates(current_token, cached_only),
+            "rg.file_type" => self.collect_rg_file_type_candidates(current_token, cached_only),
+            "ffmpeg.encoder" => self.collect_ffmpeg_table_candidates(
+                "encoder",
+                current_token,
+                "ffmpeg encoder",
+                &["-hide_banner", "-encoders"],
+                cached_only,
+            ),
+            "ffmpeg.decoder" => self.collect_ffmpeg_table_candidates(
+                "decoder",
+                current_token,
+                "ffmpeg decoder",
+                &["-hide_banner", "-decoders"],
+                cached_only,
+            ),
+            "ffmpeg.format" => self.collect_ffmpeg_table_candidates(
+                "format",
+                current_token,
+                "ffmpeg format",
+                &["-hide_banner", "-formats"],
+                cached_only,
+            ),
+            "go.env_key" => self.collect_go_env_key_candidates(current_token, cached_only),
+            "pipx.installed_package" => {
+                self.collect_pipx_installed_package_candidates(current_token, cached_only)
+            }
+            "asdf.plugin" => self.collect_asdf_plugin_candidates(current_token, cached_only),
+            "mise.tool" => self.collect_mise_tool_candidates(current_token, cached_only),
+            "code.extension" => self.collect_code_extension_candidates(current_token, cached_only),
+            "nox.session" => {
+                self.collect_nox_session_candidates(current_dir, current_token, cached_only)
+            }
+            "tox.environment" => {
+                self.collect_tox_environment_candidates(current_dir, current_token, cached_only)
+            }
+            "hatch.environment" => {
+                self.collect_hatch_environment_candidates(current_dir, current_token, cached_only)
+            }
+            "pre_commit.hook_id" => {
+                self.collect_pre_commit_hook_id_candidates(current_dir, current_token, cached_only)
+            }
+            "wireless.device" => {
+                self.collect_wireless_device_candidates(current_dir, current_token, cached_only)
+            }
+            "login.shell" => self.collect_login_shell_candidates(current_token, cached_only),
+            "udev.subsystem" => self.collect_udev_subsystem_candidates(current_token, cached_only),
+            "selinux.boolean" => {
+                self.collect_selinux_boolean_candidates(current_token, cached_only)
+            }
             "zfs.dataset" => {
                 self.collect_zfs_dataset_candidates(current_dir, current_token, cached_only)
             }
@@ -1446,8 +1551,11 @@ impl DynamicCompletionProvider {
         self.collect_systemd_unit_candidates(
             current_dir,
             parsed_command_line.current_token.as_str(),
-            kind,
-            selected_systemd_manager_scope(parsed_command_line),
+            SystemdUnitQuery::new(
+                kind,
+                selected_systemd_manager_scope(parsed_command_line),
+                None,
+            ),
             "systemd unit",
             cached_only,
         )
@@ -1487,8 +1595,11 @@ impl DynamicCompletionProvider {
         self.collect_systemd_unit_candidates(
             current_dir,
             parsed_command_line.current_token.as_str(),
-            SystemdUnitListKind::All,
-            selected_systemd_manager_scope(parsed_command_line),
+            SystemdUnitQuery::new(
+                SystemdUnitListKind::All,
+                selected_systemd_manager_scope(parsed_command_line),
+                None,
+            ),
             "systemd unit",
             cached_only,
         )
@@ -2081,7 +2192,14 @@ impl DynamicCompletionProvider {
         ) {
             return Vec::new();
         }
+        // `modprobe -r` unloads, so only modules already in the kernel apply.
+        let scope = parsed_command_line
+            .raw_args
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "-r" | "--remove"))
+            .then_some("loaded");
         self.collect_kernel_module_candidates(
+            scope,
             parsed_command_line.current_token.as_str(),
             cached_only,
         )
@@ -2291,11 +2409,26 @@ impl DynamicCompletionProvider {
         )
     }
 
+    /// `scope: "loaded"` restricts the candidates to the modules currently in
+    /// the kernel, which is what `rmmod` and friends can actually act on. The
+    /// default lists every installable module, as `modprobe` needs.
     fn collect_kernel_module_candidates(
         &self,
+        scope: Option<&str>,
         current_token: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
+        if scope == Some("loaded") {
+            return self.collect_cached_value_candidates(
+                "lsmod",
+                "loaded-kernel-module",
+                PathBuf::from("/proc/modules"),
+                current_token,
+                "loaded kernel module",
+                cached_only,
+                || Ok(load_loaded_kernel_module_names(Path::new("/proc/modules"))),
+            );
+        }
         self.collect_cached_value_candidates(
             "modprobe",
             "kernel-module",
@@ -3948,6 +4081,8 @@ impl DynamicCompletionProvider {
             CargoMetadataValueKind::Bin => "bin",
             CargoMetadataValueKind::Example => "example",
             CargoMetadataValueKind::Feature => "feature",
+            CargoMetadataValueKind::Test => "test",
+            CargoMetadataValueKind::Bench => "bench",
         };
         self.collect_cached_value_candidates(
             "cargo",
@@ -3974,11 +4109,15 @@ impl DynamicCompletionProvider {
         &self,
         current_dir: &Path,
         current_token: &str,
-        kind: SystemdUnitListKind,
-        manager_scope: Option<SystemdManagerScope>,
+        query: SystemdUnitQuery,
         description: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
+        let SystemdUnitQuery {
+            kind,
+            manager_scope,
+            unit_type,
+        } = query;
         let command_path = self.resolve_command_path("systemctl");
         let current_dir = current_dir.to_path_buf();
         let base_value_kind = match kind {
@@ -3993,6 +4132,10 @@ impl DynamicCompletionProvider {
             Some(SystemdManagerScope::User) => format!("user-{base_value_kind}"),
             Some(SystemdManagerScope::Global) => format!("global-{base_value_kind}"),
             None => base_value_kind.to_string(),
+        };
+        let value_kind = match unit_type {
+            Some(unit_type) => format!("{value_kind}:{unit_type}"),
+            None => value_kind,
         };
         self.collect_cached_value_candidates(
             "systemctl",
@@ -4035,6 +4178,9 @@ impl DynamicCompletionProvider {
                         vec!["list-unit-files", "--no-pager", "--no-legend"]
                     }
                 });
+                if let Some(unit_type) = unit_type {
+                    args.push(unit_type);
+                }
                 Ok(parse_first_fields(&run_command_lines(
                     &command_path,
                     &args,
@@ -5529,6 +5675,26 @@ fn systemctl_unit_kind_for_subcommand(subcommand: &str) -> Option<SystemdUnitLis
     }
 }
 
+/// Maps a `systemctl.unit` / `systemctl.unit_file` provider scope onto the
+/// matching `systemctl --type=` filter, so a JSON definition can narrow the
+/// candidates to timers, sockets, slices and so on.
+fn systemd_unit_type_filter(scope: Option<&str>) -> Option<&'static str> {
+    match scope? {
+        "service" => Some("--type=service"),
+        "socket" => Some("--type=socket"),
+        "timer" => Some("--type=timer"),
+        "slice" => Some("--type=slice"),
+        "target" => Some("--type=target"),
+        "mount" => Some("--type=mount"),
+        "automount" => Some("--type=automount"),
+        "path" => Some("--type=path"),
+        "swap" => Some("--type=swap"),
+        "scope" => Some("--type=scope"),
+        "device" => Some("--type=device"),
+        _ => None,
+    }
+}
+
 fn selected_systemd_manager_scope(
     parsed_command_line: &ParsedCommandLine,
 ) -> Option<SystemdManagerScope> {
@@ -5611,7 +5777,10 @@ fn parse_cargo_metadata_values(output: &str, kind: CargoMetadataValueKind) -> Ve
                     values.extend(features.keys().cloned());
                 }
             }
-            CargoMetadataValueKind::Bin | CargoMetadataValueKind::Example => {
+            CargoMetadataValueKind::Bin
+            | CargoMetadataValueKind::Example
+            | CargoMetadataValueKind::Test
+            | CargoMetadataValueKind::Bench => {
                 let Some(targets) = package
                     .get("targets")
                     .and_then(|targets| targets.as_array())
@@ -5621,6 +5790,8 @@ fn parse_cargo_metadata_values(output: &str, kind: CargoMetadataValueKind) -> Ve
                 let expected_kind = match kind {
                     CargoMetadataValueKind::Bin => "bin",
                     CargoMetadataValueKind::Example => "example",
+                    CargoMetadataValueKind::Test => "test",
+                    CargoMetadataValueKind::Bench => "bench",
                     CargoMetadataValueKind::Package | CargoMetadataValueKind::Feature => {
                         unreachable!()
                     }
@@ -6159,6 +6330,21 @@ fn collect_sysctl_keys(root: &Path, dir: &Path, values: &mut Vec<String>) {
             values.push(key);
         }
     }
+}
+
+/// Reads the currently loaded modules from `/proc/modules`, whose rows start
+/// with the module name (`ext4 1052672 1 - Live 0x0000000000000000`).
+fn load_loaded_kernel_module_names(path: &Path) -> Vec<String> {
+    let Ok(contents) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    dedup_sorted(
+        contents
+            .lines()
+            .filter_map(|line| line.split_whitespace().next())
+            .map(str::to_string)
+            .collect(),
+    )
 }
 
 fn load_kernel_module_names() -> Vec<String> {

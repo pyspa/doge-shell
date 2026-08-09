@@ -15,7 +15,11 @@
     {
       "short": "-n",
       "long": "--interval",
-      "description": "Specify update interval"
+      "description": "Specify update interval",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
       "short": "-d",
@@ -51,7 +55,35 @@
       "short": "-x",
       "long": "--exec",
       "description": "Complete command to pass to sh -c"
+    },
+    {
+      "short": "-p",
+      "long": "--precise",
+      "description": "Attempt to run the command at precise intervals"
+    },
+    {
+      "short": "-q",
+      "long": "--equexit",
+      "description": "Exit when the output does not change",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-w",
+      "long": "--no-wrap",
+      "description": "Turn off line wrapping"
     }
   ],
-  "subcommands": []
+  "subcommands": [],
+  "arguments": [
+    {
+      "name": "command",
+      "description": "Command to run repeatedly",
+      "type": {
+        "type": "CommandWithArgs"
+      }
+    }
+  ]
 }

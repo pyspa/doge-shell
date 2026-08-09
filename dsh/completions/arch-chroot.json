@@ -5,7 +5,43 @@
     {
       "short": "-C",
       "description": "Use an alternate pacman configuration file for the chroot."
+    },
+    {
+      "short": "-N",
+      "description": "Run in unshare mode as a regular user"
+    },
+    {
+      "short": "-u",
+      "description": "Run as the given user",
+      "takes_value": true,
+      "value_type": {
+        "type": "User"
+      }
+    },
+    {
+      "short": "-h",
+      "description": "Show help"
     }
   ],
-  "subcommands": []
+  "subcommands": [],
+  "arguments": [
+    {
+      "name": "chroot_dir",
+      "description": "Directory to chroot into",
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "mount.mountpoint"
+        }
+      }
+    },
+    {
+      "name": "command",
+      "description": "Command to run inside the chroot",
+      "required": false,
+      "type": {
+        "type": "CommandWithArgs"
+      }
+    }
+  ]
 }

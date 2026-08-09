@@ -36,6 +36,44 @@
       "short": "-r",
       "long": "--route",
       "description": "Display the kernel routing tables"
+    },
+    {
+      "short": "-i",
+      "long": "--interfaces",
+      "description": "Show a network interface table"
+    },
+    {
+      "short": "-I",
+      "description": "Show the table for one interface",
+      "takes_value": true,
+      "value_type": {
+        "type": "Interface"
+      }
+    },
+    {
+      "short": "-s",
+      "long": "--statistics",
+      "description": "Show per-protocol statistics"
+    },
+    {
+      "short": "-c",
+      "long": "--continuous",
+      "description": "Refresh the listing every second"
+    },
+    {
+      "short": "-e",
+      "long": "--extend",
+      "description": "Show additional information"
+    },
+    {
+      "short": "-g",
+      "long": "--groups",
+      "description": "Show multicast group membership"
+    },
+    {
+      "short": "-W",
+      "long": "--wide",
+      "description": "Do not truncate IP addresses"
     }
   ]
 }

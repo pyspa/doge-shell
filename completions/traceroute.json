@@ -79,7 +79,13 @@
   "arguments": [
     {
       "name": "host",
-      "description": "The host to trace the route to"
+      "description": "The host to trace the route to",
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "ssh.host"
+        }
+      }
     }
   ]
 }

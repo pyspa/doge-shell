@@ -10,19 +10,170 @@
       "name": "plugin",
       "description": "Manage plugins",
       "subcommands": [
-        { "name": "add", "description": "Add plugin" },
-        { "name": "list", "description": "List plugins" },
-        { "name": "remove", "description": "Remove plugin" },
-        { "name": "update", "description": "Update plugin" }
+        { "name": "add", "description": "Add plugin", "arguments": [{ "name": "name", "description": "Plugin name" }] },
+        { "name": "list", "description": "List plugins", "options": [{ "long": "--urls", "description": "Show plugin repository URLs" }] },
+        { "name": "list-all", "description": "List every plugin in the plugin index" },
+        {
+          "name": "remove",
+          "description": "Remove plugin",
+          "arguments": [
+            {
+              "name": "name",
+              "description": "Installed plugin",
+              "type": { "type": "Dynamic", "data": { "provider": "asdf.plugin" } }
+            }
+          ]
+        },
+        {
+          "name": "update",
+          "description": "Update plugin",
+          "options": [{ "long": "--all", "description": "Update every installed plugin" }],
+          "arguments": [
+            {
+              "name": "name",
+              "description": "Installed plugin",
+              "required": false,
+              "type": { "type": "Dynamic", "data": { "provider": "asdf.plugin" } }
+            }
+          ]
+        }
       ]
     },
-    { "name": "install", "description": "Install a tool version" },
-    { "name": "uninstall", "description": "Uninstall a tool version" },
-    { "name": "list", "description": "List installed versions" },
-    { "name": "list-all", "description": "List all available versions" },
-    { "name": "global", "description": "Set global version" },
-    { "name": "local", "description": "Set local version" },
-    { "name": "current", "description": "Show current versions" },
-    { "name": "where", "description": "Show install path" }
+    {
+      "name": "install",
+      "description": "Install a tool version",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "Installed plugin",
+          "required": false,
+          "type": { "type": "Dynamic", "data": { "provider": "asdf.plugin" } }
+        },
+        { "name": "version", "description": "Version to install", "required": false }
+      ]
+    },
+    {
+      "name": "uninstall",
+      "description": "Uninstall a tool version",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "Installed plugin",
+          "type": { "type": "Dynamic", "data": { "provider": "asdf.plugin" } }
+        },
+        { "name": "version", "description": "Version to remove" }
+      ]
+    },
+    {
+      "name": "list",
+      "description": "List installed versions",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "Installed plugin",
+          "required": false,
+          "type": { "type": "Dynamic", "data": { "provider": "asdf.plugin" } }
+        }
+      ]
+    },
+    {
+      "name": "list-all",
+      "description": "List all available versions",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "Installed plugin",
+          "type": { "type": "Dynamic", "data": { "provider": "asdf.plugin" } }
+        }
+      ]
+    },
+    {
+      "name": "set",
+      "description": "Set a tool version",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "Installed plugin",
+          "type": { "type": "Dynamic", "data": { "provider": "asdf.plugin" } }
+        },
+        { "name": "version", "description": "Version to set" }
+      ]
+    },
+    {
+      "name": "global",
+      "description": "Set global version",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "Installed plugin",
+          "type": { "type": "Dynamic", "data": { "provider": "asdf.plugin" } }
+        },
+        { "name": "version", "description": "Version to set" }
+      ]
+    },
+    {
+      "name": "local",
+      "description": "Set local version",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "Installed plugin",
+          "type": { "type": "Dynamic", "data": { "provider": "asdf.plugin" } }
+        },
+        { "name": "version", "description": "Version to set" }
+      ]
+    },
+    {
+      "name": "current",
+      "description": "Show current versions",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "Installed plugin",
+          "required": false,
+          "type": { "type": "Dynamic", "data": { "provider": "asdf.plugin" } }
+        }
+      ]
+    },
+    {
+      "name": "latest",
+      "description": "Show the latest available version",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "Installed plugin",
+          "type": { "type": "Dynamic", "data": { "provider": "asdf.plugin" } }
+        }
+      ]
+    },
+    {
+      "name": "where",
+      "description": "Show install path",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "Installed plugin",
+          "type": { "type": "Dynamic", "data": { "provider": "asdf.plugin" } }
+        },
+        { "name": "version", "description": "Installed version", "required": false }
+      ]
+    },
+    {
+      "name": "which",
+      "description": "Show the executable path for a command",
+      "arguments": [{ "name": "command", "description": "Command name", "type": { "type": "Command" } }]
+    },
+    {
+      "name": "reshim",
+      "description": "Recreate shims for a tool",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "Installed plugin",
+          "required": false,
+          "type": { "type": "Dynamic", "data": { "provider": "asdf.plugin" } }
+        }
+      ]
+    }
   ]
 }

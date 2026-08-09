@@ -52,7 +52,13 @@
   "arguments": [
     {
       "name": "destination",
-      "description": "Destination address"
+      "description": "Destination address",
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "ssh.host"
+        }
+      }
     },
     {
       "name": "port",

@@ -49,11 +49,60 @@
     },
     {
       "name": "monitor",
-      "description": "Monitor kernel and udev events"
+      "description": "Monitor kernel and udev events",
+      "options": [
+        { "short": "-k", "long": "--kernel", "description": "Print kernel uevents" },
+        { "short": "-u", "long": "--udev", "description": "Print udev events" },
+        { "short": "-p", "long": "--property", "description": "Print event properties" },
+        {
+          "short": "-s",
+          "long": "--subsystem-match",
+          "description": "Filter events by subsystem",
+          "takes_value": true,
+          "multiple": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "udev.subsystem"
+            }
+          }
+        }
+      ]
     },
     {
       "name": "trigger",
-      "description": "Request events from the kernel"
+      "description": "Request events from the kernel",
+      "options": [
+        {
+          "short": "-c",
+          "long": "--action",
+          "description": "Event action to trigger",
+          "takes_value": true,
+          "value_type": { "type": "Choice", "data": ["add", "remove", "change", "move", "online", "offline", "bind", "unbind"] }
+        },
+        {
+          "short": "-s",
+          "long": "--subsystem-match",
+          "description": "Trigger only devices of this subsystem",
+          "takes_value": true,
+          "multiple": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "udev.subsystem"
+            }
+          }
+        },
+        {
+          "short": "-t",
+          "long": "--type",
+          "description": "Type of events to trigger",
+          "takes_value": true,
+          "value_type": { "type": "Choice", "data": ["devices", "subsystems", "all"] }
+        },
+        { "short": "-v", "long": "--verbose", "description": "Print triggered devices" },
+        { "short": "-n", "long": "--dry-run", "description": "Do not actually trigger events" }
+      ]
     },
     {
       "name": "settle",

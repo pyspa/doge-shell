@@ -33,11 +33,23 @@
     },
     {
       "long": "--install-extension",
-      "description": "Install extension"
+      "description": "Install extension",
+      "takes_value": true,
+      "multiple": true
     },
     {
       "long": "--uninstall-extension",
-      "description": "Uninstall extension"
+      "description": "Uninstall extension",
+      "takes_value": true,
+      "multiple": true,
+      "value_type": { "type": "Dynamic", "data": { "provider": "code.extension" } }
+    },
+    {
+      "long": "--disable-extension",
+      "description": "Disable an extension for this session",
+      "takes_value": true,
+      "multiple": true,
+      "value_type": { "type": "Dynamic", "data": { "provider": "code.extension" } }
     },
     {
       "long": "--list-extensions",
@@ -63,15 +75,20 @@
     },
     {
       "long": "--user-data-dir",
-      "description": "User data directory"
+      "description": "User data directory",
+      "takes_value": true,
+      "value_type": { "type": "Directory" }
     },
     {
       "long": "--extensions-dir",
-      "description": "Extensions directory"
+      "description": "Extensions directory",
+      "takes_value": true,
+      "value_type": { "type": "Directory" }
     },
     {
       "long": "--locale",
-      "description": "Set locale"
+      "description": "Set locale",
+      "takes_value": true
     },
     {
       "long": "--disable-extensions",

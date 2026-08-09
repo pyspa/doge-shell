@@ -32,7 +32,10 @@
       "name": "destination",
       "description": "Destination host",
       "type": {
-        "type": "String"
+        "type": "Dynamic",
+        "data": {
+          "provider": "ssh.host"
+        }
       }
     }
   ]

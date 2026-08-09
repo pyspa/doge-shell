@@ -177,6 +177,30 @@
         {
           "long": "--nocapture",
           "description": "Show output from tests"
+        },
+        {
+          "long": "--test",
+          "description": "Test only the specified integration test target",
+          "takes_value": true,
+          "value_type": { "type": "Dynamic", "data": { "provider": "cargo.test" } }
+        },
+        {
+          "long": "--bin",
+          "description": "Test only the specified binary",
+          "takes_value": true,
+          "value_type": { "type": "Dynamic", "data": { "provider": "cargo.bin" } }
+        },
+        {
+          "long": "--example",
+          "description": "Test only the specified example",
+          "takes_value": true,
+          "value_type": { "type": "Dynamic", "data": { "provider": "cargo.example" } }
+        },
+        {
+          "long": "--bench",
+          "description": "Test only the specified bench target",
+          "takes_value": true,
+          "value_type": { "type": "Dynamic", "data": { "provider": "cargo.bench" } }
         }
       ],
       "arguments": [
@@ -304,6 +328,39 @@
       "subcommands": []
     },
     {
+      "name": "uninstall",
+      "description": "Remove a Rust binary installed with cargo install",
+      "options": [
+        {
+          "long": "--package",
+          "short": "-p",
+          "description": "Package to uninstall",
+          "takes_value": true,
+          "value_type": { "type": "Dynamic", "data": { "provider": "cargo.installed_binary" } }
+        },
+        {
+          "long": "--bin",
+          "description": "Only uninstall the binary NAME",
+          "takes_value": true
+        },
+        {
+          "long": "--root",
+          "description": "Directory to uninstall packages from",
+          "takes_value": true,
+          "value_type": { "type": "Directory" }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "crate",
+          "description": "Installed crate to remove",
+          "multiple": true,
+          "type": { "type": "Dynamic", "data": { "provider": "cargo.installed_binary" } }
+        }
+      ],
+      "subcommands": []
+    },
+    {
       "name": "check",
       "description": "Check a local package and all of its dependencies for errors",
       "options": [
@@ -425,6 +482,18 @@
         {
           "long": "--workspace",
           "description": "Benchmark all packages in workspace"
+        },
+        {
+          "long": "--bench",
+          "description": "Benchmark only the specified bench target",
+          "takes_value": true,
+          "value_type": { "type": "Dynamic", "data": { "provider": "cargo.bench" } }
+        },
+        {
+          "long": "--test",
+          "description": "Benchmark only the specified test target",
+          "takes_value": true,
+          "value_type": { "type": "Dynamic", "data": { "provider": "cargo.test" } }
         }
       ],
       "arguments": [

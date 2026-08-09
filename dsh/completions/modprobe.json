@@ -35,7 +35,15 @@
     {
       "short": "-r",
       "long": "--remove",
-      "description": "Remove module (stacks) or do autoclean"
+      "description": "Remove module (stacks) or do autoclean",
+      "takes_value": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "kernel.module",
+          "scope": "loaded"
+        }
+      }
     },
     {
       "short": "-V",
@@ -62,7 +70,12 @@
     {
       "name": "module",
       "description": "Kernel module name",
-      "type": { "type": "Dynamic", "data": { "provider": "kernel.module" } }
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "kernel.module"
+        }
+      }
     }
   ],
   "subcommands": []

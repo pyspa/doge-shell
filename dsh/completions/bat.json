@@ -10,7 +10,9 @@
     {
       "short": "-l",
       "long": "--language",
-      "description": "Set syntax language"
+      "description": "Set syntax language",
+      "takes_value": true,
+      "value_type": { "type": "Dynamic", "data": { "provider": "bat.language" } }
     },
     {
       "short": "-n",
@@ -24,11 +26,33 @@
     },
     {
       "long": "--paging",
-      "description": "Control paging (auto, never, always)"
+      "description": "Control paging (auto, never, always)",
+      "takes_value": true,
+      "value_type": { "type": "Choice", "data": ["auto", "never", "always"] }
     },
     {
       "long": "--theme",
-      "description": "Set color theme"
+      "description": "Set color theme",
+      "takes_value": true,
+      "value_type": { "type": "Dynamic", "data": { "provider": "bat.theme" } }
+    },
+    {
+      "long": "--map-syntax",
+      "short": "-m",
+      "description": "Map a glob pattern to an existing syntax name",
+      "takes_value": true
+    },
+    {
+      "long": "--wrap",
+      "description": "Text wrapping mode",
+      "takes_value": true,
+      "value_type": { "type": "Choice", "data": ["auto", "never", "character"] }
+    },
+    {
+      "long": "--pager",
+      "description": "Pager command to use",
+      "takes_value": true,
+      "value_type": { "type": "Command" }
     },
     {
       "long": "--list-themes",
@@ -41,7 +65,8 @@
     {
       "short": "-r",
       "long": "--line-range",
-      "description": "Show specific line range"
+      "description": "Show specific line range",
+      "takes_value": true
     },
     {
       "long": "--diff",
@@ -49,11 +74,20 @@
     },
     {
       "long": "--color",
-      "description": "Control color output (auto, always, never)"
+      "description": "Control color output (auto, always, never)",
+      "takes_value": true,
+      "value_type": { "type": "Choice", "data": ["auto", "always", "never"] }
+    },
+    {
+      "long": "--decorations",
+      "description": "Control decoration output",
+      "takes_value": true,
+      "value_type": { "type": "Choice", "data": ["auto", "always", "never"] }
     },
     {
       "long": "--style",
-      "description": "Comma-separated style options"
+      "description": "Comma-separated style options",
+      "takes_value": true
     },
     {
       "short": "-h",

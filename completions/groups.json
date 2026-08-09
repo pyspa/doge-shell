@@ -10,5 +10,16 @@
       "long": "--version",
       "description": "Output version information and exit"
     }
+  ],
+  "arguments": [
+    {
+      "name": "user",
+      "description": "User to list groups for",
+      "required": false,
+      "multiple": true,
+      "type": {
+        "type": "User"
+      }
+    }
   ]
 }

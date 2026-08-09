@@ -86,8 +86,10 @@
       "description": "Login shell",
       "takes_value": true,
       "value_type": {
-        "type": "File",
-        "data": {}
+        "type": "Dynamic",
+        "data": {
+          "provider": "login.shell"
+        }
       }
     },
     {

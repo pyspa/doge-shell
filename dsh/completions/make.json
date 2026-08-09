@@ -50,7 +50,14 @@
     {
       "name": "target",
       "description": "Build target",
-      "type": { "type": "String" }
+      "multiple": true,
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "project.task",
+          "scope": "make"
+        }
+      }
     }
   ],
   "subcommands": []

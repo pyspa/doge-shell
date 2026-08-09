@@ -10,25 +10,38 @@
       "short": "-P",
       "description": "Port to connect to on the remote host",
       "takes_value": true,
-      "value_type": { "type": "Number" }
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
       "short": "-i",
       "description": "Identity file",
       "takes_value": true,
-      "value_type": { "type": "File", "data": {} }
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "short": "-F",
       "description": "SSH configuration file",
       "takes_value": true,
-      "value_type": { "type": "File", "data": {} }
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "short": "-J",
       "description": "Proxy jump host",
       "takes_value": true,
-      "value_type": { "type": "String" }
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "ssh.host"
+        }
+      }
     },
     {
       "short": "-p",
@@ -51,13 +64,19 @@
     {
       "name": "source",
       "description": "Source file or [user@]host:path",
-      "type": { "type": "File", "data": {} }
+      "type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "name": "destination",
       "description": "Destination file or [user@]host:path",
       "multiple": true,
-      "type": { "type": "File", "data": {} }
+      "type": {
+        "type": "File",
+        "data": {}
+      }
     }
   ]
 }

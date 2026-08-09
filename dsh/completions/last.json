@@ -5,12 +5,21 @@
     {
       "short": "-n",
       "long": "--limit",
-      "description": "Tell last how many lines to show"
+      "description": "Tell last how many lines to show",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
       "short": "-f",
       "long": "--file",
-      "description": "Tell last to use a specific file instead of /var/log/wtmp"
+      "description": "Tell last to use a specific file instead of /var/log/wtmp",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
     },
     {
       "short": "-R",
@@ -26,6 +35,49 @@
       "short": "-d",
       "long": "--dns",
       "description": "Translate the IP number back into a hostname"
+    },
+    {
+      "short": "-s",
+      "long": "--since",
+      "description": "Show lines since the given time",
+      "takes_value": true
+    },
+    {
+      "short": "-t",
+      "long": "--until",
+      "description": "Show lines until the given time",
+      "takes_value": true
+    },
+    {
+      "short": "-p",
+      "long": "--present",
+      "description": "Show who was present at the given time",
+      "takes_value": true
+    },
+    {
+      "short": "-w",
+      "long": "--fullnames",
+      "description": "Show full user and domain names"
+    },
+    {
+      "short": "-x",
+      "description": "Show system shutdown entries and run level changes"
+    },
+    {
+      "short": "-F",
+      "long": "--fulltimes",
+      "description": "Show full login and logout times"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "user",
+      "description": "User or tty to report on",
+      "required": false,
+      "multiple": true,
+      "type": {
+        "type": "User"
+      }
     }
   ]
 }

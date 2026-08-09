@@ -1,52 +1,161 @@
 {
-    "command": "htop",
-    "description": "Interactive process viewer",
-    "global_options": [
-        {
-            "short": "-d",
-            "long": "--delay",
-            "description": "Update time in tenths of a second"
-        },
-        {
-            "short": "-C",
-            "long": "--no-color",
-            "description": "Start htop in monochrome mode"
-        },
-        {
-            "short": "-F",
-            "long": "--filter",
-            "description": "Filter processes by terms"
-        },
-        {
-            "short": "-h",
-            "long": "--help",
-            "description": "Display help message"
-        },
-        {
-            "short": "-p",
-            "long": "--pid",
-            "description": "Show only the given PIDs"
-        },
-        {
-            "short": "-s",
-            "long": "--sort-key",
-            "description": "Sort by COLUMN"
-        },
-        {
-            "short": "-u",
-            "long": "--user",
-            "description": "Show only the processes of a given user"
-        },
-        {
-            "short": "-v",
-            "long": "--version",
-            "description": "Output version information and exit"
-        },
-        {
-            "short": "-t",
-            "long": "--tree",
-            "description": "Show processes in tree view"
+  "command": "htop",
+  "description": "Interactive process viewer",
+  "global_options": [
+    {
+      "short": "-d",
+      "long": "--delay",
+      "description": "Update time in tenths of a second",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-C",
+      "long": "--no-color",
+      "description": "Start htop in monochrome mode"
+    },
+    {
+      "short": "-F",
+      "long": "--filter",
+      "description": "Filter processes by terms",
+      "takes_value": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "system.process_name"
         }
-    ],
-    "subcommands": []
+      }
+    },
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Display help message"
+    },
+    {
+      "short": "-p",
+      "long": "--pid",
+      "description": "Show only the given PIDs",
+      "takes_value": true,
+      "multiple": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "system.process_pid"
+        }
+      }
+    },
+    {
+      "short": "-s",
+      "long": "--sort-key",
+      "description": "Sort by COLUMN",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "PID",
+          "PPID",
+          "PGRP",
+          "SESSION",
+          "TTY",
+          "TPGID",
+          "MINFLT",
+          "CMINFLT",
+          "MAJFLT",
+          "CMAJFLT",
+          "UTIME",
+          "STIME",
+          "CUTIME",
+          "CSTIME",
+          "PRIORITY",
+          "NICE",
+          "STARTTIME",
+          "PROCESSOR",
+          "M_VIRT",
+          "M_RESIDENT",
+          "M_SHARE",
+          "M_TRS",
+          "M_DRS",
+          "M_LRS",
+          "ST_UID",
+          "PERCENT_CPU",
+          "PERCENT_MEM",
+          "PERCENT_NORM_CPU",
+          "USER",
+          "TIME",
+          "NLWP",
+          "TGID",
+          "PROC_COMM",
+          "PROC_EXE",
+          "CWD",
+          "ELAPSED",
+          "STATE",
+          "COMM",
+          "IO_RATE",
+          "IO_READ_RATE",
+          "IO_WRITE_RATE",
+          "IO_PRIORITY",
+          "CGROUP",
+          "OOM",
+          "CTID",
+          "SECATTR",
+          "AUTOGROUP_ID",
+          "AUTOGROUP_NICE"
+        ]
+      }
+    },
+    {
+      "short": "-u",
+      "long": "--user",
+      "description": "Show only the processes of a given user",
+      "takes_value": true,
+      "value_type": {
+        "type": "User"
+      }
+    },
+    {
+      "short": "-H",
+      "long": "--highlight-changes",
+      "description": "Highlight new and old processes",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-M",
+      "long": "--no-mouse",
+      "description": "Disable the mouse"
+    },
+    {
+      "short": "-U",
+      "long": "--no-unicode",
+      "description": "Do not use unicode but ASCII characters"
+    },
+    {
+      "short": "-n",
+      "long": "--max-iterations",
+      "description": "Exit after the given number of refreshes",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "long": "--readonly",
+      "description": "Disable all system and process changing features"
+    },
+    {
+      "short": "-v",
+      "long": "--version",
+      "description": "Output version information and exit"
+    },
+    {
+      "short": "-t",
+      "long": "--tree",
+      "description": "Show processes in tree view"
+    }
+  ],
+  "subcommands": []
 }

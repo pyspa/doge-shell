@@ -1,0 +1,17 @@
+{
+  "command": "setsebool",
+  "description": "Set SELinux boolean values",
+  "global_options": [
+    { "short": "-P", "description": "Write the value to policy so it persists across reboots" },
+    { "short": "-N", "description": "Do not reload the policy after committing" },
+    { "short": "-V", "description": "Verbose error messages" }
+  ],
+  "arguments": [
+    {
+      "name": "boolean",
+      "description": "SELinux boolean",
+      "multiple": true,
+      "type": { "type": "Dynamic", "data": { "provider": "selinux.boolean" } }
+    }
+  ]
+}

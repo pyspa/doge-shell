@@ -2,6 +2,7 @@ use super::{DynamicCompletionProvider, dedup_sorted, run_command_lines};
 use crate::completion::integrated::EnhancedCandidate;
 use crate::completion::parser::ParsedCommandLine;
 use crate::completion::shell_path::normalize_path_token;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -275,12 +276,683 @@ impl DynamicCompletionProvider {
         )
     }
 
+    pub(crate) fn collect_rustup_component_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_global_command_candidates(
+            "rustup",
+            "component",
+            current_token,
+            "rustup component",
+            &["component", "list"],
+            parse_rustup_components,
+            cached_only,
+        )
+    }
+
+    pub(crate) fn collect_rustup_target_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_global_command_candidates(
+            "rustup",
+            "target",
+            current_token,
+            "rustup target",
+            &["target", "list"],
+            parse_rustup_targets,
+            cached_only,
+        )
+    }
+
+    pub(crate) fn collect_cargo_installed_binary_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_global_command_candidates(
+            "cargo",
+            "installed-binary",
+            current_token,
+            "cargo installed crate",
+            &["install", "--list"],
+            parse_cargo_installed_crates,
+            cached_only,
+        )
+    }
+
+    pub(crate) fn collect_bat_theme_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_global_command_candidates(
+            "bat",
+            "theme",
+            current_token,
+            "bat theme",
+            &["--list-themes"],
+            parse_plain_lines,
+            cached_only,
+        )
+    }
+
+    pub(crate) fn collect_bat_language_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_global_command_candidates(
+            "bat",
+            "language",
+            current_token,
+            "bat language",
+            &["--list-languages"],
+            parse_colon_prefixed_names,
+            cached_only,
+        )
+    }
+
+    pub(crate) fn collect_rg_file_type_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_global_command_candidates(
+            "rg",
+            "file-type",
+            current_token,
+            "ripgrep file type",
+            &["--type-list"],
+            parse_colon_prefixed_names,
+            cached_only,
+        )
+    }
+
+    pub(crate) fn collect_ffmpeg_table_candidates(
+        &self,
+        value_kind: &'static str,
+        current_token: &str,
+        description: &str,
+        args: &'static [&'static str],
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_global_command_candidates(
+            "ffmpeg",
+            value_kind,
+            current_token,
+            description,
+            args,
+            parse_ffmpeg_table,
+            cached_only,
+        )
+    }
+
+    pub(crate) fn collect_go_env_key_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_global_command_candidates(
+            "go",
+            "env-key",
+            current_token,
+            "go environment key",
+            &["env"],
+            parse_go_env_keys,
+            cached_only,
+        )
+    }
+
+    pub(crate) fn collect_pipx_installed_package_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_global_command_candidates(
+            "pipx",
+            "installed-package",
+            current_token,
+            "pipx installed package",
+            &["list", "--short"],
+            parse_first_field_lines,
+            cached_only,
+        )
+    }
+
+    pub(crate) fn collect_asdf_plugin_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_global_command_candidates(
+            "asdf",
+            "plugin",
+            current_token,
+            "asdf plugin",
+            &["plugin", "list"],
+            parse_first_field_lines,
+            cached_only,
+        )
+    }
+
+    pub(crate) fn collect_mise_tool_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_global_command_candidates(
+            "mise",
+            "tool",
+            current_token,
+            "mise tool",
+            &["ls", "--installed"],
+            parse_mise_tools,
+            cached_only,
+        )
+    }
+
+    pub(crate) fn collect_code_extension_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_global_command_candidates(
+            "code",
+            "extension",
+            current_token,
+            "VS Code extension",
+            &["--list-extensions"],
+            parse_plain_lines,
+            cached_only,
+        )
+    }
+
+    pub(crate) fn collect_nox_session_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let project_root =
+            find_nox_root(current_dir).unwrap_or_else(|| self.cached_project_root(current_dir));
+        let noxfile = project_root.join("noxfile.py");
+        self.collect_cached_value_candidates(
+            "nox",
+            "session",
+            project_root,
+            current_token,
+            "nox session",
+            cached_only,
+            move || Ok(load_nox_sessions(&noxfile)),
+        )
+    }
+
+    pub(crate) fn collect_tox_environment_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let project_root =
+            find_tox_root(current_dir).unwrap_or_else(|| self.cached_project_root(current_dir));
+        let scope = project_root.clone();
+        self.collect_cached_value_candidates(
+            "tox",
+            "environment",
+            scope,
+            current_token,
+            "tox environment",
+            cached_only,
+            move || Ok(load_tox_environments(&project_root)),
+        )
+    }
+
+    pub(crate) fn collect_hatch_environment_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let project_root =
+            find_hatch_root(current_dir).unwrap_or_else(|| self.cached_project_root(current_dir));
+        let scope = project_root.clone();
+        self.collect_cached_value_candidates(
+            "hatch",
+            "environment",
+            scope,
+            current_token,
+            "hatch environment",
+            cached_only,
+            move || Ok(load_hatch_environments(&project_root)),
+        )
+    }
+
+    pub(crate) fn collect_pre_commit_hook_id_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let project_root = find_pre_commit_root(current_dir)
+            .unwrap_or_else(|| self.cached_project_root(current_dir));
+        let scope = project_root.clone();
+        self.collect_cached_value_candidates(
+            "pre-commit",
+            "hook-id",
+            scope,
+            current_token,
+            "pre-commit hook id",
+            cached_only,
+            move || Ok(load_pre_commit_hook_ids(&project_root)),
+        )
+    }
+
     fn env_var(&self, key: &str) -> Option<String> {
         self.environment
             .read()
             .get_var(key)
             .or_else(|| std::env::var(key).ok())
     }
+}
+
+fn parse_plain_lines(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+fn parse_first_field_lines(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .filter_map(|line| line.split_whitespace().next())
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+/// Parses `name: description` style listings such as `bat --list-languages`
+/// (`Rust:rs`) and `rg --type-list` (`rust: *.rs`).
+fn parse_colon_prefixed_names(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .filter_map(|line| line.split_once(':'))
+            .map(|(name, _)| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect(),
+    )
+}
+
+/// `rustup component list` prints every component suffixed with the host
+/// triple (`clippy-x86_64-unknown-linux-gnu`), but `rustup component add`
+/// accepts the bare name. Strip the suffix shared by every entry.
+fn parse_rustup_components(lines: &[String]) -> Vec<String> {
+    let names = rustup_listing_names(lines);
+    let Some(host) = shared_target_triple(&names) else {
+        return dedup_sorted(names);
+    };
+    let suffix = format!("-{host}");
+    dedup_sorted(
+        names
+            .iter()
+            .map(|name| {
+                name.strip_suffix(&suffix)
+                    .filter(|stripped| !stripped.is_empty())
+                    .unwrap_or(name)
+                    .to_string()
+            })
+            .collect(),
+    )
+}
+
+fn parse_rustup_targets(lines: &[String]) -> Vec<String> {
+    dedup_sorted(rustup_listing_names(lines))
+}
+
+fn rustup_listing_names(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| !name.is_empty() && !name.starts_with('('))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Number of dash separated segments a target triple can span
+/// (`aarch64-apple-darwin` through `armv7-unknown-linux-gnueabihf`).
+const TARGET_TRIPLE_MIN_SEGMENTS: usize = 3;
+const TARGET_TRIPLE_MAX_SEGMENTS: usize = 4;
+/// How many components must end with a suffix before it is treated as the host
+/// triple. Every non-host target contributes exactly one `rust-std-<triple>`
+/// entry, so a threshold of two rules them out.
+const HOST_TRIPLE_MIN_OCCURRENCES: usize = 2;
+
+/// Returns the host target triple that `rustup component list` appends to
+/// component names. The listing also carries one `rust-std-<triple>` row per
+/// supported target, so no suffix is common to *every* name; the host triple is
+/// instead the one shared by the locally installable components (`cargo`,
+/// `clippy`, `rust-src`, ...).
+///
+/// Longer suffixes are preferred because a three segment suffix of a four
+/// segment triple (`unknown-linux-gnu` inside `x86_64-unknown-linux-gnu`) is
+/// necessarily more frequent while being the wrong answer.
+fn shared_target_triple(names: &[String]) -> Option<String> {
+    let segmented = names
+        .iter()
+        .map(|name| name.split('-').collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+
+    for length in (TARGET_TRIPLE_MIN_SEGMENTS..=TARGET_TRIPLE_MAX_SEGMENTS).rev() {
+        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+        for parts in &segmented {
+            // Require a segment to survive stripping, so `cargo-<triple>` counts
+            // but a bare triple does not.
+            if parts.len() <= length {
+                continue;
+            }
+            *counts
+                .entry(parts[parts.len() - length..].join("-"))
+                .or_default() += 1;
+        }
+        if let Some((suffix, _)) = counts
+            .into_iter()
+            .filter(|(_, count)| *count >= HOST_TRIPLE_MIN_OCCURRENCES)
+            .max_by_key(|(_, count)| *count)
+        {
+            return Some(suffix);
+        }
+    }
+    None
+}
+
+/// Parses `cargo install --list`, whose crate headers carry the version and end
+/// with a colon (`ripgrep v14.1.0:`) while the binaries they installed follow on
+/// their own lines. Indentation cannot be used to tell them apart because the
+/// command runner trims every line before the parser sees it.
+fn parse_cargo_installed_crates(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .filter(|line| line.trim_end().ends_with(':'))
+            .filter_map(|line| line.split_whitespace().next())
+            .map(|name| name.trim_end_matches(':'))
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+/// Parses the tabular listings printed by `ffmpeg -encoders`, `-decoders` and
+/// `-formats`. Every table starts after a row of dashes and then prints
+/// `<flags> <name> <description>`, where multi-name formats are comma joined.
+fn parse_ffmpeg_table(lines: &[String]) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut in_table = false;
+    for line in lines {
+        let trimmed = line.trim();
+        if !in_table {
+            if !trimmed.is_empty() && trimmed.chars().all(|c| c == '-') {
+                in_table = true;
+            }
+            continue;
+        }
+        let mut fields = trimmed.split_whitespace();
+        let Some(_flags) = fields.next() else {
+            continue;
+        };
+        let Some(names) = fields.next() else {
+            continue;
+        };
+        values.extend(
+            names
+                .split(',')
+                .filter(|name| !name.is_empty())
+                .map(str::to_string),
+        );
+    }
+    dedup_sorted(values)
+}
+
+/// Parses `go env`, which prints `KEY='value'` (or `set KEY=value` on Windows).
+/// Keys are upper case but may carry digits (`GO111MODULE`, `GOAMD64`, `GO386`).
+fn parse_go_env_keys(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .filter_map(|line| line.trim().split_once('='))
+            .map(|(key, _)| key.trim().trim_start_matches("set ").to_string())
+            .filter(|key| {
+                key.starts_with(|c: char| c.is_ascii_uppercase())
+                    && key
+                        .chars()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+            })
+            .collect(),
+    )
+}
+
+/// Parses `mise ls --installed`, dropping the `Tool Version ...` header row.
+fn parse_mise_tools(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .filter_map(|line| line.split_whitespace().next())
+            .filter(|name| !name.is_empty() && *name != "Tool")
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+fn load_nox_sessions(noxfile: &Path) -> Vec<String> {
+    let Ok(contents) = fs::read_to_string(noxfile) else {
+        return Vec::new();
+    };
+    parse_nox_sessions(&contents)
+}
+
+/// Extracts session names from a `noxfile.py`.
+///
+/// `nox --list-sessions` would report them authoritatively, but it imports and
+/// evaluates the noxfile, which would run arbitrary project code just because
+/// TAB was pressed. The file is therefore scanned for `@nox.session` /
+/// `@session` decorators and the function they decorate, honouring an explicit
+/// `name=` override on the decorator.
+fn parse_nox_sessions(contents: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut pending_session = false;
+    let mut pending_name = None;
+
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("@nox.session") || trimmed.starts_with("@session") {
+            pending_session = true;
+        }
+        if pending_session && pending_name.is_none() {
+            pending_name = decorator_name_argument(trimmed);
+        }
+        if !pending_session {
+            continue;
+        }
+        let Some(rest) = trimmed
+            .strip_prefix("def ")
+            .or_else(|| trimmed.strip_prefix("async def "))
+        else {
+            continue;
+        };
+        let name = pending_name
+            .take()
+            .or_else(|| rest.split('(').next().map(|name| name.trim().to_string()));
+        if let Some(name) = name.filter(|name| !name.is_empty()) {
+            values.push(name);
+        }
+        pending_session = false;
+    }
+    dedup_sorted(values)
+}
+
+/// Reads the `name="..."` keyword out of a decorator line, if present.
+fn decorator_name_argument(line: &str) -> Option<String> {
+    let rest = line.split_once("name=")?.1.trim_start();
+    let quote = rest.chars().next().filter(|c| matches!(c, '"' | '\''))?;
+    let value = rest[quote.len_utf8()..].split(quote).next()?;
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn load_tox_environments(project_root: &Path) -> Vec<String> {
+    let mut values = parse_tox_ini_environments(
+        &fs::read_to_string(project_root.join("tox.ini")).unwrap_or_default(),
+    );
+    values.extend(load_toml_table_keys(
+        &project_root.join("pyproject.toml"),
+        &["tool", "tox", "env"],
+    ));
+    dedup_sorted(values)
+}
+
+/// Extracts environment names from a `tox.ini`: both the `[testenv:NAME]`
+/// section headers and the entries of the top level `envlist`.
+fn parse_tox_ini_environments(contents: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut in_envlist = false;
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_envlist = false;
+            if let Some(name) = trimmed
+                .strip_prefix("[testenv:")
+                .and_then(|rest| rest.strip_suffix(']'))
+                && !name.is_empty()
+            {
+                values.push(name.to_string());
+            }
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("envlist") {
+            let Some(rest) = rest.trim_start().strip_prefix('=') else {
+                continue;
+            };
+            in_envlist = true;
+            values.extend(split_tox_envlist(rest));
+            continue;
+        }
+        if in_envlist {
+            if trimmed.is_empty() || !line.starts_with(char::is_whitespace) {
+                in_envlist = false;
+                continue;
+            }
+            values.extend(split_tox_envlist(trimmed));
+        }
+    }
+    dedup_sorted(values)
+}
+
+fn split_tox_envlist(value: &str) -> Vec<String> {
+    value
+        .split_once('#')
+        .map_or(value, |(before_comment, _)| before_comment)
+        .split([',', ' '])
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn load_hatch_environments(project_root: &Path) -> Vec<String> {
+    let mut values = load_toml_table_keys(
+        &project_root.join("pyproject.toml"),
+        &["tool", "hatch", "envs"],
+    );
+    values.extend(load_toml_table_keys(
+        &project_root.join("hatch.toml"),
+        &["envs"],
+    ));
+    dedup_sorted(values)
+}
+
+fn load_toml_table_keys(path: &Path, table_path: &[&str]) -> Vec<String> {
+    let Ok(contents) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(value) = toml::from_str::<toml::Value>(&contents) else {
+        return Vec::new();
+    };
+    let mut current = &value;
+    for key in table_path {
+        let Some(next) = current.get(key) else {
+            return Vec::new();
+        };
+        current = next;
+    }
+    current
+        .as_table()
+        .map(|table| table.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+fn load_pre_commit_hook_ids(project_root: &Path) -> Vec<String> {
+    let Ok(contents) = fs::read_to_string(project_root.join(".pre-commit-config.yaml")) else {
+        return Vec::new();
+    };
+    parse_pre_commit_hook_ids(&contents)
+}
+
+/// Extracts `id:` values from `.pre-commit-config.yaml`. The file is scanned
+/// line by line rather than parsed as YAML so that no extra dependency is
+/// needed and partially written configs still yield candidates.
+fn parse_pre_commit_hook_ids(contents: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        let trimmed = trimmed.strip_prefix("- ").unwrap_or(trimmed);
+        let Some(value) = trimmed.strip_prefix("id:") else {
+            continue;
+        };
+        let value = value.trim().trim_matches(['"', '\'']);
+        if !value.is_empty() {
+            values.push(value.to_string());
+        }
+    }
+    dedup_sorted(values)
+}
+
+fn find_nox_root(current_dir: &Path) -> Option<PathBuf> {
+    find_ancestor_containing(current_dir, &["noxfile.py"])
+}
+
+fn find_tox_root(current_dir: &Path) -> Option<PathBuf> {
+    find_ancestor_containing(current_dir, &["tox.ini", "pyproject.toml"])
+}
+
+fn find_hatch_root(current_dir: &Path) -> Option<PathBuf> {
+    find_ancestor_containing(current_dir, &["hatch.toml", "pyproject.toml"])
+}
+
+fn find_pre_commit_root(current_dir: &Path) -> Option<PathBuf> {
+    find_ancestor_containing(current_dir, &[".pre-commit-config.yaml"])
+}
+
+fn find_ancestor_containing(current_dir: &Path, markers: &[&str]) -> Option<PathBuf> {
+    let mut dir = Some(current_dir);
+    while let Some(candidate) = dir {
+        if markers
+            .iter()
+            .any(|marker| candidate.join(marker).is_file())
+        {
+            return Some(candidate.to_path_buf());
+        }
+        dir = candidate.parent();
+    }
+    None
 }
 
 fn load_python_project_dependencies(project_root: &Path) -> Vec<String> {
@@ -1125,6 +1797,252 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
     use tempfile::tempdir;
+
+    fn lines(value: &str) -> Vec<String> {
+        value.lines().map(str::to_string).collect()
+    }
+
+    #[test]
+    fn rustup_component_parser_strips_the_shared_host_triple() {
+        let listing = lines(
+            "cargo-x86_64-unknown-linux-gnu (installed)\n\
+             clippy-x86_64-unknown-linux-gnu (installed)\n\
+             rust-src-x86_64-unknown-linux-gnu\n",
+        );
+        assert_eq!(
+            parse_rustup_components(&listing),
+            vec![
+                "cargo".to_string(),
+                "clippy".to_string(),
+                "rust-src".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn rustup_component_parser_keeps_names_without_a_shared_triple() {
+        let listing = lines("clippy\nrustfmt\n");
+        assert_eq!(
+            parse_rustup_components(&listing),
+            vec!["clippy".to_string(), "rustfmt".to_string()]
+        );
+    }
+
+    #[test]
+    fn rustup_component_parser_finds_the_host_triple_among_other_targets() {
+        // The real listing carries one rust-std row per supported target, so no
+        // suffix is shared by every name.
+        let listing = lines(
+            "cargo-x86_64-unknown-linux-gnu (installed)\n\
+             clippy-x86_64-unknown-linux-gnu (installed)\n\
+             rust-src-x86_64-unknown-linux-gnu\n\
+             rust-std-x86_64-unknown-linux-gnu (installed)\n\
+             rust-std-aarch64-apple-darwin\n\
+             rust-std-wasm32-unknown-unknown\n\
+             rust-std-x86_64-pc-windows-msvc\n",
+        );
+        assert_eq!(
+            parse_rustup_components(&listing),
+            vec![
+                "cargo".to_string(),
+                "clippy".to_string(),
+                "rust-src".to_string(),
+                "rust-std".to_string(),
+                "rust-std-aarch64-apple-darwin".to_string(),
+                "rust-std-wasm32-unknown-unknown".to_string(),
+                "rust-std-x86_64-pc-windows-msvc".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn rustup_component_parser_handles_a_three_segment_host_triple() {
+        let listing = lines(
+            "cargo-aarch64-apple-darwin (installed)\n\
+             clippy-aarch64-apple-darwin (installed)\n\
+             rust-src-aarch64-apple-darwin\n\
+             rust-std-x86_64-unknown-linux-gnu\n",
+        );
+        assert_eq!(
+            parse_rustup_components(&listing),
+            vec![
+                "cargo".to_string(),
+                "clippy".to_string(),
+                "rust-src".to_string(),
+                "rust-std-x86_64-unknown-linux-gnu".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn rustup_target_parser_drops_the_installed_marker() {
+        let listing = lines("aarch64-apple-darwin\nx86_64-unknown-linux-gnu (installed)\n");
+        assert_eq!(
+            parse_rustup_targets(&listing),
+            vec![
+                "aarch64-apple-darwin".to_string(),
+                "x86_64-unknown-linux-gnu".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn cargo_install_list_parser_keeps_only_crate_headers() {
+        // The command runner trims every line, so the parser must not rely on
+        // the indentation that separates binaries from their crate header.
+        let listing = lines("cargo-make v0.37.23:\ncargo-make\nmakers\nripgrep v14.1.0:\nrg\n");
+        assert_eq!(
+            parse_cargo_installed_crates(&listing),
+            vec!["cargo-make".to_string(), "ripgrep".to_string()]
+        );
+    }
+
+    #[test]
+    fn go_env_parser_keeps_keys_containing_digits() {
+        let listing = lines("GO111MODULE='on'\nGOAMD64='v1'\nGO386=''\nGOROOT='/usr/lib/go'\n");
+        assert_eq!(
+            parse_go_env_keys(&listing),
+            vec![
+                "GO111MODULE".to_string(),
+                "GO386".to_string(),
+                "GOAMD64".to_string(),
+                "GOROOT".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn colon_prefixed_parser_reads_bat_and_ripgrep_listings() {
+        assert_eq!(
+            parse_colon_prefixed_names(&lines("Rust:rs\nApache Conf:envvars,htaccess\n")),
+            vec!["Apache Conf".to_string(), "Rust".to_string()]
+        );
+        assert_eq!(
+            parse_colon_prefixed_names(&lines("ada: *.adb, *.ads\nrust: *.rs\n")),
+            vec!["ada".to_string(), "rust".to_string()]
+        );
+    }
+
+    #[test]
+    fn ffmpeg_table_parser_skips_the_legend_and_splits_aliases() {
+        let listing = lines(
+            "File formats:\n D. = Demuxing supported\n E. = Muxing supported\n --\n \
+             D  3dostr          3DO STR\n DE matroska,webm  Matroska / WebM\n",
+        );
+        assert_eq!(
+            parse_ffmpeg_table(&listing),
+            vec![
+                "3dostr".to_string(),
+                "matroska".to_string(),
+                "webm".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn go_env_parser_keeps_only_upper_case_keys() {
+        let listing = lines("AR='ar'\nCGO_CFLAGS='-O2 -g'\nnot a key\n");
+        assert_eq!(
+            parse_go_env_keys(&listing),
+            vec!["AR".to_string(), "CGO_CFLAGS".to_string()]
+        );
+    }
+
+    #[test]
+    fn mise_listing_parser_drops_the_header_row() {
+        let listing = lines("Tool  Version  Source\nnode  22.1.0  .mise.toml\npython  3.13.1\n");
+        assert_eq!(
+            parse_mise_tools(&listing),
+            vec!["node".to_string(), "python".to_string()]
+        );
+    }
+
+    #[test]
+    fn noxfile_parser_reads_decorated_sessions_without_executing_them() {
+        let contents = r#"
+import nox
+
+VERSIONS = ["3.11", "3.12"]
+
+@nox.session(python=VERSIONS)
+def tests(session):
+    session.run("pytest")
+
+@nox.session(
+    python="3.12",
+    name="type-check",
+)
+def mypy(session):
+    session.run("mypy")
+
+@session
+async def lint(session):
+    session.run("ruff")
+
+def helper():
+    return 1
+"#;
+        assert_eq!(
+            parse_nox_sessions(contents),
+            vec![
+                "lint".to_string(),
+                "tests".to_string(),
+                "type-check".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn tox_ini_parser_reads_envlist_and_testenv_sections() {
+        let contents =
+            "[tox]\nenvlist = py311, py312\n    lint\n\n[testenv:docs]\ncommands = mkdocs build\n";
+        assert_eq!(
+            parse_tox_ini_environments(contents),
+            vec![
+                "docs".to_string(),
+                "lint".to_string(),
+                "py311".to_string(),
+                "py312".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn tox_envlist_parser_drops_inline_comments() {
+        let contents = "[tox]\nenvlist = py311, py312  # run before release\n";
+        assert_eq!(
+            parse_tox_ini_environments(contents),
+            vec!["py311".to_string(), "py312".to_string()]
+        );
+    }
+
+    #[test]
+    fn hatch_environments_come_from_pyproject_and_hatch_toml() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "[tool.hatch.envs.default]\ndependencies = []\n[tool.hatch.envs.docs]\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("hatch.toml"), "[envs.lint]\n").unwrap();
+        assert_eq!(
+            load_hatch_environments(dir.path()),
+            vec![
+                "default".to_string(),
+                "docs".to_string(),
+                "lint".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn pre_commit_parser_reads_hook_ids() {
+        let contents = "repos:\n  - repo: local\n    hooks:\n      - id: fmt\n        name: fmt\n      - id: \"clippy\"\n";
+        assert_eq!(
+            parse_pre_commit_hook_ids(contents),
+            vec!["clippy".to_string(), "fmt".to_string()]
+        );
+    }
 
     #[test]
     fn python_dependency_parser_reads_common_project_files() {

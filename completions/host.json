@@ -44,7 +44,10 @@
       "name": "name",
       "description": "Domain name or address",
       "type": {
-        "type": "String"
+        "type": "Dynamic",
+        "data": {
+          "provider": "ssh.host"
+        }
       }
     },
     {
@@ -52,7 +55,10 @@
       "description": "DNS server",
       "required": false,
       "type": {
-        "type": "String"
+        "type": "Dynamic",
+        "data": {
+          "provider": "ssh.host"
+        }
       }
     }
   ]

@@ -59,6 +59,7 @@ fn family_for(provider: &str) -> ProviderFamily {
                 | "kernel"
                 | "localectl"
                 | "loginctl"
+                | "login"
                 | "loop"
                 | "lvm"
                 | "mount"
@@ -73,7 +74,9 @@ fn family_for(provider: &str) -> ProviderFamily {
                 | "systemctl"
                 | "timedatectl"
                 | "tmux"
+                | "udev"
                 | "wireguard"
+                | "wireless"
                 | "zfs"
                 | "zpool"
         )
@@ -81,7 +84,28 @@ fn family_for(provider: &str) -> ProviderFamily {
         ProviderFamily::Linux
     } else if matches!(
         provider.split_once('.').map(|(prefix, _)| prefix),
-        Some("cargo" | "go" | "js" | "maven" | "node" | "pip" | "python" | "rustup" | "terraform")
+        Some(
+            "asdf"
+                | "bat"
+                | "cargo"
+                | "code"
+                | "ffmpeg"
+                | "go"
+                | "hatch"
+                | "js"
+                | "maven"
+                | "mise"
+                | "node"
+                | "nox"
+                | "pip"
+                | "pipx"
+                | "pre_commit"
+                | "python"
+                | "rg"
+                | "rustup"
+                | "terraform"
+                | "tox"
+        )
     ) {
         ProviderFamily::Development
     } else if matches!(

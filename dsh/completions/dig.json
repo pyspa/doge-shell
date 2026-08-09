@@ -58,7 +58,10 @@
       "description": "Domain name to query",
       "required": false,
       "type": {
-        "type": "String"
+        "type": "Dynamic",
+        "data": {
+          "provider": "ssh.host"
+        }
       }
     },
     {

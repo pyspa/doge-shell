@@ -90,26 +90,69 @@
       "name": "config",
       "description": "Get and set repository or global options",
       "options": [
-        { "long": "--global", "description": "Use the global config file" },
-        { "long": "--system", "description": "Use the system config file" },
-        { "long": "--local", "description": "Use the repository config file" },
-        { "long": "--worktree", "description": "Use the worktree config file" },
-        { "long": "--get", "description": "Get a value" },
-        { "long": "--get-all", "description": "Get all values for a key" },
-        { "long": "--unset", "description": "Remove a value" },
-        { "long": "--unset-all", "description": "Remove all values for a key" },
-        { "short": "-l", "long": "--list", "description": "List all variables" },
-        { "long": "--show-origin", "description": "Show the origin of each value" },
-        { "long": "--name-only", "description": "Show variable names only" }
+        {
+          "long": "--global",
+          "description": "Use the global config file"
+        },
+        {
+          "long": "--system",
+          "description": "Use the system config file"
+        },
+        {
+          "long": "--local",
+          "description": "Use the repository config file"
+        },
+        {
+          "long": "--worktree",
+          "description": "Use the worktree config file"
+        },
+        {
+          "long": "--get",
+          "description": "Get a value"
+        },
+        {
+          "long": "--get-all",
+          "description": "Get all values for a key"
+        },
+        {
+          "long": "--unset",
+          "description": "Remove a value"
+        },
+        {
+          "long": "--unset-all",
+          "description": "Remove all values for a key"
+        },
+        {
+          "short": "-l",
+          "long": "--list",
+          "description": "List all variables"
+        },
+        {
+          "long": "--show-origin",
+          "description": "Show the origin of each value"
+        },
+        {
+          "long": "--name-only",
+          "description": "Show variable names only"
+        }
       ],
       "arguments": [
         {
           "name": "key",
           "description": "Configuration key",
           "required": false,
-          "type": { "type": "Dynamic", "data": { "provider": "git.config_key" } }
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.config_key"
+            }
+          }
         },
-        { "name": "value", "description": "Configuration value", "required": false }
+        {
+          "name": "value",
+          "description": "Configuration value",
+          "required": false
+        }
       ]
     },
     {
@@ -668,6 +711,49 @@
           "description": "Directory to clone into",
           "type": {
             "type": "Directory"
+          }
+        }
+      ]
+    },
+    {
+      "name": "help",
+      "description": "Display help information about git",
+      "options": [
+        {
+          "short": "-a",
+          "long": "--all",
+          "description": "List all available commands"
+        },
+        {
+          "short": "-g",
+          "long": "--guides",
+          "description": "List the git concept guides"
+        },
+        {
+          "short": "-m",
+          "long": "--man",
+          "description": "Show the man page"
+        },
+        {
+          "short": "-w",
+          "long": "--web",
+          "description": "Show the manual in a web browser"
+        },
+        {
+          "long": "--config",
+          "description": "List all configuration variables"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "command",
+          "description": "Git command or alias",
+          "required": false,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.alias"
+            }
           }
         }
       ]

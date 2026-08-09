@@ -28,6 +28,76 @@
       }
     },
     {
+      "long": "--slice",
+      "description": "Slice the transient unit is placed in",
+      "takes_value": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "systemctl.unit",
+          "scope": "slice"
+        }
+      }
+    },
+    {
+      "long": "--on-calendar",
+      "description": "Run as a transient timer on the given calendar event",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--timer-property",
+      "description": "Set a property on the transient timer unit",
+      "takes_value": true,
+      "multiple": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-M",
+      "long": "--machine",
+      "description": "Run on a local container",
+      "takes_value": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "machinectl.machine"
+        }
+      }
+    },
+    {
+      "short": "-E",
+      "long": "--setenv",
+      "description": "Set an environment variable for the unit",
+      "takes_value": true,
+      "multiple": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "shell.env_var"
+        }
+      }
+    },
+    {
+      "long": "--uid",
+      "description": "Run under the given user",
+      "takes_value": true,
+      "value_type": {
+        "type": "User"
+      }
+    },
+    {
+      "long": "--gid",
+      "description": "Run under the given group",
+      "takes_value": true,
+      "value_type": {
+        "type": "Group"
+      }
+    },
+    {
       "long": "--working-directory",
       "description": "Working directory",
       "takes_value": true,

@@ -1,0 +1,65 @@
+{
+  "command": "whatis",
+  "description": "Display one-line manual page descriptions",
+  "global_options": [
+    {
+      "short": "-s",
+      "long": "--sections",
+      "description": "Search only the given manual sections",
+      "takes_value": true
+    },
+    {
+      "short": "-r",
+      "long": "--regex",
+      "description": "Interpret each name as a regular expression"
+    },
+    {
+      "short": "-w",
+      "long": "--wildcard",
+      "description": "Interpret each name as a shell wildcard pattern"
+    },
+    {
+      "short": "-l",
+      "long": "--long",
+      "description": "Do not trim output to the terminal width"
+    },
+    {
+      "short": "-M",
+      "long": "--manpath",
+      "description": "Manual page search path",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-L",
+      "long": "--locale",
+      "description": "Locale to use",
+      "takes_value": true
+    },
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show help"
+    },
+    {
+      "short": "-V",
+      "long": "--version",
+      "description": "Show version"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "name",
+      "description": "Manual page name",
+      "multiple": true,
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "man.page"
+        }
+      }
+    }
+  ]
+}

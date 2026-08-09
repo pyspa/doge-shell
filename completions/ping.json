@@ -103,5 +103,17 @@
       "description": "Display help information"
     }
   ],
-  "subcommands": []
+  "subcommands": [],
+  "arguments": [
+    {
+      "name": "destination",
+      "description": "Host to ping",
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "ssh.host"
+        }
+      }
+    }
+  ]
 }

@@ -70,10 +70,9 @@ pub fn format_candidates_for_token(
     candidates: Vec<Candidate>,
     raw_token: Option<&str>,
 ) -> Vec<Candidate> {
-    let Some(raw_token) = raw_token.filter(|token| !token.is_empty()) else {
-        return candidates;
-    };
-    let token = ShellPathToken::from_raw(raw_token);
+    // An empty token still needs a style so that candidates carrying spaces are
+    // escaped when completion starts on a fresh word.
+    let token = ShellPathToken::from_raw(raw_token.unwrap_or_default());
 
     candidates
         .into_iter()
@@ -88,9 +87,26 @@ pub fn format_candidates_for_token(
             {
                 Candidate::Item(token.encode(&text), description)
             }
+            // Provider values such as `bat --theme 'Solarized (dark)'` are
+            // inserted as a single word, so anything the shell would split or
+            // interpret has to be encoded the same way paths are.
+            Candidate::Item(text, description) if needs_shell_encoding(&text) => {
+                Candidate::Item(token.encode(&text), description)
+            }
             other => other,
         })
         .collect()
+}
+
+/// Whether a candidate would be re-tokenized or expanded if inserted verbatim.
+fn needs_shell_encoding(text: &str) -> bool {
+    text.chars().any(|ch| {
+        ch.is_whitespace()
+            || matches!(
+                ch,
+                '\\' | '"' | '\'' | '|' | '&' | ';' | '(' | ')' | '<' | '>' | '$' | '`'
+            )
+    })
 }
 
 fn detect_style(raw: &str) -> ShellPathStyle {

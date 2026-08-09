@@ -25,6 +25,36 @@
     {
       "long": "--help",
       "description": "Display this help and exit"
+    },
+    {
+      "short": "-i",
+      "long": "--ip-addr",
+      "description": "Show the IP address instead of the hostname"
+    },
+    {
+      "short": "-o",
+      "long": "--old-style",
+      "description": "Old style output"
+    },
+    {
+      "short": "-p",
+      "long": "--pids",
+      "description": "Show the PID of the active process"
+    },
+    {
+      "short": "-V",
+      "long": "--version",
+      "description": "Show version"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "user",
+      "description": "Only show this user",
+      "required": false,
+      "type": {
+        "type": "User"
+      }
     }
   ]
 }

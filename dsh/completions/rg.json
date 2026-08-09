@@ -59,18 +59,40 @@
       }
     },
     {
+      "short": "-t",
       "long": "--type",
       "description": "Only search files matching TYPE (e.g., 'rust', 'py'). See 'rg --type-list'.",
       "takes_value": true,
+      "multiple": true,
       "value_type": {
-        "type": "Choice",
-        "data": [
-          "rust",
-          "python",
-          "json",
-          "md",
-          "html"
-        ]
+        "type": "Dynamic",
+        "data": { "provider": "rg.file_type" }
+      }
+    },
+    {
+      "short": "-T",
+      "long": "--type-not",
+      "description": "Do not search files matching TYPE.",
+      "takes_value": true,
+      "multiple": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": { "provider": "rg.file_type" }
+      }
+    },
+    {
+      "long": "--type-add",
+      "description": "Add a new glob for a file type (e.g., 'foo:*.foo').",
+      "takes_value": true,
+      "multiple": true
+    },
+    {
+      "long": "--type-clear",
+      "description": "Clear the globs of the given file type.",
+      "takes_value": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": { "provider": "rg.file_type" }
       }
     },
     {

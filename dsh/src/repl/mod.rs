@@ -17,11 +17,12 @@ use crate::suggestion::{InputPreferences, SuggestionBackend};
 use crate::terminal::renderer::TerminalRenderer;
 use anyhow::Context as _;
 use anyhow::Result;
-use crossterm::event::{EnableBracketedPaste, EventStream, KeyEvent};
+use crossterm::event::{EnableBracketedPaste, KeyEvent};
 use crossterm::style::Print;
 use crossterm::terminal::ClearType;
 use crossterm::terminal::{self, disable_raw_mode, enable_raw_mode};
 use crossterm::{queue, terminal::Clear};
+#[cfg(test)]
 use futures::StreamExt;
 
 use dsh_builtin::execute_chat_message;
@@ -107,7 +108,6 @@ pub(crate) struct CompletionUiState {
     pub(crate) completion: Completion,
     pub(crate) integrated_completion: IntegratedCompletionEngine,
     pub(crate) cache: HistoryCache,
-    pub(crate) completion_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
 }
 
 pub(crate) struct AiUiState {
@@ -119,7 +119,6 @@ pub(crate) struct AiUiState {
     pub(crate) pending_ai_explanation_input: Option<String>,
     pub(crate) current_ai_explanation: Option<String>,
     pub(crate) last_input_change_time: Instant,
-    pub(crate) ai_rx: tokio::sync::mpsc::UnboundedReceiver<AiEvent>,
     pub(crate) ai_tx: tokio::sync::mpsc::UnboundedSender<AiEvent>,
     pub(crate) explanation_dirty: bool,
     pub(crate) last_analyzed_input: String,
@@ -127,13 +126,11 @@ pub(crate) struct AiUiState {
 }
 
 pub(crate) struct BackgroundTasks {
-    pub(crate) git_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
     pub(crate) last_git_update: Option<Instant>,
     pub(crate) git_task_inflight: Arc<AtomicBool>,
     pub(crate) history_sync_last_check: Instant,
     pub(crate) github_task: Option<tokio::task::JoinHandle<()>>,
     /// Finished `sched` runs, reported by the scheduler runner.
-    pub(crate) sched_rx: tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::SchedulerEvent>,
     pub(crate) sched_task: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -150,6 +147,7 @@ pub struct Repl<'a> {
     pub(crate) completion_ui: CompletionUiState,
     pub(crate) ai_ui: AiUiState,
     pub(crate) background_tasks: BackgroundTasks,
+    pub(crate) event_loop: event_loop::ReplEventLoop,
 }
 
 /// Whether Ctrl-R should use the pre-picker skim flow.
@@ -335,6 +333,13 @@ impl<'a> Repl<'a> {
         // Legacy path completion still uses its own cache; keep it connected
         // until that cache is moved behind CompletionRuntime as well.
         completion_lib::set_completion_notifier(completion_tx);
+        let event_loop = event_loop::ReplEventLoop::new(
+            AI_SUGGESTION_REFRESH_MS,
+            git_rx,
+            sched_rx,
+            completion_rx,
+            ai_rx,
+        );
 
         Repl {
             shell,
@@ -365,7 +370,6 @@ impl<'a> Repl<'a> {
                 completion: Completion::new(),
                 integrated_completion,
                 cache: HistoryCache::new(Duration::from_millis(300)),
-                completion_rx,
             },
             ai_ui: AiUiState {
                 suggestion_manager,
@@ -376,21 +380,19 @@ impl<'a> Repl<'a> {
                 pending_ai_explanation_input: None,
                 current_ai_explanation: None,
                 last_input_change_time: Instant::now(),
-                ai_rx,
                 ai_tx,
                 explanation_dirty: false,
                 last_analyzed_input: String::new(),
                 last_analysis_result: None,
             },
             background_tasks: BackgroundTasks {
-                git_rx,
                 last_git_update: None,
                 git_task_inflight: Arc::new(AtomicBool::new(false)),
                 history_sync_last_check: Instant::now(),
                 github_task: Some(github_task),
-                sched_rx,
                 sched_task: Some(sched_task),
             },
+            event_loop,
         }
     }
 
@@ -748,8 +750,6 @@ impl<'a> Repl<'a> {
     }
 
     pub async fn run_interactive(&mut self) -> Result<()> {
-        let mut reader = EventStream::new();
-
         self.setup();
 
         debug!(
@@ -771,309 +771,281 @@ impl<'a> Repl<'a> {
         };
         {
             let mut renderer = TerminalRenderer::new();
-            // start repl loop
             self.print_prompt(&mut renderer);
-            // ensure preprompt + mark are flushed on initial draw
             renderer.flush().ok();
         }
         self.shell.check_job_state().await?;
-
-        let _last_save_time = Instant::now();
-        let mut event_loop = event_loop::ReplEventLoop::new(AI_SUGGESTION_REFRESH_MS);
+        self.event_loop.resume_input();
 
         loop {
-            tokio::select! {
-                _ = event_loop.background.tick() => {
-                    self.handle_background_tick().await?;
-                },
-                _ = event_loop.ai_refresh.tick() => {
-                    let mut need_redraw = false;
-                    if self.ai_ui.input_preferences.ai_backfill
-                        && self.input.completion.is_none()
-                        && self.refresh_inline_suggestion()
-                    {
-                        need_redraw = true;
-                    }
-
-                    if self.ai_ui.suggestion_manager.engine.ai_pending() != self.ai_ui.ai_pending_shown {
-                        need_redraw = true;
-                    }
-
-                    if need_redraw {
-                        let mut renderer = TerminalRenderer::new();
-                        self.print_input(&mut renderer, false, false);
-                        renderer.flush().ok();
-                    }
-                }
-                _ = event_loop.explanation_refresh.tick() => {
-                    // Debounced argument explanation refresh
-                    if self.ai_ui.explanation_dirty {
-                        self.ai_ui.explanation_dirty = false;
-                        self.refresh_argument_explanation();
-                    }
-                }
-                // Dedicated idle timer for AI command explanation.
-                // This future is stored outside the loop so it does NOT reset on every iteration.
-                _ = event_loop.idle_sleep.as_mut() => {
-                    if self.ai_ui.input_preferences.ai_explanation
-                        && self.services.ai.is_some()
-                        && !self.input.is_empty()
-                        && self.ai_ui.pending_ai_explanation_input.as_deref() != Some(self.input.as_str())
-                        && self.ai_ui.current_ai_explanation.is_none()
-                    {
-                        let input_str = self.input.as_str().to_string();
-                        self.ai_ui.pending_ai_explanation_input = Some(input_str.clone());
-                        let ai_tx = self.ai_ui.ai_tx.clone();
-                        let service_opt = self.services.ai.clone();
-
-                        tokio::spawn(async move {
-                            if let Some(service) = service_opt {
-                                match crate::ai_features::explain_command_inline(service.as_ref(), &input_str).await {
-                                    Ok(explanation) => {
-                                        let _ = ai_tx.send(AiEvent::CommandExplanation {
-                                            input: input_str.clone(),
-                                            explanation,
-                                        });
-                                    }
-                                    Err(e) => {
-                                        tracing::debug!("Failed to get AI explanation: {}", e);
-                                        let _ = ai_tx.send(AiEvent::CommandExplanationError {
-                                            input: input_str.clone(),
-                                        });
-                                    }
-                                }
-                            } else {
-                                let _ = ai_tx.send(AiEvent::CommandExplanationError {
-                                    input: input_str,
-                                });
-                            }
-                        });
-                    }
-                    // After firing, reset to a very long sleep so it doesn't fire again immediately.
-                    event_loop.reset_idle(Duration::from_secs(3600));
-                }
-                Some(_) = self.background_tasks.git_rx.recv() => {
-                    self.handle_git_refresh_request();
-                }
-                Some(event) = self.background_tasks.sched_rx.recv() => {
-                    self.handle_scheduler_event(event);
-                }
-                Some(_) = self.completion_ui.completion_rx.recv() => {
-                    self.handle_completion_refresh();
-                }
-                Some(ai_event) = self.ai_ui.ai_rx.recv() => {
-                    self.handle_ai_event(ai_event);
-                }
-                maybe_event = reader.next() => {
-                    let old_last_time = self.state.last_command_time;
-                    match maybe_event {
-                        Some(Ok(event)) => {
-                            match self.handle_event(ShellEvent::Input(event)).await {
-                                Ok(ReplControlFlow::Continue) => {
-                                    // Continue loop
-                                }
-                                Ok(ReplControlFlow::ExecuteCurrentInput) => {
-                                    drop(reader);
-
-                                    // The child owns the screen; it must not
-                                    // inherit a scroll margin it knows nothing
-                                    // about.
-                                    let status_pause = status_line::StatusLinePause::new(
-                                        self.terminal_ui.status_line.clone(),
-                                    );
-                                    let result = key_handlers::execution::handle_execute(self).await;
-                                    drop(status_pause);
-
-                                    match result {
-                                        Ok(()) => {}
-                                        Err(err) => {
-                                            self.shell.print_error(format!("Error: {err:?}\r"));
-                                            break;
-                                        }
-                                    }
-
-                                    reader = EventStream::new();
-                                }
-                                Ok(ReplControlFlow::OpenCommandPalette) => {
-                                    drop(reader);
-
-                                    let status_pause = status_line::StatusLinePause::new(
-                                        self.terminal_ui.status_line.clone(),
-                                    );
-                                    let result =
-                                        key_handlers::auxiliary::handle_open_command_palette(self)
-                                            .await;
-                                    drop(status_pause);
-
-                                    match result {
-                                        Ok(_) => {}
-                                        Err(err) => {
-                                            self.shell.print_error(format!("Error: {err:?}\r"));
-                                            break;
-                                        }
-                                    }
-
-                                    reader = EventStream::new();
-                                }
-                                Ok(ReplControlFlow::RunInteractive(closure)) => {
-                                    // Drop reader to release stdin lock
-                                    drop(reader);
-
-                                    // Execute the interactive closure
-                                    let mut execute_after = false;
-                                    let raw_mode_pause = terminal_state::RawModePause::new();
-                                    // Full-screen pickers (history, blocks,
-                                    // skim) need the whole terminal.
-                                    let status_pause = status_line::StatusLinePause::new(
-                                        self.terminal_ui.status_line.clone(),
-                                    );
-                                    match closure() {
-                                        Ok(Some(action)) => {
-                                            use crate::repl::state::InteractiveAction;
-                                            match action {
-                                                InteractiveAction::Patch { backspace_count, text } => {
-                                                    // Apply the interactive patch
-                                                    if backspace_count > 0 {
-                                                        self.input.backspacen(backspace_count);
-                                                    }
-                                                    self.input.insert_str(&text);
-                                                },
-                                                InteractiveAction::ReplaceRange { start, end, text } => {
-                                                    self.input.replace_range_chars(start, end, &text);
-                                                },
-                                                InteractiveAction::ReplaceAll { text } => {
-                                                    // Apply full replacement
-                                                    self.input.reset(text);
-                                                }
-                                                InteractiveAction::ReplaceAllAndExecute { text } => {
-                                                    self.input.reset(text);
-                                                    execute_after = true;
-                                                }
-                                            }
-
-                                            // Trigger validation/highlighting
-                                            self.input.completion = None;
-                                            self.input.color_ranges = None;
-                                        }
-                                        Ok(None) => {
-                                            // Canceled
-                                        }
-                                        Err(e) => {
-                                            self.shell.print_error(format!("Interactive session failed: {}\r\n", e));
-                                        }
-                                    }
-                                    drop(raw_mode_pause);
-
-                                    if execute_after {
-                                        // Keep the status line paused across the child too.
-                                        // Re-arming first would hand the foreground process a
-                                        // scroll region it knows nothing about, so a full-screen
-                                        // command would lose its bottom row — while the same
-                                        // command typed and Entered works fine.
-                                        //
-                                        // `handle_execute` emits the OSC 133 boundaries, manages
-                                        // raw mode around the child, and draws the next prompt
-                                        // itself, so it must run instead of the redraw below.
-                                        let result = key_handlers::execution::handle_execute(self).await;
-                                        drop(status_pause);
-                                        match result {
-                                            Ok(()) => {}
-                                            Err(err) => {
-                                                self.shell.print_error(format!("Error: {err:?}\r"));
-                                                break;
-                                            }
-                                        }
-                                    } else {
-                                        drop(status_pause);
-                                        // Redraw prompt
-                                        let mut renderer = TerminalRenderer::new();
-                                        self.print_prompt(&mut renderer);
-                                        // Reprint input with updates
-                                        self.print_input(&mut renderer, true, true);
-                                        renderer.flush().ok();
-                                    }
-
-                                    // Recreate reader
-                                    reader = EventStream::new();
-                                }
-                                Err(err) => {
-                                    self.shell.print_error(format!("Error: {err:?}\r"));
-                                    break;
-                                }
-                            }
-
-                            // Check for CWD change and trigger AI prefetch
-                            let current_cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
-                            if current_cwd != self.state.last_cwd {
-                                self.state.last_cwd = current_cwd.clone();
-
-                                if self.ai_ui.input_preferences.ai_backfill {
-                                    debug!("CWD changed to {:?}, triggering AI prefetch", self.state.last_cwd);
-                                    let files = self.get_directory_listing();
-                                    let files_vec: Vec<String> = files.lines().map(String::from).collect();
-                                    self.ai_ui.suggestion_manager.engine.prefetch(
-                                        Some(self.state.last_cwd.to_string_lossy().to_string()),
-                                        Arc::new(files_vec),
-                                        Some(self.state.last_status)
-                                    );
-                                }
-                            }
-
-                            // Reset stopped jobs warning if a command was executed
-                             if self.state.last_command_time != old_last_time {
-                                self.state.stopped_jobs_warned = false;
-
-                                // Invalidate git cache and trigger re-check
-                                self.terminal_ui.prompt.write().invalidate_git_cache();
-
-                                // Trigger git check
-                                // We can send to git_rx (via git_tx which we assume we have somehow? No, we don't have git_tx here)
-                                // We DO have self.background_tasks.git_rx, but we can't send to it.
-                                // We have prompt.git_sender!
-                                self.terminal_ui.prompt.read().trigger_git_check();
-
-                                // Trigger auto-fix if failed
-                                if self.state.last_status != 0 {
-                                    self.trigger_auto_fix();
-                                }
-                            }
-                        }
-                        Some(Err(err)) => {
-                            self.shell.print_error(format!("Error: {err:?}\r"));
-                            break;
-                        },
-                        None => break,
-                    }
-                    // Reset the idle explanation timer on every key event if enabled.
-                    // This ensures the 5-second countdown restarts after each keypress.
-                    if self.ai_ui.input_preferences.ai_explanation {
-                        event_loop.reset_idle(Duration::from_secs(5));
-                    }
-                }
-            };
+            let event = self.event_loop.next_event().await;
+            if !self.handle_loop_event(event).await? {
+                break;
+            }
 
             if self.completion_ui.start_completion {
-                // show completion
                 self.completion_ui.start_completion = false;
             }
-            if self.state.should_exit || self.shell.exited.is_some() {
-                debug!("Shell exiting normally");
-                if !self.shell.wait_jobs.is_empty() {
-                    // Allow one retry to exit with stopped jobs
-                    if !self.state.stopped_jobs_warned {
-                        self.shell
-                            .print_error("There are stopped jobs.\r\n".to_string());
-                        self.state.stopped_jobs_warned = true;
-                        self.state.should_exit = false;
-                        self.shell.exited = None;
-                        continue;
-                    }
-                }
+            if self.should_exit_event_loop() {
                 break;
             }
         }
+
+        self.event_loop.pause_input();
         self.shell.kill_wait_jobs()?;
         Ok(())
+    }
+
+    async fn handle_loop_event(&mut self, event: event_loop::LoopEvent) -> Result<bool> {
+        match event {
+            event_loop::LoopEvent::BackgroundTick => self.handle_background_tick().await?,
+            event_loop::LoopEvent::AiRefreshTick => self.handle_ai_refresh_tick(),
+            event_loop::LoopEvent::ExplanationRefreshTick => {
+                if self.ai_ui.explanation_dirty {
+                    self.ai_ui.explanation_dirty = false;
+                    self.refresh_argument_explanation();
+                }
+            }
+            event_loop::LoopEvent::ExplanationIdle => self.handle_explanation_idle(),
+            event_loop::LoopEvent::GitRefresh => self.handle_git_refresh_request(),
+            event_loop::LoopEvent::Scheduler(event) => self.handle_scheduler_event(event),
+            event_loop::LoopEvent::CompletionRefresh => self.handle_completion_refresh(),
+            event_loop::LoopEvent::Ai(event) => self.handle_ai_event(event),
+            event_loop::LoopEvent::TerminalInput(event) => {
+                return self.handle_terminal_input(event).await;
+            }
+            event_loop::LoopEvent::TerminalError(error) => {
+                self.shell.print_error(format!("Error: {error:?}\r"));
+                return Ok(false);
+            }
+            event_loop::LoopEvent::TerminalClosed => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    fn handle_ai_refresh_tick(&mut self) {
+        let mut need_redraw = false;
+        if self.ai_ui.input_preferences.ai_backfill
+            && self.input.completion.is_none()
+            && self.refresh_inline_suggestion()
+        {
+            need_redraw = true;
+        }
+
+        if self.ai_ui.suggestion_manager.engine.ai_pending() != self.ai_ui.ai_pending_shown {
+            need_redraw = true;
+        }
+
+        if need_redraw {
+            let mut renderer = TerminalRenderer::new();
+            self.print_input(&mut renderer, false, false);
+            renderer.flush().ok();
+        }
+    }
+
+    fn handle_explanation_idle(&mut self) {
+        if self.ai_ui.input_preferences.ai_explanation
+            && self.services.ai.is_some()
+            && !self.input.is_empty()
+            && self.ai_ui.pending_ai_explanation_input.as_deref() != Some(self.input.as_str())
+            && self.ai_ui.current_ai_explanation.is_none()
+        {
+            let input = self.input.as_str().to_string();
+            self.ai_ui.pending_ai_explanation_input = Some(input.clone());
+            let ai_tx = self.ai_ui.ai_tx.clone();
+            let service = self.services.ai.clone();
+
+            tokio::spawn(async move {
+                if let Some(service) = service {
+                    match crate::ai_features::explain_command_inline(service.as_ref(), &input).await
+                    {
+                        Ok(explanation) => {
+                            let _ = ai_tx.send(AiEvent::CommandExplanation {
+                                input: input.clone(),
+                                explanation,
+                            });
+                        }
+                        Err(error) => {
+                            tracing::debug!("Failed to get AI explanation: {}", error);
+                            let _ = ai_tx.send(AiEvent::CommandExplanationError {
+                                input: input.clone(),
+                            });
+                        }
+                    }
+                } else {
+                    let _ = ai_tx.send(AiEvent::CommandExplanationError { input });
+                }
+            });
+        }
+
+        self.event_loop.reset_idle(Duration::from_secs(3600));
+    }
+
+    async fn handle_terminal_input(&mut self, event: crossterm::event::Event) -> Result<bool> {
+        let old_last_time = self.state.last_command_time;
+        let control_flow = match self.handle_event(ShellEvent::Input(event)).await {
+            Ok(control_flow) => control_flow,
+            Err(error) => {
+                self.shell.print_error(format!("Error: {error:?}\r"));
+                return Ok(false);
+            }
+        };
+
+        if !self.apply_repl_control_flow(control_flow).await {
+            return Ok(false);
+        }
+
+        self.after_terminal_input(old_last_time);
+        if self.ai_ui.input_preferences.ai_explanation {
+            self.event_loop.reset_idle(Duration::from_secs(5));
+        }
+        Ok(true)
+    }
+
+    async fn apply_repl_control_flow(&mut self, control_flow: ReplControlFlow) -> bool {
+        match control_flow {
+            ReplControlFlow::Continue => true,
+            ReplControlFlow::ExecuteCurrentInput => {
+                self.event_loop.pause_input();
+                let status_pause =
+                    status_line::StatusLinePause::new(self.terminal_ui.status_line.clone());
+                let result = key_handlers::execution::handle_execute(self).await;
+                drop(status_pause);
+
+                match result {
+                    Ok(()) => {
+                        self.event_loop.resume_input();
+                        true
+                    }
+                    Err(error) => {
+                        self.shell.print_error(format!("Error: {error:?}\r"));
+                        false
+                    }
+                }
+            }
+            ReplControlFlow::OpenCommandPalette => {
+                self.event_loop.pause_input();
+                let status_pause =
+                    status_line::StatusLinePause::new(self.terminal_ui.status_line.clone());
+                let result = key_handlers::auxiliary::handle_open_command_palette(self).await;
+                drop(status_pause);
+
+                match result {
+                    Ok(_) => {
+                        self.event_loop.resume_input();
+                        true
+                    }
+                    Err(error) => {
+                        self.shell.print_error(format!("Error: {error:?}\r"));
+                        false
+                    }
+                }
+            }
+            ReplControlFlow::RunInteractive(closure) => {
+                self.event_loop.pause_input();
+
+                let mut execute_after = false;
+                let raw_mode_pause = terminal_state::RawModePause::new();
+                let status_pause =
+                    status_line::StatusLinePause::new(self.terminal_ui.status_line.clone());
+                match closure() {
+                    Ok(Some(action)) => {
+                        use crate::repl::state::InteractiveAction;
+                        match action {
+                            InteractiveAction::Patch {
+                                backspace_count,
+                                text,
+                            } => {
+                                if backspace_count > 0 {
+                                    self.input.backspacen(backspace_count);
+                                }
+                                self.input.insert_str(&text);
+                            }
+                            InteractiveAction::ReplaceRange { start, end, text } => {
+                                self.input.replace_range_chars(start, end, &text);
+                            }
+                            InteractiveAction::ReplaceAll { text } => self.input.reset(text),
+                            InteractiveAction::ReplaceAllAndExecute { text } => {
+                                self.input.reset(text);
+                                execute_after = true;
+                            }
+                        }
+                        self.input.completion = None;
+                        self.input.color_ranges = None;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        self.shell
+                            .print_error(format!("Interactive session failed: {error}\r\n"));
+                    }
+                }
+                drop(raw_mode_pause);
+
+                if execute_after {
+                    let result = key_handlers::execution::handle_execute(self).await;
+                    drop(status_pause);
+                    if let Err(error) = result {
+                        self.shell.print_error(format!("Error: {error:?}\r"));
+                        return false;
+                    }
+                } else {
+                    drop(status_pause);
+                    let mut renderer = TerminalRenderer::new();
+                    self.print_prompt(&mut renderer);
+                    self.print_input(&mut renderer, true, true);
+                    renderer.flush().ok();
+                }
+
+                self.event_loop.resume_input();
+                true
+            }
+        }
+    }
+
+    fn after_terminal_input(&mut self, old_last_time: Option<Instant>) {
+        let current_cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+        if current_cwd != self.state.last_cwd {
+            self.state.last_cwd = current_cwd;
+            if self.ai_ui.input_preferences.ai_backfill {
+                debug!(
+                    "CWD changed to {:?}, triggering AI prefetch",
+                    self.state.last_cwd
+                );
+                let files = self.get_directory_listing();
+                let files = files.lines().map(String::from).collect();
+                self.ai_ui.suggestion_manager.engine.prefetch(
+                    Some(self.state.last_cwd.to_string_lossy().to_string()),
+                    Arc::new(files),
+                    Some(self.state.last_status),
+                );
+            }
+        }
+
+        if self.state.last_command_time != old_last_time {
+            self.state.stopped_jobs_warned = false;
+            self.terminal_ui.prompt.write().invalidate_git_cache();
+            self.terminal_ui.prompt.read().trigger_git_check();
+            if self.state.last_status != 0 {
+                self.trigger_auto_fix();
+            }
+        }
+    }
+
+    fn should_exit_event_loop(&mut self) -> bool {
+        if !self.state.should_exit && self.shell.exited.is_none() {
+            return false;
+        }
+
+        debug!("Shell exiting normally");
+        if !self.shell.wait_jobs.is_empty() && !self.state.stopped_jobs_warned {
+            self.shell
+                .print_error("There are stopped jobs.\r\n".to_string());
+            self.state.stopped_jobs_warned = true;
+            self.state.should_exit = false;
+            self.shell.exited = None;
+            return false;
+        }
+        true
     }
 
     async fn handle_background_tick(&mut self) -> Result<()> {
@@ -1737,7 +1709,7 @@ mod ai_tests {
         repl.trigger_auto_fix();
 
         // Wait for the background task to complete and send the result
-        if let Some(AiEvent::AutoFix(fix)) = repl.ai_ui.ai_rx.recv().await {
+        if let Some(AiEvent::AutoFix(fix)) = repl.event_loop.recv_ai().await {
             repl.ai_ui.auto_fix_suggestion = Some(fix);
         }
 

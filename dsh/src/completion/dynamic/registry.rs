@@ -1,4 +1,7 @@
-use super::{CachePolicy, DynamicCompletionProvider, declared};
+use super::{
+    CachePolicy, DynamicCompletionProvider, container, dev, external, git, kubernetes, linux,
+    project,
+};
 use crate::completion::integrated::EnhancedCandidate;
 use crate::completion::parser::ParsedCommandLine;
 use dsh_types::completion::DynamicProviderId;
@@ -70,13 +73,13 @@ fn registration_for_id(id: DynamicProviderId) -> ProviderRegistration {
 
 fn collector_for(family: ProviderFamily) -> ProviderCollector {
     match family {
-        ProviderFamily::Git => declared::git::collect,
-        ProviderFamily::Container => declared::container::collect,
-        ProviderFamily::Kubernetes => declared::kubernetes::collect,
-        ProviderFamily::Linux => declared::linux::collect,
-        ProviderFamily::Development => declared::development::collect,
-        ProviderFamily::Project => declared::project::collect,
-        ProviderFamily::External => declared::external::collect,
+        ProviderFamily::Git => git::collect,
+        ProviderFamily::Container => container::collect,
+        ProviderFamily::Kubernetes => kubernetes::collect,
+        ProviderFamily::Linux => linux::collect,
+        ProviderFamily::Development => dev::collect,
+        ProviderFamily::Project => project::collect,
+        ProviderFamily::External => external::collect,
     }
 }
 

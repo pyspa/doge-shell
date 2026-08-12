@@ -1,5 +1,130 @@
-use super::completion_words;
+use super::{
+    CachePolicy, CompletionContext, DynamicCompletionProvider, EnhancedCandidate, completion_words,
+};
 use crate::completion::parser::ParsedCommandLine;
+use std::path::Path;
+
+pub(super) fn collect(
+    collector: &super::DynamicCompletionProvider,
+    request: &super::registry::DynamicProviderRequest<'_>,
+) -> Option<Vec<super::EnhancedCandidate>> {
+    use super::*;
+
+    let provider = request.provider.as_str();
+    let scope = request.scope;
+    let parsed_command_line = request.parsed_command_line;
+    let current_dir = request.current_dir;
+    let cached_only = request.cache_policy.is_cached_only();
+    let current_token = parsed_command_line.current_token.as_str();
+
+    Some(match provider {
+        "kind.cluster" => collector.collect_kind_cluster_candidates(current_token, cached_only),
+        "k3d.cluster" => collector.collect_k3d_cluster_candidates(current_token, cached_only),
+        "minikube.profile" => {
+            collector.collect_minikube_profile_candidates(current_token, cached_only)
+        }
+        "kubectl.context" => {
+            collector.collect_kubectl_context_candidates(current_dir, current_token, cached_only)
+        }
+        "kubectl.namespace" | "kubectl.resource_type" | "kubectl.resource_name" => {
+            platform::collect_kubectl_declared(
+                collector,
+                provider,
+                scope,
+                parsed_command_line,
+                current_dir,
+                cached_only,
+            )
+        }
+        "helm.release" => collector.collect_helm_release_candidates(
+            parsed_command_line,
+            current_dir,
+            current_token,
+            cached_only,
+        ),
+        _ => {
+            return platform::collect(
+                collector,
+                provider,
+                parsed_command_line,
+                current_dir,
+                cached_only,
+            );
+        }
+    })
+}
+
+impl DynamicCompletionProvider {
+    pub(crate) fn collect_kubectl_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        cache_policy: CachePolicy,
+    ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
+        let current_token = parsed_command_line.current_token.as_str();
+        match &parsed_command_line.completion_context {
+            CompletionContext::OptionValue { option_name, .. } => match option_name.as_str() {
+                "--context" => {
+                    self.collect_kubectl_context_candidates(current_dir, current_token, cached_only)
+                }
+                "-n" | "--namespace" => self.collect_kubectl_namespace_candidates(
+                    current_dir,
+                    current_token,
+                    cached_only,
+                ),
+                _ => Vec::new(),
+            },
+            CompletionContext::SubCommand | CompletionContext::Argument { .. } => {
+                let words = positional_words(parsed_command_line);
+                if words.len() >= 2 && words[0] == "config" && words[1] == "use-context" {
+                    self.collect_kubectl_context_candidates(current_dir, current_token, cached_only)
+                } else if matches!(
+                    words.first().copied(),
+                    Some("get" | "describe" | "delete" | "edit" | "create" | "apply")
+                ) {
+                    let namespace = selected_namespace(parsed_command_line);
+                    if let Some((resource, _)) = split_resource_name_token(current_token) {
+                        self.collect_kubectl_resource_name_candidates_for_token(
+                            current_dir,
+                            resource,
+                            current_token,
+                            namespace,
+                            cached_only,
+                        )
+                    } else if let Some(resource) = selected_resource(parsed_command_line) {
+                        if resource == current_token {
+                            self.collect_kubectl_resource_type_candidates(
+                                current_dir,
+                                current_token,
+                                cached_only,
+                            )
+                        } else {
+                            self.collect_kubectl_resource_name_candidates_for_token(
+                                current_dir,
+                                resource,
+                                current_token,
+                                namespace,
+                                cached_only,
+                            )
+                        }
+                    } else {
+                        self.collect_kubectl_resource_type_candidates(
+                            current_dir,
+                            current_token,
+                            cached_only,
+                        )
+                    }
+                } else if matches!(words.first().copied(), Some("logs" | "exec")) {
+                    self.collect_kubectl_pod_candidates(current_dir, current_token, cached_only)
+                } else {
+                    Vec::new()
+                }
+            }
+            _ => Vec::new(),
+        }
+    }
+}
 
 pub(super) fn positional_words(parsed_command_line: &ParsedCommandLine) -> Vec<&str> {
     let mut positionals = Vec::new();
@@ -143,4 +268,20 @@ fn is_inline_option_value(token: &str) -> bool {
         || token.starts_with("--server=")
         || token.starts_with("--token=")
         || token.starts_with("--user=")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::completion::parser::CommandLineParser;
+
+    #[test]
+    fn kubectl_context_parser_keeps_resource_and_namespace_separate() {
+        let input = "kubectl get pods --namespace=staging ";
+        let parsed = CommandLineParser::new().parse(input, input.len());
+
+        assert_eq!(selected_resource(&parsed), Some("pods"));
+        assert_eq!(selected_namespace(&parsed), Some("staging"));
+        assert_eq!(split_resource_name_token("pod/api"), Some(("pod", "api")));
+    }
 }

@@ -10,7 +10,8 @@ description: Use for doge-shell builtin commands, proxy builtins, help, project,
 - Read [../doge-shell-repo/references/package-map.md](../doge-shell-repo/references/package-map.md) before choosing cargo package names.
 - Default read targets are command-specific files under `dsh-builtin/src/` and `dsh/src/proxy/builtin/`.
 - For interactive builtin prompts, use the shared tty-aware input helper instead of reading `std::io::stdin()` directly; REPL command execution may not have stdin in a safe line-input state.
-- New `ShellProxy` methods need a default implementation: this trait has many test doubles in `dsh-builtin/src/`, and a required method breaks all of them.
+- Keep `ShellProxy` as the frozen compatibility facade. Add new builtin dependencies to a narrow trait in `dsh-builtin/src/shell_capabilities.rs`, and make internal helpers accept only the capabilities they use.
+- After changing `ShellProxy` or a capability trait, run `scripts/check-shell-proxy-capabilities.py` and `cargo test -p dsh-builtin`.
 - Directory stack (`pushd` / `popd` / `dirs`, `cd +N`/`-N`) lives in `dsh-builtin/src/dirstack.rs`; the module is not named `dirs` because this crate depends on the `dirs` crate. Read [../doge-shell-repo/references/invariants.md](../doge-shell-repo/references/invariants.md) before touching anything that changes directory.
 - Scheduled tasks (`sched`) live in `dsh-builtin/src/sched.rs`; the state machine is `dsh/src/scheduler/`, shared types are `dsh-types/src/schedule.rs`.
 - Use `$doge-shell-chat-tools` for chatgpt / MCP / runtime skill code and `$doge-shell-safety-policy` for safe_run or command policy changes.

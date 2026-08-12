@@ -29,6 +29,12 @@
 - `dsh` 本体を触ったとき: `cargo test -p doge-shell`
 - 複数クレートを跨いだときだけ: `cargo test`
 - 広いビルド確認が必要なら: `cargo check --workspace`
+- 段階的な設計変更の完了時とリリース前: `./scripts/check.sh`
+
+## 設計境界
+- 動的補完 provider は `dsh/src/completion/dynamic/registry.rs` の `DynamicProviderId` へ一度だけ登録し、family collector と `CachePolicy` 経路を使う。cached 専用 dispatch を増やさない。
+- `ShellProxy` は互換レイヤーとして固定し、新規メソッドを追加しない。builtin の新しい依存は `dsh-builtin/src/shell_capabilities.rs` の能力 trait へ追加する。
+- `ShellProxy` または能力 trait を変更したら `scripts/check-shell-proxy-capabilities.py` を実行する。
 
 ## 参照の使い分け
 - `task-map.md`: タスクごとの最初の読みに行く先と最小検証を決める。

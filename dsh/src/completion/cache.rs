@@ -271,10 +271,15 @@ mod tests {
 
     #[test]
     fn cache_extends_ttl() {
-        let cache = CompletionCache::new(Duration::from_millis(30));
+        let cache = CompletionCache::new(Duration::from_secs(1));
         cache.set("gi".to_string(), vec![candidate("git")]);
+        let original_expiry = cache.entries.read().get("gi").unwrap().expires_at;
+
+        std::thread::sleep(Duration::from_millis(1));
         assert!(cache.extend_ttl("gi"));
-        std::thread::sleep(Duration::from_millis(20));
+        let extended_expiry = cache.entries.read().get("gi").unwrap().expires_at;
+
+        assert!(extended_expiry > original_expiry);
         assert!(cache.lookup("gi").is_some());
     }
 

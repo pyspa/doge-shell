@@ -13,3 +13,4 @@ description: Use for doge-shell validation planning, smallest-test selection, æ¤
 - Use `cargo test -p doge-shell --lib` as a fallback only when package-level `doge-shell` tests are blocked by known macOS sandbox child-process tracing failures and the change is library-scoped.
 - For `AGENTS.md`, `docs/ai/`, or runtime skill installer guidance, run `scripts/check-ai-guidance.sh`, `scripts/install-runtime-skills.sh --list`, and focused installer `--dry-run` / `--status` checks instead of Rust tests.
 - Use `cargo test` or `cargo check --workspace` only when the change clearly spans crates.
+- Run `./scripts/check.sh` only at the end of a staged design change or before release; it integrates fmt, guidance, ShellProxy capability coverage, Clippy, workspace tests, and diff checks.

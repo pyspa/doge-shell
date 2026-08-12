@@ -34,7 +34,7 @@ const DIRS_USAGE: &str = "Usage: dirs [-v] [-p] [-l] [-c]";
 
 /// Reads the stack, falling back to `$PWD` when the shell has not changed
 /// directory yet (the stack only materialises on the first `changepwd`).
-fn stack_or_cwd(proxy: &dyn ShellProxy) -> Vec<String> {
+fn stack_or_cwd<P: crate::shell_capabilities::ShellNavigation + ?Sized>(proxy: &P) -> Vec<String> {
     let stack = proxy.dir_stack();
     if !stack.is_empty() {
         return stack;
@@ -46,7 +46,7 @@ fn stack_or_cwd(proxy: &dyn ShellProxy) -> Vec<String> {
 }
 
 /// Where the shell actually is right now, as a canonical path.
-fn actual_cwd(proxy: &dyn ShellProxy) -> Option<String> {
+fn actual_cwd<P: crate::shell_capabilities::ShellNavigation + ?Sized>(proxy: &P) -> Option<String> {
     let cwd = proxy.get_current_dir().ok()?;
     Some(
         cwd.canonicalize()
@@ -75,7 +75,10 @@ fn same_dir(a: &str, b: &str) -> bool {
 /// describing a directory we are no longer in.
 ///
 /// A hook failure is still reported, but only after the stack is consistent.
-fn apply(proxy: &mut dyn ShellProxy, mut next: Vec<String>) -> Result<String, String> {
+fn apply<P: crate::shell_capabilities::ShellNavigation + ?Sized>(
+    proxy: &mut P,
+    mut next: Vec<String>,
+) -> Result<String, String> {
     let head = match next.first() {
         Some(head) => head.clone(),
         None => return Err("directory stack empty".to_string()),
@@ -117,7 +120,10 @@ pub(crate) fn parse_stack_index(arg: &str) -> Option<usize> {
 
 /// Rotates the stack so entry `index` becomes the current directory, then
 /// changes to it. Shared by `pushd +N` and `cd -N`.
-pub(crate) fn goto_stack_index(proxy: &mut dyn ShellProxy, index: usize) -> Result<String, String> {
+pub(crate) fn goto_stack_index<P: crate::shell_capabilities::ShellNavigation + ?Sized>(
+    proxy: &mut P,
+    index: usize,
+) -> Result<String, String> {
     let mut stack = stack_or_cwd(proxy);
     if index >= stack.len() {
         return Err(format!("{index}: directory stack index out of range"));
@@ -127,6 +133,14 @@ pub(crate) fn goto_stack_index(proxy: &mut dyn ShellProxy, index: usize) -> Resu
 }
 
 pub fn pushd_command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    pushd(ctx, argv, proxy)
+}
+
+fn pushd<P: crate::shell_capabilities::ShellNavigation + ?Sized>(
+    ctx: &Context,
+    argv: Vec<String>,
+    proxy: &mut P,
+) -> ExitStatus {
     let result = match argv.get(1).map(|s| s.as_str()) {
         Some("-h") | Some("--help") => {
             ctx.write_stdout(PUSHD_USAGE).ok();
@@ -158,7 +172,10 @@ pub fn pushd_command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProx
 
 /// `pushd <dir>`: change to `dir`, then slot the directory we came from in
 /// underneath it.
-fn push_directory(arg: &str, proxy: &mut dyn ShellProxy) -> Result<String, String> {
+fn push_directory<P: crate::shell_capabilities::ShellNavigation + ?Sized>(
+    arg: &str,
+    proxy: &mut P,
+) -> Result<String, String> {
     let previous = stack_or_cwd(proxy).first().cloned();
     let target = resolve_dir(arg)?;
 
@@ -209,6 +226,14 @@ fn resolve_dir(arg: &str) -> Result<String, String> {
 }
 
 pub fn popd_command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    popd(ctx, argv, proxy)
+}
+
+fn popd<P: crate::shell_capabilities::ShellNavigation + ?Sized>(
+    ctx: &Context,
+    argv: Vec<String>,
+    proxy: &mut P,
+) -> ExitStatus {
     let index = match argv.get(1).map(|s| s.as_str()) {
         Some("-h") | Some("--help") => {
             ctx.write_stdout(POPD_USAGE).ok();
@@ -264,6 +289,14 @@ struct DirsFormat {
 }
 
 pub fn dirs_command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    dirs(ctx, argv, proxy)
+}
+
+fn dirs<P: crate::shell_capabilities::ShellNavigation + ?Sized>(
+    ctx: &Context,
+    argv: Vec<String>,
+    proxy: &mut P,
+) -> ExitStatus {
     let mut format = DirsFormat::default();
 
     for arg in argv.iter().skip(1) {
@@ -294,7 +327,11 @@ pub fn dirs_command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy
     print_stack(ctx, proxy, format)
 }
 
-fn print_stack(ctx: &Context, proxy: &mut dyn ShellProxy, format: DirsFormat) -> ExitStatus {
+fn print_stack<P: crate::shell_capabilities::ShellNavigation + ?Sized>(
+    ctx: &Context,
+    proxy: &mut P,
+    format: DirsFormat,
+) -> ExitStatus {
     let stack = stack_or_cwd(proxy);
     let home = if format.long {
         None
@@ -364,26 +401,17 @@ mod tests {
         }
     }
 
-    impl ShellProxy for StackProxy {
+    impl crate::shell_capabilities::ShellNavigation for StackProxy {
         fn get_current_dir(&self) -> anyhow::Result<std::path::PathBuf> {
             Ok(std::path::PathBuf::from(&self.cwd))
         }
-        fn exit_shell(&mut self) {}
-        fn dispatch(
-            &mut self,
-            _ctx: &Context,
-            _cmd: &str,
-            _argv: Vec<String>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
+
         fn save_path_history(&mut self, _path: &str) {}
+
         fn changepwd(&mut self, path: &str) -> anyhow::Result<()> {
             if self.chdir_fails {
                 anyhow::bail!("No such file or directory");
             }
-            // Order matters: the real implementation moves and rewrites slot 0
-            // before the hooks run, so a hook failure leaves both changed.
             self.cwd = path.to_string();
             if self.stack.is_empty() {
                 self.stack.push(path.to_string());
@@ -395,59 +423,28 @@ mod tests {
             }
             Ok(())
         }
+
         fn dir_stack(&self) -> Vec<String> {
             self.stack.clone()
         }
+
         fn dir_stack_set(&mut self, stack: Vec<String>) {
             self.stack = stack;
         }
-        fn insert_path(&mut self, _index: usize, _path: &str) {}
-        fn get_var(&mut self, _key: &str) -> Option<String> {
-            None
-        }
-        fn set_var(&mut self, _key: String, _value: String) {}
-        fn set_env_var(&mut self, _key: String, _value: String) {}
-        fn unset_env_var(&mut self, _key: &str) {}
-        fn get_alias(&mut self, _name: &str) -> Option<String> {
-            None
-        }
-        fn set_alias(&mut self, _name: String, _command: String) {}
-        fn list_aliases(&mut self) -> std::collections::HashMap<String, String> {
-            std::collections::HashMap::new()
-        }
-        fn add_abbr(&mut self, _name: String, _expansion: String) {}
-        fn remove_abbr(&mut self, _name: &str) -> bool {
+
+        fn add_dir_alias(&mut self, _name: String, _path: String) -> bool {
             false
         }
-        fn list_abbrs(&self) -> Vec<(String, String)> {
+
+        fn remove_dir_alias(&mut self, _name: &str) -> bool {
+            false
+        }
+
+        fn list_dir_aliases(&self) -> Vec<(String, String)> {
             Vec::new()
         }
-        fn get_abbr(&self, _name: &str) -> Option<String> {
-            None
-        }
-        fn list_mcp_servers(&mut self) -> Vec<dsh_types::mcp::McpServerConfig> {
-            Vec::new()
-        }
-        fn list_execute_allowlist(&mut self) -> Vec<String> {
-            Vec::new()
-        }
-        fn list_exported_vars(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-        fn export_var(&mut self, _key: &str) -> bool {
-            true
-        }
-        fn set_and_export_var(&mut self, _key: String, _value: String) {}
-        fn get_github_status(&self) -> (usize, usize, usize) {
-            (0, 0, 0)
-        }
-        fn get_git_branch(&self) -> Option<String> {
-            None
-        }
-        fn get_job_count(&self) -> usize {
-            0
-        }
-        fn get_lisp_var(&self, _key: &str) -> Option<String> {
+
+        fn get_dir_alias(&self, _name: &str) -> Option<String> {
             None
         }
     }

@@ -60,6 +60,9 @@ pub mod project;
 pub mod project_context;
 mod read;
 pub mod sched;
+pub mod shell_capabilities;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 mod reload;
 pub mod serve;
@@ -469,9 +472,9 @@ pub trait ShellProxy {
 pub type ProxyFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + 'a>>;
 pub type BuiltinFuture<'a> = Pin<Box<dyn Future<Output = ExitStatus> + 'a>>;
 
-pub(crate) fn dispatch_shell_command(
+pub(crate) fn dispatch_shell_command<P: shell_capabilities::ShellExecution + ?Sized>(
     ctx: &Context,
-    proxy: &mut dyn ShellProxy,
+    proxy: &mut P,
     command: String,
 ) -> Result<()> {
     proxy.dispatch(ctx, "sh", vec!["-c".to_string(), command])
@@ -833,96 +836,7 @@ pub fn exit(_ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) -> E
 #[cfg(test)]
 mod shell_proxy_tests {
     use super::*;
-
-    struct DefaultProxy;
-
-    impl ShellProxy for DefaultProxy {
-        fn exit_shell(&mut self) {}
-
-        fn get_github_status(&self) -> (usize, usize, usize) {
-            (0, 0, 0)
-        }
-
-        fn get_git_branch(&self) -> Option<String> {
-            None
-        }
-
-        fn get_job_count(&self) -> usize {
-            0
-        }
-
-        fn dispatch(&mut self, _ctx: &Context, _cmd: &str, _argv: Vec<String>) -> Result<()> {
-            Ok(())
-        }
-
-        fn save_path_history(&mut self, _path: &str) {}
-
-        fn changepwd(&mut self, _path: &str) -> Result<()> {
-            Ok(())
-        }
-
-        fn insert_path(&mut self, _index: usize, _path: &str) {}
-
-        fn get_var(&mut self, _key: &str) -> Option<String> {
-            None
-        }
-
-        fn set_var(&mut self, _key: String, _value: String) {}
-
-        fn set_env_var(&mut self, _key: String, _value: String) {}
-
-        fn unset_env_var(&mut self, _key: &str) {}
-
-        fn get_alias(&mut self, _name: &str) -> Option<String> {
-            None
-        }
-
-        fn set_alias(&mut self, _name: String, _command: String) {}
-
-        fn list_aliases(&mut self) -> HashMap<String, String> {
-            HashMap::new()
-        }
-
-        fn add_abbr(&mut self, _name: String, _expansion: String) {}
-
-        fn remove_abbr(&mut self, _name: &str) -> bool {
-            false
-        }
-
-        fn list_abbrs(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-
-        fn get_abbr(&self, _name: &str) -> Option<String> {
-            None
-        }
-
-        fn list_mcp_servers(&mut self) -> Vec<McpServerConfig> {
-            Vec::new()
-        }
-
-        fn list_execute_allowlist(&mut self) -> Vec<String> {
-            Vec::new()
-        }
-
-        fn list_exported_vars(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-
-        fn export_var(&mut self, _key: &str) -> bool {
-            false
-        }
-
-        fn set_and_export_var(&mut self, _key: String, _value: String) {}
-
-        fn get_current_dir(&self) -> Result<std::path::PathBuf> {
-            Ok(std::env::current_dir()?)
-        }
-
-        fn get_lisp_var(&self, _key: &str) -> Option<String> {
-            None
-        }
-    }
+    use crate::test_support::TestShellProxy;
 
     #[test]
     fn comp_gen_is_registered_with_an_async_handler() {
@@ -939,7 +853,7 @@ mod shell_proxy_tests {
 
     #[test]
     fn confirm_action_default_denies() {
-        let mut proxy = DefaultProxy;
+        let mut proxy = TestShellProxy::default();
 
         assert!(!proxy.confirm_action("dangerous?").unwrap());
         assert_eq!(proxy.safety_level(), SafetyLevel::Normal);

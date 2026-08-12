@@ -41,6 +41,14 @@ Commands run via `sh -c` from the directory you registered them in; shell
 aliases and builtins are not available inside them.";
 
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    command_with_scheduler(ctx, argv, proxy)
+}
+
+fn command_with_scheduler<P: crate::shell_capabilities::ShellScheduling + ?Sized>(
+    ctx: &Context,
+    argv: Vec<String>,
+    proxy: &mut P,
+) -> ExitStatus {
     match argv.get(1).map(|s| s.as_str()) {
         None | Some("list") | Some("ls") => list(ctx, argv.get(2).map(|s| s.as_str()), proxy),
         Some("add") => add(ctx, &argv[2..], proxy),
@@ -70,12 +78,12 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     }
 }
 
-fn mutate(
+fn mutate<P: crate::shell_capabilities::ShellScheduling + ?Sized>(
     ctx: &Context,
     subcommand: &str,
     selector: Option<&String>,
-    proxy: &mut dyn ShellProxy,
-    action: impl FnOnce(&mut dyn ShellProxy, &str) -> Result<String, String>,
+    proxy: &mut P,
+    action: impl FnOnce(&mut P, &str) -> Result<String, String>,
 ) -> ExitStatus {
     let Some(selector) = selector else {
         ctx.write_stderr(&format!("sched {subcommand}: expected a task id or name"))
@@ -95,10 +103,10 @@ fn mutate(
     }
 }
 
-fn set_paused(
+fn set_paused<P: crate::shell_capabilities::ShellScheduling + ?Sized>(
     ctx: &Context,
     selector: Option<&String>,
-    proxy: &mut dyn ShellProxy,
+    proxy: &mut P,
     paused: bool,
 ) -> ExitStatus {
     // No argument means the whole scheduler, which is the quickest way to stop
@@ -198,7 +206,11 @@ pub(crate) fn parse_add(args: &[String], cwd: String) -> Result<SchedTaskSpec, S
     })
 }
 
-fn add(ctx: &Context, args: &[String], proxy: &mut dyn ShellProxy) -> ExitStatus {
+fn add<P: crate::shell_capabilities::ShellScheduling + ?Sized>(
+    ctx: &Context,
+    args: &[String],
+    proxy: &mut P,
+) -> ExitStatus {
     let cwd = match std::env::current_dir() {
         Ok(dir) => dir.to_string_lossy().into_owned(),
         Err(err) => {
@@ -315,7 +327,11 @@ fn task_row(view: &SchedTaskView) -> TaskRow {
     }
 }
 
-fn list(ctx: &Context, flag: Option<&str>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+fn list<P: crate::shell_capabilities::ShellScheduling + ?Sized>(
+    ctx: &Context,
+    flag: Option<&str>,
+    proxy: &mut P,
+) -> ExitStatus {
     if flag == Some("--lisp") {
         let lines = proxy.sched_as_lisp();
         if lines.is_empty() {
@@ -350,7 +366,11 @@ fn list(ctx: &Context, flag: Option<&str>, proxy: &mut dyn ShellProxy) -> ExitSt
     ExitStatus::ExitedWith(0)
 }
 
-fn log(ctx: &Context, selector: Option<&str>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+fn log<P: crate::shell_capabilities::ShellScheduling + ?Sized>(
+    ctx: &Context,
+    selector: Option<&str>,
+    proxy: &mut P,
+) -> ExitStatus {
     let views = proxy.sched_list();
     let selected: Vec<&SchedTaskView> = match selector {
         Some(selector) => views

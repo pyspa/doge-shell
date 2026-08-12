@@ -183,106 +183,13 @@ fn remove_abbreviation(ctx: &Context, name: &str, proxy: &mut dyn ShellProxy) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-
-    struct MockShellProxy {
-        abbreviations: HashMap<String, String>,
-    }
-
-    impl MockShellProxy {
-        fn new() -> Self {
-            Self {
-                abbreviations: HashMap::new(),
-            }
-        }
-    }
-
-    impl ShellProxy for MockShellProxy {
-        fn get_current_dir(&self) -> anyhow::Result<std::path::PathBuf> {
-            Ok(std::env::current_dir()?)
-        }
-        fn exit_shell(&mut self) {}
-        fn dispatch(
-            &mut self,
-            _ctx: &Context,
-            _cmd: &str,
-            _argv: Vec<String>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn save_path_history(&mut self, _path: &str) {}
-        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn insert_path(&mut self, _index: usize, _path: &str) {}
-        fn get_var(&mut self, _key: &str) -> Option<String> {
-            None
-        }
-        fn set_var(&mut self, _key: String, _value: String) {}
-        fn set_env_var(&mut self, _key: String, _value: String) {}
-        fn unset_env_var(&mut self, _key: &str) {}
-        fn get_alias(&mut self, _name: &str) -> Option<String> {
-            None
-        }
-        fn set_alias(&mut self, _name: String, _command: String) {}
-        fn list_aliases(&mut self) -> std::collections::HashMap<String, String> {
-            std::collections::HashMap::new()
-        }
-
-        fn add_abbr(&mut self, name: String, expansion: String) {
-            self.abbreviations.insert(name, expansion);
-        }
-
-        fn remove_abbr(&mut self, name: &str) -> bool {
-            self.abbreviations.remove(name).is_some()
-        }
-
-        fn list_abbrs(&self) -> Vec<(String, String)> {
-            self.abbreviations
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect()
-        }
-
-        fn get_abbr(&self, name: &str) -> Option<String> {
-            self.abbreviations.get(name).cloned()
-        }
-
-        fn list_mcp_servers(&mut self) -> Vec<dsh_types::mcp::McpServerConfig> {
-            Vec::new()
-        }
-
-        fn list_execute_allowlist(&mut self) -> Vec<String> {
-            Vec::new()
-        }
-        fn list_exported_vars(&self) -> Vec<(String, String)> {
-            vec![]
-        }
-        fn export_var(&mut self, _key: &str) -> bool {
-            true
-        }
-        fn set_and_export_var(&mut self, _key: String, _value: String) {}
-
-        fn get_github_status(&self) -> (usize, usize, usize) {
-            (0, 0, 0)
-        }
-
-        fn get_git_branch(&self) -> Option<String> {
-            None
-        }
-
-        fn get_job_count(&self) -> usize {
-            0
-        }
-        fn get_lisp_var(&self, _key: &str) -> Option<String> {
-            None
-        }
-    }
+    use crate::test_support::TestShellProxy;
+    type MockShellProxy = TestShellProxy;
 
     #[test]
     fn test_add_abbreviation() {
         use nix::unistd::getpid;
-        let mut proxy = MockShellProxy::new();
+        let mut proxy = MockShellProxy::default();
         let pid = getpid();
         let pgid = pid;
         let ctx = Context::new_safe(pid, pgid, false);
@@ -295,7 +202,7 @@ mod tests {
     #[test]
     fn test_remove_abbreviation() {
         use nix::unistd::getpid;
-        let mut proxy = MockShellProxy::new();
+        let mut proxy = MockShellProxy::default();
         proxy.add_abbr("gco".to_string(), "git checkout".to_string());
         let pid = getpid();
         let pgid = pid;
@@ -309,7 +216,7 @@ mod tests {
     #[test]
     fn test_invalid_abbreviation_name() {
         use nix::unistd::getpid;
-        let mut proxy = MockShellProxy::new();
+        let mut proxy = MockShellProxy::default();
         let pid = getpid();
         let pgid = pid;
         let ctx = Context::new_safe(pid, pgid, false);

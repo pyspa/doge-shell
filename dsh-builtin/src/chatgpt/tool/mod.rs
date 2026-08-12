@@ -257,83 +257,10 @@ pub(crate) fn sensitive_path_reason(path: &Path) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dsh_types::Context;
     use tempfile::tempdir;
 
-    struct NoopProxy;
-    impl ShellProxy for NoopProxy {
-        fn get_current_dir(&self) -> anyhow::Result<std::path::PathBuf> {
-            Ok(std::env::current_dir()?)
-        }
-        fn exit_shell(&mut self) {}
-        fn dispatch(
-            &mut self,
-            _ctx: &Context,
-            _cmd: &str,
-            _argv: Vec<String>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn save_path_history(&mut self, _path: &str) {}
-        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn insert_path(&mut self, _index: usize, _path: &str) {}
-        fn get_var(&mut self, _key: &str) -> Option<String> {
-            None
-        }
-        fn set_var(&mut self, _key: String, _value: String) {}
-        fn set_env_var(&mut self, _key: String, _value: String) {}
-        fn unset_env_var(&mut self, _key: &str) {}
-        fn get_alias(&mut self, _name: &str) -> Option<String> {
-            None
-        }
-        fn set_alias(&mut self, _name: String, _command: String) {}
-        fn list_aliases(&mut self) -> std::collections::HashMap<String, String> {
-            std::collections::HashMap::new()
-        }
-        fn add_abbr(&mut self, _name: String, _expansion: String) {}
-        fn remove_abbr(&mut self, _name: &str) -> bool {
-            false
-        }
-        fn list_abbrs(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-        fn get_abbr(&self, _name: &str) -> Option<String> {
-            None
-        }
-        fn list_mcp_servers(&mut self) -> Vec<dsh_types::mcp::McpServerConfig> {
-            Vec::new()
-        }
-        fn list_execute_allowlist(&mut self) -> Vec<String> {
-            Vec::new()
-        }
-        fn list_exported_vars(&self) -> Vec<(String, String)> {
-            vec![]
-        }
-        fn export_var(&mut self, _key: &str) -> bool {
-            true
-        }
-        fn set_and_export_var(&mut self, _key: String, _value: String) {}
-
-        fn get_github_status(&self) -> (usize, usize, usize) {
-            (0, 0, 0)
-        }
-
-        fn get_git_branch(&self) -> Option<String> {
-            None
-        }
-
-        fn get_job_count(&self) -> usize {
-            0
-        }
-        fn get_lisp_var(&self, _key: &str) -> Option<String> {
-            None
-        }
-        fn confirm_action(&mut self, _message: &str) -> anyhow::Result<bool> {
-            Ok(false)
-        }
-    }
+    use crate::test_support::TestShellProxy;
+    type NoopProxy = TestShellProxy;
 
     #[test]
     fn test_truncation_short() {
@@ -379,7 +306,7 @@ mod tests {
 
     #[test]
     fn test_execute_tool_call_unknown_tool() {
-        let mut proxy = NoopProxy;
+        let mut proxy = NoopProxy::default();
         let mcp = McpManager::load_blocking(vec![]);
         let tool_call = serde_json::json!({
             "function": {
@@ -395,7 +322,7 @@ mod tests {
 
     #[test]
     fn execute_tool_call_requires_confirmation_for_mcp_tool() {
-        let mut proxy = NoopProxy;
+        let mut proxy = NoopProxy::default();
         let mut mcp = McpManager::default();
         mcp.insert_test_tool_binding("mcp__test__tool");
         let tool_call = serde_json::json!({
@@ -410,83 +337,14 @@ mod tests {
         assert_eq!(result, "MCP tool execution cancelled by user.");
     }
 
-    struct CwdProxy {
-        cwd: PathBuf,
-    }
-
-    impl ShellProxy for CwdProxy {
-        fn get_current_dir(&self) -> anyhow::Result<std::path::PathBuf> {
-            Ok(self.cwd.clone())
-        }
-        fn exit_shell(&mut self) {}
-        fn dispatch(
-            &mut self,
-            _ctx: &Context,
-            _cmd: &str,
-            _argv: Vec<String>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn save_path_history(&mut self, _path: &str) {}
-        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn insert_path(&mut self, _index: usize, _path: &str) {}
-        fn get_var(&mut self, _key: &str) -> Option<String> {
-            None
-        }
-        fn set_var(&mut self, _key: String, _value: String) {}
-        fn set_env_var(&mut self, _key: String, _value: String) {}
-        fn unset_env_var(&mut self, _key: &str) {}
-        fn get_alias(&mut self, _name: &str) -> Option<String> {
-            None
-        }
-        fn set_alias(&mut self, _name: String, _command: String) {}
-        fn list_aliases(&mut self) -> std::collections::HashMap<String, String> {
-            std::collections::HashMap::new()
-        }
-        fn add_abbr(&mut self, _name: String, _expansion: String) {}
-        fn remove_abbr(&mut self, _name: &str) -> bool {
-            false
-        }
-        fn list_abbrs(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-        fn get_abbr(&self, _name: &str) -> Option<String> {
-            None
-        }
-        fn list_mcp_servers(&mut self) -> Vec<dsh_types::mcp::McpServerConfig> {
-            Vec::new()
-        }
-        fn list_execute_allowlist(&mut self) -> Vec<String> {
-            Vec::new()
-        }
-        fn list_exported_vars(&self) -> Vec<(String, String)> {
-            vec![]
-        }
-        fn export_var(&mut self, _key: &str) -> bool {
-            true
-        }
-        fn set_and_export_var(&mut self, _key: String, _value: String) {}
-        fn get_github_status(&self) -> (usize, usize, usize) {
-            (0, 0, 0)
-        }
-        fn get_git_branch(&self) -> Option<String> {
-            None
-        }
-        fn get_job_count(&self) -> usize {
-            0
-        }
-        fn get_lisp_var(&self, _key: &str) -> Option<String> {
-            None
-        }
-    }
+    type CwdProxy = TestShellProxy;
 
     #[test]
     fn resolve_tool_path_rejects_parent_traversal() {
         let dir = tempdir().unwrap();
         let mut proxy = CwdProxy {
-            cwd: dir.path().to_path_buf(),
+            current_dir: dir.path().to_path_buf(),
+            ..CwdProxy::default()
         };
         let result = resolve_tool_path("../outside.txt", &mut proxy);
         assert!(result.is_err());
@@ -503,7 +361,8 @@ mod tests {
         symlink(outside.path(), base.path().join("inside/link_out")).unwrap();
 
         let mut proxy = CwdProxy {
-            cwd: base.path().to_path_buf(),
+            current_dir: base.path().to_path_buf(),
+            ..CwdProxy::default()
         };
         let result = resolve_tool_path("inside/link_out/pwned.txt", &mut proxy);
         assert!(result.is_err());

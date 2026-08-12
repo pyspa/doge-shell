@@ -119,90 +119,12 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dsh_types::Context;
     use std::path::PathBuf;
 
     use tempfile::tempdir;
 
-    struct NoopProxy {
-        cwd: PathBuf,
-        confirm_calls: usize,
-        confirm_result: bool,
-    }
-    impl ShellProxy for NoopProxy {
-        fn exit_shell(&mut self) {}
-        fn dispatch(
-            &mut self,
-            _ctx: &Context,
-            _cmd: &str,
-            _argv: Vec<String>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn save_path_history(&mut self, _path: &str) {}
-        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn insert_path(&mut self, _index: usize, _path: &str) {}
-        fn get_var(&mut self, _key: &str) -> Option<String> {
-            None
-        }
-        fn set_var(&mut self, _key: String, _value: String) {}
-        fn set_env_var(&mut self, _key: String, _value: String) {}
-        fn unset_env_var(&mut self, _key: &str) {}
-        fn get_alias(&mut self, _name: &str) -> Option<String> {
-            None
-        }
-        fn set_alias(&mut self, _name: String, _command: String) {}
-        fn list_aliases(&mut self) -> std::collections::HashMap<String, String> {
-            std::collections::HashMap::new()
-        }
-        fn add_abbr(&mut self, _name: String, _expansion: String) {}
-        fn remove_abbr(&mut self, _name: &str) -> bool {
-            false
-        }
-        fn list_abbrs(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-        fn get_abbr(&self, _name: &str) -> Option<String> {
-            None
-        }
-        fn list_mcp_servers(&mut self) -> Vec<dsh_types::mcp::McpServerConfig> {
-            Vec::new()
-        }
-        fn list_execute_allowlist(&mut self) -> Vec<String> {
-            Vec::new()
-        }
-        fn list_exported_vars(&self) -> Vec<(String, String)> {
-            vec![]
-        }
-        fn export_var(&mut self, _key: &str) -> bool {
-            true
-        }
-        fn set_and_export_var(&mut self, _key: String, _value: String) {}
-        fn get_lisp_var(&self, _key: &str) -> Option<String> {
-            None
-        }
-
-        fn get_github_status(&self) -> (usize, usize, usize) {
-            (0, 0, 0)
-        }
-
-        fn get_git_branch(&self) -> Option<String> {
-            None
-        }
-
-        fn get_job_count(&self) -> usize {
-            0
-        }
-        fn get_current_dir(&self) -> anyhow::Result<PathBuf> {
-            Ok(self.cwd.clone())
-        }
-        fn confirm_action(&mut self, _message: &str) -> anyhow::Result<bool> {
-            self.confirm_calls += 1;
-            Ok(self.confirm_result)
-        }
-    }
+    use crate::test_support::TestShellProxy;
+    type NoopProxy = TestShellProxy;
 
     #[test]
     fn test_ls_current_dir() {
@@ -280,9 +202,9 @@ mod tests {
 
     fn proxy(cwd: PathBuf) -> NoopProxy {
         NoopProxy {
-            cwd,
-            confirm_calls: 0,
+            current_dir: cwd,
             confirm_result: true,
+            ..NoopProxy::default()
         }
     }
 

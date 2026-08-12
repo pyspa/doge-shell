@@ -310,94 +310,13 @@ fn resolve_allowlist_path() -> Result<Option<PathBuf>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dsh_types::Context;
     use std::sync::{LazyLock, Mutex};
     use tempfile::tempdir;
 
     static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-    struct TestProxy {
-        allow: Vec<String>,
-        cwd: PathBuf,
-        confirm_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-        confirm_result: bool,
-    }
-
-    impl ShellProxy for TestProxy {
-        fn get_current_dir(&self) -> anyhow::Result<std::path::PathBuf> {
-            Ok(self.cwd.clone())
-        }
-        fn exit_shell(&mut self) {}
-        fn dispatch(
-            &mut self,
-            _ctx: &Context,
-            _cmd: &str,
-            _argv: Vec<String>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn save_path_history(&mut self, _path: &str) {}
-        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn insert_path(&mut self, _index: usize, _path: &str) {}
-        fn get_var(&mut self, _key: &str) -> Option<String> {
-            None
-        }
-        fn set_var(&mut self, _key: String, _value: String) {}
-        fn set_env_var(&mut self, _key: String, _value: String) {}
-        fn unset_env_var(&mut self, _key: &str) {}
-        fn get_alias(&mut self, _name: &str) -> Option<String> {
-            None
-        }
-        fn set_alias(&mut self, _name: String, _command: String) {}
-        fn list_aliases(&mut self) -> std::collections::HashMap<String, String> {
-            std::collections::HashMap::new()
-        }
-        fn add_abbr(&mut self, _name: String, _expansion: String) {}
-        fn remove_abbr(&mut self, _name: &str) -> bool {
-            false
-        }
-        fn list_abbrs(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-        fn get_abbr(&self, _name: &str) -> Option<String> {
-            None
-        }
-        fn list_mcp_servers(&mut self) -> Vec<dsh_types::mcp::McpServerConfig> {
-            Vec::new()
-        }
-        fn list_execute_allowlist(&mut self) -> Vec<String> {
-            self.allow.clone()
-        }
-        fn list_exported_vars(&self) -> Vec<(String, String)> {
-            vec![]
-        }
-        fn export_var(&mut self, _key: &str) -> bool {
-            true
-        }
-        fn set_and_export_var(&mut self, _key: String, _value: String) {}
-
-        fn get_github_status(&self) -> (usize, usize, usize) {
-            (0, 0, 0)
-        }
-
-        fn get_git_branch(&self) -> Option<String> {
-            None
-        }
-
-        fn get_job_count(&self) -> usize {
-            0
-        }
-        fn get_lisp_var(&self, _key: &str) -> Option<String> {
-            None
-        }
-        fn confirm_action(&mut self, _message: &str) -> anyhow::Result<bool> {
-            self.confirm_calls
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(self.confirm_result)
-        }
-    }
+    use crate::test_support::TestShellProxy;
+    type TestProxy = TestShellProxy;
 
     #[test]
     fn extract_program_name_returns_first_token() {
@@ -454,10 +373,10 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls");
         let mut proxy = TestProxy {
-            allow: vec!["ls".to_string()],
-            cwd: std::env::current_dir().unwrap(),
-            confirm_calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            execute_allowlist: vec!["ls".to_string()],
+            current_dir: std::env::current_dir().unwrap(),
             confirm_result: true,
+            ..TestProxy::default()
         };
         let result = run("{\"command\":\"cat README.md\"}", &mut proxy);
         let err = result.expect_err("command should be rejected");
@@ -470,10 +389,10 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls");
         let mut proxy = TestProxy {
-            allow: vec!["ls".to_string()],
-            cwd: std::env::current_dir().unwrap(),
-            confirm_calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            execute_allowlist: vec!["ls".to_string()],
+            current_dir: std::env::current_dir().unwrap(),
             confirm_result: true,
+            ..TestProxy::default()
         };
 
         let result = run("{\"command\":\"ls ; rm -rf /tmp/x\"}", &mut proxy);
@@ -498,10 +417,10 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "bash");
         let mut proxy = TestProxy {
-            allow: vec!["bash".to_string()],
-            cwd: std::env::current_dir().unwrap(),
-            confirm_calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            execute_allowlist: vec!["bash".to_string()],
+            current_dir: std::env::current_dir().unwrap(),
             confirm_result: true,
+            ..TestProxy::default()
         };
 
         let result = run("{\"command\":\"bash -lc 'echo hi'\"}", &mut proxy);
@@ -533,10 +452,10 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "git");
         let mut proxy = TestProxy {
-            allow: vec!["git".to_string()],
-            cwd: std::env::current_dir().unwrap(),
-            confirm_calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            execute_allowlist: vec!["git".to_string()],
+            current_dir: std::env::current_dir().unwrap(),
             confirm_result: true,
+            ..TestProxy::default()
         };
 
         let result = run("{\"command\":\"/tmp/git status\"}", &mut proxy);
@@ -551,10 +470,11 @@ mod tests {
         let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls");
         let confirm_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut proxy = TestProxy {
-            allow: vec!["ls".to_string()],
-            cwd: std::env::current_dir().unwrap(),
-            confirm_calls: confirm_calls.clone(),
+            execute_allowlist: vec!["ls".to_string()],
+            current_dir: std::env::current_dir().unwrap(),
+            confirm_counter: Some(confirm_calls.clone()),
             confirm_result: true,
+            ..TestProxy::default()
         };
         let result = run("{\"command\":\"ls -la\"}", &mut proxy);
         assert!(result.is_ok());
@@ -574,10 +494,11 @@ mod tests {
 
         let confirm_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut proxy = TestProxy {
-            allow: vec![],
-            cwd: std::env::current_dir().unwrap(),
-            confirm_calls: confirm_calls.clone(),
+            execute_allowlist: vec![],
+            current_dir: std::env::current_dir().unwrap(),
+            confirm_counter: Some(confirm_calls.clone()),
             confirm_result: false,
+            ..TestProxy::default()
         };
 
         let command = format!("{{\"command\":\"{}\"}}", script_path.to_string_lossy());

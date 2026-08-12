@@ -17,6 +17,7 @@ use tracing::warn;
 
 mod cache;
 mod container;
+mod declared;
 mod dev;
 mod external;
 mod git;
@@ -150,7 +151,7 @@ impl CommandQueryPolicy {
 }
 
 impl CachePolicy {
-    fn is_cached_only(self) -> bool {
+    pub(crate) fn is_cached_only(self) -> bool {
         matches!(self, Self::CachedOnly)
     }
 }
@@ -310,14 +311,6 @@ impl DynamicCompletionProvider {
         project_root
     }
 
-    pub(crate) fn collect_task_candidates(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_task_candidates_with_mode(parsed_command_line, current_dir, false)
-    }
-
     pub(crate) fn collect_declared_dynamic_candidates(
         &self,
         provider: &str,
@@ -348,580 +341,23 @@ impl DynamicCompletionProvider {
         cache_policy: CachePolicy,
     ) -> Option<Vec<EnhancedCandidate>> {
         let registration = registry::registration(provider)?;
-        let provider = registration.id.as_str();
-        let cached_only = cache_policy.is_cached_only();
-        let current_token = parsed_command_line.current_token.as_str();
-        Some(match provider {
-            "archive.entry" => {
-                self.collect_archive_entry_candidates(parsed_command_line, current_dir, cached_only)
-            }
-            "git.alias" => {
-                self.collect_git_alias_candidates(current_dir, current_token, cached_only)
-            }
-            "git.config_key" => {
-                self.collect_git_config_key_candidates(current_dir, current_token, cached_only)
-            }
-            "brew.installed" => self.collect_brew_installed_candidates(current_token, cached_only),
-            "cargo.feature" => {
-                self.collect_cargo_feature_candidates(current_dir, current_token, cached_only)
-            }
-            "kind.cluster" => self.collect_kind_cluster_candidates(current_token, cached_only),
-            "k3d.cluster" => self.collect_k3d_cluster_candidates(current_token, cached_only),
-            "minikube.profile" => {
-                self.collect_minikube_profile_candidates(current_token, cached_only)
-            }
-            "man.page" => self.collect_man_page_candidates(current_token, cached_only),
-            "ollama.model" => self.collect_ollama_model_candidates(current_token, cached_only),
-            "git.branch" => {
-                self.collect_git_branch_candidates(current_dir, current_token, cached_only)
-            }
-            "git.checkout_target" => {
-                self.collect_git_checkout_target_candidates(current_dir, current_token, cached_only)
-            }
-            "git.changed_path" => {
-                self.collect_git_changed_path_candidates(current_dir, current_token, cached_only)
-            }
-            "git.push_branch" => self.collect_git_push_branch_candidates(
-                current_dir,
-                selected_git_remote(parsed_command_line),
-                current_token,
-                cached_only,
-            ),
-            "git.remote" => {
-                self.collect_git_remote_candidates(current_dir, current_token, cached_only)
-            }
-            "git.remote_branch" => self.collect_git_remote_branch_candidates(
-                current_dir,
-                selected_git_remote(parsed_command_line),
-                current_token,
-                cached_only,
-            ),
-            "git.revision" => {
-                self.collect_git_revision_candidates(current_dir, current_token, cached_only)
-            }
-            "git.stash" => {
-                self.collect_git_stash_candidates(current_dir, current_token, cached_only)
-            }
-            "git.tag" => self.collect_git_tag_candidates(current_dir, current_token, cached_only),
-            "git.worktree" => {
-                self.collect_git_worktree_candidates(current_dir, current_token, cached_only)
-            }
-            "docker.image" => {
-                self.collect_docker_image_candidates(current_dir, current_token, cached_only)
-            }
-            "docker.container" => self.collect_docker_container_candidates(
-                current_dir,
-                current_token,
-                scope != Some("running"),
-                cached_only,
-            ),
-            "docker.network" => self.collect_container_object_candidates(
-                "docker",
-                "network",
-                current_dir,
-                current_token,
-                "docker network",
-                &["network", "ls", "--format", "{{.Name}}"],
-                parse_non_empty_lines,
-                cached_only,
-            ),
-            "docker.volume" => self.collect_container_object_candidates(
-                "docker",
-                "volume",
-                current_dir,
-                current_token,
-                "docker volume",
-                &["volume", "ls", "--format", "{{.Name}}"],
-                parse_non_empty_lines,
-                cached_only,
-            ),
-            "block.device" => {
-                self.collect_block_device_candidates(current_dir, current_token, cached_only)
-            }
-            "block.label" => self.collect_blkid_attribute_candidates(
-                current_dir,
-                current_token,
-                "LABEL",
-                "block label",
-                cached_only,
-            ),
-            "block.uuid" => self.collect_blkid_attribute_candidates(
-                current_dir,
-                current_token,
-                "UUID",
-                "block uuid",
-                cached_only,
-            ),
-            "dbus.service" => {
-                self.collect_dbus_service_candidates(current_dir, current_token, cached_only)
-            }
-            "docker.compose_service" => {
-                let compose_file = selected_docker_compose_file(parsed_command_line, current_dir);
-                if cached_only {
-                    self.collect_compose_service_candidates_cached(
-                        current_dir,
-                        current_token,
-                        compose_file.as_deref(),
-                    )
-                } else {
-                    self.collect_compose_service_candidates(
-                        current_dir,
-                        current_token,
-                        compose_file.as_deref(),
-                    )
-                }
-            }
-            "kubectl.context" => {
-                self.collect_kubectl_context_candidates(current_dir, current_token, cached_only)
-            }
-            "kubectl.namespace" => platform::collect_kubectl_declared(
-                self,
-                provider,
-                scope,
-                parsed_command_line,
-                current_dir,
-                cached_only,
-            ),
-            "kubectl.resource_type" | "kubectl.resource_name" => {
-                platform::collect_kubectl_declared(
-                    self,
-                    provider,
-                    scope,
-                    parsed_command_line,
-                    current_dir,
-                    cached_only,
-                )
-            }
-            "systemctl.unit" => {
-                let kind = systemctl_unit_kind_for_context(parsed_command_line);
-                self.collect_systemd_unit_candidates(
-                    current_dir,
-                    current_token,
-                    SystemdUnitQuery::new(
-                        kind,
-                        selected_systemd_manager_scope(parsed_command_line),
-                        systemd_unit_type_filter(scope),
-                    ),
-                    "systemd unit",
-                    cached_only,
-                )
-            }
-            "systemctl.unit_file" => self.collect_systemd_unit_candidates(
-                current_dir,
-                current_token,
-                SystemdUnitQuery::new(
-                    SystemdUnitListKind::UnitFiles,
-                    selected_systemd_manager_scope(parsed_command_line),
-                    systemd_unit_type_filter(scope),
-                ),
-                "systemd unit file",
-                cached_only,
-            ),
-            "journalctl.boot" => {
-                self.collect_journalctl_boot_candidates(current_dir, current_token, cached_only)
-            }
-            "journalctl.identifier" => self.collect_journalctl_identifier_candidates(
-                current_dir,
-                current_token,
-                cached_only,
-            ),
-            "firewalld.zone" => {
-                self.collect_firewalld_zone_candidates(current_dir, current_token, cached_only)
-            }
-            "firewalld.service" => {
-                self.collect_firewalld_service_candidates(current_dir, current_token, cached_only)
-            }
-            "firewalld.icmp_type" => {
-                self.collect_firewalld_icmp_type_candidates(current_dir, current_token, cached_only)
-            }
-            "networkctl.link" => {
-                self.collect_networkctl_link_candidates(current_dir, current_token, cached_only)
-            }
-            "ipset.set" => {
-                self.collect_ipset_set_candidates(current_dir, current_token, cached_only)
-            }
-            "wireguard.interface" => {
-                self.collect_wireguard_interface_candidates(current_dir, current_token, cached_only)
-            }
-            "wireguard.config" => {
-                self.collect_wireguard_config_candidates(current_dir, current_token)
-            }
-            "cargo.package" => self.collect_cargo_metadata_candidates(
-                current_dir,
-                current_token,
-                CargoMetadataValueKind::Package,
-                "cargo package",
-                cached_only,
-            ),
-            "cargo.bin" => self.collect_cargo_metadata_candidates(
-                current_dir,
-                current_token,
-                CargoMetadataValueKind::Bin,
-                "cargo binary target",
-                cached_only,
-            ),
-            "cargo.example" => self.collect_cargo_metadata_candidates(
-                current_dir,
-                current_token,
-                CargoMetadataValueKind::Example,
-                "cargo example target",
-                cached_only,
-            ),
-            "js.dependency" => self.collect_js_dependency_candidates(
-                parsed_command_line,
-                current_dir,
-                parsed_command_line.command.as_str(),
-                cached_only,
-            ),
-            "project.task" => {
-                if let Some(config) = project::completion_config(scope, parsed_command_line) {
-                    self.collect_project_task_candidates_for_sources_with_mode(
-                        parsed_command_line,
-                        current_dir,
-                        config.sources,
-                        cached_only,
-                        config.candidate_text,
-                    )
-                } else if cached_only {
-                    self.collect_task_candidates_with_mode(parsed_command_line, current_dir, true)
-                } else {
-                    self.collect_task_candidates(parsed_command_line, current_dir)
-                }
-            }
-            "filesystem.type" => {
-                self.collect_filesystem_type_candidates(current_token, cached_only)
-            }
-            "apt.installed_package" => self.collect_apt_installed_package_candidates(
-                current_dir,
-                current_token,
-                parsed_command_line.command.as_str(),
-                cached_only,
-            ),
-            "apk.installed_package" => self.collect_apk_installed_package_candidates(
-                current_dir,
-                current_token,
-                cached_only,
-            ),
-            "dnf.installed_package" => self.collect_rpm_installed_package_candidates(
-                current_dir,
-                current_token,
-                "dnf",
-                cached_only,
-            ),
-            "rpm.installed_package" => self.collect_rpm_installed_package_candidates(
-                current_dir,
-                current_token,
-                "rpm",
-                cached_only,
-            ),
-            "zypper.installed_package" => self.collect_zypper_installed_package_candidates(
-                current_dir,
-                current_token,
-                cached_only,
-            ),
-            "fstab.mountpoint" => {
-                self.collect_fstab_mountpoint_candidates(current_token, cached_only)
-            }
-            "localectl.keymap" => {
-                self.collect_localectl_keymap_candidates(current_dir, current_token, cached_only)
-            }
-            "localectl.locale" => {
-                self.collect_localectl_locale_candidates(current_dir, current_token, cached_only)
-            }
-            "loginctl.seat" => {
-                self.collect_loginctl_seat_candidates(current_dir, current_token, cached_only)
-            }
-            "loginctl.session" => {
-                self.collect_loginctl_session_candidates(current_dir, current_token, cached_only)
-            }
-            "machinectl.machine" => {
-                self.collect_machinectl_machine_candidates(current_dir, current_token, cached_only)
-            }
-            "loop.device" => {
-                self.collect_loop_device_candidates(current_dir, current_token, cached_only)
-            }
-            "sysctl.key" => self.collect_sysctl_key_candidates(current_token, cached_only),
-            "ssh.host" => self.collect_ssh_host_candidates_with_mode(
-                parsed_command_line,
-                current_dir,
-                parsed_command_line.command.as_str(),
-                cached_only,
-            ),
-            "swap.device" => self.collect_swap_device_candidates(current_token, cached_only),
-            "system.process_name" => self.collect_process_name_candidates_with_mode(
-                parsed_command_line,
-                "system",
-                cached_only,
-            ),
-            "system.process_pid" => {
-                self.collect_process_pid_candidates(parsed_command_line, cached_only)
-            }
-            "timedatectl.timezone" => self.collect_timedatectl_timezone_candidates(
-                current_dir,
-                current_token,
-                cached_only,
-            ),
-            "ufw.application" => {
-                self.collect_ufw_application_candidates(current_dir, current_token, cached_only)
-            }
-            "tmux.session" => {
-                self.collect_tmux_session_candidates(current_dir, current_token, cached_only)
-            }
-            "screen.session" => {
-                self.collect_screen_session_candidates(current_dir, current_token, cached_only)
-            }
-            "nmcli.connection" => self.collect_nmcli_value_candidates(
-                current_dir,
-                current_token,
-                NmcliCompletionSpec {
-                    kind: "connection",
-                    args: &["-t", "-f", "NAME", "connection", "show"],
-                    description: "NetworkManager connection",
-                    parser: parse_nmcli_first_field,
-                },
-                cached_only,
-            ),
-            "nmcli.device" => self.collect_nmcli_value_candidates(
-                current_dir,
-                current_token,
-                NmcliCompletionSpec {
-                    kind: "device",
-                    args: &["-t", "-f", "DEVICE", "device"],
-                    description: "NetworkManager device",
-                    parser: parse_nmcli_first_field,
-                },
-                cached_only,
-            ),
-            "rustup.toolchain" => {
-                self.collect_rustup_toolchain_candidates(current_dir, current_token, cached_only)
-            }
-            "pip.installed_package" => self.collect_pip_installed_package_candidates(
-                current_dir,
-                parsed_command_line.command.as_str(),
-                current_token,
-                cached_only,
-            ),
-            "pacman.package" => self.collect_pacman_package_candidates(
-                current_dir,
-                current_token,
-                matches!(
-                    parsed_command_line
-                        .subcommand_path
-                        .first()
-                        .map(String::as_str)
-                        .or_else(|| parsed_command_line.raw_args.first().map(String::as_str)),
-                    Some("-S")
-                ),
-                cached_only,
-            ),
-            "mount.mountpoint" => {
-                self.collect_mountpoint_candidates(current_dir, current_token, cached_only)
-            }
-            "kernel.module" => {
-                self.collect_kernel_module_candidates(scope, current_token, cached_only)
-            }
-            "audit.rule_key" => self.collect_audit_rule_key_candidates(current_token, cached_only),
-            "ansible.inventory_host" => self.collect_ansible_inventory_host_candidates(
-                parsed_command_line,
-                current_dir,
-                current_token,
-                cached_only,
-            ),
-            "aws.profile" => self.collect_aws_profile_candidates(current_token, cached_only),
-            "az.subscription" => {
-                self.collect_az_subscription_candidates(current_token, cached_only)
-            }
-            "gcloud.configuration" => {
-                self.collect_gcloud_configuration_candidates(current_token, cached_only)
-            }
-            "gcloud.project" => self.collect_gcloud_project_candidates(current_token, cached_only),
-            "python.project_dependency" => self.collect_python_project_dependency_candidates(
-                current_dir,
-                current_token,
-                cached_only,
-            ),
-            "python.module" => {
-                self.collect_python_module_candidates(current_dir, current_token, cached_only)
-            }
-            "node.bin" => self.collect_node_bin_candidates(current_dir, current_token, cached_only),
-            "node.workspace" => {
-                self.collect_node_workspace_candidates(current_dir, current_token, cached_only)
-            }
-            "go.package" => {
-                self.collect_go_package_candidates(current_dir, current_token, cached_only)
-            }
-            "helm.release" => self.collect_helm_release_candidates(
-                parsed_command_line,
-                current_dir,
-                current_token,
-                cached_only,
-            ),
-            "ip.netns" => self.collect_ip_netns_candidates(current_dir, current_token, cached_only),
-            "ip.route_table" => self.collect_ip_route_table_candidates(current_token, cached_only),
-            "btrfs.subvolume" => {
-                self.collect_btrfs_subvolume_candidates(current_dir, current_token, cached_only)
-            }
-            "dmsetup.device" => self.collect_dmsetup_device_candidates(current_token, cached_only),
-            "lvm.logical_volume" => {
-                self.collect_lvm_logical_volume_candidates(current_token, cached_only)
-            }
-            "lvm.physical_volume" => {
-                self.collect_lvm_physical_volume_candidates(current_token, cached_only)
-            }
-            "lvm.volume_group" => {
-                self.collect_lvm_volume_group_candidates(current_token, cached_only)
-            }
-            "maven.module" => {
-                self.collect_maven_module_candidates(current_dir, current_token, cached_only)
-            }
-            "maven.profile" => {
-                self.collect_maven_profile_candidates(current_dir, current_token, cached_only)
-            }
-            "mdadm.array" => self.collect_mdadm_array_candidates(current_token, cached_only),
-            "nft.chain" => {
-                self.collect_nft_chain_candidates(current_dir, current_token, cached_only)
-            }
-            "nft.table" => {
-                self.collect_nft_table_candidates(current_dir, current_token, cached_only)
-            }
-            "selinux.module" => self.collect_selinux_module_candidates(current_token, cached_only),
-            "terraform.workspace" => {
-                self.collect_terraform_workspace_candidates(current_dir, current_token, cached_only)
-            }
-            "shell.abbr" => self.collect_shell_abbr_candidates(current_token),
-            "shell.alias" => self.collect_shell_alias_candidates(current_token),
-            "shell.env_var" => self.collect_shell_env_var_candidates(current_token),
-            "shell.job" => Vec::new(),
-            "system.owner_group" => self.collect_owner_group_candidates(current_token, cached_only),
-            "podman.image" => self.collect_container_image_candidates(
-                "podman",
-                current_dir,
-                current_token,
-                cached_only,
-            ),
-            "podman.container" => self.collect_container_container_candidates(
-                "podman",
-                current_dir,
-                current_token,
-                scope != Some("running"),
-                cached_only,
-            ),
-            "podman.network" => self.collect_container_object_candidates(
-                "podman",
-                "network",
-                current_dir,
-                current_token,
-                "podman network",
-                &["network", "ls", "--format", "{{.Name}}"],
-                parse_non_empty_lines,
-                cached_only,
-            ),
-            "podman.volume" => self.collect_container_object_candidates(
-                "podman",
-                "volume",
-                current_dir,
-                current_token,
-                "podman volume",
-                &["volume", "ls", "--format", "{{.Name}}"],
-                parse_non_empty_lines,
-                cached_only,
-            ),
-            "rustup.component" => {
-                self.collect_rustup_component_candidates(current_token, cached_only)
-            }
-            "rustup.target" => self.collect_rustup_target_candidates(current_token, cached_only),
-            "cargo.installed_binary" => {
-                self.collect_cargo_installed_binary_candidates(current_token, cached_only)
-            }
-            "cargo.test" => self.collect_cargo_metadata_candidates(
-                current_dir,
-                current_token,
-                CargoMetadataValueKind::Test,
-                "cargo test target",
-                cached_only,
-            ),
-            "cargo.bench" => self.collect_cargo_metadata_candidates(
-                current_dir,
-                current_token,
-                CargoMetadataValueKind::Bench,
-                "cargo bench target",
-                cached_only,
-            ),
-            "bat.theme" => self.collect_bat_theme_candidates(current_token, cached_only),
-            "bat.language" => self.collect_bat_language_candidates(current_token, cached_only),
-            "rg.file_type" => self.collect_rg_file_type_candidates(current_token, cached_only),
-            "ffmpeg.encoder" => self.collect_ffmpeg_table_candidates(
-                "encoder",
-                current_token,
-                "ffmpeg encoder",
-                &["-hide_banner", "-encoders"],
-                cached_only,
-            ),
-            "ffmpeg.decoder" => self.collect_ffmpeg_table_candidates(
-                "decoder",
-                current_token,
-                "ffmpeg decoder",
-                &["-hide_banner", "-decoders"],
-                cached_only,
-            ),
-            "ffmpeg.format" => self.collect_ffmpeg_table_candidates(
-                "format",
-                current_token,
-                "ffmpeg format",
-                &["-hide_banner", "-formats"],
-                cached_only,
-            ),
-            "go.env_key" => self.collect_go_env_key_candidates(current_token, cached_only),
-            "pipx.installed_package" => {
-                self.collect_pipx_installed_package_candidates(current_token, cached_only)
-            }
-            "asdf.plugin" => self.collect_asdf_plugin_candidates(current_token, cached_only),
-            "mise.tool" => self.collect_mise_tool_candidates(current_token, cached_only),
-            "code.extension" => self.collect_code_extension_candidates(current_token, cached_only),
-            "nox.session" => {
-                self.collect_nox_session_candidates(current_dir, current_token, cached_only)
-            }
-            "tox.environment" => {
-                self.collect_tox_environment_candidates(current_dir, current_token, cached_only)
-            }
-            "hatch.environment" => {
-                self.collect_hatch_environment_candidates(current_dir, current_token, cached_only)
-            }
-            "pre_commit.hook_id" => {
-                self.collect_pre_commit_hook_id_candidates(current_dir, current_token, cached_only)
-            }
-            "wireless.device" => {
-                self.collect_wireless_device_candidates(current_dir, current_token, cached_only)
-            }
-            "login.shell" => self.collect_login_shell_candidates(current_token, cached_only),
-            "udev.subsystem" => self.collect_udev_subsystem_candidates(current_token, cached_only),
-            "selinux.boolean" => {
-                self.collect_selinux_boolean_candidates(current_token, cached_only)
-            }
-            "zfs.dataset" => {
-                self.collect_zfs_dataset_candidates(current_dir, current_token, cached_only)
-            }
-            "zpool.pool" => {
-                self.collect_zpool_pool_candidates(current_dir, current_token, cached_only)
-            }
-            _ => {
-                return platform::collect(
-                    self,
-                    provider,
-                    parsed_command_line,
-                    current_dir,
-                    cached_only,
-                );
-            }
-        })
+        let request = registry::DynamicProviderRequest {
+            provider: registration.id,
+            scope,
+            parsed_command_line,
+            current_dir,
+            cache_policy,
+        };
+        registration.collect(self, &request)
     }
 
-    fn collect_task_candidates_with_mode(
+    pub(crate) fn collect_task_candidates(
         &self,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
-        cached_only: bool,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
         let current_token = parsed_command_line.current_token.as_str();
         let tasks = if cached_only {
             self.lookup_project_tasks(current_dir)
@@ -1083,24 +519,9 @@ impl DynamicCompletionProvider {
         &self,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_git_candidates_with_mode(parsed_command_line, current_dir, false)
-    }
-
-    pub(crate) fn collect_git_candidates_cached(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_git_candidates_with_mode(parsed_command_line, current_dir, true)
-    }
-
-    fn collect_git_candidates_with_mode(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
         let current_token = parsed_command_line.current_token.as_str();
         let Some(primary_subcommand) = parsed_command_line.subcommand_path.first() else {
             // At the subcommand position (`git co<TAB>`), offer user-defined
@@ -1249,24 +670,9 @@ impl DynamicCompletionProvider {
         &self,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_docker_candidates_with_mode(parsed_command_line, current_dir, false)
-    }
-
-    pub(crate) fn collect_docker_candidates_cached(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_docker_candidates_with_mode(parsed_command_line, current_dir, true)
-    }
-
-    fn collect_docker_candidates_with_mode(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
         let primary = parsed_command_line
             .subcommand_path
             .first()
@@ -1378,24 +784,9 @@ impl DynamicCompletionProvider {
         &self,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_kubectl_candidates_with_mode(parsed_command_line, current_dir, false)
-    }
-
-    pub(crate) fn collect_kubectl_candidates_cached(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_kubectl_candidates_with_mode(parsed_command_line, current_dir, true)
-    }
-
-    fn collect_kubectl_candidates_with_mode(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
         let current_token = parsed_command_line.current_token.as_str();
         match &parsed_command_line.completion_context {
             CompletionContext::OptionValue { option_name, .. } => match option_name.as_str() {
@@ -1467,24 +858,9 @@ impl DynamicCompletionProvider {
         &self,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_cargo_candidates_with_mode(parsed_command_line, current_dir, false)
-    }
-
-    pub(crate) fn collect_cargo_candidates_cached(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_cargo_candidates_with_mode(parsed_command_line, current_dir, true)
-    }
-
-    fn collect_cargo_candidates_with_mode(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
         let CompletionContext::OptionValue { option_name, .. } =
             &parsed_command_line.completion_context
         else {
@@ -1511,24 +887,9 @@ impl DynamicCompletionProvider {
         &self,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_systemctl_candidates_with_mode(parsed_command_line, current_dir, false)
-    }
-
-    pub(crate) fn collect_systemctl_candidates_cached(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_systemctl_candidates_with_mode(parsed_command_line, current_dir, true)
-    }
-
-    fn collect_systemctl_candidates_with_mode(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
         if !matches!(
             parsed_command_line.completion_context,
             CompletionContext::SubCommand | CompletionContext::Argument { .. }
@@ -1565,24 +926,9 @@ impl DynamicCompletionProvider {
         &self,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_journalctl_candidates_with_mode(parsed_command_line, current_dir, false)
-    }
-
-    pub(crate) fn collect_journalctl_candidates_cached(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_journalctl_candidates_with_mode(parsed_command_line, current_dir, true)
-    }
-
-    fn collect_journalctl_candidates_with_mode(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
         let CompletionContext::OptionValue { option_name, .. } =
             &parsed_command_line.completion_context
         else {
@@ -1608,38 +954,11 @@ impl DynamicCompletionProvider {
     pub(crate) fn collect_ssh_host_candidates(
         &self,
         parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        command_name: &str,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_ssh_host_candidates_with_mode(
-            parsed_command_line,
-            current_dir,
-            command_name,
-            false,
-        )
-    }
-
-    pub(crate) fn collect_ssh_host_candidates_cached(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        command_name: &str,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_ssh_host_candidates_with_mode(
-            parsed_command_line,
-            current_dir,
-            command_name,
-            true,
-        )
-    }
-
-    fn collect_ssh_host_candidates_with_mode(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
         _current_dir: &Path,
         command_name: &str,
-        cached_only: bool,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
         if !matches!(
             parsed_command_line.completion_context,
             CompletionContext::SubCommand | CompletionContext::Argument { .. }
@@ -1688,24 +1007,9 @@ impl DynamicCompletionProvider {
         &self,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_tmux_candidates_with_mode(parsed_command_line, current_dir, false)
-    }
-
-    pub(crate) fn collect_tmux_candidates_cached(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_tmux_candidates_with_mode(parsed_command_line, current_dir, true)
-    }
-
-    fn collect_tmux_candidates_with_mode(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
         let completes_session = match &parsed_command_line.completion_context {
             CompletionContext::OptionValue { option_name, .. } => option_name == "-t",
             CompletionContext::SubCommand | CompletionContext::Argument { .. } => matches!(
@@ -1732,24 +1036,9 @@ impl DynamicCompletionProvider {
         &self,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_screen_candidates_with_mode(parsed_command_line, current_dir, false)
-    }
-
-    pub(crate) fn collect_screen_candidates_cached(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_screen_candidates_with_mode(parsed_command_line, current_dir, true)
-    }
-
-    fn collect_screen_candidates_with_mode(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
         if !matches!(
             parsed_command_line.completion_context,
             CompletionContext::OptionValue { .. }
@@ -1770,24 +1059,9 @@ impl DynamicCompletionProvider {
         &self,
         parsed_command_line: &ParsedCommandLine,
         command_name: &str,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_process_name_candidates_with_mode(parsed_command_line, command_name, false)
-    }
-
-    pub(crate) fn collect_process_name_candidates_cached(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        command_name: &str,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_process_name_candidates_with_mode(parsed_command_line, command_name, true)
-    }
-
-    fn collect_process_name_candidates_with_mode(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        command_name: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
         if !matches!(
             parsed_command_line.completion_context,
             CompletionContext::SubCommand | CompletionContext::Argument { .. }
@@ -1834,26 +1108,9 @@ impl DynamicCompletionProvider {
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
         command_name: &str,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_pip_candidates_with_mode(parsed_command_line, current_dir, command_name, false)
-    }
-
-    pub(crate) fn collect_pip_candidates_cached(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        command_name: &str,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_pip_candidates_with_mode(parsed_command_line, current_dir, command_name, true)
-    }
-
-    fn collect_pip_candidates_with_mode(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        command_name: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
         if !matches!(
             parsed_command_line
                 .subcommand_path
@@ -1879,24 +1136,9 @@ impl DynamicCompletionProvider {
         &self,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_rustup_candidates_with_mode(parsed_command_line, current_dir, false)
-    }
-
-    pub(crate) fn collect_rustup_candidates_cached(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_rustup_candidates_with_mode(parsed_command_line, current_dir, true)
-    }
-
-    fn collect_rustup_candidates_with_mode(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
         let path = parsed_command_line
             .subcommand_path
             .iter()
@@ -1918,24 +1160,9 @@ impl DynamicCompletionProvider {
         &self,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_gh_candidates_with_mode(parsed_command_line, current_dir, false)
-    }
-
-    pub(crate) fn collect_gh_candidates_cached(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_gh_candidates_with_mode(parsed_command_line, current_dir, true)
-    }
-
-    fn collect_gh_candidates_with_mode(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
         let path = parsed_command_line
             .subcommand_path
             .iter()
@@ -1991,24 +1218,9 @@ impl DynamicCompletionProvider {
         &self,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_nmcli_candidates_with_mode(parsed_command_line, current_dir, false)
-    }
-
-    pub(crate) fn collect_nmcli_candidates_cached(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_nmcli_candidates_with_mode(parsed_command_line, current_dir, true)
-    }
-
-    fn collect_nmcli_candidates_with_mode(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
         let path = parsed_command_line
             .subcommand_path
             .iter()
@@ -2060,24 +1272,9 @@ impl DynamicCompletionProvider {
         &self,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_pacman_candidates_with_mode(parsed_command_line, current_dir, false)
-    }
-
-    pub(crate) fn collect_pacman_candidates_cached(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_pacman_candidates_with_mode(parsed_command_line, current_dir, true)
-    }
-
-    fn collect_pacman_candidates_with_mode(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
         let subcommand = parsed_command_line
             .subcommand_path
             .first()
@@ -2100,24 +1297,9 @@ impl DynamicCompletionProvider {
         &self,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_mount_candidates_with_mode(parsed_command_line, current_dir, false)
-    }
-
-    pub(crate) fn collect_mount_candidates_cached(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_mount_candidates_with_mode(parsed_command_line, current_dir, true)
-    }
-
-    fn collect_mount_candidates_with_mode(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
         if !matches!(
             parsed_command_line.completion_context,
             CompletionContext::SubCommand | CompletionContext::Argument { .. }
@@ -2136,24 +1318,9 @@ impl DynamicCompletionProvider {
         &self,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_umount_candidates_with_mode(parsed_command_line, current_dir, false)
-    }
-
-    pub(crate) fn collect_umount_candidates_cached(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_umount_candidates_with_mode(parsed_command_line, current_dir, true)
-    }
-
-    fn collect_umount_candidates_with_mode(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
         if !matches!(
             parsed_command_line.completion_context,
             CompletionContext::SubCommand | CompletionContext::Argument { .. }
@@ -2170,22 +1337,9 @@ impl DynamicCompletionProvider {
     pub(crate) fn collect_modprobe_candidates(
         &self,
         parsed_command_line: &ParsedCommandLine,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_modprobe_candidates_with_mode(parsed_command_line, false)
-    }
-
-    pub(crate) fn collect_modprobe_candidates_cached(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_modprobe_candidates_with_mode(parsed_command_line, true)
-    }
-
-    fn collect_modprobe_candidates_with_mode(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
         if !matches!(
             parsed_command_line.completion_context,
             CompletionContext::SubCommand | CompletionContext::Argument { .. }
@@ -2963,22 +2117,9 @@ impl DynamicCompletionProvider {
     pub(crate) fn collect_tcpdump_candidates(
         &self,
         parsed_command_line: &ParsedCommandLine,
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
-        self.collect_tcpdump_candidates_with_mode(parsed_command_line, false)
-    }
-
-    pub(crate) fn collect_tcpdump_candidates_cached(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_tcpdump_candidates_with_mode(parsed_command_line, true)
-    }
-
-    fn collect_tcpdump_candidates_with_mode(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
+        let cached_only = cache_policy.is_cached_only();
         let CompletionContext::OptionValue { option_name, .. } =
             &parsed_command_line.completion_context
         else {
@@ -6479,6 +5620,26 @@ mod tests {
     }
 
     #[test]
+    fn unknown_provider_is_not_registered_or_dispatched() {
+        let provider = DynamicCompletionProvider::new(Environment::new());
+        let parsed = parsed("");
+        let current_dir = std::env::current_dir().unwrap();
+
+        assert!(registry::registration("unknown.provider").is_none());
+        assert!(
+            provider
+                .try_collect_declared_dynamic_candidates(
+                    "unknown.provider",
+                    None,
+                    &parsed,
+                    &current_dir,
+                    CachePolicy::CachedOnly,
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
     fn full_worker_queue_restores_pending_state() {
         let runtime = Arc::new(CompletionRuntime::with_worker_counts(
             runtime::CompletionWorkerCounts::new(1, 1, 1),
@@ -7235,8 +6396,11 @@ mod tests {
             },
         );
 
-        let candidates =
-            provider.collect_mount_candidates_cached(&parsed("mount /mnt"), Path::new("/tmp"));
+        let candidates = provider.collect_mount_candidates(
+            &parsed("mount /mnt"),
+            Path::new("/tmp"),
+            CachePolicy::CachedOnly,
+        );
 
         assert!(
             candidates
@@ -7279,7 +6443,11 @@ volumes:
         .unwrap();
 
         let provider = DynamicCompletionProvider::new(Environment::new());
-        let build_candidates = provider.collect_task_candidates(&parsed("task bu"), &nested);
+        let build_candidates = provider.collect_task_candidates(
+            &parsed("task bu"),
+            &nested,
+            CachePolicy::RefreshInBackground,
+        );
 
         assert!(
             build_candidates
@@ -7295,7 +6463,11 @@ volumes:
         )
         .unwrap();
 
-        let test_candidates = provider.collect_task_candidates(&parsed("task te"), &nested);
+        let test_candidates = provider.collect_task_candidates(
+            &parsed("task te"),
+            &nested,
+            CachePolicy::RefreshInBackground,
+        );
 
         assert!(
             test_candidates
@@ -7317,16 +6489,27 @@ volumes:
         let provider = DynamicCompletionProvider::new(Environment::new());
         assert!(
             provider
-                .collect_task_candidates_with_mode(&parsed("bun run bu"), dir.path(), true)
+                .collect_task_candidates(
+                    &parsed("bun run bu"),
+                    dir.path(),
+                    CachePolicy::CachedOnly,
+                )
                 .is_empty(),
             "cached-only task completion should not load on miss"
         );
 
-        let loaded = provider.collect_task_candidates(&parsed("bun run bu"), dir.path());
+        let loaded = provider.collect_task_candidates(
+            &parsed("bun run bu"),
+            dir.path(),
+            CachePolicy::RefreshInBackground,
+        );
         assert!(loaded.iter().any(|candidate| candidate.text == "build"));
 
-        let cached =
-            provider.collect_task_candidates_with_mode(&parsed("bun run bu"), dir.path(), true);
+        let cached = provider.collect_task_candidates(
+            &parsed("bun run bu"),
+            dir.path(),
+            CachePolicy::CachedOnly,
+        );
         assert!(cached.iter().any(|candidate| candidate.text == "build"));
     }
 
@@ -7385,6 +6568,7 @@ volumes:
         let candidates = provider.collect_docker_candidates(
             &parsed("docker compose -f compose.dev.yml up wo"),
             dir.path(),
+            CachePolicy::RefreshInBackground,
         );
 
         assert!(
@@ -7455,6 +6639,7 @@ volumes:
         let candidates = provider.collect_docker_candidates(
             &parsed("docker --context prod compose -f compose.dev.yml up wo"),
             dir.path(),
+            CachePolicy::RefreshInBackground,
         );
 
         assert!(
@@ -7487,6 +6672,7 @@ volumes:
         let candidates = provider.collect_docker_candidates(
             &parsed("docker --context=prod compose -f compose.dev.yml up wo"),
             dir.path(),
+            CachePolicy::RefreshInBackground,
         );
 
         assert!(
@@ -7610,17 +6796,27 @@ volumes:
         }
         let provider = DynamicCompletionProvider::new(environment);
 
-        let cold =
-            provider.collect_kubectl_candidates(&parsed("kubectl get -n prod pods ap"), dir.path());
+        let cold = provider.collect_kubectl_candidates(
+            &parsed("kubectl get -n prod pods ap"),
+            dir.path(),
+            CachePolicy::RefreshInBackground,
+        );
         assert!(cold.is_empty(), "cold provider must not block TAB");
         assert!(wait_until(Duration::from_secs(20), || {
             provider
-                .collect_kubectl_candidates(&parsed("kubectl get -n prod pods ap"), dir.path())
+                .collect_kubectl_candidates(
+                    &parsed("kubectl get -n prod pods ap"),
+                    dir.path(),
+                    CachePolicy::RefreshInBackground,
+                )
                 .iter()
                 .any(|candidate| candidate.text == "api")
         }));
-        let names =
-            provider.collect_kubectl_candidates(&parsed("kubectl get -n prod pods ap"), dir.path());
+        let names = provider.collect_kubectl_candidates(
+            &parsed("kubectl get -n prod pods ap"),
+            dir.path(),
+            CachePolicy::RefreshInBackground,
+        );
         assert!(
             names.iter().any(|candidate| candidate.text == "api"),
             "expected resource names to be queried inside the selected namespace"
@@ -7630,20 +6826,30 @@ volumes:
             "get\n-n\nprod\npods\n-o\njsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}\n"
         );
 
-        let resource_name_cold =
-            provider.collect_kubectl_candidates(&parsed("kubectl get pods/ap"), dir.path());
+        let resource_name_cold = provider.collect_kubectl_candidates(
+            &parsed("kubectl get pods/ap"),
+            dir.path(),
+            CachePolicy::RefreshInBackground,
+        );
         assert!(
             resource_name_cold.is_empty(),
             "a new namespace/resource cache key should schedule a worker"
         );
         assert!(wait_until(Duration::from_secs(20), || {
             provider
-                .collect_kubectl_candidates(&parsed("kubectl get pods/ap"), dir.path())
+                .collect_kubectl_candidates(
+                    &parsed("kubectl get pods/ap"),
+                    dir.path(),
+                    CachePolicy::RefreshInBackground,
+                )
                 .iter()
                 .any(|candidate| candidate.text == "pods/api")
         }));
-        let resource_name =
-            provider.collect_kubectl_candidates(&parsed("kubectl get pods/ap"), dir.path());
+        let resource_name = provider.collect_kubectl_candidates(
+            &parsed("kubectl get pods/ap"),
+            dir.path(),
+            CachePolicy::RefreshInBackground,
+        );
         assert!(
             resource_name
                 .iter()

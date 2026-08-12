@@ -41,6 +41,7 @@ type DynamicProviderFn = for<'a> fn(
     &IntegratedCompletionEngine,
     &CompletionRequest<'a>,
     &ParsedCommandLine,
+    CachePolicy,
 ) -> Vec<EnhancedCandidate>;
 
 struct DynamicProviderSpec {
@@ -950,7 +951,14 @@ impl IntegratedCompletionEngine {
         let mut candidates = DYNAMIC_PROVIDER_SPECS
             .iter()
             .find(|provider| provider.command == parsed_command_line.command)
-            .map(|provider| (provider.collect)(self, request, parsed_command_line))
+            .map(|provider| {
+                (provider.collect)(
+                    self,
+                    request,
+                    parsed_command_line,
+                    CachePolicy::RefreshInBackground,
+                )
+            })
             .unwrap_or_default();
         candidates.extend(self.collect_declared_dynamic_candidates(
             request,
@@ -1028,126 +1036,19 @@ impl IntegratedCompletionEngine {
         request: &CompletionRequest,
         parsed_command_line: &parser::ParsedCommandLine,
     ) -> Vec<EnhancedCandidate> {
-        match parsed_command_line.command.as_str() {
-            "git" => self
-                .dynamic
-                .collect_git_candidates_cached(parsed_command_line, request.current_dir),
-            "docker" => self
-                .dynamic
-                .collect_docker_candidates_cached(parsed_command_line, request.current_dir),
-            "kubectl" => self
-                .dynamic
-                .collect_kubectl_candidates_cached(parsed_command_line, request.current_dir),
-            "cargo" => self
-                .dynamic
-                .collect_cargo_candidates_cached(parsed_command_line, request.current_dir),
-            "systemctl" => self
-                .dynamic
-                .collect_systemctl_candidates_cached(parsed_command_line, request.current_dir),
-            "journalctl" => self
-                .dynamic
-                .collect_journalctl_candidates_cached(parsed_command_line, request.current_dir),
-            "ssh" => self.dynamic.collect_ssh_host_candidates_cached(
-                parsed_command_line,
-                request.current_dir,
-                "ssh",
-            ),
-            "scp" => self.dynamic.collect_ssh_host_candidates_cached(
-                parsed_command_line,
-                request.current_dir,
-                "scp",
-            ),
-            "rsync" => self.dynamic.collect_ssh_host_candidates_cached(
-                parsed_command_line,
-                request.current_dir,
-                "rsync",
-            ),
-            "tmux" => self
-                .dynamic
-                .collect_tmux_candidates_cached(parsed_command_line, request.current_dir),
-            "screen" => self
-                .dynamic
-                .collect_screen_candidates_cached(parsed_command_line, request.current_dir),
-            "pgrep" => self
-                .dynamic
-                .collect_process_name_candidates_cached(parsed_command_line, "pgrep"),
-            "pkill" => self
-                .dynamic
-                .collect_process_name_candidates_cached(parsed_command_line, "pkill"),
-            "pip" => self.dynamic.collect_pip_candidates_cached(
-                parsed_command_line,
-                request.current_dir,
-                "pip",
-            ),
-            "pip3" => self.dynamic.collect_pip_candidates_cached(
-                parsed_command_line,
-                request.current_dir,
-                "pip3",
-            ),
-            "rustup" => self
-                .dynamic
-                .collect_rustup_candidates_cached(parsed_command_line, request.current_dir),
-            "gh" => self
-                .dynamic
-                .collect_gh_candidates_cached(parsed_command_line, request.current_dir),
-            "nmcli" => self
-                .dynamic
-                .collect_nmcli_candidates_cached(parsed_command_line, request.current_dir),
-            "pacman" => self
-                .dynamic
-                .collect_pacman_candidates_cached(parsed_command_line, request.current_dir),
-            "mount" => self
-                .dynamic
-                .collect_mount_candidates_cached(parsed_command_line, request.current_dir),
-            "umount" => self
-                .dynamic
-                .collect_umount_candidates_cached(parsed_command_line, request.current_dir),
-            "modprobe" => self
-                .dynamic
-                .collect_modprobe_candidates_cached(parsed_command_line),
-            "tcpdump" => self
-                .dynamic
-                .collect_tcpdump_candidates_cached(parsed_command_line),
-            "npm" | "pnpm" => {
-                let completes_dependency = match parsed_command_line.command.as_str() {
-                    "pnpm" => {
-                        leading_completion_words_match(parsed_command_line, &["remove"])
-                            || leading_completion_words_match(parsed_command_line, &["update"])
-                            || leading_completion_words_match(parsed_command_line, &["why"])
-                    }
-                    _ => {
-                        leading_completion_words_match(parsed_command_line, &["uninstall"])
-                            || leading_completion_words_match(parsed_command_line, &["update"])
-                    }
-                };
-                if completes_dependency {
-                    self.dynamic.collect_js_dependency_candidates(
-                        parsed_command_line,
-                        request.current_dir,
-                        parsed_command_line.command.as_str(),
-                        true,
-                    )
-                } else {
-                    Vec::new()
-                }
-            }
-            "yarn" => {
-                if leading_completion_words_match(parsed_command_line, &["remove"])
-                    || leading_completion_words_match(parsed_command_line, &["why"])
-                    || leading_completion_words_match(parsed_command_line, &["upgrade"])
-                {
-                    self.dynamic.collect_js_dependency_candidates(
-                        parsed_command_line,
-                        request.current_dir,
-                        "yarn",
-                        true,
-                    )
-                } else {
-                    Vec::new()
-                }
-            }
-            _ => Vec::new(),
-        }
+        let mut candidates = DYNAMIC_PROVIDER_SPECS
+            .iter()
+            .find(|provider| provider.command == parsed_command_line.command)
+            .map(|provider| {
+                (provider.collect)(self, request, parsed_command_line, CachePolicy::CachedOnly)
+            })
+            .unwrap_or_default();
+        candidates.extend(self.collect_declared_dynamic_candidates(
+            request,
+            parsed_command_line,
+            CachePolicy::CachedOnly,
+        ));
+        candidates
     }
 
     fn collect_command_candidates_for_ghost(
@@ -1976,268 +1877,320 @@ fn collect_task_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
-    engine
-        .dynamic
-        .collect_task_candidates(parsed, request.current_dir)
+    if cache_policy.is_cached_only() {
+        Vec::new()
+    } else {
+        engine
+            .dynamic
+            .collect_task_candidates(parsed, request.current_dir, cache_policy)
+    }
 }
 
 fn collect_pm_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     _request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
-    engine.collect_pm_candidates(parsed)
+    if cache_policy.is_cached_only() {
+        Vec::new()
+    } else {
+        engine.collect_pm_candidates(parsed)
+    }
 }
 
 fn collect_pj_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     _request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
-    engine.collect_pj_candidates(parsed)
+    if cache_policy.is_cached_only() {
+        Vec::new()
+    } else {
+        engine.collect_pj_candidates(parsed)
+    }
 }
 
 fn collect_mcp_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     _request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
-    engine.collect_mcp_candidates(parsed)
+    if cache_policy.is_cached_only() {
+        Vec::new()
+    } else {
+        engine.collect_mcp_candidates(parsed)
+    }
 }
 
 fn collect_git_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_git_candidates(parsed, request.current_dir)
+        .collect_git_candidates(parsed, request.current_dir, cache_policy)
 }
 
 fn collect_docker_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_docker_candidates(parsed, request.current_dir)
+        .collect_docker_candidates(parsed, request.current_dir, cache_policy)
 }
 
 fn collect_kubectl_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_kubectl_candidates(parsed, request.current_dir)
+        .collect_kubectl_candidates(parsed, request.current_dir, cache_policy)
 }
 
 fn collect_cargo_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_cargo_candidates(parsed, request.current_dir)
+        .collect_cargo_candidates(parsed, request.current_dir, cache_policy)
 }
 
 fn collect_systemctl_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_systemctl_candidates(parsed, request.current_dir)
+        .collect_systemctl_candidates(parsed, request.current_dir, cache_policy)
 }
 
 fn collect_journalctl_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_journalctl_candidates(parsed, request.current_dir)
+        .collect_journalctl_candidates(parsed, request.current_dir, cache_policy)
 }
 
 fn collect_ssh_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_ssh_host_candidates(parsed, request.current_dir, "ssh")
+        .collect_ssh_host_candidates(parsed, request.current_dir, "ssh", cache_policy)
 }
 
 fn collect_scp_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_ssh_host_candidates(parsed, request.current_dir, "scp")
+        .collect_ssh_host_candidates(parsed, request.current_dir, "scp", cache_policy)
 }
 
 fn collect_rsync_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_ssh_host_candidates(parsed, request.current_dir, "rsync")
+        .collect_ssh_host_candidates(parsed, request.current_dir, "rsync", cache_policy)
 }
 
 fn collect_tmux_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_tmux_candidates(parsed, request.current_dir)
+        .collect_tmux_candidates(parsed, request.current_dir, cache_policy)
 }
 
 fn collect_screen_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_screen_candidates(parsed, request.current_dir)
+        .collect_screen_candidates(parsed, request.current_dir, cache_policy)
 }
 
 fn collect_pgrep_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     _request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_process_name_candidates(parsed, "pgrep")
+        .collect_process_name_candidates(parsed, "pgrep", cache_policy)
 }
 
 fn collect_pkill_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     _request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_process_name_candidates(parsed, "pkill")
+        .collect_process_name_candidates(parsed, "pkill", cache_policy)
 }
 
 fn collect_pip_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_pip_candidates(parsed, request.current_dir, "pip")
+        .collect_pip_candidates(parsed, request.current_dir, "pip", cache_policy)
 }
 
 fn collect_pip3_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_pip_candidates(parsed, request.current_dir, "pip3")
+        .collect_pip_candidates(parsed, request.current_dir, "pip3", cache_policy)
 }
 
 fn collect_rustup_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_rustup_candidates(parsed, request.current_dir)
+        .collect_rustup_candidates(parsed, request.current_dir, cache_policy)
 }
 
 fn collect_gh_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_gh_candidates(parsed, request.current_dir)
+        .collect_gh_candidates(parsed, request.current_dir, cache_policy)
 }
 
 fn collect_nmcli_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_nmcli_candidates(parsed, request.current_dir)
+        .collect_nmcli_candidates(parsed, request.current_dir, cache_policy)
 }
 
 fn collect_pacman_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_pacman_candidates(parsed, request.current_dir)
+        .collect_pacman_candidates(parsed, request.current_dir, cache_policy)
 }
 
 fn collect_mount_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_mount_candidates(parsed, request.current_dir)
+        .collect_mount_candidates(parsed, request.current_dir, cache_policy)
 }
 
 fn collect_umount_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     engine
         .dynamic
-        .collect_umount_candidates(parsed, request.current_dir)
+        .collect_umount_candidates(parsed, request.current_dir, cache_policy)
 }
 
 fn collect_modprobe_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     _request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
-    engine.dynamic.collect_modprobe_candidates(parsed)
+    engine
+        .dynamic
+        .collect_modprobe_candidates(parsed, cache_policy)
 }
 
 fn collect_tcpdump_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     _request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
-    engine.dynamic.collect_tcpdump_candidates(parsed)
+    engine
+        .dynamic
+        .collect_tcpdump_candidates(parsed, cache_policy)
 }
 
 fn collect_npm_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
-    let mut candidates = engine.collect_package_run_candidates(parsed, request.current_dir);
+    let mut candidates = if cache_policy.is_cached_only() {
+        Vec::new()
+    } else {
+        engine.collect_package_run_candidates(parsed, request.current_dir)
+    };
     let completes_dependency = match parsed.command.as_str() {
         "pnpm" => {
             leading_completion_words_match(parsed, &["remove"])
@@ -2254,7 +2207,7 @@ fn collect_npm_dynamic_candidates(
             parsed,
             request.current_dir,
             parsed.command.as_str(),
-            false,
+            cache_policy.is_cached_only(),
         ));
     }
     candidates
@@ -2264,8 +2217,13 @@ fn collect_yarn_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
-    let mut candidates = engine.collect_yarn_script_candidates(parsed, request.current_dir);
+    let mut candidates = if cache_policy.is_cached_only() {
+        Vec::new()
+    } else {
+        engine.collect_yarn_script_candidates(parsed, request.current_dir)
+    };
     if leading_completion_words_match(parsed, &["remove"])
         || leading_completion_words_match(parsed, &["why"])
         || leading_completion_words_match(parsed, &["upgrade"])
@@ -2274,7 +2232,7 @@ fn collect_yarn_dynamic_candidates(
             parsed,
             request.current_dir,
             "yarn",
-            false,
+            cache_policy.is_cached_only(),
         ));
     }
     candidates
@@ -2284,24 +2242,39 @@ fn collect_deno_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
-    engine.collect_deno_task_candidates(parsed, request.current_dir)
+    if cache_policy.is_cached_only() {
+        Vec::new()
+    } else {
+        engine.collect_deno_task_candidates(parsed, request.current_dir)
+    }
 }
 
 fn collect_just_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
-    engine.collect_top_level_task_candidates(parsed, request.current_dir, JUST_TASK_SOURCES)
+    if cache_policy.is_cached_only() {
+        Vec::new()
+    } else {
+        engine.collect_top_level_task_candidates(parsed, request.current_dir, JUST_TASK_SOURCES)
+    }
 }
 
 fn collect_make_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
-    engine.collect_top_level_task_candidates(parsed, request.current_dir, MAKE_TASK_SOURCES)
+    if cache_policy.is_cached_only() {
+        Vec::new()
+    } else {
+        engine.collect_top_level_task_candidates(parsed, request.current_dir, MAKE_TASK_SOURCES)
+    }
 }
 
 fn leading_completion_words(parsed: &ParsedCommandLine) -> Vec<&str> {

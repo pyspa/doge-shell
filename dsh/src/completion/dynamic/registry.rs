@@ -1,4 +1,21 @@
+use super::{CachePolicy, DynamicCompletionProvider, declared};
+use crate::completion::integrated::EnhancedCandidate;
+use crate::completion::parser::ParsedCommandLine;
 use dsh_types::completion::DynamicProviderId;
+use std::path::Path;
+
+pub(crate) struct DynamicProviderRequest<'a> {
+    pub(super) provider: DynamicProviderId,
+    pub(super) scope: Option<&'a str>,
+    pub(super) parsed_command_line: &'a ParsedCommandLine,
+    pub(super) current_dir: &'a Path,
+    pub(super) cache_policy: CachePolicy,
+}
+
+pub(crate) type ProviderCollector = for<'a> fn(
+    &DynamicCompletionProvider,
+    &DynamicProviderRequest<'a>,
+) -> Option<Vec<EnhancedCandidate>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProviderFamily {
@@ -11,26 +28,56 @@ pub(crate) enum ProviderFamily {
     External,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct ProviderRegistration {
     pub id: DynamicProviderId,
     pub family: ProviderFamily,
+    pub collector: ProviderCollector,
+}
+
+impl ProviderRegistration {
+    pub(crate) fn collect(
+        self,
+        provider: &DynamicCompletionProvider,
+        request: &DynamicProviderRequest<'_>,
+    ) -> Option<Vec<EnhancedCandidate>> {
+        debug_assert!(std::ptr::fn_addr_eq(
+            self.collector,
+            collector_for(self.family)
+        ));
+        (self.collector)(provider, request)
+    }
 }
 
 pub(crate) fn registration(provider: &str) -> Option<ProviderRegistration> {
     let id = DynamicProviderId::parse(provider)?;
-    Some(ProviderRegistration {
-        id,
-        family: family_for(id.as_str()),
-    })
+    Some(registration_for_id(id))
 }
 
 #[cfg(test)]
 pub(crate) fn registrations() -> impl Iterator<Item = ProviderRegistration> {
-    DynamicProviderId::all().map(|id| ProviderRegistration {
+    DynamicProviderId::all().map(registration_for_id)
+}
+
+fn registration_for_id(id: DynamicProviderId) -> ProviderRegistration {
+    let family = family_for(id.as_str());
+    ProviderRegistration {
         id,
-        family: family_for(id.as_str()),
-    })
+        family,
+        collector: collector_for(family),
+    }
+}
+
+fn collector_for(family: ProviderFamily) -> ProviderCollector {
+    match family {
+        ProviderFamily::Git => declared::git::collect,
+        ProviderFamily::Container => declared::container::collect,
+        ProviderFamily::Kubernetes => declared::kubernetes::collect,
+        ProviderFamily::Linux => declared::linux::collect,
+        ProviderFamily::Development => declared::development::collect,
+        ProviderFamily::Project => declared::project::collect,
+        ProviderFamily::External => declared::external::collect,
+    }
 }
 
 fn family_for(provider: &str) -> ProviderFamily {

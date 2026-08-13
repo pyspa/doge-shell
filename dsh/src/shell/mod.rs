@@ -272,14 +272,24 @@ impl Shell {
         input: &str,
         exit_code: i32,
         duration: std::time::Duration,
+        output: Option<&str>,
     ) {
         let Some(history) = &self.cmd_history else {
             return;
         };
 
-        let processed = {
+        let (processed, ledger_mode, filtered_output) = {
             let env = self.environment.read();
-            env.policy_state.secret_manager.process_for_history(input)
+            let ledger_mode = env.variable_state.command_ledger_mode;
+            (
+                env.policy_state.secret_manager.process_for_history(input),
+                ledger_mode,
+                (ledger_mode == crate::history::CommandLedgerMode::Output)
+                    .then(|| {
+                        output.map(|value| env.policy_state.secret_manager.redact_command(value))
+                    })
+                    .flatten(),
+            )
         };
         let Some(command) = processed else {
             return;
@@ -298,6 +308,13 @@ impl Shell {
             cwd,
             session_id: Some(self.session_id.clone()),
             hostname,
+            started_at: chrono::Utc::now().timestamp() - duration.as_secs() as i64,
+            author: std::env::var("DSH_COMMAND_AUTHOR")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(|| "human".to_string()),
+            output: filtered_output,
+            ledger_mode,
         };
 
         let mut history = history.lock();

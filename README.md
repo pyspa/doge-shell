@@ -30,7 +30,7 @@ doge-shell (dsh) is a simple yet powerful shell that combines traditional shell 
 - **Job Control**: Background job management with `jobs`, `bg`, `fg` commands
 - **Aliases**: Command aliasing with `alias` command
 - **Variables**: Environment variable management with `var`, `set` commands
-- **Abbreviations**: Define and use abbreviations with `abbr` command
+- **Abbreviations**: Define global abbreviations with `abbr -a g git`, or command-scoped ones with `abbr --add --command git co checkout`; scoped definitions win only in that pipeline segment
 - **Macro Recorder**: Record sequences of commands as reusable macros with `Alt+m`
 
 ### Completion & UI
@@ -156,15 +156,27 @@ Organize and switch between workspaces efficiently with the integrated Project M
 
 - **`pm add [path] [name]`**: Register a project.
 - **`pm init [name]`**: Register the current project root and show onboarding status.
-- **`pm status`**: Show current project registration, activation, runtime, and task status.
+- **`pm status [--json]`**: Show current project registration, activation provider, mise trust/lockfile/missing tools, Dev Container detection, runtimes, and tasks.
 - **`pm list`**: List registered projects (sorted by last access).
 - **`pm work <name>`**: Switch to a project and trigger hooks.
 - **`pm jump` / `pj`**: Interactively select and switch to a project.
-- **`pm activate`**: Apply safe project activation from `.env`, allowed `.envrc`, and `.venv`/`venv`.
+- **`pm activate --provider auto|native|mise`**: Apply safe native activation and, for trusted or conservatively classified safe mise projects, overlay `mise --no-hooks env --json`. dsh never runs `mise trust`, installs tools, or executes hooks automatically.
 - **`pm activate --dry-run`**: Preview `.env`, allowed `.envrc`, venv, and PATH changes with sensitive values masked before applying them.
 - **Hooks**: Define `*on-project-switch-hooks*` in Lisp to automate environment setup.
   - Automatically triggered when entering a project directory (via `pm work`, `pj`, or `cd`).
   - Sets `DSH_PROJECT` environment variable to the current project name.
+
+### Task Catalog
+
+`task --json` exposes a stable `id/source/name/command/description/cwd` schema.
+Run a task unambiguously with `task <source>:<name> -- <args>`. Static project
+file parsers remain the fallback; when installed, mise, Nx, and Turbo providers
+prefer their official JSON output with a bounded timeout. Results are cached by
+project-marker metadata, and Nx/Turbo continue to own graph, affected, and
+artifact-cache behavior.
+
+For example, `task npm:test -- --watch` invokes `npm run test -- --watch`.
+Arguments for other providers are forwarded using that runner's native syntax.
 
 ### GitHub Integration
 
@@ -399,6 +411,7 @@ Create a `~/.config/dsh/config.lisp` file to configure your shell:
 (abbr "ga" "git add")
 (abbr "gc" "git commit")
 (abbr "gs" "git status")
+(abbr-command "git" "co" "checkout") ; only expands `co` after `git`
 
 ;; Add paths to PATH
 (add_path "~/bin")
@@ -643,7 +656,13 @@ blocks show 1 --stderr
 
 # Reuse or explain a block
 blocks command 1
+blocks fix 1             # deterministic, inserts/runs nothing
+blocks fix 1 --ai        # explicit AI fallback
 blocks explain 1
+
+# Machine-readable session or opt-in persistent metadata
+blocks list --json
+blocks --scope persistent --json
 
 # Browse them full-screen (same as Ctrl+O)
 blocks tui
@@ -667,7 +686,23 @@ so those blocks start folded.
 - `e` - explain it with AI · `?` - key help · `q` / `Esc` - close
 
 Copying uses the system clipboard, falling back to OSC 52 so it still works over
-SSH. Blocks are session-local and are not persisted across restarts.
+SSH. Blocks remain session-local by default. `blocks --scope persistent` reads
+the opt-in command ledger described below; it contains metadata only unless
+output storage was explicitly enabled. Filters such as `--failed` are applied
+to the complete persistent ledger before `--limit` selects the newest results.
+
+### Machine-readable output
+
+`task --json`, `pm status --json`, `doctor --json`, `history --json`,
+`blocks list --json`, and `timing --json` each write exactly one JSON value to
+stdout. JSON mode and non-TTY output omit ANSI decoration and interactive
+prompts; diagnostics go to stderr and failures return a non-zero status. Field
+names use `snake_case`, and optional collections are emitted as empty arrays
+rather than presentation text.
+
+Focused doctor calls keep the same envelope and add section-specific `details`;
+for example, `doctor safety --json` reports safety configuration while
+`doctor validate --json` reports the selected validation commands.
 
 Run as `blocks tui` there is no input buffer to fill, so `Enter` prints the
 command and `r` runs it. From `Ctrl+O` and the command palette, both put it in
@@ -856,9 +891,21 @@ history --status failure
 
 # Show slow commands in the current project with metadata
 history --scope project --slow 1000 --verbose
+
+# Query append-only ledger events by provenance
+history --author human --json
 ```
 
 `--scope` accepts `global`, `session`, `cwd`, and `project`. Use `--limit` to control result count, or `--query` if you prefer an explicit flag instead of the positional search text.
+
+The aggregate history remains the default. To opt in to the append-only command
+ledger, add `(pref-command-ledger "metadata")` to `config.lisp`; use `"output"`
+only when captured output should be inspected, redacted, and retained (64 KiB
+per event, at most 10,000 events, 90-day retention). The default `"off"` and
+`"metadata"` modes do not inspect or store command output. External agents can
+record provenance with `history record --json '<event>'`. Optional Atuin
+dual-write is enabled with `DSH_ATUIN_DUAL_WRITE=1`; failures run off the prompt
+path and never block a command.
 
 ### `doctor` Command
 
@@ -900,9 +947,11 @@ Register the current project and inspect what dsh can activate or run.
 ```bash
 pm init
 pm status
-pm activate --dry-run
-pm activate
-task
+pm status --json
+pm activate --provider auto --dry-run
+pm activate --provider auto
+task --json
+task cargo:test -- --nocapture
 ```
 
 ### `include` Command
@@ -1047,6 +1096,19 @@ Access all shell capabilities through a unified fuzzy-search interface, similar 
 ## Command Suggestions
 
 When a command is not found, dsh can suggest close command names. If the current directory exposes tasks through the built-in task runner, task suggestions may also appear as `task <name>` candidates.
+
+After a failed command, `Alt+f` first uses the local deterministic Quick Fix
+engine (command/Git typos, missing upstream, occupied port, local execute bit,
+and missing project runtime). It only falls back to the configured AI fixer
+when no deterministic candidate exists. Suggestions only replace the input;
+they are never executed automatically. The same engine is available for old
+failures through `blocks fix <N> [--json] [--ai]`. Port fixes require an
+explicit `:PORT` or `port PORT` diagnostic so version, PID, and errno numbers do
+not become accidental kill suggestions.
+
+Inside VS Code, dsh emits each OSC 633 command marker once in A/B/E/C/D order,
+plus Cwd and HasRichCommandDetection properties. Prompt redraws do not duplicate
+the B marker. Other terminals keep the existing OSC 133 and OSC 7 integration.
 
 ## 📼 Macro Recorder
 

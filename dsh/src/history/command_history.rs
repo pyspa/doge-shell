@@ -9,13 +9,146 @@ use crate::db::Db;
 use crate::environment;
 use anyhow::Result;
 use chrono::Local;
+use serde::{Deserialize, Serialize};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
+
+const LEDGER_RETENTION_SECONDS: i64 = 90 * 24 * 60 * 60;
+const LEDGER_MAX_OUTPUT_BYTES: usize = 64 * 1024;
+const LEDGER_MAX_EVENTS: i64 = 10_000;
+
+fn truncate_ledger_output(output: &str) -> String {
+    if output.len() <= LEDGER_MAX_OUTPUT_BYTES {
+        return output.to_string();
+    }
+    let mut end = LEDGER_MAX_OUTPUT_BYTES;
+    while !output.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}\n... (truncated)", &output[..end])
+}
+
+fn enqueue_atuin_dual_write(event: CommandEvent) {
+    let enabled = std::env::var("DSH_ATUIN_DUAL_WRITE").ok().as_deref() == Some("1");
+    enqueue_atuin_dual_write_with(enabled, std::path::PathBuf::from("atuin"), event);
+}
+
+fn enqueue_atuin_dual_write_with(
+    enabled: bool,
+    executable: std::path::PathBuf,
+    event: CommandEvent,
+) {
+    if !enabled {
+        return;
+    }
+    thread::spawn(move || {
+        use std::process::{Command, Stdio};
+        use std::time::Duration;
+        use wait_timeout::ChildExt;
+
+        let end_executable = executable.clone();
+        let mut start = Command::new(executable);
+        start
+            .args(["history", "start", "--", event.command.as_str()])
+            .env("ATUIN_HISTORY_AUTHOR", event.author.as_str())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        if let Some(cwd) = event.cwd.as_deref() {
+            start.current_dir(cwd);
+        }
+        if let Some(session) = event.session_id.as_deref() {
+            start.env("ATUIN_SESSION", session);
+        }
+        let Ok(mut child) = start.spawn() else {
+            return;
+        };
+        let completed = child
+            .wait_timeout(Duration::from_millis(750))
+            .ok()
+            .flatten();
+        if completed.is_none() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+        let Ok(output) = child.wait_with_output() else {
+            return;
+        };
+        let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if id.is_empty() {
+            return;
+        }
+        let exit = event.exit_code.unwrap_or_default().to_string();
+        let Ok(mut end) = Command::new(end_executable)
+            .args(["history", "end", "--exit", exit.as_str(), "--", id.as_str()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        else {
+            return;
+        };
+        if end
+            .wait_timeout(Duration::from_millis(750))
+            .ok()
+            .flatten()
+            .is_none()
+        {
+            let _ = end.kill();
+            let _ = end.wait();
+        }
+    });
+}
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub enum CommandLedgerMode {
+    #[default]
+    Off,
+    Metadata,
+    Output,
+}
+
+impl CommandLedgerMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Metadata => "metadata",
+            Self::Output => "output",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "off" => Some(Self::Off),
+            "metadata" => Some(Self::Metadata),
+            "output" => Some(Self::Output),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CommandEvent {
+    #[serde(default)]
+    pub id: i64,
+    pub command: String,
+    pub cwd: Option<String>,
+    pub started_at: i64,
+    pub duration_ms: Option<u64>,
+    pub exit_code: Option<i32>,
+    #[serde(rename = "session", alias = "session_id")]
+    pub session_id: Option<String>,
+    #[serde(rename = "host", alias = "hostname")]
+    pub hostname: Option<String>,
+    pub author: String,
+    pub output: Option<String>,
+}
 
 /// Message types for background history writer.
 enum HistoryMsg {
     WriteBatch(Vec<(String, i64)>, Option<String>), // entries, context
-    UpdateMetadata(String, Option<String>, HistoryMetadata),
+    RecordOutcome(String, Option<String>, HistoryMetadata),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -25,6 +158,10 @@ pub struct HistoryMetadata {
     pub cwd: Option<String>,
     pub session_id: Option<String>,
     pub hostname: Option<String>,
+    pub started_at: i64,
+    pub author: String,
+    pub output: Option<String>,
+    pub ledger_mode: CommandLedgerMode,
 }
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
@@ -540,9 +677,9 @@ impl History {
                         HistoryMsg::WriteBatch(entries, context) => {
                             let _ = Self::write_batch_sync(&mut db, entries, context);
                         }
-                        HistoryMsg::UpdateMetadata(command, context, metadata) => {
+                        HistoryMsg::RecordOutcome(command, context, metadata) => {
                             let _ =
-                                Self::update_metadata_sync(&mut db, &command, context, &metadata);
+                                Self::record_outcome_sync(&mut db, &command, context, &metadata);
                         }
                     }
                 }
@@ -606,6 +743,63 @@ impl History {
                 metadata.hostname
             ],
         )?;
+        Ok(())
+    }
+
+    fn record_outcome_sync(
+        db: &mut Db,
+        command: &str,
+        context: Option<String>,
+        metadata: &HistoryMetadata,
+    ) -> Result<()> {
+        Self::update_metadata_sync(db, command, context, metadata)?;
+        if metadata.ledger_mode == CommandLedgerMode::Off {
+            return Ok(());
+        }
+        let output = (metadata.ledger_mode == CommandLedgerMode::Output)
+            .then(|| metadata.output.as_deref().map(truncate_ledger_output))
+            .flatten();
+        let conn = db.get_connection();
+        conn.execute(
+            "INSERT INTO command_events
+             (command, cwd, started_at, duration_ms, exit_code, session_id, hostname, author, output)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![
+                command,
+                metadata.cwd,
+                metadata.started_at,
+                metadata.duration_ms.map(|value| value as i64),
+                metadata.exit_code,
+                metadata.session_id,
+                metadata.hostname,
+                metadata.author,
+                output,
+            ],
+        )?;
+        conn.execute(
+            "DELETE FROM command_events WHERE started_at < ?1",
+            [chrono::Utc::now().timestamp() - LEDGER_RETENTION_SECONDS],
+        )?;
+        conn.execute(
+            "DELETE FROM command_events
+             WHERE id NOT IN (
+                 SELECT id FROM command_events
+                 ORDER BY started_at DESC, id DESC LIMIT ?1
+             )",
+            [LEDGER_MAX_EVENTS],
+        )?;
+        enqueue_atuin_dual_write(CommandEvent {
+            id: 0,
+            command: command.to_string(),
+            cwd: metadata.cwd.clone(),
+            started_at: metadata.started_at,
+            duration_ms: metadata.duration_ms,
+            exit_code: metadata.exit_code,
+            session_id: metadata.session_id.clone(),
+            hostname: metadata.hostname.clone(),
+            author: metadata.author.clone(),
+            output: None,
+        });
         Ok(())
     }
 
@@ -692,15 +886,95 @@ impl History {
 
         let context = get_current_context();
         if let Some(sender) = &self.sender {
-            let _ = sender.send(HistoryMsg::UpdateMetadata(
+            let _ = sender.send(HistoryMsg::RecordOutcome(
                 command.to_string(),
                 context,
                 metadata,
             ));
         } else if let Some(db) = &mut self.db {
-            let _ = Self::update_metadata_sync(db, command, context, &metadata);
+            let _ = Self::record_outcome_sync(db, command, context, &metadata);
         }
         Ok(())
+    }
+
+    pub fn command_events(&self, author: Option<&str>, limit: usize) -> Result<Vec<CommandEvent>> {
+        self.command_events_filtered(author, limit, false)
+    }
+
+    pub fn command_events_filtered(
+        &self,
+        author: Option<&str>,
+        limit: usize,
+        failures_only: bool,
+    ) -> Result<Vec<CommandEvent>> {
+        let Some(db) = &self.db else {
+            return Ok(Vec::new());
+        };
+        let conn = db.get_connection();
+        let author = author.filter(|author| *author != "all");
+        let sql = match (author.is_some(), failures_only) {
+            (true, true) => {
+                "SELECT id, command, cwd, started_at, duration_ms, exit_code, session_id, hostname, author, output
+                 FROM command_events WHERE author = ?1 AND exit_code IS NOT NULL AND exit_code != 0
+                 ORDER BY started_at DESC, id DESC LIMIT ?2"
+            }
+            (true, false) => {
+                "SELECT id, command, cwd, started_at, duration_ms, exit_code, session_id, hostname, author, output
+                 FROM command_events WHERE author = ?1 ORDER BY started_at DESC, id DESC LIMIT ?2"
+            }
+            (false, true) => {
+                "SELECT id, command, cwd, started_at, duration_ms, exit_code, session_id, hostname, author, output
+                 FROM command_events WHERE exit_code IS NOT NULL AND exit_code != 0
+                 ORDER BY started_at DESC, id DESC LIMIT ?1"
+            }
+            (false, false) => {
+                "SELECT id, command, cwd, started_at, duration_ms, exit_code, session_id, hostname, author, output
+                 FROM command_events ORDER BY started_at DESC, id DESC LIMIT ?1"
+            }
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let map_row = |row: &rusqlite::Row<'_>| {
+            Ok(CommandEvent {
+                id: row.get(0)?,
+                command: row.get(1)?,
+                cwd: row.get(2)?,
+                started_at: row.get(3)?,
+                duration_ms: row
+                    .get::<_, Option<i64>>(4)?
+                    .map(|value| value.max(0) as u64),
+                exit_code: row.get(5)?,
+                session_id: row.get(6)?,
+                hostname: row.get(7)?,
+                author: row.get(8)?,
+                output: row.get(9)?,
+            })
+        };
+        let rows = if let Some(author) = author {
+            stmt.query_map(rusqlite::params![author, limit as i64], map_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        } else {
+            stmt.query_map(rusqlite::params![limit as i64], map_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        Ok(rows)
+    }
+
+    pub fn record_external_event(&mut self, event: CommandEvent) -> Result<()> {
+        let Some(db) = &mut self.db else {
+            return Ok(());
+        };
+        let metadata = HistoryMetadata {
+            exit_code: event.exit_code,
+            duration_ms: event.duration_ms,
+            cwd: event.cwd,
+            session_id: event.session_id,
+            hostname: event.hostname,
+            started_at: event.started_at,
+            author: event.author,
+            output: event.output,
+            ledger_mode: CommandLedgerMode::Output,
+        };
+        Self::record_outcome_sync(db, &event.command, None, &metadata)
     }
 
     /// Search for the first entry matching the given prefix.
@@ -793,6 +1067,134 @@ impl History {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ledger_metadata(author: &str, mode: CommandLedgerMode) -> HistoryMetadata {
+        HistoryMetadata {
+            exit_code: Some(1),
+            duration_ms: Some(42),
+            cwd: Some("/repo".to_string()),
+            session_id: Some("session".to_string()),
+            hostname: Some("host".to_string()),
+            started_at: chrono::Utc::now().timestamp(),
+            author: author.to_string(),
+            output: Some("API_KEY=secret".to_string()),
+            ledger_mode: mode,
+        }
+    }
+
+    #[test]
+    fn ledger_is_append_only_and_filters_by_author() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut history = History::new();
+        history.db = Some(crate::db::Db::new(dir.path().join("history.db")).unwrap());
+        history.write_history("cargo test").unwrap();
+        history
+            .record_outcome(
+                "cargo test",
+                ledger_metadata("human", CommandLedgerMode::Metadata),
+            )
+            .unwrap();
+        history
+            .record_outcome(
+                "cargo test",
+                ledger_metadata("agent-x", CommandLedgerMode::Metadata),
+            )
+            .unwrap();
+
+        let all = history.command_events(Some("all"), 10).unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().all(|event| event.output.is_none()));
+        let agent = history.command_events(Some("agent-x"), 10).unwrap();
+        assert_eq!(agent.len(), 1);
+        assert_eq!(agent[0].author, "agent-x");
+    }
+
+    #[test]
+    fn output_mode_truncates_on_a_character_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut history = History::new();
+        history.db = Some(crate::db::Db::new(dir.path().join("history.db")).unwrap());
+        history.write_history("command").unwrap();
+        let mut metadata = ledger_metadata("human", CommandLedgerMode::Output);
+        metadata.output = Some("あ".repeat(LEDGER_MAX_OUTPUT_BYTES));
+        history.record_outcome("command", metadata).unwrap();
+        let event = history.command_events(Some("all"), 1).unwrap().remove(0);
+        assert!(event.output.unwrap().ends_with("... (truncated)"));
+    }
+
+    #[test]
+    fn recording_an_event_prunes_entries_outside_retention_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut history = History::new();
+        history.db = Some(crate::db::Db::new(dir.path().join("history.db")).unwrap());
+        {
+            let conn = history.db.as_ref().unwrap().get_connection();
+            conn.execute(
+                "INSERT INTO command_events(command, started_at, author) VALUES ('old', 0, 'human')",
+                [],
+            )
+            .unwrap();
+        }
+        history.write_history("new").unwrap();
+        history
+            .record_outcome("new", ledger_metadata("human", CommandLedgerMode::Metadata))
+            .unwrap();
+        let events = history.command_events(Some("all"), 10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].command, "new");
+    }
+
+    #[test]
+    fn failure_filter_is_applied_before_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut history = History::new();
+        history.db = Some(crate::db::Db::new(dir.path().join("history.db")).unwrap());
+        let conn = history.db.as_ref().unwrap().get_connection();
+        conn.execute(
+            "INSERT INTO command_events(command, started_at, exit_code, author)
+             VALUES ('old failure', 1, 1, 'human')",
+            [],
+        )
+        .unwrap();
+        for timestamp in 2..=102 {
+            conn.execute(
+                "INSERT INTO command_events(command, started_at, exit_code, author)
+                 VALUES (?1, ?2, 0, 'human')",
+                rusqlite::params![format!("success {timestamp}"), timestamp],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let events = history
+            .command_events_filtered(Some("all"), 1, true)
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].command, "old failure");
+    }
+
+    #[test]
+    fn disabled_or_broken_atuin_adapter_never_waits_for_command_execution() {
+        let event = CommandEvent {
+            id: 0,
+            command: "cargo test".to_string(),
+            cwd: None,
+            started_at: 0,
+            duration_ms: None,
+            exit_code: None,
+            session_id: None,
+            hostname: None,
+            author: "human".to_string(),
+            output: None,
+        };
+        let start = std::time::Instant::now();
+        enqueue_atuin_dual_write_with(
+            true,
+            std::path::PathBuf::from("/definitely/missing/atuin"),
+            event,
+        );
+        assert!(start.elapsed() < std::time::Duration::from_millis(50));
+    }
 
     fn sample_entry(
         entry: &str,

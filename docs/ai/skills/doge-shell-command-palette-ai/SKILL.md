@@ -8,7 +8,8 @@ description: Use for doge-shell command palette, AI actions, diagnose, explain, 
 - Start with `rg -n "command_palette|ai_features|diagnose|explain|suggest|argument_explainer|OpenAI" dsh/src/command_palette dsh/src/ai_features dsh/src/argument_explainer.rs dsh-openai/src`.
 - Read [../doge-shell-repo/references/task-map.md](../doge-shell-repo/references/task-map.md) for command palette / AI action entries.
 - Read [../doge-shell-repo/references/package-map.md](../doge-shell-repo/references/package-map.md) before choosing cargo package names.
-- Default read targets are `dsh/src/command_palette/`, `dsh/src/ai_features/`, `dsh/src/argument_explainer.rs`, and `dsh-openai/src/` when client/config behavior is involved.
+- Default read targets are `dsh/src/command_palette/`, `dsh/src/ai_features/`, `dsh/src/repl/repl_ai.rs`, `dsh-types/src/quick_fix.rs`, `dsh/src/argument_explainer.rs`, and `dsh-openai/src/` when client/config behavior is involved.
+- Failed-command repair must ask the deterministic, side-effect-free `QuickFixProvider` first and use AI only when it returns no candidates. A fix may replace input but must never execute itself. Port extraction accepts only explicit `:PORT` or `port PORT` diagnostics so unrelated version, PID, and errno numbers cannot produce kill suggestions.
 - Keep chatgpt / MCP tool work in `$doge-shell-chat-tools`; this skill is for shell-side palette and AI action flows.
 - An action that changes directory must call `ShellProxy::changepwd`, never `std::env::set_current_dir` — see [../doge-shell-repo/references/invariants.md](../doge-shell-repo/references/invariants.md).
 - Palette and picker actions own the screen; they run through `ReplControlFlow::RunInteractive`, which pauses raw mode and the status line for them.

@@ -87,6 +87,7 @@ pub enum CoreShellAction {
     Reload,
     Z,
     BlocksTui,
+    BlocksPersistent,
     Jobs,
     Foreground,
     Background,
@@ -94,6 +95,7 @@ pub enum CoreShellAction {
     LispRun,
     Var,
     Read,
+    AbbrCommand,
 }
 
 impl CoreShellAction {
@@ -104,6 +106,7 @@ impl CoreShellAction {
             Self::Reload => "reload",
             Self::Z => "z",
             Self::BlocksTui => "blocks-tui",
+            Self::BlocksPersistent => "blocks-persistent",
             Self::Jobs => "jobs",
             Self::Foreground => "fg",
             Self::Background => "bg",
@@ -111,6 +114,7 @@ impl CoreShellAction {
             Self::LispRun => "lisp-run",
             Self::Var => "var",
             Self::Read => "read",
+            Self::AbbrCommand => "abbr-command",
         }
     }
 
@@ -121,6 +125,7 @@ impl CoreShellAction {
             "reload" => Self::Reload,
             "z" => Self::Z,
             "blocks-tui" => Self::BlocksTui,
+            "blocks-persistent" => Self::BlocksPersistent,
             "jobs" => Self::Jobs,
             "fg" => Self::Foreground,
             "bg" => Self::Background,
@@ -128,6 +133,7 @@ impl CoreShellAction {
             "lisp-run" => Self::LispRun,
             "var" => Self::Var,
             "read" => Self::Read,
+            "abbr-command" => Self::AbbrCommand,
             _ => return None,
         })
     }
@@ -867,6 +873,7 @@ mod shell_proxy_tests {
             CoreShellAction::Reload,
             CoreShellAction::Z,
             CoreShellAction::BlocksTui,
+            CoreShellAction::BlocksPersistent,
             CoreShellAction::Jobs,
             CoreShellAction::Foreground,
             CoreShellAction::Background,
@@ -874,6 +881,7 @@ mod shell_proxy_tests {
             CoreShellAction::LispRun,
             CoreShellAction::Var,
             CoreShellAction::Read,
+            CoreShellAction::AbbrCommand,
         ];
 
         for action in actions {

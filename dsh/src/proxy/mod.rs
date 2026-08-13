@@ -252,6 +252,9 @@ impl ShellProxy for Shell {
             CoreShellAction::Reload => builtin::reload::execute(self, ctx, argv),
             CoreShellAction::Z => builtin::z::execute(self, ctx, argv),
             CoreShellAction::BlocksTui => builtin::blocks_tui::execute(self, ctx, argv),
+            CoreShellAction::BlocksPersistent => {
+                builtin::blocks_persistent::execute(self, ctx, argv)
+            }
             CoreShellAction::Jobs => builtin::jobs::execute_jobs(self, ctx, argv),
             CoreShellAction::Foreground => builtin::jobs::execute_fg(self, ctx, argv),
             CoreShellAction::Background => builtin::jobs::execute_bg(self, ctx, argv),
@@ -259,6 +262,7 @@ impl ShellProxy for Shell {
             CoreShellAction::LispRun => builtin::lisp::execute_lisp_run(self, ctx, argv),
             CoreShellAction::Var => builtin::var::execute_var(self, ctx, argv),
             CoreShellAction::Read => builtin::var::execute_read(self, ctx, argv),
+            CoreShellAction::AbbrCommand => builtin::abbr::execute(self, ctx, argv),
         }
     }
 

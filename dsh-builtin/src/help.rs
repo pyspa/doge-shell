@@ -42,7 +42,7 @@ const HELP_TOPICS: &[HelpTopic] = &[
         name: "pm",
         category: "project",
         summary: "Manage projects and apply safe project activation.",
-        usage: "pm <init|status|add|list|remove|work|jump|activate> [args] | pm activate --dry-run",
+        usage: "pm <init|status|add|list|remove|work|jump|activate> [args] | pm status --json | pm activate --provider auto|native|mise [--dry-run]",
         examples: &[
             "pm init",
             "pm status",
@@ -72,8 +72,8 @@ const HELP_TOPICS: &[HelpTopic] = &[
         name: "task",
         category: "project",
         summary: "Run project-specific tasks detected from package managers and task files.",
-        usage: "task [--list|--json] [--source <source>] [<task>|<source>:<task>]",
-        examples: &["task", "task --list", "task cargo:test"],
+        usage: "task [--list|--json] [--source <source>] [<task>|<source>:<task>] [-- <args>]",
+        examples: &["task", "task --list", "task cargo:test -- --release"],
         related: &["pm", "doctor"],
     },
     HelpTopic {
@@ -95,12 +95,13 @@ const HELP_TOPICS: &[HelpTopic] = &[
     HelpTopic {
         name: "blocks",
         category: "history",
-        summary: "List, inspect, rerun, and explain session command blocks.",
-        usage: "blocks [list|show|command|rerun|explain|clear] [args]",
+        summary: "List, inspect, repair, rerun, and explain command blocks.",
+        usage: "blocks [list|show|command|fix|rerun|explain|clear] [args] [--scope session|persistent] [--json]",
         examples: &[
             "blocks",
             "blocks list --failed",
             "blocks show 2 --stderr",
+            "blocks fix 1 --json",
             "blocks explain 1",
         ],
         related: &["out", "tm", "history"],
@@ -108,8 +109,8 @@ const HELP_TOPICS: &[HelpTopic] = &[
     HelpTopic {
         name: "history",
         category: "history",
-        summary: "Search command history by text, scope, status, and duration.",
-        usage: "history [query] [--scope global|session|cwd|project] [--status success|failure] [--slow ms]",
+        summary: "Search command history and its opt-in persistent event ledger.",
+        usage: "history [query] [--scope global|session|cwd|project] [--status success|failure] [--slow ms] [--author human|dsh-ai|<agent>|all] [--json] | history record --json '<event>'",
         examples: &[
             "history cargo",
             "history --status failure",

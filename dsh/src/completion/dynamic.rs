@@ -6186,7 +6186,7 @@ volumes:
 
         let provider = DynamicCompletionProvider::new(Environment::new());
         let build_candidates = provider.collect_project_task_candidates_for_sources_with_mode(
-            &parsed("nx run bu"),
+            &parsed("nx run api:bu"),
             dir.path(),
             NX_PROJECT_TASK_SOURCES,
             false,
@@ -6195,7 +6195,7 @@ volumes:
         assert!(
             build_candidates
                 .iter()
-                .any(|candidate| candidate.text == "build"),
+                .any(|candidate| candidate.text == "api:build"),
             "expected Nx task completion from descendant project.json"
         );
 
@@ -6207,7 +6207,7 @@ volumes:
         .unwrap();
 
         let test_candidates = provider.collect_project_task_candidates_for_sources_with_mode(
-            &parsed("nx run te"),
+            &parsed("nx run api:te"),
             dir.path(),
             NX_PROJECT_TASK_SOURCES,
             false,
@@ -6216,7 +6216,7 @@ volumes:
         assert!(
             test_candidates
                 .iter()
-                .any(|candidate| candidate.text == "test"),
+                .any(|candidate| candidate.text == "api:test"),
             "expected task cache invalidation after descendant project.json changes"
         );
     }

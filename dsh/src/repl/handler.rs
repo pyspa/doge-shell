@@ -321,17 +321,20 @@ pub(crate) async fn handle_key_event(
             return navigation::handle_cursor_word_right(repl, 0).await;
         }
         KeyAction::ExpandAbbreviationAndInsertSpace => {
-            if let Some(word) = repl.input.get_current_word_for_abbr()
-                && let Some(expansion) = repl
-                    .shell
-                    .environment
-                    .read()
-                    .variable_state
-                    .abbreviations
-                    .get(&word)
-            {
-                let expansion = expansion.clone();
-                if repl.input.replace_current_word(&expansion) {
+            if let Some(word) = repl.input.get_current_word_for_abbr() {
+                let expansion = {
+                    let environment = repl.shell.environment.read();
+                    super::abbreviation::resolve(
+                        repl.input.as_str(),
+                        repl.input.cursor(),
+                        &word,
+                        &environment.variable_state.abbreviations,
+                        &environment.variable_state.command_abbreviations,
+                    )
+                };
+                if let Some(expansion) = expansion
+                    && repl.input.replace_current_word(&expansion)
+                {
                     reset_completion = true;
                 }
             }

@@ -181,7 +181,7 @@ pub fn description() -> &'static str {
 ///   timing --frequent     - Show top 10 most frequent commands
 ///   timing --failures     - Show recently failed commands
 ///   timing --clear        - Clear all timing statistics
-pub fn command(_ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy) -> ExitStatus {
+pub fn command(ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy) -> ExitStatus {
     // Load existing timing data
     let timing_file = match get_timing_file_path() {
         Some(path) => path,
@@ -194,7 +194,41 @@ pub fn command(_ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
     let mut timing = CommandTiming::load_from_file(&timing_file).unwrap_or_default();
 
     // Parse arguments
-    let args: Vec<&str> = argv.iter().skip(1).map(|s| s.as_str()).collect();
+    let json_output = argv.iter().any(|arg| arg == "--json");
+    let args: Vec<&str> = argv
+        .iter()
+        .skip(1)
+        .map(|s| s.as_str())
+        .filter(|arg| *arg != "--json")
+        .collect();
+
+    if json_output {
+        let value = match args.first().copied() {
+            Some("--slow") => serde_json::json!({"mode": "slow", "stats": timing.top_slowest(10)}),
+            Some("--frequent") => {
+                serde_json::json!({"mode": "frequent", "stats": timing.top_frequent(10)})
+            }
+            Some("--failures") => {
+                serde_json::json!({"mode": "failures", "stats": timing.recent_failures(24)})
+            }
+            Some("--clear") => {
+                let _ = ctx.write_stderr("timing: --clear cannot be combined with --json");
+                return ExitStatus::ExitedWith(1);
+            }
+            Some(command) => serde_json::json!({"mode": "command", "stats": timing.get(command)}),
+            None => serde_json::json!({"mode": "summary", "timing": timing}),
+        };
+        match serde_json::to_string(&value) {
+            Ok(output) => {
+                let _ = ctx.write_stdout(&output);
+                return ExitStatus::ExitedWith(0);
+            }
+            Err(err) => {
+                let _ = ctx.write_stderr(&format!("timing: JSON serialization failed: {err}"));
+                return ExitStatus::ExitedWith(1);
+            }
+        }
+    }
 
     match args.first() {
         None => {

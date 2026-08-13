@@ -44,6 +44,8 @@ pub struct LispEngine {
 struct EnvironmentSnapshot {
     alias: HashMap<String, String>,
     abbreviations: HashMap<String, String>,
+    command_abbreviations: HashMap<String, HashMap<String, String>>,
+    command_ledger_mode: crate::history::CommandLedgerMode,
     paths: Vec<String>,
     variables: HashMap<String, String>,
     exported_vars: HashSet<String>,
@@ -67,6 +69,8 @@ impl EnvironmentSnapshot {
         Self {
             alias: env.variable_state.alias.clone(),
             abbreviations: env.variable_state.abbreviations.clone(),
+            command_abbreviations: env.variable_state.command_abbreviations.clone(),
+            command_ledger_mode: env.variable_state.command_ledger_mode,
             paths: env.variable_state.paths.clone(),
             variables: env.variable_state.variables.clone(),
             exported_vars: env.variable_state.exported_vars.clone(),
@@ -156,6 +160,8 @@ impl LispEngine {
         let mut env = self.shell_env.write();
         env.variable_state.alias = snapshot.alias;
         env.variable_state.abbreviations = snapshot.abbreviations;
+        env.variable_state.command_abbreviations = snapshot.command_abbreviations;
+        env.variable_state.command_ledger_mode = snapshot.command_ledger_mode;
         env.variable_state.paths = snapshot.paths;
         env.variable_state.variables = snapshot.variables;
         env.variable_state.exported_vars = snapshot.exported_vars;
@@ -317,6 +323,10 @@ pub fn make_env(environment: Arc<RwLock<Environment>>) -> Rc<RefCell<Env>> {
         .define(Symbol::from("alias"), Value::NativeFunc(builtin::alias));
     env.borrow_mut()
         .define(Symbol::from("abbr"), Value::NativeFunc(builtin::abbr));
+    env.borrow_mut().define(
+        Symbol::from("abbr-command"),
+        Value::NativeFunc(builtin::abbr_command),
+    );
     env.borrow_mut()
         .define(Symbol::from("command"), Value::NativeFunc(builtin::command));
     env.borrow_mut()
@@ -358,6 +368,10 @@ pub fn make_env(environment: Arc<RwLock<Environment>>) -> Rc<RefCell<Env>> {
     env.borrow_mut().define(
         Symbol::from("pref-status-line"),
         Value::NativeFunc(builtin::pref_status_line),
+    );
+    env.borrow_mut().define(
+        Symbol::from("pref-command-ledger"),
+        Value::NativeFunc(builtin::pref_command_ledger),
     );
 
     // Secret management functions
@@ -456,6 +470,51 @@ mod tests {
         let env = Environment::new();
         let engine = LispEngine::new(env);
         let _res = engine.borrow().run("(alias \"e\" \"emacs\")");
+    }
+
+    #[test]
+    fn command_ledger_preference_is_off_by_default_and_configurable() {
+        init();
+        let env = Environment::new();
+        let engine = LispEngine::new(env.clone());
+        assert_eq!(
+            env.read().variable_state.command_ledger_mode,
+            crate::history::CommandLedgerMode::Off
+        );
+        engine
+            .borrow()
+            .run("(pref-command-ledger \"metadata\")")
+            .unwrap();
+        assert_eq!(
+            env.read().variable_state.command_ledger_mode,
+            crate::history::CommandLedgerMode::Metadata
+        );
+        assert!(
+            engine
+                .borrow()
+                .run("(pref-command-ledger \"invalid\")")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn lisp_can_define_command_scoped_abbreviation() {
+        init();
+        let env = Environment::new();
+        let engine = LispEngine::new(env.clone());
+        engine
+            .borrow()
+            .run("(abbr-command \"git\" \"co\" \"checkout\")")
+            .unwrap();
+        assert_eq!(
+            env.read()
+                .variable_state
+                .command_abbreviations
+                .get("git")
+                .and_then(|entries| entries.get("co"))
+                .map(String::as_str),
+            Some("checkout")
+        );
     }
 
     #[test]

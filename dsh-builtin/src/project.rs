@@ -5,9 +5,14 @@ use crate::task;
 use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
 use dsh_types::{Context, ExitStatus, Project};
+use serde::Serialize;
+use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::Duration;
+use wait_timeout::ChildExt;
 
 const PROJECTS_FILE: &str = "projects.json";
 
@@ -46,7 +51,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
                 ExitStatus::ExitedWith(1)
             }
         },
-        "status" | "st" => match status(ctx, proxy) {
+        "status" | "st" => match status(ctx, &argv[2..], proxy) {
             Ok(_) => ExitStatus::ExitedWith(0),
             Err(e) => {
                 let _ = ctx.write_stderr(&format!("pm status error: {}", e));
@@ -108,13 +113,13 @@ fn help_text() -> &'static str {
         "\n",
         "Subcommands:\n",
         "  init [name]          Register the current project root and show onboarding status\n",
-        "  status               Show current project root, registration, activation, runtimes, and tasks\n",
+        "  status [--json]      Show project, provider, trust, lockfile, tools, and tasks\n",
         "  add [path] [name]    Register a project path\n",
         "  list | ls            List registered projects\n",
         "  remove | rm <name>   Remove a project\n",
         "  work <name>          Switch to a project\n",
         "  jump                 Select and switch to a project interactively\n",
-        "  activate [--dry-run] Apply safe .env, allowed .envrc, and venv activation\n",
+        "  activate [--provider auto|native|mise] [--dry-run]\n",
         "\n",
         "Aliases:\n",
         "  pj [name]            Alias for pm jump\n",
@@ -225,12 +230,283 @@ fn init(ctx: &Context, args: &[String], proxy: &mut dyn ShellProxy) -> Result<()
     Ok(())
 }
 
-fn status(ctx: &Context, proxy: &mut dyn ShellProxy) -> Result<()> {
+fn status(ctx: &Context, args: &[String], proxy: &mut dyn ShellProxy) -> Result<()> {
+    let json_output = match args {
+        [] => false,
+        [flag] if flag == "--json" => true,
+        _ => return Err(anyhow::anyhow!("Usage: pm status [--json]")),
+    };
     let current_dir = proxy.get_current_dir()?;
     let context = project_context::resolve_project_context(&current_dir);
     let projects = load_projects()?;
-    print_project_status(ctx, proxy, &context, &projects);
+    if json_output {
+        let status = build_project_status(&context, &projects);
+        let _ = ctx.write_stdout(&serde_json::to_string(&status)?);
+    } else {
+        print_project_status(ctx, proxy, &context, &projects);
+        print_provider_status(ctx, &context.project_root);
+    }
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct ProjectStatusJson {
+    cwd: String,
+    root: String,
+    registered: Option<String>,
+    markers: Vec<String>,
+    provider: String,
+    trust: String,
+    lockfile: Option<String>,
+    missing_tools: Vec<String>,
+    dev_container: Option<String>,
+    runtimes: Vec<ProjectRuntimeJson>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProjectRuntimeJson {
+    name: String,
+    source: String,
+    version: Option<String>,
+    path: String,
+}
+
+fn build_project_status(
+    context: &project_context::ProjectContext,
+    projects: &[Project],
+) -> ProjectStatusJson {
+    let mise = MiseStatus::detect(&context.project_root);
+    ProjectStatusJson {
+        cwd: context.cwd.display().to_string(),
+        root: context.project_root.display().to_string(),
+        registered: projects
+            .iter()
+            .find(|project| same_path(&project.path, &context.project_root))
+            .map(|project| project.name.clone()),
+        markers: context.project_markers.clone(),
+        provider: if matches!(mise.trust.as_str(), "trusted" | "safe") {
+            "mise".to_string()
+        } else {
+            "native".to_string()
+        },
+        trust: mise.trust,
+        lockfile: mise.lockfile,
+        missing_tools: mise.missing_tools,
+        dev_container: detect_dev_container(&context.project_root),
+        runtimes: context
+            .runtimes
+            .iter()
+            .map(|runtime| ProjectRuntimeJson {
+                name: runtime.name.clone(),
+                source: runtime.source.clone(),
+                version: runtime.version.clone(),
+                path: runtime.path.display().to_string(),
+            })
+            .collect(),
+    }
+}
+
+fn print_provider_status(ctx: &Context, root: &Path) {
+    let mise = MiseStatus::detect(root);
+    let provider = if matches!(mise.trust.as_str(), "trusted" | "safe") {
+        "mise"
+    } else {
+        "native"
+    };
+    let _ = ctx.write_stdout(&format!(
+        "provider {provider} trust={} lockfile={} missing_tools={}",
+        mise.trust,
+        mise.lockfile.as_deref().unwrap_or("none"),
+        if mise.missing_tools.is_empty() {
+            "none".to_string()
+        } else {
+            mise.missing_tools.join(",")
+        }
+    ));
+    if let Some(path) = detect_dev_container(root) {
+        let _ = ctx.write_stdout(&format!(
+            "dev-container {path} (open it explicitly with your editor/container tool)"
+        ));
+    }
+}
+
+#[derive(Debug)]
+struct MiseStatus {
+    executable: Option<PathBuf>,
+    trust: String,
+    lockfile: Option<String>,
+    missing_tools: Vec<String>,
+}
+
+impl MiseStatus {
+    fn detect(root: &Path) -> Self {
+        Self::detect_with_executable(root, find_executable("mise"))
+    }
+
+    fn detect_with_executable(root: &Path, executable: Option<PathBuf>) -> Self {
+        let configured = root.join("mise.toml").exists() || root.join(".mise.toml").exists();
+        let trust = if !configured {
+            "not-configured".to_string()
+        } else if let Some(mise) = executable.as_deref() {
+            match mise_output(mise, root, &["trust", "--show"]) {
+                Ok(output) if trust_output_is_trusted(&output) => "trusted".to_string(),
+                _ if mise_config_is_safe(root) => "safe".to_string(),
+                _ => "untrusted".to_string(),
+            }
+        } else {
+            "unavailable".to_string()
+        };
+        let lockfile = ["mise.lock", ".mise.lock"]
+            .into_iter()
+            .map(|name| root.join(name))
+            .find(|path| path.is_file())
+            .map(|path| path.display().to_string());
+        let missing_tools = if matches!(trust.as_str(), "trusted" | "safe") {
+            executable
+                .as_deref()
+                .and_then(|mise| mise_missing_tools(mise, root).ok())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        Self {
+            executable,
+            trust,
+            lockfile,
+            missing_tools,
+        }
+    }
+}
+
+fn mise_missing_tools(mise: &Path, root: &Path) -> Result<Vec<String>> {
+    let output = mise_output(mise, root, &["--no-hooks", "ls", "--missing", "--json"])?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+    let value: JsonValue = serde_json::from_slice(&output.stdout)?;
+    let mut tools = Vec::new();
+    collect_missing_tool_names(&value, &mut tools);
+    tools.sort();
+    tools.dedup();
+    Ok(tools)
+}
+
+fn mise_output(mise: &Path, root: &Path, args: &[&str]) -> Result<std::process::Output> {
+    let mut child = Command::new(mise)
+        .current_dir(root)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    if child.wait_timeout(Duration::from_millis(1500))?.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(anyhow::anyhow!("mise provider timed out"));
+    }
+    Ok(child.wait_with_output()?)
+}
+
+fn trust_output_is_trusted(output: &std::process::Output) -> bool {
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .chain(String::from_utf8_lossy(&output.stderr).lines())
+        .any(|line| {
+            line.rsplit_once(':')
+                .map(|(_, status)| status.trim() == "trusted")
+                .unwrap_or_else(|| line.trim() == "trusted")
+        })
+}
+
+fn mise_config_is_safe(root: &Path) -> bool {
+    let configs = [root.join("mise.toml"), root.join(".mise.toml")]
+        .into_iter()
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    !configs.is_empty() && configs.iter().all(|path| mise_config_file_is_safe(path))
+}
+
+fn mise_config_file_is_safe(path: &Path) -> bool {
+    let Ok(contents) = fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(value) = toml::from_str::<toml::Value>(&contents) else {
+        return false;
+    };
+    let Some(table) = value.as_table() else {
+        return false;
+    };
+    table.iter().all(|(key, value)| match key.as_str() {
+        "min_version" => value.is_str(),
+        "tools" => value.as_table().is_some_and(|tools| {
+            tools.values().all(|value| {
+                value.is_str()
+                    || value
+                        .as_array()
+                        .is_some_and(|versions| versions.iter().all(toml::Value::is_str))
+            })
+        }),
+        "tasks" => safe_mise_task_value(value, None),
+        _ => false,
+    })
+}
+
+fn safe_mise_task_value(value: &toml::Value, key: Option<&str>) -> bool {
+    if key == Some("tools") {
+        return false;
+    }
+    match value {
+        toml::Value::String(value) => !value.contains("{{") && !value.contains("{%"),
+        toml::Value::Array(values) => values.iter().all(|value| safe_mise_task_value(value, key)),
+        toml::Value::Table(table) => table
+            .iter()
+            .all(|(key, value)| safe_mise_task_value(value, Some(key))),
+        toml::Value::Integer(_) | toml::Value::Float(_) | toml::Value::Boolean(_) => true,
+        toml::Value::Datetime(_) => false,
+    }
+}
+
+fn collect_missing_tool_names(value: &JsonValue, tools: &mut Vec<String>) {
+    match value {
+        JsonValue::Array(values) => {
+            for value in values {
+                collect_missing_tool_names(value, tools);
+            }
+        }
+        JsonValue::Object(object) => {
+            if let Some(name) = object.get("name").and_then(JsonValue::as_str) {
+                tools.push(name.to_string());
+            } else {
+                for (key, value) in object {
+                    if value.as_bool() == Some(true)
+                        || value.as_array().is_some_and(|values| !values.is_empty())
+                        || value.get("missing").and_then(JsonValue::as_bool) == Some(true)
+                    {
+                        tools.push(key.clone());
+                    }
+                }
+            }
+        }
+        JsonValue::String(name) => tools.push(name.clone()),
+        _ => {}
+    }
+}
+
+fn detect_dev_container(root: &Path) -> Option<String> {
+    [
+        root.join(".devcontainer/devcontainer.json"),
+        root.join(".devcontainer.json"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+    .map(|path| path.display().to_string())
+}
+
+fn find_executable(name: &str) -> Option<PathBuf> {
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths)
+        .map(|dir| dir.join(name))
+        .find(|path| path.is_file())
 }
 
 fn project_name_from_path(path: &Path) -> String {
@@ -592,13 +868,128 @@ fn prepend_path(proxy: &mut dyn ShellProxy, root: &Path, path: &str) -> bool {
     true
 }
 
-fn activate(ctx: &Context, args: &[String], proxy: &mut dyn ShellProxy) -> Result<()> {
-    let dry_run = match args {
-        [] => false,
-        [flag] if flag == "--dry-run" => true,
-        _ => return Err(anyhow::anyhow!("Usage: pm activate [--dry-run]")),
-    };
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActivationProvider {
+    Auto,
+    Native,
+    Mise,
+}
 
+fn activate(ctx: &Context, args: &[String], proxy: &mut dyn ShellProxy) -> Result<()> {
+    let mut provider = ActivationProvider::Auto;
+    let mut dry_run = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--dry-run" => dry_run = true,
+            "--provider" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return Err(anyhow::anyhow!("--provider requires auto, native, or mise"));
+                };
+                provider = parse_activation_provider(value)?;
+            }
+            value if value.starts_with("--provider=") => {
+                provider = parse_activation_provider(value.trim_start_matches("--provider="))?;
+            }
+            value => return Err(anyhow::anyhow!("unknown activate option: {value}")),
+        }
+        index += 1;
+    }
+
+    let current_dir = proxy.get_current_dir()?;
+    let project = project_context::resolve_project_context(&current_dir);
+    let root = project.project_root;
+
+    if matches!(
+        provider,
+        ActivationProvider::Auto | ActivationProvider::Native
+    ) {
+        activate_native(ctx, proxy, dry_run)?;
+    }
+    if matches!(
+        provider,
+        ActivationProvider::Auto | ActivationProvider::Mise
+    ) {
+        let status = MiseStatus::detect(&root);
+        if matches!(status.trust.as_str(), "trusted" | "safe") {
+            activate_mise(ctx, proxy, &root, &status, dry_run)?;
+        } else if provider == ActivationProvider::Mise {
+            return Err(anyhow::anyhow!(
+                "mise provider is {}. dsh will not trust or install it automatically",
+                status.trust
+            ));
+        } else if status.trust != "not-configured" {
+            let _ = ctx.write_stdout(&format!(
+                "mise overlay skipped trust={} (dsh never runs `mise trust` automatically)",
+                status.trust
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn parse_activation_provider(value: &str) -> Result<ActivationProvider> {
+    match value {
+        "auto" => Ok(ActivationProvider::Auto),
+        "native" => Ok(ActivationProvider::Native),
+        "mise" => Ok(ActivationProvider::Mise),
+        _ => Err(anyhow::anyhow!(
+            "unknown provider `{value}`; expected auto, native, or mise"
+        )),
+    }
+}
+
+fn activate_mise(
+    ctx: &Context,
+    proxy: &mut dyn ShellProxy,
+    root: &Path,
+    status: &MiseStatus,
+    dry_run: bool,
+) -> Result<()> {
+    let mise = status
+        .executable
+        .as_deref()
+        .context("mise executable unavailable")?;
+    let output = mise_output(mise, root, &["--no-hooks", "env", "--json"])?;
+    if !output.status.success() {
+        return Err(anyhow::anyhow!(
+            "mise env failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let value: JsonValue = serde_json::from_slice(&output.stdout)?;
+    let object = value
+        .as_object()
+        .context("mise env --json returned a non-object value")?;
+    let mut changed = 0;
+    for (key, value) in object {
+        let Some(value) = value.as_str() else {
+            continue;
+        };
+        if proxy.get_var(key).as_deref() == Some(value) {
+            continue;
+        }
+        changed += 1;
+        if dry_run {
+            let _ = ctx.write_stdout(&format!(
+                "mise set {}={}",
+                key,
+                safety_policy::mask_env_value(key, value)
+            ));
+        } else {
+            proxy.set_env_var(key.clone(), value.to_string());
+        }
+    }
+    let mode = if dry_run { "dry-run" } else { "applied" };
+    let _ = ctx.write_stdout(&format!(
+        "mise overlay {mode} vars={changed} hooks=disabled trust={}",
+        status.trust
+    ));
+    Ok(())
+}
+
+fn activate_native(ctx: &Context, proxy: &mut dyn ShellProxy, dry_run: bool) -> Result<()> {
     if dry_run {
         return activate_dry_run(ctx, proxy);
     }
@@ -893,6 +1284,7 @@ mod tests {
     use dsh_types::observed_output::ObservedOutput;
     use std::io::Write;
     use std::os::fd::IntoRawFd;
+    use std::os::unix::fs::PermissionsExt;
 
     struct TestProxy {
         cwd: PathBuf,
@@ -1072,21 +1464,9 @@ mod tests {
     #[test]
     fn task_source_counts_groups_by_source() {
         let tasks = vec![
-            task::TaskInfo {
-                source: "cargo".to_string(),
-                name: "test".to_string(),
-                command: "cargo test".to_string(),
-            },
-            task::TaskInfo {
-                source: "cargo".to_string(),
-                name: "check".to_string(),
-                command: "cargo check".to_string(),
-            },
-            task::TaskInfo {
-                source: "npm".to_string(),
-                name: "build".to_string(),
-                command: "npm run build".to_string(),
-            },
+            task::TaskInfo::new("cargo", "test", "cargo test", "/tmp"),
+            task::TaskInfo::new("cargo", "check", "cargo check", "/tmp"),
+            task::TaskInfo::new("npm", "build", "npm run build", "/tmp"),
         ];
 
         let counts = task_source_counts(&tasks);
@@ -1146,5 +1526,109 @@ mod tests {
         assert!(output.contains("activation safety env_vars=3 confirm_vars=2"));
         assert!(!output.contains("secret"));
         assert!(!output.contains("SERVICE_TOKEN=token"));
+    }
+
+    #[test]
+    fn mise_activation_checks_trust_disables_hooks_and_dry_run_does_not_mutate() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("mise.toml"), "[tools]\nnode = '22'\n").unwrap();
+        let executable = dir.path().join("mise-fake");
+        std::fs::write(
+            &executable,
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> "$PWD/mise-args.log"
+if [ "$1" = "trust" ]; then printf '%s\n' "$PWD: trusted"; exit 0; fi
+if [ "$1" = "--no-hooks" ] && [ "$2" = "ls" ]; then printf '%s\n' '[{"name":"python"}]'; exit 0; fi
+if [ "$1" = "--no-hooks" ] && [ "$2" = "env" ]; then
+  printf '%s\n' '{"PATH":"/tmp/mise/bin","API_KEY":"secret"}'
+  exit 0
+fi
+exit 1
+"#,
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, permissions).unwrap();
+
+        let status = MiseStatus::detect_with_executable(dir.path(), Some(executable));
+        assert_eq!(status.trust, "trusted");
+        assert_eq!(status.missing_tools, vec!["python"]);
+
+        let mut proxy = TestProxy {
+            cwd: dir.path().to_path_buf(),
+            direnv_allowed: false,
+            set_env_calls: 0,
+            insert_path_calls: 0,
+        };
+        let (ctx, observer) = observed_context();
+        activate_mise(&ctx, &mut proxy, dir.path(), &status, true).unwrap();
+        assert_eq!(proxy.set_env_calls, 0);
+        let output = observed_stdout(&observer);
+        assert!(output.contains("API_KEY=***"));
+        assert!(!output.contains("API_KEY=secret"));
+        let args = std::fs::read_to_string(dir.path().join("mise-args.log")).unwrap();
+        assert!(args.contains("trust --show"));
+        assert!(args.contains("--no-hooks ls --missing --json"));
+        assert!(args.contains("--no-hooks env --json"));
+        assert!(
+            !args
+                .lines()
+                .any(|line| line.starts_with("trust") && line != "trust --show")
+        );
+    }
+
+    #[test]
+    fn safe_mise_config_requires_only_plain_tools_and_non_templated_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("mise.toml");
+        std::fs::write(
+            &config,
+            "min_version = '2026.1.0'\n[tools]\nnode = ['22', '24']\n[tasks.test]\nrun = 'cargo test'\n",
+        )
+        .unwrap();
+        assert!(mise_config_is_safe(dir.path()));
+
+        std::fs::write(&config, "[env]\nTOKEN = 'secret'\n").unwrap();
+        assert!(!mise_config_is_safe(dir.path()));
+
+        std::fs::write(&config, "[tasks.test]\nrun = 'echo {{env.HOME}}'\n").unwrap();
+        assert!(!mise_config_is_safe(dir.path()));
+
+        std::fs::write(&config, "[tasks.test.tools]\nnode = '22'\n").unwrap();
+        assert!(!mise_config_is_safe(dir.path()));
+    }
+
+    #[test]
+    fn missing_mise_tools_accepts_current_object_json_shape() {
+        let mut tools = Vec::new();
+        collect_missing_tool_names(
+            &serde_json::json!({
+                "node": [{"version": "22", "installed": false}],
+                "python": []
+            }),
+            &mut tools,
+        );
+        assert_eq!(tools, vec!["node"]);
+    }
+
+    #[test]
+    fn project_status_json_reports_provider_lock_and_dev_container_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), "{\"name\":\"demo\"}").unwrap();
+        std::fs::create_dir_all(dir.path().join(".devcontainer")).unwrap();
+        std::fs::write(dir.path().join(".devcontainer/devcontainer.json"), "{}").unwrap();
+        let context = project_context::resolve_project_context(dir.path());
+        let status = build_project_status(&context, &[]);
+        let value = serde_json::to_value(status).unwrap();
+        assert_eq!(value["provider"], "native");
+        assert_eq!(value["trust"], "not-configured");
+        assert!(value["missing_tools"].is_array());
+        assert!(
+            value["dev_container"]
+                .as_str()
+                .unwrap()
+                .ends_with(".devcontainer/devcontainer.json")
+        );
     }
 }

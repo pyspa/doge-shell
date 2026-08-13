@@ -7,6 +7,7 @@ use toml::Value as TomlValue;
 
 const PROJECT_MARKERS: &[&str] = &[
     "mise.toml",
+    ".mise.toml",
     ".tool-versions",
     "Cargo.toml",
     "rust-toolchain.toml",
@@ -417,10 +418,12 @@ pub struct TaskDefinition {
 }
 
 fn detect_mise_tasks(root: &Path) -> Result<Vec<TaskDefinition>> {
-    let path = root.join("mise.toml");
-    if !path.exists() {
+    let Some(path) = [root.join("mise.toml"), root.join(".mise.toml")]
+        .into_iter()
+        .find(|path| path.exists())
+    else {
         return Ok(Vec::new());
-    }
+    };
 
     let content = fs::read_to_string(path)?;
     let value = toml::from_str::<TomlValue>(&content)?;
@@ -584,7 +587,7 @@ fn nx_tasks_from_project_value(project_name: &str, value: &JsonValue) -> Vec<Tas
         .keys()
         .map(|name| TaskDefinition {
             source: "nx".to_string(),
-            name: name.clone(),
+            name: format!("{project_name}:{name}"),
             command: format!("nx run {}:{}", project_name, name),
         })
         .collect()
@@ -731,7 +734,7 @@ mod tests {
         assert!(
             tasks
                 .iter()
-                .any(|task| task.source == "nx" && task.name == "test")
+                .any(|task| task.source == "nx" && task.name.ends_with(":test"))
         );
     }
 
@@ -758,18 +761,20 @@ mod tests {
 
         let tasks = detect_nx_tasks(dir.path()).unwrap();
         assert!(tasks.iter().any(|task| {
-            task.source == "nx" && task.name == "build" && task.command == "nx run web:build"
+            task.source == "nx" && task.name == "web:build" && task.command == "nx run web:build"
         }));
         assert!(tasks.iter().any(|task| {
-            task.source == "nx" && task.name == "serve" && task.command == "nx run legacy:serve"
+            task.source == "nx"
+                && task.name == "legacy:serve"
+                && task.command == "nx run legacy:serve"
         }));
         assert!(tasks.iter().any(|task| {
-            task.source == "nx" && task.name == "lint" && task.command == "nx run api:lint"
+            task.source == "nx" && task.name == "api:lint" && task.command == "nx run api:lint"
         }));
 
         let detected = detect_task_names_in_dir(dir.path()).unwrap();
         assert!(detected.iter().any(|task| {
-            task.source == "nx" && task.name == "build" && task.command == "nx run web:build"
+            task.source == "nx" && task.name == "web:build" && task.command == "nx run web:build"
         }));
     }
 

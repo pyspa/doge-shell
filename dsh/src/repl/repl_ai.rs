@@ -2,6 +2,7 @@ use super::AiEvent;
 use super::Repl;
 
 use crate::completion::shell_token::{self, SeparatorMode};
+use dsh_types::quick_fix::{DeterministicQuickFixProvider, QuickFixProvider};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -37,23 +38,51 @@ pub fn get_directory_listing_content(path: &std::path::Path) -> Vec<String> {
 
 impl<'a> Repl<'a> {
     pub(crate) fn trigger_auto_fix(&self) {
-        if self.state.last_status != 0
-            && !self.state.last_command_string.is_empty()
-            && self.ai_ui.input_preferences.auto_fix
+        if self.state.last_status == 0 || self.state.last_command_string.is_empty() {
+            return;
+        }
+
+        let command = self.state.last_command_string.clone();
+        let status = self.state.last_status;
+        let output = self
+            .shell
+            .environment
+            .read()
+            .session_output_state
+            .command_blocks
+            .iter()
+            .find(|block| block.command == command && block.exit_code == status)
+            .map(|block| {
+                if block.stderr.is_empty() {
+                    block.stdout.clone()
+                } else {
+                    block.stderr.clone()
+                }
+            })
+            .unwrap_or_else(|| {
+                self.shell
+                    .environment
+                    .read()
+                    .get_var("OUT")
+                    .unwrap_or_default()
+            });
+
+        if let Some(fix) = DeterministicQuickFixProvider
+            .suggest(&command, status, &output)
+            .into_iter()
+            .next()
+        {
+            let _ = self.ai_ui.ai_tx.send(AiEvent::AutoFix(fix.replacement));
+            return;
+        }
+
+        if self.ai_ui.input_preferences.auto_fix
             && let Some(service) = &self.services.ai
         {
-            if is_auto_fix_blocked(&self.state.last_command_string) {
+            if is_auto_fix_blocked(&command) {
                 return;
             }
             let service = service.clone();
-            let command = self.state.last_command_string.clone();
-            let status = self.state.last_status;
-            let output = self
-                .shell
-                .environment
-                .read()
-                .get_var("OUT")
-                .unwrap_or_default();
             let tx = self.ai_ui.ai_tx.clone();
 
             tokio::spawn(async move {

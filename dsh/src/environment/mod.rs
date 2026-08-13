@@ -24,6 +24,7 @@ mod tests;
 
 use crate::ai_features::AiService;
 use crate::direnv::DirEnvironment;
+use crate::history::CommandLedgerMode;
 use crate::secrets::SecretManager;
 use crate::shell::APP_NAME;
 use crate::suggestion::InputPreferences;
@@ -54,6 +55,8 @@ pub trait ChangePwdHook: Send + Sync {
 pub(crate) struct VariableState {
     pub(crate) alias: HashMap<String, String>,
     pub(crate) abbreviations: HashMap<String, String>,
+    pub(crate) command_abbreviations: HashMap<String, HashMap<String, String>>,
+    pub(crate) command_ledger_mode: CommandLedgerMode,
     pub(crate) paths: Vec<String>,
     pub(crate) variables: HashMap<String, String>,
     pub(crate) exported_vars: HashSet<String>,
@@ -167,6 +170,8 @@ impl Environment {
             variable_state: VariableState {
                 alias: HashMap::new(),
                 abbreviations: HashMap::new(),
+                command_abbreviations: HashMap::new(),
+                command_ledger_mode: CommandLedgerMode::Off,
                 variables: HashMap::new(),
                 exported_vars: HashSet::new(),
                 paths,
@@ -217,6 +222,8 @@ impl Environment {
             VariableState {
                 alias: parent.variable_state.alias.clone(),
                 abbreviations: parent.variable_state.abbreviations.clone(),
+                command_abbreviations: parent.variable_state.command_abbreviations.clone(),
+                command_ledger_mode: parent.variable_state.command_ledger_mode,
                 paths: parent.variable_state.paths.clone(),
                 variables: parent.variable_state.variables.clone(),
                 exported_vars: parent.variable_state.exported_vars.clone(),
@@ -274,6 +281,14 @@ impl std::fmt::Debug for Environment {
         f.debug_struct("Environment")
             .field("alias", &self.variable_state.alias)
             .field("abbreviations", &self.variable_state.abbreviations)
+            .field(
+                "command_abbreviations",
+                &self.variable_state.command_abbreviations,
+            )
+            .field(
+                "command_ledger_mode",
+                &self.variable_state.command_ledger_mode,
+            )
             .field("direnv_paths", &self.variable_state.direnv_roots)
             .field("paths", &self.variable_state.paths)
             .field("variables_count", &self.variable_state.variables.len())

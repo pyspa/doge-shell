@@ -80,6 +80,37 @@ impl Db {
         let _ = conn.execute("ALTER TABLE command_history ADD COLUMN session_id TEXT", []);
         let _ = conn.execute("ALTER TABLE command_history ADD COLUMN hostname TEXT", []);
 
+        // Append-only execution ledger. This deliberately coexists with the
+        // aggregate command_history table so existing databases and frecency
+        // behavior remain unchanged.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS command_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                command TEXT NOT NULL,
+                cwd TEXT,
+                started_at INTEGER NOT NULL,
+                duration_ms INTEGER,
+                exit_code INTEGER,
+                session_id TEXT,
+                hostname TEXT,
+                author TEXT NOT NULL DEFAULT 'human',
+                output TEXT
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_command_events_started_at ON command_events(started_at DESC)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_command_events_author ON command_events(author, started_at DESC)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_command_events_session ON command_events(session_id, started_at DESC)",
+            [],
+        )?;
+
         // Directory Visits Log (Append Only)
         conn.execute(
             "CREATE TABLE IF NOT EXISTS directory_visits (
@@ -168,5 +199,45 @@ impl Db {
         self.conn
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn additive_migration_preserves_aggregate_history_and_adds_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("history.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE command_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    command TEXT NOT NULL,
+                    timestamp INTEGER NOT NULL,
+                    context TEXT,
+                    count INTEGER DEFAULT 1
+                );
+                INSERT INTO command_history(command, timestamp) VALUES ('git status', 1);",
+            )
+            .unwrap();
+        }
+
+        let db = Db::new(path).unwrap();
+        let conn = db.get_connection();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM command_history", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+        let events_table: String = conn
+            .query_row(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='command_events'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(events_table, "command_events");
     }
 }

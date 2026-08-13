@@ -7,7 +7,7 @@
   - Read: `dsh/src/parser/`
   - Validate: `cargo test -p doge-shell`
 - prompt / right prompt / transient / terminal UI / status line
-  - Read: `dsh/src/prompt/`, `dsh/src/terminal/`, `dsh/src/repl/`, `dsh/src/repl/status_line.rs`
+  - Read: `dsh/src/prompt/`, `dsh/src/terminal/`, `dsh/src/repl/`, `dsh/src/repl/status_line.rs`, `dsh/src/repl/shell_integration.rs`
   - Validate: `cargo test -p doge-shell`
 - key bindings / chords / bind / KeyAction
   - Read: `dsh/src/repl/keybind/`, `dsh/src/repl/key_action.rs`, `dsh/src/repl/handler.rs`, `dsh/src/lisp/keybind.rs`
@@ -54,13 +54,13 @@
   - Read: `dsh/src/lisp/`, `dsh/src/lib.rs`, `dsh/src/main.rs`, `dsh-builtin/src/lisp.rs`, `dsh-builtin/src/include.rs`, `dsh-builtin/src/reload.rs`
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-builtin` when builtin include/reload/lisp changes
 - environment / project context / direnv / path activation
-  - Read: `dsh/src/environment/`, `dsh/src/direnv.rs`, `dsh-builtin/src/project_context.rs`
+  - Read: `dsh/src/environment/`, `dsh/src/direnv.rs`, `dsh-builtin/src/project.rs`, `dsh-builtin/src/project_context.rs`, `dsh-builtin/src/task.rs`
   - Validate: package for touched files; use `cargo test -p doge-shell` for `dsh/` and `cargo test -p dsh-builtin` for builtin project context
 - history / frecency / command timing
-  - Read: `dsh/src/history/`, `dsh-frecency/src/`, `dsh/src/command_timing.rs`, `dsh-builtin/src/command_timing.rs`
+  - Read: `dsh/src/history/`, `dsh/src/db.rs`, `dsh-frecency/src/`, `dsh/src/command_timing.rs`, `dsh-builtin/src/command_timing.rs`, `dsh-builtin/src/blocks.rs`
   - Validate: package for touched files; use `cargo test -p dsh-frecency` for frecency changes
 - command palette / AI actions
-  - Read: `dsh/src/command_palette/`, `dsh/src/ai_features/`, `dsh/src/argument_explainer.rs`, `dsh-openai/src/`
+  - Read: `dsh/src/command_palette/`, `dsh/src/ai_features/`, `dsh/src/repl/repl_ai.rs`, `dsh-types/src/quick_fix.rs`, `dsh/src/argument_explainer.rs`, `dsh-openai/src/`
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-openai` when client/config changes
 - AI guidance / Skills / runtime skill installer
   - Read: `AGENTS.md`, `docs/ai/`, `scripts/install-runtime-skills.sh`

@@ -1,6 +1,7 @@
 use super::{BuiltinFuture, ShellProxy};
 use crate::capability::AiCapability;
 use dsh_types::command_block::CommandBlock;
+use dsh_types::quick_fix::{DeterministicQuickFixProvider, QuickFix, QuickFixProvider};
 use dsh_types::{Context, ExitStatus};
 use serde_json::json;
 
@@ -23,10 +24,20 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
             limit,
             failed,
             watched,
-        } => list_blocks(ctx, proxy, limit, failed, watched),
+            json,
+            scope,
+        } => list_blocks(ctx, proxy, limit, failed, watched, json, scope),
         BlocksMode::Show { index, output } => show_block(ctx, proxy, index, output),
         BlocksMode::Command(index) => print_command(ctx, proxy, index),
         BlocksMode::Rerun(index) => rerun_block(ctx, proxy, index),
+        BlocksMode::Fix { index, json, ai } => {
+            if ai {
+                let _ = ctx.write_stderr("blocks: --ai requires foreground async execution");
+                ExitStatus::ExitedWith(1)
+            } else {
+                fix_block(ctx, proxy, index, json)
+            }
+        }
         BlocksMode::Explain(_) => {
             let _ = ctx.write_stderr("blocks: AI explanation requires foreground async execution");
             ExitStatus::ExitedWith(1)
@@ -60,10 +71,19 @@ pub fn command_async<'a>(
                 limit,
                 failed,
                 watched,
-            } => list_blocks(ctx, proxy, limit, failed, watched),
+                json,
+                scope,
+            } => list_blocks(ctx, proxy, limit, failed, watched, json, scope),
             BlocksMode::Show { index, output } => show_block(ctx, proxy, index, output),
             BlocksMode::Command(index) => print_command(ctx, proxy, index),
             BlocksMode::Rerun(index) => rerun_block(ctx, proxy, index),
+            BlocksMode::Fix { index, json, ai } => {
+                if ai {
+                    fix_block_ai(ctx, proxy, index, json).await
+                } else {
+                    fix_block(ctx, proxy, index, json)
+                }
+            }
             BlocksMode::Explain(index) => explain_block_async(ctx, proxy, index).await,
             BlocksMode::Clear => clear_blocks(ctx, proxy),
             BlocksMode::Tui => open_tui(ctx, proxy),
@@ -82,12 +102,20 @@ enum OutputSelection {
     All,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlockScope {
+    Session,
+    Persistent,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum BlocksMode {
     List {
         limit: usize,
         failed: bool,
         watched: bool,
+        json: bool,
+        scope: BlockScope,
     },
     Show {
         index: usize,
@@ -95,6 +123,11 @@ enum BlocksMode {
     },
     Command(usize),
     Rerun(usize),
+    Fix {
+        index: usize,
+        json: bool,
+        ai: bool,
+    },
     Explain(usize),
     Clear,
     /// Full-screen browser. Implemented in the `dsh` crate and reached through
@@ -116,6 +149,8 @@ fn parse_options(args: &[String]) -> Result<BlocksOptions, String> {
                 limit: 20,
                 failed: false,
                 watched: false,
+                json: false,
+                scope: BlockScope::Session,
             },
         });
     }
@@ -125,9 +160,11 @@ fn parse_options(args: &[String]) -> Result<BlocksOptions, String> {
             mode: BlocksMode::Help,
         }),
         "list" | "-l" | "--list" => parse_list_options(&args[1..]),
+        "--scope" | "--json" => parse_list_options(args),
         "show" => parse_show_options(&args[1..]),
         "command" => parse_index_mode(&args[1..], BlocksMode::Command),
         "rerun" => parse_index_mode(&args[1..], BlocksMode::Rerun),
+        "fix" => parse_fix_options(&args[1..]),
         "explain" => parse_index_mode(&args[1..], BlocksMode::Explain),
         "tui" | "browse" => {
             if args.len() > 1 {
@@ -158,10 +195,39 @@ fn parse_options(args: &[String]) -> Result<BlocksOptions, String> {
     }
 }
 
+fn parse_fix_options(args: &[String]) -> Result<BlocksOptions, String> {
+    let mut index_value = None;
+    let mut json = false;
+    let mut ai = false;
+    for arg in args {
+        match arg.as_str() {
+            "--json" => json = true,
+            "--ai" => ai = true,
+            value if value.starts_with('-') => return Err(format!("unknown fix option: {value}")),
+            value => {
+                if index_value
+                    .replace(parse_positive_usize(value, "index")?)
+                    .is_some()
+                {
+                    return Err("fix accepts only one index".to_string());
+                }
+            }
+        }
+    }
+    let Some(index) = index_value else {
+        return Err("fix requires an index".to_string());
+    };
+    Ok(BlocksOptions {
+        mode: BlocksMode::Fix { index, json, ai },
+    })
+}
+
 fn parse_list_options(args: &[String]) -> Result<BlocksOptions, String> {
     let mut limit = 20;
     let mut failed = false;
     let mut watched = false;
+    let mut json = false;
+    let mut scope = BlockScope::Session;
     let mut index = 0;
 
     while index < args.len() {
@@ -178,6 +244,18 @@ fn parse_list_options(args: &[String]) -> Result<BlocksOptions, String> {
             }
             "--failed" => failed = true,
             "--watched" => watched = true,
+            "--json" => json = true,
+            "--scope" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return Err("--scope requires session or persistent".to_string());
+                };
+                scope = match value.as_str() {
+                    "session" => BlockScope::Session,
+                    "persistent" => BlockScope::Persistent,
+                    _ => return Err("--scope requires session or persistent".to_string()),
+                };
+            }
             value => return Err(format!("unknown list option: {value}")),
         }
         index += 1;
@@ -188,6 +266,8 @@ fn parse_list_options(args: &[String]) -> Result<BlocksOptions, String> {
             limit,
             failed,
             watched,
+            json,
+            scope,
         },
     })
 }
@@ -249,10 +329,62 @@ fn list_blocks(
     limit: usize,
     failed: bool,
     watched: bool,
+    json_output: bool,
+    scope: BlockScope,
 ) -> ExitStatus {
+    if scope == BlockScope::Persistent {
+        use crate::CoreShellAction;
+        use crate::capability::ExecutionCapability;
+        return match proxy.dispatch_core(
+            ctx,
+            CoreShellAction::BlocksPersistent,
+            vec![
+                "blocks-persistent".to_string(),
+                limit.to_string(),
+                failed.to_string(),
+                json_output.to_string(),
+            ],
+        ) {
+            Ok(()) => ExitStatus::ExitedWith(0),
+            Err(err) => {
+                let _ = ctx.write_stderr(&format!("blocks: {err}"));
+                ExitStatus::ExitedWith(1)
+            }
+        };
+    }
     let blocks = proxy.get_command_blocks();
     if blocks.is_empty() {
-        let _ = ctx.write_stdout("No command blocks available.");
+        let _ = ctx.write_stdout(if json_output {
+            "[]"
+        } else {
+            "No command blocks available."
+        });
+        return ExitStatus::ExitedWith(0);
+    }
+
+    if json_output {
+        let rows = blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, block)| !failed || block.exit_code != 0)
+            .filter(|(_, block)| !watched || block.watched)
+            .take(limit)
+            .map(|(offset, block)| {
+                json!({
+                    "index": offset + 1,
+                    "id": block.id,
+                    "command": block.command,
+                    "cwd": block.cwd,
+                    "exit_code": block.exit_code,
+                    "duration_ms": block.duration_ms,
+                    "watched": block.watched,
+                    "stdout": block.stdout,
+                    "stderr": block.stderr
+                })
+            })
+            .collect::<Vec<_>>();
+        let _ =
+            ctx.write_stdout(&serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string()));
         return ExitStatus::ExitedWith(0);
     }
 
@@ -349,6 +481,109 @@ fn rerun_block(ctx: &Context, proxy: &mut dyn ShellProxy, index: usize) -> ExitS
     }
 }
 
+fn deterministic_fixes(block: &CommandBlock) -> Vec<QuickFix> {
+    let output = if block.stderr.is_empty() {
+        block.stdout.as_str()
+    } else {
+        block.stderr.as_str()
+    };
+    DeterministicQuickFixProvider.suggest(&block.command, block.exit_code, output)
+}
+
+fn fix_block(
+    ctx: &Context,
+    proxy: &mut dyn ShellProxy,
+    index: usize,
+    json_output: bool,
+) -> ExitStatus {
+    let Some(block) = get_block(proxy, index) else {
+        let _ = ctx.write_stderr(&format!("blocks: no block at index {index}"));
+        return ExitStatus::ExitedWith(1);
+    };
+    let fixes = deterministic_fixes(&block);
+    if json_output {
+        let _ = ctx.write_stdout(
+            &serde_json::to_string(&json!({
+                "block": index,
+                "command": block.command,
+                "fixes": fixes,
+                "source": "deterministic"
+            }))
+            .unwrap_or_else(|_| "{}".to_string()),
+        );
+    } else if fixes.is_empty() {
+        let _ = ctx.write_stdout("No deterministic fix found. Retry with `blocks fix <N> --ai`.");
+    } else {
+        let lines = fixes
+            .iter()
+            .enumerate()
+            .map(|(offset, fix)| format!("{}. {}\n   {}", offset + 1, fix.title, fix.replacement))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let _ = ctx.write_stdout(&lines);
+    }
+    ExitStatus::ExitedWith(0)
+}
+
+async fn fix_block_ai(
+    ctx: &Context,
+    proxy: &mut dyn ShellProxy,
+    index: usize,
+    json_output: bool,
+) -> ExitStatus {
+    let Some(block) = get_block(proxy, index) else {
+        let _ = ctx.write_stderr(&format!("blocks: no block at index {index}"));
+        return ExitStatus::ExitedWith(1);
+    };
+
+    let deterministic = deterministic_fixes(&block);
+    if !deterministic.is_empty() {
+        return fix_block(ctx, proxy, index, json_output);
+    }
+
+    let output = if block.stderr.is_empty() {
+        block.stdout.as_str()
+    } else {
+        block.stderr.as_str()
+    };
+    let messages = vec![
+        json!({
+            "role": "system",
+            "content": "Return one corrected shell command only. Never claim it has been executed."
+        }),
+        json!({
+            "role": "user",
+            "content": format!("Command: {}\nExit code: {}\nOutput:\n{}", block.command, block.exit_code, truncate_for_ai(output, 4000))
+        }),
+    ];
+    match proxy.ask(messages).await {
+        Ok(replacement) => {
+            if json_output {
+                let _ = ctx.write_stdout(
+                    &serde_json::to_string(&json!({
+                        "block": index,
+                        "command": block.command,
+                        "fixes": [{
+                            "id": "ai",
+                            "title": "AI suggestion",
+                            "replacement": replacement.trim()
+                        }],
+                        "source": "ai"
+                    }))
+                    .unwrap_or_else(|_| "{}".to_string()),
+                );
+            } else {
+                let _ = ctx.write_stdout(replacement.trim());
+            }
+            ExitStatus::ExitedWith(0)
+        }
+        Err(err) => {
+            let _ = ctx.write_stderr(&format!("blocks: AI fix failed: {err}"));
+            ExitStatus::ExitedWith(1)
+        }
+    }
+}
+
 async fn explain_block_async(
     ctx: &Context,
     proxy: &mut dyn ShellProxy,
@@ -403,7 +638,7 @@ fn open_tui(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
     use std::io::IsTerminal;
 
     if !std::io::stdout().is_terminal() {
-        return list_blocks(ctx, proxy, 20, false, false);
+        return list_blocks(ctx, proxy, 20, false, false, false, BlockScope::Session);
     }
 
     match proxy.dispatch_core(
@@ -415,7 +650,7 @@ fn open_tui(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
         Err(err) => {
             let _ = ctx.write_stderr(&format!("blocks: {err}"));
             // A terminal too small for the browser still deserves the list.
-            list_blocks(ctx, proxy, 20, false, false)
+            list_blocks(ctx, proxy, 20, false, false, false, BlockScope::Session)
         }
     }
 }
@@ -484,10 +719,11 @@ fn help_text() -> &'static str {
         "List and inspect session command blocks.\n",
         "\n",
         "Commands:\n",
-        "  list [--limit N] [--failed] [--watched]  List command blocks\n",
+        "  list [--limit N] [--failed] [--watched] [--json] [--scope session|persistent]\n",
         "  show <N> [--stdout|--stderr|--all]        Show a command block\n",
         "  command <N>                               Print the command only\n",
         "  rerun <N>                                 Rerun a command block\n",
+        "  fix <N> [--json] [--ai]                  Suggest a fix without running it\n",
         "  explain <N>                               Ask AI to explain a block\n",
         "  tui                                       Browse blocks full-screen (also Ctrl-O)\n",
         "  clear                                     Clear command blocks\n",
@@ -677,7 +913,9 @@ mod tests {
                 mode: BlocksMode::List {
                     limit: 20,
                     failed: false,
-                    watched: false
+                    watched: false,
+                    json: false,
+                    scope: BlockScope::Session,
                 }
             }
         );
@@ -698,7 +936,9 @@ mod tests {
                 mode: BlocksMode::List {
                     limit: 5,
                     failed: true,
-                    watched: true
+                    watched: true,
+                    json: false,
+                    scope: BlockScope::Session,
                 }
             }
         );
@@ -716,6 +956,46 @@ mod tests {
                 }
             }
         );
+    }
+
+    #[test]
+    fn parse_fix_supports_json_and_ai_flags() {
+        assert_eq!(
+            parse_options(&[
+                "fix".to_string(),
+                "2".to_string(),
+                "--json".to_string(),
+                "--ai".to_string(),
+            ])
+            .unwrap(),
+            BlocksOptions {
+                mode: BlocksMode::Fix {
+                    index: 2,
+                    json: true,
+                    ai: true,
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn fix_json_uses_deterministic_engine_without_running_command() {
+        let mut failed = block("gti status", 127, false);
+        failed.stderr = "dsh: command not found: gti".to_string();
+        let mut proxy = MockShellProxy::new(vec![failed]);
+        let (status, snapshot) = run_with_observer(
+            vec![
+                "blocks".to_string(),
+                "fix".to_string(),
+                "1".to_string(),
+                "--json".to_string(),
+            ],
+            &mut proxy,
+        );
+        assert_eq!(status, ExitStatus::ExitedWith(0));
+        let value: serde_json::Value = serde_json::from_str(snapshot.stdout.trim()).unwrap();
+        assert_eq!(value["fixes"][0]["replacement"], "git status");
+        assert!(proxy.requested_eval.is_empty());
     }
 
     #[test]

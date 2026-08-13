@@ -170,6 +170,29 @@ pub fn abbr(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeErr
     Ok(Value::NIL)
 }
 
+/// Defines an abbreviation that is expanded only after a direct command.
+/// Usage: (abbr-command "git" "co" "checkout")
+pub fn abbr_command(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    if args.len() != 3 {
+        return Err(RuntimeError::new(
+            "abbr-command requires exactly 3 arguments: command, name, and expansion",
+        ));
+    }
+
+    let command = args[0].to_string();
+    let name = args[1].to_string();
+    let expansion = args[2].to_string();
+    env.borrow()
+        .shell_env
+        .write()
+        .variable_state
+        .command_abbreviations
+        .entry(command)
+        .or_default()
+        .insert(name, expansion);
+    Ok(Value::NIL)
+}
+
 pub fn allow_direnv(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     for arg in args {
         let root = arg.to_string();
@@ -449,6 +472,44 @@ pub fn pref_status_line(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value
         .shell_env
         .write()
         .set_status_line_enabled(enabled);
+    Ok(Value::NIL)
+}
+
+/// `(pref-command-ledger ["off"|"metadata"|"output"])`.
+/// Output capture is intentionally opt-in; all modes still use secret filtering.
+pub fn pref_command_ledger(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    if args.is_empty() {
+        return Ok(Value::String(
+            env.borrow()
+                .shell_env
+                .read()
+                .variable_state
+                .command_ledger_mode
+                .as_str()
+                .to_string(),
+        ));
+    }
+    if args.len() != 1 {
+        return Err(RuntimeError::new(
+            "pref-command-ledger accepts zero or one argument",
+        ));
+    }
+    let value = match &args[0] {
+        Value::String(value) => value.as_str(),
+        _ => {
+            return Err(RuntimeError::new(
+                "pref-command-ledger requires a string: off, metadata, or output",
+            ));
+        }
+    };
+    let mode = crate::history::CommandLedgerMode::parse(value).ok_or_else(|| {
+        RuntimeError::new("pref-command-ledger requires off, metadata, or output")
+    })?;
+    env.borrow()
+        .shell_env
+        .write()
+        .variable_state
+        .command_ledger_mode = mode;
     Ok(Value::NIL)
 }
 

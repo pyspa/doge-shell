@@ -4,6 +4,7 @@ use crate::safety_policy;
 use crate::task;
 use dsh_types::mcp::McpTransport;
 use dsh_types::{Context, ExitStatus};
+use serde_json::json;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,7 +17,12 @@ pub fn description() -> &'static str {
 }
 
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
-    let section = argv.get(1).map(|value| value.as_str());
+    let json_output = argv.iter().skip(1).any(|value| value == "--json");
+    let section = argv
+        .iter()
+        .skip(1)
+        .find(|value| value.as_str() != "--json")
+        .map(|value| value.as_str());
     if matches!(section, Some("-h" | "--help" | "help")) {
         return print_help(ctx);
     }
@@ -31,6 +37,14 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     let current_dir = proxy
         .get_current_dir()
         .unwrap_or_else(|_| PathBuf::from("."));
+
+    if json_output {
+        if matches!(section, Some("fix")) {
+            let _ = ctx.write_stderr("doctor: fix cannot be combined with --json");
+            return ExitStatus::ExitedWith(1);
+        }
+        return print_json_report(ctx, proxy, &current_dir, section);
+    }
 
     if matches!(section, Some("setup" | "fix")) {
         print_header(ctx, "setup");
@@ -78,6 +92,204 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     ExitStatus::ExitedWith(0)
 }
 
+fn print_json_report(
+    ctx: &Context,
+    proxy: &mut dyn ShellProxy,
+    current_dir: &Path,
+    section: Option<&str>,
+) -> ExitStatus {
+    let project = project_context::resolve_project_context(current_dir);
+    let details = json_section_details(proxy, current_dir, section);
+    let runtimes = project
+        .runtimes
+        .iter()
+        .map(|runtime| {
+            json!({
+                "name": runtime.name,
+                "source": runtime.source,
+                "version": runtime.version,
+                "path": runtime.path
+            })
+        })
+        .collect::<Vec<_>>();
+    let tasks = task::summarize_tasks_in_dir_metadata_only(&project.project_root)
+        .map(|summary| {
+            json!({
+                "count": summary.tasks.len(),
+                "deferred_sources": summary.deferred_sources
+            })
+        })
+        .unwrap_or_else(|err| json!({"error": err.to_string()}));
+    let report = json!({
+        "section": section.unwrap_or("all"),
+        "cwd": current_dir,
+        "project": {
+            "root": project.project_root,
+            "markers": project.project_markers,
+            "runtimes": runtimes,
+            "tasks": tasks
+        },
+        "integrations": {
+            "mcp_servers": proxy.list_mcp_servers().len(),
+            "ai_configured": proxy.get_var("AI_CHAT_API_KEY")
+                .or_else(|| proxy.get_var("OPENAI_API_KEY"))
+                .is_some_and(|value| !value.trim().is_empty())
+        },
+        "details": details
+    });
+    match serde_json::to_string(&report) {
+        Ok(output) => {
+            let _ = ctx.write_stdout(&output);
+            ExitStatus::ExitedWith(0)
+        }
+        Err(err) => {
+            let _ = ctx.write_stderr(&format!("doctor: JSON serialization failed: {err}"));
+            ExitStatus::ExitedWith(1)
+        }
+    }
+}
+
+fn json_section_details(
+    proxy: &mut dyn ShellProxy,
+    current_dir: &Path,
+    section: Option<&str>,
+) -> serde_json::Value {
+    match section {
+        Some("config") => {
+            let config_root = dirs::config_dir().map(|path| path.join("dsh"));
+            let config = config_root.as_ref().map(|path| path.join("config.lisp"));
+            let skills = config_root.as_ref().map(|path| path.join("skills"));
+            json!({
+                "config": config.as_ref().map(|path| json!({"path": path, "exists": path.is_file()})),
+                "runtime_skills": skills.as_ref().map(|path| json!({
+                    "path": path,
+                    "exists": path.is_dir(),
+                    "entries": fs::read_dir(path).map(|entries| entries.count()).unwrap_or(0)
+                }))
+            })
+        }
+        Some("ai") => json!({
+            "configured": proxy.get_var("AI_CHAT_API_KEY")
+                .or_else(|| proxy.get_var("OPENAI_API_KEY"))
+                .or_else(|| proxy.get_var("OPEN_AI_API_KEY"))
+                .is_some_and(|value| !value.trim().is_empty()),
+            "model": proxy.get_var("AI_CHAT_MODEL")
+                .or_else(|| proxy.get_var("OPENAI_MODEL"))
+                .unwrap_or_else(|| "gpt-5-mini".to_string()),
+            "base_url": proxy.get_var("AI_CHAT_BASE_URL")
+                .or_else(|| proxy.get_var("OPENAI_BASE_URL"))
+                .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+            "message_lang": proxy.get_var("AI_MESSAGE_LANG").unwrap_or_else(|| "default".to_string())
+        }),
+        Some("mcp") => {
+            let servers = proxy.list_mcp_servers();
+            json!({
+                "configured": servers.len(),
+                "servers": servers.iter().map(|server| {
+                    let transport = match &server.transport {
+                        McpTransport::Stdio { .. } => "stdio",
+                        McpTransport::Sse { .. } => "sse",
+                        McpTransport::Http { .. } => "http",
+                    };
+                    json!({"label": server.label, "transport": transport})
+                }).collect::<Vec<_>>()
+            })
+        }
+        Some("project") => {
+            let project = project_context::resolve_project_context(current_dir);
+            json!({
+                "root": project.project_root,
+                "markers": project.project_markers,
+                "activations": project.activations.iter().map(|activation| {
+                    json!({"kind": activation.kind, "path": activation.path})
+                }).collect::<Vec<_>>(),
+                "completion": proxy.completion_diagnostics()
+            })
+        }
+        Some("runtime" | "runtimes") => {
+            let commands = [
+                "mise", "direnv", "rustc", "cargo", "node", "npm", "pnpm", "python3", "uv", "go",
+                "just",
+            ]
+            .into_iter()
+            .map(|command| {
+                json!({
+                    "command": command,
+                    "path": resolve_in_path(command),
+                    "version": read_version(command)
+                })
+            })
+            .collect::<Vec<_>>();
+            json!({"commands": commands})
+        }
+        Some("performance" | "perf") => json!({
+            "history_entries": proxy.command_history_len(),
+            "executable_cache_entries": proxy.executable_cache_len(),
+            "completion": proxy.completion_diagnostics()
+        }),
+        Some("safety") => json_safety_details(proxy, current_dir),
+        Some("dev" | "validate") => json_dev_details(current_dir),
+        Some("skills") => {
+            let dsh = dirs::config_dir().map(|path| path.join("dsh/skills"));
+            let codex = dirs::home_dir().map(|path| path.join(".codex/skills"));
+            json!({
+                "dsh_runtime": dsh.as_ref().map(|path| json!({"path": path, "entries": count_skill_dirs(path)})),
+                "codex_runtime": codex.as_ref().map(|path| json!({"path": path, "entries": count_skill_dirs(path)}))
+            })
+        }
+        Some("setup") => {
+            let root = dirs::config_dir().map(|path| path.join("dsh"));
+            json!({"config_root": root.as_ref().map(|path| json!({"path": path, "exists": path.is_dir()}))})
+        }
+        None => json!({"kind": "summary"}),
+        Some(_) => serde_json::Value::Null,
+    }
+}
+
+fn json_safety_details(proxy: &mut dyn ShellProxy, current_dir: &Path) -> serde_json::Value {
+    let allowlist = proxy.list_execute_allowlist();
+    let servers = proxy.list_mcp_servers();
+    let project = project_context::resolve_project_context(current_dir);
+    let envrc = project.project_root.join(".envrc");
+    let base_url = proxy.get_var("AI_CHAT_BASE_URL");
+    let base_url_safe = base_url.as_deref().is_none_or(is_https_or_local_http_url);
+    let envrc_exists = envrc.is_file();
+    let envrc_allowed = !envrc_exists || proxy.is_direnv_allowed(&project.project_root);
+    json!({
+        "execute_allowlist": allowlist.iter().map(|entry| json!({
+            "entry": entry,
+            "risky": is_risky_execute_allowlist_entry(entry)
+        })).collect::<Vec<_>>(),
+        "mcp": {
+            "configured": servers.len(),
+            "sse_servers": servers.iter().filter(|server| matches!(&server.transport, McpTransport::Sse { .. })).count()
+        },
+        "ai_base_url": {
+            "value": base_url,
+            "safe": base_url_safe
+        },
+        "envrc": {
+            "path": envrc,
+            "exists": envrc_exists,
+            "allowed": envrc_allowed
+        }
+    })
+}
+
+fn json_dev_details(current_dir: &Path) -> serde_json::Value {
+    let Some(repo_root) = find_repo_root(current_dir) else {
+        return json!({"error": "repo-root-not-found"});
+    };
+    match changed_paths(&repo_root) {
+        Ok(paths) => json!({
+            "repo_root": repo_root,
+            "changed_files": paths,
+            "commands": validation_commands_for_paths(&paths)
+        }),
+        Err(err) => json!({"repo_root": repo_root, "error": err}),
+    }
+}
+
 fn print_help(ctx: &Context) -> ExitStatus {
     let _ = ctx.write_stdout(help_text());
     ExitStatus::ExitedWith(0)
@@ -113,6 +325,7 @@ fn help_text() -> &'static str {
         "  doctor setup\n",
         "  doctor fix\n",
         "  doctor validate\n",
+        "  doctor --json\n",
         "  doctor --help\n",
     )
 }
@@ -1728,6 +1941,59 @@ mod tests {
         assert!(output.contains("warn ai-base-url insecure http://example.com/v1"));
         assert!(output.contains("warn envrc not-allowed"));
         assert!(output.contains("warn unignored-log debug.log"));
+
+        let (ctx, observer) = observed_context();
+        let status = command(
+            &ctx,
+            vec![
+                "doctor".to_string(),
+                "safety".to_string(),
+                "--json".to_string(),
+            ],
+            &mut proxy,
+        );
+        assert_eq!(status, ExitStatus::ExitedWith(0));
+        let value: serde_json::Value =
+            serde_json::from_str(observed_stdout(&observer).trim()).unwrap();
+        assert_eq!(value["section"], "safety");
+        assert_eq!(value["details"]["execute_allowlist"][0]["risky"], true);
+        assert_eq!(value["details"]["mcp"]["sse_servers"], 1);
+        assert_eq!(value["details"]["envrc"]["allowed"], false);
+    }
+
+    #[test]
+    fn validate_json_contains_focused_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("docs/ai")).unwrap();
+        std::fs::create_dir_all(dir.path().join("dsh/src")).unwrap();
+        assert!(
+            StdCommand::new("git")
+                .arg("init")
+                .current_dir(dir.path())
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        std::fs::write(dir.path().join("dsh/src/review.rs"), "// changed\n").unwrap();
+
+        let value = json_dev_details(dir.path());
+        let commands = value["commands"].as_array().unwrap();
+        assert!(
+            commands
+                .iter()
+                .any(|command| command == "cargo test -p doge-shell")
+        );
+        assert!(
+            value["changed_files"]
+                .as_array()
+                .is_some_and(|files| !files.is_empty())
+        );
     }
 
     #[test]

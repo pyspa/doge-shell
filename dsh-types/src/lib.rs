@@ -21,6 +21,7 @@ pub mod notebook;
 pub mod observed_output;
 pub mod output_history;
 pub mod project;
+pub mod quick_fix;
 pub mod safety_policy;
 pub mod schedule;
 pub mod snippet;

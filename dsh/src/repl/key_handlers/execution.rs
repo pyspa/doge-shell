@@ -100,16 +100,20 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
     // Handle abbreviation expansion on Enter if cursor is at end of a word
     if ai_watch_request.is_none()
         && let Some(word) = repl.input.get_current_word_for_abbr()
-        && let Some(expansion) = repl
-            .shell
-            .environment
-            .read()
-            .variable_state
-            .abbreviations
-            .get(&word)
     {
-        let expansion = expansion.clone();
-        if repl.input.replace_current_word(&expansion) {
+        let expansion = {
+            let environment = repl.shell.environment.read();
+            super::super::abbreviation::resolve(
+                repl.input.as_str(),
+                repl.input.cursor(),
+                &word,
+                &environment.variable_state.abbreviations,
+                &environment.variable_state.command_abbreviations,
+            )
+        };
+        if let Some(expansion) = expansion
+            && repl.input.replace_current_word(&expansion)
+        {
             debug!("Abbreviation '{}' expanded to '{}'", word, expansion);
         }
     }
@@ -191,7 +195,7 @@ async fn execute_shell_command(
             );
 
             // Command failed to start due to terminal init error
-            write_terminal_control(b"\x1b]133;D;1\x1b\\");
+            write_terminal_control(&super::super::shell_integration::command_finished(1));
 
             // Show new prompt and skip command execution
             let mut renderer = TerminalRenderer::new();
@@ -204,8 +208,9 @@ async fn execute_shell_command(
     let output_observer = Some(ObservedOutput::shared(COMMAND_BLOCK_MAX_OBSERVED_BYTES));
     ctx.output_observer = output_observer.clone();
 
-    // OSC 133 C: Command executed / Output start
-    write_terminal_control(b"\x1b]133;C\x1b\\");
+    write_terminal_control(&super::super::shell_integration::command_output_start(
+        &input_str,
+    ));
 
     let exit_code = match repl
         .shell
@@ -224,8 +229,9 @@ async fn execute_shell_command(
         }
     };
 
-    // OSC 133 D: Command finished
-    write_terminal_control(format!("\x1b]133;D;{exit_code}\x1b\\").as_bytes());
+    write_terminal_control(&super::super::shell_integration::command_finished(
+        exit_code,
+    ));
 
     repl.completion_ui.cache.invalidate();
 
@@ -241,9 +247,6 @@ async fn execute_shell_command(
         }
     }
 
-    repl.shell
-        .record_history_outcome(&input_str, exit_code, elapsed);
-
     let output_entries = repl
         .shell
         .environment
@@ -257,6 +260,9 @@ async fn execute_shell_command(
         .filter(|output| !output.is_empty())
         .map(combined_observed_output)
         .unwrap_or_else(|| combined_output(&output_entries));
+
+    repl.shell
+        .record_history_outcome(&input_str, exit_code, elapsed, Some(&watched_output));
 
     let watch_summary = if let Some(request) = ai_watch_request.as_ref() {
         summarize_ai_watch(
@@ -456,7 +462,7 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
                 );
 
                 // Command failed to start due to terminal init error
-                write_terminal_control(b"\x1b]133;D;1\x1b\\");
+                write_terminal_control(&super::super::shell_integration::command_finished(1));
 
                 let mut renderer = TerminalRenderer::new();
                 repl.print_prompt(&mut renderer);
@@ -466,8 +472,9 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
         };
         let mut ctx = Context::new(repl.shell.pid, repl.shell.pgid, Some(shell_tmode), true);
 
-        // OSC 133 C: Command executed / Output start
-        write_terminal_control(b"\x1b]133;C\x1b\\");
+        write_terminal_control(&super::super::shell_integration::command_output_start(
+            &input,
+        ));
 
         let exit_code = match repl.shell.eval_str(&mut ctx, input.clone(), true).await {
             Ok(code) => {
@@ -481,15 +488,16 @@ pub(crate) async fn handle_execute_background(repl: &mut Repl<'_>) -> Result<()>
             }
         };
 
-        // OSC 133 D: Command finished
-        write_terminal_control(format!("\x1b]133;D;{exit_code}\x1b\\").as_bytes());
+        write_terminal_control(&super::super::shell_integration::command_finished(
+            exit_code,
+        ));
 
         repl.completion_ui.cache.invalidate();
         repl.input.clear();
         repl.ai_ui.suggestion_manager.clear();
         let elapsed = start_time.elapsed();
         repl.shell
-            .record_history_outcome(&input, exit_code, elapsed);
+            .record_history_outcome(&input, exit_code, elapsed, None);
         repl.state.last_duration = Some(elapsed);
     }
 
@@ -585,7 +593,7 @@ pub(crate) fn handle_interrupt(repl: &mut Repl<'_>) -> Result<()> {
 
         // OSC 133 D: Command finished (interrupted)
         // 130 is the standard exit code for SIGINT
-        write_terminal_control(b"\x1b]133;D;130\x1b\\");
+        write_terminal_control(&super::super::shell_integration::command_finished(130));
 
         repl.print_prompt(&mut renderer);
         renderer.flush().ok();

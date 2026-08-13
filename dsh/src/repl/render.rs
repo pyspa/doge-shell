@@ -117,21 +117,17 @@ fn print_prompt_inner(repl: &mut Repl<'_>, out: &mut impl Write, new_prompt: boo
     }
 
     if new_prompt {
-        // OSC 133 A: Prompt start
-        out.write_all(b"\x1b]133;A\x1b\\").ok();
-
-        // OSC 7 Directory Tracking (emit before hooks)
-        if let Ok(cwd) = std::env::current_dir()
-            && let Ok(hostname) = nix::unistd::gethostname()
-        {
-            let hostname: std::ffi::OsString = hostname;
-            let hostname_str = hostname.to_string_lossy().to_string();
-            let cwd_str = cwd.to_string_lossy();
-            // Format: \x1b]7;file://<hostname><pwd>\x1b\
-            // Note: We skip full URL encoding for simplicity, assumes standard paths.
-            let osc7 = format!("\x1b]7;file://{}{}\x1b\\", hostname_str, cwd_str);
-            out.write_all(osc7.as_bytes()).ok();
-        }
+        let cwd = std::env::current_dir()
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned());
+        let hostname = nix::unistd::gethostname()
+            .ok()
+            .map(|name| name.to_string_lossy().into_owned());
+        out.write_all(&super::shell_integration::fresh_prompt(
+            cwd.as_deref(),
+            hostname.as_deref(),
+        ))
+        .ok();
 
         // Execute pre-prompt hooks
         if let Err(e) = repl.shell.exec_pre_prompt_hooks() {
@@ -167,6 +163,9 @@ fn print_prompt_inner(repl: &mut Repl<'_>, out: &mut impl Write, new_prompt: boo
     out.write_all(b"\r").ok();
     out.write_all(repl.terminal_ui.prompt_mark_cache.as_bytes())
         .ok();
+    if new_prompt {
+        out.write_all(super::shell_integration::prompt_end()).ok();
+    }
     // no out.flush() here
 }
 
@@ -377,9 +376,6 @@ pub fn print_input(
         .input
         .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
     repl.terminal_ui.last_drawn_cursor_y = new_y;
-
-    // OSC 133 B: Command start
-    out.write_all(b"\x1b]133;B\x1b\\").ok();
 
     // Print the input
     repl.input.print(out, ghost_suffix.as_deref());
@@ -611,9 +607,6 @@ pub(crate) fn render_transient_prompt_to<W: Write>(
     // We use write! instead of print! to support the generic writer
     queue!(out, Print("❯".green()), Print(" ")).ok();
 
-    // OSC 133 B: Command start
-    out.write_all(b"\x1b]133;B\x1b\\").ok();
-
     // Render the input with existing syntax highlighting
     input.print(out, None);
 
@@ -769,7 +762,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn print_prompt_emits_prompt_start_but_redraw_prompt_does_not() {
+    async fn print_prompt_emits_one_boundary_pair_but_redraws_emit_neither() {
         let mut shell = Shell::new(Environment::new());
         let mut repl = Repl::new(&mut shell);
         repl.terminal_ui.columns = 40;
@@ -777,10 +770,24 @@ mod tests {
         let mut fresh = Vec::new();
         print_prompt(&mut repl, &mut fresh);
         assert!(contains_bytes(&fresh, b"\x1b]133;A"));
+        assert_eq!(
+            fresh
+                .windows(b"\x1b]133;B".len())
+                .filter(|window| *window == b"\x1b]133;B")
+                .count(),
+            1
+        );
 
         let mut again = Vec::new();
         redraw_prompt(&mut repl, &mut again);
         assert!(!contains_bytes(&again, b"\x1b]133;A"));
+        assert!(!contains_bytes(&again, b"\x1b]133;B"));
+
+        repl.input.reset("echo one".to_string());
+        let mut input_redraws = Vec::new();
+        print_input(&mut repl, &mut input_redraws, true, false);
+        print_input(&mut repl, &mut input_redraws, false, false);
+        assert!(!contains_bytes(&input_redraws, b"\x1b]133;B"));
     }
 
     #[tokio::test]

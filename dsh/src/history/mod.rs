@@ -24,7 +24,8 @@ mod tests;
 // Re-export main types for backward compatibility
 pub use command_history::History;
 pub use command_history::{
-    EntryMatcher, HistoryMetadata, HistoryQuery, HistoryScope, HistoryStatusFilter,
+    CommandEvent, CommandLedgerMode, EntryMatcher, HistoryMetadata, HistoryQuery, HistoryScope,
+    HistoryStatusFilter,
 };
 pub use context::get_current_context;
 pub use entry::Entry;

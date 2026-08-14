@@ -1,0 +1,60 @@
+{
+  "command": "cargo-watch",
+  "description": "Watch files and run Cargo commands",
+  "global_options": [
+    {
+      "short": "-w",
+      "long": "--watch",
+      "description": "Path to watch",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-i",
+      "long": "--ignore",
+      "description": "Ignored pattern",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-x",
+      "long": "--exec",
+      "description": "Cargo command to execute",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-s",
+      "long": "--shell",
+      "description": "Shell command to execute",
+      "takes_value": true,
+      "value_type": {
+        "type": "CommandWithArgs"
+      }
+    },
+    {
+      "short": "-c",
+      "long": "--clear",
+      "description": "Clear screen before run"
+    },
+    {
+      "long": "--why",
+      "description": "Show changed paths"
+    },
+    {
+      "short": "-d",
+      "long": "--delay",
+      "description": "Debounce delay",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    }
+  ]
+}

@@ -1,0 +1,605 @@
+{
+  "command": "jj",
+  "description": "Jujutsu version control system",
+  "global_options": [
+    {
+      "short": "-R",
+      "long": "--repository",
+      "description": "Repository path",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "long": "--at-operation",
+      "description": "Load repository at operation",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--ignore-working-copy",
+      "description": "Do not snapshot working copy"
+    },
+    {
+      "long": "--color",
+      "description": "Color mode",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "always",
+          "never",
+          "debug",
+          "auto"
+        ]
+      }
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "status",
+      "description": "Show working-copy status"
+    },
+    {
+      "name": "log",
+      "description": "Show revision history",
+      "options": [
+        {
+          "short": "-r",
+          "long": "--revision",
+          "description": "Revision set",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "jj.revision"
+            }
+          }
+        },
+        {
+          "short": "-n",
+          "long": "--limit",
+          "description": "Limit revisions",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "short": "-G",
+          "long": "--no-graph",
+          "description": "Disable graph"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "path",
+          "required": false,
+          "multiple": true,
+          "type": {
+            "type": "File",
+            "data": {}
+          }
+        }
+      ]
+    },
+    {
+      "name": "diff",
+      "description": "Compare revisions",
+      "options": [
+        {
+          "long": "--from",
+          "description": "Source revision",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "jj.revision"
+            }
+          }
+        },
+        {
+          "long": "--to",
+          "description": "Destination revision",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "jj.revision"
+            }
+          }
+        },
+        {
+          "short": "-r",
+          "long": "--revision",
+          "description": "Revision",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "jj.revision"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "show",
+      "description": "Show a revision",
+      "arguments": [
+        {
+          "name": "revision",
+          "required": false,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "jj.revision"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "new",
+      "description": "Create a new change",
+      "options": [
+        {
+          "short": "-m",
+          "long": "--message",
+          "description": "Description",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "revision",
+          "required": false,
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "jj.revision"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "edit",
+      "description": "Edit a revision",
+      "arguments": [
+        {
+          "name": "revision",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "jj.revision"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "describe",
+      "description": "Set description",
+      "options": [
+        {
+          "short": "-m",
+          "long": "--message",
+          "description": "Description",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "revision",
+          "required": false,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "jj.revision"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "commit",
+      "description": "Commit and create a new change",
+      "options": [
+        {
+          "short": "-m",
+          "long": "--message",
+          "description": "Description",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "squash",
+      "description": "Move changes into another revision",
+      "options": [
+        {
+          "long": "--from",
+          "description": "Source revision",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "jj.revision"
+            }
+          }
+        },
+        {
+          "long": "--into",
+          "description": "Destination revision",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "jj.revision"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "split",
+      "description": "Split a revision",
+      "options": [
+        {
+          "short": "-r",
+          "long": "--revision",
+          "description": "Revision",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "jj.revision"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "rebase",
+      "description": "Rebase revisions",
+      "options": [
+        {
+          "short": "-s",
+          "long": "--source",
+          "description": "Source revision",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "jj.revision"
+            }
+          }
+        },
+        {
+          "short": "-b",
+          "long": "--branch",
+          "description": "Branch revision",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "jj.revision"
+            }
+          }
+        },
+        {
+          "short": "-d",
+          "long": "--destination",
+          "description": "Destination revision",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "jj.revision"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "restore",
+      "description": "Restore paths",
+      "options": [
+        {
+          "long": "--from",
+          "description": "Source revision",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "jj.revision"
+            }
+          }
+        },
+        {
+          "long": "--to",
+          "description": "Destination revision",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "jj.revision"
+            }
+          }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "path",
+          "required": false,
+          "multiple": true,
+          "type": {
+            "type": "File",
+            "data": {}
+          }
+        }
+      ]
+    },
+    {
+      "name": "abandon",
+      "description": "Abandon revisions",
+      "arguments": [
+        {
+          "name": "revision",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "jj.revision"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "bookmark",
+      "description": "Manage bookmarks",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List bookmarks"
+        },
+        {
+          "name": "create",
+          "description": "Create bookmarks",
+          "options": [
+            {
+              "short": "-r",
+              "long": "--revision",
+              "description": "Target revision",
+              "takes_value": true,
+              "value_type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "jj.revision"
+                }
+              }
+            }
+          ],
+          "arguments": [
+            {
+              "name": "bookmark",
+              "multiple": true,
+              "type": {
+                "type": "String"
+              }
+            }
+          ]
+        },
+        {
+          "name": "delete",
+          "description": "Delete bookmarks",
+          "arguments": [
+            {
+              "name": "bookmark",
+              "multiple": true,
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "jj.bookmark"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "move",
+          "description": "Move bookmarks",
+          "options": [
+            {
+              "short": "-t",
+              "long": "--to",
+              "description": "Target revision",
+              "takes_value": true,
+              "value_type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "jj.revision"
+                }
+              }
+            }
+          ],
+          "arguments": [
+            {
+              "name": "bookmark",
+              "multiple": true,
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "jj.bookmark"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "rename",
+          "description": "Rename a bookmark",
+          "arguments": [
+            {
+              "name": "old",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "jj.bookmark"
+                }
+              }
+            },
+            {
+              "name": "new",
+              "type": {
+                "type": "String"
+              }
+            }
+          ]
+        },
+        {
+          "name": "set",
+          "description": "Set bookmarks",
+          "options": [
+            {
+              "short": "-r",
+              "long": "--revision",
+              "description": "Target revision",
+              "takes_value": true,
+              "value_type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "jj.revision"
+                }
+              }
+            }
+          ],
+          "arguments": [
+            {
+              "name": "bookmark",
+              "multiple": true,
+              "type": {
+                "type": "String"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "git",
+      "description": "Interact with Git remotes",
+      "subcommands": [
+        {
+          "name": "fetch",
+          "description": "Fetch remotes"
+        },
+        {
+          "name": "push",
+          "description": "Push changes"
+        },
+        {
+          "name": "clone",
+          "description": "Clone a Git repository",
+          "arguments": [
+            {
+              "name": "source",
+              "type": {
+                "type": "String"
+              }
+            },
+            {
+              "name": "destination",
+              "required": false,
+              "type": {
+                "type": "Directory"
+              }
+            }
+          ]
+        },
+        {
+          "name": "remote",
+          "description": "Manage remotes"
+        }
+      ]
+    },
+    {
+      "name": "workspace",
+      "description": "Manage workspaces",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List workspaces"
+        },
+        {
+          "name": "add",
+          "description": "Add a workspace",
+          "arguments": [
+            {
+              "name": "destination",
+              "type": {
+                "type": "Directory"
+              }
+            }
+          ]
+        },
+        {
+          "name": "forget",
+          "description": "Forget workspaces",
+          "arguments": [
+            {
+              "name": "workspace",
+              "required": false,
+              "multiple": true,
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "jj.workspace"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "rename",
+          "description": "Rename current workspace",
+          "arguments": [
+            {
+              "name": "name",
+              "type": {
+                "type": "String"
+              }
+            }
+          ]
+        },
+        {
+          "name": "root",
+          "description": "Show workspace root"
+        }
+      ]
+    },
+    {
+      "name": "config",
+      "description": "Manage configuration"
+    },
+    {
+      "name": "operation",
+      "description": "Manage operation log"
+    }
+  ]
+}

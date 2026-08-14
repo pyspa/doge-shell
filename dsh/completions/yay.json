@@ -1,0 +1,133 @@
+{
+  "command": "yay",
+  "description": "Arch Linux AUR helper",
+  "global_options": [
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show help"
+    },
+    {
+      "short": "-V",
+      "long": "--version",
+      "description": "Show version"
+    },
+    {
+      "long": "--noconfirm",
+      "description": "Do not prompt"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "-S",
+      "description": "Install packages from sync repositories",
+      "options": [
+        {
+          "short": "-y",
+          "long": "--refresh",
+          "description": "Refresh package databases"
+        },
+        {
+          "short": "-u",
+          "long": "--sysupgrade",
+          "description": "Upgrade installed packages"
+        },
+        {
+          "long": "--needed",
+          "description": "Skip up-to-date packages"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "package",
+          "required": false,
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "pacman.package"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "-R",
+      "description": "Remove installed packages",
+      "options": [
+        {
+          "short": "-s",
+          "long": "--recursive",
+          "description": "Remove unneeded dependencies"
+        },
+        {
+          "short": "-n",
+          "long": "--nosave",
+          "description": "Ignore backup files"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "package",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "pacman.package"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "-Q",
+      "description": "Query installed packages",
+      "arguments": [
+        {
+          "name": "package",
+          "required": false,
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "pacman.package"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "-U",
+      "description": "Install package files",
+      "arguments": [
+        {
+          "name": "package",
+          "multiple": true,
+          "type": {
+            "type": "File",
+            "data": {
+              "extensions": [
+                "pkg.tar.zst",
+                "pkg.tar.xz"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "-Y",
+      "description": "Yay-specific operations",
+      "subcommands": [
+        {
+          "name": "--gendb",
+          "description": "Generate development package database"
+        },
+        {
+          "name": "--clean",
+          "description": "Clean unneeded dependencies"
+        }
+      ]
+    }
+  ]
+}

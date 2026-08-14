@@ -1,6 +1,6 @@
 use super::{
     CachePolicy, CargoMetadataValueKind, CompletionContext, DynamicCompletionProvider,
-    dedup_sorted, run_command_lines,
+    completion_words, dedup_sorted, run_command_lines, run_command_stdout,
 };
 use crate::completion::integrated::EnhancedCandidate;
 use crate::completion::parser::ParsedCommandLine;
@@ -153,6 +153,60 @@ pub(super) fn collect(
         "pre_commit.hook_id" => {
             collector.collect_pre_commit_hook_id_candidates(current_dir, current_token, cached_only)
         }
+        "bacon.job" => {
+            collector.collect_bacon_job_candidates(current_dir, current_token, cached_only)
+        }
+        "pdm.script" => {
+            collector.collect_pdm_script_candidates(current_dir, current_token, cached_only)
+        }
+        "pipenv.script" => {
+            collector.collect_pipenv_script_candidates(current_dir, current_token, cached_only)
+        }
+        "ghq.repository" => {
+            collector.collect_ghq_repository_candidates(current_dir, current_token, cached_only)
+        }
+        "golangci_lint.linter" => {
+            collector.collect_golangci_linter_candidates(current_dir, current_token, cached_only)
+        }
+        "jj.bookmark" => collector.collect_jj_candidates(
+            parsed_command_line,
+            current_dir,
+            current_token,
+            "bookmark",
+            &["bookmark", "list", "-T", r#"name ++ "\n""#],
+            cached_only,
+        ),
+        "jj.revision" => collector.collect_jj_candidates(
+            parsed_command_line,
+            current_dir,
+            current_token,
+            "revision",
+            &[
+                "log",
+                "-r",
+                "all()",
+                "--no-graph",
+                "--limit",
+                "200",
+                "-T",
+                r#"change_id.short() ++ "\n""#,
+            ],
+            cached_only,
+        ),
+        "jj.workspace" => collector.collect_jj_candidates(
+            parsed_command_line,
+            current_dir,
+            current_token,
+            "workspace",
+            &["workspace", "list", "-T", r#"name ++ "\n""#],
+            cached_only,
+        ),
+        "meson.target" => collector.collect_meson_target_candidates(
+            parsed_command_line,
+            current_dir,
+            current_token,
+            cached_only,
+        ),
         _ => {
             return platform::collect(
                 collector,
@@ -739,6 +793,214 @@ impl DynamicCompletionProvider {
         )
     }
 
+    fn collect_bacon_job_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let project_root = find_ancestor_containing(current_dir, &["bacon.toml"])
+            .unwrap_or_else(|| self.cached_project_root(current_dir));
+        let scope = project_root.clone();
+        self.collect_cached_value_candidates(
+            "bacon",
+            "job",
+            scope,
+            current_token,
+            "bacon job",
+            cached_only,
+            move || {
+                Ok(load_toml_table_keys(
+                    &project_root.join("bacon.toml"),
+                    &["jobs"],
+                ))
+            },
+        )
+    }
+
+    fn collect_pdm_script_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let project_root = find_ancestor_containing(current_dir, &["pyproject.toml"])
+            .unwrap_or_else(|| self.cached_project_root(current_dir));
+        let scope = project_root.clone();
+        self.collect_cached_value_candidates(
+            "pdm",
+            "script",
+            scope,
+            current_token,
+            "PDM script",
+            cached_only,
+            move || {
+                Ok(load_toml_table_keys(
+                    &project_root.join("pyproject.toml"),
+                    &["tool", "pdm", "scripts"],
+                ))
+            },
+        )
+    }
+
+    fn collect_pipenv_script_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let project_root = find_ancestor_containing(current_dir, &["Pipfile"])
+            .unwrap_or_else(|| self.cached_project_root(current_dir));
+        let scope = project_root.clone();
+        self.collect_cached_value_candidates(
+            "pipenv",
+            "script",
+            scope,
+            current_token,
+            "Pipenv script",
+            cached_only,
+            move || {
+                Ok(load_toml_table_keys(
+                    &project_root.join("Pipfile"),
+                    &["scripts"],
+                ))
+            },
+        )
+    }
+
+    fn collect_ghq_repository_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("ghq");
+        let current_dir = current_dir.to_path_buf();
+        let scope = self
+            .env_var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| current_dir.clone());
+        self.collect_cached_value_candidates(
+            "ghq",
+            "repository",
+            scope,
+            current_token,
+            "ghq repository",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parse_plain_lines(&run_command_lines(
+                    &command_path,
+                    &["list"],
+                    &current_dir,
+                )?))
+            },
+        )
+    }
+
+    fn collect_golangci_linter_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("golangci-lint");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "golangci-lint",
+            "linter",
+            current_dir.clone(),
+            current_token,
+            "golangci-lint linter",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parse_golangci_linters(&run_command_lines(
+                    &command_path,
+                    &["linters"],
+                    &current_dir,
+                )?))
+            },
+        )
+    }
+
+    fn collect_jj_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        current_token: &str,
+        kind: &str,
+        args: &'static [&'static str],
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let project_root = selected_jj_repository(parsed_command_line, current_dir)
+            .or_else(|| find_jj_root(current_dir))
+            .unwrap_or_else(|| self.cached_project_root(current_dir));
+        let command_path = self.resolve_command_path("jj");
+        let scope = project_root.clone();
+        let current_dir = current_dir.to_path_buf();
+        let description = format!("jj {kind}");
+        self.collect_cached_value_candidates(
+            "jj",
+            kind,
+            scope,
+            current_token,
+            &description,
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                let repository = project_root.to_string_lossy().into_owned();
+                let mut command_args = vec!["--repository", repository.as_str()];
+                command_args.extend_from_slice(args);
+                Ok(parse_plain_lines(&run_command_lines(
+                    &command_path,
+                    &command_args,
+                    &current_dir,
+                )?))
+            },
+        )
+    }
+
+    fn collect_meson_target_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let project_root = find_ancestor_containing(current_dir, &["meson.build"])
+            .unwrap_or_else(|| self.cached_project_root(current_dir));
+        let build_dir = selected_meson_build_dir(parsed_command_line, &project_root);
+        let command_path = self.resolve_command_path("meson");
+        let scope = build_dir.clone();
+        self.collect_cached_value_candidates(
+            "meson",
+            "target",
+            scope,
+            current_token,
+            "Meson target",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                let build_dir = build_dir.to_string_lossy().into_owned();
+                let output = run_command_stdout(
+                    &command_path,
+                    &["introspect", "--targets", build_dir.as_str()],
+                    &project_root,
+                )?;
+                Ok(parse_meson_targets(&output))
+            },
+        )
+    }
+
     fn env_var(&self, key: &str) -> Option<String> {
         self.environment
             .read()
@@ -1129,6 +1391,88 @@ fn find_pre_commit_root(current_dir: &Path) -> Option<PathBuf> {
     find_ancestor_containing(current_dir, &[".pre-commit-config.yaml"])
 }
 
+fn find_jj_root(current_dir: &Path) -> Option<PathBuf> {
+    current_dir
+        .ancestors()
+        .find(|candidate| candidate.join(".jj").exists())
+        .map(Path::to_path_buf)
+}
+
+fn selected_jj_repository(
+    parsed_command_line: &ParsedCommandLine,
+    current_dir: &Path,
+) -> Option<PathBuf> {
+    let words = completion_words(parsed_command_line);
+    for (index, word) in words.iter().enumerate() {
+        if matches!(*word, "-R" | "--repository")
+            && let Some(value) = words
+                .get(index + 1)
+                .copied()
+                .filter(|value| !value.is_empty())
+        {
+            return Some(resolve_command_path_token(current_dir, value));
+        }
+        if let Some(value) = word
+            .strip_prefix("--repository=")
+            .or_else(|| word.strip_prefix("-R="))
+            .filter(|value| !value.is_empty())
+        {
+            return Some(resolve_command_path_token(current_dir, value));
+        }
+        if let Some(value) = word.strip_prefix("-R").filter(|value| !value.is_empty()) {
+            return Some(resolve_command_path_token(current_dir, value));
+        }
+    }
+    None
+}
+
+fn resolve_command_path_token(current_dir: &Path, value: &str) -> PathBuf {
+    let path = PathBuf::from(normalize_path_token(value));
+    if path.is_absolute() {
+        path
+    } else {
+        current_dir.join(path)
+    }
+}
+
+fn selected_meson_build_dir(
+    parsed_command_line: &ParsedCommandLine,
+    project_root: &Path,
+) -> PathBuf {
+    let words = completion_words(parsed_command_line);
+    for (index, word) in words.iter().enumerate() {
+        if matches!(*word, "-C" | "--builddir")
+            && let Some(value) = words
+                .get(index + 1)
+                .copied()
+                .filter(|value| !value.is_empty())
+        {
+            return resolve_project_path(project_root, value);
+        }
+        if let Some(value) = word
+            .strip_prefix("--builddir=")
+            .filter(|value| !value.is_empty())
+        {
+            return resolve_project_path(project_root, value);
+        }
+    }
+
+    ["build", "builddir", "_build"]
+        .into_iter()
+        .map(|name| project_root.join(name))
+        .find(|path| path.is_dir())
+        .unwrap_or_else(|| project_root.join("build"))
+}
+
+fn resolve_project_path(project_root: &Path, value: &str) -> PathBuf {
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        path
+    } else {
+        project_root.join(path)
+    }
+}
+
 fn find_ancestor_containing(current_dir: &Path, markers: &[&str]) -> Option<PathBuf> {
     let mut dir = Some(current_dir);
     while let Some(candidate) = dir {
@@ -1141,6 +1485,40 @@ fn find_ancestor_containing(current_dir: &Path, markers: &[&str]) -> Option<Path
         dir = candidate.parent();
     }
     None
+}
+
+fn parse_golangci_linters(lines: &[String]) -> Vec<String> {
+    dedup_sorted(
+        lines
+            .iter()
+            .filter_map(|line| {
+                let line = line.trim().trim_start_matches(['-', '*', ' ']);
+                let (name, _) = line.split_once(':')?;
+                let name = name.trim();
+                (!name.is_empty()
+                    && name
+                        .chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')))
+                .then(|| name.to_string())
+            })
+            .collect(),
+    )
+}
+
+fn parse_meson_targets(output: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(output) else {
+        return Vec::new();
+    };
+    let Some(targets) = value.as_array() else {
+        return Vec::new();
+    };
+    dedup_sorted(
+        targets
+            .iter()
+            .filter_map(|target| target.get("name").and_then(serde_json::Value::as_str))
+            .map(str::to_string)
+            .collect(),
+    )
 }
 
 fn load_python_project_dependencies(project_root: &Path) -> Vec<String> {
@@ -2560,5 +2938,105 @@ all:
             std::thread::sleep(Duration::from_millis(10));
         };
         assert_eq!(node[0].text, "vite");
+    }
+
+    #[test]
+    fn new_developer_provider_parsers_read_project_metadata() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join("bacon.toml"),
+            "[jobs.check]\ncommand = [\"cargo\", \"check\"]\n[jobs.test]\ncommand = [\"cargo\", \"test\"]\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "[tool.pdm.scripts]\ntest = \"pytest\"\nlint = \"ruff check\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("Pipfile"),
+            "[scripts]\ntest = \"pytest\"\nserve = \"python -m app\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            load_toml_table_keys(&dir.path().join("bacon.toml"), &["jobs"]),
+            vec!["check".to_string(), "test".to_string()]
+        );
+        assert_eq!(
+            load_toml_table_keys(
+                &dir.path().join("pyproject.toml"),
+                &["tool", "pdm", "scripts"]
+            ),
+            vec!["lint".to_string(), "test".to_string()]
+        );
+        assert_eq!(
+            load_toml_table_keys(&dir.path().join("Pipfile"), &["scripts"]),
+            vec!["serve".to_string(), "test".to_string()]
+        );
+    }
+
+    #[test]
+    fn new_developer_command_parsers_ignore_headers_and_malformed_json() {
+        assert_eq!(
+            parse_golangci_linters(&[
+                "Enabled by default linters:".to_string(),
+                "errcheck: Errcheck is a program for checking errors".to_string(),
+                "  govet: Vet examines Go source code".to_string(),
+                "Disabled by default linters:".to_string(),
+                "gocyclo: Computes cyclomatic complexity".to_string(),
+            ]),
+            vec![
+                "errcheck".to_string(),
+                "gocyclo".to_string(),
+                "govet".to_string(),
+            ]
+        );
+        assert_eq!(
+            parse_meson_targets(
+                r#"[{"name":"app","id":"app@exe"},{"name":"tests","id":"tests@run"}]"#
+            ),
+            vec!["app".to_string(), "tests".to_string()]
+        );
+        assert!(parse_meson_targets("not-json").is_empty());
+    }
+
+    #[test]
+    fn meson_build_directory_and_jj_root_are_context_scoped() {
+        use crate::completion::parser::CommandLineParser;
+
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("meson.build"), "project('demo', 'c')\n").unwrap();
+        fs::create_dir_all(dir.path().join("out")).unwrap();
+        fs::create_dir_all(dir.path().join(".jj")).unwrap();
+        let child = dir.path().join("src");
+        fs::create_dir_all(&child).unwrap();
+
+        let input = "meson compile -C out ";
+        let parsed = CommandLineParser::new().parse(input, input.len());
+        assert_eq!(
+            selected_meson_build_dir(&parsed, dir.path()),
+            dir.path().join("out")
+        );
+        let default_input = "meson compile ";
+        let default_parsed = CommandLineParser::new().parse(default_input, default_input.len());
+        assert_eq!(
+            selected_meson_build_dir(&default_parsed, dir.path()),
+            dir.path().join("build")
+        );
+        assert_eq!(find_jj_root(&child), Some(dir.path().to_path_buf()));
+
+        let repository = dir.path().join("other");
+        for input in [
+            format!("jj -R {} bookmark delete ", repository.display()),
+            format!("jj --repository={} bookmark delete ", repository.display()),
+        ] {
+            let parsed = CommandLineParser::new().parse(&input, input.len());
+            assert_eq!(
+                selected_jj_repository(&parsed, dir.path()),
+                Some(repository.clone()),
+                "{input}"
+            );
+        }
     }
 }

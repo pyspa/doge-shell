@@ -1,0 +1,110 @@
+{
+  "command": "makechrootpkg",
+  "description": "Build an Arch package in a clean chroot",
+  "global_options": [
+    {
+      "short": "-h",
+      "description": "Show help"
+    },
+    {
+      "short": "-c",
+      "description": "Clean the chroot before building"
+    },
+    {
+      "short": "-d",
+      "description": "Bind a directory read-write",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-D",
+      "description": "Bind a directory read-only",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-t",
+      "description": "Mount tmpfs as directory[:options]",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-u",
+      "description": "Update the working chroot copy"
+    },
+    {
+      "short": "-r",
+      "description": "Chroot root directory",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-I",
+      "description": "Install a package into the working copy",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      }
+    },
+    {
+      "short": "-l",
+      "description": "Working copy name",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-n",
+      "description": "Run namcap on the built package"
+    },
+    {
+      "short": "-C",
+      "description": "Run checkpkg on the built package"
+    },
+    {
+      "short": "-T",
+      "description": "Build in a temporary directory"
+    },
+    {
+      "short": "-U",
+      "description": "Run makepkg as the specified user",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-x",
+      "description": "Inspect the chroot after the build",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "never",
+          "always",
+          "failure"
+        ]
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "makepkg-argument",
+      "required": false,
+      "multiple": true,
+      "type": {
+        "type": "String"
+      }
+    }
+  ]
+}

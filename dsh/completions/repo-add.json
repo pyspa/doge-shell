@@ -1,0 +1,63 @@
+{
+  "command": "repo-add",
+  "description": "Add package files to a pacman repository database",
+  "global_options": [
+    {
+      "short": "-n",
+      "long": "--new",
+      "description": "Only add new packages"
+    },
+    {
+      "short": "-R",
+      "long": "--remove",
+      "description": "Remove old package files"
+    },
+    {
+      "short": "-s",
+      "long": "--sign",
+      "description": "Sign database"
+    },
+    {
+      "short": "-k",
+      "long": "--key",
+      "description": "Signing key",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-v",
+      "long": "--verify",
+      "description": "Verify package signatures"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "database",
+      "type": {
+        "type": "File",
+        "data": {
+          "extensions": [
+            "db.tar.gz",
+            "db.tar.xz",
+            "db.tar.zst"
+          ]
+        }
+      }
+    },
+    {
+      "name": "package",
+      "multiple": true,
+      "type": {
+        "type": "File",
+        "data": {
+          "extensions": [
+            "pkg.tar.zst",
+            "pkg.tar.xz"
+          ]
+        }
+      }
+    }
+  ]
+}

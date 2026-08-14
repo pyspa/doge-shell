@@ -1,7 +1,7 @@
 use super::{
     CachePolicy, CompletionContext, DynamicCompletionProvider, ParsedCommandLine, SystemdUnitQuery,
-    dedup_sorted, parse_non_empty_lines, run_command_lines, selected_systemd_manager_scope,
-    systemctl_unit_kind_for_subcommand,
+    completion_words, dedup_sorted, parse_non_empty_lines, run_command_lines, run_command_stdout,
+    selected_systemd_manager_scope, systemctl_unit_kind_for_subcommand,
 };
 use crate::completion::integrated::EnhancedCandidate;
 use std::fs;
@@ -179,6 +179,9 @@ pub(super) fn collect(
         "lvm.volume_group" => {
             collector.collect_lvm_volume_group_candidates(current_token, cached_only)
         }
+        "mkinitcpio.preset" => {
+            collector.collect_mkinitcpio_preset_candidates(current_token, cached_only)
+        }
         "nft.chain" => {
             collector.collect_nft_chain_candidates(current_dir, current_token, cached_only)
         }
@@ -197,6 +200,16 @@ pub(super) fn collect(
         "selinux.boolean" => {
             collector.collect_selinux_boolean_candidates(current_token, cached_only)
         }
+        "pacman.repository" => {
+            collector.collect_pacman_repository_candidates(current_dir, current_token, cached_only)
+        }
+        "snapper.config" => collector.collect_snapper_config_candidates(current_token, cached_only),
+        "snapper.snapshot" => collector.collect_snapper_snapshot_candidates(
+            parsed_command_line,
+            current_dir,
+            current_token,
+            cached_only,
+        ),
         "zfs.dataset" => {
             collector.collect_zfs_dataset_candidates(current_dir, current_token, cached_only)
         }
@@ -770,6 +783,224 @@ impl DynamicCompletionProvider {
             },
         )
     }
+
+    fn collect_mkinitcpio_preset_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let preset_dir = PathBuf::from("/etc/mkinitcpio.d");
+        let scope = preset_dir.clone();
+        self.collect_cached_value_candidates(
+            "mkinitcpio",
+            "preset",
+            scope,
+            current_token,
+            "mkinitcpio preset",
+            cached_only,
+            move || Ok(load_file_stems(&preset_dir, ".preset")),
+        )
+    }
+
+    fn collect_pacman_repository_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("pacman-conf");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "pacman-conf",
+            "repository",
+            PathBuf::from("/etc/pacman.conf"),
+            current_token,
+            "pacman repository",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(parse_non_empty_lines(&run_command_lines(
+                    &command_path,
+                    &["--repo-list"],
+                    &current_dir,
+                )?))
+            },
+        )
+    }
+
+    fn collect_snapper_config_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let config_dir = PathBuf::from("/etc/snapper/configs");
+        let scope = config_dir.clone();
+        self.collect_cached_value_candidates(
+            "snapper",
+            "config",
+            scope,
+            current_token,
+            "snapper configuration",
+            cached_only,
+            move || Ok(load_file_names(&config_dir)),
+        )
+    }
+
+    fn collect_snapper_snapshot_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let config = selected_snapper_config(parsed_command_line)
+            .unwrap_or("root")
+            .to_string();
+        let command_path = self.resolve_command_path("snapper");
+        let current_dir = current_dir.to_path_buf();
+        let scope = PathBuf::from("/etc/snapper/configs").join(&config);
+        let (range_prefix, filter_token) = snapper_snapshot_filter(current_token);
+        let mut candidates = self.collect_cached_value_candidates(
+            "snapper",
+            &format!("snapshot:{config}"),
+            scope,
+            &filter_token,
+            "snapper snapshot",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                let output = run_command_stdout(
+                    &command_path,
+                    &[
+                        "--jsonout",
+                        "--config",
+                        config.as_str(),
+                        "list",
+                        "--columns",
+                        "number,description",
+                    ],
+                    &current_dir,
+                )?;
+                Ok(parse_snapper_snapshot_json(&output))
+            },
+        );
+        if let Some(prefix) = range_prefix {
+            for candidate in &mut candidates {
+                candidate.text.insert_str(0, &prefix);
+            }
+        }
+        candidates
+    }
+}
+
+fn selected_snapper_config(parsed_command_line: &ParsedCommandLine) -> Option<&str> {
+    let words = completion_words(parsed_command_line);
+    for (index, word) in words.iter().enumerate() {
+        if matches!(*word, "-c" | "--config")
+            && let Some(value) = words
+                .get(index + 1)
+                .copied()
+                .filter(|value| !value.is_empty())
+        {
+            return Some(value);
+        }
+        if let Some(value) = word
+            .strip_prefix("--config=")
+            .filter(|value| !value.is_empty())
+        {
+            return Some(value);
+        }
+        if let Some(value) = word.strip_prefix("-c").filter(|value| !value.is_empty()) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn snapper_snapshot_filter(current_token: &str) -> (Option<String>, String) {
+    if let Some((left, right)) = current_token.split_once("..")
+        && !left.is_empty()
+        && left.chars().all(|character| character.is_ascii_digit())
+        && right.chars().all(|character| character.is_ascii_digit())
+    {
+        return (Some(format!("{left}..")), right.to_string());
+    }
+
+    if let Some((left, right)) = current_token.split_once('-')
+        && !left.is_empty()
+        && left.chars().all(|character| character.is_ascii_digit())
+        && right.chars().all(|character| character.is_ascii_digit())
+    {
+        return (Some(format!("{left}-")), right.to_string());
+    }
+
+    (None, current_token.to_string())
+}
+
+fn load_file_names(dir: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    dedup_sorted(
+        entries
+            .flatten()
+            .filter(|entry| entry.path().is_file())
+            .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+            .collect(),
+    )
+}
+
+fn load_file_stems(dir: &Path, suffix: &str) -> Vec<String> {
+    dedup_sorted(
+        load_file_names(dir)
+            .into_iter()
+            .filter_map(|name| name.strip_suffix(suffix).map(str::to_string))
+            .filter(|name| !name.is_empty())
+            .collect(),
+    )
+}
+
+fn parse_snapper_snapshot_json(output: &str) -> Vec<String> {
+    fn collect_numbers(value: &serde_json::Value, values: &mut Vec<String>) {
+        match value {
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    collect_numbers(item, values);
+                }
+            }
+            serde_json::Value::Object(object) => {
+                if let Some(number) = object.get("number") {
+                    match number {
+                        serde_json::Value::Number(number) => values.push(number.to_string()),
+                        serde_json::Value::String(number) if !number.is_empty() => {
+                            values.push(number.clone())
+                        }
+                        _ => {}
+                    }
+                }
+                for value in object.values() {
+                    if !matches!(
+                        value,
+                        serde_json::Value::Number(_) | serde_json::Value::String(_)
+                    ) {
+                        collect_numbers(value, values);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(output) else {
+        return Vec::new();
+    };
+    let mut values = Vec::new();
+    collect_numbers(&value, &mut values);
+    dedup_sorted(values)
 }
 
 /// Extracts interface names from `iw dev`, whose device rows are indented
@@ -1165,5 +1396,57 @@ mod tests {
             load_selinux_module_files(dir.path()),
             vec!["ssh".to_string(), "web".to_string()]
         );
+    }
+
+    #[test]
+    fn arch_and_snapper_inventory_parsers_use_local_sources() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("linux.preset"), "").unwrap();
+        fs::write(dir.path().join("fallback.preset"), "").unwrap();
+        fs::write(dir.path().join("README"), "").unwrap();
+
+        assert_eq!(
+            load_file_stems(dir.path(), ".preset"),
+            vec!["fallback".to_string(), "linux".to_string()]
+        );
+        assert_eq!(
+            load_file_names(dir.path()),
+            vec![
+                "README".to_string(),
+                "fallback.preset".to_string(),
+                "linux.preset".to_string(),
+            ]
+        );
+        assert_eq!(
+            parse_snapper_snapshot_json(
+                r#"{"configs":[{"snapshots":[{"number":1},{"number":"42"}]}]}"#
+            ),
+            vec!["1".to_string(), "42".to_string()]
+        );
+        assert!(parse_snapper_snapshot_json("not-json").is_empty());
+    }
+
+    #[test]
+    fn snapper_config_parser_supports_separate_and_inline_options() {
+        use crate::completion::parser::CommandLineParser;
+
+        for (input, expected) in [
+            ("snapper --config home delete ", "home"),
+            ("snapper --config=home delete ", "home"),
+            ("snapper -chome delete ", "home"),
+        ] {
+            let parsed = CommandLineParser::new().parse(input, input.len());
+            assert_eq!(selected_snapper_config(&parsed), Some(expected), "{input}");
+        }
+
+        assert_eq!(
+            snapper_snapshot_filter("1..4"),
+            (Some("1..".to_string()), "4".to_string())
+        );
+        assert_eq!(
+            snapper_snapshot_filter("1-"),
+            (Some("1-".to_string()), String::new())
+        );
+        assert_eq!(snapper_snapshot_filter("42"), (None, "42".to_string()));
     }
 }

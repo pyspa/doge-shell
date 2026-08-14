@@ -1,0 +1,141 @@
+{
+  "command": "cargo-nextest",
+  "description": "Next-generation Rust test runner",
+  "global_options": [
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show help"
+    },
+    {
+      "short": "-V",
+      "long": "--version",
+      "description": "Show version"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "run",
+      "description": "Run tests",
+      "options": [
+        {
+          "short": "-p",
+          "long": "--package",
+          "description": "Package",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "cargo.package"
+            }
+          }
+        },
+        {
+          "long": "--bin",
+          "description": "Binary target",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "cargo.bin"
+            }
+          }
+        },
+        {
+          "long": "--test",
+          "description": "Test target",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "cargo.test"
+            }
+          }
+        },
+        {
+          "long": "--features",
+          "description": "Cargo features",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "cargo.feature"
+            }
+          }
+        },
+        {
+          "long": "--profile",
+          "description": "Nextest profile",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "filter-expression",
+          "required": false,
+          "multiple": true,
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "list",
+      "description": "List tests",
+      "options": [
+        {
+          "short": "-p",
+          "long": "--package",
+          "description": "Package",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "cargo.package"
+            }
+          }
+        },
+        {
+          "long": "--message-format",
+          "description": "Output format",
+          "takes_value": true,
+          "value_type": {
+            "type": "Choice",
+            "data": [
+              "human",
+              "json",
+              "json-pretty"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "archive",
+      "description": "Archive tests",
+      "options": [
+        {
+          "long": "--archive-file",
+          "description": "Archive output",
+          "takes_value": true,
+          "value_type": {
+            "type": "File",
+            "data": {
+              "extensions": [
+                "tar.zst"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "show-config",
+      "description": "Show resolved configuration"
+    }
+  ]
+}

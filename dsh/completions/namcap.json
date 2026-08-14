@@ -1,0 +1,49 @@
+{
+  "command": "namcap",
+  "description": "Check Arch PKGBUILDs and packages",
+  "global_options": [
+    {
+      "short": "-i",
+      "long": "--info",
+      "description": "Print informational messages"
+    },
+    {
+      "short": "-m",
+      "long": "--machine-readable",
+      "description": "Machine-readable output"
+    },
+    {
+      "short": "-r",
+      "long": "--rules",
+      "description": "Rules to run",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-e",
+      "long": "--exclude",
+      "description": "Rules to exclude",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "target",
+      "multiple": true,
+      "type": {
+        "type": "File",
+        "data": {
+          "extensions": [
+            "pkg.tar.zst",
+            "pkg.tar.xz"
+          ]
+        }
+      }
+    }
+  ]
+}

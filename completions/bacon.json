@@ -1,0 +1,49 @@
+{
+  "command": "bacon",
+  "description": "Background Rust code checker",
+  "global_options": [
+    {
+      "short": "-l",
+      "long": "--list-jobs",
+      "description": "List jobs"
+    },
+    {
+      "short": "-H",
+      "long": "--headless",
+      "description": "Run without TUI"
+    },
+    {
+      "short": "-p",
+      "long": "--path",
+      "description": "Project path",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-j",
+      "long": "--job",
+      "description": "Job to run",
+      "takes_value": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "bacon.job"
+        }
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "job",
+      "required": false,
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "bacon.job"
+        }
+      }
+    }
+  ]
+}

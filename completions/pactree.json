@@ -1,0 +1,46 @@
+{
+  "command": "pactree",
+  "description": "Display package dependency trees",
+  "global_options": [
+    {
+      "short": "-r",
+      "long": "--reverse",
+      "description": "Show packages depending on target"
+    },
+    {
+      "short": "-u",
+      "long": "--unique",
+      "description": "List each dependency once"
+    },
+    {
+      "short": "-d",
+      "long": "--depth",
+      "description": "Maximum depth",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-s",
+      "long": "--sync",
+      "description": "Read sync databases"
+    },
+    {
+      "short": "-g",
+      "long": "--graph",
+      "description": "Graphviz output"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "package",
+      "type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "pacman.package"
+        }
+      }
+    }
+  ]
+}

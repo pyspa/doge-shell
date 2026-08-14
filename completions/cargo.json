@@ -613,6 +613,35 @@
         }
       ],
       "subcommands": []
+    },
+    {
+      "name": "nextest",
+      "description": "Run tests with cargo-nextest",
+      "subcommands": [
+        {
+          "name": "run",
+          "description": "Run tests",
+          "options": [
+            { "short": "-p", "long": "--package", "description": "Package", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "cargo.package" } } },
+            { "long": "--test", "description": "Test target", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "cargo.test" } } },
+            { "long": "--features", "description": "Cargo features", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "cargo.feature" } } }
+          ],
+          "arguments": [{ "name": "filter-expression", "required": false, "multiple": true, "type": { "type": "String" } }]
+        },
+        { "name": "list", "description": "List tests" },
+        { "name": "archive", "description": "Archive tests" },
+        { "name": "show-config", "description": "Show resolved configuration" }
+      ]
+    },
+    {
+      "name": "watch",
+      "description": "Watch files and run Cargo commands",
+      "options": [
+        { "short": "-w", "long": "--watch", "description": "Path to watch", "takes_value": true, "value_type": { "type": "Directory" } },
+        { "short": "-x", "long": "--exec", "description": "Cargo command to execute", "takes_value": true, "value_type": { "type": "String" } },
+        { "short": "-s", "long": "--shell", "description": "Shell command to execute", "takes_value": true, "value_type": { "type": "CommandWithArgs" } },
+        { "short": "-c", "long": "--clear", "description": "Clear screen before each run" }
+      ]
     }
   ]
 }

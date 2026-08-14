@@ -1,0 +1,345 @@
+{
+  "command": "snapper",
+  "description": "Manage filesystem snapshots",
+  "global_options": [
+    {
+      "short": "-c",
+      "long": "--config",
+      "description": "Snapshot configuration",
+      "takes_value": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "snapper.config"
+        }
+      }
+    },
+    {
+      "short": "-r",
+      "long": "--root",
+      "description": "Alternative root",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "long": "--jsonout",
+      "description": "JSON output"
+    },
+    {
+      "long": "--no-dbus",
+      "description": "Do not use D-Bus"
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Verbose output"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "list-configs",
+      "description": "List configurations"
+    },
+    {
+      "name": "create-config",
+      "description": "Create a configuration",
+      "options": [
+        {
+          "short": "-f",
+          "long": "--fstype",
+          "description": "Filesystem type",
+          "takes_value": true,
+          "value_type": {
+            "type": "Choice",
+            "data": [
+              "btrfs",
+              "lvm",
+              "ext4"
+            ]
+          }
+        },
+        {
+          "short": "-t",
+          "long": "--template",
+          "description": "Configuration template",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "subvolume",
+          "type": {
+            "type": "Directory"
+          }
+        }
+      ]
+    },
+    {
+      "name": "delete-config",
+      "description": "Delete selected configuration"
+    },
+    {
+      "name": "get-config",
+      "description": "Show selected configuration"
+    },
+    {
+      "name": "set-config",
+      "description": "Update configuration",
+      "arguments": [
+        {
+          "name": "key=value",
+          "multiple": true,
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "list",
+      "description": "List snapshots",
+      "options": [
+        {
+          "short": "-t",
+          "long": "--type",
+          "description": "Snapshot type",
+          "takes_value": true,
+          "value_type": {
+            "type": "Choice",
+            "data": [
+              "all",
+              "single",
+              "pre-post"
+            ]
+          }
+        },
+        {
+          "short": "-a",
+          "long": "--all-configs",
+          "description": "List all configurations"
+        }
+      ]
+    },
+    {
+      "name": "create",
+      "description": "Create a snapshot",
+      "options": [
+        {
+          "short": "-t",
+          "long": "--type",
+          "description": "Snapshot type",
+          "takes_value": true,
+          "value_type": {
+            "type": "Choice",
+            "data": [
+              "single",
+              "pre",
+              "post"
+            ]
+          }
+        },
+        {
+          "long": "--pre-number",
+          "description": "Pre snapshot number",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "snapper.snapshot"
+            }
+          }
+        },
+        {
+          "short": "-d",
+          "long": "--description",
+          "description": "Description",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--command",
+          "description": "Command to run",
+          "takes_value": true,
+          "value_type": {
+            "type": "CommandWithArgs"
+          }
+        }
+      ]
+    },
+    {
+      "name": "modify",
+      "description": "Modify a snapshot",
+      "arguments": [
+        {
+          "name": "snapshot",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "snapper.snapshot"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "delete",
+      "description": "Delete snapshots",
+      "options": [
+        {
+          "short": "-s",
+          "long": "--sync",
+          "description": "Wait for space reclamation"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "snapshot",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "snapper.snapshot"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "mount",
+      "description": "Mount a snapshot",
+      "arguments": [
+        {
+          "name": "snapshot",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "snapper.snapshot"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "umount",
+      "description": "Unmount a snapshot",
+      "arguments": [
+        {
+          "name": "snapshot",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "snapper.snapshot"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "status",
+      "description": "Compare snapshot status",
+      "arguments": [
+        {
+          "name": "snapshot-range",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "snapper.snapshot"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "diff",
+      "description": "Compare snapshot contents",
+      "options": [
+        {
+          "short": "-i",
+          "long": "--input",
+          "description": "Input file",
+          "takes_value": true,
+          "value_type": {
+            "type": "File",
+            "data": {}
+          }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "snapshot-range",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "snapper.snapshot"
+            }
+          }
+        },
+        {
+          "name": "file",
+          "required": false,
+          "multiple": true,
+          "type": {
+            "type": "File",
+            "data": {}
+          }
+        }
+      ]
+    },
+    {
+      "name": "undochange",
+      "description": "Undo changes between snapshots",
+      "arguments": [
+        {
+          "name": "snapshot-range",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "snapper.snapshot"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "rollback",
+      "description": "Roll back to a snapshot",
+      "arguments": [
+        {
+          "name": "snapshot",
+          "required": false,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "snapper.snapshot"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "cleanup",
+      "description": "Run cleanup algorithm",
+      "arguments": [
+        {
+          "name": "algorithm",
+          "type": {
+            "type": "Choice",
+            "data": [
+              "number",
+              "timeline",
+              "empty-pre-post",
+              "all"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+{
+  "command": "goreleaser",
+  "description": "Release Go projects",
+  "global_options": [
+    {
+      "short": "-f",
+      "long": "--config",
+      "description": "Configuration file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {
+          "extensions": [
+            "yml",
+            "yaml",
+            "json"
+          ]
+        }
+      }
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Verbose output"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "release",
+      "description": "Create a release",
+      "options": [
+        {
+          "long": "--snapshot",
+          "description": "Build snapshot"
+        },
+        {
+          "long": "--skip",
+          "description": "Pipes to skip",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--clean",
+          "description": "Clean dist directory"
+        }
+      ]
+    },
+    {
+      "name": "build",
+      "description": "Build artifacts",
+      "options": [
+        {
+          "long": "--snapshot",
+          "description": "Build snapshot"
+        },
+        {
+          "long": "--single-target",
+          "description": "Build current target"
+        }
+      ]
+    },
+    {
+      "name": "check",
+      "description": "Validate configuration"
+    },
+    {
+      "name": "init",
+      "description": "Create configuration"
+    },
+    {
+      "name": "healthcheck",
+      "description": "Check environment"
+    },
+    {
+      "name": "changelog",
+      "description": "Generate changelog"
+    }
+  ]
+}

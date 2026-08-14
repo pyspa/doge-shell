@@ -1,0 +1,125 @@
+{
+  "command": "dlv",
+  "description": "Delve debugger for Go",
+  "global_options": [
+    {
+      "long": "--headless",
+      "description": "Run headless"
+    },
+    {
+      "short": "-l",
+      "long": "--listen",
+      "description": "Debug server address",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--api-version",
+      "description": "API version",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "debug",
+      "description": "Compile and debug a package",
+      "arguments": [
+        {
+          "name": "package",
+          "required": false,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "go.package"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "test",
+      "description": "Compile and debug tests",
+      "arguments": [
+        {
+          "name": "package",
+          "required": false,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "go.package"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "exec",
+      "description": "Debug a binary",
+      "arguments": [
+        {
+          "name": "binary",
+          "type": {
+            "type": "File",
+            "data": {}
+          }
+        }
+      ]
+    },
+    {
+      "name": "attach",
+      "description": "Attach to a process",
+      "arguments": [
+        {
+          "name": "pid",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "system.process_pid"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "connect",
+      "description": "Connect to a debug server",
+      "arguments": [
+        {
+          "name": "address",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "core",
+      "description": "Examine a core dump",
+      "arguments": [
+        {
+          "name": "binary",
+          "type": {
+            "type": "File",
+            "data": {}
+          }
+        },
+        {
+          "name": "core",
+          "type": {
+            "type": "File",
+            "data": {}
+          }
+        }
+      ]
+    },
+    {
+      "name": "dap",
+      "description": "Start DAP server"
+    }
+  ]
+}

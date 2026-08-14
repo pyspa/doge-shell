@@ -1,0 +1,209 @@
+{
+  "command": "pkgctl",
+  "description": "Unified Arch Linux packaging frontend",
+  "global_options": [
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show help"
+    },
+    {
+      "short": "-V",
+      "long": "--version",
+      "description": "Show version"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "aur",
+      "description": "Interact with the Arch User Repository",
+      "subcommands": [
+        {
+          "name": "search",
+          "description": "Search AUR packages",
+          "arguments": [
+            {
+              "name": "query",
+              "multiple": true,
+              "type": {
+                "type": "String"
+              }
+            }
+          ]
+        },
+        {
+          "name": "pull",
+          "description": "Pull AUR package changes",
+          "arguments": [
+            {
+              "name": "package",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "pacman.package"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "auth",
+      "description": "Authenticate with Arch services"
+    },
+    {
+      "name": "build",
+      "description": "Build packages in a clean chroot",
+      "options": [
+        {
+          "short": "-c",
+          "long": "--clean",
+          "description": "Clean chroot"
+        },
+        {
+          "short": "-I",
+          "long": "--install-to-chroot",
+          "description": "Install package into chroot",
+          "takes_value": true,
+          "value_type": {
+            "type": "File",
+            "data": {
+              "extensions": [
+                "pkg.tar.zst"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "db",
+      "description": "Modify pacman repository databases",
+      "subcommands": [
+        {
+          "name": "update",
+          "description": "Update package database",
+          "arguments": [
+            {
+              "name": "repository",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "pacman.repository"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "move",
+          "description": "Move packages",
+          "arguments": [
+            {
+              "name": "repository",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "pacman.repository"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "diff",
+      "description": "Compare package files",
+      "arguments": [
+        {
+          "name": "file",
+          "required": false,
+          "multiple": true,
+          "type": {
+            "type": "File",
+            "data": {}
+          }
+        }
+      ]
+    },
+    {
+      "name": "issue",
+      "description": "Work with packaging issues"
+    },
+    {
+      "name": "license",
+      "description": "Check and manage licenses"
+    },
+    {
+      "name": "release",
+      "description": "Commit, tag, and upload package artifacts"
+    },
+    {
+      "name": "repo",
+      "description": "Manage package Git repositories",
+      "subcommands": [
+        {
+          "name": "clone",
+          "description": "Clone package repositories",
+          "options": [
+            {
+              "long": "--protocol",
+              "description": "Clone protocol",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "ssh",
+                  "https"
+                ]
+              }
+            }
+          ],
+          "arguments": [
+            {
+              "name": "package",
+              "multiple": true,
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "pacman.package"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "configure",
+          "description": "Configure a package repository"
+        },
+        {
+          "name": "create",
+          "description": "Create a package repository"
+        },
+        {
+          "name": "switch",
+          "description": "Switch package version"
+        }
+      ]
+    },
+    {
+      "name": "search",
+      "description": "Search Arch packages",
+      "arguments": [
+        {
+          "name": "query",
+          "multiple": true,
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "version",
+      "description": "Check package versions"
+    }
+  ]
+}

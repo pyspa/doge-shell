@@ -4151,6 +4151,24 @@ mod tests {
         let bin_dir = dir.path().join("bin");
         fs::create_dir_all(&bin_dir).unwrap();
         fs::write(dir.path().join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
+        fs::write(
+            dir.path().join("bacon.toml"),
+            "[jobs.check]\ncommand = [\"cargo\", \"check\"]\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("pyproject.toml"),
+            "[tool.pdm.scripts]\nlint = \"ruff check\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("Pipfile"),
+            "[scripts]\nserve = \"python -m app\"\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("meson.build"), "project('demo', 'c')\n").unwrap();
+        fs::create_dir_all(dir.path().join("build")).unwrap();
+        fs::create_dir_all(dir.path().join(".jj")).unwrap();
 
         write_executable_script(
             &bin_dir.join("cargo"),
@@ -4213,6 +4231,26 @@ fi
         write_executable_script(
             &bin_dir.join("pacman"),
             "#!/bin/sh\ncase \"$1\" in\n-Qq) printf 'pacman\\nparu\\n';;\n-Slq) printf 'ripgrep\\nrust\\n';;\nesac\n",
+        );
+        write_executable_script(
+            &bin_dir.join("snapper"),
+            "#!/bin/sh\nprintf '{\"snapshots\":[{\"number\":1},{\"number\":42}]}'\n",
+        );
+        write_executable_script(
+            &bin_dir.join("jj"),
+            "#!/bin/sh\nif [ \"$1\" = \"--repository\" ]; then shift 2; fi\ncase \"$1 $2\" in\n'bookmark list') printf 'main\\nrelease\\n';;\n'workspace list') printf 'default\\ndocs\\n';;\n*) printf 'abc123\\ndef456\\n';;\nesac\n",
+        );
+        write_executable_script(
+            &bin_dir.join("meson"),
+            "#!/bin/sh\nprintf '[{\"name\":\"app\"},{\"name\":\"tests\"}]'\n",
+        );
+        write_executable_script(
+            &bin_dir.join("ghq"),
+            "#!/bin/sh\nif [ \"$1\" = \"list\" ]; then printf 'github.com/org/repo\\ngitlab.com/org/tools\\n'; fi\n",
+        );
+        write_executable_script(
+            &bin_dir.join("golangci-lint"),
+            "#!/bin/sh\nif [ \"$1\" = \"linters\" ]; then printf 'errcheck: check errors\\ngovet: vet code\\n'; fi\n",
         );
         write_executable_script(
             &bin_dir.join("docker"),
@@ -4281,6 +4319,21 @@ fi
             ("nmcli connection up ho", "home-wifi"),
             ("nmcli device disconnect wl", "wlan0"),
             ("pacman -R pa", "pacman"),
+            ("yay -S ri", "ripgrep"),
+            ("paru -R pa", "pacman"),
+            ("snapper --config root delete 4", "42"),
+            ("snapper --config root status 1..4", "1..42"),
+            ("snapper --config root delete 1-4", "1-42"),
+            ("jj bookmark delete ma", "main"),
+            ("jj rebase --destination ab", "abc123"),
+            ("jj workspace forget de", "default"),
+            ("bacon ch", "check"),
+            ("pdm run li", "lint"),
+            ("pipenv run se", "serve"),
+            ("meson compile -C build ap", "app"),
+            ("ghq look github", "github.com/org/repo"),
+            ("golangci-lint run --enable err", "errcheck"),
+            ("cargo nextest run -p ap", "app-core"),
             ("docker stop app", "app-container"),
             ("docker inspect app-i", "app-image:latest"),
             ("kubectl get pods we", "web-0"),
@@ -4306,6 +4359,36 @@ fi
                 .await;
             let _ = wait_for_candidate(&engine, input, dir.path(), expected).await;
         }
+    }
+
+    #[tokio::test]
+    async fn jj_dynamic_completion_uses_selected_repository() {
+        let dir = tempdir().unwrap();
+        let current_repo = dir.path().join("current");
+        let selected_repo = dir.path().join("selected");
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(current_repo.join(".jj")).unwrap();
+        fs::create_dir_all(selected_repo.join(".jj")).unwrap();
+        fs::create_dir_all(&bin_dir).unwrap();
+        write_executable_script(
+            &bin_dir.join("jj"),
+            &format!(
+                "#!/bin/sh\nif [ \"$1\" != \"--repository\" ]; then exit 9; fi\nif [ \"$2\" = \"{}\" ] && [ \"$3 $4\" = \"bookmark list\" ]; then printf 'target-main\\n'; else printf 'wrong-repository\\n'; fi\n",
+                selected_repo.display()
+            ),
+        );
+
+        let engine = engine_with_path(&bin_dir);
+        let input = format!("jj -R {} bookmark delete target", selected_repo.display());
+        let result = wait_for_candidate(&engine, &input, &current_repo, "target-main").await;
+        assert!(
+            !result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "wrong-repository"),
+            "jj provider used the current repository instead of -R: {:?}",
+            result.candidates
+        );
     }
 
     #[tokio::test]

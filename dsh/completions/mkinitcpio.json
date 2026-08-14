@@ -23,7 +23,8 @@
       "description": "Use preset file from /etc/mkinitcpio.d/",
       "takes_value": true,
       "value_type": {
-        "type": "String"
+        "type": "Dynamic",
+        "data": { "provider": "mkinitcpio.preset" }
       }
     },
     {

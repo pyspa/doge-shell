@@ -188,6 +188,185 @@ fn test_load_new_json_completions() {
 }
 
 #[test]
+fn arch_and_cross_language_command_batch_loads() {
+    let loader = JsonCompletionLoader::new();
+    let commands = [
+        "yay",
+        "paru",
+        "paccache",
+        "pacdiff",
+        "pactree",
+        "pacman-conf",
+        "pacman-key",
+        "pkgctl",
+        "repo-add",
+        "repo-remove",
+        "namcap",
+        "mkarchroot",
+        "arch-nspawn",
+        "makechrootpkg",
+        "snapper",
+        "jj",
+        "cargo-nextest",
+        "cargo-watch",
+        "sccache",
+        "bacon",
+        "pdm",
+        "pipenv",
+        "pyright",
+        "biome",
+        "golangci-lint",
+        "goreleaser",
+        "dlv",
+        "meson",
+        "watchexec",
+        "ghq",
+    ];
+
+    for command in commands {
+        let completion = loader
+            .load_command_completion(command)
+            .unwrap_or_else(|error| panic!("failed to load {command}: {error}"))
+            .unwrap_or_else(|| panic!("missing completion for {command}"));
+        assert_eq!(completion.command, command);
+    }
+}
+
+#[test]
+fn arch_command_options_match_current_cli_contracts() {
+    let loader = JsonCompletionLoader::new();
+
+    let pacman_key = loader
+        .load_command_completion("pacman-key")
+        .unwrap()
+        .expect("pacman-key completion");
+    let export = pacman_key
+        .global_options
+        .iter()
+        .find(|option| option.short.as_deref() == Some("-e"))
+        .expect("pacman-key -e");
+    assert_eq!(export.long.as_deref(), Some("--export"));
+    assert!(
+        pacman_key
+            .global_options
+            .iter()
+            .any(|option| option.short.is_none() && option.long.as_deref() == Some("--edit-key"))
+    );
+    assert!(
+        !pacman_key
+            .global_options
+            .iter()
+            .any(|option| option.short.as_deref() == Some("-x"))
+    );
+
+    let mkarchroot = loader
+        .load_command_completion("mkarchroot")
+        .unwrap()
+        .expect("mkarchroot completion");
+    let copy = mkarchroot
+        .global_options
+        .iter()
+        .find(|option| option.short.as_deref() == Some("-f"))
+        .expect("mkarchroot -f");
+    assert!(copy.expects_value());
+    assert!(matches!(copy.value_type(), Some(ArgumentType::File { .. })));
+    assert!(
+        mkarchroot
+            .global_options
+            .iter()
+            .all(|option| option.long.is_none())
+    );
+
+    let makechrootpkg = loader
+        .load_command_completion("makechrootpkg")
+        .unwrap()
+        .expect("makechrootpkg completion");
+    let namcap = makechrootpkg
+        .global_options
+        .iter()
+        .find(|option| option.short.as_deref() == Some("-n"))
+        .expect("makechrootpkg -n");
+    assert!(
+        namcap
+            .description
+            .as_deref()
+            .is_some_and(|description| description.contains("namcap"))
+    );
+    assert!(
+        !makechrootpkg
+            .global_options
+            .iter()
+            .any(|option| option.short.as_deref() == Some("-s"))
+    );
+
+    let arch_nspawn = loader
+        .load_command_completion("arch-nspawn")
+        .unwrap()
+        .expect("arch-nspawn completion");
+    for short in ["-C", "-M", "-c", "-f", "-s", "-h"] {
+        assert!(
+            arch_nspawn
+                .global_options
+                .iter()
+                .any(|option| option.short.as_deref() == Some(short)),
+            "arch-nspawn should expose {short}"
+        );
+    }
+    assert!(arch_nspawn.global_options.iter().all(|option| {
+        !matches!(option.short.as_deref(), Some("-b" | "-q")) && option.long.is_none()
+    }));
+}
+
+#[test]
+fn new_command_batch_wires_dynamic_providers() {
+    let loader = JsonCompletionLoader::new();
+    let expected = [
+        ("bacon", "bacon.job"),
+        ("ghq", "ghq.repository"),
+        ("golangci-lint", "golangci_lint.linter"),
+        ("jj", "jj.bookmark"),
+        ("jj", "jj.revision"),
+        ("jj", "jj.workspace"),
+        ("meson", "meson.target"),
+        ("mkinitcpio", "mkinitcpio.preset"),
+        ("pacman-conf", "pacman.repository"),
+        ("pdm", "pdm.script"),
+        ("pipenv", "pipenv.script"),
+        ("snapper", "snapper.config"),
+        ("snapper", "snapper.snapshot"),
+        ("yay", "pacman.package"),
+        ("paru", "pacman.package"),
+        ("cargo-nextest", "cargo.package"),
+        ("dlv", "system.process_pid"),
+    ];
+
+    for (command, provider) in expected {
+        let completion = loader
+            .load_command_completion(command)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{command} completion"));
+        assert!(
+            completion_uses_dynamic_provider(&completion, provider),
+            "{command} should use {provider}"
+        );
+    }
+
+    let cargo = loader
+        .load_command_completion("cargo")
+        .unwrap()
+        .expect("cargo completion");
+    for command in ["nextest", "watch"] {
+        assert!(
+            cargo
+                .subcommands
+                .iter()
+                .any(|subcommand| subcommand.name == command),
+            "cargo should expose {command}"
+        );
+    }
+}
+
+#[test]
 fn wg_quick_up_uses_wireguard_config_provider() {
     let loader = JsonCompletionLoader::new();
     let completion = loader

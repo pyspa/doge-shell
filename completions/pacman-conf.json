@@ -1,0 +1,55 @@
+{
+  "command": "pacman-conf",
+  "description": "Query pacman configuration",
+  "global_options": [
+    {
+      "short": "-c",
+      "long": "--config",
+      "description": "Configuration file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {
+          "extensions": [
+            "conf"
+          ]
+        }
+      }
+    },
+    {
+      "short": "-R",
+      "long": "--root",
+      "description": "Alternative installation root",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "long": "--repo-list",
+      "description": "List configured repositories"
+    },
+    {
+      "short": "-r",
+      "long": "--repo",
+      "description": "Select repository",
+      "takes_value": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "pacman.repository"
+        }
+      }
+    }
+  ],
+  "arguments": [
+    {
+      "name": "directive",
+      "required": false,
+      "multiple": true,
+      "type": {
+        "type": "String"
+      }
+    }
+  ]
+}

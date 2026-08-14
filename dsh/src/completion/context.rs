@@ -251,7 +251,8 @@ impl<'a> ContextCorrector<'a> {
         let mut tokens_consumed = 0;
         let mut subcommands_found = false;
 
-        for token in &parsed.raw_args {
+        while tokens_consumed < parsed.raw_args.len() {
+            let token = &parsed.raw_args[tokens_consumed];
             // If this token is the current one being typed, don't consume it as a parent
             // But if it IS a valid subcommand, we should set context to SubCommand
             let is_current = token == &new_parsed.current_token;
@@ -277,6 +278,32 @@ impl<'a> ContextCorrector<'a> {
                 new_parsed.completion_context = CompletionContext::SubCommand;
                 new_parsed.subcommand_path = valid_subcommands.clone();
                 return new_parsed;
+            } else if !is_current {
+                // Global options are commonly accepted before a subcommand (for example,
+                // `snapper --config root delete`). Skip known options and their values so
+                // subcommand recovery can continue after the parser stopped at the option.
+                let available_options =
+                    self.collect_available_options(command_completion, &valid_subcommands);
+
+                if Self::is_inline_long_option_value(token, &available_options)
+                    || split_attached_short_option_value(token, &available_options).is_some()
+                {
+                    tokens_consumed += 1;
+                    continue;
+                }
+
+                if let Some(option) = available_options
+                    .iter()
+                    .find(|option| option.matches_name(token))
+                {
+                    tokens_consumed += 1;
+                    if option.expects_value() && tokens_consumed < parsed.raw_args.len() {
+                        tokens_consumed += 1;
+                    }
+                    continue;
+                }
+
+                break;
             } else {
                 // Token doesn't match any subcommand, stop scanning
                 break;
@@ -285,40 +312,19 @@ impl<'a> ContextCorrector<'a> {
 
         if subcommands_found {
             new_parsed.subcommand_path = valid_subcommands;
-
-            // Clean up consumed tokens from options/args lists is complex and maybe unnecessary
-            // as generators usually rely on context and subcommand_path.
-            // But we should update completion context if we consumed everything and are now looking at arguments.
-
-            // Recalculate context based on what remains
-            if parsed.raw_args.len() > tokens_consumed {
-                // We have remaining args.
-                // The next one is the current context?
-                // If cursor is on one of the remaining, context is Argument?
-                new_parsed.completion_context = CompletionContext::Argument {
-                    arg_index: new_parsed.specified_arguments.len(), // approximate
-                    arg_type: None,
-                };
-
-                // If the immediate next token is what we are completing
-                if parsed.raw_args.len() == tokens_consumed + 1
-                    && parsed.raw_args[tokens_consumed] == new_parsed.current_token
-                {
-                    // We are completing the first argument
-                    new_parsed.completion_context = CompletionContext::Argument {
-                        arg_index: 0,
-                        arg_type: None,
-                    };
-                }
-            } else {
-                // Consumed all raw args as path? Then we are expecting new args/options
-                // If we ended exactly on a subcommand (and it wasn't current_token check above?),
-                // then we are completing arguments of that subcommand.
-                new_parsed.completion_context = CompletionContext::Argument {
-                    arg_index: 0,
-                    arg_type: None,
-                };
-            }
+            let available_options =
+                self.collect_available_options(command_completion, &new_parsed.subcommand_path);
+            let (arguments, arg_index) = Self::positional_arguments_after_raw_index(
+                &new_parsed,
+                tokens_consumed,
+                &available_options,
+            );
+            new_parsed.specified_arguments = arguments;
+            new_parsed.args = new_parsed.specified_arguments.clone();
+            new_parsed.completion_context = CompletionContext::Argument {
+                arg_index,
+                arg_type: None,
+            };
 
             // Override if current token looks like an option and we didn't match it as subcommand?
             if new_parsed.current_token.starts_with('-')
@@ -348,6 +354,69 @@ impl<'a> ContextCorrector<'a> {
         }
 
         new_parsed
+    }
+
+    fn positional_arguments_after_raw_index(
+        parsed: &ParsedCommandLine,
+        start_index: usize,
+        options: &[&CommandOption],
+    ) -> (Vec<String>, usize) {
+        let current_index = Self::current_raw_index(parsed).unwrap_or(parsed.raw_args.len());
+        let mut arguments = Vec::new();
+        let mut arg_index = 0;
+        let mut raw_index = start_index;
+        let mut skip_next_redirect_target = false;
+        let mut end_of_options = false;
+
+        while raw_index < parsed.raw_args.len() {
+            let token = parsed.raw_args[raw_index].as_str();
+
+            if skip_next_redirect_target {
+                skip_next_redirect_target = false;
+                raw_index += 1;
+                continue;
+            }
+
+            if !end_of_options && Self::is_redirect_operator(token) {
+                skip_next_redirect_target = true;
+                raw_index += 1;
+                continue;
+            }
+
+            if !end_of_options && token == "--" {
+                end_of_options = true;
+                raw_index += 1;
+                continue;
+            }
+
+            if !end_of_options && Self::is_inline_long_option_value(token, options) {
+                raw_index += 1;
+                continue;
+            }
+
+            if !end_of_options && split_attached_short_option_value(token, options).is_some() {
+                raw_index += 1;
+                continue;
+            }
+
+            if !end_of_options && is_separate_value_option(token, options) {
+                raw_index = (raw_index + 2).min(parsed.raw_args.len());
+                continue;
+            }
+
+            if !end_of_options && Self::looks_like_known_option(token, options) {
+                raw_index += 1;
+                continue;
+            }
+
+            if raw_index < current_index {
+                arg_index += 1;
+            }
+            arguments.push(token.to_string());
+            raw_index += 1;
+        }
+
+        (arguments, arg_index)
     }
 
     fn correct_option_value_context(
@@ -906,6 +975,103 @@ mod tests {
         ));
         assert!(corrected.specified_arguments.is_empty());
         assert!(corrected.args.is_empty());
+    }
+
+    #[test]
+    fn global_option_before_subcommand_preserves_argument_context() {
+        let mut db = CommandCompletionDatabase::new();
+        db.add_command(CommandCompletion {
+            command: "snapper".to_string(),
+            description: None,
+            global_options: vec![CommandOption {
+                short: Some("-c".to_string()),
+                long: Some("--config".to_string()),
+                description: None,
+                takes_value: true,
+                value_type: Some(ArgumentType::Choice(vec!["root".to_string()])),
+                argument: None,
+            }],
+            subcommands: vec![SubCommand {
+                name: "delete".to_string(),
+                description: None,
+                aliases: vec![],
+                options: vec![],
+                arguments: vec![crate::completion::command::Argument {
+                    name: "snapshot".to_string(),
+                    description: None,
+                    multiple: true,
+                    arg_type: Some(ArgumentType::Dynamic {
+                        provider: "snapper.snapshot".to_string(),
+                        scope: None,
+                    }),
+                }],
+                subcommands: vec![],
+            }],
+            arguments: vec![],
+        });
+
+        let input = "snapper --config root delete 4";
+        let parsed = CommandLineParser::new().parse(input, input.len());
+        let corrected = ContextCorrector::new(&db).correct_parsed_command_line(&parsed);
+
+        assert_eq!(corrected.subcommand_path, vec!["delete".to_string()]);
+        assert!(matches!(
+            corrected.completion_context,
+            CompletionContext::Argument { arg_index: 0, .. }
+        ));
+    }
+
+    #[test]
+    fn recovered_subcommand_counts_only_preceding_positional_arguments() {
+        let mut db = CommandCompletionDatabase::new();
+        db.add_command(CommandCompletion {
+            command: "helm".to_string(),
+            description: None,
+            global_options: vec![CommandOption {
+                short: None,
+                long: Some("--kube-context".to_string()),
+                description: None,
+                takes_value: true,
+                value_type: Some(ArgumentType::String),
+                argument: None,
+            }],
+            subcommands: vec![SubCommand {
+                name: "install".to_string(),
+                description: None,
+                aliases: vec![],
+                options: vec![],
+                arguments: vec![
+                    crate::completion::command::Argument {
+                        name: "release".to_string(),
+                        description: None,
+                        multiple: false,
+                        arg_type: Some(ArgumentType::String),
+                    },
+                    crate::completion::command::Argument {
+                        name: "chart".to_string(),
+                        description: None,
+                        multiple: false,
+                        arg_type: Some(ArgumentType::File { extensions: None }),
+                    },
+                ],
+                subcommands: vec![],
+            }],
+            arguments: vec![],
+        });
+
+        let input = "helm --kube-context dev install release ./cha";
+        let parsed = CommandLineParser::new().parse(input, input.len());
+        let corrected = ContextCorrector::new(&db).correct_parsed_command_line(&parsed);
+
+        assert_eq!(corrected.subcommand_path, vec!["install".to_string()]);
+        assert_eq!(
+            corrected.specified_arguments,
+            vec!["release".to_string(), "./cha".to_string()]
+        );
+        assert!(matches!(
+            corrected.completion_context,
+            CompletionContext::Argument { arg_index: 1, .. }
+        ));
     }
 
     #[test]

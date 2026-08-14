@@ -1,0 +1,150 @@
+{
+  "command": "biome",
+  "description": "JavaScript and TypeScript toolchain",
+  "global_options": [
+    {
+      "long": "--config-path",
+      "description": "Configuration path",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {
+          "extensions": [
+            "json",
+            "jsonc"
+          ]
+        }
+      }
+    },
+    {
+      "long": "--colors",
+      "description": "Color output",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "off",
+          "force"
+        ]
+      }
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Verbose output"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "check",
+      "description": "Lint, format, and organize imports",
+      "options": [
+        {
+          "long": "--write",
+          "description": "Apply safe fixes"
+        },
+        {
+          "long": "--unsafe",
+          "description": "Apply unsafe fixes"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "path",
+          "required": false,
+          "multiple": true,
+          "type": {
+            "type": "File",
+            "data": {}
+          }
+        }
+      ]
+    },
+    {
+      "name": "lint",
+      "description": "Lint files",
+      "options": [
+        {
+          "long": "--write",
+          "description": "Apply fixes"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "path",
+          "required": false,
+          "multiple": true,
+          "type": {
+            "type": "File",
+            "data": {}
+          }
+        }
+      ]
+    },
+    {
+      "name": "format",
+      "description": "Format files",
+      "options": [
+        {
+          "long": "--write",
+          "description": "Write changes"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "path",
+          "required": false,
+          "multiple": true,
+          "type": {
+            "type": "File",
+            "data": {}
+          }
+        }
+      ]
+    },
+    {
+      "name": "ci",
+      "description": "Run checks for CI",
+      "arguments": [
+        {
+          "name": "path",
+          "required": false,
+          "multiple": true,
+          "type": {
+            "type": "File",
+            "data": {}
+          }
+        }
+      ]
+    },
+    {
+      "name": "init",
+      "description": "Create configuration"
+    },
+    {
+      "name": "migrate",
+      "description": "Migrate configuration"
+    },
+    {
+      "name": "search",
+      "description": "Search source code",
+      "arguments": [
+        {
+          "name": "pattern",
+          "type": {
+            "type": "String"
+          }
+        },
+        {
+          "name": "path",
+          "required": false,
+          "multiple": true,
+          "type": {
+            "type": "File",
+            "data": {}
+          }
+        }
+      ]
+    }
+  ]
+}

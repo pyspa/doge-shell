@@ -1,0 +1,131 @@
+{
+  "command": "pacman-key",
+  "description": "Manage pacman package signing keys",
+  "global_options": [
+    {
+      "long": "--config",
+      "description": "Configuration file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {
+          "extensions": [
+            "conf"
+          ]
+        }
+      }
+    },
+    {
+      "long": "--gpgdir",
+      "description": "GnuPG home directory",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "long": "--keyserver",
+      "description": "Keyserver to use",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-a",
+      "long": "--add",
+      "description": "Add key files"
+    },
+    {
+      "short": "-d",
+      "long": "--delete",
+      "description": "Delete key IDs"
+    },
+    {
+      "short": "-e",
+      "long": "--export",
+      "description": "Export key IDs"
+    },
+    {
+      "long": "--edit-key",
+      "description": "Edit a key"
+    },
+    {
+      "short": "-f",
+      "long": "--finger",
+      "description": "List fingerprints"
+    },
+    {
+      "long": "--import",
+      "description": "Import public keyring directories"
+    },
+    {
+      "long": "--import-trustdb",
+      "description": "Import ownertrust directories"
+    },
+    {
+      "long": "--init",
+      "description": "Initialize keyring"
+    },
+    {
+      "short": "-l",
+      "long": "--list-keys",
+      "description": "List keys"
+    },
+    {
+      "long": "--list-sigs",
+      "description": "List keys and signatures"
+    },
+    {
+      "long": "--lsign-key",
+      "description": "Locally sign a key"
+    },
+    {
+      "long": "--nocolor",
+      "description": "Disable colored output"
+    },
+    {
+      "long": "--populate",
+      "description": "Reload default keyrings"
+    },
+    {
+      "short": "-r",
+      "long": "--recv-keys",
+      "description": "Receive keys"
+    },
+    {
+      "long": "--refresh-keys",
+      "description": "Refresh keys"
+    },
+    {
+      "short": "-u",
+      "long": "--updatedb",
+      "description": "Update the trust database"
+    },
+    {
+      "short": "-v",
+      "long": "--verify",
+      "description": "Verify a signature"
+    },
+    {
+      "short": "-V",
+      "long": "--version",
+      "description": "Show version"
+    },
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show help"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "target",
+      "required": false,
+      "multiple": true,
+      "type": {
+        "type": "String"
+      }
+    }
+  ]
+}

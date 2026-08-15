@@ -27,9 +27,11 @@ pub use command_history::{
     CommandEvent, CommandLedgerMode, EntryMatcher, HistoryMetadata, HistoryQuery, HistoryScope,
     HistoryStatusFilter,
 };
+pub(crate) use command_history::{CommandHistoryReloadSnapshot, HistoryReloadApply};
 pub use context::get_current_context;
 pub use entry::Entry;
 pub use frecency_history::FrecencyHistory;
+pub(crate) use frecency_history::{FrecencyReloadApply, FrecencyReloadSnapshot};
 
 /// A [`HistoryQuery`] carrying only the caller's current scope context.
 ///

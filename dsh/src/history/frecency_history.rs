@@ -20,6 +20,33 @@ use std::thread;
 enum FrecencyMsg {
     Save(Arc<FrecencyStore>),
     LogVisit(String, i64, Option<String>), // path, timestamp, context
+    Reload {
+        base_revision: u64,
+        base_store: Arc<FrecencyStore>,
+        complete: FrecencyReloadCallback,
+    },
+}
+
+type FrecencyReloadCallback = Box<dyn FnOnce(Result<FrecencyReloadSnapshot>) + Send + 'static>;
+
+pub(crate) struct FrecencyReloadSnapshot {
+    base_revision: u64,
+    store: Arc<FrecencyStore>,
+}
+
+impl fmt::Debug for FrecencyReloadSnapshot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FrecencyReloadSnapshot")
+            .field("base_revision", &self.base_revision)
+            .field("entries", &self.store.items.len())
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FrecencyReloadApply {
+    Applied,
+    Stale,
 }
 
 /// Frecency-based history for directory navigation.
@@ -32,6 +59,7 @@ pub struct FrecencyHistory {
     prev_search_word: String,
     matcher: SkimMatcherV2,
     sender: Option<Sender<FrecencyMsg>>,
+    revision: u64,
 }
 
 impl fmt::Debug for FrecencyHistory {
@@ -64,6 +92,7 @@ impl FrecencyHistory {
             prev_search_word: "".to_string(),
             matcher,
             sender: None,
+            revision: 0,
         }
     }
 
@@ -110,6 +139,7 @@ impl FrecencyHistory {
             prev_search_word: "".to_string(),
             matcher,
             sender: None,
+            revision: 0,
         })
     }
 
@@ -133,6 +163,13 @@ impl FrecencyHistory {
                                  "INSERT INTO directory_visits (path, timestamp, context) VALUES (?1, ?2, ?3)",
                                  rusqlite::params![path, timestamp, context],
                              );
+                        }
+                        FrecencyMsg::Reload {
+                            base_revision,
+                            base_store,
+                            complete,
+                        } => {
+                            complete(Self::load_reload_snapshot(&db, base_revision, base_store));
                         }
                     }
                 }
@@ -238,13 +275,35 @@ impl FrecencyHistory {
 
     /// Reload the frecency store from the database.
     pub fn reload(&mut self) -> Result<()> {
-        if self.db.is_none() || self.store.is_none() {
-            return Ok(());
-        }
-
-        let Some(db) = self.db.as_ref() else {
+        let (Some(db), Some(store)) = (self.db.clone(), self.store.clone()) else {
             return Ok(());
         };
+        let snapshot = Self::load_reload_snapshot(&db, self.revision, store)?;
+        let _ = self.apply_reload_snapshot(snapshot);
+        Ok(())
+    }
+
+    pub(crate) fn request_reload<F>(&self, complete: F) -> bool
+    where
+        F: FnOnce(Result<FrecencyReloadSnapshot>) + Send + 'static,
+    {
+        let (Some(sender), Some(store)) = (&self.sender, &self.store) else {
+            return false;
+        };
+        sender
+            .send(FrecencyMsg::Reload {
+                base_revision: self.revision,
+                base_store: Arc::clone(store),
+                complete: Box::new(complete),
+            })
+            .is_ok()
+    }
+
+    fn load_reload_snapshot(
+        db: &Db,
+        base_revision: u64,
+        base_store: Arc<FrecencyStore>,
+    ) -> Result<FrecencyReloadSnapshot> {
         let conn = db.get_connection();
         let mut stmt = conn.prepare("SELECT path, score, last_accessed, access_count, half_life, context FROM directory_snapshot")?;
 
@@ -258,33 +317,43 @@ impl FrecencyHistory {
             Ok((path, score, last_accessed, access_count, half_life, context))
         })?;
 
-        let Some(store) = self.store.as_mut() else {
-            return Ok(());
-        };
-        let store_mut = Arc::make_mut(store);
+        let mut store = (*base_store).clone();
 
         for row in rows {
-            match row {
-                Ok((path, score, _last_accessed, _access_count, half_life, context)) => {
-                    match store_mut.items.binary_search_by(|i| i.item.cmp(&path)) {
-                        Ok(_idx) => {
-                            // Exists - skip for now
-                        }
-                        Err(idx) => {
-                            let mut new_item =
-                                ItemStats::new(&path, 0.0, half_life as f32, context);
-                            new_item.set_frecency(score as f32);
-                            store_mut.items.insert(idx, new_item);
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Reload Row Error: {}", e);
+            let (path, score, _last_accessed, _access_count, half_life, context) = row?;
+            match store.items.binary_search_by(|item| item.item.cmp(&path)) {
+                Ok(_) => {}
+                Err(index) => {
+                    let mut item = ItemStats::new(&path, 0.0, half_life as f32, context);
+                    item.set_frecency(score as f32);
+                    store.items.insert(index, item);
                 }
             }
         }
+        store.size = store.items.len();
 
-        Ok(())
+        Ok(FrecencyReloadSnapshot {
+            base_revision,
+            store: Arc::new(store),
+        })
+    }
+
+    pub(crate) fn apply_reload_snapshot(
+        &mut self,
+        snapshot: FrecencyReloadSnapshot,
+    ) -> FrecencyReloadApply {
+        if self.revision != snapshot.base_revision {
+            return FrecencyReloadApply::Stale;
+        }
+        self.store = Some(snapshot.store);
+        self.histories = None;
+        self.reset_index();
+        self.bump_revision();
+        FrecencyReloadApply::Applied
+    }
+
+    fn bump_revision(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
     }
 
     /// Save in background using the writer thread.
@@ -320,6 +389,7 @@ impl FrecencyHistory {
     pub fn force_changed(&mut self) {
         if let Some(ref mut store) = self.store {
             Arc::make_mut(store).changed = true;
+            self.bump_revision();
         }
     }
 
@@ -341,6 +411,7 @@ impl FrecencyHistory {
                     rusqlite::params![history, now, ctx],
                 );
             }
+            self.bump_revision();
         }
     }
 
@@ -362,7 +433,11 @@ impl FrecencyHistory {
     /// Prune old entries from the store.
     pub fn prune(&mut self) {
         if let Some(ref mut store) = self.store {
+            let before = store.items.len();
             Arc::make_mut(store).prune();
+            if store.items.len() != before {
+                self.bump_revision();
+            }
         }
     }
 
@@ -433,5 +508,50 @@ impl FrecencyHistory {
         for res in self.sort_by_match(pattern) {
             println!("'{}' match_score:{:?}", res.item, res.match_score);
         }
+    }
+}
+
+#[cfg(test)]
+mod background_reload_tests {
+    use super::*;
+
+    #[test]
+    fn stale_reload_snapshot_does_not_overwrite_local_visit() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(dir.path().join("frecency.db")).unwrap();
+        {
+            let conn = db.get_connection();
+            conn.execute(
+                "INSERT INTO directory_snapshot \
+                 (path, score, last_accessed, access_count, half_life, context) \
+                 VALUES ('/remote', 1.0, 1, 1, 43200.0, NULL)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let mut history = FrecencyHistory::new();
+        history.db = Some(db.clone());
+        let snapshot = FrecencyHistory::load_reload_snapshot(
+            &db,
+            history.revision,
+            history.store.clone().unwrap(),
+        )
+        .unwrap();
+        history.add("/local");
+
+        assert_eq!(
+            history.apply_reload_snapshot(snapshot),
+            FrecencyReloadApply::Stale
+        );
+        assert!(
+            history
+                .store
+                .as_ref()
+                .unwrap()
+                .items
+                .iter()
+                .any(|item| item.item == "/local")
+        );
     }
 }

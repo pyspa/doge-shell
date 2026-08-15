@@ -238,13 +238,11 @@ async fn execute_shell_command(
     // Record command timing statistics
     let elapsed = start_time.elapsed();
     if let Some(cmd_name) = command_timing::extract_command_name(&input_str) {
-        let mut timing = repl.services.command_timing.write();
-        timing.record(&cmd_name, exit_code, elapsed);
-        if let Some(path) = command_timing::get_timing_file_path()
-            && let Err(e) = timing.save_to_file_if_due(&path)
         {
-            debug!("Failed to save command timing: {}", e);
+            let mut timing = repl.services.command_timing.write();
+            timing.record(&cmd_name, exit_code, elapsed);
         }
+        repl.schedule_command_timing_save();
     }
 
     let output_entries = repl

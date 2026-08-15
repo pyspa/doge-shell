@@ -9,9 +9,78 @@ use dsh_types::{Context, ExitStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter};
-use std::path::PathBuf;
+use std::io::{BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex, MutexGuard};
 use tracing::{debug, warn};
+
+#[derive(Default)]
+struct TimingFileCoordinator {
+    reset_epochs: HashMap<PathBuf, u64>,
+}
+
+static TIMING_FILE_COORDINATOR: LazyLock<Mutex<TimingFileCoordinator>> =
+    LazyLock::new(|| Mutex::new(TimingFileCoordinator::default()));
+
+fn timing_file_coordinator() -> MutexGuard<'static, TimingFileCoordinator> {
+    TIMING_FILE_COORDINATOR
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Returns the in-process reset epoch for a timing file.
+///
+/// The REPL snapshots this value before a background write. `timing --clear`
+/// increments it under the same mutex so an older snapshot cannot be published
+/// after the clear completes.
+pub fn timing_reset_epoch(path: &Path) -> u64 {
+    timing_file_coordinator()
+        .reset_epochs
+        .get(path)
+        .copied()
+        .unwrap_or(0)
+}
+
+fn write_json_atomically<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    serde_json::to_writer_pretty(temporary.as_file_mut(), value)?;
+    temporary.as_file_mut().flush()?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    Ok(())
+}
+
+/// Atomically publishes `value` only if no in-process reset happened since the
+/// caller captured `expected_reset_epoch`.
+pub fn write_timing_json_if_epoch<T: Serialize>(
+    path: &Path,
+    value: &T,
+    expected_reset_epoch: u64,
+) -> std::io::Result<bool> {
+    let coordinator = timing_file_coordinator();
+    let current_epoch = coordinator.reset_epochs.get(path).copied().unwrap_or(0);
+    if current_epoch != expected_reset_epoch {
+        return Ok(false);
+    }
+    write_json_atomically(path, value)?;
+    Ok(true)
+}
+
+fn write_timing_reset<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
+    let mut coordinator = timing_file_coordinator();
+    write_json_atomically(path, value)?;
+    let epoch = coordinator
+        .reset_epochs
+        .entry(path.to_path_buf())
+        .or_default();
+    *epoch = epoch.wrapping_add(1);
+    Ok(())
+}
 
 /// Statistics for a single command
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,14 +166,7 @@ impl CommandTiming {
 
     /// Save timing data to a file
     pub fn save_to_file(&self, path: &PathBuf) -> std::io::Result<()> {
-        // Ensure parent directory exists
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-
-        let file = File::create(path)?;
-        let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, self)?;
+        write_timing_reset(path, self)?;
         debug!("Saved command timing to {:?}", path);
         Ok(())
     }
@@ -475,5 +537,17 @@ mod tests {
         assert!(path.is_some());
         let path = path.expect("path should be some");
         assert!(path.to_string_lossy().contains("timing.json"));
+    }
+
+    #[test]
+    fn save_publishes_valid_json_and_advances_the_reset_epoch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("timing.json");
+        let before = timing_reset_epoch(&path);
+
+        CommandTiming::new().save_to_file(&path).unwrap();
+
+        assert_ne!(timing_reset_epoch(&path), before);
+        assert!(CommandTiming::load_from_file(&path).is_some());
     }
 }

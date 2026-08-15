@@ -7,8 +7,8 @@ use chrono::{DateTime, Duration, Utc};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::{BufReader, BufWriter};
+use std::fs::File;
+use std::io::BufReader;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration as StdDuration, Instant};
@@ -93,6 +93,43 @@ pub struct CommandTiming {
     dirty_records: u64,
     #[serde(skip)]
     last_saved_at: Option<Instant>,
+    /// Monotonic in-memory revision used to acknowledge background snapshots
+    /// without clearing records added while a file write was in flight.
+    #[serde(skip)]
+    generation: u64,
+    /// File identity and reset epoch are process-local coordination state and
+    /// are deliberately excluded from the persisted JSON format.
+    #[serde(skip)]
+    storage_path: Option<PathBuf>,
+    #[serde(skip)]
+    reset_epoch: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TimingWriteOutcome {
+    Written,
+    SupersededByReset,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CommandTimingSnapshot {
+    timing: CommandTiming,
+    generation: u64,
+    dirty_records: u64,
+}
+
+impl CommandTimingSnapshot {
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(crate) fn dirty_records(&self) -> u64 {
+        self.dirty_records
+    }
+
+    pub(crate) fn write_to_file(&self, path: &PathBuf) -> std::io::Result<TimingWriteOutcome> {
+        self.timing.write_payload(path)
+    }
 }
 
 impl CommandTiming {
@@ -104,7 +141,21 @@ impl CommandTiming {
             dirty: false,
             dirty_records: 0,
             last_saved_at: Some(Instant::now()),
+            generation: 0,
+            storage_path: None,
+            reset_epoch: 0,
         }
+    }
+
+    pub(crate) fn new_for_path(path: PathBuf) -> Self {
+        let mut timing = Self::new();
+        timing.attach_storage_path(path);
+        timing
+    }
+
+    fn attach_storage_path(&mut self, path: PathBuf) {
+        self.reset_epoch = dsh_builtin::command_timing::timing_reset_epoch(&path);
+        self.storage_path = Some(path);
     }
 
     /// Load timing data from a file
@@ -118,6 +169,7 @@ impl CommandTiming {
                 let reader = BufReader::new(file);
                 match serde_json::from_reader::<_, CommandTiming>(reader) {
                     Ok(mut timing) => {
+                        timing.attach_storage_path(path.clone());
                         timing.mark_clean();
                         debug!("Loaded command timing from {:?}", path);
                         Some(timing)
@@ -137,21 +189,34 @@ impl CommandTiming {
 
     /// Save timing data to a file
     pub fn save_to_file(&mut self, path: &PathBuf) -> std::io::Result<()> {
+        self.reconcile_storage_reset(path);
         if !self.dirty {
             return Ok(());
         }
 
-        // Ensure parent directory exists
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+        match self.write_payload(path)? {
+            TimingWriteOutcome::Written => {
+                self.mark_clean();
+                debug!("Saved command timing to {:?}", path);
+            }
+            TimingWriteOutcome::SupersededByReset => self.reconcile_storage_reset(path),
         }
-
-        let file = File::create(path)?;
-        let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, self)?;
-        self.mark_clean();
-        debug!("Saved command timing to {:?}", path);
         Ok(())
+    }
+
+    fn write_payload(&self, path: &PathBuf) -> std::io::Result<TimingWriteOutcome> {
+        let expected_epoch = if self.storage_path.as_ref() == Some(path) {
+            self.reset_epoch
+        } else {
+            dsh_builtin::command_timing::timing_reset_epoch(path)
+        };
+        let written =
+            dsh_builtin::command_timing::write_timing_json_if_epoch(path, self, expected_epoch)?;
+        Ok(if written {
+            TimingWriteOutcome::Written
+        } else {
+            TimingWriteOutcome::SupersededByReset
+        })
     }
 
     /// Save timing data only when the debounce interval or record threshold is reached.
@@ -175,17 +240,75 @@ impl CommandTiming {
 
     /// Force save regardless of dirty flag
     pub fn force_save(&mut self, path: &PathBuf) -> std::io::Result<()> {
-        // Ensure parent directory exists
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+        self.reconcile_storage_reset(path);
+        match self.write_payload(path)? {
+            TimingWriteOutcome::Written => {
+                self.mark_clean();
+                debug!("Force saved command timing to {:?}", path);
+            }
+            TimingWriteOutcome::SupersededByReset => self.reconcile_storage_reset(path),
+        }
+        Ok(())
+    }
+
+    pub(crate) fn background_snapshot_if_due(&mut self) -> Option<CommandTimingSnapshot> {
+        self.reconcile_configured_storage();
+        if !self.dirty {
+            return None;
+        }
+        let interval_elapsed = self
+            .last_saved_at
+            .is_none_or(|last_saved| last_saved.elapsed() >= TIMING_SAVE_INTERVAL);
+        let threshold_reached = self.dirty_records >= TIMING_SAVE_RECORD_THRESHOLD;
+        (interval_elapsed || threshold_reached).then(|| self.background_snapshot())
+    }
+
+    fn background_snapshot(&self) -> CommandTimingSnapshot {
+        CommandTimingSnapshot {
+            timing: self.clone(),
+            generation: self.generation,
+            dirty_records: self.dirty_records,
+        }
+    }
+
+    pub(crate) fn reconcile_configured_storage(&mut self) {
+        if let Some(path) = self.storage_path.clone() {
+            self.reconcile_storage_reset(&path);
+        }
+    }
+
+    fn reconcile_storage_reset(&mut self, path: &PathBuf) {
+        let current_epoch = dsh_builtin::command_timing::timing_reset_epoch(path);
+        if self.storage_path.as_ref() != Some(path) {
+            self.storage_path = Some(path.clone());
+            self.reset_epoch = current_epoch;
+            return;
+        }
+        if self.reset_epoch == current_epoch {
+            return;
         }
 
-        let file = File::create(path)?;
-        let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, self)?;
-        self.mark_clean();
-        debug!("Force saved command timing to {:?}", path);
-        Ok(())
+        self.stats.clear();
+        self.collection_started = Some(Utc::now());
+        self.dirty = false;
+        self.dirty_records = 0;
+        self.last_saved_at = Some(Instant::now());
+        self.generation = self.generation.wrapping_add(1);
+        self.reset_epoch = current_epoch;
+    }
+
+    pub(crate) fn acknowledge_background_save(
+        &mut self,
+        generation: u64,
+        saved_dirty_records: u64,
+    ) {
+        self.last_saved_at = Some(Instant::now());
+        if self.generation == generation {
+            self.dirty = false;
+            self.dirty_records = 0;
+        } else {
+            self.dirty_records = self.dirty_records.saturating_sub(saved_dirty_records);
+        }
     }
 
     /// Record a command execution
@@ -201,8 +324,7 @@ impl CommandTiming {
                 CommandStats::new(command.to_string(), duration_ms, success),
             );
         }
-        self.dirty = true;
-        self.dirty_records = self.dirty_records.saturating_add(1);
+        self.mark_dirty();
     }
 
     /// Check if there are unsaved changes
@@ -214,6 +336,12 @@ impl CommandTiming {
         self.dirty = false;
         self.dirty_records = 0;
         self.last_saved_at = Some(Instant::now());
+    }
+
+    fn mark_dirty(&mut self) {
+        self.dirty = true;
+        self.dirty_records = self.dirty_records.saturating_add(1);
+        self.generation = self.generation.wrapping_add(1);
     }
 
     /// Get the top N slowest commands by average duration
@@ -248,7 +376,7 @@ impl CommandTiming {
     pub fn clear(&mut self) {
         self.stats.clear();
         self.collection_started = Some(Utc::now());
-        self.dirty = true;
+        self.mark_dirty();
     }
 
     /// Purge old entries (older than N days)
@@ -257,7 +385,7 @@ impl CommandTiming {
         let before = self.stats.len();
         self.stats.retain(|_, v| v.last_executed > cutoff);
         if self.stats.len() != before {
-            self.dirty = true;
+            self.mark_dirty();
         }
     }
 }
@@ -295,7 +423,7 @@ pub type SharedCommandTiming = Arc<RwLock<CommandTiming>>;
 /// Create or load the shared timing instance
 pub fn create_shared_timing() -> SharedCommandTiming {
     let timing = if let Some(path) = get_timing_file_path() {
-        CommandTiming::load_from_file(&path).unwrap_or_default()
+        CommandTiming::load_from_file(&path).unwrap_or_else(|| CommandTiming::new_for_path(path))
     } else {
         CommandTiming::new()
     };
@@ -445,6 +573,66 @@ mod tests {
 
         assert!(timing.save_to_file_if_due(&path).unwrap());
         assert!(path.exists());
+        assert!(!timing.is_dirty());
+    }
+
+    #[test]
+    fn background_ack_keeps_records_added_after_snapshot_dirty() {
+        let mut timing = CommandTiming::new();
+        for _ in 0..TIMING_SAVE_RECORD_THRESHOLD {
+            timing.record("git", 0, StdDuration::from_millis(100));
+        }
+        let snapshot = timing.background_snapshot_if_due().unwrap();
+
+        timing.record("cargo", 0, StdDuration::from_millis(200));
+        timing.acknowledge_background_save(snapshot.generation(), snapshot.dirty_records());
+
+        assert!(timing.is_dirty());
+        assert_eq!(timing.dirty_records, 1);
+        assert_eq!(timing.get("git").unwrap().total_calls, 10);
+        assert_eq!(timing.get("cargo").unwrap().total_calls, 1);
+    }
+
+    #[test]
+    fn background_ack_cleans_the_exact_saved_generation() {
+        let mut timing = CommandTiming::new();
+        for _ in 0..TIMING_SAVE_RECORD_THRESHOLD {
+            timing.record("git", 0, StdDuration::from_millis(100));
+        }
+        let snapshot = timing.background_snapshot_if_due().unwrap();
+
+        timing.acknowledge_background_save(snapshot.generation(), snapshot.dirty_records());
+
+        assert!(!timing.is_dirty());
+        assert_eq!(timing.dirty_records, 0);
+    }
+
+    #[test]
+    fn background_snapshot_cannot_overwrite_builtin_reset() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("timing.json");
+        let mut timing = CommandTiming::new_for_path(path.clone());
+        for _ in 0..TIMING_SAVE_RECORD_THRESHOLD {
+            timing.record("git", 0, StdDuration::from_millis(100));
+        }
+        let snapshot = timing.background_snapshot_if_due().unwrap();
+
+        let cleared = dsh_builtin::command_timing::CommandTiming::new();
+        cleared.save_to_file(&path).unwrap();
+
+        assert_eq!(
+            snapshot.write_to_file(&path).unwrap(),
+            TimingWriteOutcome::SupersededByReset
+        );
+        assert!(
+            dsh_builtin::command_timing::CommandTiming::load_from_file(&path)
+                .unwrap()
+                .stats
+                .is_empty()
+        );
+
+        assert!(timing.background_snapshot_if_due().is_none());
+        assert!(timing.stats.is_empty());
         assert!(!timing.is_dirty());
     }
 }

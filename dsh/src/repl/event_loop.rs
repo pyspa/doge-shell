@@ -1,4 +1,5 @@
 use super::AiEvent;
+use super::background_io::BackgroundIoEvent;
 use crate::scheduler::SchedulerEvent;
 use crossterm::event::{Event, EventStream};
 use futures::StreamExt;
@@ -23,6 +24,7 @@ pub(crate) enum LoopEvent {
     Scheduler(SchedulerEvent),
     CompletionRefresh,
     Ai(AiEvent),
+    BackgroundIo(BackgroundIoEvent),
     TerminalInput(Event),
     TerminalError(io::Error),
     TerminalClosed,
@@ -38,6 +40,7 @@ pub(crate) struct ReplEventLoop {
     sched_rx: UnboundedReceiver<SchedulerEvent>,
     completion_rx: UnboundedReceiver<()>,
     ai_rx: UnboundedReceiver<AiEvent>,
+    background_io_rx: UnboundedReceiver<BackgroundIoEvent>,
 }
 
 impl ReplEventLoop {
@@ -47,6 +50,7 @@ impl ReplEventLoop {
         sched_rx: UnboundedReceiver<SchedulerEvent>,
         completion_rx: UnboundedReceiver<()>,
         ai_rx: UnboundedReceiver<AiEvent>,
+        background_io_rx: UnboundedReceiver<BackgroundIoEvent>,
     ) -> Self {
         Self {
             reader: None,
@@ -60,6 +64,7 @@ impl ReplEventLoop {
             sched_rx,
             completion_rx,
             ai_rx,
+            background_io_rx,
         }
     }
 
@@ -73,6 +78,7 @@ impl ReplEventLoop {
             Some(event) = self.sched_rx.recv() => LoopEvent::Scheduler(event),
             Some(()) = self.completion_rx.recv() => LoopEvent::CompletionRefresh,
             Some(event) = self.ai_rx.recv() => LoopEvent::Ai(event),
+            Some(event) = self.background_io_rx.recv() => LoopEvent::BackgroundIo(event),
             event = next_terminal_event(&mut self.reader) => match event {
                 Some(Ok(event)) => LoopEvent::TerminalInput(event),
                 Some(Err(error)) => LoopEvent::TerminalError(error),
@@ -118,29 +124,48 @@ mod tests {
     use super::*;
     use tokio::time::timeout;
 
-    fn event_loop() -> (
-        ReplEventLoop,
-        tokio::sync::mpsc::UnboundedSender<()>,
-        tokio::sync::mpsc::UnboundedSender<SchedulerEvent>,
-        tokio::sync::mpsc::UnboundedSender<()>,
-        tokio::sync::mpsc::UnboundedSender<AiEvent>,
-    ) {
+    struct EventLoopFixture {
+        event_loop: ReplEventLoop,
+        git_tx: tokio::sync::mpsc::UnboundedSender<()>,
+        sched_tx: tokio::sync::mpsc::UnboundedSender<SchedulerEvent>,
+        completion_tx: tokio::sync::mpsc::UnboundedSender<()>,
+        ai_tx: tokio::sync::mpsc::UnboundedSender<AiEvent>,
+        background_io_tx: tokio::sync::mpsc::UnboundedSender<BackgroundIoEvent>,
+    }
+
+    fn event_loop() -> EventLoopFixture {
         let (git_tx, git_rx) = tokio::sync::mpsc::unbounded_channel();
         let (sched_tx, sched_rx) = tokio::sync::mpsc::unbounded_channel();
         let (completion_tx, completion_rx) = tokio::sync::mpsc::unbounded_channel();
         let (ai_tx, ai_rx) = tokio::sync::mpsc::unbounded_channel();
-        (
-            ReplEventLoop::new(60_000, git_rx, sched_rx, completion_rx, ai_rx),
+        let (background_io_tx, background_io_rx) = tokio::sync::mpsc::unbounded_channel();
+        EventLoopFixture {
+            event_loop: ReplEventLoop::new(
+                60_000,
+                git_rx,
+                sched_rx,
+                completion_rx,
+                ai_rx,
+                background_io_rx,
+            ),
             git_tx,
             sched_tx,
             completion_tx,
             ai_tx,
-        )
+            background_io_tx,
+        }
     }
 
     #[tokio::test]
     async fn channels_are_mapped_to_typed_loop_events() {
-        let (mut event_loop, git_tx, sched_tx, completion_tx, ai_tx) = event_loop();
+        let EventLoopFixture {
+            mut event_loop,
+            git_tx,
+            sched_tx,
+            completion_tx,
+            ai_tx,
+            background_io_tx,
+        } = event_loop();
 
         git_tx.send(()).unwrap();
         assert!(matches!(
@@ -187,11 +212,25 @@ mod tests {
                 .unwrap(),
             LoopEvent::Ai(AiEvent::AutoFix(fix)) if fix == "fix"
         ));
+
+        background_io_tx
+            .send(BackgroundIoEvent::TimingSaved {
+                generation: 0,
+                dirty_records: 0,
+                result: Ok(crate::command_timing::TimingWriteOutcome::Written),
+            })
+            .unwrap();
+        assert!(matches!(
+            timeout(Duration::from_millis(50), event_loop.next_event())
+                .await
+                .unwrap(),
+            LoopEvent::BackgroundIo(BackgroundIoEvent::TimingSaved { .. })
+        ));
     }
 
     #[tokio::test]
     async fn timer_is_mapped_to_background_tick() {
-        let (mut event_loop, _git_tx, _sched_tx, _completion_tx, _ai_tx) = event_loop();
+        let EventLoopFixture { mut event_loop, .. } = event_loop();
         event_loop.background = skipping_interval(1);
 
         assert!(matches!(

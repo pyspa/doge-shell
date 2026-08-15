@@ -54,6 +54,7 @@ mod cache;
 use cache::*;
 mod abbreviation;
 pub(crate) mod ai_watch;
+pub(crate) mod background_io;
 pub mod confirmation;
 mod event_loop;
 mod handler;
@@ -77,6 +78,7 @@ mod input_analysis;
 pub mod macro_utils;
 mod repl_ai; // Extracted AI logic
 
+use background_io::{BackgroundIoCoordinator, BackgroundIoEvent};
 pub(crate) use input_analysis::{CachedInputAnalysis, InputAnalysis};
 use services::ReplServices;
 
@@ -134,6 +136,7 @@ pub(crate) struct BackgroundTasks {
     pub(crate) github_task: Option<tokio::task::JoinHandle<()>>,
     /// Finished `sched` runs, reported by the scheduler runner.
     pub(crate) sched_task: Option<tokio::task::JoinHandle<()>>,
+    pub(crate) io: BackgroundIoCoordinator,
 }
 
 pub struct Repl<'a> {
@@ -170,7 +173,6 @@ impl<'a> Drop for Repl<'a> {
         if let Some(handle) = self.background_tasks.sched_task.take() {
             handle.abort();
         };
-
         // Tests build and drop `Repl` dozens of times; without this gate each
         // drop writes escape sequences to the terminal running `cargo test`.
         if crate::terminal::terminal_control_enabled() {
@@ -186,6 +188,10 @@ impl<'a> Drop for Repl<'a> {
 
             disable_raw_mode().ok();
         }
+        // Restore the user's terminal before waiting on filesystem I/O. The
+        // writer may be slow, but raw mode and DECSTBM must never outlive the
+        // interactive event loop.
+        self.background_tasks.io.shutdown();
         self.save_history();
         // Save command timing statistics
         if let Some(path) = command_timing::get_timing_file_path()
@@ -329,6 +335,8 @@ impl<'a> Repl<'a> {
 
         // Setup AI event channel
         let (ai_tx, ai_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (background_io_tx, background_io_rx) = tokio::sync::mpsc::unbounded_channel();
+        let background_io = BackgroundIoCoordinator::new(background_io_tx);
         let integrated_completion = IntegratedCompletionEngine::new(envronment);
         integrated_completion.set_notifier(completion_tx.clone());
         shell.completion_runtime = Some(integrated_completion.runtime());
@@ -341,6 +349,7 @@ impl<'a> Repl<'a> {
             sched_rx,
             completion_rx,
             ai_rx,
+            background_io_rx,
         );
 
         Repl {
@@ -393,6 +402,7 @@ impl<'a> Repl<'a> {
                 history_sync_last_check: Instant::now(),
                 github_task: Some(github_task),
                 sched_task: Some(sched_task),
+                io: background_io,
             },
             event_loop,
         }
@@ -813,6 +823,7 @@ impl<'a> Repl<'a> {
             event_loop::LoopEvent::Scheduler(event) => self.handle_scheduler_event(event),
             event_loop::LoopEvent::CompletionRefresh => self.handle_completion_refresh(),
             event_loop::LoopEvent::Ai(event) => self.handle_ai_event(event),
+            event_loop::LoopEvent::BackgroundIo(event) => self.handle_background_io_event(event),
             event_loop::LoopEvent::TerminalInput(event) => {
                 return self.handle_terminal_input(event).await;
             }
@@ -1052,28 +1063,14 @@ impl<'a> Repl<'a> {
 
     async fn handle_background_tick(&mut self) -> Result<()> {
         self.save_history_periodic();
-        if let Some(path) = command_timing::get_timing_file_path()
-            && let Err(e) = self
-                .services
-                .command_timing
-                .write()
-                .save_to_file_if_due(&path)
-        {
-            warn!("Failed to save command timing: {}", e);
-        }
+        self.schedule_command_timing_save();
         self.check_background_jobs(true).await?;
 
         if self.background_tasks.history_sync_last_check.elapsed() > Duration::from_secs(30) {
-            if let Some(ref history) = self.shell.path_history
-                && let Some(mut history) = history.try_lock()
-            {
-                let _ = history.reload();
-            }
-            if let Some(ref history) = self.shell.cmd_history
-                && let Some(mut history) = history.try_lock()
-            {
-                let _ = history.reload();
-            }
+            self.background_tasks.io.schedule_history_sync(
+                self.shell.cmd_history.as_ref(),
+                self.shell.path_history.as_ref(),
+            );
             self.background_tasks.history_sync_last_check = Instant::now();
         }
 
@@ -1081,6 +1078,24 @@ impl<'a> Repl<'a> {
         self.services.prompt_refresh.schedule();
         self.refresh_status_line();
         Ok(())
+    }
+
+    pub(crate) fn schedule_command_timing_save(&mut self) {
+        let Some(path) = command_timing::get_timing_file_path() else {
+            return;
+        };
+        self.background_tasks
+            .io
+            .schedule_timing_save(&self.services.command_timing, path);
+    }
+
+    fn handle_background_io_event(&mut self, event: BackgroundIoEvent) {
+        self.background_tasks.io.apply_event(
+            event,
+            self.shell.cmd_history.as_ref(),
+            self.shell.path_history.as_ref(),
+            &self.services.command_timing,
+        );
     }
 
     /// Redraws the status line from cached state.

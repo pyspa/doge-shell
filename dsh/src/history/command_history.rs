@@ -9,8 +9,11 @@ use crate::db::Db;
 use crate::environment;
 use anyhow::Result;
 use chrono::Local;
+use parking_lot::Mutex as ParkingMutex;
 use serde::{Deserialize, Serialize};
-use std::sync::mpsc::{self, Sender};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 const LEDGER_RETENTION_SECONDS: i64 = 90 * 24 * 60 * 60;
@@ -147,8 +150,54 @@ pub struct CommandEvent {
 
 /// Message types for background history writer.
 enum HistoryMsg {
-    WriteBatch(Vec<(String, i64)>, Option<String>), // entries, context
-    RecordOutcome(String, Option<String>, HistoryMetadata),
+    WriteBatch {
+        entries: Vec<(String, i64)>,
+        context: Option<String>,
+        persistence_id: u64,
+        commands: Vec<String>,
+    },
+    RecordOutcome {
+        command: String,
+        context: Option<String>,
+        metadata: HistoryMetadata,
+        persistence_id: u64,
+    },
+    Reload {
+        base_revision: u64,
+        pending_entries: Vec<Entry>,
+        complete: CommandHistoryReloadCallback,
+    },
+}
+
+#[derive(Debug)]
+struct HistoryPersistAck {
+    persistence_id: u64,
+    commands: Vec<String>,
+    result: Result<(), String>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingHistoryEntry {
+    persistence_id: u64,
+    entry: Entry,
+}
+
+type CommandHistoryReloadCallback =
+    Box<dyn FnOnce(Result<CommandHistoryReloadSnapshot>) + Send + 'static>;
+
+#[derive(Debug)]
+pub(crate) struct CommandHistoryReloadSnapshot {
+    base_revision: u64,
+    histories: Vec<Entry>,
+    normalized_entries: Vec<String>,
+    recent_cache: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HistoryReloadApply {
+    Applied,
+    Navigating,
+    Stale,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -282,6 +331,15 @@ pub struct History {
     recent_cache: Vec<String>,
     /// Lowercase command text aligned with `histories` for allocation-free text search.
     normalized_entries: Vec<String>,
+    /// Incremented whenever the in-memory history changes. Background reloads
+    /// only replace the snapshot they started from, so local writes cannot be
+    /// overwritten by an older database read.
+    revision: u64,
+    /// Entries whose most recent SQLite write has not been acknowledged yet.
+    /// Only this small delta is copied into a background reload request.
+    pending_persistence: HashMap<String, PendingHistoryEntry>,
+    persist_ack_rx: Option<Arc<ParkingMutex<Receiver<HistoryPersistAck>>>>,
+    next_persistence_id: u64,
 }
 
 impl Default for History {
@@ -302,6 +360,10 @@ impl History {
             sender: None,
             recent_cache: Vec::with_capacity(100),
             normalized_entries: Vec::new(),
+            revision: 0,
+            pending_persistence: HashMap::new(),
+            persist_ack_rx: None,
+            next_persistence_id: 0,
         }
     }
 
@@ -320,6 +382,10 @@ impl History {
             sender: None,
             recent_cache: Vec::with_capacity(100),
             normalized_entries: Vec::new(),
+            revision: 0,
+            pending_persistence: HashMap::new(),
+            persist_ack_rx: None,
+            next_persistence_id: 0,
         })
     }
 
@@ -519,6 +585,7 @@ impl History {
             }
         }
         self.rebuild_normalized_entries();
+        self.bump_revision();
         Ok(min_timestamp)
     }
 
@@ -566,13 +633,12 @@ impl History {
         self.histories = entries;
         self.rebuild_normalized_entries();
         self.reset_index();
+        self.bump_revision();
     }
 
     /// Reload history from the database.
     pub fn reload(&mut self) -> Result<()> {
-        let db = if let Some(db) = &self.db {
-            db.clone()
-        } else {
+        let Some(db) = self.db.clone() else {
             return Ok(());
         };
 
@@ -581,6 +647,39 @@ impl History {
             return Ok(());
         }
 
+        self.drain_persistence_acks();
+        let snapshot =
+            Self::load_reload_snapshot(&db, self.revision, self.pending_entries_snapshot())?;
+        let _ = self.apply_reload_snapshot(snapshot);
+        Ok(())
+    }
+
+    pub(crate) fn request_reload<F>(&mut self, complete: F) -> bool
+    where
+        F: FnOnce(Result<CommandHistoryReloadSnapshot>) + Send + 'static,
+    {
+        if !self.at_end() {
+            return false;
+        }
+        self.drain_persistence_acks();
+        let Some(sender) = &self.sender else {
+            return false;
+        };
+        let pending_entries = self.pending_entries_snapshot();
+        sender
+            .send(HistoryMsg::Reload {
+                base_revision: self.revision,
+                pending_entries,
+                complete: Box::new(complete),
+            })
+            .is_ok()
+    }
+
+    fn load_reload_snapshot(
+        db: &Db,
+        base_revision: u64,
+        pending_entries: Vec<Entry>,
+    ) -> Result<CommandHistoryReloadSnapshot> {
         let conn = db.get_connection();
         let mut stmt = conn.prepare(
             "SELECT command, timestamp, count, context, exit_code, duration_ms, cwd, session_id, hostname
@@ -607,79 +706,202 @@ impl History {
             })
         })?;
 
-        let mut new_histories: Vec<Entry> = Vec::new();
-        for r in rows.flatten() {
-            new_histories.push(r);
+        let mut histories = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        Self::merge_pending_entries(&mut histories, pending_entries);
+        let normalized_entries = histories
+            .iter()
+            .map(|entry| Self::normalized_command(&entry.entry))
+            .collect();
+        let mut recent_cache = histories
+            .iter()
+            .rev()
+            .take(100)
+            .map(|entry| entry.entry.clone())
+            .collect::<Vec<_>>();
+        recent_cache.reverse();
+
+        Ok(CommandHistoryReloadSnapshot {
+            base_revision,
+            histories,
+            normalized_entries,
+            recent_cache,
+        })
+    }
+
+    fn merge_pending_entries(histories: &mut Vec<Entry>, pending_entries: Vec<Entry>) {
+        for local in pending_entries {
+            match histories
+                .iter()
+                .position(|entry| entry.entry == local.entry)
+            {
+                Some(index) if histories[index].when <= local.when => {
+                    let db_entry = &mut histories[index];
+                    db_entry.when = local.when;
+                    db_entry.count = db_entry.count.max(local.count);
+                    db_entry.context = local.context.or_else(|| db_entry.context.clone());
+                    db_entry.exit_code = local.exit_code.or(db_entry.exit_code);
+                    db_entry.duration_ms = local.duration_ms.or(db_entry.duration_ms);
+                    db_entry.cwd = local.cwd.or_else(|| db_entry.cwd.clone());
+                    db_entry.session_id = local.session_id.or_else(|| db_entry.session_id.clone());
+                    db_entry.hostname = local.hostname.or_else(|| db_entry.hostname.clone());
+                }
+                Some(_) => {}
+                None => histories.push(local),
+            }
         }
+        histories.sort_by(|left, right| {
+            left.when
+                .cmp(&right.when)
+                .then(left.entry.cmp(&right.entry))
+        });
+    }
 
-        // Merge local entries that are newer than DB
-        if let Some(last_db_entry) = new_histories.last() {
-            let last_db_ts = last_db_entry.when;
+    fn next_persistence_id(&mut self) -> u64 {
+        self.next_persistence_id = self.next_persistence_id.wrapping_add(1);
+        self.next_persistence_id
+    }
 
-            for local_item in &self.histories {
-                if local_item.when >= last_db_ts
-                    && !new_histories.iter().any(|h| h.entry == local_item.entry)
-                {
-                    new_histories.push(Entry {
-                        entry: local_item.entry.clone(),
-                        when: local_item.when,
-                        count: local_item.count,
-                        context: local_item.context.clone(),
-                        exit_code: local_item.exit_code,
-                        duration_ms: local_item.duration_ms,
-                        cwd: local_item.cwd.clone(),
-                        session_id: local_item.session_id.clone(),
-                        hostname: local_item.hostname.clone(),
-                    });
+    fn track_pending_entries(&mut self, persistence_id: u64, commands: &[String]) {
+        for command in commands {
+            if let Some(entry) = self
+                .histories
+                .iter()
+                .rev()
+                .find(|entry| entry.entry == *command)
+                .cloned()
+            {
+                self.pending_persistence.insert(
+                    command.clone(),
+                    PendingHistoryEntry {
+                        persistence_id,
+                        entry,
+                    },
+                );
+            }
+        }
+    }
+
+    fn acknowledge_persistence(&mut self, persistence_id: u64, commands: &[String]) {
+        for command in commands {
+            if self
+                .pending_persistence
+                .get(command)
+                .is_some_and(|pending| pending.persistence_id == persistence_id)
+            {
+                self.pending_persistence.remove(command);
+            }
+        }
+    }
+
+    fn drain_persistence_acks(&mut self) {
+        let acks = self
+            .persist_ack_rx
+            .as_ref()
+            .map(|receiver| receiver.lock().try_iter().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for ack in acks {
+            match ack.result {
+                Ok(()) => self.acknowledge_persistence(ack.persistence_id, &ack.commands),
+                Err(error) => {
+                    tracing::warn!("background command history write failed: {error}");
                 }
             }
-        } else {
-            // DB empty. Keep all local
-            for local_item in &self.histories {
-                new_histories.push(Entry {
-                    entry: local_item.entry.clone(),
-                    when: local_item.when,
-                    count: local_item.count,
-                    context: local_item.context.clone(),
-                    exit_code: local_item.exit_code,
-                    duration_ms: local_item.duration_ms,
-                    cwd: local_item.cwd.clone(),
-                    session_id: local_item.session_id.clone(),
-                    hostname: local_item.hostname.clone(),
-                });
-            }
+        }
+    }
+
+    fn pending_entries_snapshot(&self) -> Vec<Entry> {
+        self.pending_persistence
+            .values()
+            .map(|pending| pending.entry.clone())
+            .collect()
+    }
+
+    pub(crate) fn apply_reload_snapshot(
+        &mut self,
+        snapshot: CommandHistoryReloadSnapshot,
+    ) -> HistoryReloadApply {
+        if !self.at_end() {
+            return HistoryReloadApply::Navigating;
+        }
+        if self.revision != snapshot.base_revision {
+            return HistoryReloadApply::Stale;
         }
 
-        self.histories = new_histories;
-        self.rebuild_normalized_entries();
+        self.histories = snapshot.histories;
+        self.normalized_entries = snapshot.normalized_entries;
+        self.recent_cache = snapshot.recent_cache;
         self.reset_index();
+        self.bump_revision();
+        HistoryReloadApply::Applied
+    }
 
-        // Update recent cache after reload
-        self.recent_cache.clear();
-        for entry in self.histories.iter().rev().take(100) {
-            self.recent_cache.insert(0, entry.entry.clone());
+    pub(crate) fn reload_snapshot_for_probe(
+        &self,
+        target: &History,
+    ) -> CommandHistoryReloadSnapshot {
+        CommandHistoryReloadSnapshot {
+            base_revision: target.revision,
+            histories: self.histories.clone(),
+            normalized_entries: self.normalized_entries.clone(),
+            recent_cache: self.recent_cache.clone(),
         }
+    }
 
-        Ok(())
+    fn bump_revision(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
     }
 
     /// Start the background writer thread.
     pub fn start_background_writer(&mut self) {
-        if let Some(db) = &self.db {
-            let db_clone = db.clone();
+        if let Some(db_clone) = self.db.clone() {
             let (tx, rx) = mpsc::channel();
+            let (ack_tx, ack_rx) = mpsc::channel();
             self.sender = Some(tx);
+            self.persist_ack_rx = Some(Arc::new(ParkingMutex::new(ack_rx)));
 
             thread::spawn(move || {
                 let mut db = db_clone;
                 while let Ok(msg) = rx.recv() {
                     match msg {
-                        HistoryMsg::WriteBatch(entries, context) => {
-                            let _ = Self::write_batch_sync(&mut db, entries, context);
+                        HistoryMsg::WriteBatch {
+                            entries,
+                            context,
+                            persistence_id,
+                            commands,
+                        } => {
+                            let result = Self::write_batch_sync(&mut db, entries, context)
+                                .map_err(|error| error.to_string());
+                            let _ = ack_tx.send(HistoryPersistAck {
+                                persistence_id,
+                                commands,
+                                result,
+                            });
                         }
-                        HistoryMsg::RecordOutcome(command, context, metadata) => {
-                            let _ =
-                                Self::record_outcome_sync(&mut db, &command, context, &metadata);
+                        HistoryMsg::RecordOutcome {
+                            command,
+                            context,
+                            metadata,
+                            persistence_id,
+                        } => {
+                            let result =
+                                Self::record_outcome_sync(&mut db, &command, context, &metadata)
+                                    .map_err(|error| error.to_string());
+                            let _ = ack_tx.send(HistoryPersistAck {
+                                persistence_id,
+                                commands: vec![command],
+                                result,
+                            });
+                        }
+                        HistoryMsg::Reload {
+                            base_revision,
+                            pending_entries,
+                            complete,
+                        } => {
+                            complete(Self::load_reload_snapshot(
+                                &db,
+                                base_revision,
+                                pending_entries,
+                            ));
                         }
                     }
                 }
@@ -822,6 +1044,7 @@ impl History {
 
     /// Write a batch of history entries.
     pub fn write_batch(&mut self, entries: Vec<(String, i64)>) -> Result<()> {
+        self.drain_persistence_acks();
         let context = get_current_context();
 
         if self.normalized_entries.len() != self.histories.len() {
@@ -859,17 +1082,34 @@ impl History {
                 self.recent_cache.remove(0);
             }
         }
+        if !entries.is_empty() {
+            self.bump_revision();
+        }
 
         // 2. Persist
+        let persistence_id = self.next_persistence_id();
+        let commands = entries
+            .iter()
+            .map(|(command, _)| command.clone())
+            .collect::<Vec<_>>();
+        self.track_pending_entries(persistence_id, &commands);
         if let Some(sender) = &self.sender {
-            let _ = sender.send(HistoryMsg::WriteBatch(entries, context));
-        } else if let Some(db) = &mut self.db {
-            let _ = Self::write_batch_sync(db, entries, context);
+            let _ = sender.send(HistoryMsg::WriteBatch {
+                entries,
+                context,
+                persistence_id,
+                commands,
+            });
+        } else if let Some(db) = &mut self.db
+            && Self::write_batch_sync(db, entries, context).is_ok()
+        {
+            self.acknowledge_persistence(persistence_id, &commands);
         }
         Ok(())
     }
 
     pub fn record_outcome(&mut self, command: &str, metadata: HistoryMetadata) -> Result<()> {
+        self.drain_persistence_acks();
         if let Some(entry) = self
             .histories
             .iter_mut()
@@ -885,15 +1125,22 @@ impl History {
         }
 
         let context = get_current_context();
+        let persistence_id = self.next_persistence_id();
+        let commands = vec![command.to_string()];
+        self.track_pending_entries(persistence_id, &commands);
         if let Some(sender) = &self.sender {
-            let _ = sender.send(HistoryMsg::RecordOutcome(
-                command.to_string(),
+            let _ = sender.send(HistoryMsg::RecordOutcome {
+                command: command.to_string(),
                 context,
                 metadata,
-            ));
-        } else if let Some(db) = &mut self.db {
-            let _ = Self::record_outcome_sync(db, command, context, &metadata);
+                persistence_id,
+            });
+        } else if let Some(db) = &mut self.db
+            && Self::record_outcome_sync(db, command, context, &metadata).is_ok()
+        {
+            self.acknowledge_persistence(persistence_id, &commands);
         }
+        self.bump_revision();
         Ok(())
     }
 
@@ -1061,6 +1308,7 @@ impl History {
             .push(Self::normalized_command(entry));
         self.size = self.histories.len();
         self.current_index = self.histories.len();
+        self.bump_revision();
     }
 }
 
@@ -1194,6 +1442,116 @@ mod tests {
             event,
         );
         assert!(start.elapsed() < std::time::Duration::from_millis(50));
+    }
+
+    #[test]
+    fn reload_snapshot_imports_another_sessions_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Db::new(dir.path().join("history.db")).unwrap();
+        let mut other_session = History::new();
+        other_session.db = Some(db.clone());
+        other_session
+            .write_batch(vec![("cargo test".to_string(), 100)])
+            .unwrap();
+
+        let mut history = History::new();
+        history.db = Some(db.clone());
+        let snapshot = History::load_reload_snapshot(&db, history.revision, Vec::new()).unwrap();
+
+        assert_eq!(
+            history.apply_reload_snapshot(snapshot),
+            HistoryReloadApply::Applied
+        );
+        assert_eq!(history.iter().next().unwrap().entry, "cargo test");
+    }
+
+    #[test]
+    fn stale_reload_snapshot_does_not_overwrite_local_append() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Db::new(dir.path().join("history.db")).unwrap();
+        let mut history = History::new();
+        history.db = Some(db.clone());
+        let snapshot = History::load_reload_snapshot(&db, history.revision, Vec::new()).unwrap();
+
+        history.add_test_entry("local while loading");
+
+        assert_eq!(
+            history.apply_reload_snapshot(snapshot),
+            HistoryReloadApply::Stale
+        );
+        assert_eq!(history.iter().next().unwrap().entry, "local while loading");
+    }
+
+    #[test]
+    fn reload_snapshot_is_discarded_during_navigation() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Db::new(dir.path().join("history.db")).unwrap();
+        let mut history = History::new();
+        history.db = Some(db.clone());
+        history
+            .write_batch(vec![("git status".to_string(), 100)])
+            .unwrap();
+        let snapshot = History::load_reload_snapshot(&db, history.revision, Vec::new()).unwrap();
+        assert_eq!(history.back().as_deref(), Some("git status"));
+
+        assert_eq!(
+            history.apply_reload_snapshot(snapshot),
+            HistoryReloadApply::Navigating
+        );
+        assert_eq!(history.iter().next().unwrap().entry, "git status");
+    }
+
+    #[test]
+    fn reload_snapshot_keeps_an_unpersisted_local_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Db::new(dir.path().join("history.db")).unwrap();
+        let local = Entry {
+            entry: "local after failed write".to_string(),
+            when: 200,
+            count: 1,
+            context: Some("/repo".to_string()),
+            exit_code: Some(1),
+            duration_ms: Some(42),
+            cwd: Some("/repo".to_string()),
+            session_id: Some("local-session".to_string()),
+            hostname: Some("local-host".to_string()),
+        };
+
+        let snapshot = History::load_reload_snapshot(&db, 0, vec![local.clone()]).unwrap();
+
+        assert_eq!(snapshot.histories.len(), 1);
+        let restored = &snapshot.histories[0];
+        assert_eq!(restored.entry, local.entry);
+        assert_eq!(restored.exit_code, local.exit_code);
+        assert_eq!(restored.session_id, local.session_id);
+    }
+
+    #[test]
+    fn failed_persistence_ack_keeps_the_local_reload_delta() {
+        let mut history = History::new();
+        history
+            .write_batch(vec![("keep after sqlite failure".to_string(), 300)])
+            .unwrap();
+        let pending = history
+            .pending_persistence
+            .get("keep after sqlite failure")
+            .unwrap();
+        let persistence_id = pending.persistence_id;
+        let (ack_tx, ack_rx) = mpsc::channel();
+        history.persist_ack_rx = Some(Arc::new(ParkingMutex::new(ack_rx)));
+        ack_tx
+            .send(HistoryPersistAck {
+                persistence_id,
+                commands: vec!["keep after sqlite failure".to_string()],
+                result: Err("disk full".to_string()),
+            })
+            .unwrap();
+
+        history.drain_persistence_acks();
+
+        let pending = history.pending_entries_snapshot();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].entry, "keep after sqlite failure");
     }
 
     fn sample_entry(

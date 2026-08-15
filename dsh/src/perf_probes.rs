@@ -42,6 +42,9 @@ fn run_default_probes_outside_runtime(iterations: usize) -> Vec<ProbeResult> {
         probe_dynamic_completion_cache_hit(iterations),
         probe_history_search(iterations),
         probe_history_search_large(iterations),
+        probe_history_search_miss_10k(iterations),
+        probe_history_snapshot_apply_10k(),
+        probe_background_io_schedule(),
         runtime.block_on(probe_integrated_completion_git_subcommand_warm(iterations)),
         runtime.block_on(probe_integrated_completion_git_branch_cached(iterations)),
         runtime.block_on(probe_integrated_completion_docker_subcommand_warm(
@@ -189,6 +192,63 @@ fn probe_history_search_large(iterations: usize) -> ProbeResult {
         name: "history_search_large",
         iterations,
         elapsed,
+    }
+}
+
+fn probe_history_search_miss_10k(iterations: usize) -> ProbeResult {
+    let mut history = History::new();
+    seed_history(&mut history, 10_000);
+
+    let elapsed = measure(iterations, || {
+        let query = HistoryQuery {
+            text: Some("__dsh_no_history_match__".to_string()),
+            limit: Some(100),
+            ..Default::default()
+        };
+        black_box(history.search_entries(&query).len());
+    });
+
+    ProbeResult {
+        name: "history_search_miss_10k",
+        iterations,
+        elapsed,
+    }
+}
+
+fn probe_history_snapshot_apply_10k() -> ProbeResult {
+    const APPLY_ITERATIONS: usize = 32;
+    let mut source = History::new();
+    seed_history(&mut source, 10_000);
+    let mut cases = (0..APPLY_ITERATIONS)
+        .map(|_| {
+            let target = History::new();
+            let snapshot = source.reload_snapshot_for_probe(&target);
+            (target, snapshot)
+        })
+        .collect::<Vec<_>>();
+
+    let mut applied = Vec::with_capacity(APPLY_ITERATIONS);
+    let start = Instant::now();
+    for (target, snapshot) in cases.drain(..) {
+        let mut target = target;
+        black_box(target.apply_reload_snapshot(snapshot));
+        applied.push(target);
+    }
+    let elapsed = start.elapsed();
+    black_box(&applied);
+
+    ProbeResult {
+        name: "history_snapshot_apply_10k",
+        iterations: APPLY_ITERATIONS,
+        elapsed,
+    }
+}
+
+fn probe_background_io_schedule() -> ProbeResult {
+    ProbeResult {
+        name: "background_io_schedule",
+        iterations: 1,
+        elapsed: crate::repl::background_io::probe_schedule_cost(),
     }
 }
 
@@ -350,6 +410,7 @@ async fn probe_repl_print_input(iterations: usize) -> ProbeResult {
 
     // The probe never calls `setup`, so dropping Repl would only print terminal
     // teardown sequences and save empty timing/history state into the user's env.
+    repl.background_tasks.io.shutdown();
     std::mem::forget(repl);
 
     ProbeResult {
@@ -380,6 +441,7 @@ async fn probe_repl_print_input_with_suggestion(iterations: usize) -> ProbeResul
         black_box(out.len());
     });
 
+    repl.background_tasks.io.shutdown();
     std::mem::forget(repl);
 
     ProbeResult {
@@ -406,6 +468,7 @@ async fn probe_repl_print_input_reanalyze(iterations: usize) -> ProbeResult {
         black_box(out.len());
     });
 
+    repl.background_tasks.io.shutdown();
     std::mem::forget(repl);
 
     ProbeResult {
@@ -459,6 +522,7 @@ async fn probe_repl_analyze_input_case(
         ));
     });
 
+    repl.background_tasks.io.shutdown();
     std::mem::forget(repl);
 
     ProbeResult {
@@ -538,6 +602,9 @@ mod tests {
 
         assert!(names.contains(&"dynamic_completion_cache_miss"));
         assert!(names.contains(&"dynamic_completion_cache_hit"));
+        assert!(names.contains(&"history_search_miss_10k"));
+        assert!(names.contains(&"history_snapshot_apply_10k"));
+        assert!(names.contains(&"background_io_schedule"));
         assert!(names.contains(&"integrated_completion_git_subcommand_warm"));
         assert!(names.contains(&"integrated_completion_git_branch_cached"));
         assert!(names.contains(&"integrated_completion_docker_subcommand_warm"));

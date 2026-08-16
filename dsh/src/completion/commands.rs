@@ -117,11 +117,15 @@ pub fn deduplicate_candidates(items: Vec<Candidate>) -> Vec<Candidate> {
             Candidate::Process { pid, command } => (pid.clone(), command.clone()),
         };
 
-        // Extract just the filename for comparison (remove path prefixes)
-        let base_name = if let Some(pos) = name.rfind('/') {
-            &name[pos + 1..]
+        // Extract just the filename for comparison (remove path prefixes).
+        // Trim a trailing separator first so directory names ending in `/`
+        // (path.rs's convention) don't have `rfind('/')` match that trailing
+        // slash itself and collapse `base_name` to an empty string.
+        let trimmed_name = name.trim_end_matches(['/', '\\']);
+        let base_name = if let Some(pos) = trimmed_name.rfind('/') {
+            &trimmed_name[pos + 1..]
         } else {
-            &name
+            trimmed_name
         };
 
         match seen_names.get(base_name) {
@@ -236,6 +240,26 @@ mod tests {
         // Third is ls (command). (command vs command -> keep first).
 
         assert!(result.iter().any(|c| matches!(c, Candidate::Item(name, desc) if name == "/usr/bin/ls" && desc == "(command)")));
+    }
+
+    #[test]
+    fn test_deduplicate_candidates_with_trailing_slash() {
+        // path.rs's scan_dir_candidates() appends a trailing separator to
+        // directory paths; the base_name extraction must not treat that as
+        // the last path component and produce an empty key.
+        let items = vec![
+            Candidate::Path("/home/user/projects/".to_string()),
+            Candidate::Path("/home/user/projects".to_string()),
+        ];
+
+        let result = deduplicate_candidates(items);
+
+        assert_eq!(result.len(), 1);
+        assert!(
+            result
+                .iter()
+                .any(|c| matches!(c, Candidate::Path(name) if name == "/home/user/projects/"))
+        );
     }
 
     #[test]

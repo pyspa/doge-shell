@@ -1503,8 +1503,18 @@ impl IntegratedCompletionEngine {
                 })
                 .then_with(|| a.text.cmp(&b.text))
         });
+        // Normalize away a trailing path separator before deduping: different
+        // candidate sources (e.g. the JSON/FileSystemGenerator stage vs. the
+        // fish-fallback stage) disagree on whether a directory's text ends in
+        // `/`, so comparing raw text would let the same directory survive twice.
+        // The candidate_type is kept as part of the key so this normalization
+        // can't accidentally merge an unrelated candidate (e.g. a git branch or
+        // history entry) that happens to share text with a trimmed directory.
         let mut seen = HashSet::with_capacity(candidates.len());
-        candidates.retain(|candidate| seen.insert(candidate.text.clone()));
+        candidates.retain(|candidate| {
+            let key = candidate.text.trim_end_matches(['/', '\\']);
+            seen.insert((candidate.candidate_type.clone(), key.to_string()))
+        });
 
         candidates.truncate(max_results);
         candidates
@@ -2416,7 +2426,7 @@ impl EnhancedCandidate {
 }
 
 /// Candidate type
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CandidateType {
     /// Subcommand
     SubCommand,
@@ -2525,6 +2535,61 @@ mod tests {
     fn test_integrated_completion_engine_creation() {
         let engine = IntegratedCompletionEngine::new(Environment::new());
         assert!(engine.loader.is_none());
+    }
+
+    #[test]
+    fn test_deduplicate_and_sort_merges_trailing_slash_duplicate() {
+        // The JSON/FileSystemGenerator stage yields directories without a
+        // trailing separator (higher priority); the fish-fallback stage
+        // yields the same directory with one (lower priority). Both should
+        // collapse into a single candidate, keeping the higher-priority one.
+        let engine = IntegratedCompletionEngine::new(Environment::new());
+        let candidates = vec![
+            EnhancedCandidate {
+                text: "src/".to_string(),
+                description: None,
+                candidate_type: CandidateType::Directory,
+                priority: 35,
+            },
+            EnhancedCandidate {
+                text: "src".to_string(),
+                description: None,
+                candidate_type: CandidateType::Directory,
+                priority: 50,
+            },
+        ];
+
+        let result = engine.deduplicate_and_sort(candidates, 50, None, None);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].text, "src");
+    }
+
+    #[test]
+    fn test_deduplicate_and_sort_keeps_unrelated_types_with_same_trimmed_text() {
+        // A Directory candidate "src/" trims to the same text as an unrelated
+        // candidate literally named "src" (e.g. a git branch or history
+        // entry). They must not be merged just because they share a key once
+        // the directory's trailing separator is stripped.
+        let engine = IntegratedCompletionEngine::new(Environment::new());
+        let candidates = vec![
+            EnhancedCandidate {
+                text: "src/".to_string(),
+                description: None,
+                candidate_type: CandidateType::Directory,
+                priority: 50,
+            },
+            EnhancedCandidate {
+                text: "src".to_string(),
+                description: None,
+                candidate_type: CandidateType::Argument,
+                priority: 50,
+            },
+        ];
+
+        let result = engine.deduplicate_and_sort(candidates, 50, None, None);
+
+        assert_eq!(result.len(), 2);
     }
 
     #[tokio::test]

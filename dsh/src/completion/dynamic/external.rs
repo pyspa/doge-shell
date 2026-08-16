@@ -56,19 +56,15 @@ pub(super) fn collect(
         "ufw.application" => {
             collector.collect_ufw_application_candidates(current_dir, current_token, cached_only)
         }
-        "pacman.package" => collector.collect_pacman_package_candidates(
-            current_dir,
-            current_token,
-            matches!(
-                parsed_command_line
-                    .subcommand_path
-                    .first()
-                    .map(String::as_str)
-                    .or_else(|| parsed_command_line.raw_args.first().map(String::as_str)),
-                Some("-S")
+        "pacman.package" => match pacman_sync_mode(parsed_command_line) {
+            Some(sync) => collector.collect_pacman_package_candidates(
+                current_dir,
+                current_token,
+                sync,
+                cached_only,
             ),
-            cached_only,
-        ),
+            None => Vec::new(),
+        },
         "audit.rule_key" => collector.collect_audit_rule_key_candidates(current_token, cached_only),
         "ansible.inventory_host" => collector.collect_ansible_inventory_host_candidates(
             parsed_command_line,

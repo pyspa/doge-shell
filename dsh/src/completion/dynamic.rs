@@ -867,15 +867,8 @@ impl DynamicCompletionProvider {
         cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
         let cached_only = cache_policy.is_cached_only();
-        let subcommand = parsed_command_line
-            .subcommand_path
-            .first()
-            .map(String::as_str)
-            .or_else(|| parsed_command_line.raw_args.first().map(String::as_str));
-        let sync = match subcommand {
-            Some("-S") => true,
-            Some("-R") => false,
-            _ => return Vec::new(),
+        let Some(sync) = pacman_sync_mode(parsed_command_line) else {
+            return Vec::new();
         };
         self.collect_pacman_package_candidates(
             current_dir,
@@ -3653,6 +3646,53 @@ fn provider_diagnostics_lines(cache: &ProjectDynamicCache) -> Vec<String> {
         .collect()
 }
 
+/// The pacman operation the command line selects, as its single upper-case
+/// letter.
+///
+/// pacman spells operations as short flags that are routinely bundled with
+/// their modifiers (`-Rns`, `-Syu`, `-Qi`) or written out in long form
+/// (`--remove`). Matching `-R`/`-S` literally, as this used to, left every
+/// bundled form with no candidates at all.
+fn pacman_operation(parsed_command_line: &ParsedCommandLine) -> Option<char> {
+    const OPERATIONS: [char; 7] = ['S', 'R', 'Q', 'U', 'F', 'D', 'T'];
+
+    parsed_command_line
+        .subcommand_path
+        .iter()
+        .chain(parsed_command_line.raw_args.iter())
+        // The token under the cursor is still being typed: `pacman -R<TAB>` is
+        // completing the flag itself, not a package name for it.
+        .filter(|token| token.as_str() != parsed_command_line.current_token)
+        .find_map(|token| match token.as_str() {
+            "--sync" => Some('S'),
+            "--remove" => Some('R'),
+            "--query" => Some('Q'),
+            "--upgrade" => Some('U'),
+            "--files" => Some('F'),
+            "--database" => Some('D'),
+            "--deptest" => Some('T'),
+            value if value.starts_with("--") => None,
+            value => value
+                .strip_prefix('-')
+                .and_then(|flags| flags.chars().next())
+                .filter(|flag| OPERATIONS.contains(flag)),
+        })
+}
+
+/// Whether pacman package candidates should come from the sync repositories
+/// (`true`, for installs) or from the local database (`false`).
+///
+/// Only the local database lists AUR/foreign packages, so every operation that
+/// acts on already-installed packages must land on `false`. `None` means the
+/// operation takes no package name and should offer nothing.
+pub(crate) fn pacman_sync_mode(parsed_command_line: &ParsedCommandLine) -> Option<bool> {
+    match pacman_operation(parsed_command_line)? {
+        'S' => Some(true),
+        'R' | 'Q' | 'F' | 'D' | 'T' => Some(false),
+        _ => None,
+    }
+}
+
 fn cached_value_matches(values: Vec<String>, current_token: &str) -> Vec<String> {
     if current_token.is_empty() {
         return values;
@@ -5078,6 +5118,61 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         false
+    }
+
+    #[test]
+    fn pacman_sync_mode_resolves_bundled_and_long_operations() {
+        // Installed packages (the only list that contains AUR packages).
+        for input in [
+            "pacman -R ",
+            "pacman -Rns ",
+            "pacman -Rs ",
+            "pacman -Rdd ",
+            "pacman --remove ",
+            "pacman -Q ",
+            "pacman -Qi ",
+            "pacman -F ",
+            "pacman --noconfirm -R ",
+            "pacman -b /var/lib/pacman -R ",
+        ] {
+            assert_eq!(
+                pacman_sync_mode(&parsed(input)),
+                Some(false),
+                "{input} should offer installed packages"
+            );
+        }
+
+        for input in [
+            "pacman -S ",
+            "pacman -Syu ",
+            "pacman -Sy ",
+            "pacman --sync ",
+        ] {
+            assert_eq!(
+                pacman_sync_mode(&parsed(input)),
+                Some(true),
+                "{input} should offer sync packages"
+            );
+        }
+
+        // `-U` takes package files, and bare/unknown flags name no operation.
+        for input in [
+            "pacman -U ",
+            "pacman --upgrade ",
+            "pacman -h ",
+            "pacman -V ",
+            "pacman ",
+        ] {
+            assert_eq!(
+                pacman_sync_mode(&parsed(input)),
+                None,
+                "{input} should offer no package candidates"
+            );
+        }
+
+        // The operation flag under the cursor is still being typed.
+        assert_eq!(pacman_sync_mode(&parsed("pacman -R")), None);
+        assert_eq!(pacman_sync_mode(&parsed("pacman -Rn")), None);
     }
 
     #[test]

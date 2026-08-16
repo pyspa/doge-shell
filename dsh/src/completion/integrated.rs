@@ -2,6 +2,7 @@ use super::cache::CompletionCache;
 use super::command::{
     ArgumentType, CommandCompletionDatabase, CommandOption, CompletionCandidate, SubCommand,
 };
+use super::context::ContextCorrector;
 use super::dynamic::{CachePolicy, CompletionRuntime, DynamicCompletionProvider};
 
 use super::framework::CompletionFrameworkKind;
@@ -19,6 +20,7 @@ use anyhow::Result;
 use dsh_builtin::project;
 use dsh_types::mcp::McpTransport;
 use parking_lot::{Mutex, RwLock};
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, LazyLock};
@@ -31,6 +33,9 @@ const HISTORY_BOOST_SCAN_LIMIT: usize = 512;
 /// enough that typing never re-stats the same name, short enough that a
 /// definition written mid-session (`comp-gen`) starts working without a restart.
 const MISSING_COMPLETION_TTL: Duration = Duration::from_secs(30);
+/// How many `CommandWithArgs` wrappers (`sudo env pacman ...`) are peeled off
+/// before giving up. Deeper nesting is not realistic at a prompt.
+const MAX_COMMAND_WRAPPER_DEPTH: usize = 3;
 const HISTORY_BOOST_SCORE_CAP: u32 = 5000;
 const JS_TASK_SOURCES: &[&str] = &["npm", "pnpm", "yarn", "bun"];
 const DENO_TASK_SOURCES: &[&str] = &["deno"];
@@ -147,6 +152,17 @@ const DYNAMIC_PROVIDER_SPECS: &[DynamicProviderSpec] = &[
     },
     DynamicProviderSpec {
         command: "pacman",
+        collect: collect_pacman_dynamic_candidates,
+    },
+    // AUR helpers take the same operation flags and share the pacman package
+    // provider in their JSON definitions, so they need the same bundled-flag
+    // handling (`yay -Rns`, `paru -Syu`).
+    DynamicProviderSpec {
+        command: "yay",
+        collect: collect_pacman_dynamic_candidates,
+    },
+    DynamicProviderSpec {
+        command: "paru",
         collect: collect_pacman_dynamic_candidates,
     },
     DynamicProviderSpec {
@@ -482,21 +498,7 @@ impl IntegratedCompletionEngine {
         }
 
         let mut parsed = self.parser.parse(input, cursor_pos);
-
-        // For dynamic completion, update command with resolved alias
-        parsed.command = self.environment.read().resolve_alias(&parsed.command);
-
-        self.ensure_command_completion_loaded(&parsed.command);
-        {
-            let db_lock = self.command_completion.lock();
-            if db_lock.get_command(&parsed.command).is_some() {
-                parsed = CompletionGenerator::new(&db_lock).correct_parsed_command_line(&parsed);
-            }
-        }
-
-        // Update args to use specified_arguments and options to use specified_options
-        parsed.args = parsed.specified_arguments.clone();
-        parsed.options = parsed.specified_options.clone();
+        self.normalize_parsed_command_line(&mut parsed);
 
         *self.parsed_cache.write() = Some(ParsedCommandLineCache {
             input: input.to_string(),
@@ -505,6 +507,28 @@ impl IntegratedCompletionEngine {
         });
 
         parsed
+    }
+
+    /// Resolve the alias, load the command definition and apply context
+    /// correction to a freshly parsed line.
+    ///
+    /// Shared by the top-level parse and by wrapper unwrapping so an inner
+    /// command line (`pacman -R` inside `sudo pacman -R`) is normalized exactly
+    /// like a line typed on its own.
+    fn normalize_parsed_command_line(&self, parsed: &mut ParsedCommandLine) {
+        parsed.command = self.environment.read().resolve_alias(&parsed.command);
+
+        self.ensure_command_completion_loaded(&parsed.command);
+        {
+            let db_lock = self.command_completion.lock();
+            if db_lock.get_command(&parsed.command).is_some() {
+                *parsed = CompletionGenerator::new(&db_lock).correct_parsed_command_line(parsed);
+            }
+        }
+
+        // Update args to use specified_arguments and options to use specified_options
+        parsed.args = parsed.specified_arguments.clone();
+        parsed.options = parsed.specified_options.clone();
     }
 
     fn ensure_command_completion_loaded(&self, command_name: &str) {
@@ -943,39 +967,103 @@ impl IntegratedCompletionEngine {
         }
     }
 
+    /// Peel off one `CommandWithArgs` wrapper (`sudo`, `env`, `nice`, ...) and
+    /// return the wrapped command line, or `None` when there is nothing to
+    /// unwrap.
+    ///
+    /// `self.command_completion` is a non-reentrant mutex and
+    /// `ensure_command_completion_loaded` takes it, so both loads happen with
+    /// the lock released.
+    fn unwrap_command_with_args_once(
+        &self,
+        parsed: &parser::ParsedCommandLine,
+    ) -> Option<parser::ParsedCommandLine> {
+        self.ensure_command_completion_loaded(&parsed.command);
+
+        let mut inner = {
+            let db_lock = self.command_completion.lock();
+            let corrector = ContextCorrector::new(&db_lock);
+            let (cmd_index, cmd_name) = corrector.find_command_with_args_arg(parsed)?;
+            if !cursor_follows_wrapped_command(parsed, &cmd_name) {
+                return None;
+            }
+            corrector.reparse_inner_command(parsed, cmd_index, cmd_name)
+        };
+
+        if inner.command.is_empty() || inner.command == parsed.command {
+            return None;
+        }
+
+        self.normalize_parsed_command_line(&mut inner);
+        Some(inner)
+    }
+
+    /// The command line the dynamic providers should be keyed off.
+    ///
+    /// `sudo pacman -R <TAB>` parses with `command == "sudo"`, and every
+    /// dynamic provider lookup keys off the command name, so the pacman package
+    /// provider never ran and the completion fell through to the fish fallback
+    /// (which lists sync-repository packages only, dropping AUR packages).
+    /// Unwrapping here makes the wrapped command reach its provider.
+    fn dynamic_provider_target<'a>(
+        &self,
+        parsed: &'a parser::ParsedCommandLine,
+    ) -> Cow<'a, parser::ParsedCommandLine> {
+        let mut current = Cow::Borrowed(parsed);
+
+        for _ in 0..MAX_COMMAND_WRAPPER_DEPTH {
+            let Some(inner) = self.unwrap_command_with_args_once(&current) else {
+                break;
+            };
+            // Each unwrap must consume the wrapper's own tokens. Bail out rather
+            // than spin if a malformed definition ever breaks that.
+            if inner.raw_args.len() >= current.raw_args.len() {
+                break;
+            }
+            current = Cow::Owned(inner);
+        }
+
+        current
+    }
+
+    fn collect_dynamic_candidates_for(
+        &self,
+        request: &CompletionRequest,
+        parsed_command_line: &parser::ParsedCommandLine,
+        cache_policy: CachePolicy,
+    ) -> Vec<EnhancedCandidate> {
+        let mut candidates = DYNAMIC_PROVIDER_SPECS
+            .iter()
+            .find(|provider| provider.command == parsed_command_line.command)
+            .map(|provider| (provider.collect)(self, request, parsed_command_line, cache_policy))
+            .unwrap_or_default();
+        candidates.extend(self.collect_declared_dynamic_candidates(
+            request,
+            parsed_command_line,
+            cache_policy,
+        ));
+        candidates
+    }
+
     fn collect_dynamic_candidates(
         &self,
         request: &CompletionRequest,
         parsed_command_line: &parser::ParsedCommandLine,
     ) -> CandidateBatch {
-        let mut candidates = DYNAMIC_PROVIDER_SPECS
-            .iter()
-            .find(|provider| provider.command == parsed_command_line.command)
-            .map(|provider| {
-                (provider.collect)(
-                    self,
-                    request,
-                    parsed_command_line,
-                    CachePolicy::RefreshInBackground,
-                )
-            })
-            .unwrap_or_default();
-        candidates.extend(self.collect_declared_dynamic_candidates(
-            request,
-            parsed_command_line,
-            CachePolicy::RefreshInBackground,
-        ));
+        let target = self.dynamic_provider_target(parsed_command_line);
+        let mut candidates =
+            self.collect_dynamic_candidates_for(request, &target, CachePolicy::RefreshInBackground);
 
         // `git checkout`/`git restore` accept BOTH refs and working-tree paths.
         // The dynamic provider only yields branches, and these subcommands are
         // treated as exclusive (so later file stages never run), which would
         // otherwise make `git checkout <file>` impossible to complete. Merge in
         // file/directory candidates so both branches and paths are offered.
-        if git_subcommand_accepts_paths(parsed_command_line) {
-            candidates.extend(self.file_candidates_for_token(&parsed_command_line.current_token));
+        if git_subcommand_accepts_paths(&target) {
+            candidates.extend(self.file_candidates_for_token(&target.current_token));
         }
 
-        if dynamic_candidates_are_exclusive(parsed_command_line) {
+        if dynamic_candidates_are_exclusive(&target) {
             CandidateBatch::exclusive_with_framework(candidates, CompletionFrameworkKind::Skim)
         } else if candidates.is_empty() {
             CandidateBatch::empty()
@@ -1036,19 +1124,8 @@ impl IntegratedCompletionEngine {
         request: &CompletionRequest,
         parsed_command_line: &parser::ParsedCommandLine,
     ) -> Vec<EnhancedCandidate> {
-        let mut candidates = DYNAMIC_PROVIDER_SPECS
-            .iter()
-            .find(|provider| provider.command == parsed_command_line.command)
-            .map(|provider| {
-                (provider.collect)(self, request, parsed_command_line, CachePolicy::CachedOnly)
-            })
-            .unwrap_or_default();
-        candidates.extend(self.collect_declared_dynamic_candidates(
-            request,
-            parsed_command_line,
-            CachePolicy::CachedOnly,
-        ));
-        candidates
+        let target = self.dynamic_provider_target(parsed_command_line);
+        self.collect_dynamic_candidates_for(request, &target, CachePolicy::CachedOnly)
     }
 
     fn collect_command_candidates_for_ghost(
@@ -1816,6 +1893,33 @@ pub(super) fn matches_prefix(current_token: &str, value: &str) -> bool {
         || super::fuzzy_match_score(value, current_token).is_some()
 }
 
+/// Whether the cursor sits past the wrapped command's own name token.
+///
+/// `sudo pac<TAB>` is completing the command name itself and must keep the
+/// wrapper's own completion; `sudo pacman -R <TAB>` is completing *for* the
+/// wrapped command and should be unwrapped.
+fn cursor_follows_wrapped_command(parsed: &ParsedCommandLine, command_name: &str) -> bool {
+    let Some(command_index) = parsed
+        .raw_args
+        .iter()
+        .position(|token| token == command_name)
+    else {
+        return false;
+    };
+
+    let cursor_index = if parsed.current_token.is_empty() {
+        parsed.raw_args.len()
+    } else {
+        parsed
+            .raw_args
+            .iter()
+            .rposition(|token| token == &parsed.current_token)
+            .unwrap_or(parsed.raw_args.len())
+    };
+
+    cursor_index > command_index
+}
+
 fn is_dynamic_completion_command(command: &str) -> bool {
     DYNAMIC_PROVIDER_SPECS
         .iter()
@@ -1823,7 +1927,16 @@ fn is_dynamic_completion_command(command: &str) -> bool {
 }
 
 fn completion_cache_allowed(parsed_command_line: &ParsedCommandLine) -> bool {
-    if !is_dynamic_completion_command(&parsed_command_line.command) {
+    // A wrapper (`sudo pacman -R`) parses as the wrapper's own command line, so
+    // checking only `command` would let dynamic results be cached under the
+    // wrapper. Scanning the arguments is cheap and errs toward not caching.
+    let dynamic_command = is_dynamic_completion_command(&parsed_command_line.command)
+        || parsed_command_line
+            .specified_arguments
+            .iter()
+            .any(|argument| is_dynamic_completion_command(argument));
+
+    if !dynamic_command {
         return true;
     }
 
@@ -4295,7 +4408,10 @@ fi
         );
         write_executable_script(
             &bin_dir.join("pacman"),
-            "#!/bin/sh\ncase \"$1\" in\n-Qq) printf 'pacman\\nparu\\n';;\n-Slq) printf 'ripgrep\\nrust\\n';;\nesac\n",
+            // `visual-studio-code-bin` stands in for an AUR package: it is
+            // installed (`-Qq`) but absent from the sync repositories (`-Slq`),
+            // so a removal completion sourced from the wrong list loses it.
+            "#!/bin/sh\nfor a in \"$@\"; do\n  case \"$a\" in\n    -Qq) printf 'pacman\\nparu\\nvisual-studio-code-bin\\n'; exit 0 ;;\n    -Slq) printf 'ripgrep\\nrust\\n'; exit 0 ;;\n  esac\ndone\nexit 0\n",
         );
         write_executable_script(
             &bin_dir.join("snapper"),
@@ -4386,6 +4502,20 @@ fi
             ("pacman -R pa", "pacman"),
             ("yay -S ri", "ripgrep"),
             ("paru -R pa", "pacman"),
+            // AUR packages only exist in the local database, so removal must
+            // read `-Qq`.
+            ("pacman -R visual", "visual-studio-code-bin"),
+            // Bundled operation flags (`-Rns` is the usual removal spelling).
+            ("pacman -Rns visual", "visual-studio-code-bin"),
+            ("pacman -Syu ri", "ripgrep"),
+            ("yay -Rns visual", "visual-studio-code-bin"),
+            // Wrapped in `sudo`, which is how removal is actually typed.
+            ("sudo pacman -R visual", "visual-studio-code-bin"),
+            ("sudo pacman -Rns visual", "visual-studio-code-bin"),
+            ("sudo -u root pacman -R pa", "pacman"),
+            // Unwrapping is generic over `CommandWithArgs`, not sudo-specific.
+            ("sudo systemctl start ss", "ssh.service"),
+            ("sudo docker stop app", "app-container"),
             ("snapper --config root delete 4", "42"),
             ("snapper --config root status 1..4", "1..42"),
             ("snapper --config root delete 1-4", "1-42"),
@@ -4424,6 +4554,89 @@ fi
                 .await;
             let _ = wait_for_candidate(&engine, input, dir.path(), expected).await;
         }
+    }
+
+    /// AUR packages are installed but absent from the sync repositories, so
+    /// they only ever appear if removal reads the local database. Sourcing the
+    /// sync list instead is exactly the bug this guards: it still looks
+    /// plausible (every repo-installed package is there) while silently
+    /// dropping everything from the AUR.
+    #[test]
+    fn dynamic_provider_target_unwraps_command_wrappers() {
+        let mut engine = IntegratedCompletionEngine::new(Environment::new());
+        engine.initialize_command_completion().unwrap();
+
+        let cases = [
+            ("sudo pacman -R ", "pacman"),
+            ("sudo pacman -R pa", "pacman"),
+            ("sudo -u root pacman -R pa", "pacman"),
+            ("sudo systemctl start ss", "systemctl"),
+        ];
+        for (input, expected_command) in cases {
+            let parsed = engine.convert_to_parsed_command_line(input, input.len());
+            let target = engine.dynamic_provider_target(&parsed);
+            assert_eq!(
+                target.command, expected_command,
+                "unexpected unwrap target for {input}"
+            );
+        }
+
+        // Typing the wrapped command's own name still completes command names.
+        let parsed = engine.convert_to_parsed_command_line("sudo pac", "sudo pac".len());
+        let target = engine.dynamic_provider_target(&parsed);
+        assert_eq!(target.command, "sudo");
+
+        // Unwrapped lines are normalized like a line typed on its own, so the
+        // declared provider can resolve the `-R` argument definition.
+        let parsed =
+            engine.convert_to_parsed_command_line("sudo pacman -R ", "sudo pacman -R ".len());
+        let target = engine.dynamic_provider_target(&parsed);
+        assert_eq!(target.subcommand_path, vec!["-R".to_string()]);
+
+        // Not a wrapper: borrowed through untouched.
+        let parsed = engine.convert_to_parsed_command_line("pacman -R ", "pacman -R ".len());
+        let target = engine.dynamic_provider_target(&parsed);
+        assert!(matches!(target, Cow::Borrowed(_)));
+    }
+
+    #[tokio::test]
+    async fn pacman_removal_offers_aur_packages_and_install_does_not() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        write_executable_script(
+            &bin_dir.join("pacman"),
+            "#!/bin/sh\nfor a in \"$@\"; do\n  case \"$a\" in\n    -Qq) printf 'pacman\\nvisual-studio-code-bin\\n'; exit 0 ;;\n    -Slq) printf 'ripgrep\\nvisual-studio-code\\n'; exit 0 ;;\n  esac\ndone\nexit 0\n",
+        );
+
+        let engine = engine_with_path(&bin_dir);
+
+        for input in [
+            "pacman -R visual",
+            "pacman -Rns visual",
+            "sudo pacman -R visual",
+            "sudo pacman -Rns visual",
+        ] {
+            let _ = engine
+                .complete(input, input.len(), dir.path(), 50, None)
+                .await;
+            let _ = wait_for_candidate(&engine, input, dir.path(), "visual-studio-code-bin").await;
+        }
+
+        // Installing reads the sync list, so the AUR package must not show up.
+        let input = "pacman -S visual";
+        let _ = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+        let result = wait_for_candidate(&engine, input, dir.path(), "visual-studio-code").await;
+        assert!(
+            !result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "visual-studio-code-bin"),
+            "pacman -S offered a package that is only in the local database: {:?}",
+            result.candidates
+        );
     }
 
     #[tokio::test]

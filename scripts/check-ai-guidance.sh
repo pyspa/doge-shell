@@ -231,6 +231,29 @@ doge-shell-chat-tools"
     fi
 }
 
+check_claude_project_skills() {
+    claude_skills="$repo_root/.claude/skills"
+
+    if [ ! -e "$claude_skills" ]; then
+        fail ".claude/skills is missing; Claude Code sees no project skills"
+        return
+    fi
+
+    # A symlink keeps docs/ai/skills the single source of truth. A real
+    # directory is the supported fallback, but then it must not drift.
+    if [ -L "$claude_skills" ]; then
+        target=$(readlink "$claude_skills")
+        if [ "$target" != "../docs/ai/skills" ]; then
+            fail ".claude/skills must point at ../docs/ai/skills (found: $target)"
+        fi
+        return
+    fi
+
+    if ! diff -qr "$source_root" "$claude_skills" >/dev/null 2>&1; then
+        fail ".claude/skills has drifted from docs/ai/skills; rerun scripts/install-runtime-skills.sh --target claude-project"
+    fi
+}
+
 if [ -d "$source_root" ]; then
     while IFS= read -r skill_dir; do
         check_skill_frontmatter "$skill_dir"
@@ -243,6 +266,7 @@ if [ -d "$source_root" ]; then
     check_readme_skill_names
     check_repo_skill_paths
     check_installer_profiles
+    check_claude_project_skills
 fi
 
 if [ "$failures" -gt 0 ]; then

@@ -1240,8 +1240,7 @@ For maintainers, concise AI/Skill authoring notes live in `docs/ai/README.md`.
 - `dsh-frecency/` - Frecency-based history management
 - `dsh-types/` - Shared data structures
 - `dsh-openai/` - OpenAI integration
-- `dsh/completions/` - Canonical embedded command completion definitions
-- `completions/` - Development mirror/fallback for command completion definitions
+- `completions/` - Canonical command completion definitions (embedded into the binary)
 
 ## 🤝 Contributing
 

@@ -1020,6 +1020,58 @@ fn check_skills(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path) {
     } else {
         let _ = ctx.write_stdout("warn dsh-runtime-skills unable-to-determine-config-dir");
     }
+
+    check_claude_project_skills(ctx, &repo_root, &source_root, canonical_count);
+}
+
+/// `<repo>/.claude/skills` is what Claude Code reads. It is normally a symlink
+/// to the canonical source, so every skill is visible with nothing to sync.
+fn check_claude_project_skills(
+    ctx: &Context,
+    repo_root: &Path,
+    source_root: &Path,
+    canonical_count: usize,
+) {
+    let dest_root = repo_root.join(".claude").join("skills");
+
+    if !dest_root.exists() {
+        let _ = ctx.write_stdout(&format!(
+            "missing claude-project-skills {}",
+            dest_root.display()
+        ));
+        return;
+    }
+
+    if dest_root.is_symlink() {
+        match fs::canonicalize(&dest_root) {
+            Ok(resolved) if fs::canonicalize(source_root).ok().as_deref() == Some(&resolved) => {
+                let _ = ctx.write_stdout(&format!(
+                    "ok claude-project-skills symlink -> docs/ai/skills entries={canonical_count}"
+                ));
+            }
+            Ok(resolved) => {
+                let _ = ctx.write_stdout(&format!(
+                    "warn claude-project-skills symlink points at {}",
+                    resolved.display()
+                ));
+            }
+            Err(err) => {
+                let _ =
+                    ctx.write_stdout(&format!("warn claude-project-skills broken-symlink {err}"));
+            }
+        }
+        return;
+    }
+
+    let installed = count_skill_dirs(&dest_root);
+    let state = if installed == canonical_count {
+        "ok"
+    } else {
+        "warn"
+    };
+    let _ = ctx.write_stdout(&format!(
+        "{state} claude-project-skills copy entries={installed} canonical={canonical_count}"
+    ));
 }
 
 fn check_skill_profile(
@@ -1344,10 +1396,23 @@ fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
             needs_workspace_check = true;
         }
         if text == "AGENTS.md"
+            || text == "CLAUDE.md"
             || text.starts_with("docs/ai/")
+            || text.starts_with(".claude/")
             || text == "scripts/install-runtime-skills.sh"
         {
             needs_ai_guidance = true;
+        }
+
+        // `completions/` is embedded into the `doge-shell` binary by rust-embed,
+        // and `command-completion-schema.json` is asserted to match the provider
+        // list in `dsh-types`.
+        if text.starts_with("completions/") {
+            packages.insert("doge-shell");
+        }
+        if text == "command-completion-schema.json" {
+            packages.insert("doge-shell");
+            packages.insert("dsh-types");
         }
 
         if text.starts_with("dsh-builtin/") {
@@ -1845,6 +1910,31 @@ mod tests {
         assert!(commands.iter().any(|cmd| {
             cmd == "scripts/install-runtime-skills.sh --status --target codex --profile codex-core"
         }));
+    }
+
+    #[test]
+    fn completion_definitions_map_to_the_embedding_package() {
+        let commands = validation_commands_for_paths(&[PathBuf::from("completions/git.json")]);
+        assert!(
+            commands.iter().any(|cmd| cmd == "cargo test -p doge-shell"),
+            "editing completions/ must still propose the doge-shell tests: {commands:?}"
+        );
+
+        let commands =
+            validation_commands_for_paths(&[PathBuf::from("command-completion-schema.json")]);
+        assert!(commands.iter().any(|cmd| cmd == "cargo test -p doge-shell"));
+        assert!(commands.iter().any(|cmd| cmd == "cargo test -p dsh-types"));
+    }
+
+    #[test]
+    fn claude_guidance_paths_request_the_guidance_check() {
+        let commands = validation_commands_for_paths(&[PathBuf::from(".claude/settings.json")]);
+        assert!(
+            commands
+                .iter()
+                .any(|cmd| cmd == "scripts/check-ai-guidance.sh"),
+            "{commands:?}"
+        );
     }
 
     #[test]

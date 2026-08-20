@@ -1,1 +1,0 @@
-{"command":"mkfifo","description":"Create FIFOs","global_options":[{"short":"-m","long":"--mode","description":"Set file mode","takes_value":true,"value_type":{"type":"String"}},{"short":"-Z","description":"Set SELinux context"},{"long":"--help","description":"Show help"}],"arguments":[{"name":"name","multiple":true,"type":{"type":"File","data":{}}}]}

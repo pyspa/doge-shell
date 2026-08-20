@@ -42,3 +42,16 @@
 - 非ブロッキング性は時間閾値ではなく `repl::background_io::tests` の停止ワーカー・in-flight・完了 channel で検証する。世代競合は `command_timing::tests` と `history::*::background_reload_tests` が入口。
 - REPL 終了時は raw mode と DECSTBM を解除してから background writer の完了を待つ。ファイル I/O 待機中に端末状態を保持しない。
 - pause から resume するときは `next_run` を貼り直す。しないと溜まった分が一斉に発火する。
+
+## Completion 定義
+- 埋め込み元は `completions/` ただ 1 つ（`dsh/src/completion/json_loader.rs` の `#[folder = "../completions/"]`）。ディレクトリを増やさない。以前は `dsh/completions/` との二重管理で、root にだけ足した 4 ファイルが出荷バイナリに載っていなかった。
+- provider 名のタイポは**どのテストも落ちない**。loader は `provider` をただの `String` として通し、`DynamicProviderId::parse` が `None` を返して候補が静かに 0 件になるだけ。`json_loader.rs` の `embedded_completion_definitions_are_valid` が唯一の防波堤なので、ここを弱めない。
+- `ArgumentType` は `#[serde(tag = "type", content = "data")]`。`Choice` は newtype なので `data` は**文字列の配列**（`{"type":"Choice","data":["a","b"]}`）。`{"choices": [...]}` のようなオブジェクトで包むと deserialize が `invalid type: map, expected a sequence` で落ち、その定義だけ丸ごと無効になる。
+- 新しい dynamic provider は 3 箇所を同時に更新する。`dsh-types/src/completion.rs` の `DYNAMIC_COMPLETION_PROVIDERS`（**ソート済み**・`binary_search` 前提）、`command-completion-schema.json` の Dynamic Type enum（**完全一致**で比較される）、`dsh/src/completion/dynamic/registry.rs` の `family_for` + family collector。検証は `cargo test -p dsh-types` と `cargo test -p doge-shell` の両方。
+- `family_for`（`registry.rs`）の else は無条件 `External`。プレフィクスを足し忘れても「未登録」とは言われない。`dynamic/git.rs` の `_ =>` は `platform::collect` に落ちるので、「match アームが無い = 未対応」でもない。
+- 動的補完には経路が 2 つある。宣言的 provider（JSON の `Dynamic`）と、コマンド名直結の `DYNAMIC_PROVIDER_SPECS`（`completion/integrated.rs`）。後者が先に走り、結果に前者が `extend` される。片方だけ直すと候補が重複するか、直したはずが効かない。
+- JSON を**新規追加**しただけでは release ビルドが再実行されない（rust-embed は `include_bytes!` でファイル単位に依存を張るのでディレクトリの変化を追わない）。出荷前に `touch dsh/src/completion/json_loader.rs`。
+- `completions/` はクレートディレクトリの外なので `cargo package -p doge-shell` には入らない。path 依存があり現状 publish できないため実害は無いが、crates.io 公開が必要になったら `dsh/` 配下へ戻す。
+
+## 二重化しているもの（多数派が正解とは限らない）
+- builtin の能力 trait は `dsh-builtin/src/shell_capabilities.rs` が**正**（`scripts/check-shell-proxy-capabilities.py` の検査対象）。`dsh-builtin/src/capability.rs` は旧世代で、利用ファイル数だけは多い。新しい依存は前者へ足す。

@@ -2,6 +2,8 @@
 
 - `cargo test -p dsh-builtin`: builtin, chat, MCP, runtime skill loading
 - `cargo test -p doge-shell`: parser, repl, completion, prompt, shell behavior
+- `cargo test -p doge-shell --lib <filter>`: 反復ループの既定。`dsh/tests/` の統合テストはサブプロセスをグローバル Mutex で直列化するので、実装を回している間は `--lib` とテスト名フィルタが速い。コミット前に一度だけフルの `cargo test -p doge-shell` を回す
+- `completions/*.json` を触ったとき: `cargo test -p doge-shell --lib completion::json_loader`
 - `cargo test -p dsh-openai`: OpenAI-compatible client or config loading
 - `cargo test -p dsh-types`: shared type changes, especially MCP/project/output data shapes
 - `cargo test -p dsh-frecency`: frecency scoring or store changes
@@ -14,6 +16,8 @@
 The `dsh/` directory uses the Cargo package name `doge-shell`, so prefer package names from `package-map.md` when selecting commands.
 
 Do not start with workspace-wide tests unless the change clearly crosses crate boundaries.
+
+`--message-format short` を付けると clippy / rustc の 1 診断が 8 行から 1 行になる。広い範囲を確認するときは `cargo clippy -p doge-shell --all-targets --message-format short -- -D warnings` を使う。
 
 Terminal-touching code (`dsh/src/repl/`, `dsh/src/terminal/`, `dsh/src/process/job_pty.rs`, `dsh/src/process/job_wait.rs`, `dsh/src/shell/eval.rs`): see the "テストと実端末" section of `invariants.md` first. If a run leaves the terminal misbehaving, `cargo test < /dev/null` isolates fd 0, and `reset` clears a stale DECSTBM margin that `stty sane` cannot.
 

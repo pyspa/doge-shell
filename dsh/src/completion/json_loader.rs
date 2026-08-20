@@ -11,11 +11,12 @@ use tracing::{debug, warn};
 
 /// Embedded completion assets using rust-embed.
 ///
-/// `dsh/completions/` is the canonical built-in source. User config completion
-/// directories are checked before embedded assets so generated definitions can
-/// override built-ins; local dev fallback directories are checked after embedded.
+/// The repository-root `completions/` directory is the single canonical source
+/// and is embedded from here. User config completion directories are checked
+/// before embedded assets so generated definitions can override built-ins;
+/// local dev fallback directories are checked after embedded.
 #[derive(RustEmbed)]
-#[folder = "completions/"]
+#[folder = "../completions/"]
 struct CompletionAssets;
 
 pub struct JsonCompletionLoader {
@@ -812,41 +813,6 @@ mod tests {
     }
 
     #[test]
-    fn root_completion_mirror_matches_embedded_completion_source() {
-        let embedded_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("completions");
-        let mirror_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../completions");
-        if !mirror_dir.exists() {
-            return;
-        }
-
-        let mut embedded_files = Vec::new();
-        for entry in fs::read_dir(&embedded_dir).unwrap() {
-            let entry = entry.unwrap();
-            let path = entry.path();
-            if path.extension().and_then(|value| value.to_str()) == Some("json") {
-                embedded_files.push(path);
-            }
-        }
-        embedded_files.sort();
-
-        for embedded_path in embedded_files {
-            let file_name = embedded_path.file_name().unwrap();
-            let mirror_path = mirror_dir.join(file_name);
-            assert!(
-                mirror_path.exists(),
-                "root completion mirror is missing {}",
-                file_name.to_string_lossy()
-            );
-            assert_eq!(
-                fs::read(&embedded_path).unwrap(),
-                fs::read(&mirror_path).unwrap(),
-                "root completion mirror differs for {}",
-                file_name.to_string_lossy()
-            );
-        }
-    }
-
-    #[test]
     fn test_load_invalid_json() {
         let temp_dir = TempDir::new().unwrap();
         let completion_file = temp_dir.path().join("invalid.json");
@@ -1521,22 +1487,96 @@ mod tests {
         }
     }
 
+    /// Regression guard for the four builtins whose definitions lived only in
+    /// the old repository-root mirror and were therefore never embedded.
     #[test]
-    fn embedded_completion_definitions_do_not_use_script_type() {
-        let embedded_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("completions");
+    fn builtin_completions_are_embedded() {
+        for command in ["dirs", "popd", "pushd", "sched"] {
+            assert!(
+                CompletionAssets::get(&format!("{command}.json")).is_some(),
+                "completion for builtin '{command}' is not embedded"
+            );
+        }
+    }
+
+    /// Every built-in completion definition is validated here.
+    ///
+    /// A bad `provider` string is otherwise silent: the loader keeps it as a
+    /// plain `String`, `DynamicProviderId::parse` returns `None`, and the user
+    /// just gets zero candidates. Nothing else in the test suite catches it.
+    #[test]
+    fn embedded_completion_definitions_are_valid() {
+        let embedded_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../completions");
+        let mut checked = 0usize;
+
         for entry in fs::read_dir(&embedded_dir).unwrap() {
             let entry = entry.unwrap();
             let path = entry.path();
             if path.extension().and_then(|value| value.to_str()) != Some("json") {
                 continue;
             }
+
             let contents = fs::read_to_string(&path).unwrap();
-            let value: serde_json::Value = serde_json::from_str(&contents).unwrap();
+            let value: serde_json::Value = serde_json::from_str(&contents)
+                .unwrap_or_else(|err| panic!("{} is not valid JSON: {err}", path.display()));
+
+            let stem = path.file_stem().unwrap().to_str().unwrap();
+            let command = value.get("command").and_then(serde_json::Value::as_str);
+            assert_eq!(
+                command,
+                Some(stem),
+                "`command` must match the file name in {}",
+                path.display()
+            );
+
             assert!(
                 !json_contains_script_type(&value),
                 "built-in completion must not use Script: {}",
                 path.display()
             );
+
+            let mut unknown = Vec::new();
+            collect_dynamic_providers(&value, &mut unknown);
+            unknown.retain(|provider| {
+                !dsh_types::completion::is_known_dynamic_completion_provider(provider)
+            });
+            assert!(
+                unknown.is_empty(),
+                "unknown dynamic provider(s) {unknown:?} in {}; add them to \
+                 DYNAMIC_COMPLETION_PROVIDERS in dsh-types/src/completion.rs",
+                path.display()
+            );
+
+            checked += 1;
+        }
+
+        assert!(
+            checked > 100,
+            "expected the built-in completion directory to be populated, saw {checked} files"
+        );
+    }
+
+    fn collect_dynamic_providers(value: &serde_json::Value, out: &mut Vec<String>) {
+        match value {
+            serde_json::Value::Object(object) => {
+                if object.get("type").and_then(serde_json::Value::as_str) == Some("Dynamic")
+                    && let Some(provider) = object
+                        .get("data")
+                        .and_then(|data| data.get("provider"))
+                        .and_then(serde_json::Value::as_str)
+                {
+                    out.push(provider.to_string());
+                }
+                for nested in object.values() {
+                    collect_dynamic_providers(nested, out);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for nested in values {
+                    collect_dynamic_providers(nested, out);
+                }
+            }
+            _ => {}
         }
     }
 

@@ -9,18 +9,56 @@
       "Bash(cargo pkgid:*)",
       "Bash(cargo metadata:*)",
       "Bash(cargo run -p doge-shell -- --help)",
+      "Bash(rustfmt:*)",
+      "Bash(./target/release/dsh -c:*)",
       "Bash(rg:*)",
       "Bash(fd:*)",
       "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(sed:*)",
+      "Bash(awk:*)",
+      "Bash(jq:*)",
+      "Bash(diff:*)",
+      "Bash(comm:*)",
+      "Bash(sort:*)",
+      "Bash(uniq:*)",
+      "Bash(basename:*)",
+      "Bash(dirname:*)",
+      "Bash(cd:*)",
       "Bash(git status:*)",
       "Bash(git diff:*)",
       "Bash(git log:*)",
       "Bash(git show:*)",
       "Bash(git branch:*)",
+      "Bash(git blame:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git merge-base:*)",
+      "Bash(scripts/check.sh)",
       "Bash(scripts/check-ai-guidance.sh)",
+      "Bash(scripts/check-shell-proxy-capabilities.py)",
+      "Bash(scripts/claude-post-edit.sh)",
       "Bash(scripts/install-runtime-skills.sh --list:*)",
       "Bash(scripts/install-runtime-skills.sh --status:*)",
       "Bash(scripts/install-runtime-skills.sh --dry-run:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/scripts/claude-post-edit.sh\"",
+            "timeout": 20
+          }
+        ]
+      }
     ]
   }
 }

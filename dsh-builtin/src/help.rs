@@ -149,7 +149,7 @@ const HELP_TOPICS: &[HelpTopic] = &[
             "comp-gen rg",
             "comp-gen --check rg",
             "comp-gen --stdout just",
-            "comp-gen --audit dsh/completions",
+            "comp-gen --audit completions",
             "comp-gen --list-dynamic-providers",
         ],
         related: &["doctor", "help"],

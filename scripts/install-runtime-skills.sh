@@ -4,15 +4,17 @@ set -eu
 
 usage() {
     cat <<'EOF'
-Usage: scripts/install-runtime-skills.sh [--target codex|dsh|claude|both] [--profile name] [skill-name ...]
-       scripts/install-runtime-skills.sh [codex|dsh|claude|both]
+Usage: scripts/install-runtime-skills.sh [--target codex|dsh|claude|claude-project|both] [--profile name] [skill-name ...]
+       scripts/install-runtime-skills.sh [codex|dsh|claude|claude-project|both]
        scripts/install-runtime-skills.sh --list [--profile name] [skill-name ...]
-       scripts/install-runtime-skills.sh --status [--target codex|dsh|claude|both] [--profile name]
+       scripts/install-runtime-skills.sh --status [--target codex|dsh|claude|claude-project|both] [--profile name]
 
 Installs sample runtime skills from docs/ai/skills/ into:
   codex  -> ~/.codex/skills
   dsh    -> ~/.config/dsh/skills
   claude -> ~/.claude/skills   (Claude Code user-level skills; CLAUDE_CONFIG_DIR overrides ~/.claude)
+  claude-project -> <repo>/.claude/skills   (project-level fallback; only needed if the
+            .claude/skills -> ../docs/ai/skills symlink is not followed)
   both   -> codex and dsh destinations
 
 Profiles:
@@ -69,7 +71,7 @@ while [ "$#" -gt 0 ]; do
             shift 2
             continue
             ;;
-        codex|dsh|claude|both)
+        codex|dsh|claude|claude-project|both)
             if [ "$mode" = "both" ] && [ "${#requested_skills[@]}" -eq 0 ]; then
                 mode="$1"
             else
@@ -93,7 +95,7 @@ if [ -n "$profile" ] && [ "${#requested_skills[@]}" -gt 0 ]; then
 fi
 
 case "$mode" in
-    codex|dsh|claude|both)
+    codex|dsh|claude|claude-project|both)
         ;;
     *)
         usage >&2
@@ -232,6 +234,10 @@ if [ "$status_only" -eq 1 ]; then
         skill_list | status_selected "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills" claude
     fi
 
+    if [ "$mode" = "claude-project" ]; then
+        skill_list | status_selected "$repo_root/.claude/skills" claude-project
+    fi
+
     exit 0
 fi
 
@@ -245,4 +251,12 @@ fi
 
 if [ "$mode" = "claude" ]; then
     skill_list | install_selected "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills"
+fi
+
+if [ "$mode" = "claude-project" ]; then
+    if [ -L "$repo_root/.claude/skills" ]; then
+        echo "note: .claude/skills is a symlink to the canonical source; nothing to copy" >&2
+        exit 0
+    fi
+    skill_list | install_selected "$repo_root/.claude/skills"
 fi

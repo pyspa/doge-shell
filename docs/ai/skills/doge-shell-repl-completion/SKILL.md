@@ -6,6 +6,7 @@ description: Use for doge-shell completion, ghost text, suggestion, skim, fuzzy,
 # Doge Shell REPL Completion
 
 - Start with `rg -n "completion|suggest|ghost|skim|fuzzy|TAB" dsh/src`.
+- 補完エンジンではなく `completions/*.json` の定義や dynamic provider を足す作業なら [../doge-shell-completion-spec/SKILL.md](../doge-shell-completion-spec/SKILL.md) に切り替える。
 - Read [../doge-shell-repo/references/task-map.md](../doge-shell-repo/references/task-map.md) for the expected entry points.
 - Read [../doge-shell-repo/references/read-boundaries.md](../doge-shell-repo/references/read-boundaries.md) before opening broader files.
 - Default read targets are `dsh/src/completion/`, `dsh/src/repl/completion/`, and `dsh/src/repl/input_analysis.rs`.

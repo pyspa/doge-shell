@@ -1,1 +1,0 @@
-{"command":"sestatus","description":"Show SELinux status","global_options":[{"short":"-b","long":"--boolean","description":"Show booleans"},{"short":"-v","long":"--verbose","description":"Verbose status"},{"short":"-h","long":"--help","description":"Show help"}]}

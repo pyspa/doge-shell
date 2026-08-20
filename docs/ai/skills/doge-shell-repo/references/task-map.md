@@ -2,7 +2,7 @@
 
 - completion / suggestion / ghost text / TAB
   - Read: `dsh/src/completion/`, `dsh/src/repl/completion/`, `dsh/src/repl/input_analysis.rs`
-  - Validate: `cargo test -p doge-shell`
+  - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-types` when `DYNAMIC_COMPLETION_PROVIDERS` changes
 - parser / AST / redirect / expansion / brace
   - Read: `dsh/src/parser/`
   - Validate: `cargo test -p doge-shell`
@@ -40,6 +40,11 @@
 - GitHub builtins / PR notification / git helpers
   - Read: `dsh-builtin/src/g*.rs`, `dsh-builtin/src/github_client.rs`, `dsh-builtin/src/gh_notify.rs`, `dsh-builtin/src/commit_ai.rs`
   - Validate: `cargo test -p dsh-builtin`
+- completion JSON spec の追加/編集（このリポジトリで最も多い作業）
+  - Skill: `docs/ai/skills/doge-shell-completion-spec/SKILL.md`
+  - Read: `completions/<command>.json`, `command-completion-schema.json`
+  - Validate: `cargo test -p doge-shell --lib completion::json_loader`
+  - 新しい dynamic provider を足すときは `dsh-types/src/completion.rs` と `command-completion-schema.json` も同時に更新し、`cargo test -p dsh-types` も実行する
 - completion JSON generation / comp-gen
   - Read: `dsh-builtin/src/comp_gen.rs`, `dsh/src/completion/json_loader.rs`, `dsh/src/completion/generators/`
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p doge-shell` when runtime completion loading changes

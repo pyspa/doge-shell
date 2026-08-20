@@ -1,1 +1,0 @@
-{"command":"dirname","description":"Strip last component from file names","global_options":[{"short":"-z","long":"--zero","description":"End output with NUL"},{"long":"--help","description":"Show help"}],"arguments":[{"name":"path","multiple":true,"type":{"type":"File","data":{}}}]}

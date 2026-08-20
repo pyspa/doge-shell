@@ -12,6 +12,7 @@
 - Codex runtime skills: `~/.codex/skills/`
 - doge-shell runtime skills: `~/.config/dsh/skills/`
 - Claude Code runtime skills: `~/.claude/skills/` (`CLAUDE_CONFIG_DIR` で上書き可)
+- Claude Code project skills: `<repo>/.claude/skills/` (`../docs/ai/skills` への symlink。全 Skill がそのまま見える)
 
 ## 使い分け
 - `AGENTS.md`: この repo で最初に守る短いルールだけを書く。`CLAUDE.md` は `@AGENTS.md` を import するだけの薄いアダプタにし、内容は複製しない。
@@ -45,5 +46,7 @@ doctor skills
 - Codex 最小: `--profile codex-core` (`doge-shell-repo`)
 - Codex よく使う構成: `--profile codex-common` (`doge-shell-repo`, `doge-shell-validation`, `doge-shell-investigation`, `doge-shell-chat-tools`)
 - dsh runtime 用: `--profile dsh-common`
-- Claude Code 用: `--target claude --profile claude-common`
-- 領域別: `doge-shell-parser-shell`, `doge-shell-process-pty`, `doge-shell-repl-completion`, `doge-shell-prompt-terminal-ui`, `doge-shell-env-startup`, `doge-shell-lisp-config`, `doge-shell-history-frecency`, `doge-shell-command-palette-ai`, `doge-shell-builtin-commands`, `doge-shell-serve-web`, `doge-shell-notebook-markdown`, `doge-shell-safety-policy`
+- Claude Code 用: プロジェクト内では `.claude/skills` の symlink で全件が入るので導入不要。
+  symlink が使えない環境だけ `--target claude-project`（リポジトリ内へコピー）か `--target claude`（`~/.claude/skills/` へコピー）を使う。
+  `--profile claude-common` を付けると 4 個に絞られ、SKILL.md 間の相対リンクが切れるので通常は付けない。
+- 領域別: `doge-shell-parser-shell`, `doge-shell-process-pty`, `doge-shell-repl-completion`, `doge-shell-completion-spec`, `doge-shell-prompt-terminal-ui`, `doge-shell-env-startup`, `doge-shell-lisp-config`, `doge-shell-history-frecency`, `doge-shell-command-palette-ai`, `doge-shell-builtin-commands`, `doge-shell-serve-web`, `doge-shell-notebook-markdown`, `doge-shell-safety-policy`

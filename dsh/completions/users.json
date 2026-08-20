@@ -1,1 +1,0 @@
-{"command":"users","description":"Print users currently logged in","global_options":[{"long":"--help","description":"Show help"},{"long":"--version","description":"Show version"}],"arguments":[{"name":"file","type":{"type":"File","data":{}}}]}

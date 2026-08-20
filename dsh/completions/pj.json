@@ -1,8 +1,0 @@
-{
-  "command": "pj",
-  "description": "Jump to a registered project",
-  "global_options": [
-    { "short": "-h", "long": "--help", "description": "Show help" }
-  ],
-  "arguments": [{ "name": "name", "description": "Project name" }]
-}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Doge Shell Completion Spec"
+  short_description: "Author completion JSON and dynamic providers."
+  default_prompt: "Use $doge-shell-completion-spec to add or edit command completion definitions and dynamic providers with the smallest validation."

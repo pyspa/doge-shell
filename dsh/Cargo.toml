@@ -77,7 +77,7 @@ pest_derive = "2.8"
 fuzzy-matcher = "0.3"
 indexmap = { version = "2", features = ["serde"] }
 tabled = { version = "0.21", default-features = false, features = ["std"] }
-num-bigint = { version = "0.4", optional = true }
+num-bigint = { version = "0.5", optional = true }
 num-traits = "0.2"
 rust-embed = "8.5"
 rusqlite = { version = "0.40", features = ["bundled"] }

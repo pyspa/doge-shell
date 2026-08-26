@@ -1,5 +1,5 @@
 use crate::completion::cache::CompletionCache;
-use crate::completion::fuzzy::fuzzy_match_score;
+use crate::completion::fuzzy::fuzzy_rank;
 #[cfg(not(test))]
 use crate::completion::notify_completion_update;
 use crate::completion::shell_path::{format_path_for_token, normalize_path_token};
@@ -48,10 +48,7 @@ pub fn path_completion_prefix(input: &str) -> Result<Option<String>> {
             let path_str = path.to_string();
 
             // Check full path match
-            if let Some(mut score) = fuzzy_match_score(&path_str, &search) {
-                if path_str.starts_with(&search) {
-                    score += 1000;
-                }
+            if let Some(score) = fuzzy_rank(&path_str, &search) {
                 match best_match {
                     Some((_, best_score)) if score > best_score => {
                         best_match = Some((path_str.clone(), score));
@@ -66,10 +63,7 @@ pub fn path_completion_prefix(input: &str) -> Result<Option<String>> {
             // Check stripped path match (relative path)
             if let Ok(striped) = PathBuf::from(path).strip_prefix("./") {
                 let striped_str = striped.display().to_string();
-                if let Some(mut score) = fuzzy_match_score(&striped_str, &search) {
-                    if striped_str.starts_with(&search) {
-                        score += 1000;
-                    }
+                if let Some(score) = fuzzy_rank(&striped_str, &search) {
                     // Adjust score slightly to prefer shorter/exact matches or keep logic simple?
                     // Verify if better than current best
                     match best_match {

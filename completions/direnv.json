@@ -6,9 +6,9 @@
     { "long": "--version", "description": "Show version" }
   ],
   "subcommands": [
-    { "name": "allow", "description": "Allow loading .envrc", "arguments": [{ "name": "path", "description": "Directory", "required": false, "type": { "type": "Directory" } }] },
-    { "name": "deny", "description": "Deny loading .envrc", "arguments": [{ "name": "path", "description": "Directory", "required": false, "type": { "type": "Directory" } }] },
-    { "name": "edit", "description": "Edit .envrc", "arguments": [{ "name": "path", "description": "Directory", "required": false, "type": { "type": "Directory" } }] },
+    { "name": "allow", "description": "Allow loading .envrc", "arguments": [{ "name": "path", "description": "Directory or .envrc", "required": false, "type": { "type": "Dynamic", "data": { "provider": "direnv.rc" } } }] },
+    { "name": "deny", "description": "Deny loading .envrc", "arguments": [{ "name": "path", "description": "Directory or .envrc", "required": false, "type": { "type": "Dynamic", "data": { "provider": "direnv.rc" } } }] },
+    { "name": "edit", "description": "Edit .envrc", "arguments": [{ "name": "path", "description": "Directory or .envrc", "required": false, "type": { "type": "Dynamic", "data": { "provider": "direnv.rc" } } }] },
     { "name": "reload", "description": "Reload .envrc" },
     { "name": "status", "description": "Show direnv status" },
     { "name": "export", "description": "Export environment for shell", "arguments": [{ "name": "shell", "description": "Shell name", "type": { "type": "Choice", "data": ["bash", "zsh", "fish", "tcsh", "json"] } }] },

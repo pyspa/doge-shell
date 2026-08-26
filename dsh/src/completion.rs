@@ -39,7 +39,7 @@ pub use crate::completion::commands::{deduplicate_candidates, get_commands};
 pub use crate::completion::display::Candidate;
 pub use crate::completion::display::CompletionConfig;
 pub use crate::completion::framework::CompletionSelection;
-pub use crate::completion::fuzzy::fuzzy_match_score;
+pub use crate::completion::fuzzy::{fuzzy_match_score, fuzzy_rank};
 pub use crate::completion::path::*;
 pub use crate::completion::selection::{
     completion_for_z, default_completion_framework, get_prompt_and_input_for_completion,

@@ -1,6 +1,6 @@
 use crate::completion::command::CompletionCandidate;
 use crate::completion::shell_path::normalize_path_token;
-use crate::completion::{Candidate, fuzzy_match_score, path_completion_path_sync};
+use crate::completion::{Candidate, fuzzy_rank, path_completion_path_sync};
 use anyhow::Result;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 
@@ -45,8 +45,8 @@ impl FileSystemGenerator {
             if !file_prefix.is_empty() {
                 if file_name.starts_with(&file_prefix) {
                     score_bonus = 1000;
-                } else if let Some(score) = fuzzy_match_score(file_name, &file_prefix) {
-                    score_bonus = score.max(0) as u32;
+                } else if let Some(rank) = fuzzy_rank(file_name, &file_prefix) {
+                    score_bonus = rank.clamp(0, u32::MAX as i64) as u32;
                 } else {
                     continue;
                 }
@@ -103,8 +103,8 @@ impl FileSystemGenerator {
             if !dir_prefix.is_empty() {
                 if file_name.starts_with(&dir_prefix) {
                     score_bonus = 1000;
-                } else if let Some(score) = fuzzy_match_score(file_name, &dir_prefix) {
-                    score_bonus = score.max(0) as u32;
+                } else if let Some(rank) = fuzzy_rank(file_name, &dir_prefix) {
+                    score_bonus = rank.clamp(0, u32::MAX as i64) as u32;
                 } else {
                     continue;
                 }

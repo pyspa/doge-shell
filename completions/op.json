@@ -11,7 +11,7 @@
     { "name": "signout", "description": "Sign out" },
     { "name": "account", "description": "Manage accounts" },
     { "name": "vault", "description": "Manage vaults" },
-    { "name": "item", "description": "Manage items", "subcommands": [{ "name": "get", "description": "Get item" }, { "name": "list", "description": "List items" }, { "name": "create", "description": "Create item" }, { "name": "edit", "description": "Edit item" }, { "name": "delete", "description": "Delete item" }] },
+    { "name": "item", "description": "Manage items", "subcommands": [{ "name": "get", "description": "Get item", "arguments": [{ "name": "item", "description": "Item name or ID", "type": { "type": "Dynamic", "data": { "provider": "op.item" } } }] }, { "name": "list", "description": "List items" }, { "name": "create", "description": "Create item" }, { "name": "edit", "description": "Edit item", "arguments": [{ "name": "item", "description": "Item name or ID", "type": { "type": "Dynamic", "data": { "provider": "op.item" } } }] }, { "name": "delete", "description": "Delete item", "arguments": [{ "name": "item", "description": "Item name or ID", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "op.item" } } }] }] },
     { "name": "read", "description": "Read secret reference", "arguments": [{ "name": "reference", "description": "Secret reference" }] },
     { "name": "run", "description": "Run command with injected secrets", "arguments": [{ "name": "command", "multiple": true, "type": { "type": "CommandWithArgs" } }] }
   ]

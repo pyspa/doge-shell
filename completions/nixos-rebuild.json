@@ -1,0 +1,20 @@
+{
+  "command": "nixos-rebuild",
+  "description": "Build and activate NixOS configurations",
+  "global_options": [
+    { "long": "--flake", "description": "Flake reference with attribute", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--use-remote-sudo", "description": "Use sudo on the remote host" },
+    { "long": "--target-host", "description": "Deploy to the given host via SSH", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--no-flake", "description": "Ignore the flake setting" },
+    { "long": "--impure", "description": "Allow impure evaluation" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [
+    {
+      "name": "action",
+      "description": "Rebuild action",
+      "required": true,
+      "type": { "type": "Choice", "data": ["switch", "boot", "test", "build", "dry-build", "dry-activate", "dry-run", "edit", "build-vm", "build-vm-with-bootloader", "list-generations", "rollback"] }
+    }
+  ]
+}

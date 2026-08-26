@@ -1,0 +1,16 @@
+{
+  "command": "uvx",
+  "description": "Run a tool from a Python package (uv tool run)",
+  "global_options": [
+    { "long": "--from", "description": "Run the tool from a specific package", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--with", "description": "Run with additional packages installed", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--python", "description": "Python interpreter to use", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-q", "long": "--quiet", "description": "Do not print output" },
+    { "short": "-v", "long": "--verbose", "description": "Use verbose output" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "arguments": [
+    { "name": "command", "description": "Tool command to run", "required": true },
+    { "name": "args", "description": "Arguments passed to the tool", "multiple": true, "type": { "type": "CommandWithArgs" } }
+  ]
+}

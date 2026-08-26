@@ -1,0 +1,18 @@
+{
+  "command": "systemd-resolve",
+  "description": "Resolve domain names via systemd-resolved",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "long": "--version", "description": "Show version" },
+    { "long": "--status", "description": "Show link and DNS status" },
+    { "short": "-i", "long": "--interface", "description": "Interface to use", "takes_value": true, "value_type": { "type": "Interface" } },
+    { "short": "-4", "description": "Resolve IPv4 addresses" },
+    { "short": "-6", "description": "Resolve IPv6 addresses" },
+    { "short": "-c", "long": "--cname", "description": "Follow CNAME redirects" },
+    { "short": "-f", "long": "--fullname", "description": "Treat name as fully qualified" },
+    { "short": "-l", "long": "--legend", "description": "Print column legend" }
+  ],
+  "arguments": [
+    { "name": "hostname", "description": "Name or address to resolve", "required": true, "multiple": true, "type": { "type": "String" } }
+  ]
+}

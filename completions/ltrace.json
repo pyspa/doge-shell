@@ -1,0 +1,38 @@
+{
+  "command": "ltrace",
+  "description": "Trace library calls of a program",
+  "global_options": [
+    {
+      "short": "-p",
+      "description": "Attach to a running process",
+      "takes_value": true,
+      "value_type": { "type": "Process" }
+    },
+    { "short": "-f", "description": "Trace child processes" },
+    {
+      "short": "-e",
+      "description": "Filter traced calls",
+      "takes_value": true,
+      "value_type": { "type": "String" }
+    },
+    {
+      "short": "-o",
+      "description": "Write output to file",
+      "takes_value": true,
+      "value_type": { "type": "File", "data": {} }
+    },
+    { "short": "-c", "description": "Count calls and time" },
+    { "short": "-t", "description": "Prefix each line with timestamp" },
+    { "short": "-S", "description": "Also trace system calls" },
+    {
+      "short": "-n",
+      "description": "Indentation for nested calls",
+      "takes_value": true,
+      "value_type": { "type": "Number" }
+    },
+    { "short": "-v", "long": "--version", "description": "Show version" }
+  ],
+  "arguments": [
+    { "name": "command", "description": "Program to trace with arguments", "multiple": true, "type": { "type": "CommandWithArgs" } }
+  ]
+}

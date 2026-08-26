@@ -3,10 +3,11 @@ use super::{
     GRADLE_PROJECT_TASK_SOURCES, JS_PROJECT_TASK_SOURCES, JUST_PROJECT_TASK_SOURCES,
     MAKE_PROJECT_TASK_SOURCES, MISE_PROJECT_TASK_SOURCES, NX_PROJECT_TASK_SOURCES,
     ProjectTaskCandidateText, ProjectTaskCompletionConfig, TASKFILE_PROJECT_TASK_SOURCES,
-    TURBO_PROJECT_TASK_SOURCES, format_task_description, matches_prefix,
+    TURBO_PROJECT_TASK_SOURCES, dedup_sorted, format_task_description, matches_prefix,
 };
 use crate::completion::parser::{CompletionContext, ParsedCommandLine};
 use dsh_builtin::task;
+use std::fs;
 use std::path::Path;
 use tracing::warn;
 
@@ -60,6 +61,7 @@ pub(super) fn collect(
         "shell.alias" => collector.collect_shell_alias_candidates(current_token),
         "shell.env_var" => collector.collect_shell_env_var_candidates(current_token),
         "shell.job" => Vec::new(),
+        "direnv.rc" => collector.collect_direnv_rc_candidates(current_dir, current_token, cached_only),
         _ => {
             return platform::collect(
                 collector,
@@ -73,6 +75,24 @@ pub(super) fn collect(
 }
 
 impl DynamicCompletionProvider {
+    pub(crate) fn collect_direnv_rc_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let scope = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "direnv",
+            "rc",
+            scope.clone(),
+            current_token,
+            ".envrc file",
+            cached_only,
+            move || Ok(load_direnv_rc_values(&scope)),
+        )
+    }
+
     pub(crate) fn collect_project_task_candidates(
         &self,
         parsed_command_line: &ParsedCommandLine,
@@ -198,6 +218,52 @@ pub(super) fn candidate_text_for_task(
     }
 }
 
+/// direnv walks the directory chain from cwd upward, so offer `.envrc`
+/// files found there plus one level of subdirectories. Both the `.envrc`
+/// path and its containing directory are offered because `direnv`
+/// allow/deny/edit accept either form.
+const DIRENV_RC_ANCESTOR_DEPTH_LIMIT: usize = 8;
+
+fn load_direnv_rc_values(start: &Path) -> Vec<String> {
+    let Ok(start) = start.canonicalize() else {
+        return Vec::new();
+    };
+    let mut values = Vec::new();
+    for depth in 0..=DIRENV_RC_ANCESTOR_DEPTH_LIMIT {
+        let Some(dir) = start.ancestors().nth(depth) else {
+            break;
+        };
+        if dir.join(".envrc").is_file() {
+            match depth {
+                0 => {
+                    values.push(".envrc".to_string());
+                    values.push(".".to_string());
+                }
+                _ => {
+                    let dir_text = vec![".."; depth].join("/");
+                    values.push(format!("{dir_text}/.envrc"));
+                    values.push(dir_text);
+                }
+            }
+        }
+        if dir.parent().is_none() {
+            break;
+        }
+    }
+    if let Ok(entries) = fs::read_dir(&start) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() && path.join(".envrc").is_file() {
+                if let Some(name) = entry.file_name().to_str() {
+                    values.push(format!("{name}/.envrc"));
+                    values.push(name.to_string());
+                }
+            }
+        }
+    }
+    dedup_sorted(values)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +280,22 @@ mod tests {
             config.candidate_text,
             ProjectTaskCandidateText::NxRunArgument
         );
+    }
+
+    #[test]
+    fn load_direnv_rc_values_lists_envrc_and_containing_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(".envrc"), "").unwrap();
+        let sub = dir.path().join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join(".envrc"), "").unwrap();
+
+        let values = load_direnv_rc_values(dir.path());
+        for expected in [".envrc", ".", "sub", "sub/.envrc"] {
+            assert!(
+                values.contains(&expected.to_string()),
+                "missing {expected} in {values:?}"
+            );
+        }
     }
 }

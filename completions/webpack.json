@@ -1,0 +1,22 @@
+{
+  "command": "webpack",
+  "description": "Bundle JavaScript modules with webpack",
+  "global_options": [
+    { "short": "-c", "long": "--config", "description": "Configuration file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["js", "ts", "mjs", "cjs", "json"] } } },
+    { "long": "--mode", "description": "Build mode", "takes_value": true, "value_type": { "type": "Choice", "data": ["production", "development", "none"] } },
+    { "short": "-w", "long": "--watch", "description": "Watch for file changes" },
+    { "long": "--entry", "description": "Entry point", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+    { "short": "-o", "long": "--output-path", "description": "Output directory", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "short": "-d", "description": "Development shortcut" },
+    { "short": "-p", "description": "Production shortcut" },
+    { "long": "--stats", "description": "Stats output level", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "build", "description": "Build the bundle", "arguments": [{ "name": "entry", "multiple": true, "type": { "type": "File", "data": {} } }] },
+    { "name": "serve", "description": "Run the webpack dev server" },
+    { "name": "info", "description": "Show system information" },
+    { "name": "init", "description": "Initialize a new project" },
+    { "name": "configtest", "description": "Validate the configuration", "arguments": [{ "name": "config-path", "type": { "type": "File", "data": {} } }] }
+  ]
+}

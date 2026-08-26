@@ -207,6 +207,8 @@ pub(super) fn collect(
             current_token,
             cached_only,
         ),
+        "op.item" => collector.collect_op_item_candidates(current_token, cached_only),
+        "vagrant.box" => collector.collect_vagrant_box_candidates(current_token, cached_only),
         _ => {
             return platform::collect(
                 collector,
@@ -697,6 +699,38 @@ impl DynamicCompletionProvider {
         )
     }
 
+    pub(crate) fn collect_op_item_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_global_command_candidates(
+            "op",
+            "item",
+            current_token,
+            "1Password item",
+            &["item", "list", "--format", "json"],
+            parse_op_items,
+            cached_only,
+        )
+    }
+
+    pub(crate) fn collect_vagrant_box_candidates(
+        &self,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        self.collect_global_command_candidates(
+            "vagrant",
+            "box",
+            current_token,
+            "vagrant box",
+            &["box", "list"],
+            parse_first_field_lines,
+            cached_only,
+        )
+    }
+
     pub(crate) fn collect_code_extension_candidates(
         &self,
         current_token: &str,
@@ -1025,6 +1059,24 @@ fn parse_first_field_lines(lines: &[String]) -> Vec<String> {
         lines
             .iter()
             .filter_map(|line| line.split_whitespace().next())
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+/// Parses `op item list --format json` (a JSON array of item objects).
+fn parse_op_items(lines: &[String]) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&lines.join("\n")) else {
+        return Vec::new();
+    };
+    let Some(entries) = value.as_array() else {
+        return Vec::new();
+    };
+    dedup_sorted(
+        entries
+            .iter()
+            .filter_map(|entry| entry.get("title").and_then(serde_json::Value::as_str))
+            .filter(|title| !title.is_empty())
             .map(str::to_string)
             .collect(),
     )

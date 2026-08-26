@@ -1,0 +1,58 @@
+{
+  "command": "vagrant",
+  "description": "Build and manage virtualized development environments",
+  "global_options": [
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "short": "-v", "long": "--version", "description": "Show version" },
+    { "long": "--machine-readable", "description": "Machine readable output" },
+    { "long": "--timestamp", "description": "Timestamp log output" },
+    { "long": "--debug", "description": "Show debug output" }
+  ],
+  "subcommands": [
+    {
+      "name": "box",
+      "description": "Manage boxes",
+      "subcommands": [
+        { "name": "add", "description": "Add a box", "arguments": [{ "name": "address", "description": "Box catalog address or file" }] },
+        { "name": "list", "description": "List installed boxes" },
+        { "name": "outdated", "description": "Check for outdated boxes" },
+        { "name": "prune", "description": "Remove old versions of boxes" },
+        {
+          "name": "remove",
+          "description": "Remove a box",
+          "arguments": [
+            { "name": "box", "description": "Installed box name", "required": true, "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "vagrant.box" } } }
+          ]
+        },
+        {
+          "name": "repackage",
+          "description": "Repackage an installed box",
+          "arguments": [
+            { "name": "box", "description": "Installed box name", "required": true, "type": { "type": "Dynamic", "data": { "provider": "vagrant.box" } } },
+            { "name": "output", "description": "Output .box file", "type": { "type": "File", "data": { "extensions": ["box"] } } }
+          ]
+        },
+        { "name": "update", "description": "Update outdated boxes" }
+      ]
+    },
+    { "name": "cloud", "description": "Manage Vagrant Cloud", "subcommands": [{ "name": "search", "description": "Search boxes" }, { "name": "publish", "description": "Publish a box" }, { "name": "provider", "description": "Manage providers" }] },
+    { "name": "connect", "description": "Connect to a shared computer" },
+    { "name": "destroy", "description": "Stop and delete the machine", "arguments": [{ "name": "name", "description": "Machine name" }] },
+    { "name": "halt", "description": "Stop the machine", "options": [{ "short": "-f", "long": "--force", "description": "Force shut down" }], "arguments": [{ "name": "name", "description": "Machine name" }] },
+    { "name": "init", "description": "Initialize a new Vagrantfile", "options": [{ "long": "--force", "description": "Overwrite existing Vagrantfile" }], "arguments": [{ "name": "box", "description": "Installed box name", "type": { "type": "Dynamic", "data": { "provider": "vagrant.box" } } }] },
+    { "name": "package", "description": "Package a running machine into a box" },
+    { "name": "plugin", "description": "Manage plugins", "subcommands": [{ "name": "install", "description": "Install a plugin" }, { "name": "uninstall", "description": "Uninstall a plugin" }, { "name": "update", "description": "Update plugins" }, { "name": "list", "description": "List plugins" }] },
+    { "name": "port", "description": "Display forwarded ports", "arguments": [{ "name": "name", "description": "Machine name" }] },
+    { "name": "provision", "description": "Run provisioners", "arguments": [{ "name": "name", "description": "Machine name" }] },
+    { "name": "resume", "description": "Resume a suspended machine", "arguments": [{ "name": "name", "description": "Machine name" }] },
+    { "name": "serve", "description": "Start a share server" },
+    { "name": "snapshot", "description": "Manage snapshots", "subcommands": [{ "name": "save", "description": "Save a snapshot", "arguments": [{ "name": "vm", "description": "Machine name" }, { "name": "name", "description": "Snapshot name" }] }, { "name": "restore", "description": "Restore a snapshot", "arguments": [{ "name": "vm", "description": "Machine name" }, { "name": "name", "description": "Snapshot name" }] }, { "name": "list", "description": "List snapshots" }, { "name": "delete", "description": "Delete a snapshot" }] },
+    { "name": "ssh", "description": "SSH into the machine", "options": [{ "short": "-c", "long": "--command", "description": "Execute an SSH command", "takes_value": true, "value_type": { "type": "CommandWithArgs" } }], "arguments": [{ "name": "name", "description": "Machine name" }] },
+    { "name": "ssh-config", "description": "Output SSH configuration", "arguments": [{ "name": "name", "description": "Machine name" }] },
+    { "name": "status", "description": "Show machine status" },
+    { "name": "suspend", "description": "Suspend the machine", "arguments": [{ "name": "name", "description": "Machine name" }] },
+    { "name": "up", "description": "Start and provision the machine", "options": [{ "long": "--provision", "description": "Enable provisioning" }, { "long": "--destroy-on-error", "description": "Destroy on error" }] },
+    { "name": "validate", "description": "Validate the Vagrantfile" },
+    { "name": "version", "description": "Show version" }
+  ]
+}

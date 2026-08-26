@@ -156,6 +156,7 @@ fn family_for(provider: &str) -> ProviderFamily {
                 | "mise"
                 | "node"
                 | "nox"
+                | "op"
                 | "pdm"
                 | "pip"
                 | "pipenv"
@@ -166,6 +167,7 @@ fn family_for(provider: &str) -> ProviderFamily {
                 | "rustup"
                 | "terraform"
                 | "tox"
+                | "vagrant"
         )
     ) {
         ProviderFamily::Development
@@ -173,6 +175,7 @@ fn family_for(provider: &str) -> ProviderFamily {
         provider,
         "project.task"
             | "archive.entry"
+            | "direnv.rc"
             | "filesystem.type"
             | "man.page"
             | "shell.abbr"

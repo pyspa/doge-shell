@@ -1,0 +1,25 @@
+{
+  "command": "mix",
+  "description": "Elixir build and project tool",
+  "global_options": [
+    { "long": "--help", "description": "Show help" },
+    { "long": "--version", "description": "Show version" }
+  ],
+  "subcommands": [
+    { "name": "compile", "description": "Compile the project" },
+    { "name": "test", "description": "Run the test suite" },
+    { "name": "run", "description": "Evaluate code or start a session" },
+    { "name": "format", "description": "Format source files", "arguments": [{ "name": "file", "multiple": true, "type": { "type": "File", "data": { "extensions": ["ex", "exs"] } } }] },
+    { "name": "deps.get", "description": "Fetch dependencies" },
+    { "name": "deps.update", "description": "Update dependencies" },
+    { "name": "deps.clean", "description": "Clean dependencies" },
+    { "name": "deps.compile", "description": "Compile dependencies" },
+    { "name": "docs", "description": "Generate documentation" },
+    { "name": "new", "description": "Create a new project", "arguments": [{ "name": "path", "required": true, "type": { "type": "Directory" } }] },
+    { "name": "release", "description": "Build a release" },
+    { "name": "phx.server", "description": "Start the Phoenix server" },
+    { "name": "ecto.create", "description": "Create the database" },
+    { "name": "ecto.migrate", "description": "Run database migrations" },
+    { "name": "ecto.rollback", "description": "Roll back migrations" }
+  ]
+}

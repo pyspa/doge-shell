@@ -1,0 +1,48 @@
+{
+  "command": "consul",
+  "description": "Service networking solution by HashiCorp",
+  "global_options": [
+    { "long": "-http-addr", "description": "HTTP API address", "takes_value": true, "value_type": { "type": "Url" } },
+    { "long": "-token", "description": "ACL token", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "-datacenter", "description": "Datacenter to query", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "-ca-file", "description": "Path to CA certificate", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+    { "short": "-h", "long": "-help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "agent", "description": "Run a Consul agent" },
+    {
+      "name": "catalog",
+      "description": "Interact with the catalog",
+      "subcommands": [
+        { "name": "nodes", "description": "List nodes" },
+        { "name": "services", "description": "List services" },
+        { "name": "datacenters", "description": "List datacenters" }
+      ]
+    },
+    {
+      "name": "kv",
+      "description": "Interact with the KV store",
+      "subcommands": [
+        { "name": "get", "description": "Read a key or prefix", "arguments": [{ "name": "key", "required": true, "type": { "type": "String" } }] },
+        { "name": "put", "description": "Write a key", "arguments": [{ "name": "key", "required": true, "type": { "type": "String" } }, { "name": "data", "type": { "type": "String" } }] },
+        { "name": "delete", "description": "Delete a key or prefix", "arguments": [{ "name": "key", "required": true, "type": { "type": "String" } }] },
+        { "name": "export", "description": "Export a prefix", "arguments": [{ "name": "prefix", "type": { "type": "String" } }] },
+        { "name": "import", "description": "Import a prefix", "arguments": [{ "name": "file", "type": { "type": "File", "data": {} } }] }
+      ]
+    },
+    { "name": "members", "description": "List cluster members" },
+    { "name": "services", "description": "List registered services" },
+    { "name": "leave", "description": "Gracefully leave the cluster" },
+    { "name": "force-leave", "description": "Force a member to leave", "arguments": [{ "name": "node", "type": { "type": "String" } }] },
+    { "name": "join", "description": "Join a cluster", "arguments": [{ "name": "address", "required": true, "multiple": true, "type": { "type": "String" } }] },
+    { "name": "reload", "description": "Trigger configuration reload" },
+    { "name": "watch", "description": "Watch for changes", "options": [{ "long": "-type", "description": "Watch type", "takes_value": true, "value_type": { "type": "Choice", "data": ["key", "keyprefix", "services", "nodes", "checks", "service", "events"] } }, { "long": "-prefix", "description": "Key prefix to watch", "takes_value": true, "value_type": { "type": "String" } }] },
+    { "name": "keygen", "description": "Generate an encryption key" },
+    { "name": "validate", "description": "Validate config files", "arguments": [{ "name": "directory-or-file", "required": true, "multiple": true, "type": { "type": "File", "data": {} } }] },
+    { "name": "info", "description": "Show debugging information" },
+    { "name": "rtt", "description": "Estimate network round-trip time", "arguments": [{ "name": "node-a", "required": true, "type": { "type": "String" } }, { "name": "node-b", "type": { "type": "String" } }] },
+    { "name": "snapshot", "description": "Save and restore snapshots", "subcommands": [{ "name": "save", "description": "Save a snapshot", "arguments": [{ "name": "file", "required": true, "type": { "type": "File", "data": {} } }] }, { "name": "restore", "description": "Restore a snapshot", "arguments": [{ "name": "file", "required": true, "type": { "type": "File", "data": {} } }] }, { "name": "inspect", "description": "Inspect a snapshot file" }] },
+    { "name": "operator", "description": "Operator-level operations", "subcommands": [{ "name": "raft", "description": "Raft operations" }, { "name": "autopilot", "description": "Autopilot operations" }] },
+    { "name": "version", "description": "Show version" }
+  ]
+}

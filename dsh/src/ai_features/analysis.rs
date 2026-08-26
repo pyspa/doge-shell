@@ -3,6 +3,7 @@
 //! This module provides functions for explaining commands, checking safety,
 //! suggesting improvements, and diagnosing command output.
 
+use super::cache;
 use super::service::AiService;
 use crate::safety::{PromptInjectionResult, SafetyGuard};
 use anyhow::Result;
@@ -25,12 +26,19 @@ pub async fn explain_command<S: AiService + ?Sized>(service: &S, command: &str) 
     Keep the explanation brief but informative. Use markdown formatting for clarity. \
     Respond in the same language as the user's request (e.g., if they ask in Japanese, explain in Japanese).";
 
+    // Explaining the same command twice is the same answer.
+    if let Some(cached) = cache::lookup("explain", &[&sanitized_command]) {
+        return Ok(cached);
+    }
+
     let messages = vec![
         json!({"role": "system", "content": system_prompt}),
         json!({"role": "user", "content": format!("Explain this command:\n```\n{}\n```", sanitized_command)}),
     ];
 
-    service.send_request(messages, Some(0.2)).await
+    let answer = service.send_request(messages, Some(0.2)).await?;
+    cache::store("explain", &[&sanitized_command], &answer);
+    Ok(answer)
 }
 
 /// Explain a shell command briefly in a single line (for inline ghost text).
@@ -57,7 +65,14 @@ pub async fn explain_command_inline<S: AiService + ?Sized>(
         json!({"role": "user", "content": format!("Explain this briefly:\n{}", sanitized_command)}),
     ];
 
-    service.send_request(messages, Some(0.1)).await
+    // The prompt asks for a single short line; cap the generation to match.
+    if let Some(cached) = cache::lookup("explain_inline", &[&sanitized_command]) {
+        return Ok(cached);
+    }
+
+    let answer = service.send_request(messages, Some(0.1)).await?;
+    cache::store("explain_inline", &[&sanitized_command], &answer);
+    Ok(answer)
 }
 
 /// Suggest improvements for a shell command.
@@ -98,12 +113,18 @@ pub async fn check_safety<S: AiService + ?Sized>(service: &S, command: &str) -> 
     Output 'SAFE' if the command appears safe. \
     Output 'WARNING: <reason>' if there are risks.";
 
+    if let Some(cached) = cache::lookup("check_safety", &[&sanitized_command]) {
+        return Ok(cached);
+    }
+
     let messages = vec![
         json!({"role": "system", "content": system_prompt}),
         json!({"role": "user", "content": format!("Check safety of:\n```\n{}\n```", sanitized_command)}),
     ];
 
-    service.send_request(messages, Some(0.1)).await
+    let answer = service.send_request(messages, Some(0.1)).await?;
+    cache::store("check_safety", &[&sanitized_command], &answer);
+    Ok(answer)
 }
 
 /// Diagnose command output (especially errors).
@@ -133,12 +154,18 @@ pub async fn diagnose_output<S: AiService + ?Sized>(
         sanitized_command, exit_code, truncated_output
     );
 
+    if let Some(cached) = cache::lookup("diagnose", &[&query]) {
+        return Ok(cached);
+    }
+
     let messages = vec![
         json!({"role": "system", "content": system_prompt}),
         json!({"role": "user", "content": query}),
     ];
 
-    service.send_request(messages, Some(0.2)).await
+    let answer = service.send_request(messages, Some(0.2)).await?;
+    cache::store("diagnose", &[&query], &answer);
+    Ok(answer)
 }
 
 /// Diagnose command output and return both the response and the conversation history.

@@ -1,7 +1,7 @@
 use super::ShellProxy;
 use crate::chatgpt::load_openai_config;
 use crate::interactive_input;
-use dsh_openai::ChatGptClient;
+use dsh_openai::{ChatGptClient, ChatRequestOptions};
 use dsh_types::{Context, ExitStatus};
 use serde_json::json;
 use std::io::{self, Write};
@@ -127,9 +127,13 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     }
 }
 
-fn get_staged_diff(cwd: Option<&std::path::Path>) -> Result<String, String> {
+/// Diff bytes sent to the model. A large staged change used to be forwarded in
+/// full, which is unbounded input for a one-paragraph answer.
+const MAX_DIFF_CHARS: usize = 24_000;
+
+fn run_git(args: &[&str], cwd: Option<&std::path::Path>) -> Result<String, String> {
     let mut command = Command::new("git");
-    command.args(["diff", "--cached"]);
+    command.args(args);
 
     if let Some(dir) = cwd {
         command.current_dir(dir);
@@ -142,6 +146,26 @@ fn get_staged_diff(cwd: Option<&std::path::Path>) -> Result<String, String> {
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn get_staged_diff(cwd: Option<&std::path::Path>) -> Result<String, String> {
+    let diff = run_git(&["diff", "--cached"], cwd)?;
+    if diff.len() <= MAX_DIFF_CHARS {
+        return Ok(diff);
+    }
+
+    // Too large to send whole: lead with the file-level summary so the model
+    // still sees the shape of the change, then as much of the diff as fits.
+    let stat = run_git(&["diff", "--cached", "--stat"], cwd).unwrap_or_default();
+    let budget = MAX_DIFF_CHARS.saturating_sub(stat.len());
+    let end = diff.floor_char_boundary(budget);
+
+    Ok(format!(
+        "Diff summary:\n{stat}\nDiff excerpt (truncated, {} of {} bytes):\n{}",
+        end,
+        diff.len(),
+        &diff[..end]
+    ))
 }
 
 fn generate_commit_message(
@@ -176,15 +200,12 @@ Rules:
         }),
     ];
 
+    let options = ChatRequestOptions::new()
+        .with_temperature(Some(0.3)) // Lower temperature for more deterministic output
+        .with_model(model_override);
     let response = client
-        .send_chat_request(
-            &messages,
-            Some(0.3), // Lower temperature for more deterministic output
-            model_override,
-            None,
-            None, // No cancellation callback for now, or could pass one if available
-        )
-        .map_err(|e| format!("{:?}", e))?;
+        .send_chat(&messages, &options, None)
+        .map_err(|e| format!("{e}"))?;
 
     let content = response["choices"][0]["message"]["content"]
         .as_str()

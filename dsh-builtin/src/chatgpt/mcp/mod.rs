@@ -467,6 +467,9 @@ impl McpManager {
             }
         }
 
+        // Only the servers belong here. Every tool already reaches the model
+        // through the `tools` array with its own name, description and schema;
+        // repeating them in the prompt paid for the same text twice.
         for server in &self.servers {
             let mut header = format!("- Server `{}`", server.label);
             if let Some(desc) = &server.description
@@ -474,14 +477,8 @@ impl McpManager {
             {
                 header.push_str(&format!(": {desc}"));
             }
+            header.push_str(&format!(" ({} tools)", server.tools.len()));
             lines.push(header);
-            for tool in &server.tools {
-                if let Some(tool_desc) = &tool.description {
-                    lines.push(format!("  • Tool `{}` – {}", tool.name, tool_desc));
-                } else {
-                    lines.push(format!("  • Tool `{}`", tool.name));
-                }
-            }
         }
 
         Some(lines.join("\n"))

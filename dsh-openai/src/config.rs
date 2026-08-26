@@ -1,3 +1,8 @@
+use std::time::Duration;
+
+/// Environment key overriding the total per-request timeout, in seconds.
+pub const TIMEOUT_ENV: &str = "AI_CHAT_TIMEOUT_SECS";
+
 /// Primary key for the chat endpoint path segment.
 const CHAT_COMPLETIONS_PATH: &str = "chat/completions";
 
@@ -8,11 +13,18 @@ pub const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1/";
 pub const DEFAULT_MODEL: &str = "gpt-5-mini";
 const ALLOW_INSECURE_HTTP_ENV: &str = "AI_CHAT_ALLOW_INSECURE_HTTP";
 
+/// Total per-request budget. An agent turn with tools regularly needs more than
+/// a minute, so the old fixed 60s cut long answers off mid-flight.
+pub const DEFAULT_TIMEOUT_SECS: u64 = 180;
+const MIN_TIMEOUT_SECS: u64 = 5;
+const MAX_TIMEOUT_SECS: u64 = 1800;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenAiConfig {
     api_key: Option<String>,
     base_url: String,
     default_model: String,
+    timeout: Duration,
 }
 
 impl OpenAiConfig {
@@ -30,6 +42,7 @@ impl OpenAiConfig {
             api_key,
             base_url,
             default_model,
+            timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
         }
     }
 
@@ -42,7 +55,16 @@ impl OpenAiConfig {
 
         let default_model = getter("AI_CHAT_MODEL").or_else(|| getter("OPENAI_MODEL"));
 
-        OpenAiConfig::new(api_key, base_url, default_model)
+        let timeout = getter(TIMEOUT_ENV)
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .map(|secs| secs.clamp(MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS))
+            .map(Duration::from_secs);
+
+        let config = OpenAiConfig::new(api_key, base_url, default_model);
+        match timeout {
+            Some(timeout) => config.with_timeout(timeout),
+            None => config,
+        }
     }
 
     pub fn api_key(&self) -> Option<&str> {
@@ -63,6 +85,15 @@ impl OpenAiConfig {
 
     pub fn with_api_key(mut self, api_key: Option<String>) -> Self {
         self.api_key = api_key;
+        self
+    }
+
+    pub fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
         self
     }
 }
@@ -199,6 +230,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn from_getter_reads_and_clamps_the_timeout() {
+        let cfg = OpenAiConfig::from_getter(|key| match key {
+            TIMEOUT_ENV => Some(" 300 ".to_string()),
+            _ => None,
+        });
+        assert_eq!(cfg.timeout(), Duration::from_secs(300));
+
+        let clamped = OpenAiConfig::from_getter(|key| match key {
+            TIMEOUT_ENV => Some("999999".to_string()),
+            _ => None,
+        });
+        assert_eq!(clamped.timeout(), Duration::from_secs(MAX_TIMEOUT_SECS));
+
+        let default = OpenAiConfig::from_getter(|_| None);
+        assert_eq!(default.timeout(), Duration::from_secs(DEFAULT_TIMEOUT_SECS));
     }
 
     #[test]

@@ -44,6 +44,8 @@ use std::time::{Duration, Instant};
 use tokio::time::{Instant as TokioInstant, MissedTickBehavior, interval_at};
 use tracing::{debug, warn};
 
+/// Cap on captured command output forwarded by `|>` to the chat runtime.
+const AI_PIPE_OUTPUT_CHARS: usize = 12_000;
 const AI_SUGGESTION_REFRESH_MS: u64 = 300;
 const GIT_STATUS_THROTTLE_MS: u64 = 200;
 // MCP_FORM_SUGGESTIONS moved to completion.rs
@@ -1531,9 +1533,13 @@ impl<'a> Repl<'a> {
         queue!(renderer, Print("\r")).ok();
         queue!(renderer, Clear(ClearType::CurrentLine)).ok();
 
+        // The captured output is unbounded; keep both ends so an error at the
+        // tail of a long log still reaches the model.
+        let bounded_output =
+            dsh_openai::turn::truncate_middle(&combined_output, AI_PIPE_OUTPUT_CHARS);
         let message = format!(
             "Shell command: `{}`\n\nOutput:\n```\n{}\n```\n\nQuery: {}",
-            command, combined_output, query
+            command, bounded_output, query
         );
 
         let ctx = Context::new_safe(getpid(), getpid(), true);

@@ -4,9 +4,12 @@
 //! generating completion definitions.
 
 use super::sanitize_code_block;
-use super::service::AiService;
+use super::service::{AiRequestOptions, AiService};
 use crate::safety::SafetyGuard;
 use anyhow::Result;
+
+/// Cap on the help text handed to the completion-definition generator.
+const MAX_HELP_TEXT_CHARS: usize = 12_000;
 use serde_json::json;
 
 /// Suggest next commands based on context.
@@ -103,6 +106,9 @@ CRITICAL RULES:
 3. Ensure the JSON is valid. Escape double quotes in descriptions if necessary.
 "#;
 
+    // `man` output for a command like git or ffmpeg runs past 100 KB; the
+    // options the definition needs are near the front.
+    let help_text = SafetyGuard::sanitize_ai_input(help_text, MAX_HELP_TEXT_CHARS);
     let user_message = format!("Command: {}\n\nHelp Text:\n{}", command_name, help_text);
 
     let messages = vec![
@@ -110,7 +116,10 @@ CRITICAL RULES:
         json!({"role": "user", "content": user_message}),
     ];
 
-    let content = service.send_request(messages, Some(0.1)).await?;
+    // The prompt demands a bare JSON document; let the provider enforce it.
+    let content = service
+        .send_request_with(messages, AiRequestOptions::new(Some(0.1)).as_json_object())
+        .await?;
     // sanitize just in case the AI adds markdown despite instructions
     Ok(sanitize_code_block(&content))
 }

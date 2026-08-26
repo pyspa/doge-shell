@@ -1,10 +1,17 @@
 use super::ShellProxy;
 use crate::chatgpt::load_openai_config;
-use dsh_openai::ChatGptClient;
+use dsh_openai::{ChatGptClient, ChatRequestOptions, json_object_format, strip_code_fence};
 use dsh_types::{Context, ExitStatus};
 use serde_json::json;
 
 /// Built-in safe-run command description
+/// Request shape shared by both safety analyses.
+fn verdict_options() -> ChatRequestOptions {
+    ChatRequestOptions::new()
+        .with_temperature(Some(0.1))
+        .with_response_format(Some(json_object_format()))
+}
+
 pub fn description() -> &'static str {
     "Execute commands with deterministic and LLM-based safety analysis"
 }
@@ -86,7 +93,7 @@ Format your response as valid JSON:
         json!({"role": "user", "content": format!("Check safety of:\n```\n{}\n```", full_command)}),
     ];
 
-    let analysis_result = match client.send_chat_request(&messages, Some(0.1), None, None, None) {
+    let analysis_result = match client.send_chat(&messages, &verdict_options(), None) {
         Ok(res) => res,
         Err(err) => {
             ctx.write_stderr(&format!("safe-run: Analysis failed: {err:?}"))
@@ -105,28 +112,7 @@ Format your response as valid JSON:
 
     // Parse JSON response
     // If parsing fails, fall back to simple text warning and high caution
-    fn clean_json(s: &str) -> String {
-        let s = s.trim();
-        if s.starts_with("```json") {
-            s.strip_prefix("```json")
-                .unwrap_or(s)
-                .strip_suffix("```")
-                .unwrap_or(s)
-                .trim()
-                .to_string()
-        } else if s.starts_with("```") {
-            s.strip_prefix("```")
-                .unwrap_or(s)
-                .strip_suffix("```")
-                .unwrap_or(s)
-                .trim()
-                .to_string()
-        } else {
-            s.to_string()
-        }
-    }
-
-    let cleaned_content = clean_json(content);
+    let cleaned_content = strip_code_fence(content);
     let (risk, explanation, recommend_inspection) =
         match serde_json::from_str::<serde_json::Value>(&cleaned_content) {
             Ok(json) => (
@@ -455,8 +441,7 @@ Format your response as valid JSON:
             json!({"role": "user", "content": format!("Analyze this content:\n```\n{}\n```", preview)}),
         ];
 
-        let analysis_result = match client.send_chat_request(&messages, Some(0.1), None, None, None)
-        {
+        let analysis_result = match client.send_chat(&messages, &verdict_options(), None) {
             Ok(res) => res,
             Err(err) => {
                 ctx.write_stderr(&format!("safe-run: Content analysis failed: {err:?}"))
@@ -473,28 +458,7 @@ Format your response as valid JSON:
             .and_then(|c| c.as_str())
             .unwrap_or("");
 
-        fn clean_json(s: &str) -> String {
-            let s = s.trim();
-            if s.starts_with("```json") {
-                s.strip_prefix("```json")
-                    .unwrap_or(s)
-                    .strip_suffix("```")
-                    .unwrap_or(s)
-                    .trim()
-                    .to_string()
-            } else if s.starts_with("```") {
-                s.strip_prefix("```")
-                    .unwrap_or(s)
-                    .strip_suffix("```")
-                    .unwrap_or(s)
-                    .trim()
-                    .to_string()
-            } else {
-                s.to_string()
-            }
-        }
-
-        let cleaned_content = clean_json(content);
+        let cleaned_content = strip_code_fence(content);
         let (risk, explanation) = match serde_json::from_str::<serde_json::Value>(&cleaned_content)
         {
             Ok(json) => (

@@ -8,6 +8,9 @@ use std::time::Instant;
 
 const AUTO_FIX_BLOCKLIST: &[&str] = &["gco"];
 
+/// Quiet period before the AI ghost-text backfill is allowed to fire.
+const AI_BACKFILL_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(400);
+
 pub fn get_directory_listing_content(path: &std::path::Path) -> Vec<String> {
     let mut files = Vec::new();
     if let Ok(dir) = std::fs::read_dir(path) {
@@ -143,7 +146,14 @@ impl<'a> Repl<'a> {
         }
 
         // If no deterministic candidates are available, try AI with full context.
-        if candidates.is_empty() && self.ai_ui.input_preferences.ai_backfill {
+        //
+        // Debounced: this runs on every keystroke, and the refresh tick calls it
+        // again once typing stops, so waiting for a quiet moment costs no
+        // suggestions but stops a request per character.
+        if candidates.is_empty()
+            && self.ai_ui.input_preferences.ai_backfill
+            && self.ai_ui.last_input_change_time.elapsed() >= AI_BACKFILL_DEBOUNCE
+        {
             let (cwd, files) = {
                 self.trigger_file_context_update();
                 let cache = self.services.file_context.read();

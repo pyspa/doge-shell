@@ -637,6 +637,10 @@ pub static BUILTIN_COMMAND: LazyLock<HashMap<&'static str, BuiltinSpec>> = LazyL
         "chat_model",
         BuiltinSpec::new(chatgpt::chat_model, chatgpt::chat_model_description()),
     );
+    builtin.insert(
+        "chat_reset",
+        BuiltinSpec::new(chatgpt::chat_reset, chatgpt::chat_reset_description()),
+    );
 
     // Safety commands
     builtin.insert(

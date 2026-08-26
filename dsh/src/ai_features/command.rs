@@ -4,9 +4,15 @@
 //! expanding smart pipes, and fixing failed commands.
 
 use super::sanitize_code_block;
-use super::service::{AiCommandResponse, AiService};
+use super::service::{AiCommandResponse, AiRequestOptions, AiService};
 use crate::safety::{PromptInjectionResult, SafetyGuard, SafetyResult};
 use anyhow::Result;
+
+fn command_json_options() -> AiRequestOptions {
+    // No token cap: on a reasoning model `max_completion_tokens` also budgets
+    // hidden reasoning, so a small cap yields finish_reason=length and no JSON.
+    AiRequestOptions::new(Some(0.1)).as_json_object()
+}
 use serde_json::json;
 
 /// Expand a smart pipe query into a shell command.
@@ -36,7 +42,9 @@ pub async fn expand_smart_pipe<S: AiService + ?Sized>(service: &S, query: &str) 
         json!({"role": "user", "content": sanitized_query}),
     ];
 
-    let content = service.send_request(messages, Some(0.1)).await?;
+    let content = service
+        .send_request_with(messages, command_json_options())
+        .await?;
     let content_clean = sanitize_code_block(&content);
 
     // Parse JSON
@@ -48,34 +56,7 @@ pub async fn expand_smart_pipe<S: AiService + ?Sized>(service: &S, query: &str) 
         )
     })?;
 
-    // Check safety
-    let safety_guard = service.get_safety_guard();
-    let safety_level = service.get_safety_level();
-    let allowlist = service.get_allowlist();
-
-    if let (Some(guard), Some(level), Some(allowlist)) = (safety_guard, safety_level, allowlist) {
-        match guard.check_command(&level, &response.command, &response.args, &allowlist) {
-            SafetyResult::Allowed => {
-                // Reconstruct command string
-                let mut parts = vec![response.command];
-                parts.extend(response.args);
-                Ok(parts.join(" "))
-            }
-            SafetyResult::Denied(msg) | SafetyResult::Confirm(msg) => {
-                tracing::warn!("Blocked dangerous AI suggestion: {}", msg);
-                Err(anyhow::anyhow!(
-                    "Security Warning: AI suggested a potentially dangerous command: {}. {}",
-                    response.command,
-                    msg
-                ))
-            }
-        }
-    } else {
-        // Fallback if safety components are not available (e.g. tests)
-        let mut parts = vec![response.command];
-        parts.extend(response.args);
-        Ok(parts.join(" "))
-    }
+    finalize_command(service, response, "pipeline suggestion")
 }
 
 /// Generate a shell command from a natural language request.
@@ -108,7 +89,9 @@ pub async fn run_generative_command<S: AiService + ?Sized>(
         json!({"role": "user", "content": sanitized_query}),
     ];
 
-    let content = service.send_request(messages, Some(0.1)).await?;
+    let content = service
+        .send_request_with(messages, command_json_options())
+        .await?;
     let content_clean = sanitize_code_block(&content);
 
     // Parse JSON
@@ -120,34 +103,7 @@ pub async fn run_generative_command<S: AiService + ?Sized>(
         )
     })?;
 
-    // Check safety
-    let safety_guard = service.get_safety_guard();
-    let safety_level = service.get_safety_level();
-    let allowlist = service.get_allowlist();
-
-    if let (Some(guard), Some(level), Some(allowlist)) = (safety_guard, safety_level, allowlist) {
-        match guard.check_command(&level, &response.command, &response.args, &allowlist) {
-            SafetyResult::Allowed => {
-                // Reconstruct command string
-                let mut parts = vec![response.command];
-                parts.extend(response.args);
-                Ok(parts.join(" "))
-            }
-            SafetyResult::Denied(msg) | SafetyResult::Confirm(msg) => {
-                tracing::warn!("Blocked dangerous AI generated command: {}", msg);
-                Err(anyhow::anyhow!(
-                    "Security Warning: AI generated a potentially dangerous command: {}. {}",
-                    response.command,
-                    msg
-                ))
-            }
-        }
-    } else {
-        // Fallback for tests
-        let mut parts = vec![response.command];
-        parts.extend(response.args);
-        Ok(parts.join(" "))
-    }
+    finalize_command(service, response, "generated command")
 }
 
 /// Fix a failed command using AI analysis.
@@ -191,7 +147,9 @@ pub async fn fix_command<S: AiService + ?Sized>(
         json!({"role": "user", "content": query}),
     ];
 
-    let content = service.send_request(messages, Some(0.1)).await?;
+    let content = service
+        .send_request_with(messages, command_json_options())
+        .await?;
     let content_clean = sanitize_code_block(&content);
 
     // Parse JSON
@@ -203,32 +161,46 @@ pub async fn fix_command<S: AiService + ?Sized>(
         )
     })?;
 
-    // Check safety
-    let safety_guard = service.get_safety_guard();
-    let safety_level = service.get_safety_level();
-    let allowlist = service.get_allowlist();
+    finalize_command(service, response, "fix suggestion")
+}
 
-    if let (Some(guard), Some(level), Some(allowlist)) = (safety_guard, safety_level, allowlist) {
-        match guard.check_command(&level, &response.command, &response.args, &allowlist) {
-            SafetyResult::Allowed => {
-                // Reconstruct command string
-                let mut parts = vec![response.command];
-                parts.extend(response.args);
-                Ok(parts.join(" "))
-            }
-            SafetyResult::Denied(msg) | SafetyResult::Confirm(msg) => {
-                tracing::warn!("Blocked dangerous AI fix suggestion: {}", msg);
-                Err(anyhow::anyhow!(
-                    "Security Warning: AI suggested a potentially dangerous fix: {}. {}",
-                    response.command,
-                    msg
-                ))
-            }
+/// Turn a validated AI command response into a command string.
+///
+/// `Confirm` is not a rejection here. These candidates only land in the input
+/// buffer, and the execution-time guard in `shell::eval` asks before anything
+/// runs; discarding them meant paying for a request and showing the user
+/// nothing at all.
+fn finalize_command<S: AiService + ?Sized>(
+    service: &S,
+    response: AiCommandResponse,
+    what: &str,
+) -> Result<String> {
+    let mut parts = vec![response.command.clone()];
+    parts.extend(response.args.clone());
+    let rendered = parts.join(" ");
+
+    let (Some(guard), Some(level), Some(allowlist)) = (
+        service.get_safety_guard(),
+        service.get_safety_level(),
+        service.get_allowlist(),
+    ) else {
+        // Safety components are unavailable (e.g. in tests).
+        return Ok(rendered);
+    };
+
+    match guard.check_command(&level, &response.command, &response.args, &allowlist) {
+        SafetyResult::Allowed => Ok(rendered),
+        SafetyResult::Confirm(msg) => {
+            tracing::info!("AI {what} needs confirmation before it runs: {msg}");
+            Ok(rendered)
         }
-    } else {
-        // Fallback
-        let mut parts = vec![response.command];
-        parts.extend(response.args);
-        Ok(parts.join(" "))
+        SafetyResult::Denied(msg) => {
+            tracing::warn!("Blocked dangerous AI {what}: {msg}");
+            Err(anyhow::anyhow!(
+                "AI {what} was blocked by the safety policy: `{}`. {}",
+                response.command,
+                msg
+            ))
+        }
     }
 }

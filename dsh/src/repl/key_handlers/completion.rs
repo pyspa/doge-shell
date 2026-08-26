@@ -78,6 +78,7 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
             }
             Err(e) => {
                 warn!("Smart pipe expansion failed: {}", e);
+                notify_ai_failure(repl, "smart pipe", &e);
             }
         }
     }
@@ -92,6 +93,7 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
             }
             Err(e) => {
                 warn!("Generative command expansion failed: {}", e);
+                notify_ai_failure(repl, "generated command", &e);
             }
         }
     }
@@ -302,6 +304,17 @@ fn range_text(input: &str, range: CompletionReplacementRange) -> String {
         .skip(range.start)
         .take(range.end.saturating_sub(range.start))
         .collect()
+}
+
+/// Surface an AI expansion failure to the user.
+///
+/// These paths used to only write to the trace log, so a request that the
+/// safety policy rejected looked exactly like a key that did nothing.
+fn notify_ai_failure(repl: &mut Repl<'_>, what: &str, err: &anyhow::Error) {
+    let mut renderer = TerminalRenderer::new();
+    let line = format!("dsh: {what}: {err}").replace(['\n', '\r'], " ");
+    crate::repl::render::print_above_prompt(repl, &mut renderer, &[line]);
+    renderer.flush().ok();
 }
 
 #[cfg(test)]

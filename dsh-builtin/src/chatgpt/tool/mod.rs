@@ -10,9 +10,13 @@ mod execute;
 mod gitignore;
 mod ls;
 mod read;
+mod replace;
 mod search;
 
-const MAX_OUTPUT_LENGTH: usize = 4096;
+/// Global backstop for the size of a single tool result. Individual tools apply
+/// their own tighter limits first so that the important part of their output
+/// survives this cut.
+pub(crate) const MAX_OUTPUT_LENGTH: usize = 8192;
 
 pub fn build_tools() -> Vec<Value> {
     vec![
@@ -20,6 +24,7 @@ pub fn build_tools() -> Vec<Value> {
         execute::definition(),
         ls::definition(),
         read::definition(),
+        replace::definition(),
         search::definition(),
     ]
 }
@@ -68,6 +73,7 @@ pub fn execute_tool_call(
             execute::NAME => execute::run(arguments, proxy)?,
             ls::NAME => ls::run(arguments, proxy)?,
             read::NAME => read::run(arguments, proxy)?,
+            replace::NAME => replace::run(arguments, proxy)?,
             search::NAME => search::run(arguments, proxy)?,
             other => return Err(format!("chat: unsupported tool `{other}`")),
         }
@@ -91,14 +97,10 @@ fn redact_tool_arguments(args: &str) -> String {
 }
 
 fn truncate_output(output: String) -> String {
-    if output.len() > MAX_OUTPUT_LENGTH {
-        let end = output.floor_char_boundary(MAX_OUTPUT_LENGTH);
-        let truncated = &output[..end];
-        let omitted = output.len() - end;
-        format!("{truncated}\n... (truncated {omitted} characters)")
-    } else {
-        output
+    if output.len() <= MAX_OUTPUT_LENGTH {
+        return output;
     }
+    dsh_openai::turn::truncate_middle(&output, MAX_OUTPUT_LENGTH)
 }
 
 pub(crate) fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
@@ -257,6 +259,7 @@ pub(crate) fn sensitive_path_reason(path: &Path) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use tempfile::tempdir;
 
     use crate::test_support::TestShellProxy;
@@ -275,21 +278,49 @@ mod tests {
     }
 
     #[test]
-    fn test_truncation_long() {
-        let long = "a".repeat(MAX_OUTPUT_LENGTH + 10);
+    fn truncate_output_keeps_the_tail() {
+        // The tail carries the compiler error / test summary the model must see.
+        let long = format!("{}{}", "H".repeat(MAX_OUTPUT_LENGTH), "TAIL-MARKER");
         let truncated = truncate_output(long);
-        assert!(truncated.contains("... (truncated 10 characters)"));
-        assert_eq!(truncated.len(), MAX_OUTPUT_LENGTH + 30); // 30 is length of "\n... (truncated 10 characters)" approx
+
+        assert!(truncated.starts_with("HHH"));
+        assert!(truncated.ends_with("TAIL-MARKER"));
+        assert!(truncated.contains("truncated"));
+        assert!(truncated.len() < MAX_OUTPUT_LENGTH + 64);
     }
 
     #[test]
-    fn test_truncation_no_panic_multi_byte() {
-        let mut s = "a".repeat(MAX_OUTPUT_LENGTH - 1);
-        s.push('🦀'); // '🦀' is 4 bytes. 4095 + 4 = 4099 bytes.
-        // Index 4096 is inside '🦀', floor_char_boundary(4096) should return 4095.
-        let truncated = truncate_output(s);
-        assert_eq!(truncated.len(), (MAX_OUTPUT_LENGTH - 1) + 29); // 29 is length of "\n... (truncated 4 characters)"
-        assert!(truncated.contains("... (truncated 4 characters)"));
+    fn execute_tool_call_returns_parseable_json_after_the_global_cap() {
+        // The global cap runs after the tool, so it must not corrupt a
+        // structured result on its way back to the model.
+        let dir = tempdir().unwrap();
+        for index in 0..400 {
+            std::fs::write(dir.path().join(format!("f-{index:0>50}")), b"x").unwrap();
+        }
+
+        let mut proxy = NoopProxy {
+            current_dir: std::env::current_dir().unwrap(),
+            execute_allowlist: vec!["ls".to_string()],
+            confirm_result: true,
+            ..NoopProxy::default()
+        };
+
+        let tool_call = json!({
+            "function": {
+                "name": "execute",
+                "arguments": format!("{{\"command\":\"ls -R {}\"}}", dir.path().display())
+            }
+        });
+
+        let result = execute_tool_call(
+            &tool_call,
+            &crate::chatgpt::McpManager::default(),
+            &mut proxy,
+        )
+        .unwrap();
+
+        assert!(result.len() <= MAX_OUTPUT_LENGTH + 128);
+        serde_json::from_str::<Value>(&result).expect("tool result must stay valid JSON");
     }
 
     #[test]

@@ -3,9 +3,12 @@ use serde_json::{Value, json};
 use shell_words::split;
 use std::env;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 use xdg::BaseDirectories;
 
 use crate::ShellProxy;
@@ -18,18 +21,41 @@ const EXECUTE_TOOL_ENV_ALLOWLIST: &str = "AI_CHAT_EXECUTE_ALLOWLIST";
 const EXECUTE_TOOL_CONFIG_OVERRIDE_ENV: &str = "DSH_EXECUTE_TOOL_CONFIG";
 const CONFIG_DIR_PREFIX: &str = "dsh";
 
+/// Wall-clock budget for a single `execute` call when the caller does not ask
+/// for one. Without a timeout a build or a dev server wedges the whole shell.
+const DEFAULT_TIMEOUT_MS: u64 = 120_000;
+const MIN_TIMEOUT_MS: u64 = 1_000;
+const MAX_TIMEOUT_MS: u64 = 600_000;
+const TIMEOUT_POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// Per-stream budget applied before the global tool-output cap, so a chatty
+/// stdout can never push stderr out of the result.
+const MAX_STREAM_CHARS: usize = 3072;
+/// Floor for that budget when the serialized result still does not fit.
+const MIN_STREAM_CHARS: usize = 256;
+/// How long to wait for the output readers once the child is gone.
+///
+/// A killed child that left a grandchild behind keeps the write end of the pipe
+/// open, so waiting for EOF can never finish; that would defeat the timeout
+/// this whole path exists for.
+const DRAIN_GRACE: Duration = Duration::from_secs(2);
+
 pub(crate) fn definition() -> Value {
     json!({
         "type": "function",
         "function": {
             "name": NAME,
-            "description": "Execute an allowlisted command directly (without shell evaluation) and return exit code, stdout, and stderr. Configure allowlist in ~/.config/dsh/openai-execute-tool.json or AI_CHAT_EXECUTE_ALLOWLIST.",
+            "description": "Execute an allowlisted command directly (without shell evaluation) and return exit code, stdout, and stderr. Long output is truncated in the middle, so the end of a build or test log is preserved. Configure allowlist in ~/.config/dsh/openai-execute-tool.json or AI_CHAT_EXECUTE_ALLOWLIST.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
                         "description": "Command line to execute. Shell operators are not allowed."
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "minimum": 1000,
+                        "description": "Kill the command after this many milliseconds. Defaults to 120000."
                     }
                 },
                 "required": ["command"],
@@ -95,14 +121,17 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
         }
     }
 
-    let output = Command::new(&program)
-        .args(&args)
-        .output()
+    let timeout_ms = parsed
+        .get("timeout_ms")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(DEFAULT_TIMEOUT_MS)
+        .clamp(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
+
+    let run_result = run_with_timeout(&program, &args, Duration::from_millis(timeout_ms))
         .map_err(|err| format!("chat: failed to execute `{}`: {err}", command.trim()))?;
 
-    let exit_code = output.status.code().unwrap_or(-1);
-    let stdout_text = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr_text = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout_text = String::from_utf8_lossy(&run_result.stdout).to_string();
+    let stderr_text = String::from_utf8_lossy(&run_result.stderr).to_string();
 
     if !stdout_text.is_empty() {
         let mut stdout = io::stdout();
@@ -118,13 +147,141 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
             .map_err(|e| e.to_string())?;
     }
 
-    let result = json!({
-        "exit_code": exit_code,
-        "stdout": stdout_text,
-        "stderr": stderr_text,
+    let exit_code = run_result
+        .status
+        .and_then(|status| status.code())
+        .unwrap_or(-1);
+
+    let note = run_result.timed_out.then(|| {
+        format!("command exceeded timeout_ms={timeout_ms} and was killed; output below is partial")
     });
 
-    Ok(result.to_string())
+    Ok(render_result(exit_code, &stdout_text, &stderr_text, note))
+}
+
+/// Serialize the result so that it survives the global tool-output cap intact.
+///
+/// The per-stream budgets bound the *raw* text, but JSON escaping can double or
+/// sextuple it. Handing an oversized object to the shared truncator produced a
+/// middle-cut, unparseable JSON document.
+fn render_result(exit_code: i32, stdout: &str, stderr: &str, note: Option<String>) -> String {
+    let mut budget = MAX_STREAM_CHARS;
+
+    loop {
+        let mut result = json!({
+            "exit_code": exit_code,
+            "stdout": dsh_openai::turn::truncate_middle(stdout, budget),
+            "stderr": dsh_openai::turn::truncate_middle(stderr, budget),
+        });
+
+        if let Some(note) = &note
+            && let Some(map) = result.as_object_mut()
+        {
+            map.insert("note".into(), json!(note));
+        }
+
+        let rendered = result.to_string();
+        if rendered.len() <= super::MAX_OUTPUT_LENGTH || budget <= MIN_STREAM_CHARS {
+            return rendered;
+        }
+
+        budget /= 2;
+    }
+}
+
+struct CapturedRun {
+    status: Option<ExitStatus>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    timed_out: bool,
+}
+
+/// Drain a child pipe on its own thread.
+///
+/// Polling only for exit deadlocks as soon as the child fills a pipe buffer, so
+/// both streams have to be read while we wait. The result arrives over a
+/// channel rather than a join handle so that the caller can stop waiting.
+fn drain_pipe<R>(pipe: Option<R>) -> mpsc::Receiver<Vec<u8>>
+where
+    R: Read + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut buffer);
+        }
+        let _ = tx.send(buffer);
+    });
+    rx
+}
+
+fn run_with_timeout(
+    program: &str,
+    args: &[String],
+    timeout: Duration,
+) -> Result<CapturedRun, String> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        // Own process group, so a timeout can take the whole tree down instead
+        // of orphaning whatever the command spawned.
+        .process_group(0)
+        .spawn()
+        .map_err(|err| err.to_string())?;
+
+    let stdout_reader = drain_pipe(child.stdout.take());
+    let stderr_reader = drain_pipe(child.stderr.take());
+
+    let deadline = Instant::now() + timeout;
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {}
+            Err(err) => return Err(err.to_string()),
+        }
+
+        if Instant::now() >= deadline {
+            kill_process_group(&child);
+            let _ = child.kill();
+            let _ = child.wait();
+            timed_out = true;
+            break None;
+        }
+
+        std::thread::sleep(TIMEOUT_POLL_INTERVAL);
+    };
+
+    // Bounded: a surviving grandchild still holds the write end of the pipe, so
+    // EOF may never arrive. Give up on the tail rather than on the shell. Both
+    // readers share one deadline so the wait cannot add up.
+    let drain_deadline = Instant::now() + DRAIN_GRACE;
+    let stdout = recv_until(&stdout_reader, drain_deadline);
+    let stderr = recv_until(&stderr_reader, drain_deadline);
+
+    Ok(CapturedRun {
+        status,
+        stdout,
+        stderr,
+        timed_out,
+    })
+}
+
+fn recv_until(reader: &mpsc::Receiver<Vec<u8>>, deadline: Instant) -> Vec<u8> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    reader.recv_timeout(remaining).unwrap_or_default()
+}
+
+/// Signal the whole group the child leads, so background grandchildren die too.
+fn kill_process_group(child: &std::process::Child) {
+    let Ok(pid) = i32::try_from(child.id()) else {
+        return;
+    };
+    // `process_group(0)` made the child its own group leader, so pgid == pid.
+    let _ = nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pid), nix::sys::signal::SIGKILL);
 }
 
 fn parse_command_tokens(command: &str) -> Result<Vec<String>, String> {
@@ -506,6 +663,149 @@ mod tests {
 
         assert_eq!(result.unwrap(), "Execution cancelled by user.".to_string());
         assert_eq!(confirm_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn run_kills_a_command_that_exceeds_its_timeout() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "sleep");
+        let mut proxy = TestProxy {
+            execute_allowlist: vec!["sleep".to_string()],
+            current_dir: std::env::current_dir().unwrap(),
+            confirm_result: true,
+            ..TestProxy::default()
+        };
+
+        let started = Instant::now();
+        let result = run("{\"command\":\"sleep 30\",\"timeout_ms\":1000}", &mut proxy).unwrap();
+        let elapsed = started.elapsed();
+
+        assert!(result.contains("exceeded timeout_ms=1000"), "{result}");
+        assert!(result.contains("\"exit_code\":-1"), "{result}");
+        assert!(
+            elapsed < Duration::from_secs(20),
+            "did not return early: {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn run_returns_stderr_alongside_exit_code() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls");
+        let mut proxy = TestProxy {
+            execute_allowlist: vec!["ls".to_string()],
+            current_dir: std::env::current_dir().unwrap(),
+            confirm_result: true,
+            ..TestProxy::default()
+        };
+
+        let result = run(
+            "{\"command\":\"ls /definitely-missing-path-for-dsh-test\"}",
+            &mut proxy,
+        )
+        .unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+
+        assert_ne!(parsed["exit_code"].as_i64().unwrap(), 0);
+        assert!(
+            !parsed["stderr"].as_str().unwrap().is_empty(),
+            "stderr was dropped: {result}"
+        );
+    }
+
+    #[test]
+    fn render_result_stays_parseable_when_escaping_inflates_it() {
+        // Regression: the per-stream caps bound raw text, but JSON escaping can
+        // multiply it, and the shared truncator then cut the middle out of the
+        // serialized object.
+        let noisy = "\u{1b}[31mboom\n".repeat(2000);
+        let rendered = render_result(1, &noisy, &noisy, None);
+
+        assert!(
+            rendered.len() <= crate::chatgpt::tool::MAX_OUTPUT_LENGTH,
+            "result is {} bytes",
+            rendered.len()
+        );
+        let parsed: Value = serde_json::from_str(&rendered).expect("result must be valid JSON");
+        assert_eq!(parsed["exit_code"], 1);
+        assert!(!parsed["stdout"].as_str().unwrap().is_empty());
+        assert!(!parsed["stderr"].as_str().unwrap().is_empty());
+    }
+
+    #[test]
+    fn render_result_reports_a_timeout_note() {
+        let rendered = render_result(-1, "out", "", Some("killed".to_string()));
+        let parsed: Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(parsed["note"], "killed");
+    }
+
+    #[test]
+    fn run_returns_even_while_a_grandchild_holds_the_pipe() {
+        // A script that backgrounds a process keeps the write end of stdout
+        // open after it exits, so waiting for EOF would hang the shell.
+        let _lock = ENV_LOCK.lock().unwrap();
+
+        let dir = tempdir().unwrap();
+        let script = dir.path().join("spawner.sh");
+        std::fs::write(&script, "#!/bin/sh\nsleep 5 &\necho started\n").unwrap();
+        let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+        std::fs::set_permissions(&script, permissions).unwrap();
+
+        let allowlist = script.to_string_lossy().to_string();
+        let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, &allowlist);
+        let mut proxy = TestProxy {
+            execute_allowlist: vec![allowlist.clone()],
+            current_dir: std::env::current_dir().unwrap(),
+            confirm_result: true,
+            ..TestProxy::default()
+        };
+
+        let started = Instant::now();
+        let result = run(&format!("{{\"command\":\"{allowlist}\"}}"), &mut proxy).unwrap();
+        let elapsed = started.elapsed();
+
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["exit_code"].as_i64().unwrap(), 0);
+        assert!(
+            elapsed < DRAIN_GRACE + Duration::from_secs(1),
+            "waited for the grandchild: {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn a_large_stdout_does_not_evict_stderr() {
+        // Regression: the whole result JSON used to be cut from the front, so a
+        // chatty stdout dropped the error message the model needed.
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls");
+
+        let dir = tempdir().unwrap();
+        for index in 0..300 {
+            std::fs::write(dir.path().join(format!("file-{index:0>40}")), b"x").unwrap();
+        }
+
+        let mut proxy = TestProxy {
+            execute_allowlist: vec!["ls".to_string()],
+            current_dir: std::env::current_dir().unwrap(),
+            confirm_result: true,
+            ..TestProxy::default()
+        };
+
+        let command = format!(
+            "{{\"command\":\"ls {} /definitely-missing-path-for-dsh-test\"}}",
+            dir.path().display()
+        );
+        let result = run(&command, &mut proxy).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+
+        let stdout = parsed["stdout"].as_str().unwrap();
+        let stderr = parsed["stderr"].as_str().unwrap();
+
+        assert!(stdout.len() > MAX_STREAM_CHARS / 2, "stdout was empty");
+        assert!(stdout.contains("truncated"), "stdout was not truncated");
+        assert!(!stderr.is_empty(), "stderr was dropped: {result}");
+        assert_ne!(parsed["exit_code"].as_i64().unwrap(), 0);
     }
 
     struct EnvGuard {

@@ -231,6 +231,7 @@ The shell includes many built-in commands:
 | `bookmark`          | Bookmark management command                                                                                                |
 | `chat_prompt`       | Set AI assistant system prompt                                                                                             |
 | `chat_model`        | Set AI model                                                                                                               |
+| `chat_reset`        | Forget the carried AI chat conversation and cached MCP tool list                                                           |
 | `gh-notify`         | View GitHub notifications interactively                                                                                    |
 | `glog`              | Git log with interactive selection                                                                                         |
 | `gco`               | Git checkout with interactive branch selection                                                                             |
@@ -1144,6 +1145,23 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    export AI_CHAT_API_KEY="your-api-key-here"
    ```
 
+   Optional settings:
+
+   | Variable | Default | Purpose |
+   | --- | --- | --- |
+   | `AI_CHAT_MODEL` | `gpt-5-mini` | Model used for chat and AI actions |
+   | `AI_SUMMARY_MODEL` | chat model | Model used to summarize a long conversation |
+   | `AI_CHAT_BASE_URL` | `https://api.openai.com/v1/` | OpenAI-compatible endpoint |
+   | `AI_CHAT_ALLOW_INSECURE_HTTP` | off | Allow an `http://` base URL (local models) |
+   | `AI_CHAT_TIMEOUT_SECS` | `180` | Total per-request timeout |
+   | `AI_CHAT_SESSION_TTL_SECS` | `1800` | How long consecutive `!` turns share a conversation; `0` disables it |
+   | `AI_CHAT_CONTEXT_TOKEN_BUDGET` | `100000` | Prompt tokens before the conversation is summarized |
+   | `AI_CHAT_EXECUTE_ALLOWLIST` | unset | Overrides the `execute` tool allowlist |
+   | `AI_MESSAGE_LANG` | unset | Language for AI responses |
+
+   Transient failures (429, 5xx, timeouts) are retried with backoff, honouring
+   `Retry-After`.
+
 2. The shell will automatically provide command suggestions when available.
 
 3. Use `!` prefix to chat with the AI directly:
@@ -1209,7 +1227,31 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
 
     Press `Alt+w` to wrap the current input as `ai-watch -- <current input>` without executing it.
 
-9. **AI Response Language**:
+9. **Agent tools**:
+    Inside `!` chat the assistant can call `search`, `ls`, `read_file`, `str_replace`, `edit`
+    and `execute`.
+
+    - `read_file` returns a line-numbered window and is paged: the assistant continues
+      with `offset` instead of losing everything past the first few KB.
+    - `str_replace` changes part of a file by exact match. `edit` still exists for
+      creating a file or replacing one in full.
+    - `execute` runs an allowlisted command with no shell evaluation and kills it after
+      `timeout_ms` (120s by default), so a build or a dev server cannot wedge the shell.
+    - Long tool output is truncated in the middle, so the end of a build or test log -
+      where the error is - still reaches the model.
+    - File writes and skill scripts always ask for confirmation.
+
+10. **Conversation continuity**:
+    Consecutive `!` turns continue the same conversation, so follow-up questions work and
+    the assistant does not re-explore the project every time. It restarts when the
+    directory changes, when the model/prompt/language changes, after
+    `AI_CHAT_SESSION_TTL_SECS` (default 1800), or on `chat_reset`.
+
+11. **Token usage**:
+    Each `!` turn prints what it cost (`tokens: N req / in X (cached Y) / out Z`), and
+    `doctor ai` shows the session total.
+
+12. **AI Response Language**:
     Configure the language for AI chat responses.
 
     ```lisp
@@ -1221,7 +1263,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     export AI_MESSAGE_LANG="Japanese"
     ```
 
-9. **Runtime Skills**:
+13. **Runtime Skills**:
    The chat runtime can load local skills from `~/.config/dsh/skills/`. This repository keeps canonical sample skills under `docs/ai/skills/`.
 
    ```bash

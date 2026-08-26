@@ -17,6 +17,7 @@
 //! - [`suggestion`] - Command suggestions and completion generation
 
 mod analysis;
+mod cache;
 mod command;
 mod directory;
 mod service;
@@ -33,19 +34,14 @@ pub use analysis::{
 };
 pub use command::{expand_smart_pipe, fix_command, run_generative_command};
 pub use directory::describe_directory;
-pub use service::{AiCommandResponse, AiService, ChatClient, ConfirmationHandler, LiveAiService};
+pub use service::{
+    AiCommandResponse, AiRequestOptions, AiService, ChatClient, ConfirmationHandler, LiveAiService,
+};
 pub use suggestion::{generate_completion_json, suggest_next_commands};
 
 /// Sanitize code block markers from AI response.
 ///
 /// Removes markdown code block syntax from AI responses.
 pub fn sanitize_code_block(content: &str) -> String {
-    let content = content.trim_matches(|c| c == '`');
-    if let Some(stripped) = content.strip_prefix("bash\n") {
-        stripped.to_string()
-    } else if let Some(stripped) = content.strip_prefix("json\n") {
-        stripped.to_string()
-    } else {
-        content.to_string()
-    }
+    dsh_openai::strip_code_fence(content)
 }

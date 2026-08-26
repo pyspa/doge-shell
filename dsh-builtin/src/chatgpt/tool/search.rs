@@ -7,6 +7,12 @@ use std::io::{BufRead, BufReader};
 
 pub(crate) const NAME: &str = "search";
 
+const DEFAULT_MAX_RESULTS: usize = 50;
+const MAX_MAX_RESULTS: usize = 200;
+/// Matching lines reported per file for a content search. One line per file
+/// hides the other call sites the model is looking for.
+const MAX_MATCHES_PER_FILE: usize = 5;
+
 pub(crate) fn definition() -> Value {
     json!({
         "type": "function",
@@ -23,6 +29,11 @@ pub(crate) fn definition() -> Value {
                     "path": {
                         "type": "string",
                         "description": "Path to start search from (relative to current directory or absolute for skills)"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Maximum number of results to return. Defaults to 50."
                     },
                     "type": {
                         "type": "string",
@@ -75,7 +86,11 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
     }
 
     let mut results = Vec::new();
-    let max_results = 50;
+    let max_results = parsed
+        .get("max_results")
+        .and_then(|v| v.as_u64())
+        .map(|v| (v.max(1) as usize).min(MAX_MAX_RESULTS))
+        .unwrap_or(DEFAULT_MAX_RESULTS);
     let mut hidden_sensitive = 0usize;
 
     match search_type {
@@ -149,22 +164,24 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
                 // For now, just try to read as text
                 if let Ok(file) = fs::File::open(entry.path()) {
                     let reader = BufReader::new(file);
+                    let mut matches_in_file = 0usize;
                     for (line_idx, line) in reader.lines().enumerate() {
+                        if results.len() >= max_results || matches_in_file >= MAX_MATCHES_PER_FILE {
+                            break;
+                        }
                         if let Ok(line_content) = line
                             && line_content.contains(query)
+                            && let Ok(cwd_rel) = entry.path().strip_prefix(&normalized_current_dir)
                         {
-                            if let Ok(cwd_rel) = entry.path().strip_prefix(&normalized_current_dir)
-                            {
-                                let line_content =
-                                    safety_policy::redact_sensitive_text(line_content.trim());
-                                results.push(format!(
-                                    "{}:{}: {}",
-                                    cwd_rel.display(),
-                                    line_idx + 1,
-                                    line_content
-                                ));
-                            }
-                            break; // Only one match per file for now to avoid spam
+                            let line_content =
+                                safety_policy::redact_sensitive_text(line_content.trim());
+                            results.push(format!(
+                                "{}:{}: {}",
+                                cwd_rel.display(),
+                                line_idx + 1,
+                                line_content
+                            ));
+                            matches_in_file += 1;
                         }
                     }
                 }
@@ -182,11 +199,14 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
     if results.is_empty() {
         output.push_str("(no matches found)");
     } else {
+        let hit_cap = results.len() >= max_results;
         for result in results {
             output.push_str(&format!("- {}\n", result));
         }
-        if output.lines().count() > max_results {
-            output.push_str("... (results truncated)");
+        if hit_cap {
+            output.push_str(&format!(
+                "... (stopped at max_results={max_results}; narrow the query or raise max_results)"
+            ));
         }
     }
     if hidden_sensitive > 0 {

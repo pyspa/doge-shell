@@ -163,6 +163,14 @@ const HELP_TOPICS: &[HelpTopic] = &[
         related: &["chat_prompt", "doctor"],
     },
     HelpTopic {
+        name: "chat_reset",
+        category: "ai",
+        summary: "Forget the carried AI chat conversation and cached MCP tool list.",
+        usage: "chat_reset",
+        examples: &["chat_reset"],
+        related: &["chat_model", "chat_prompt"],
+    },
+    HelpTopic {
         name: "chat_prompt",
         category: "ai",
         summary: "Set the AI assistant system prompt for the current shell session.",

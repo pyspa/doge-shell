@@ -1,7 +1,7 @@
 use crate::completion::path::path_completion_prefix_for_shell_token;
 use crate::completion::shell_token::{self, SeparatorMode};
 use crate::history::History;
-use dsh_openai::ChatGptClient;
+use dsh_openai::{ChatGptClient, ChatRequestOptions};
 use parking_lot::Mutex as ParkingMutex;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -723,13 +723,12 @@ impl AiSuggestionBackend {
 
     fn fetch_completion(&self, request: &SuggestionRequest) -> Option<String> {
         let messages = self.build_messages(request);
-        let response = match self.inner.client.send_chat_request(
-            &messages,
-            Some(self.inner.settings.temperature),
-            None,
-            None,
-            None,
-        ) {
+        // No `max_completion_tokens`: on a reasoning model that budget also
+        // covers hidden reasoning, and a capped ghost-text request comes back
+        // empty with finish_reason=length.
+        let options =
+            ChatRequestOptions::new().with_temperature(Some(self.inner.settings.temperature));
+        let response = match self.inner.client.send_chat(&messages, &options, None) {
             Ok(value) => value,
             Err(err) => {
                 warn!("ai suggestion request failed: {err:?}");

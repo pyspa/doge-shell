@@ -2,6 +2,7 @@
 //!
 //! This module provides functions for analyzing directory structure and contents.
 
+use super::cache;
 use super::service::AiService;
 use crate::safety::SafetyGuard;
 use anyhow::Result;
@@ -28,10 +29,16 @@ pub async fn describe_directory<S: AiService + ?Sized>(
         sanitized_cwd, sanitized_listing
     );
 
+    if let Some(cached) = cache::lookup("describe_dir", &[&query]) {
+        return Ok(cached);
+    }
+
     let messages = vec![
         json!({"role": "system", "content": system_prompt}),
         json!({"role": "user", "content": query}),
     ];
 
-    service.send_request(messages, Some(0.3)).await
+    let answer = service.send_request(messages, Some(0.3)).await?;
+    cache::store("describe_dir", &[&query], &answer);
+    Ok(answer)
 }

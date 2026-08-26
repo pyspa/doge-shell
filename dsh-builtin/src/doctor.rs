@@ -168,7 +168,9 @@ fn json_section_details(
                 }))
             })
         }
-        Some("ai") => json!({
+        Some("ai") => {
+            let usage = dsh_openai::usage::session_total();
+            json!({
             "configured": proxy.get_var("AI_CHAT_API_KEY")
                 .or_else(|| proxy.get_var("OPENAI_API_KEY"))
                 .or_else(|| proxy.get_var("OPEN_AI_API_KEY"))
@@ -179,8 +181,16 @@ fn json_section_details(
             "base_url": proxy.get_var("AI_CHAT_BASE_URL")
                 .or_else(|| proxy.get_var("OPENAI_BASE_URL"))
                 .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
-            "message_lang": proxy.get_var("AI_MESSAGE_LANG").unwrap_or_else(|| "default".to_string())
-        }),
+            "message_lang": proxy.get_var("AI_MESSAGE_LANG").unwrap_or_else(|| "default".to_string()),
+            "timeout_secs": ai_timeout_secs(proxy),
+            "usage": {
+                "requests": usage.requests,
+                "prompt_tokens": usage.prompt_tokens,
+                "cached_prompt_tokens": usage.cached_prompt_tokens,
+                "completion_tokens": usage.completion_tokens
+            }
+            })
+        }
         Some("mcp") => {
             let servers = proxy.list_mcp_servers();
             json!({
@@ -551,6 +561,13 @@ fn check_config(ctx: &Context) {
     }
 }
 
+/// Report the timeout the client resolves, clamps included.
+fn ai_timeout_secs(proxy: &mut dyn ShellProxy) -> u64 {
+    crate::chatgpt::load_openai_config(proxy)
+        .timeout()
+        .as_secs()
+}
+
 fn check_ai(ctx: &Context, proxy: &mut dyn ShellProxy) {
     let api_key = proxy
         .get_var("AI_CHAT_API_KEY")
@@ -580,6 +597,24 @@ fn check_ai(ctx: &Context, proxy: &mut dyn ShellProxy) {
     let _ = ctx.write_stdout(&format!("ok model {model}"));
     let _ = ctx.write_stdout(&format!("ok base-url {base_url}"));
     let _ = ctx.write_stdout(&format!("ok message-lang {lang}"));
+
+    let _ = ctx.write_stdout(&format!("ok request-timeout {}s", ai_timeout_secs(proxy)));
+
+    match crate::chatgpt::chat_session_description() {
+        Some(detail) => {
+            let _ = ctx.write_stdout(&format!("ok chat-session {detail}"));
+        }
+        None => {
+            let _ = ctx.write_stdout("skip chat-session none carried");
+        }
+    }
+
+    let usage = dsh_openai::usage::session_total();
+    if usage.is_empty() {
+        let _ = ctx.write_stdout("skip token-usage no AI requests in this session");
+    } else {
+        let _ = ctx.write_stdout(&format!("ok token-usage {}", usage.summary_line()));
+    }
 
     let dsh_skills_dir = dirs::config_dir().map(|path| path.join("dsh").join("skills"));
     let dsh_skill_count = match dsh_skills_dir.as_ref() {

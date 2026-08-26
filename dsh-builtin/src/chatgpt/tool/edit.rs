@@ -11,7 +11,7 @@ pub(crate) fn definition() -> Value {
         "type": "function",
         "function": {
             "name": NAME,
-            "description": "Create or overwrite a workspace file with the provided contents.",
+            "description": "Create a new workspace file, or replace an existing one in full. The file is overwritten with `contents`, so use `str_replace` instead when changing part of an existing file.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -21,7 +21,7 @@ pub(crate) fn definition() -> Value {
                     },
                     "contents": {
                         "type": "string",
-                        "description": "Full desired contents of the file. The file will be overwritten with this value."
+                        "description": "Full desired contents of the file. Everything currently in the file is discarded."
                     }
                 },
                 "required": ["path", "contents"],

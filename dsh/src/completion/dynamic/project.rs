@@ -61,7 +61,9 @@ pub(super) fn collect(
         "shell.alias" => collector.collect_shell_alias_candidates(current_token),
         "shell.env_var" => collector.collect_shell_env_var_candidates(current_token),
         "shell.job" => Vec::new(),
-        "direnv.rc" => collector.collect_direnv_rc_candidates(current_dir, current_token, cached_only),
+        "direnv.rc" => {
+            collector.collect_direnv_rc_candidates(current_dir, current_token, cached_only)
+        }
         _ => {
             return platform::collect(
                 collector,
@@ -253,11 +255,12 @@ fn load_direnv_rc_values(start: &Path) -> Vec<String> {
     if let Ok(entries) = fs::read_dir(&start) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() && path.join(".envrc").is_file() {
-                if let Some(name) = entry.file_name().to_str() {
-                    values.push(format!("{name}/.envrc"));
-                    values.push(name.to_string());
-                }
+            if path.is_dir()
+                && path.join(".envrc").is_file()
+                && let Some(name) = entry.file_name().to_str()
+            {
+                values.push(format!("{name}/.envrc"));
+                values.push(name.to_string());
             }
         }
     }

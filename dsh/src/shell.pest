@@ -1,11 +1,22 @@
 sp              = _{ " " | "\t" | "\r" }
 word_char       = _{
-    !("|" | "&" | ";" | " " | "\t" | "\r" | "\n" | "`" | "{" | "}" | "<" | ">" | "(" | ")" | "$" | "\"" | "'" | "*" | "?" | "[" | "]" | "\\") ~ ANY
+    !("|" | "&" | ";" | " " | "\t" | "\r" | "\n" | "`" | "{" | "}" | "<" | ">" | "(" | ")" | "$" | "\"" | "'" | "*" | "?" | "[" | "\\") ~ ANY
 }
 escape_sequence =  { "\\" ~ ANY }
 
 word                =  { (escape_sequence | word_char)+ }
-variable            =  { "$" ~ word }
+
+var_name_char       = _{ ASCII_ALPHANUMERIC | "_" }
+var_name            =  { var_name_char+ }
+// Only the specials the shell can actually answer. Adding a name here without
+// a resolver would turn `$x` into the literal string `$x`, which is a silently
+// wrong value rather than an error.
+special_var         =  { "?" | "$" }
+variable_braced     =  { "${" ~ var_name ~ "}" }
+variable_special    =  { "$" ~ special_var }
+variable_named      =  { "$" ~ var_name }
+variable_indexed    =  { "$" ~ var_name ~ "[" ~ ASCII_DIGIT+ ~ "]" }
+variable            =  { variable_braced | variable_indexed | variable_special | variable_named }
 glob_char           = _{ "*" | "?" | "[" }
 glob_remaining_char = _{ word_char | glob_char | "]" | "{" | "}" | escape_sequence }
 glob_word           =  { (word_char | escape_sequence)* ~ glob_char ~ glob_remaining_char* }
@@ -19,11 +30,16 @@ s_quoted_inner   = _{
 literal_s_quoted = ${ ("\\'" | !("\'") ~ ANY | sp)+ }
 
 d_quoted         =  { "\"" ~ d_quoted_inner* ~ "\"" }
-d_quoted_inner   = _{
-    literal_d_quoted
-}
+// `command_subst` first so `"$(date)"` is not read as a `$` variable.
+d_quoted_inner   = _{ command_subst | variable | literal_d_quoted }
+// A `$` that starts no variable stays literal, so `"price is $"` keeps working.
+// Backtick is literal here: the grammar has no backtick-substitution rule, and
+// excluding it made the whole line truncate instead.
 literal_d_quoted = ${
-    (!("\"" | "\\" | "`" | "$") ~ ANY | "\\" ~ ANY | sp)+
+    ( "\\" ~ ANY
+    | "$" ~ !("{" | "(" | var_name_char | special_var)
+    | !("\"" | "\\" | "$") ~ ANY
+    )+
 }
 
 proc_subst_direction_in =  { "<(" }
@@ -48,10 +64,21 @@ stdouterr_redirect_direction        = { (stdouterr_redirect_direction_append | s
 stderr_redirect_direction           = { (stderr_redirect_direction_append | stderr_redirect_direction_out) }
 stdout_redirect_direction           = { (stdout_redirect_direction_append | stdout_redirect_direction_out) }
 stdin_redirect_direction            = { stdin_redirect_direction_in }
-redirect                            = { (stdouterr_redirect_direction | stderr_redirect_direction | stdout_redirect_direction | stdin_redirect_direction) ~ sp* ~ span }
-span                                = { quoted | glob_word | brace_word | word | variable | proc_subst | subshell | command_subst }
+
+// File-descriptor duplication. This has to be tried before the plain
+// redirects: `2>&1` otherwise matches `2>` and then fails on `&`, the whole
+// redirect fails, and `2` is left to be read as an ordinary argument -- which
+// is how `ls x 2>&1` ended up running `ls x 2`.
+fd_number                           = { ASCII_DIGIT+ }
+fd_dup_target                       = { fd_number | "-" }
+fd_dup_out                          = { fd_number? ~ ">&" ~ fd_dup_target }
+fd_dup_in                           = { fd_number? ~ "<&" ~ fd_dup_target }
+fd_dup                              = { fd_dup_out | fd_dup_in }
+redirect                            = { fd_dup | (stdouterr_redirect_direction | stderr_redirect_direction | stdout_redirect_direction | stdin_redirect_direction) ~ sp* ~ span }
+word_part                           = _{ quoted | command_subst | proc_subst | subshell | variable | glob_word | brace_word | word }
+span                                = { word_part+ }
 argv0                               = { span }
-args                                = { (sp* ~ (redirect | span))+ }
+args                                = { (sp* ~ redirect | sp+ ~ span)+ }
 
 background_op  = { !("&&") ~ "&" }
 capture_op     = { "|>" }
@@ -62,7 +89,13 @@ and_op         = { "&&" }
 or_op          = { "||" }
 
 command_list_sep    =  { sequential_op | and_op | or_op }
-simple_command      =  { sp* ~ argv0 ~ args* }
+// A name=value prefix. Both branches require content, so `simple_command`
+// can never match empty -- it sits inside a `*` in `command`, where an empty
+// match would spin.
+assign_name         =  { (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+assignment          =  { assign_name ~ "=" ~ span? }
+assignment_list     =  { assignment ~ (sp+ ~ assignment)* }
+simple_command      =  { sp* ~ (assignment_list ~ (sp+ ~ argv0 ~ args*)? | argv0 ~ args*) }
 simple_command_bg   =  { simple_command ~ sp* ~ background_op }
 pipe_command        =  { pipeline_op ~ sp* ~ (simple_command_bg | simple_command) ~ sp* }
 struct_pipe_command =  { struct_pipe_op ~ sp* ~ lisp_expr ~ sp* }

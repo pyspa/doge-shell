@@ -101,69 +101,400 @@ pub(crate) fn expand_braces(pattern: &str) -> Vec<String> {
     vec![pattern.to_string()]
 }
 
-pub fn expand_alias_tilde(
-    pair: Pair<Rule>,
-    alias: &HashMap<String, String>,
-    _current_dir: &PathBuf,
-) -> Result<Vec<String>> {
+/// What `expand_alias_tilde` needs to resolve a token.
+///
+/// The environment is here because a span (`--file=`, `$HOME`, `/x`) is a
+/// single argv entry, so its variables must be resolved *before* the parts are
+/// joined -- the later whole-token pass cannot see inside a span.
+pub struct ExpandCtx<'a> {
+    pub env: &'a Environment,
+    pub current_dir: &'a Path,
+}
+
+impl ExpandCtx<'_> {
+    fn alias(&self) -> &HashMap<String, String> {
+        &self.env.variable_state.alias
+    }
+}
+
+/// Characters that survive a re-parse as themselves: no whitespace, no quote,
+/// no `$`, no glob metacharacter, no `~`, and no `=` -- at the start of a
+/// command that would now be read as an environment prefix.
+fn is_reparse_safe(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '_' | '.' | '/' | ':' | '@' | '%' | '+' | ',' | '-')
+        })
+}
+
+/// Quote `value` so re-parsing yields exactly these bytes.
+///
+/// Single quotes, not double: the expanded line is re-parsed, and inside double
+/// quotes `$` and `\` are live, so a value containing either would be
+/// interpolated a second time. Values that cannot mean anything but themselves
+/// are left bare so the intermediate line stays readable.
+fn shell_escape_single(value: &str) -> String {
+    if is_reparse_safe(value) {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
+/// Expand a pattern that may contain brace and glob metacharacters.
+///
+/// Returns raw, unquoted results; the caller decides how to escape them. A
+/// pattern that matches nothing comes back as itself, which is what the shell
+/// has always done here.
+fn expand_glob_pattern(pattern: &str, current_dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    for pat in expand_braces(pattern) {
+        if !(pat.contains('*') || pat.contains('?') || pat.contains('[')) {
+            out.push(pat);
+            continue;
+        }
+
+        let (root, glob) = find_glob_root(&pat);
+        debug!("glob pattern: root:{} {:?} ", root, glob);
+
+        let effective_root = if Path::new(&root).is_absolute() {
+            PathBuf::from(&root)
+        } else {
+            current_dir.join(&root)
+        };
+
+        match globmatch::Builder::new(&glob).build(&effective_root) {
+            Ok(builder) => {
+                let paths: Vec<_> = builder.into_iter().flatten().collect();
+                if paths.is_empty() {
+                    debug!("dsh: no matches for wildcard '{}'", &glob);
+                    out.push(pat);
+                } else {
+                    for path in paths {
+                        debug!("glob match {}", path.display());
+                        // Relative patterns stay relative so the argv the user
+                        // sees matches what they typed.
+                        let display_path = if Path::new(&root).is_relative() {
+                            path.strip_prefix(current_dir)
+                                .unwrap_or(&path)
+                                .to_path_buf()
+                        } else {
+                            path
+                        };
+                        out.push(display_path.display().to_string());
+                    }
+                }
+            }
+            Err(err) => {
+                debug!("dsh: failed resolve paths. {}. treating as literal.", err);
+                out.push(pat);
+            }
+        }
+    }
+    out
+}
+
+/// Look up the value a `variable` pair stands for.
+///
+/// Normalizes `$FOO` and `${FOO}` to the same key. An unresolved variable keeps
+/// its literal text, which is what the shell did before spans existed.
+fn resolve_variable(pair: &Pair<Rule>, env: &Environment) -> String {
+    let text = pair.as_str();
+    env.get_var(text).unwrap_or_else(|| text.to_string())
+}
+
+/// Expand the command name, resolving an alias if the name is one.
+///
+/// Shared by both dispatch paths into `expand_alias_tilde`: the nested match in
+/// the catch-all is the one real commands actually take, so a fix applied only
+/// to the top-level arm would never run.
+fn expand_argv0(pair: Pair<Rule>, cx: &ExpandCtx<'_>) -> Result<Vec<String>> {
+    let mut argv = Vec::new();
+    for span in pair.into_inner() {
+        // The alias table is keyed by the bare command name, so look it up
+        // against the raw span value rather than the escaped form.
+        // When the span declines to flatten it hands back markers the re-parse
+        // has to read as syntax -- `$(cmd)`, `(`, `)`. Escaping those would turn
+        // a command substitution in command position into a literal string, so
+        // only a real value is escaped.
+        let (values, escape) = match expand_span(&span, cx) {
+            Some(values) => (values, true),
+            None => (expand_alias_tilde(span, cx)?, false),
+        };
+        for (index, arg) in values.iter().enumerate() {
+            let arg = arg.trim();
+            if index == 0
+                && let Some(alias) = cx.alias().get(arg)
+            {
+                debug!("alias '{arg}' => '{alias}'");
+                argv.push(alias.trim().to_string());
+                continue;
+            }
+            if escape {
+                argv.push(shell_escape_single(arg));
+            } else {
+                argv.push(arg.to_string());
+            }
+        }
+    }
+    Ok(argv)
+}
+
+/// Escape the characters that would otherwise start matching files.
+///
+/// Applied to text that came from a quote or a variable value: those are
+/// literals, even when another part of the same word is a real pattern.
+fn escape_glob_metacharacters(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        if matches!(c, '*' | '?' | '[' | ']' | '{' | '}' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Undo [`escape_glob_metacharacters`].
+fn unescape_glob_metacharacters(value: &str) -> String {
+    if !value.contains('\\') {
+        return value.to_string();
+    }
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\'
+            && let Some(next) = chars.next()
+        {
+            if !matches!(next, '*' | '?' | '[' | ']' | '{' | '}' | '\\') {
+                out.push('\\');
+            }
+            out.push(next);
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Whether this part begins with a tilde the shell should expand.
+fn starts_with_bare_tilde(part: &Pair<Rule>) -> bool {
+    matches!(
+        part.as_rule(),
+        Rule::word | Rule::glob_word | Rule::brace_word
+    ) && part.as_str().starts_with('~')
+}
+
+/// Whether this part -- or anything nested in a double-quoted run inside it --
+/// is a substitution that `shell/parse.rs` handles as a marker rather than text.
+fn contains_substitution(part: &Pair<Rule>) -> bool {
+    match part.as_rule() {
+        Rule::command_subst | Rule::subshell | Rule::proc_subst => true,
+        Rule::d_quoted => part.clone().into_inner().any(|inner| {
+            matches!(
+                inner.as_rule(),
+                Rule::command_subst | Rule::subshell | Rule::proc_subst
+            )
+        }),
+        _ => false,
+    }
+}
+
+/// Expand one `span` into the argv entries it stands for, or `None` when this
+/// span must take the older per-part path.
+///
+/// Command substitutions, subshells and process substitutions are handed to
+/// `shell/parse.rs` as markers rather than as text, so a span containing one
+/// cannot be flattened here.
+fn expand_span(pair: &Pair<Rule>, cx: &ExpandCtx<'_>) -> Option<Vec<String>> {
+    let parts: Vec<_> = pair.clone().into_inner().collect();
+    if parts.iter().any(contains_substitution) {
+        return None;
+    }
+
+    // Two views of the same word. `text` is the literal result; `pattern` is
+    // what to match files against, with metacharacters that came from a quote
+    // or a variable value escaped. The flag is per span, so without this a
+    // quoted `*` next to a real glob became a live pattern.
+    let mut text = String::new();
+    let mut pattern = String::new();
+    let mut globbable = false;
+
+    let push_literal = |text: &mut String, pattern: &mut String, value: &str| {
+        text.push_str(value);
+        pattern.push_str(&escape_glob_metacharacters(value));
+    };
+
+    for part in &parts {
+        match part.as_rule() {
+            Rule::variable => {
+                push_literal(&mut text, &mut pattern, &resolve_variable(part, cx.env));
+            }
+            Rule::s_quoted => {
+                push_literal(
+                    &mut text,
+                    &mut pattern,
+                    &get_string(part.clone()).unwrap_or_default(),
+                );
+            }
+            // Double quotes interpolate, so walk the parts instead of taking
+            // the literal text.
+            Rule::d_quoted => {
+                for inner in part.clone().into_inner() {
+                    let value = match inner.as_rule() {
+                        Rule::variable => resolve_variable(&inner, cx.env),
+                        _ => get_string(inner).unwrap_or_default(),
+                    };
+                    push_literal(&mut text, &mut pattern, &value);
+                }
+            }
+            // Glob and brace patterns keep their backslashes: `get_string`
+            // would collapse `\*` into a literal `*` and it would start
+            // matching files.
+            Rule::glob_word | Rule::brace_word => {
+                globbable = true;
+                text.push_str(part.as_str());
+                pattern.push_str(part.as_str());
+            }
+            // Everything else goes through `get_string` so `a\ b` loses its
+            // backslash here rather than carrying it into argv.
+            _ => {
+                push_literal(
+                    &mut text,
+                    &mut pattern,
+                    &get_string(part.clone()).unwrap_or_default(),
+                );
+            }
+        }
+    }
+
+    // A tilde is only special at the start of a word, and only when the user
+    // typed it unquoted -- `"x"~/y` is a literal, and so is `\~`.
+    if parts.first().is_some_and(starts_with_bare_tilde) {
+        text = shellexpand::tilde(&text).into_owned();
+        pattern = shellexpand::tilde(&pattern).into_owned();
+    }
+
+    if !globbable {
+        return Some(vec![text]);
+    }
+
+    let matches = expand_glob_pattern(&pattern, cx.current_dir);
+    // A pattern that matched nothing comes back as itself, escapes and all, so
+    // hand back the literal view instead -- the backslashes we added to keep a
+    // quoted `*` inert must not reach argv.
+    if matches.len() == 1 && matches[0] == pattern {
+        return Some(vec![text]);
+    }
+    Some(
+        matches
+            .into_iter()
+            .map(|value| unescape_glob_metacharacters(&value))
+            .collect(),
+    )
+}
+
+pub fn expand_alias_tilde(pair: Pair<Rule>, cx: &ExpandCtx<'_>) -> Result<Vec<String>> {
     let mut argv: Vec<String> = vec![];
 
     match pair.as_rule() {
-        Rule::glob_word | Rule::brace_word => {
-            let pattern = shellexpand::tilde(pair.as_str()).to_string();
-            // First expand braces
-            let expanded_patterns = expand_braces(&pattern);
-
-            for pat in expanded_patterns {
-                // Check if the expanded pattern actually contains glob characters
-                // Note: expand_braces handles brace expansion, so we check for glob chars in the result
-                if pat.contains('*') || pat.contains('?') || pat.contains('[') {
-                    let (root, pattern) = find_glob_root(&pat);
-                    debug!("glob pattern: root:{} {:?} ", root, pattern);
-
-                    let effective_root = if Path::new(&root).is_absolute() {
-                        PathBuf::from(&root)
-                    } else {
-                        _current_dir.join(&root)
-                    };
-
-                    match globmatch::Builder::new(&pattern).build(&effective_root) {
-                        Ok(builder) => {
-                            let paths: Vec<_> = builder.into_iter().flatten().collect();
-                            if paths.is_empty() {
-                                debug!("dsh: no matches for wildcard '{}'", &pattern);
-                                argv.push(pat);
-                            } else {
-                                for path in paths {
-                                    debug!("glob match {}", path.display());
-                                    // Try to make path relative to current_dir for cleaner display
-                                    // if it was a relative pattern
-                                    let display_path = if Path::new(&root).is_relative() {
-                                        path.strip_prefix(_current_dir)
-                                            .unwrap_or(&path)
-                                            .to_path_buf()
-                                    } else {
-                                        path
-                                    };
-                                    argv.push(format!("\"{}\"", display_path.display()));
-                                }
+        // A span is one argv entry, so resolve and join its parts here. The
+        // result is single-quoted because the expanded line is re-parsed and
+        // must not be split, globbed or interpolated a second time.
+        Rule::span => match expand_span(&pair, cx) {
+            Some(values) => argv.extend(values.iter().map(|value| shell_escape_single(value))),
+            None => {
+                // Contains a substitution. Those are handed on as markers that
+                // `shell/parse.rs` recognises, so emit them the way the
+                // pre-span code did rather than recursing into their bodies --
+                // dropping the parentheses would turn a subshell into a plain
+                // command list.
+                for inner_pair in pair.into_inner() {
+                    match inner_pair.as_rule() {
+                        Rule::subshell => {
+                            argv.push("(".to_string());
+                            for body in inner_pair.into_inner() {
+                                argv.append(&mut expand_alias_tilde(body, cx)?);
                             }
+                            argv.push(")".to_string());
                         }
-                        Err(err) => {
-                            debug!("dsh: failed resolve paths. {}. treating as literal.", err);
-                            argv.push(pat);
+                        Rule::proc_subst => {
+                            argv.push("<(".to_string());
+                            for body in inner_pair.into_inner() {
+                                argv.append(&mut expand_alias_tilde(body, cx)?);
+                            }
+                            argv.push(")".to_string());
                         }
+                        Rule::command_subst => argv.push(inner_pair.as_str().to_string()),
+                        _ => argv.append(&mut expand_alias_tilde(inner_pair, cx)?),
                     }
-                } else {
-                    // No glob chars, just push the brace-expanded string
-                    argv.push(pat);
                 }
             }
+        },
+        // Without an explicit arm these fall into the catch-all, whose inner
+        // match does not list them -- and the whole prefix disappears from the
+        // re-serialized line, so `FOO=$HOME cmd` silently loses `FOO`.
+        Rule::assignment_list => {
+            for assignment in pair.into_inner() {
+                argv.append(&mut expand_alias_tilde(assignment, cx)?);
+            }
         }
+        Rule::assignment => {
+            let mut name = String::new();
+            let mut value = None;
+            for part in pair.into_inner() {
+                match part.as_rule() {
+                    Rule::assign_name => name = part.as_str().to_string(),
+                    Rule::span => {
+                        // Assignment is not a glob context, so join whatever
+                        // the span expands to rather than letting it split.
+                        value = Some(match expand_span(&part, cx) {
+                            Some(values) => values.join(" "),
+                            None => part.as_str().to_string(),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            argv.push(format!(
+                "{name}={}",
+                shell_escape_single(&value.unwrap_or_default())
+            ));
+        }
+        Rule::glob_word | Rule::brace_word => {
+            let pattern = shellexpand::tilde(pair.as_str()).to_string();
+            argv.extend(
+                expand_glob_pattern(&pattern, cx.current_dir)
+                    .iter()
+                    .map(|value| shell_escape_single(value)),
+            );
+        }
+        // Reached only when the span declined to flatten, i.e. this string
+        // contains a substitution. `"$(cmd)"` on its own is unwrapped so the
+        // re-parse still substitutes it as a single argument.
+        //
+        // KNOWN LIMITATION: mixed content such as `"a $(cmd) b"` stays literal.
+        // Joining it correctly needs the substitution's *result*, which the
+        // parser cannot produce -- it hands substitutions to `shell/parse.rs`
+        // as markers. Emitting the parts separately would silently turn one
+        // argument into three, so a visibly literal `$(cmd)` is the honest
+        // failure until expansion moves after parsing.
+        Rule::d_quoted => {
+            let mut inner = pair.clone().into_inner();
+            match (inner.next(), inner.next()) {
+                (Some(only), None) if only.as_rule() == Rule::command_subst => {
+                    argv.push(only.as_str().to_string());
+                }
+                _ => argv.push(shellexpand::tilde(pair.as_str()).to_string()),
+            }
+        }
+        // A duplication is one indivisible operator. Without an arm it fell to
+        // the catch-all, whose inner match does not list it either, so any line
+        // that also triggered expansion lost the `2>&1` entirely.
+        Rule::fd_dup => argv.push(pair.as_str().to_string()),
         Rule::word
         | Rule::variable
         | Rule::s_quoted
-        | Rule::d_quoted
         | Rule::literal_s_quoted
         | Rule::literal_d_quoted
         | Rule::stdout_redirect_direction
@@ -174,34 +505,18 @@ pub fn expand_alias_tilde(
         | Rule::command_subst => {
             argv.push(shellexpand::tilde(pair.as_str()).to_string());
         }
-        Rule::argv0 => {
-            for inner_pair in pair.into_inner() {
-                let v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
-                for (i, arg) in v.iter().enumerate() {
-                    if i == 0 {
-                        if let Some(val) = alias.get(arg) {
-                            debug!("alias '{arg}' => '{val}'");
-                            argv.push(val.trim().to_string());
-                        } else {
-                            argv.push(arg.trim().to_string());
-                        }
-                    } else {
-                        argv.push(arg.trim().to_string());
-                    }
-                }
-            }
-        }
+        Rule::argv0 => argv.append(&mut expand_argv0(pair, cx)?),
         Rule::pipe_command => {
             debug!("expand pipe_command {}", pair.as_str());
             // Pipe character is added by expand_alias function, so don't add it here
             for inner_pair in pair.into_inner() {
-                let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
+                let mut v = expand_alias_tilde(inner_pair, cx)?;
                 argv.append(&mut v);
             }
         }
         Rule::redirect => {
             for inner_pair in pair.into_inner() {
-                let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
+                let mut v = expand_alias_tilde(inner_pair, cx)?;
                 argv.append(&mut v);
             }
         }
@@ -214,7 +529,7 @@ pub fn expand_alias_tilde(
                             if inner_pair.as_rule() == Rule::background_op {
                                 argv.push(inner_pair.as_str().to_string());
                             } else {
-                                let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
+                                let mut v = expand_alias_tilde(inner_pair, cx)?;
                                 argv.append(&mut v);
                             }
                         }
@@ -223,7 +538,7 @@ pub fn expand_alias_tilde(
                         debug!("expand proc_subst {}", inner_pair.as_str());
                         argv.push("<(".to_string());
                         for inner_pair in inner_pair.into_inner() {
-                            let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
+                            let mut v = expand_alias_tilde(inner_pair, cx)?;
                             argv.append(&mut v);
                         }
                         argv.push(")".to_string());
@@ -236,49 +551,36 @@ pub fn expand_alias_tilde(
                         debug!("expand subshell {}", inner_pair.as_str());
                         argv.push("(".to_string());
                         for inner_pair in inner_pair.into_inner() {
-                            let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
+                            let mut v = expand_alias_tilde(inner_pair, cx)?;
                             argv.append(&mut v);
                         }
                         argv.push(")".to_string());
                     }
-                    Rule::argv0 => {
-                        for inner_pair in inner_pair.into_inner() {
-                            let v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
-                            for (i, arg) in v.iter().enumerate() {
-                                if i == 0 {
-                                    if let Some(val) = alias.get(arg) {
-                                        debug!("alias '{arg}' => '{val}'");
-                                        argv.push(val.trim().to_string());
-                                    } else {
-                                        argv.push(arg.trim().to_string());
-                                    }
-                                } else {
-                                    argv.push(arg.trim().to_string());
-                                }
-                            }
-                        }
-                    }
+                    Rule::argv0 => argv.append(&mut expand_argv0(inner_pair, cx)?),
                     Rule::pipe_command => {
                         for inner_pair in inner_pair.into_inner() {
                             if inner_pair.as_rule() == Rule::pipeline_op {
                                 argv.push(inner_pair.as_str().to_string());
                             } else {
-                                let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
+                                let mut v = expand_alias_tilde(inner_pair, cx)?;
                                 argv.append(&mut v);
                             }
                         }
                     }
-                    Rule::commands
-                    | Rule::command
-                    | Rule::simple_command
-                    | Rule::args
-                    | Rule::span => {
+                    Rule::commands | Rule::command | Rule::simple_command | Rule::args => {
                         for inner_pair in inner_pair.into_inner() {
-                            let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
+                            let mut v = expand_alias_tilde(inner_pair, cx)?;
                             argv.append(&mut v);
                         }
                     }
-                    Rule::word
+                    // Dispatched whole, not iterated. A span's parts form one
+                    // argv entry, and an assignment prefix is not listed by the
+                    // inner match at all -- stepping into either here dropped
+                    // it from the re-serialized line.
+                    Rule::assignment_list
+                    | Rule::fd_dup
+                    | Rule::span
+                    | Rule::word
                     | Rule::glob_word
                     | Rule::brace_word
                     | Rule::variable
@@ -290,7 +592,7 @@ pub fn expand_alias_tilde(
                     | Rule::stdout_redirect_direction
                     | Rule::stderr_redirect_direction
                     | Rule::stdouterr_redirect_direction => {
-                        let mut v = expand_alias_tilde(inner_pair, alias, _current_dir)?;
+                        let mut v = expand_alias_tilde(inner_pair, cx)?;
                         argv.append(&mut v);
                     }
                     _ => {
@@ -434,22 +736,24 @@ pub fn expand_alias_from_pairs(
     Ok(buf.join(" "))
 }
 
+/// Resolve any remaining whole-token variables.
+///
+/// Spans are already resolved and escaped by [`expand_span`], so what reaches
+/// here is operators and markers. Only a token that still *looks* like a
+/// variable reference is substituted -- a bare word must never be read as a
+/// variable name, or `echo $USER LANG` would print the value of `LANG`.
 fn expand_var_args(args: Vec<String>, env: &Environment, buf: &mut Vec<String>) {
     for arg in args {
-        if let Some(val) = env.get_var(&arg) {
-            if val.is_empty() {
-                buf.push("\"\"".to_string());
-            } else {
-                let needs_quote = val.contains('\n') || val.contains(' ') || val.contains('\t');
-                if needs_quote {
-                    let escaped = val.replace('"', r#"\""#);
-                    buf.push(format!("\"{}\"", escaped));
-                } else {
-                    buf.push(val.trim().to_string());
-                }
-            }
-        } else {
+        if !arg.starts_with('$') {
             buf.push(arg);
+            continue;
+        }
+        match env.get_var(&arg) {
+            // No trimming: leading and trailing whitespace can be the
+            // whole point of a value, and the escaping below already keeps
+            // it from being re-split.
+            Some(val) => buf.push(shell_escape_single(&val)),
+            None => buf.push(arg),
         }
     }
 }
@@ -463,32 +767,24 @@ fn expand_command_alias(
 
     if let Rule::command = pair.as_rule() {
         let env_guard = environment.read();
+        let cx = ExpandCtx {
+            env: &env_guard,
+            current_dir: _current_dir,
+        };
         for inner_pair in pair.into_inner() {
             match inner_pair.as_rule() {
                 Rule::simple_command => {
-                    let args = expand_alias_tilde(
-                        inner_pair,
-                        &env_guard.variable_state.alias,
-                        _current_dir,
-                    )?;
+                    let args = expand_alias_tilde(inner_pair, &cx)?;
                     expand_var_args(args, &env_guard, &mut buf);
                 }
                 Rule::simple_command_bg => {
-                    let args = expand_alias_tilde(
-                        inner_pair,
-                        &env_guard.variable_state.alias,
-                        _current_dir,
-                    )?;
+                    let args = expand_alias_tilde(inner_pair, &cx)?;
                     expand_var_args(args, &env_guard, &mut buf);
                     buf.push("&".to_string());
                 }
                 Rule::pipe_command => {
                     buf.push("|".to_string());
-                    let args = expand_alias_tilde(
-                        inner_pair,
-                        &env_guard.variable_state.alias,
-                        _current_dir,
-                    )?;
+                    let args = expand_alias_tilde(inner_pair, &cx)?;
                     expand_var_args(args, &env_guard, &mut buf);
                 }
                 Rule::struct_pipe_command => {

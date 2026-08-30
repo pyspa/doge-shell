@@ -3,13 +3,12 @@ use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::unistd::{isatty, pipe};
 use std::io::{Read, Write};
 use std::os::fd::BorrowedFd;
-use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
+use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
 use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::unix::AsyncFd;
 use tokio::{fs, io, time};
 
-use super::redirect::Redirect;
 use crate::terminal::renderer::{TerminalRenderer, flush_stdout_bytes};
 use dsh_types::Context;
 use dsh_types::observed_output::{ObservedStream, SharedOutputObserver};
@@ -433,56 +432,15 @@ pub(crate) fn create_pipe(ctx: &mut Context) -> Result<Option<RawFd>> {
     Ok(Some(pout.into_raw_fd()))
 }
 
-pub(crate) fn handle_output_redirect(
-    ctx: &mut Context,
-    redirect: &Option<Redirect>,
-    stdout: RawFd,
-) -> Result<Option<RawFd>> {
-    if let Some(output) = redirect {
-        match output {
-            Redirect::StdoutOutput(_file) | Redirect::StdoutAppend(_file) => {
-                let (pout, pin) = pipe().context("failed pipe")?;
-                ctx.outfile = pin.into_raw_fd();
-                Ok(Some(pout.into_raw_fd()))
-            }
-            Redirect::StderrOutput(file) | Redirect::StderrAppend(file) => {
-                tracing::debug!("🔀 REDIRECT: StderrOutput/Append to file: {}", file);
-                let (pout, pin) = pipe().context("failed pipe")?;
-                tracing::debug!(
-                    "🔀 REDIRECT: Created redirect pipe - read_end={:?}, write_end={:?}",
-                    pout,
-                    pin
-                );
-                ctx.errfile = pin.into_raw_fd();
-                tracing::debug!("🔀 REDIRECT: Set ctx.errfile={}", ctx.errfile);
-                Ok(Some(pout.into_raw_fd()))
-            }
-            Redirect::StdouterrOutput(file) | Redirect::StdouterrAppend(file) => {
-                tracing::debug!("🔀 REDIRECT: StdouterrOutput/Append to file: {}", file);
-                let (pout, pin) = pipe().context("failed pipe")?;
-                tracing::debug!(
-                    "🔀 REDIRECT: Created redirect pipe - read_end={:?}, write_end={:?}",
-                    pout,
-                    pin
-                );
-                ctx.outfile = pin.as_raw_fd(); // Keep alive for errfile
-                ctx.errfile = pin.into_raw_fd();
-                tracing::debug!(
-                    "🔀 REDIRECT: Set ctx.outfile={}, ctx.errfile={}",
-                    ctx.outfile,
-                    ctx.errfile
-                );
-                Ok(Some(pout.into_raw_fd()))
-            }
-            Redirect::Input(_) => Ok(None),
-        }
-    } else {
-        if let Some(out) = ctx.captured_out {
-            ctx.outfile = out;
-        } else if ctx.infile != STDIN_FILENO {
-            ctx.outfile = stdout;
-        }
-        Ok(None)
+/// Wire up stdout when nothing redirects it.
+///
+/// Redirections are applied separately, straight onto the opened file, so all
+/// that is left here is the pipeline/capture default.
+pub(crate) fn default_output_wiring(ctx: &mut Context, stdout: RawFd) {
+    if let Some(out) = ctx.captured_out {
+        ctx.outfile = out;
+    } else if ctx.infile != STDIN_FILENO {
+        ctx.outfile = stdout;
     }
 }
 

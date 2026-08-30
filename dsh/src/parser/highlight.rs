@@ -18,6 +18,8 @@ pub enum HighlightKind {
     ProcSubstitution,
     Error,
     Bareword,
+    /// The `NAME=` half of a `NAME=value` prefix.
+    Assignment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,10 +80,46 @@ fn collect_highlight_from_pair(
             };
             push_token(pair.as_span(), kind, out);
         }
+        Rule::assign_name => push_token(pair.as_span(), HighlightKind::Assignment, out),
         Rule::variable => push_token(pair.as_span(), HighlightKind::Variable, out),
         Rule::s_quoted => push_token(pair.as_span(), HighlightKind::SingleQuoted, out),
-        Rule::d_quoted => push_token(pair.as_span(), HighlightKind::DoubleQuoted, out),
-        Rule::stdout_redirect_direction
+        // A double-quoted string is now a run of literal and variable parts, so
+        // walk it and colour the variables. `write_colored_ranges_to` slices a
+        // sorted, non-overlapping partition, so the gaps between parts -- the
+        // quotes themselves included -- have to be emitted too.
+        Rule::d_quoted => {
+            // With nothing to distinguish inside, keep the string as one range.
+            // Downstream passes match on a range's exact text -- the cached
+            // path check upgrades a whole quoted argument to `ValidPath` -- so
+            // splitting unconditionally would break them.
+            if !pair
+                .clone()
+                .into_inner()
+                .any(|inner| inner.as_rule() == Rule::variable)
+            {
+                push_token(pair.as_span(), HighlightKind::DoubleQuoted, out);
+                return;
+            }
+
+            let outer = pair.as_span();
+            let mut cursor = outer.start();
+            for inner in pair.clone().into_inner() {
+                let span = inner.as_span();
+                if span.start() > cursor {
+                    push_range(cursor, span.start(), HighlightKind::DoubleQuoted, out);
+                }
+                match inner.as_rule() {
+                    Rule::variable => push_token(span, HighlightKind::Variable, out),
+                    _ => push_token(span, HighlightKind::DoubleQuoted, out),
+                }
+                cursor = span.end();
+            }
+            if cursor < outer.end() {
+                push_range(cursor, outer.end(), HighlightKind::DoubleQuoted, out);
+            }
+        }
+        Rule::fd_dup
+        | Rule::stdout_redirect_direction
         | Rule::stderr_redirect_direction
         | Rule::stdouterr_redirect_direction
         | Rule::stdin_redirect_direction
@@ -101,6 +139,12 @@ fn collect_highlight_from_pair(
                 collect_highlight_from_pair(inner, ctx, out);
             }
         }
+    }
+}
+
+fn push_range(start: usize, end: usize, kind: HighlightKind, out: &mut Vec<HighlightToken>) {
+    if start < end {
+        out.push(HighlightToken { start, end, kind });
     }
 }
 

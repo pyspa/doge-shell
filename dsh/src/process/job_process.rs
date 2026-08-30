@@ -1,17 +1,17 @@
 use anyhow::{Context as _, Result};
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::sys::signal::Signal;
-use nix::unistd::{Pid, getpid, pipe};
+use nix::unistd::{Pid, close, getpid, pipe};
 use std::os::fd::IntoRawFd;
 use std::os::unix::io::RawFd;
 use tracing::debug;
 
 use super::builtin::BuiltinProcess;
 use super::fork::{fork_builtin_process, fork_process};
-use super::io::{create_pipe, handle_output_redirect};
+use super::io::{create_pipe, default_output_wiring};
 use super::process::Process;
 use super::pty::{PtyChildConfig, PtyMode};
-use super::redirect::Redirect;
+use super::redirect::{self, AppliedRedirects, Redirect};
 use super::signal::send_signal;
 use super::state::ProcessState;
 use crate::shell::Shell;
@@ -69,6 +69,14 @@ impl JobProcess {
         match self {
             JobProcess::Builtin(jprocess) => jprocess.link(process),
             JobProcess::Command(jprocess) => jprocess.link(process),
+        }
+    }
+
+    /// The next stage of the pipeline, borrowed rather than cloned.
+    pub(crate) fn next_process(&self) -> Option<&JobProcess> {
+        match self {
+            JobProcess::Builtin(p) => p.next.as_deref(),
+            JobProcess::Command(p) => p.next.as_deref(),
         }
     }
 
@@ -285,22 +293,54 @@ impl JobProcess {
         matches!(self, JobProcess::Command(_))
     }
 
+    /// Redirections written on this command.
+    pub(crate) fn redirects(&self) -> &[Redirect] {
+        match self {
+            JobProcess::Builtin(p) => &p.redirects,
+            JobProcess::Command(p) => &p.redirects,
+        }
+    }
+
+    pub(crate) fn set_redirects(&mut self, redirects: Vec<Redirect>) {
+        match self {
+            JobProcess::Builtin(p) => p.redirects = redirects,
+            JobProcess::Command(p) => p.redirects = redirects,
+        }
+    }
+
+    pub(crate) fn set_env_overrides(&mut self, overrides: Vec<(String, String)>) {
+        match self {
+            JobProcess::Builtin(p) => p.env_overrides = overrides,
+            JobProcess::Command(p) => p.env_overrides = overrides,
+        }
+    }
+
     pub(crate) async fn launch(
         &mut self,
         ctx: &mut Context,
         shell: &mut Shell,
-        redirect: &Option<Redirect>,
         stdout: RawFd,
         pty: Option<PtyChildConfig>,
-    ) -> Result<(Pid, Option<Box<JobProcess>>)> {
+    ) -> Result<(Pid, Option<Box<JobProcess>>, AppliedRedirects)> {
         // has pipelines process ?
         let next_process = self.take_next();
         let has_next_process = next_process.is_some();
+        let output_redirects: Vec<Redirect> = self
+            .redirects()
+            .iter()
+            .filter(|redirect| !redirect.is_stdin())
+            .cloned()
+            .collect();
+        // Any redirection at all disables the automatic capture below, input
+        // included: capture reroutes stdout through a monitor that reformats
+        // line endings, and a command the user redirected should reach its
+        // destination byte for byte.
+        let has_redirect = !self.redirects().is_empty();
         let observe_foreground_external = ctx.output_observer.is_some()
             && ctx.foreground
             && matches!(self, JobProcess::Command(_))
             && !has_next_process
-            && redirect.is_none()
+            && !has_redirect
             && pty.is_none()
             && ctx.captured_out.is_none();
 
@@ -312,7 +352,7 @@ impl JobProcess {
                 // Automatic capture for non-interactive mode (e.g. smart pipe tests)
                 // We don't do this in interactive mode to preserve TTY (colors, etc.)
                 if (!ctx.interactive
-                    && redirect.is_none()
+                    && !has_redirect
                     && pty.is_none()
                     && ctx.captured_out.is_none())
                     || observe_foreground_external
@@ -326,8 +366,8 @@ impl JobProcess {
                     }
                     None
                 } else {
-                    // Manual capture or redirect
-                    handle_output_redirect(ctx, redirect, stdout)?
+                    default_output_wiring(ctx, stdout);
+                    None
                 }
             }
         };
@@ -359,39 +399,78 @@ impl JobProcess {
             );
         }
 
+        // The write end the pipeline handed us, before any redirection had a
+        // chance to replace it.
+        let pipe_write = has_next_process.then_some(ctx.outfile);
+
+        let applied = redirect::apply(&output_redirects, ctx)?;
+
         self.set_io(ctx.infile, ctx.outfile, ctx.errfile);
 
         // initial pid
         let current_pid = getpid();
 
-        let pid = match self {
-            JobProcess::Builtin(process) => {
-                if ctx.foreground {
-                    process.pid = Some(current_pid);
-                    process.launch(ctx, shell).await?;
-                    current_pid
-                } else {
-                    // Fork for background execution
-                    let child_pid = fork_builtin_process(ctx, process, shell)?;
-                    process.pid = Some(child_pid);
-                    child_pid
+        let launched: Result<Pid> = async {
+            Ok(match self {
+                JobProcess::Builtin(process) => {
+                    if ctx.foreground {
+                        process.pid = Some(current_pid);
+                        process.launch(ctx, shell).await?;
+                        current_pid
+                    } else {
+                        // Fork for background execution
+                        let child_pid = fork_builtin_process(ctx, process, shell)?;
+                        process.pid = Some(child_pid);
+                        child_pid
+                    }
                 }
-            }
-            JobProcess::Command(process) => {
-                ctx.process_count += 1;
-                // fork
-                fork_process(ctx, ctx.pgid, process, shell, pty)?
+                JobProcess::Command(process) => {
+                    ctx.process_count += 1;
+                    // fork
+                    fork_process(ctx, ctx.pgid, process, shell, pty)?
+                }
+            })
+        }
+        .await;
+
+        // Restore before propagating: `applied` closes its files on drop, and
+        // leaving `ctx` pointing at them would hand the next command a
+        // descriptor that is already gone.
+        let pid = match launched {
+            Ok(pid) => pid,
+            Err(err) => {
+                applied.restore(ctx);
+                return Err(err);
             }
         };
 
         self.set_pid(Some(pid));
 
+        // The process has the descriptors now (inherited at fork, or already
+        // written to by an in-process builtin), so put `ctx` back before the
+        // next command in the pipeline reads it.
+        applied.restore(ctx);
+
+        // `a > file | b` gives `a` the file instead of the pipe, which leaves
+        // the shell holding the only remaining write end -- and `b` waiting
+        // forever for an EOF that cannot arrive.
+        if let Some(write_fd) = pipe_write {
+            let (_, stdout_fd, stderr_fd) = self.get_io();
+            if stdout_fd != write_fd
+                && stderr_fd != write_fd
+                && let Err(err) = close(write_fd)
+            {
+                debug!("failed to close superseded pipe write end: {}", err);
+            }
+        }
+
         // set pipe inout
         if let Some(pipe_out) = pipe_out {
             ctx.infile = pipe_out;
         }
-        // return launched process pid and pipeline process
-        Ok((pid, next_process))
+        // return launched process pid, pipeline process, and the descriptors
+        // the redirections own (the caller must not close those itself)
+        Ok((pid, next_process, applied))
     }
 
     pub fn kill(&self) -> Result<()> {

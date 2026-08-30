@@ -43,7 +43,9 @@ fn test_unclosed_bracket() -> Result<()> {
     let _pairs = ShellParser::parse(Rule::simple_command, input)?;
     let env = Environment::new();
     let expanded = expand_alias(input.to_string(), std::sync::Arc::clone(&env))?;
-    // If no match, it should return original string
-    assert_eq!(expanded, "val[1");
+    // A pattern that matched nothing is passed through -- now quoted, because
+    // the expanded line is re-parsed and an unquoted `[` would be read as a
+    // glob a second time. It still reaches argv as `val[1`.
+    assert_eq!(expanded, "'val[1'");
     Ok(())
 }

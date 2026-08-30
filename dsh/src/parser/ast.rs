@@ -6,7 +6,7 @@ use tracing::debug;
 
 pub fn get_string(pair: Pair<Rule>) -> Option<String> {
     match pair.as_rule() {
-        Rule::s_quoted | Rule::d_quoted => {
+        Rule::s_quoted => {
             let res = if let Some(next) = pair.into_inner().next() {
                 next.as_str().to_string()
             } else {
@@ -14,12 +14,25 @@ pub fn get_string(pair: Pair<Rule>) -> Option<String> {
             };
             Some(res)
         }
-        Rule::span => {
-            if let Some(inner) = pair.into_inner().next() {
-                get_string(inner)
-            } else {
-                Some("".to_string())
+        // A double-quoted string is now a run of literal, variable and
+        // command-substitution parts, so every part contributes.
+        Rule::d_quoted => {
+            let mut out = String::new();
+            for inner in pair.into_inner() {
+                out.push_str(&get_string(inner)?);
             }
+            Some(out)
+        }
+        Rule::literal_d_quoted => Some(unescape_double_quoted(pair.as_str())),
+        // A span is a run of adjacent parts (`--file=`, `$HOME`, `/x`) and
+        // stands for one argv entry, so every part contributes. Taking only the
+        // first silently truncated the argument.
+        Rule::span => {
+            let mut out = String::new();
+            for inner in pair.into_inner() {
+                out.push_str(&get_string(inner)?);
+            }
+            Some(out)
         }
         Rule::word | Rule::glob_word => {
             let s = pair.as_str();
@@ -53,6 +66,34 @@ pub fn get_string(pair: Pair<Rule>) -> Option<String> {
         }
         _ => Some(pair.as_str().to_string()),
     }
+}
+
+/// Drop the backslash from the escapes double quotes actually honour.
+///
+/// Only `\$`, `\"`, `\\` and `` \` `` collapse; every other `\x` stays as
+/// typed, which is what shells do inside double quotes (`"C:\path"` must
+/// survive intact).
+fn unescape_double_quoted(text: &str) -> String {
+    if !text.contains('\\') {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some(next @ ('$' | '"' | '\\' | '`')) => out.push(next),
+            Some(next) => {
+                out.push('\\');
+                out.push(next);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
 }
 
 pub fn get_pos_word(input: &str, pos: usize) -> Result<Option<(Rule, Span<'_>)>> {

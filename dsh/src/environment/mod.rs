@@ -97,6 +97,12 @@ pub(crate) struct CompletionState {
 }
 
 pub struct Environment {
+    /// Exit status of the last command, for `$?`.
+    ///
+    /// Deliberately outside `variable_state`: this is runtime state, and
+    /// `EnvironmentSnapshot` rolls back *configuration* only — restoring a
+    /// stale exit status after a failed config reload would be wrong.
+    pub(crate) last_exit_status: i32,
     pub(crate) variable_state: VariableState,
     pub(crate) policy_state: PolicyState,
     pub(crate) integration_state: IntegrationState,
@@ -167,6 +173,7 @@ impl Environment {
         debug!("default path {:?}", &paths);
 
         let env_arc = Arc::new(RwLock::new(Environment {
+            last_exit_status: 0,
             variable_state: VariableState {
                 alias: HashMap::new(),
                 abbreviations: HashMap::new(),
@@ -256,6 +263,7 @@ impl Environment {
         };
 
         Arc::new(RwLock::new(Environment {
+            last_exit_status: 0,
             variable_state,
             policy_state,
             integration_state,

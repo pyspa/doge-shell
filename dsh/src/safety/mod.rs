@@ -139,13 +139,13 @@ impl SafetyGuard {
                 continue;
             }
 
-            let cmd_token = job.cmd.split_whitespace().next().unwrap_or("");
+            let cmd_token = Self::leading_command_token(&job.cmd);
             let cmd_name = Self::get_command_name(cmd_token);
 
             // Check illegal pipe destinations
             if i > 0 {
                 let prev_job = &jobs[i - 1];
-                let prev_token = prev_job.cmd.split_whitespace().next().unwrap_or("");
+                let prev_token = Self::leading_command_token(&prev_job.cmd);
                 let prev_cmd = Self::get_command_name(prev_token);
 
                 if Self::is_network_tool(&prev_cmd) && Self::is_execution_tool(&cmd_name) {
@@ -165,6 +165,10 @@ impl SafetyGuard {
                     ));
                 }
             };
+            // Classify the command, not the `NAME=value` prefix in front of it:
+            // otherwise `FOO=bar rm -rf /` looks like a command called
+            // `FOO=bar` and every dangerous-command check passes.
+            let parts = Self::skip_assignments(&parts);
             if let Some(cmd) = parts.first() {
                 let args = if parts.len() > 1 { &parts[1..] } else { &[] };
                 let cmd_clean = Self::get_command_name(cmd);
@@ -370,6 +374,34 @@ impl SafetyGuard {
             "query", "view", "ls", "stat",
         ];
         read_markers.iter().any(|marker| name.contains(marker))
+    }
+
+    /// Whether this token is a `NAME=value` assignment rather than a command.
+    fn is_assignment_token(token: &str) -> bool {
+        match token.split_once('=') {
+            Some((name, _)) => {
+                !name.is_empty()
+                    && name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                    && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            }
+            None => false,
+        }
+    }
+
+    /// The command a line actually runs, past any `NAME=value` prefix.
+    fn leading_command_token(cmd: &str) -> &str {
+        cmd.split_whitespace()
+            .find(|token| !Self::is_assignment_token(token))
+            .unwrap_or("")
+    }
+
+    /// Drop a leading `NAME=value` prefix from an already-tokenized command.
+    fn skip_assignments(tokens: &[String]) -> &[String] {
+        let start = tokens
+            .iter()
+            .position(|token| !Self::is_assignment_token(token))
+            .unwrap_or(tokens.len());
+        &tokens[start..]
     }
 
     fn get_command_name(cmd: &str) -> String {
@@ -784,6 +816,53 @@ mod tests {
     fn mock_job(cmd: &str) -> Job {
         // Minimal job creation for testing check_jobs
         Job::new(cmd.to_string(), nix::unistd::Pid::from_raw(0))
+    }
+
+    /// A `NAME=value` prefix must not hide the command behind it. Before the
+    /// guard skipped these, `FOO=bar rm -rf /` was classified as a command
+    /// called `FOO=bar` and passed every dangerous-command check.
+    #[test]
+    fn an_assignment_prefix_does_not_hide_the_command() {
+        let guard = SafetyGuard::new();
+        let level = SafetyLevel::Normal;
+
+        let jobs = vec![mock_job("FOO=bar rm -rf /")];
+        assert!(
+            matches!(
+                guard.check_jobs(&jobs, &level, &[]),
+                SafetyResult::Confirm(_)
+            ),
+            "a prefixed destructive command should still ask"
+        );
+
+        let jobs = vec![mock_job("A=1 B=2 rm -rf /")];
+        assert!(
+            matches!(
+                guard.check_jobs(&jobs, &level, &[]),
+                SafetyResult::Confirm(_)
+            ),
+            "several assignments should all be skipped"
+        );
+    }
+
+    #[test]
+    fn assignment_detection_only_matches_real_names() {
+        assert!(SafetyGuard::is_assignment_token("FOO=bar"));
+        assert!(SafetyGuard::is_assignment_token("_x="));
+        // A value containing `=` is still one assignment.
+        assert!(SafetyGuard::is_assignment_token("A=b=c"));
+        // These are commands or arguments, not assignments.
+        assert!(!SafetyGuard::is_assignment_token("rm"));
+        assert!(!SafetyGuard::is_assignment_token("--opt=value"));
+        assert!(!SafetyGuard::is_assignment_token("=bare"));
+        assert!(!SafetyGuard::is_assignment_token("9FOO=bar"));
+    }
+
+    #[test]
+    fn leading_command_token_looks_past_assignments() {
+        assert_eq!(SafetyGuard::leading_command_token("FOO=bar curl x"), "curl");
+        assert_eq!(SafetyGuard::leading_command_token("curl x"), "curl");
+        assert_eq!(SafetyGuard::leading_command_token("FOO=bar"), "");
     }
 
     #[test]

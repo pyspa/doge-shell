@@ -4,18 +4,45 @@ use super::Environment;
 use dsh_types::output_history;
 use std::collections::HashMap;
 
+/// Strip the sigil and any braces so `$FOO`, `${FOO}` and `FOO` all reach the
+/// same lookup.
+fn variable_name(key: &str) -> &str {
+    let name = key.strip_prefix('$').unwrap_or(key);
+    name.strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+        .unwrap_or(name)
+}
+
 impl Environment {
-    /// Get the value of a variable.
+    /// Get the value of a variable, given `$FOO`, `${FOO}` or a bare `FOO`.
     pub fn get_var(&self, key: &str) -> Option<String> {
-        // Check $OUT[N] and $ERR[N] patterns first
-        if let Some(index) = output_history::parse_output_var(key, "OUT") {
+        self.lookup_variable(variable_name(key))
+    }
+
+    /// Resolve a bare variable name.
+    ///
+    /// The shell variable map is written to with and without a `$` prefix
+    /// depending on which builtin did the writing (`set`/`export` store the
+    /// bare name, `read` and Lisp `let` store `$name`), so both spellings are
+    /// tried here. Without this, `export FOO=x; echo $FOO` printed nothing
+    /// while the child process saw `FOO=x`.
+    pub fn lookup_variable(&self, name: &str) -> Option<String> {
+        // Shell specials, before anything user-settable can shadow them.
+        match name {
+            "?" => return Some(self.last_exit_status.to_string()),
+            "$" => return Some(std::process::id().to_string()),
+            _ => {}
+        }
+
+        // Captured output: `$OUT`, `$OUT[2]`, `$ERR`, `$ERR[2]`.
+        if let Some(index) = output_history::parse_output_var(name, "OUT") {
             return self
                 .session_output_state
                 .output_history
                 .get_stdout(index)
                 .map(|s| s.to_string());
         }
-        if let Some(index) = output_history::parse_output_var(key, "ERR") {
+        if let Some(index) = output_history::parse_output_var(name, "ERR") {
             return self
                 .session_output_state
                 .output_history
@@ -23,50 +50,25 @@ impl Environment {
                 .map(|s| s.to_string());
         }
 
-        // Check MCP-related dynamic variables
-        match key {
-            "MCP_SERVERS" => {
-                return Some(
-                    self.integration_state
-                        .mcp_manager
-                        .read()
-                        .server_count()
-                        .to_string(),
-                );
-            }
+        // MCP counters.
+        let mcp = |count: usize| Some(count.to_string());
+        match name {
+            "MCP_SERVERS" => return mcp(self.integration_state.mcp_manager.read().server_count()),
             "MCP_CONNECTED" => {
-                return Some(
-                    self.integration_state
-                        .mcp_manager
-                        .read()
-                        .connected_count()
-                        .to_string(),
-                );
+                return mcp(self.integration_state.mcp_manager.read().connected_count());
             }
-            "MCP_TOOLS" => {
-                return Some(
-                    self.integration_state
-                        .mcp_manager
-                        .read()
-                        .tool_count()
-                        .to_string(),
-                );
-            }
+            "MCP_TOOLS" => return mcp(self.integration_state.mcp_manager.read().tool_count()),
             _ => {}
         }
 
-        let val = self.variable_state.variables.get(key);
-        if val.is_some() {
-            return val.map(|x| x.to_string());
+        if let Some(value) = self.variable_state.variables.get(name) {
+            return Some(value.clone());
+        }
+        if let Some(value) = self.variable_state.variables.get(&format!("${name}")) {
+            return Some(value.clone());
         }
 
-        if let Some(var) = key.strip_prefix('$') {
-            // expand env var
-            self.variable_state.system_env_vars.get(var).cloned()
-        } else {
-            // For compatibility, also check OS env vars without the '$' prefix
-            self.variable_state.system_env_vars.get(key).cloned()
-        }
+        self.variable_state.system_env_vars.get(name).cloned()
     }
 
     /// Resolves an alias from the Environment's alias map.

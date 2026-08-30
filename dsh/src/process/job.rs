@@ -1,14 +1,13 @@
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::unistd::{Pid, close, getpgid, getpgrp, setpgid};
-use std::fs::File;
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::io::RawFd;
 use tracing::{debug, error};
 
 use super::io::OutputMonitor;
 use super::job_process::JobProcess;
 use super::process::Process;
-use super::redirect::Redirect;
+use super::redirect::{self, Redirect};
 use super::state::{ListOp, ProcessState, SubshellType};
 use super::wait::is_job_completed;
 use crate::process::pty::{Pty, PtyChildConfig, PtyMode};
@@ -30,7 +29,11 @@ pub struct Job {
     stderr: RawFd,
     pub foreground: bool,
     pub subshell: SubshellType,
-    pub redirect: Option<Redirect>,
+    /// Redirections in the order they were written; applied left to right.
+    pub redirects: Vec<Redirect>,
+    /// `NAME=value` written before the command, staged here by the parser
+    /// and moved onto the process it belongs to.
+    pub env_overrides: Vec<(String, String)>,
     pub list_op: ListOp,
     pub job_id: usize,
     pub state: ProcessState,
@@ -80,7 +83,8 @@ impl Job {
             stderr: STDERR_FILENO,
             foreground: true,
             subshell: SubshellType::None,
-            redirect: None,
+            redirects: Vec::new(),
+            env_overrides: Vec::new(),
             list_op: ListOp::None,
             job_id: 1,
             state: ProcessState::Running,
@@ -110,7 +114,8 @@ impl Job {
             stderr: STDERR_FILENO,
             foreground: true,
             subshell: SubshellType::None,
-            redirect: None,
+            redirects: Vec::new(),
+            env_overrides: Vec::new(),
             list_op: ListOp::None,
             job_id: 1,
             state: ProcessState::Running,
@@ -291,22 +296,31 @@ impl Job {
         pty: Option<PtyChildConfig>,
     ) -> Result<()> {
         let previous_infile = ctx.infile;
-        let mut _input_file_guard: Option<File> = None;
-        let mut input_fd: Option<RawFd> = None;
-
-        if let Some(Redirect::Input(ref path)) = self.redirect {
-            let file = File::open(path)
-                .with_context(|| format!("failed to open input redirect file '{}'", path))?;
-            let fd = file.as_raw_fd();
-            ctx.infile = fd;
-            input_fd = Some(fd);
-            _input_file_guard = Some(file);
-        }
+        // Input redirection is applied here, before the process is launched;
+        // the output side is applied inside `launch`, after the pipe and PTY
+        // wiring, so `2>&1` sees where stdout actually ended up.
+        let stdin_redirects: Vec<Redirect> = process
+            .redirects()
+            .iter()
+            .filter(|redirect| redirect.is_stdin())
+            .cloned()
+            .collect();
+        let applied_stdin = redirect::apply(&stdin_redirects, ctx)?;
+        let input_fd = applied_stdin.changed_stdin().then_some(ctx.infile);
 
         // Use launch for automatic capture (modified internal logic)
-        let (pid, mut next_process) = process
-            .launch(ctx, shell, &self.redirect, self.stdout, pty)
-            .await?;
+        let (pid, mut next_process, applied_output) =
+            match process.launch(ctx, shell, self.stdout, pty).await {
+                Ok(launched) => launched,
+                Err(err) => {
+                    // The guard is about to drop and close the input file, so
+                    // put `ctx` back first rather than leaving it naming a
+                    // descriptor that no longer exists.
+                    applied_stdin.restore(ctx);
+                    ctx.infile = previous_infile;
+                    return Err(err);
+                }
+            };
         if self.pid.is_none() {
             self.pid = Some(pid); // set process pid
         }
@@ -394,14 +408,17 @@ impl Job {
             let should_close = match input_fd {
                 Some(fd) => stdin != fd,
                 None => pty_slave != Some(stdin), // Don't close if it's pty_slave
-            };
+            } && !applied_stdin.owns(stdin);
             if should_close && let Err(e) = close(stdin) {
                 debug!("failed close stdin: {}", e);
                 // Don't error out here, just log (avoid crash if EBADF)
             }
         }
+        // A redirection's file is owned by `applied_output` and closed when it
+        // drops; closing it here as well would be a double close.
         if stdout != self.stdout
             && pty_slave != Some(stdout)
+            && !applied_output.owns(stdout)
             && let Err(e) = close(stdout)
         {
             debug!("failed close stdout: {}", e);
@@ -409,17 +426,20 @@ impl Job {
         if stderr != self.stderr
             && stdout != stderr
             && pty_slave != Some(stderr)
+            && !applied_output.owns(stderr)
             && let Err(e) = close(stderr)
         {
             debug!("failed close stderr: {}", e);
         }
 
+        // Release the redirection files now. The child inherited them at fork,
+        // and a duplicate of a pipe's write end kept here would stop the next
+        // command in the pipeline from ever seeing EOF.
+        drop(applied_output);
+        drop(applied_stdin);
+
         self.set_process(process.to_owned());
         self.show_job_status();
-
-        if let Some(ref redirect) = self.redirect {
-            redirect.process(ctx);
-        }
 
         if let Some(fd) = input_fd
             && ctx.infile == fd

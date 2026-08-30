@@ -1,12 +1,21 @@
 use super::ast::{get_pos_word, get_string};
-use super::expansion::{expand_alias, expand_alias_tilde};
+use super::expansion::{ExpandCtx, expand_alias, expand_alias_tilde};
+
+/// Build the expansion context these tests need. `expand_alias_tilde` resolves
+/// variables inside a span, so it needs the environment, not just the aliases.
+fn expand_ctx<'a>(
+    env: &'a crate::environment::Environment,
+    current_dir: &'a Path,
+) -> ExpandCtx<'a> {
+    ExpandCtx { env, current_dir }
+}
 use super::{Rule, ShellParser};
 use crate::environment::Environment;
 use anyhow::Result;
 use pest::Parser;
 use std::cell::RefCell;
 
-use std::path::PathBuf;
+use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 use tracing::debug;
@@ -80,8 +89,11 @@ fn parse_args1() {
 #[test]
 fn parse_args2() {
     init();
+    // `args` is only ever entered after `argv0`, so it starts at the space
+    // before the first argument -- same shape as `parse_args1`. Adjacent parts
+    // now join into one span, so the separator is what marks a new argument.
     let pairs =
-        ShellParser::parse(Rule::args, r#"echo "test""#).unwrap_or_else(|e| panic!("{}", e));
+        ShellParser::parse(Rule::args, r#" echo "test""#).unwrap_or_else(|e| panic!("{}", e));
     for pair in pairs {
         assert_eq!(Rule::args, pair.as_rule());
         let count = pair.clone().into_inner().count();
@@ -188,12 +200,10 @@ fn expand_alias_preserves_input_redirect() {
     let mut pairs = ShellParser::parse(Rule::simple_command, "cat < input.txt")
         .unwrap_or_else(|e| panic!("{}", e));
     let alias_simple = pairs.next().unwrap();
-    let tokens = expand_alias_tilde(
-        alias_simple,
-        &env.read().variable_state.alias,
-        &PathBuf::from("."),
-    )
-    .expect("tokenize redirect");
+    let guard = env.read();
+    let cx = expand_ctx(&guard, Path::new("."));
+    let tokens = expand_alias_tilde(alias_simple, &cx).expect("tokenize redirect");
+    drop(guard);
     assert_eq!(tokens, vec!["cat", "<", "input.txt"]);
 
     let result =
@@ -477,37 +487,40 @@ fn test_expand_alias() -> Result<()> {
 
     let input = r#"alias abc " test" '-vvv' --foo "#.to_string();
     let replaced = expand_alias(input, Arc::clone(&env))?;
+    // Values are single-quoted rather than double-quoted: the line is re-parsed
+    // and `$` is live inside double quotes, so a value containing one would be
+    // interpolated twice. `-vvv` needs no quoting and comes back bare.
     assert_eq!(
         replaced,
-        r#"echo 'test' | sk abc " test" '-vvv' --foo"#.to_string()
+        r#"echo 'test' | sk abc ' test' -vvv --foo"#.to_string()
     );
 
     let input = r#"alias abc " test" '-vvv' --foo &"#.to_string();
     let replaced = expand_alias(input, Arc::clone(&env))?;
     assert_eq!(
         replaced,
-        r#"echo 'test' | sk abc " test" '-vvv' --foo &"#.to_string()
+        r#"echo 'test' | sk abc ' test' -vvv --foo &"#.to_string()
     );
 
     let input = r#"alias | abc " test" '-vvv' --foo &"#.to_string();
     let replaced = expand_alias(input, Arc::clone(&env))?;
     assert_eq!(
         replaced,
-        r#"echo 'test' | sk | abc " test" '-vvv' --foo"#.to_string()
+        r#"echo 'test' | sk | abc ' test' -vvv --foo"#.to_string()
     );
 
     let input = r#"sh -c | alias " test" '-vvv' --foo &"#.to_string();
     let replaced = expand_alias(input, Arc::clone(&env))?;
     assert_eq!(
         replaced,
-        r#"sh -c | echo 'test' | sk " test" '-vvv' --foo"#.to_string()
+        r#"sh -c | echo 'test' | sk ' test' -vvv --foo"#.to_string()
     );
 
     let input = r#"echo (alias " test" '-vvv' --foo) "#.to_string();
     let replaced = expand_alias(input, Arc::clone(&env))?;
     assert_eq!(
         replaced,
-        r#"echo ( echo 'test' | sk " test" '-vvv' --foo )"#.to_string()
+        r#"echo ( echo 'test' | sk ' test' -vvv --foo )"#.to_string()
     );
     let input = r#"echo $FOO"#.to_string();
     let replaced = expand_alias(input, Arc::clone(&env))?;
@@ -950,9 +963,12 @@ fn test_brace_expansion_unit() -> Result<()> {
     // Since files don't exist, glob pattern remains literal
     let input = "echo {*.test_dummy_1,*.test_dummy_2}".to_string();
     let replaced = expand_alias(input, Arc::clone(&env))?;
-    // result should be "*.test_dummy_1 *.test_dummy_2" because glob expansion fails and returns pattern
-    // The order depends on implementation but implementation preserves order of brace expansion
-    assert_eq!(replaced, "echo *.test_dummy_1 *.test_dummy_2".to_string());
+    // Patterns that matched nothing are passed through in brace-expansion order,
+    // quoted so the re-parse does not glob them again.
+    assert_eq!(
+        replaced,
+        "echo '*.test_dummy_1' '*.test_dummy_2'".to_string()
+    );
 
     Ok(())
 }
@@ -968,13 +984,13 @@ fn test_glob_expansion() -> Result<()> {
     File::create(&path_b)?;
 
     let env = crate::environment::Environment::new();
-    let alias = &env.read().variable_state.alias;
+    let guard = env.read();
 
     // Test *.txt expansion
     let pairs = ShellParser::parse(Rule::glob_word, "*.txt").unwrap_or_else(|e| panic!("{}", e));
 
     for pair in pairs {
-        let expanded = expand_alias_tilde(pair, alias, &dir.path().to_path_buf())?;
+        let expanded = expand_alias_tilde(pair, &expand_ctx(&guard, dir.path()))?;
         // Should contain glob_test_a.txt and glob_test_b.txt (quoted or not?)
         // expand_alias_tilde returns fully qualified paths if using absolute root?
         // Or relative?
@@ -999,16 +1015,16 @@ fn test_glob_no_match() -> Result<()> {
     File::create(&path)?;
 
     let env = crate::environment::Environment::new();
-    let alias = &env.read().variable_state.alias;
+    let guard = env.read();
 
     // Pattern matches nothing
     let pairs = ShellParser::parse(Rule::glob_word, "*.rs").unwrap_or_else(|e| panic!("{}", e));
 
     for pair in pairs {
-        let expanded = expand_alias_tilde(pair, alias, &dir.path().to_path_buf())?;
-        // Should return literal if no match
+        let expanded = expand_alias_tilde(pair, &expand_ctx(&guard, dir.path()))?;
+        // Literal on no match, quoted so the re-parse does not glob it again.
         assert_eq!(expanded.len(), 1);
-        assert_eq!(expanded[0], "*.rs");
+        assert_eq!(expanded[0], "'*.rs'");
     }
     Ok(())
 }
@@ -1022,13 +1038,13 @@ fn test_glob_question_mark() -> Result<()> {
     File::create(dir.path().join("fileA.txt"))?;
 
     let env = crate::environment::Environment::new();
-    let alias = &env.read().variable_state.alias;
+    let guard = env.read();
 
     let pairs =
         ShellParser::parse(Rule::glob_word, "file?.txt").unwrap_or_else(|e| panic!("{}", e));
 
     for pair in pairs {
-        let expanded = expand_alias_tilde(pair, alias, &dir.path().to_path_buf())?;
+        let expanded = expand_alias_tilde(pair, &expand_ctx(&guard, dir.path()))?;
         assert_eq!(expanded.len(), 2);
         let s = expanded.join(" ");
         assert!(s.contains("file1.txt"));
@@ -1047,13 +1063,13 @@ fn test_glob_character_class() -> Result<()> {
     File::create(dir.path().join("fileA.txt"))?;
 
     let env = crate::environment::Environment::new();
-    let alias = &env.read().variable_state.alias;
+    let guard = env.read();
 
     let pairs =
         ShellParser::parse(Rule::glob_word, "file[0-9].txt").unwrap_or_else(|e| panic!("{}", e));
 
     for pair in pairs {
-        let expanded = expand_alias_tilde(pair, alias, &dir.path().to_path_buf())?;
+        let expanded = expand_alias_tilde(pair, &expand_ctx(&guard, dir.path()))?;
         assert_eq!(expanded.len(), 2);
         let s = expanded.join(" ");
         assert!(s.contains("file1.txt"));
@@ -1073,12 +1089,12 @@ fn test_glob_subdirectory() -> Result<()> {
     File::create(subdir.join("test.rs"))?;
 
     let env = crate::environment::Environment::new();
-    let alias = &env.read().variable_state.alias;
+    let guard = env.read();
 
     let pairs = ShellParser::parse(Rule::glob_word, "sub/*.rs").unwrap_or_else(|e| panic!("{}", e));
 
     for pair in pairs {
-        let expanded = expand_alias_tilde(pair, alias, &dir.path().to_path_buf())?;
+        let expanded = expand_alias_tilde(pair, &expand_ctx(&guard, dir.path()))?;
         assert_eq!(expanded.len(), 1);
         let s = expanded[0].clone();
         assert!(s.contains("sub"));
@@ -1102,13 +1118,13 @@ fn test_recursive_glob() -> Result<()> {
     File::create(nested.join("deep.rs"))?;
 
     let env = crate::environment::Environment::new();
-    let alias = &env.read().variable_state.alias;
+    let guard = env.read();
 
     // Test **/*.rs
     let pairs = ShellParser::parse(Rule::glob_word, "**/*.rs").unwrap_or_else(|e| panic!("{}", e));
 
     for pair in pairs {
-        let expanded = expand_alias_tilde(pair, alias, &dir.path().to_path_buf())?;
+        let expanded = expand_alias_tilde(pair, &expand_ctx(&guard, dir.path()))?;
         // Should find all 3 .rs files
         assert_eq!(expanded.len(), 3);
         let s = expanded.join(" ");

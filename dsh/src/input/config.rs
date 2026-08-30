@@ -7,6 +7,7 @@ pub struct InputConfig {
     pub command_not_exists_color: Color, // Command that doesn't exist (red)
     pub argument_color: Color,           // Arguments (cyan)
     pub variable_color: Color,           // Variables (yellow)
+    pub assignment_color: Color,         // NAME= prefix (cyan)
     pub single_quote_color: Color,       // Single quoted strings (green)
     pub double_quote_color: Color,       // Double quoted strings (Green with bold?)
     pub redirect_color: Color,           // Redirect operators (magenta)
@@ -30,6 +31,7 @@ impl Default for InputConfig {
             command_not_exists_color: Color::Red,
             argument_color: Color::Cyan,
             variable_color: Color::Yellow,
+            assignment_color: Color::Cyan,
             single_quote_color: Color::DarkGreen,
             double_quote_color: Color::Green,
             redirect_color: Color::Magenta,
@@ -53,6 +55,7 @@ pub enum ColorType {
     CommandNotExists,
     Argument,
     Variable,
+    Assignment,
     SingleQuote,
     DoubleQuote,
     Redirect,

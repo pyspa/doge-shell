@@ -7,6 +7,7 @@ use std::os::unix::io::RawFd;
 use tracing::debug;
 
 use super::job_process::JobProcess;
+use super::redirect::Redirect;
 use super::state::ProcessState;
 use crate::shell::Shell;
 
@@ -23,6 +24,11 @@ pub struct BuiltinProcess {
     pub stderr: RawFd,
     pub(crate) cap_stdout: Option<RawFd>,
     pub(crate) cap_stderr: Option<RawFd>,
+    /// Redirections written on *this* command, in order. Per process,
+    /// not per job: in `a 2>&1 | b` the duplication belongs to `a`.
+    pub(crate) redirects: Vec<Redirect>,
+    /// `NAME=value` written before this command; visible to it only.
+    pub(crate) env_overrides: Vec<(String, String)>,
 }
 
 impl PartialEq for BuiltinProcess {
@@ -69,6 +75,8 @@ impl BuiltinProcess {
             stderr: STDERR_FILENO,
             cap_stdout: None,
             cap_stderr: None,
+            redirects: Vec::new(),
+            env_overrides: Vec::new(),
         }
     }
 

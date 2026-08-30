@@ -76,6 +76,24 @@ fn should_use_full_proxy(job: &Job, ctx: &Context) -> bool {
         && !is_builtin_job(job)
         && ctx.infile == STDIN_FILENO
         && ctx.outfile == STDOUT_FILENO
+        && !job_has_redirects(job)
+}
+
+/// Whether the command carries redirections of its own.
+///
+/// The `ctx` checks above cannot see these: redirections are applied inside
+/// `launch`, after this decision has been made. Without this, `vim > out` would
+/// still take the terminal into raw mode and proxy keystrokes for a command
+/// whose output never reaches the terminal.
+fn job_has_redirects(job: &Job) -> bool {
+    let mut current = job.process.as_deref();
+    while let Some(process) = current {
+        if !process.redirects().is_empty() {
+            return true;
+        }
+        current = process.next_process();
+    }
+    false
 }
 
 fn should_enable_foreground_pty_raw_mode(job: &Job, ctx: &Context) -> bool {

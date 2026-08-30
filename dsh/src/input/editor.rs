@@ -812,6 +812,7 @@ impl Input {
                 ColorType::CommandNotExists => self.config.command_not_exists_color,
                 ColorType::Argument => self.config.argument_color,
                 ColorType::Variable => self.config.variable_color,
+                ColorType::Assignment => self.config.assignment_color,
                 ColorType::SingleQuote => self.config.single_quote_color,
                 ColorType::DoubleQuote => self.config.double_quote_color,
                 ColorType::Redirect => self.config.redirect_color,

@@ -182,11 +182,13 @@ pub async fn eval_str(
         if let Some(reason) = denied_reason {
             tracing::warn!("Command execution denied by SafetyGuard: {}", reason);
             eprintln!("🚫 Access Denied: {}", reason);
+            publish_exit_status(shell, 1);
             return Ok(1);
         }
 
         if user_cancelled {
             tracing::info!("Command execution cancelled by user");
+            publish_exit_status(shell, 130);
             return Ok(130);
         }
     }
@@ -237,7 +239,7 @@ pub async fn eval_str(
 
         debug!(
             "start job '{:?}' foreground:{:?} redirect:{:?} list_op:{:?} capture:{:?}",
-            job.cmd, job.foreground, job.redirect, job.list_op, job.capture_output,
+            job.cmd, job.foreground, job.redirects, job.list_op, job.capture_output,
         );
         let _title_guard = TitleGuard::new(ctx, &job);
 
@@ -470,6 +472,8 @@ pub async fn eval_str(
     }
 
     debug!("EVAL_STR: Job loop completed");
+    publish_exit_status(shell, last_exit_code);
+
     Ok(last_exit_code)
 }
 
@@ -562,6 +566,19 @@ pub async fn execute_with_capture(
     Ok((exit_code, stdout, stderr))
 }
 
+/// Record the status `$?` should report.
+///
+/// Every exit from `eval_str` goes through here, refusals and cancellations
+/// included: a line that was blocked still happened, and leaving the previous
+/// line's status in place would tell the user it succeeded.
+///
+/// Once per line, not once per job: the whole line is parsed and expanded
+/// before the first job runs, so a `$?` written on this line was already
+/// substituted from the previous one.
+fn publish_exit_status(shell: &Shell, code: i32) {
+    shell.environment.write().last_exit_status = code;
+}
+
 pub fn get_jobs(shell: &mut Shell, input: &str) -> Result<Vec<Job>> {
     let (input_cow, pairs_opt) =
         parser::parse_with_expansion(input, Arc::clone(&shell.environment))?;
@@ -573,10 +590,31 @@ pub fn get_jobs(shell: &mut Shell, input: &str) -> Result<Vec<Job>> {
     };
 
     let mut ctx = ParseContext::new(true);
-    pairs.next().map_or_else(
-        || Ok(Vec::new()),
-        |pair| parse_commands(shell, &mut ctx, pair),
-    )
+    let Some(pair) = pairs.next() else {
+        return Ok(Vec::new());
+    };
+
+    // The grammar has no EOI anchor, so `Rule::commands` happily returns a
+    // partial match and we would silently execute only the prefix. Report the
+    // leftover instead of pretending the whole line ran.
+    report_unparsed_tail(&input_cow, pair.as_span().end());
+
+    parse_commands(shell, &mut ctx, pair)
+}
+
+/// Warn about input the parser did not consume.
+///
+/// Kept separate from [`get_jobs`] so the "what counts as leftover" rule is
+/// testable without a shell. A trailing separator or whitespace is consumed by
+/// the grammar, so anything reaching here is text the user typed and we ignored.
+fn report_unparsed_tail(input: &str, consumed: usize) {
+    if let Some(tail) = parser::unparsed_tail(input, consumed) {
+        tracing::warn!("unparsed input tail: {:?}", tail);
+        // `\r\n`, not `\n`: this runs before raw mode is turned off, where a
+        // bare newline leaves the cursor in the same column and staircases the
+        // next line.
+        eprint!("dsh: warning: ignored unparsed input: {tail}\r\n");
+    }
 }
 
 pub fn launch_subshell(shell: &mut Shell, ctx: &mut Context, jobs: Vec<Job>) -> Result<()> {

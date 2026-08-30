@@ -13,6 +13,7 @@ use tracing::{debug, error};
 
 use super::job_process::JobProcess;
 use super::pty::{PtyChildConfig, PtyMode};
+use super::redirect::Redirect;
 use super::state::ProcessState;
 use super::wait::wait_pid_job;
 use crate::shell::SHELL_TERMINAL;
@@ -38,6 +39,11 @@ pub struct Process {
     pub stderr: RawFd,
     pub(crate) cap_stdout: Option<RawFd>,
     pub(crate) cap_stderr: Option<RawFd>,
+    /// Redirections written on *this* command, in order. Per process,
+    /// not per job: in `a 2>&1 | b` the duplication belongs to `a`.
+    pub(crate) redirects: Vec<Redirect>,
+    /// `NAME=value` written before this command; visible to it only.
+    pub(crate) env_overrides: Vec<(String, String)>,
 }
 
 impl std::fmt::Debug for Process {
@@ -70,6 +76,8 @@ impl Process {
             stderr: STDERR_FILENO,
             cap_stdout: None,
             cap_stderr: None,
+            redirects: Vec::new(),
+            env_overrides: Vec::new(),
         }
     }
 
@@ -147,8 +155,21 @@ impl Process {
             + env_guard.variable_state.exported_vars.len();
         let mut envp: Vec<CString> = Vec::with_capacity(estimated_cap + 2); // +2 for TERM, LS_COLORS fallback
 
+        // A `NAME=value` prefix wins over both the shell's exported vars and
+        // the inherited environment, and must appear only once: with a
+        // duplicate key it is the *first* entry the child sees, so the
+        // overridden value has to be left out rather than shadowed.
+        let overridden: std::collections::HashSet<&str> = self
+            .env_overrides
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .collect();
+
         // 1. Add system vars that are NOT overridden by exported vars
         for (key, val) in &env_guard.variable_state.system_env_vars {
+            if overridden.contains(key.as_str()) {
+                continue;
+            }
             if !env_guard.variable_state.exported_vars.contains(key) {
                 // Special handling for TERM: if empty, skip so we can default it later
                 if key == "TERM" && val.is_empty() {
@@ -169,6 +190,9 @@ impl Process {
 
         // 2. Add exported vars (overriding system vars)
         for key in &env_guard.variable_state.exported_vars {
+            if overridden.contains(key.as_str()) {
+                continue;
+            }
             if let Some(value) = env_guard.variable_state.variables.get(key) {
                 if key == "TERM" {
                     if value.is_empty() {
@@ -183,6 +207,25 @@ impl Process {
                 if let Ok(c_str) = CString::new(format!("{}={}", key, value)) {
                     envp.push(c_str);
                 }
+            }
+        }
+
+        // 3. The command's own `NAME=value` prefix. `A=1 A=2 cmd` must give the
+        // child `A=2`: it resolves the first duplicate, so the earlier value is
+        // dropped instead of being shadowed by a later entry.
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for (key, value) in self.env_overrides.iter().rev() {
+            if !seen.insert(key.as_str()) {
+                continue;
+            }
+            if key == "TERM" {
+                term_set = !value.is_empty();
+            }
+            if key == "LS_COLORS" {
+                ls_colors_set = true;
+            }
+            if let Ok(c_str) = CString::new(format!("{key}={value}")) {
+                envp.push(c_str);
             }
         }
 

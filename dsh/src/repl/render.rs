@@ -205,6 +205,7 @@ pub(crate) fn highlight_result_to_ranges(
             }
             HighlightKind::Argument | HighlightKind::Bareword => ColorType::Argument,
             HighlightKind::Variable => ColorType::Variable,
+            HighlightKind::Assignment => ColorType::Assignment,
             HighlightKind::SingleQuoted => ColorType::SingleQuote,
             HighlightKind::DoubleQuoted => ColorType::DoubleQuote,
             HighlightKind::Redirect => ColorType::Redirect,

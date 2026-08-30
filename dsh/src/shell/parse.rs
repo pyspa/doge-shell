@@ -4,6 +4,7 @@ use crate::process::{self, Job, JobProcess, Redirect, SubshellType};
 use crate::shell::Shell;
 use anyhow::{Context as _, Result, bail};
 use dsh_types::Context;
+use nix::libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::sys::termios::tcgetattr;
 use nix::unistd::pipe;
 use pest::iterators::Pair;
@@ -44,6 +45,152 @@ impl ParseContext {
     }
 }
 
+/// `FOO=bar` with no command sets a shell variable, the way `set` does.
+///
+/// Not exported: a prefix only reaches a child process when there is a command
+/// for it to run.
+fn apply_standalone_assignments(shell: &mut Shell, assignments: &mut Vec<(String, String)>) {
+    if assignments.is_empty() {
+        return;
+    }
+    let mut env = shell.environment.write();
+    for (name, value) in assignments.drain(..) {
+        env.variable_state.variables.insert(name, value);
+    }
+}
+
+/// Split one `NAME=value` into its two halves.
+///
+/// The value goes through `get_string` like any other word, so quoting and
+/// escapes behave the same as they would in an argument. A bare `NAME=` is an
+/// empty value, which is how shells spell "defined but empty".
+fn parse_assignment(pair: Pair<Rule>) -> (String, String) {
+    let mut name = String::new();
+    let mut value = String::new();
+    for part in pair.into_inner() {
+        match part.as_rule() {
+            Rule::assign_name => name = part.as_str().to_string(),
+            Rule::span => value = parser::get_string(part).unwrap_or_default(),
+            _ => {}
+        }
+    }
+    (name, value)
+}
+
+/// Whether any part of this span is a substitution.
+///
+/// Substitutions become their own argv entries because they can expand to
+/// several words; everything else in a span is joined into one argument.
+fn span_has_substitution(span: &Pair<Rule>) -> bool {
+    span.clone().into_inner().any(|part| {
+        matches!(
+            part.as_rule(),
+            Rule::subshell | Rule::proc_subst | Rule::command_subst
+        )
+    })
+}
+
+/// Attach the command's redirections and environment prefix, then add it
+/// to the job.
+///
+/// Per process rather than per job: in `a 2>&1 | b` the duplication belongs to
+/// `a`, and applying it to `b` sent the error to the terminal instead of down
+/// the pipe.
+fn attach_process(
+    job: &mut Job,
+    mut process: JobProcess,
+    redirects: &mut Vec<Redirect>,
+    env_overrides: &mut Vec<(String, String)>,
+) {
+    process.set_redirects(std::mem::take(redirects));
+    process.set_env_overrides(std::mem::take(env_overrides));
+    job.set_process(process);
+}
+
+/// Build the redirections one `redirect` pair stands for.
+///
+/// `&>` desugars into two entries, which is why this returns a list: keeping
+/// the ordering explicit is what makes `> f 2>&1` and `2>&1 > f` differ
+/// correctly once the list is applied left to right.
+fn parse_redirect(pair: Pair<Rule>) -> Result<Vec<Redirect>> {
+    let mut direction = None;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::fd_dup => return parse_fd_dup(inner),
+            Rule::stdout_redirect_direction
+            | Rule::stderr_redirect_direction
+            | Rule::stdouterr_redirect_direction
+            | Rule::stdin_redirect_direction => {
+                direction = inner.into_inner().next().map(|rule| rule.as_rule());
+            }
+            Rule::span => {
+                // Through `get_string` so the target goes through the same
+                // quote removal and expansion as any other word -- taking the
+                // raw text left the quotes in `> "my file.txt"`.
+                let dest = parser::get_string(inner).unwrap_or_default();
+                return Ok(match direction {
+                    Some(Rule::stdout_redirect_direction_out) => {
+                        vec![Redirect::write(STDOUT_FILENO, dest)]
+                    }
+                    Some(Rule::stdout_redirect_direction_append) => {
+                        vec![Redirect::append(STDOUT_FILENO, dest)]
+                    }
+                    Some(Rule::stderr_redirect_direction_out) => {
+                        vec![Redirect::write(STDERR_FILENO, dest)]
+                    }
+                    Some(Rule::stderr_redirect_direction_append) => {
+                        vec![Redirect::append(STDERR_FILENO, dest)]
+                    }
+                    Some(Rule::stdouterr_redirect_direction_out) => Redirect::both(dest, false),
+                    Some(Rule::stdouterr_redirect_direction_append) => Redirect::both(dest, true),
+                    Some(Rule::stdin_redirect_direction_in) => vec![Redirect::input(dest)],
+                    _ => Vec::new(),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Vec::new())
+}
+
+/// `2>&1`, `>&2`, `2>&-`.
+fn parse_fd_dup(pair: Pair<Rule>) -> Result<Vec<Redirect>> {
+    let Some(form) = pair.into_inner().next() else {
+        return Ok(Vec::new());
+    };
+    // Without an explicit number, `>&` means stdout and `<&` means stdin.
+    let default_fd = match form.as_rule() {
+        Rule::fd_dup_in => STDIN_FILENO,
+        _ => STDOUT_FILENO,
+    };
+
+    let mut fd = default_fd;
+    let mut target = None;
+    for inner in form.into_inner() {
+        match inner.as_rule() {
+            Rule::fd_number => fd = parse_fd(inner.as_str())?,
+            Rule::fd_dup_target => target = Some(inner.as_str().to_string()),
+            _ => {}
+        }
+    }
+
+    let Some(target) = target else {
+        return Ok(Vec::new());
+    };
+    Ok(vec![if target == "-" {
+        Redirect::close(fd)
+    } else {
+        Redirect::dup(fd, parse_fd(&target)?)
+    }])
+}
+
+fn parse_fd(text: &str) -> Result<RawFd> {
+    text.parse::<RawFd>()
+        .with_context(|| format!("dsh: invalid file descriptor '{text}'"))
+}
+
 pub fn parse_argv(
     shell: &mut Shell,
     ctx: &mut ParseContext,
@@ -57,6 +204,17 @@ pub fn parse_argv(
             Rule::argv0 => {
                 for inner_pair in inner_pair.into_inner() {
                     // span
+                    // A span is one argument. Only a substitution needs its
+                    // parts handled separately; everything else is joined by
+                    // `get_string`, or `echo a"b"c` would arrive as three
+                    // arguments.
+                    if !span_has_substitution(&inner_pair) {
+                        if let Some(arg) = parser::get_string(inner_pair) {
+                            argv.push((arg, None));
+                        }
+                        continue;
+                    }
+
                     for inner_pair in inner_pair.into_inner() {
                         match inner_pair.as_rule() {
                             Rule::subshell => {
@@ -114,51 +272,25 @@ pub fn parse_argv(
                     }
                 }
             }
+            Rule::assignment_list => {
+                for assignment in inner_pair.into_inner() {
+                    current_job.env_overrides.push(parse_assignment(assignment));
+                }
+            }
             Rule::args => {
                 for inner_pair in inner_pair.into_inner() {
                     if let Rule::redirect = inner_pair.as_rule() {
-                        // set redirect
-                        let mut redirect_rule = None;
-                        for pair in inner_pair.into_inner() {
-                            if let Rule::stdout_redirect_direction
-                            | Rule::stderr_redirect_direction
-                            | Rule::stdouterr_redirect_direction
-                            | Rule::stdin_redirect_direction = pair.as_rule()
-                            {
-                                if let Some(rule) = pair.into_inner().next() {
-                                    redirect_rule = Some(rule.as_rule());
-                                }
-                            } else if let Rule::span = pair.as_rule() {
-                                let dest = pair.as_str();
+                        current_job.redirects.extend(parse_redirect(inner_pair)?);
+                        continue;
+                    }
 
-                                let redirect = match redirect_rule {
-                                    Some(Rule::stdout_redirect_direction_out) => {
-                                        Some(Redirect::StdoutOutput(dest.to_string()))
-                                    }
-                                    Some(Rule::stdout_redirect_direction_append) => {
-                                        Some(Redirect::StdoutAppend(dest.to_string()))
-                                    }
-
-                                    Some(Rule::stderr_redirect_direction_out) => {
-                                        Some(Redirect::StderrOutput(dest.to_string()))
-                                    }
-                                    Some(Rule::stderr_redirect_direction_append) => {
-                                        Some(Redirect::StderrAppend(dest.to_string()))
-                                    }
-
-                                    Some(Rule::stdouterr_redirect_direction_out) => {
-                                        Some(Redirect::StdouterrOutput(dest.to_string()))
-                                    }
-                                    Some(Rule::stdouterr_redirect_direction_append) => {
-                                        Some(Redirect::StdouterrAppend(dest.to_string()))
-                                    }
-                                    Some(Rule::stdin_redirect_direction_in) => {
-                                        Some(Redirect::Input(dest.to_string()))
-                                    }
-                                    _ => None,
-                                };
-                                current_job.redirect = redirect;
-                            }
+                    // A span is one argument. Only a substitution needs its
+                    // parts handled separately; everything else is joined by
+                    // `get_string`, or `echo a"b"c` would arrive as three
+                    // arguments.
+                    if !span_has_substitution(&inner_pair) {
+                        if let Some(arg) = parser::get_string(inner_pair) {
+                            argv.push((arg, None));
                         }
                         continue;
                     }
@@ -282,7 +414,12 @@ pub fn parse_command(
 ) -> Result<()> {
     debug!("start parse command: {}", pair.as_str());
     let parsed_argv = parse_argv(shell, ctx, current_job, pair)?;
+    // `parse_argv` collects redirections on the job as a staging area; they
+    // belong to the command being built here, so move them across.
+    let mut redirects = std::mem::take(&mut current_job.redirects);
+    let mut env_overrides = std::mem::take(&mut current_job.env_overrides);
     if parsed_argv.is_empty() {
+        apply_standalone_assignments(shell, &mut env_overrides);
         return Ok(());
     }
 
@@ -353,6 +490,7 @@ pub fn parse_command(
     }
 
     if argv.is_empty() {
+        apply_standalone_assignments(shell, &mut env_overrides);
         // no main command
         return Ok(());
     }
@@ -369,18 +507,45 @@ pub fn parse_command(
     }
 
     let cmd = argv[0].as_str();
+    // A builtin runs inside the shell for a foreground job, so a per-command
+    // environment would have to be applied and unwound around the call. Say so
+    // rather than accepting the prefix and quietly ignoring it.
+    if !env_overrides.is_empty()
+        && (dsh_builtin::get_handler(cmd).is_some() || shell.lisp_engine.borrow().is_export(cmd))
+    {
+        // Report and skip *this* command. Bailing here aborted the whole line,
+        // so `FOO=bar cd /tmp; echo ok` silently dropped `echo ok` as well.
+        eprintln!("dsh: {cmd}: a NAME=value prefix is not supported for builtins");
+        return Ok(());
+    }
+
     if let Some(handler) = dsh_builtin::get_handler(cmd) {
         let builtin = process::BuiltinProcess::new_handler(cmd.to_string(), handler, argv);
-        current_job.set_process(JobProcess::Builtin(builtin));
+        attach_process(
+            current_job,
+            JobProcess::Builtin(builtin),
+            &mut redirects,
+            &mut env_overrides,
+        );
     } else if shell.lisp_engine.borrow().is_export(cmd) {
         let cmd_fn = dsh_builtin::lisp::run;
         let builtin = process::BuiltinProcess::new(cmd.to_string(), cmd_fn, argv);
-        current_job.set_process(JobProcess::Builtin(builtin));
+        attach_process(
+            current_job,
+            JobProcess::Builtin(builtin),
+            &mut redirects,
+            &mut env_overrides,
+        );
     } else {
         let cmd_lookup = shell.environment.read().lookup(cmd);
         if let Some(cmd) = cmd_lookup {
             let process = process::Process::new(cmd, argv);
-            current_job.set_process(JobProcess::Command(process));
+            attach_process(
+                current_job,
+                JobProcess::Command(process),
+                &mut redirects,
+                &mut env_overrides,
+            );
             current_job.foreground = ctx.foreground;
         } else if dirs::is_dir(cmd) {
             if let Some(handler) = dsh_builtin::get_handler("cd") {
@@ -389,7 +554,12 @@ pub fn parse_command(
                     handler,
                     vec!["cd".to_string(), cmd.to_string()],
                 );
-                current_job.set_process(JobProcess::Builtin(builtin));
+                attach_process(
+                    current_job,
+                    JobProcess::Builtin(builtin),
+                    &mut redirects,
+                    &mut env_overrides,
+                );
             }
         } else {
             // Execute command-not-found hooks before showing error

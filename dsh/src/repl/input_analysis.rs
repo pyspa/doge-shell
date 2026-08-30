@@ -102,11 +102,13 @@ pub(crate) fn analyze_input(
             }
 
             // 2. Compute color ranges using the same pairs
+            let consumed = pairs.clone().next().map(|pair| pair.as_span().end());
             let (mut color_ranges, can_execute) =
                 repl.compute_color_ranges_from_pairs(pairs, input);
 
             apply_cached_path_highlighting(input, &mut color_ranges);
             append_cached_tail_path_highlighting(input, &mut color_ranges);
+            append_unparsed_tail_highlighting(input, consumed, &mut color_ranges);
 
             InputAnalysis {
                 completion_full,
@@ -171,6 +173,39 @@ fn append_cached_tail_path_highlighting(
     }
 
     color_ranges.push((start, end, kind));
+    color_ranges.sort_by_key(|(start, _, _)| *start);
+}
+
+/// Mark input the grammar did not consume.
+///
+/// `Rule::commands` returns a partial match rather than failing, so without
+/// this the dropped tail looks like ordinary text right up until the shell
+/// runs only the prefix. Colouring it is the earliest point the user can
+/// notice.
+fn append_unparsed_tail_highlighting(
+    input: &str,
+    consumed: Option<usize>,
+    color_ranges: &mut Vec<(usize, usize, ColorType)>,
+) {
+    let Some(consumed) = consumed else {
+        return;
+    };
+    if parser::unparsed_tail(input, consumed).is_none() {
+        return;
+    }
+    // The same rounding the guard applied: the renderer slices `input` with
+    // this index, and a byte offset inside a character panics.
+    let consumed = parser::unparsed_tail_start(input, consumed);
+    // `write_colored_ranges_to` walks a sorted, non-overlapping partition, so
+    // never push a range that collides with one already there.
+    if color_ranges
+        .iter()
+        .any(|(start, end, _)| ranges_overlap(consumed, input.len(), *start, *end))
+    {
+        return;
+    }
+
+    color_ranges.push((consumed, input.len(), ColorType::Error));
     color_ranges.sort_by_key(|(start, _, _)| *start);
 }
 
@@ -291,6 +326,50 @@ mod tests {
             .iter()
             .copied()
             .find(|(start, end, _)| &input[*start..*end] == raw)
+    }
+
+    /// Colour ranges are consumed by `write_colored_ranges_to`, which walks a
+    /// sorted, non-overlapping partition and slices `input[start..end]`. A
+    /// range that breaks either property corrupts the rendered line, so these
+    /// pin both.
+    #[test]
+    fn unparsed_tail_is_marked_as_an_error_range() {
+        let input = "echo a )";
+        let mut ranges = vec![(0, 4, ColorType::CommandExists)];
+        append_unparsed_tail_highlighting(input, Some(7), &mut ranges);
+
+        assert_eq!(ranges.last(), Some(&(7, input.len(), ColorType::Error)));
+    }
+
+    #[test]
+    fn fully_consumed_input_gets_no_error_range() {
+        let input = "echo hello";
+        let mut ranges = vec![(0, 4, ColorType::CommandExists)];
+        append_unparsed_tail_highlighting(input, Some(input.len()), &mut ranges);
+
+        assert_eq!(ranges.len(), 1);
+    }
+
+    #[test]
+    fn unparsed_tail_never_overlaps_an_existing_range() {
+        let input = "echo a )";
+        // A tail-path heuristic already claimed the region.
+        let mut ranges = vec![(5, input.len(), ColorType::ValidPath)];
+        append_unparsed_tail_highlighting(input, Some(7), &mut ranges);
+
+        assert_eq!(ranges, vec![(5, input.len(), ColorType::ValidPath)]);
+    }
+
+    #[test]
+    fn unparsed_tail_ranges_stay_sorted() {
+        let input = "echo a )";
+        let mut ranges = vec![
+            (5, 6, ColorType::Argument),
+            (0, 4, ColorType::CommandExists),
+        ];
+        append_unparsed_tail_highlighting(input, Some(7), &mut ranges);
+
+        assert!(ranges.windows(2).all(|w| w[0].0 <= w[1].0));
     }
 
     #[tokio::test]

@@ -303,6 +303,20 @@ pub async fn eval_str(
                 job.struct_pipe_exprs.len()
             );
 
+            // Declarative output schema for the pipeline's last external
+            // command: inject preferred machine-readable flags before the
+            // run, parse the captured output into a table after it.
+            let schema_spec = job
+                .last_external_argv()
+                .and_then(|argv| crate::output_schema::lookup(&argv));
+            if let Some(prefer) = schema_spec.as_ref().and_then(|spec| spec.prefer.as_ref()) {
+                debug!(
+                    "Struct pipe: injecting schema args {:?}",
+                    prefer.inject_args
+                );
+                job.append_args_to_last_external(&prefer.inject_args);
+            }
+
             // Execute command through regular job launch path and capture output.
             let (exit_code, output, stderr_output) =
                 execute_with_capture(shell, ctx, &mut job).await?;
@@ -324,8 +338,41 @@ pub async fn eval_str(
                 continue;
             }
 
+            // With a matching schema and a successful run, hand the Lisp side
+            // a typed table in `$_`. Parse failures fall back to the plain
+            // string: a schema must never break the pipeline.
+            let table = (last_exit_code == 0)
+                .then_some(schema_spec.as_ref())
+                .flatten()
+                .and_then(
+                    |spec| match crate::output_schema::parse_with_spec(spec, &output) {
+                        Ok(table) => Some(table),
+                        Err(err) => {
+                            debug!("Struct pipe: schema parse failed, using raw string: {err}");
+                            None
+                        }
+                    },
+                );
+
+            // `$RAW` is the raw text of *this* command. The Lisp root
+            // environment outlives the pipeline, so it is rebound on every run
+            // — leaving a previous command's output in place would silently
+            // feed stale data to a later `|:`.
+            {
+                let engine = shell.lisp_engine.borrow();
+                engine
+                    .env
+                    .borrow_mut()
+                    .define(Symbol::from("$RAW"), Value::String(output.clone()));
+            }
+
             // Evaluate Lisp expressions in sequence, passing output through $_
-            let mut current_value = Value::String(output);
+            let mut current_value = match table {
+                Some(table) => {
+                    Value::Table(crate::lisp::TableRc::new(std::cell::RefCell::new(table)))
+                }
+                None => Value::String(output),
+            };
 
             for lisp_expr in &job.struct_pipe_exprs {
                 debug!("Struct pipe: evaluating Lisp expression: {}", lisp_expr);

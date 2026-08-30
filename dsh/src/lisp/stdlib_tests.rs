@@ -246,6 +246,70 @@ mod tests {
     }
 
     #[test]
+    fn test_output_parse_with_where_cmp() {
+        let env = create_test_env();
+
+        // (output-parse "ps aux" <captured text>) resolves the embedded
+        // schema and yields a typed table.
+        let output = "USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND\n\
+                      root 1 0.5 0.1 100 200 ? Ss now 0:01 /sbin/init\n\
+                      ma2 42 55.5 2.0 300 400 ? R now 1:23 cargo test"
+            .to_string();
+        let expr = Value::List(
+            vec![
+                Value::Symbol(Symbol::from("output-parse")),
+                Value::String("ps aux".to_string()),
+                Value::String(output),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let table = eval(env.clone(), &expr).unwrap();
+        match &table {
+            Value::Table(t) => assert_eq!(t.borrow().count(), 2),
+            other => panic!("Expected table from output-parse, got {other:?}"),
+        }
+
+        // (table-where-cmp table "cpu" ">" 50) — the float %CPU column must
+        // participate in numeric comparisons.
+        let expr_cmp = Value::List(
+            vec![
+                Value::Symbol(Symbol::from("table-where-cmp")),
+                table,
+                Value::String("cpu".to_string()),
+                Value::String(">".to_string()),
+                Value::Int(50.into()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let filtered = eval(env.clone(), &expr_cmp).unwrap();
+        match filtered {
+            Value::Table(t) => {
+                let t = t.borrow();
+                assert_eq!(t.count(), 1);
+                assert_eq!(
+                    t.rows[0].get("command"),
+                    Some(&Value::String("cargo test".to_string()))
+                );
+            }
+            other => panic!("Expected table from table-where-cmp, got {other:?}"),
+        }
+
+        // Unknown command line: a clear error rather than a silent NIL.
+        let expr_unknown = Value::List(
+            vec![
+                Value::Symbol(Symbol::from("output-parse")),
+                Value::String("definitely-unknown-cmd".to_string()),
+                Value::String("x".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        assert!(eval(env.clone(), &expr_unknown).is_err());
+    }
+
+    #[test]
     fn lisp_mcp_helpers_add_servers() {
         let shell_env = Environment::new();
         shell_env.write().startup_mode = true;

@@ -475,6 +475,36 @@ pub fn pref_status_line(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value
     Ok(Value::NIL)
 }
 
+/// `(pref-failure-hint [t])` — read or set whether a failed command shows a
+/// one-line proactive hint (deterministic quick fix ghost text, or a pointer
+/// to Alt-f/Alt-d). On by default; the automatic path never sends an AI
+/// request unless auto-fix is also enabled.
+///
+/// Turning it off disables the whole automatic post-failure path, automatic
+/// AI fixes included, since all of it surfaces as that hint. `Alt-f` and
+/// `Alt-d` keep working on demand.
+pub fn pref_failure_hint(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    if args.is_empty() {
+        return Ok(Value::from(
+            env.borrow()
+                .shell_env
+                .read()
+                .completion_state
+                .input_preferences
+                .failure_hint,
+        ));
+    }
+
+    let enabled = bool::from(&args[0]);
+
+    debug!("setting failure-hint to {:?}", enabled);
+    env.borrow()
+        .shell_env
+        .write()
+        .set_failure_hint_enabled(enabled);
+    Ok(Value::NIL)
+}
+
 /// `(pref-command-ledger ["off"|"metadata"|"output"])`.
 /// Output capture is intentionally opt-in; all modes still use secret filtering.
 pub fn pref_command_ledger(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {

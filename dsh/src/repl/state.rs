@@ -17,6 +17,9 @@ pub(crate) struct ReplState {
     pub last_arg: Option<crate::repl::last_arg::LastArgState>,
     /// Remaining `{{placeholder}}` stops from the last inserted snippet.
     pub placeholders: Option<crate::repl::placeholder::PlaceholderState>,
+    /// `(command, exit_code)` the last proactive failure hint was shown for.
+    /// The same failure repeating stays quiet after the first hint.
+    pub last_hinted_failure: Option<(String, i32)>,
 }
 
 impl ReplState {
@@ -32,6 +35,7 @@ impl ReplState {
             last_cwd: current_dir,
             last_arg: None,
             placeholders: None,
+            last_hinted_failure: None,
         }
     }
 }

@@ -87,30 +87,23 @@ impl PlaceholderState {
 /// where each one ended up.
 ///
 /// An unterminated `{{` is left alone rather than swallowing the rest of the
-/// snippet.
+/// snippet, as is any `{{...}}` that does not name a placeholder — snippets
+/// legitimately carry another language's template syntax, and collapsing
+/// `{{json .}}` to its empty default would destroy the command. The scanner
+/// is shared with runbook playback so the two agree.
 pub(crate) fn expand(template: &str) -> (String, Vec<PlaceholderSpan>) {
     let mut out = String::with_capacity(template.len());
     let mut spans = Vec::new();
     // Char offset into `out`, which is what the caller needs.
     let mut out_chars = 0usize;
+    let mut copied = 0usize;
 
-    let mut rest = template;
-    while let Some(open) = rest.find("{{") {
-        let (before, after_open) = rest.split_at(open);
+    for marker in dsh_types::placeholder::markers(template) {
+        let before = &template[copied..marker.start];
         out.push_str(before);
         out_chars += before.chars().count();
 
-        let body = &after_open[2..];
-        let Some(close) = body.find("}}") else {
-            // No closing marker: emit the rest verbatim.
-            out.push_str(after_open);
-            return (out, spans);
-        };
-
-        let default = match body[..close].split_once(':') {
-            Some((_name, default)) => default,
-            None => "",
-        };
+        let default = marker.default_text();
         out.push_str(default);
         let len = default.chars().count();
         spans.push(PlaceholderSpan {
@@ -119,9 +112,9 @@ pub(crate) fn expand(template: &str) -> (String, Vec<PlaceholderSpan>) {
         });
         out_chars += len;
 
-        rest = &body[close + 2..];
+        copied = marker.end;
     }
-    out.push_str(rest);
+    out.push_str(&template[copied..]);
 
     (out, spans)
 }
@@ -168,6 +161,24 @@ mod tests {
         assert_eq!(text, "echo 日本語 あ");
         // "echo 日本語 " is 9 chars, the default "あ" is 1.
         assert_eq!(spans, vec![span(9, 10)]);
+    }
+
+    #[test]
+    fn foreign_template_syntax_is_left_verbatim() {
+        // Collapsing these to their empty default would destroy the command.
+        let (text, spans) = expand("docker ps --format '{{json .}}'");
+        assert_eq!(text, "docker ps --format '{{json .}}'");
+        assert!(spans.is_empty());
+
+        let (text, spans) = expand("docker inspect --format '{{.State.Status}}' web");
+        assert_eq!(text, "docker inspect --format '{{.State.Status}}' web");
+        assert!(spans.is_empty());
+
+        // A real placeholder still works alongside foreign syntax, and its
+        // reported offset accounts for the untouched marker.
+        let (text, spans) = expand("docker ps --format '{{json .}}' {{filter}}");
+        assert_eq!(text, "docker ps --format '{{json .}}' ");
+        assert_eq!(spans, vec![span(32, 32)]);
     }
 
     #[test]

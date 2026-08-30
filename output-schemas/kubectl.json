@@ -1,0 +1,10 @@
+{
+  "command": "kubectl",
+  "outputs": [
+    {
+      "subcommand": "get",
+      "when": { "args_exclude": ["-o", "--output", "-w", "--watch"] },
+      "prefer": { "inject_args": ["-o", "json"], "parse": "json", "json_root": "items" }
+    }
+  ]
+}

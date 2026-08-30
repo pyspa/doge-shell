@@ -1,0 +1,41 @@
+{
+  "command": "git",
+  "outputs": [
+    {
+      "subcommand": "log",
+      "when": {
+        "args_exclude": [
+          "--pretty", "--format", "--oneline", "-p", "--patch", "--graph", "--stat",
+          "--name-only", "--name-status", "--numstat", "--shortstat", "--raw"
+        ]
+      },
+      "prefer": {
+        "inject_args": ["--pretty=format:%h\t%an\t%ad\t%s", "--date=short"],
+        "parse": "text"
+      },
+      "text": {
+        "separator": { "delimiter": "\t" },
+        "header_lines": 0,
+        "columns": [
+          { "name": "hash" },
+          { "name": "author" },
+          { "name": "date", "type": "date" },
+          { "name": "subject", "rest": true }
+        ]
+      }
+    },
+    {
+      "subcommand": "status",
+      "when": { "args_exclude": ["--porcelain", "-s", "--short", "--long"] },
+      "prefer": { "inject_args": ["--porcelain"], "parse": "text" },
+      "text": {
+        "separator": "whitespace",
+        "header_lines": 0,
+        "columns": [
+          { "name": "status" },
+          { "name": "path", "rest": true }
+        ]
+      }
+    }
+  ]
+}

@@ -511,7 +511,7 @@ impl Div<Value> for Value {
 }
 
 /// Convert whatever int type we're using to whatever float type we're using
-fn int_type_to_float_type(i: &IntType) -> FloatType {
+pub(crate) fn int_type_to_float_type(i: &IntType) -> FloatType {
     cfg_if! {
         if #[cfg(feature = "bigint")] {
             cfg_if! {

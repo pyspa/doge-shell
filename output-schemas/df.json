@@ -1,0 +1,35 @@
+{
+  "command": "df",
+  "outputs": [
+    {
+      "when": { "args_include": ["-h"], "args_exclude": ["-i", "--inodes"] },
+      "text": {
+        "separator": "whitespace",
+        "header_lines": 1,
+        "columns": [
+          { "name": "filesystem" },
+          { "name": "size", "type": "size" },
+          { "name": "used", "type": "size" },
+          { "name": "avail", "type": "size" },
+          { "name": "use_percent", "header": "Use%", "type": "percent" },
+          { "name": "mounted", "rest": true }
+        ]
+      }
+    },
+    {
+      "when": { "args_exclude": ["-h", "--human-readable", "-H", "--si", "-i", "--inodes"] },
+      "text": {
+        "separator": "whitespace",
+        "header_lines": 1,
+        "columns": [
+          { "name": "filesystem" },
+          { "name": "size_1k", "header": "1K-blocks", "type": "int" },
+          { "name": "used_1k", "type": "int" },
+          { "name": "avail_1k", "type": "int" },
+          { "name": "use_percent", "header": "Use%", "type": "percent" },
+          { "name": "mounted", "rest": true }
+        ]
+      }
+    }
+  ]
+}

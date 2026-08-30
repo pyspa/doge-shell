@@ -1,0 +1,71 @@
+{
+  "command": "free",
+  "outputs": [
+    {
+      "when": { "args_include": ["-h"], "args_exclude": ["-w", "--wide"] },
+      "text": {
+        "separator": "whitespace",
+        "header_lines": 1,
+        "columns": [
+          { "name": "kind" },
+          { "name": "total", "type": "size" },
+          { "name": "used", "type": "size" },
+          { "name": "free", "type": "size" },
+          { "name": "shared", "type": "size" },
+          { "name": "buff_cache", "type": "size" },
+          { "name": "available", "type": "size" }
+        ]
+      }
+    },
+    {
+      "when": { "args_include": ["-h", "-w"] },
+      "text": {
+        "separator": "whitespace",
+        "header_lines": 1,
+        "columns": [
+          { "name": "kind" },
+          { "name": "total", "type": "size" },
+          { "name": "used", "type": "size" },
+          { "name": "free", "type": "size" },
+          { "name": "shared", "type": "size" },
+          { "name": "buffers", "type": "size" },
+          { "name": "cache", "type": "size" },
+          { "name": "available", "type": "size" }
+        ]
+      }
+    },
+    {
+      "when": { "args_include": ["-w"], "args_exclude": ["-h", "--human", "--si"] },
+      "text": {
+        "separator": "whitespace",
+        "header_lines": 1,
+        "columns": [
+          { "name": "kind" },
+          { "name": "total_kib", "header": "total", "type": "int" },
+          { "name": "used_kib", "header": "used", "type": "int" },
+          { "name": "free_kib", "header": "free", "type": "int" },
+          { "name": "shared_kib", "header": "shared", "type": "int" },
+          { "name": "buffers_kib", "header": "buffers", "type": "int" },
+          { "name": "cache_kib", "header": "cache", "type": "int" },
+          { "name": "available_kib", "header": "available", "type": "int" }
+        ]
+      }
+    },
+    {
+      "when": { "args_exclude": ["-h", "--human", "--si", "-w", "--wide"] },
+      "text": {
+        "separator": "whitespace",
+        "header_lines": 1,
+        "columns": [
+          { "name": "kind" },
+          { "name": "total_kib", "header": "total", "type": "int" },
+          { "name": "used_kib", "header": "used", "type": "int" },
+          { "name": "free_kib", "header": "free", "type": "int" },
+          { "name": "shared_kib", "header": "shared", "type": "int" },
+          { "name": "buff_cache_kib", "header": "buff/cache", "type": "int" },
+          { "name": "available_kib", "header": "available", "type": "int" }
+        ]
+      }
+    }
+  ]
+}

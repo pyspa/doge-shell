@@ -138,6 +138,64 @@ impl Job {
         }
     }
 
+    /// argv of the pipeline's last process when it is an external command.
+    ///
+    /// `|:` captures that process's stdout, so it is the one output schemas
+    /// match against; a builtin tail returns `None`.
+    pub(crate) fn last_external_argv(&self) -> Option<Vec<String>> {
+        let mut current = self.process.as_deref()?;
+        loop {
+            let next = match current {
+                JobProcess::Builtin(process) => process.next.as_deref(),
+                JobProcess::Command(process) => process.next.as_deref(),
+            };
+            match next {
+                Some(next) => current = next,
+                None => break,
+            }
+        }
+        match current {
+            JobProcess::Command(process) => Some(process.argv.clone()),
+            JobProcess::Builtin(_) => None,
+        }
+    }
+
+    /// Insert arguments into the pipeline's last external command (an output
+    /// schema's `inject_args`). A builtin tail is left untouched.
+    ///
+    /// Arguments go *before* a standalone `--`: everything after that
+    /// terminator is operands (`git log -- <path>`), so appending there would
+    /// turn injected flags into pathspecs and break the command.
+    pub(crate) fn append_args_to_last_external(&mut self, args: &[String]) {
+        let Some(mut current) = self.process.as_deref_mut() else {
+            return;
+        };
+        loop {
+            let has_next = match &*current {
+                JobProcess::Builtin(process) => process.next.is_some(),
+                JobProcess::Command(process) => process.next.is_some(),
+            };
+            if !has_next {
+                break;
+            }
+            current = match current {
+                JobProcess::Builtin(process) => process.next.as_deref_mut().unwrap(),
+                JobProcess::Command(process) => process.next.as_deref_mut().unwrap(),
+            };
+        }
+        if let JobProcess::Command(process) = current {
+            // argv[0] is the command name, so start the search at 1.
+            let at = process
+                .argv
+                .iter()
+                .skip(1)
+                .position(|arg| arg == "--")
+                .map(|index| index + 1)
+                .unwrap_or(process.argv.len());
+            process.argv.splice(at..at, args.iter().cloned());
+        }
+    }
+
     pub fn last_process_state(&self) -> ProcessState {
         if let Some(p) = &self.process {
             last_process_state(*p.clone())
@@ -510,6 +568,55 @@ mod tests {
         job2.pgid = Some(pgid2);
         let mut job3 = Job::new_with_process("test3".to_owned(), "".to_owned(), vec![]);
         job3.pgid = Some(pgid3);
+    }
+
+    fn argv(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|part| part.to_string()).collect()
+    }
+
+    fn pipeline_of(commands: &[Vec<String>]) -> Job {
+        let mut job = Job::new("test".to_string(), Pid::from_raw(1));
+        for command in commands {
+            let process = Process::new(command[0].clone(), command.clone());
+            job.set_process(JobProcess::Command(process));
+        }
+        job
+    }
+
+    #[test]
+    fn schema_args_go_to_the_last_external_command() {
+        let mut job = pipeline_of(&[argv(&["ps", "aux"]), argv(&["grep", "dsh"])]);
+        assert_eq!(job.last_external_argv(), Some(argv(&["grep", "dsh"])));
+
+        job.append_args_to_last_external(&argv(&["--color=never"]));
+        assert_eq!(
+            job.last_external_argv(),
+            Some(argv(&["grep", "dsh", "--color=never"]))
+        );
+    }
+
+    #[test]
+    fn schema_args_are_inserted_before_a_pathspec_terminator() {
+        // Appending after `--` would turn the injected flags into pathspecs
+        // and break the command.
+        let mut job = pipeline_of(&[argv(&["git", "log", "--", "README.md"])]);
+        job.append_args_to_last_external(&argv(&["--pretty=format:%h", "--date=short"]));
+        assert_eq!(
+            job.last_external_argv(),
+            Some(argv(&[
+                "git",
+                "log",
+                "--pretty=format:%h",
+                "--date=short",
+                "--",
+                "README.md"
+            ]))
+        );
+
+        // A command literally named `--` (argv[0]) is not a terminator.
+        let mut job = pipeline_of(&[argv(&["--", "x"])]);
+        job.append_args_to_last_external(&argv(&["-o"]));
+        assert_eq!(job.last_external_argv(), Some(argv(&["--", "x", "-o"])));
     }
 
     #[test]

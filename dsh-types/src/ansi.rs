@@ -6,6 +6,10 @@
 //! CSI/OSC sequences and `\r` progress rewrites — `blocks show` leaks both
 //! today. The escape-sequence state machine here mirrors `PtyDisplayBuffer` in
 //! `process::io`, discarding what that one forwards.
+//!
+//! Lives in `dsh-types` because both the block browser (`dsh`) and runbook
+//! export (`dsh-builtin`) need to strip escapes, and the two crates cannot
+//! depend on each other.
 
 /// Longest run treated as an unterminated escape sequence before giving up and
 /// emitting it as text. Matches `MAX_PENDING_CONTROL_BYTES` in `process::io`.

@@ -82,6 +82,12 @@ fn eval_inner(
     }
 
     match expression {
+        // A `:keyword` stands for itself rather than naming a binding, as in
+        // other lisps. Functions that take option flags match on it —
+        // `(table-order-by t "size" :desc)` — and without this it would be
+        // looked up as a variable and fail.
+        Value::Symbol(symbol) if symbol.0.starts_with(':') => Ok(expression.clone()),
+
         // look up symbol
         Value::Symbol(symbol) => env.borrow().get(symbol).ok_or_else(|| RuntimeError {
             msg: format!("\"{symbol}\" is not defined"),
@@ -574,6 +580,19 @@ mod tests {
     fn create_test_env() -> Rc<RefCell<Env>> {
         let shell_env = Environment::new();
         Rc::new(RefCell::new(default_env(shell_env)))
+    }
+
+    #[test]
+    fn keywords_evaluate_to_themselves() {
+        let env = create_test_env();
+
+        // `(table-order-by t "size" :desc)` relies on this; looking `:desc`
+        // up as a variable is what used to fail.
+        let keyword = Value::Symbol(Symbol::from(":desc"));
+        assert_eq!(eval(env.clone(), &keyword).unwrap(), keyword);
+
+        // A plain symbol is still a binding, and an unbound one still errors.
+        assert!(eval(env.clone(), &Value::Symbol(Symbol::from("desc"))).is_err());
     }
 
     #[test]

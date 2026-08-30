@@ -1,0 +1,42 @@
+{
+  "command": "ps",
+  "outputs": [
+    {
+      "when": { "args_include": ["aux"] },
+      "text": {
+        "separator": "whitespace",
+        "header_lines": 1,
+        "columns": [
+          { "name": "user" },
+          { "name": "pid", "type": "int" },
+          { "name": "cpu", "header": "%CPU", "type": "percent" },
+          { "name": "mem", "header": "%MEM", "type": "percent" },
+          { "name": "vsz", "type": "int" },
+          { "name": "rss", "type": "int" },
+          { "name": "tty" },
+          { "name": "stat" },
+          { "name": "start" },
+          { "name": "time", "type": "duration" },
+          { "name": "command", "rest": true }
+        ]
+      }
+    },
+    {
+      "when": { "args_include": ["-ef"] },
+      "text": {
+        "separator": "whitespace",
+        "header_lines": 1,
+        "columns": [
+          { "name": "uid" },
+          { "name": "pid", "type": "int" },
+          { "name": "ppid", "type": "int" },
+          { "name": "c", "type": "int" },
+          { "name": "stime" },
+          { "name": "tty" },
+          { "name": "time", "type": "duration" },
+          { "name": "cmd", "rest": true }
+        ]
+      }
+    }
+  ]
+}

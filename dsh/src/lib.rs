@@ -32,6 +32,7 @@ pub mod history_import;
 pub mod input;
 pub mod lisp;
 // pub mod notebook;
+pub mod output_schema;
 pub mod parser;
 #[doc(hidden)]
 pub mod perf_probes;

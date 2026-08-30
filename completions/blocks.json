@@ -7,9 +7,12 @@
   "subcommands": [
     { "name": "list", "aliases": ["-l", "--list"], "description": "List blocks", "options": [{ "short": "-n", "long": "--limit", "description": "Limit entries", "takes_value": true, "value_type": { "type": "Number" } }, { "long": "--failed", "description": "Only failed blocks" }, { "long": "--watched", "description": "Only watched blocks" }] },
     { "name": "show", "description": "Show block", "arguments": [{ "name": "index", "description": "Block index", "type": { "type": "Number" } }], "options": [{ "long": "--stdout", "description": "Show stdout" }, { "long": "--stderr", "description": "Show stderr" }, { "long": "--all", "description": "Show all output" }] },
+    { "name": "export", "description": "Export blocks as a Markdown runbook", "options": [{ "long": "--range", "description": "Display index range N..M", "takes_value": true }, { "long": "--ids", "description": "Comma-separated block ids", "takes_value": true }, { "long": "--last", "description": "Most recent N blocks", "takes_value": true, "value_type": { "type": "Number" } }, { "short": "-o", "long": "--output", "description": "Write to file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": null } } }, { "long": "--title", "description": "Runbook title", "takes_value": true }, { "long": "--ai", "description": "Add AI step descriptions" }] },
     { "name": "command", "description": "Print command", "arguments": [{ "name": "index", "description": "Block index", "type": { "type": "Number" } }] },
     { "name": "rerun", "description": "Rerun block", "arguments": [{ "name": "index", "description": "Block index", "type": { "type": "Number" } }] },
+    { "name": "fix", "description": "Suggest a fix without running it", "arguments": [{ "name": "index", "description": "Block index", "type": { "type": "Number" } }], "options": [{ "long": "--json", "description": "JSON output" }, { "long": "--ai", "description": "Ask AI when no deterministic fix" }] },
     { "name": "explain", "description": "Explain block", "arguments": [{ "name": "index", "description": "Block index", "type": { "type": "Number" } }] },
+    { "name": "tui", "aliases": ["browse"], "description": "Browse blocks full-screen" },
     { "name": "clear", "aliases": ["-c", "--clear"], "description": "Clear blocks" },
     { "name": "help", "description": "Show help" }
   ],

@@ -28,6 +28,19 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
             scope,
         } => list_blocks(ctx, proxy, limit, failed, watched, json, scope),
         BlocksMode::Show { index, output } => show_block(ctx, proxy, index, output),
+        BlocksMode::Export {
+            selection,
+            output,
+            ai,
+            title,
+        } => {
+            if ai {
+                let _ = ctx.write_stderr("blocks: --ai requires foreground async execution");
+                ExitStatus::ExitedWith(1)
+            } else {
+                export_blocks(ctx, proxy, &selection, output.as_deref(), title, None)
+            }
+        }
         BlocksMode::Command(index) => print_command(ctx, proxy, index),
         BlocksMode::Rerun(index) => rerun_block(ctx, proxy, index),
         BlocksMode::Fix { index, json, ai } => {
@@ -75,6 +88,18 @@ pub fn command_async<'a>(
                 scope,
             } => list_blocks(ctx, proxy, limit, failed, watched, json, scope),
             BlocksMode::Show { index, output } => show_block(ctx, proxy, index, output),
+            BlocksMode::Export {
+                selection,
+                output,
+                ai,
+                title,
+            } => {
+                if ai {
+                    export_blocks_ai(ctx, proxy, &selection, output.as_deref(), title).await
+                } else {
+                    export_blocks(ctx, proxy, &selection, output.as_deref(), title, None)
+                }
+            }
             BlocksMode::Command(index) => print_command(ctx, proxy, index),
             BlocksMode::Rerun(index) => rerun_block(ctx, proxy, index),
             BlocksMode::Fix { index, json, ai } => {
@@ -108,6 +133,20 @@ enum BlockScope {
     Persistent,
 }
 
+/// Which blocks `blocks export` writes. Display indices are 1-based and
+/// newest-first (same as `blocks list`); ids are the stable `CommandBlock.id`
+/// values, which the TUI uses because display indices shift with every
+/// command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExportSelection {
+    /// Display indices N..M inclusive.
+    Range(usize, usize),
+    /// Stable block ids.
+    Ids(Vec<u64>),
+    /// The most recent N blocks.
+    Last(usize),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum BlocksMode {
     List {
@@ -116,6 +155,12 @@ enum BlocksMode {
         watched: bool,
         json: bool,
         scope: BlockScope,
+    },
+    Export {
+        selection: ExportSelection,
+        output: Option<String>,
+        ai: bool,
+        title: Option<String>,
     },
     Show {
         index: usize,
@@ -162,6 +207,7 @@ fn parse_options(args: &[String]) -> Result<BlocksOptions, String> {
         "list" | "-l" | "--list" => parse_list_options(&args[1..]),
         "--scope" | "--json" => parse_list_options(args),
         "show" => parse_show_options(&args[1..]),
+        "export" => parse_export_options(&args[1..]),
         "command" => parse_index_mode(&args[1..], BlocksMode::Command),
         "rerun" => parse_index_mode(&args[1..], BlocksMode::Rerun),
         "fix" => parse_fix_options(&args[1..]),
@@ -193,6 +239,101 @@ fn parse_options(args: &[String]) -> Result<BlocksOptions, String> {
             })
         }
     }
+}
+
+fn parse_export_options(args: &[String]) -> Result<BlocksOptions, String> {
+    let mut selection: Option<ExportSelection> = None;
+    let mut output = None;
+    let mut ai = false;
+    let mut title = None;
+
+    let mut set_selection = |value: ExportSelection| -> Result<(), String> {
+        if selection.replace(value).is_some() {
+            return Err("export accepts only one of --range, --ids, --last".to_string());
+        }
+        Ok(())
+    };
+
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--range" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return Err("--range requires N..M".to_string());
+                };
+                set_selection(parse_range(value)?)?;
+            }
+            "--ids" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return Err("--ids requires a comma-separated id list".to_string());
+                };
+                set_selection(parse_ids(value)?)?;
+            }
+            "--last" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return Err("--last requires a number".to_string());
+                };
+                set_selection(ExportSelection::Last(parse_positive_usize(value, "last")?))?;
+            }
+            "-o" | "--output" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return Err("--output requires a file path".to_string());
+                };
+                output = Some(value.clone());
+            }
+            "--title" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return Err("--title requires a value".to_string());
+                };
+                title = Some(value.clone());
+            }
+            "--ai" => ai = true,
+            value => return Err(format!("unknown export option: {value}")),
+        }
+        index += 1;
+    }
+
+    Ok(BlocksOptions {
+        mode: BlocksMode::Export {
+            selection: selection.unwrap_or(ExportSelection::Last(1)),
+            output,
+            ai,
+            title,
+        },
+    })
+}
+
+fn parse_range(value: &str) -> Result<ExportSelection, String> {
+    let Some((start, end)) = value.split_once("..") else {
+        return Err("--range requires the form N..M".to_string());
+    };
+    let start = parse_positive_usize(start, "range start")?;
+    let end = parse_positive_usize(end, "range end")?;
+    if start > end {
+        return Err("range start must not exceed range end".to_string());
+    }
+    Ok(ExportSelection::Range(start, end))
+}
+
+fn parse_ids(value: &str) -> Result<ExportSelection, String> {
+    let ids = value
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            part.parse::<u64>()
+                .map_err(|_| format!("invalid block id: {part}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if ids.is_empty() {
+        return Err("--ids requires at least one id".to_string());
+    }
+    Ok(ExportSelection::Ids(ids))
 }
 
 fn parse_fix_options(args: &[String]) -> Result<BlocksOptions, String> {
@@ -481,6 +622,204 @@ fn rerun_block(ctx: &Context, proxy: &mut dyn ShellProxy, index: usize) -> ExitS
     }
 }
 
+/// Resolve an export selection against the newest-first block list and return
+/// the chosen blocks in chronological order — a runbook is a procedure, so
+/// steps must read in execution order.
+fn select_blocks_for_export(
+    blocks: &[CommandBlock],
+    selection: &ExportSelection,
+) -> Result<Vec<CommandBlock>, String> {
+    if blocks.is_empty() {
+        return Err("no command blocks available".to_string());
+    }
+
+    let selected: Vec<CommandBlock> = match selection {
+        ExportSelection::Range(start, end) => {
+            if *end > blocks.len() {
+                return Err(format!(
+                    "range end {end} exceeds available blocks ({})",
+                    blocks.len()
+                ));
+            }
+            blocks[start - 1..*end].to_vec()
+        }
+        ExportSelection::Last(count) => blocks.iter().take(*count).cloned().collect(),
+        ExportSelection::Ids(ids) => {
+            let mut selected = Vec::with_capacity(ids.len());
+            for id in ids {
+                let Some(block) = blocks.iter().find(|block| block.id == *id) else {
+                    return Err(format!("no block with id {id}"));
+                };
+                selected.push(block.clone());
+            }
+            // Ids may arrive in any order; sort newest-first like the other
+            // arms so the single reversal below yields chronological order.
+            selected.sort_by_key(|block| std::cmp::Reverse(block.id));
+            selected
+        }
+    };
+
+    Ok(selected.into_iter().rev().collect())
+}
+
+fn export_blocks(
+    ctx: &Context,
+    proxy: &mut dyn ShellProxy,
+    selection: &ExportSelection,
+    output: Option<&str>,
+    title: Option<String>,
+    descriptions: Option<Vec<String>>,
+) -> ExitStatus {
+    let blocks = proxy.get_command_blocks();
+    let selected = match select_blocks_for_export(&blocks, selection) {
+        Ok(selected) => selected,
+        Err(err) => {
+            let _ = ctx.write_stderr(&format!("blocks: {err}"));
+            return ExitStatus::ExitedWith(1);
+        }
+    };
+
+    write_runbook(ctx, &selected, output, title, descriptions)
+}
+
+/// Render the already-selected blocks and write them out.
+///
+/// Takes the resolved blocks rather than the selection so the AI path cannot
+/// re-resolve after its await: a block recorded meanwhile would shift what
+/// `--last`/`--range` mean and attach each description to the wrong step.
+fn write_runbook(
+    ctx: &Context,
+    selected: &[CommandBlock],
+    output: Option<&str>,
+    title: Option<String>,
+    descriptions: Option<Vec<String>>,
+) -> ExitStatus {
+    let options = crate::runbook::RunbookOptions {
+        title,
+        descriptions,
+        ..Default::default()
+    };
+    let markdown = crate::runbook::render_runbook(selected, &options);
+
+    match output {
+        Some(path) => match std::fs::write(path, &markdown) {
+            Ok(()) => {
+                let _ = ctx.write_stdout(&format!(
+                    "Exported {} block(s) to {path}. Replay with `notebook-play {path}`.",
+                    selected.len()
+                ));
+                ExitStatus::ExitedWith(0)
+            }
+            Err(err) => {
+                let _ = ctx.write_stderr(&format!("blocks: failed to write {path}: {err}"));
+                ExitStatus::ExitedWith(1)
+            }
+        },
+        None => {
+            let _ = ctx.write_stdout(&markdown);
+            ExitStatus::ExitedWith(0)
+        }
+    }
+}
+
+async fn export_blocks_ai(
+    ctx: &Context,
+    proxy: &mut dyn ShellProxy,
+    selection: &ExportSelection,
+    output: Option<&str>,
+    title: Option<String>,
+) -> ExitStatus {
+    let blocks = proxy.get_command_blocks();
+    let selected = match select_blocks_for_export(&blocks, selection) {
+        Ok(selected) => selected,
+        Err(err) => {
+            let _ = ctx.write_stderr(&format!("blocks: {err}"));
+            return ExitStatus::ExitedWith(1);
+        }
+    };
+
+    // One request for the whole runbook; a failed or unparsable response
+    // degrades to an export without descriptions instead of failing.
+    let steps = selected
+        .iter()
+        .enumerate()
+        .map(|(index, block)| {
+            format!(
+                "{}. `{}` (exit {})\n{}",
+                index + 1,
+                block.command,
+                block.exit_code,
+                truncate_for_ai(
+                    if block.stdout.is_empty() {
+                        &block.stderr
+                    } else {
+                        &block.stdout
+                    },
+                    1000
+                )
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let messages = vec![
+        json!({
+            "role": "system",
+            "content": "You annotate shell runbooks. For each numbered step, describe its purpose in one short sentence. Reply with one line per step in the form `N. description`, nothing else. Use the user's language when the commands suggest one."
+        }),
+        json!({
+            "role": "user",
+            "content": steps
+        }),
+    ];
+
+    let descriptions = match proxy.ask(messages).await {
+        Ok(response) => {
+            let parsed = parse_numbered_descriptions(&response, selected.len());
+            if parsed.iter().all(|line| line.is_empty()) {
+                let _ = ctx.write_stderr(
+                    "blocks: could not parse AI descriptions; exporting without them",
+                );
+                None
+            } else {
+                Some(parsed)
+            }
+        }
+        Err(err) => {
+            let _ = ctx.write_stderr(&format!(
+                "blocks: AI description failed ({err}); exporting without descriptions"
+            ));
+            None
+        }
+    };
+
+    // The blocks resolved before the await, so the descriptions line up with
+    // exactly the steps they were generated for.
+    write_runbook(ctx, &selected, output, title, descriptions)
+}
+
+/// Parse `N. description` lines into a per-step vector; unmatched steps stay
+/// empty and simply render bare.
+fn parse_numbered_descriptions(response: &str, steps: usize) -> Vec<String> {
+    let mut descriptions = vec![String::new(); steps];
+    for line in response.lines() {
+        let trimmed = line.trim().trim_start_matches(['-', '*']).trim_start();
+        let Some((number, rest)) = trimmed.split_once(['.', ')']) else {
+            continue;
+        };
+        let Ok(step) = number.trim().parse::<usize>() else {
+            continue;
+        };
+        if step == 0 || step > steps {
+            continue;
+        }
+        let text = rest.trim();
+        if !text.is_empty() {
+            descriptions[step - 1] = text.to_string();
+        }
+    }
+    descriptions
+}
+
 fn deterministic_fixes(block: &CommandBlock) -> Vec<QuickFix> {
     let output = if block.stderr.is_empty() {
         block.stdout.as_str()
@@ -721,6 +1060,9 @@ fn help_text() -> &'static str {
         "Commands:\n",
         "  list [--limit N] [--failed] [--watched] [--json] [--scope session|persistent]\n",
         "  show <N> [--stdout|--stderr|--all]        Show a command block\n",
+        "  export [--range N..M|--ids A,B|--last N] [-o FILE] [--title T] [--ai]\n",
+        "                                            Export blocks as a Markdown runbook\n",
+        "                                            (replayable with notebook-play; --ai adds step notes)\n",
         "  command <N>                               Print the command only\n",
         "  rerun <N>                                 Rerun a command block\n",
         "  fix <N> [--json] [--ai]                  Suggest a fix without running it\n",
@@ -734,6 +1076,7 @@ fn help_text() -> &'static str {
         "  blocks list --failed\n",
         "  blocks show 2 --stderr\n",
         "  blocks command 1\n",
+        "  blocks export --range 1..5 -o runbook.md\n",
         "  blocks tui\n",
     )
 }
@@ -903,6 +1246,163 @@ mod tests {
     #[test]
     fn parse_tui_rejects_extra_arguments() {
         assert!(parse_options(&["tui".to_string(), "3".to_string()]).is_err());
+    }
+
+    fn args(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|part| part.to_string()).collect()
+    }
+
+    #[test]
+    fn parse_export_selections() {
+        assert_eq!(
+            parse_options(&args(&["export"])).unwrap().mode,
+            BlocksMode::Export {
+                selection: ExportSelection::Last(1),
+                output: None,
+                ai: false,
+                title: None,
+            }
+        );
+        assert_eq!(
+            parse_options(&args(&[
+                "export", "--range", "2..5", "-o", "rb.md", "--title", "Deploy", "--ai"
+            ]))
+            .unwrap()
+            .mode,
+            BlocksMode::Export {
+                selection: ExportSelection::Range(2, 5),
+                output: Some("rb.md".to_string()),
+                ai: true,
+                title: Some("Deploy".to_string()),
+            }
+        );
+        assert_eq!(
+            parse_options(&args(&["export", "--ids", "3, 7,9"]))
+                .unwrap()
+                .mode,
+            BlocksMode::Export {
+                selection: ExportSelection::Ids(vec![3, 7, 9]),
+                output: None,
+                ai: false,
+                title: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_export_rejects_bad_input() {
+        assert!(parse_options(&args(&["export", "--range", "5..2"])).is_err());
+        assert!(parse_options(&args(&["export", "--range", "abc"])).is_err());
+        assert!(parse_options(&args(&["export", "--ids", ""])).is_err());
+        assert!(parse_options(&args(&["export", "--ids", "x"])).is_err());
+        assert!(parse_options(&args(&["export", "--range", "1..2", "--ids", "1"])).is_err());
+        assert!(parse_options(&args(&["export", "-o"])).is_err());
+        assert!(parse_options(&args(&["export", "--bogus"])).is_err());
+    }
+
+    fn export_fixture() -> Vec<CommandBlock> {
+        // Newest-first, as `get_command_blocks` returns them.
+        let mut newest = block("cargo test", 0, false);
+        newest.id = 3;
+        let mut middle = block("cargo build", 0, false);
+        middle.id = 2;
+        let mut oldest = block("git pull", 0, false);
+        oldest.id = 1;
+        vec![newest, middle, oldest]
+    }
+
+    #[test]
+    fn export_selection_is_chronological() {
+        let blocks = export_fixture();
+
+        let range = select_blocks_for_export(&blocks, &ExportSelection::Range(1, 2)).unwrap();
+        assert_eq!(
+            range.iter().map(|b| b.command.as_str()).collect::<Vec<_>>(),
+            vec!["cargo build", "cargo test"]
+        );
+
+        let last = select_blocks_for_export(&blocks, &ExportSelection::Last(2)).unwrap();
+        assert_eq!(
+            last.iter().map(|b| b.command.as_str()).collect::<Vec<_>>(),
+            vec!["cargo build", "cargo test"]
+        );
+
+        // Ids in any order come out chronological.
+        let ids = select_blocks_for_export(&blocks, &ExportSelection::Ids(vec![3, 1])).unwrap();
+        assert_eq!(
+            ids.iter().map(|b| b.command.as_str()).collect::<Vec<_>>(),
+            vec!["git pull", "cargo test"]
+        );
+
+        assert!(select_blocks_for_export(&blocks, &ExportSelection::Range(1, 9)).is_err());
+        assert!(select_blocks_for_export(&blocks, &ExportSelection::Ids(vec![42])).is_err());
+        assert!(select_blocks_for_export(&[], &ExportSelection::Last(1)).is_err());
+    }
+
+    #[test]
+    fn export_writes_a_runbook_notebook_play_can_load() {
+        let mut proxy = MockShellProxy::new(export_fixture());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("runbook.md");
+
+        let (status, snapshot) = run_with_observer(
+            args(&[
+                "blocks",
+                "export",
+                "--range",
+                "1..3",
+                "-o",
+                path.to_str().unwrap(),
+            ]),
+            &mut proxy,
+        );
+        assert_eq!(status, ExitStatus::ExitedWith(0));
+        assert!(snapshot.stdout.contains("Exported 3 block(s)"));
+
+        // Round-trip: notebook-play must see exactly the commands, in
+        // chronological order, and nothing else as executable.
+        let notebook = dsh_types::notebook::Notebook::load_from_file(&path).unwrap();
+        let executable: Vec<String> = notebook
+            .blocks
+            .iter()
+            .filter(|block| {
+                matches!(&block.kind, dsh_types::notebook::BlockKind::Code(lang)
+                    if lang == "sh" || lang == "bash" || lang.is_empty())
+            })
+            .map(|block| block.raw_content())
+            .collect();
+        assert_eq!(executable, vec!["git pull", "cargo build", "cargo test"]);
+    }
+
+    #[test]
+    fn export_without_output_prints_markdown() {
+        let mut proxy = MockShellProxy::new(export_fixture());
+        let (status, snapshot) =
+            run_with_observer(args(&["blocks", "export", "--last", "1"]), &mut proxy);
+        assert_eq!(status, ExitStatus::ExitedWith(0));
+        assert!(snapshot.stdout.contains("## Step 1: cargo test"));
+        assert!(snapshot.stdout.contains("```sh\ncargo test\n```"));
+    }
+
+    #[test]
+    fn numbered_descriptions_parse_and_tolerate_noise() {
+        let parsed = parse_numbered_descriptions(
+            "1. Pull the latest changes.\nnoise\n3) Run the tests.\n9. out of range",
+            3,
+        );
+        assert_eq!(
+            parsed,
+            vec![
+                "Pull the latest changes.".to_string(),
+                String::new(),
+                "Run the tests.".to_string(),
+            ]
+        );
+        assert!(
+            parse_numbered_descriptions("no numbers here", 2)
+                .iter()
+                .all(String::is_empty)
+        );
     }
 
     #[test]

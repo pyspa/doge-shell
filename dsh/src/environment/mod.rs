@@ -304,6 +304,29 @@ impl std::fmt::Debug for Environment {
 }
 
 /// Get the path to a configuration file.
+/// User config directories that may hold overrides for an embedded asset
+/// directory (`completions`, `output-schemas`), most specific first.
+///
+/// Both the platform config dir and `~/.config/<app>` are returned: on macOS
+/// `dirs::config_dir()` is `~/Library/Application Support`, but users
+/// following the docs put overrides in `~/.config/dsh/`, and both must work.
+pub fn user_asset_override_dirs(subdir: &str) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    if let Some(config_dir) = dirs::config_dir() {
+        dirs.push(config_dir.join(APP_NAME).join(subdir));
+    }
+
+    if let Some(home_dir) = dirs::home_dir() {
+        let home_config_dir = home_dir.join(".config").join(APP_NAME).join(subdir);
+        if !dirs.contains(&home_config_dir) {
+            dirs.push(home_config_dir);
+        }
+    }
+
+    dirs
+}
+
 pub fn get_config_file(name: &str) -> Result<PathBuf> {
     let xdg_dir = xdg::BaseDirectories::with_prefix(APP_NAME);
     xdg_dir.place_config_file(name).context("failed get path")

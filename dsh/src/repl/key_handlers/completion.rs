@@ -16,9 +16,15 @@ pub(crate) fn handle_accept_suggestion_word(repl: &mut Repl<'_>) -> bool {
 }
 
 pub(crate) fn handle_accept_suggestion_full(repl: &mut Repl<'_>) -> bool {
-    if repl.input.is_empty() && repl.ai_ui.auto_fix_suggestion.is_some() {
+    if repl.input.is_empty()
+        && repl
+            .ai_ui
+            .auto_fix_suggestion
+            .as_ref()
+            .is_some_and(|fix| fix.has_fix())
+    {
         if let Some(fix) = repl.ai_ui.auto_fix_suggestion.take() {
-            repl.input.reset(fix);
+            repl.input.reset(fix.replacement);
             repl.refresh_inline_suggestion(); // clear potential other suggestions
             return true; // reset_completion = true
         }

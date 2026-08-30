@@ -220,7 +220,8 @@ fn draw_list(frame: &mut Frame, area: Rect, browser: &BlockBrowser) {
     let items: Vec<ListItem> = browser
         .blocks()
         .into_iter()
-        .map(|block| ListItem::new(list_row(block, area.width)))
+        .enumerate()
+        .map(|(pos, block)| ListItem::new(list_row(block, browser.is_marked(pos), area.width)))
         .collect();
 
     let list = List::new(items)
@@ -243,7 +244,7 @@ fn draw_list(frame: &mut Frame, area: Rect, browser: &BlockBrowser) {
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-fn list_row(block: &CommandBlock, width: u16) -> Line<'static> {
+fn list_row(block: &CommandBlock, marked: bool, width: u16) -> Line<'static> {
     let (glyph, color) = if block.exit_code == 0 {
         ("✔", Color::Green)
     } else {
@@ -251,6 +252,10 @@ fn list_row(block: &CommandBlock, width: u16) -> Line<'static> {
     };
 
     let mut spans = vec![
+        Span::styled(
+            if marked { "* " } else { "  " },
+            Style::default().fg(Color::Cyan),
+        ),
         Span::styled(format!("{} ", glyph), Style::default().fg(color)),
         Span::styled(
             format!("{:>7} ", format_duration(block.duration_ms)),
@@ -330,7 +335,13 @@ fn draw_output(frame: &mut Frame, area: Rect, browser: &mut BlockBrowser) {
 fn draw_status(frame: &mut Frame, area: Rect, browser: &BlockBrowser) {
     let text = match browser.status() {
         Some(status) => status.to_string(),
-        None => "Enter insert  r rerun  d cd  e explain  c/y copy  Space fold  s stream  Tab pane  q quit".to_string(),
+        None => {
+            let mut text = "Enter insert  r rerun  d cd  e explain  m mark  x export  c/y copy  Space fold  q quit".to_string();
+            if browser.marked_count() > 0 {
+                text = format!("[{} marked] {}", browser.marked_count(), text);
+            }
+            text
+        }
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -358,6 +369,8 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         "r               re-run the command",
         "d               cd to where it ran",
         "e               explain it with AI",
+        "m               mark for export",
+        "x               export marked (or selected) as a runbook",
         "q / Esc         close",
     ];
 

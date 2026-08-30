@@ -14,12 +14,15 @@ use tracing::warn;
 
 pub mod terminal;
 pub use terminal::{ShellMode, TerminalState};
+pub mod ansi;
 pub mod command_block;
 pub mod completion;
 pub mod mcp;
 pub mod notebook;
 pub mod observed_output;
 pub mod output_history;
+pub mod output_schema;
+pub mod placeholder;
 pub mod project;
 pub mod quick_fix;
 pub mod safety_policy;

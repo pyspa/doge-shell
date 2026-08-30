@@ -1,9 +1,8 @@
 use crate::environment::{self, Environment};
 use crate::lisp::default_environment::default_env;
 use crate::lisp::interpreter::eval;
-#[cfg(test)]
-use crate::lisp::model::IntType;
 pub use crate::lisp::model::Value;
+pub use crate::lisp::model::{CmpValue, FloatType, IntType, Record, Table, TableRc};
 pub use crate::lisp::model::{Env, Symbol};
 use crate::lisp::model::{List, RuntimeError};
 use crate::lisp::parser::parse;
@@ -368,6 +367,10 @@ pub fn make_env(environment: Arc<RwLock<Environment>>) -> Rc<RefCell<Env>> {
     env.borrow_mut().define(
         Symbol::from("pref-status-line"),
         Value::NativeFunc(builtin::pref_status_line),
+    );
+    env.borrow_mut().define(
+        Symbol::from("pref-failure-hint"),
+        Value::NativeFunc(builtin::pref_failure_hint),
     );
     env.borrow_mut().define(
         Symbol::from("pref-command-ledger"),

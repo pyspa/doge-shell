@@ -343,11 +343,19 @@ pub fn print_input(
         repl.ai_ui.suggestion_manager.clear();
     }
 
-    // Auto-fix ghost text logic
-    let mut ai_suggestion_text = None;
-    if is_empty && repl.ai_ui.auto_fix_suggestion.is_some() {
-        ai_suggestion_text = repl.ai_ui.auto_fix_suggestion.as_deref();
-    }
+    // Auto-fix ghost text: the replacement (if any) plus a right-aligned
+    // annotation saying why and how to accept it. Owned copies so the borrow
+    // does not outlive the mutable field updates below.
+    let auto_fix = if is_empty {
+        repl.ai_ui.auto_fix_suggestion.as_ref().map(|fix| {
+            (
+                fix.has_fix().then(|| fix.replacement.clone()),
+                super::failure_hint::format_hint_annotation(fix.title.as_deref(), fix.has_fix()),
+            )
+        })
+    } else {
+        None
+    };
 
     let ghost_suffix = if completion.is_none() {
         repl.ai_ui.suggestion_manager.suffix(&input_string)
@@ -380,15 +388,20 @@ pub fn print_input(
     // Print the input
     repl.input.print(out, ghost_suffix.as_deref());
 
-    if let Some(ai_fix) = ai_suggestion_text {
-        // Render AI suggestion with a distinct color
-        queue!(out, Print(ai_fix.with(Color::DarkGrey))).ok();
-        let width = display_width(ai_fix);
-        queue!(out, MoveLeft(width as u16)).ok();
+    if let Some((replacement, annotation)) = auto_fix.as_ref() {
+        let mut ghost_width = 0usize;
+        if let Some(ai_fix) = replacement.as_deref() {
+            // Render AI suggestion with a distinct color
+            queue!(out, Print(ai_fix.with(Color::DarkGrey))).ok();
+            ghost_width = display_width(ai_fix);
+            queue!(out, MoveLeft(ghost_width as u16)).ok();
+        }
+        render_hint_if_room(repl, out, annotation, ghost_width);
     }
 
     if let Some(hint) = input_hint(&input_string) {
-        render_hint_if_room(repl, out, hint.text());
+        let ghost_width = ghost_suffix.as_deref().map(display_width).unwrap_or(0);
+        render_hint_if_room(repl, out, hint.text(), ghost_width);
     }
 
     if ai_pending_now {
@@ -560,9 +573,13 @@ fn has_ai_pipe_query(input: &str) -> bool {
     !query.is_empty()
 }
 
-fn render_hint_if_room(repl: &Repl<'_>, out: &mut impl Write, hint: &'static str) {
+/// Draw a right-aligned DarkGrey hint when it fits. `ghost_width` is the
+/// display width of any ghost text drawn after the input; without it a hint
+/// can overwrite the ghost on narrow terminals.
+fn render_hint_if_room(repl: &Repl<'_>, out: &mut impl Write, hint: &str, ghost_width: usize) {
     let hint_width = display_width(hint);
-    let input_visual_end = repl.terminal_ui.prompt_mark_width + repl.input.display_width();
+    let input_visual_end =
+        repl.terminal_ui.prompt_mark_width + repl.input.display_width() + ghost_width;
 
     if repl.terminal_ui.columns > hint_width
         && repl.terminal_ui.columns.saturating_sub(hint_width) > input_visual_end + 2

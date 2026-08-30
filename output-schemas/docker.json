@@ -1,0 +1,39 @@
+{
+  "command": "docker",
+  "outputs": [
+    {
+      "subcommand": "ps",
+      "when": { "args_exclude": ["-q", "--quiet", "--format"] },
+      "prefer": { "inject_args": ["--format", "{{json .}}"], "parse": "json-lines" },
+      "text": {
+        "separator": "auto",
+        "header_lines": 1,
+        "columns": [
+          { "name": "container_id", "header": "CONTAINER ID" },
+          { "name": "image", "header": "IMAGE" },
+          { "name": "command", "header": "COMMAND" },
+          { "name": "created", "header": "CREATED", "type": "date" },
+          { "name": "status", "header": "STATUS" },
+          { "name": "ports", "header": "PORTS" },
+          { "name": "names", "header": "NAMES", "rest": true }
+        ]
+      }
+    },
+    {
+      "subcommand": "images",
+      "when": { "args_exclude": ["-q", "--quiet", "--format"] },
+      "prefer": { "inject_args": ["--format", "{{json .}}"], "parse": "json-lines" },
+      "text": {
+        "separator": "auto",
+        "header_lines": 1,
+        "columns": [
+          { "name": "repository", "header": "REPOSITORY" },
+          { "name": "tag", "header": "TAG" },
+          { "name": "image_id", "header": "IMAGE ID" },
+          { "name": "created", "header": "CREATED", "type": "date" },
+          { "name": "size", "header": "SIZE", "type": "size", "rest": true }
+        ]
+      }
+    }
+  ]
+}

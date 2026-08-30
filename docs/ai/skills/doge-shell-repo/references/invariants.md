@@ -50,8 +50,9 @@
 - 新しい dynamic provider は 3 箇所を同時に更新する。`dsh-types/src/completion.rs` の `DYNAMIC_COMPLETION_PROVIDERS`（**ソート済み**・`binary_search` 前提）、`command-completion-schema.json` の Dynamic Type enum（**完全一致**で比較される）、`dsh/src/completion/dynamic/registry.rs` の `family_for` + family collector。検証は `cargo test -p dsh-types` と `cargo test -p doge-shell` の両方。
 - `family_for`（`registry.rs`）の else は無条件 `External`。プレフィクスを足し忘れても「未登録」とは言われない。`dynamic/git.rs` の `_ =>` は `platform::collect` に落ちるので、「match アームが無い = 未対応」でもない。
 - 動的補完には経路が 2 つある。宣言的 provider（JSON の `Dynamic`）と、コマンド名直結の `DYNAMIC_PROVIDER_SPECS`（`completion/integrated.rs`）。後者が先に走り、結果に前者が `extend` される。片方だけ直すと候補が重複するか、直したはずが効かない。
-- JSON を**新規追加**しただけでは release ビルドが再実行されない（rust-embed は `include_bytes!` でファイル単位に依存を張るのでディレクトリの変化を追わない）。出荷前に `touch dsh/src/completion/json_loader.rs`。
+- JSON を**新規追加**しただけでは release ビルドが再実行されない（rust-embed は `include_bytes!` でファイル単位に依存を張るのでディレクトリの変化を追わない）。出荷前に `touch dsh/src/completion/json_loader.rs`。`output-schemas/` も同じ仕組み（`dsh/src/output_schema/loader.rs`）なので、スキーマ追加時は同様に loader を touch する。
 - `completions/` はクレートディレクトリの外なので `cargo package -p doge-shell` には入らない。path 依存があり現状 publish できないため実害は無いが、crates.io 公開が必要になったら `dsh/` 配下へ戻す。
 
 ## 二重化しているもの（多数派が正解とは限らない）
 - builtin の能力 trait は `dsh-builtin/src/shell_capabilities.rs` が**正**（`scripts/check-shell-proxy-capabilities.py` の検査対象）。`dsh-builtin/src/capability.rs` は旧世代で、利用ファイル数だけは多い。新しい依存は前者へ足す。
+- `dsh` と `dsh-builtin` は互いに依存できないので、両方で要る純粋なテキスト処理は `dsh-types` に置く。ANSI ストリップは `dsh-types/src/ansi.rs`、`{{name:default}}` の走査は `dsh-types/src/placeholder.rs` が**正**。以前これを各クレートで書いていて、名前検証のある側と無い側に分かれ、`docker ps --format '{{json .}}'` が片方だけ壊れた。コピーを作らない。

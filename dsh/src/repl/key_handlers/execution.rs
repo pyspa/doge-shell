@@ -313,21 +313,9 @@ async fn execute_shell_command(
     repl.state.last_command_time = Some(Instant::now());
     repl.state.last_duration = Some(elapsed);
 
-    // Show error diagnosis hint if auto_diagnose is enabled
-    if exit_code != 0
-        && repl.services.ai.is_some()
-        && repl
-            .shell
-            .environment
-            .read()
-            .completion_state
-            .input_preferences
-            .auto_diagnose
-    {
-        let mut renderer = TerminalRenderer::new();
-        queue!(renderer, Print("💡 Press Alt+d to diagnose this error\r\n")).ok();
-        renderer.flush().ok();
-    }
+    // The diagnosis hint for failed commands is rendered as a transient
+    // annotation next to the prompt (see `failure_hint`), not printed here:
+    // a plain print would stay in the scrollback.
 
     Ok(())
 }

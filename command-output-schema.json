@@ -1,0 +1,126 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Command Output Schema",
+  "description": "Declarative description of a command's stdout layout, used by the |: structured pipe to parse output into a typed table. Files live in output-schemas/ (one per command) and are embedded into the dsh binary; ~/.config/dsh/output-schemas/ overrides them.",
+  "type": "object",
+  "required": ["command", "outputs"],
+  "additionalProperties": false,
+  "properties": {
+    "command": {
+      "type": "string",
+      "description": "Command name, e.g. \"ps\" or \"docker\""
+    },
+    "outputs": {
+      "type": "array",
+      "description": "Candidate specs; the first whose subcommand/when match wins",
+      "items": { "$ref": "#/definitions/outputSpec" }
+    }
+  },
+  "definitions": {
+    "outputSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subcommand": {
+          "type": "string",
+          "description": "Required first non-option argument, e.g. \"ps\" for `docker ps`"
+        },
+        "when": { "$ref": "#/definitions/whenSpec" },
+        "prefer": { "$ref": "#/definitions/preferSpec" },
+        "text": { "$ref": "#/definitions/textSpec" }
+      }
+    },
+    "whenSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "args_include": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "All must be present. \"-l\" also matches combined clusters (-la); \"--opt\" also matches --opt=value"
+        },
+        "args_exclude": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "None may be present"
+        }
+      }
+    },
+    "preferSpec": {
+      "type": "object",
+      "required": ["inject_args", "parse"],
+      "additionalProperties": false,
+      "properties": {
+        "inject_args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Arguments appended before the command runs, e.g. [\"--format\", \"{{json .}}\"]"
+        },
+        "parse": {
+          "enum": ["json", "json-lines", "text"],
+          "description": "json: one document; json-lines: one object per line; text: use the spec's text definition"
+        },
+        "json_root": {
+          "type": "string",
+          "description": "For parse: json — unwrap this top-level key first (e.g. \"items\")"
+        }
+      }
+    },
+    "textSpec": {
+      "type": "object",
+      "required": ["columns"],
+      "additionalProperties": false,
+      "properties": {
+        "separator": {
+          "oneOf": [
+            { "enum": ["whitespace", "auto"] },
+            {
+              "type": "object",
+              "required": ["delimiter"],
+              "additionalProperties": false,
+              "properties": { "delimiter": { "type": "string" } }
+            }
+          ],
+          "description": "whitespace (default): split on whitespace runs; auto: fixed-width columns located by header text positions; {\"delimiter\": ...}: fixed delimiter"
+        },
+        "header_lines": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 1,
+          "description": "Header lines to skip; the last one drives auto column detection"
+        },
+        "skip_prefixes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Skip lines starting with any of these (e.g. ls -l's \"total \")"
+        },
+        "columns": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/columnSpec" }
+        }
+      }
+    },
+    "columnSpec": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "description": "Column name in the resulting table" },
+        "header": {
+          "type": "string",
+          "description": "Header text when it differs from the name (e.g. \"%CPU\"); required for auto separators"
+        },
+        "type": {
+          "enum": ["string", "int", "float", "percent", "size", "duration", "date"],
+          "default": "string",
+          "description": "percent: 3.5% → 3.5 (float); size: 1.5K/2Gi/bytes → integer bytes; duration/date: kept as string"
+        },
+        "rest": {
+          "type": "boolean",
+          "default": false,
+          "description": "This (final) column greedily takes the rest of the line"
+        }
+      }
+    }
+  }
+}

@@ -1,4 +1,6 @@
-use crate::lisp::model::{Env, IntType, List, RuntimeError, Symbol, Table, TableRc, Value};
+use crate::lisp::model::{
+    CmpValue, Env, IntType, List, RuntimeError, Symbol, Table, TableRc, Value,
+};
 use crate::lisp::utils::{require_arg, require_typed_arg};
 use cfg_if::cfg_if;
 use std::cell::RefCell;
@@ -27,6 +29,33 @@ pub fn register(env: &mut Env) {
             let table_rc = require_typed_arg::<&TableRc>("json-stringify", &args, 0)?;
             let table = table_rc.borrow();
             Ok(Value::String(table.to_json()))
+        }),
+    );
+
+    // output-parse: Parse command output text using a declarative output
+    // schema (output-schemas/*.json), the same lookup `|:` applies
+    // automatically. Usage: (output-parse "ps aux" text)
+    env.define(
+        Symbol::from("output-parse"),
+        Value::NativeFunc(|_env, args| {
+            let command_line = require_typed_arg::<&String>("output-parse", &args, 0)?;
+            let text = require_typed_arg::<&String>("output-parse", &args, 1)?;
+
+            let argv: Vec<String> = command_line
+                .split_whitespace()
+                .map(str::to_string)
+                .collect();
+            let Some(spec) = crate::output_schema::lookup(&argv) else {
+                return Err(RuntimeError {
+                    msg: format!("output-parse: no output schema matches {command_line:?}"),
+                });
+            };
+            match crate::output_schema::parse_with_spec(&spec, text) {
+                Ok(table) => Ok(Value::Table(TableRc::new(RefCell::new(table)))),
+                Err(e) => Err(RuntimeError {
+                    msg: format!("output-parse error: {}", e),
+                }),
+            }
         }),
     );
 
@@ -209,10 +238,22 @@ pub fn register(env: &mut Env) {
             let table_rc = require_typed_arg::<&TableRc>("table-where-cmp", &args, 0)?;
             let column = require_typed_arg::<&String>("table-where-cmp", &args, 1)?;
             let op = require_typed_arg::<&String>("table-where-cmp", &args, 2)?;
-            let value = require_typed_arg::<IntType>("table-where-cmp", &args, 3)?;
+            // Int or Float: `%CPU` style columns hold floats, while ids and
+            // byte counts need exact integer comparison.
+            let value = match args.get(3).and_then(CmpValue::from_value) {
+                Some(value) => value,
+                None => {
+                    return Err(RuntimeError {
+                        msg: format!(
+                            "table-where-cmp requires a numeric value argument, got {:?}",
+                            args.get(3)
+                        ),
+                    });
+                }
+            };
 
             let table = table_rc.borrow();
-            let new_table = table.where_cmp(column, op, value);
+            let new_table = table.where_cmp(column, op, &value);
             Ok(Value::Table(TableRc::new(RefCell::new(new_table))))
         }),
     );

@@ -59,6 +59,7 @@ pub(crate) mod ai_watch;
 pub(crate) mod background_io;
 pub mod confirmation;
 mod event_loop;
+pub(crate) mod failure_hint;
 mod handler;
 pub(crate) mod job_notify;
 pub mod key_action;
@@ -87,9 +88,38 @@ use services::ReplServices;
 /// Format directory entries for AI context
 /// This is a pure function for testability
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoFixKind {
+    /// Deterministic quick fix; `replacement` is ready to accept.
+    QuickFix,
+    /// AI-generated replacement (opt-in via `set-auto-fix-enabled`).
+    AiFix,
+    /// Nothing to apply; the annotation only points at Alt-f / Alt-d.
+    DiagnoseHintOnly,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutoFixSuggestion {
+    /// Replacement command shown as ghost text. Empty for `DiagnoseHintOnly`.
+    pub replacement: String,
+    /// Short reason shown as a right-aligned annotation.
+    pub title: Option<String>,
+    pub kind: AutoFixKind,
+    /// `last_command_time` when this suggestion was computed. An async AI fix
+    /// that arrives after another command ran is stale and gets dropped.
+    pub command_time: Option<Instant>,
+}
+
+impl AutoFixSuggestion {
+    /// Whether there is a replacement the user can accept with Tab/Alt-f.
+    pub fn has_fix(&self) -> bool {
+        !self.replacement.is_empty()
+    }
+}
+
 #[derive(Debug)]
 pub enum AiEvent {
-    AutoFix(String),
+    AutoFix(AutoFixSuggestion),
     CommandExplanation { input: String, explanation: String },
     CommandExplanationError { input: String },
 }
@@ -121,7 +151,7 @@ pub(crate) struct AiUiState {
     pub(crate) input_preferences: InputPreferences,
     pub(crate) ai_pending_shown: bool,
     pub(crate) last_explanation: Option<String>,
-    pub(crate) auto_fix_suggestion: Option<String>,
+    pub(crate) auto_fix_suggestion: Option<AutoFixSuggestion>,
     pub(crate) pending_ai_explanation_input: Option<String>,
     pub(crate) current_ai_explanation: Option<String>,
     pub(crate) last_input_change_time: Instant,
@@ -1040,8 +1070,13 @@ impl<'a> Repl<'a> {
             self.state.stopped_jobs_warned = false;
             self.terminal_ui.prompt.write().invalidate_git_cache();
             self.terminal_ui.prompt.read().trigger_git_check();
+            // A new command ran; whatever hint the previous failure produced
+            // is stale now.
+            self.ai_ui.auto_fix_suggestion = None;
             if self.state.last_status != 0 {
-                self.trigger_auto_fix();
+                self.maybe_auto_fix_on_failure();
+            } else {
+                self.state.last_hinted_failure = None;
             }
         }
     }
@@ -1268,6 +1303,11 @@ impl<'a> Repl<'a> {
     fn handle_ai_event(&mut self, event: AiEvent) {
         match event {
             AiEvent::AutoFix(fix) => {
+                // An async AI fix can outlive the failure it was computed for;
+                // showing it against a newer command would be misleading.
+                if fix.command_time != self.state.last_command_time {
+                    return;
+                }
                 self.ai_ui.auto_fix_suggestion = Some(fix);
                 if self.input.as_str().is_empty() {
                     let mut renderer = TerminalRenderer::new();
@@ -1736,7 +1776,13 @@ mod ai_tests {
             repl.ai_ui.auto_fix_suggestion = Some(fix);
         }
 
-        assert_eq!(repl.ai_ui.auto_fix_suggestion, Some("ls -la".to_string()));
+        let fix = repl
+            .ai_ui
+            .auto_fix_suggestion
+            .take()
+            .expect("auto fix expected");
+        assert_eq!(fix.replacement, "ls -la");
+        assert_eq!(fix.kind, crate::repl::AutoFixKind::AiFix);
     }
 
     #[tokio::test]

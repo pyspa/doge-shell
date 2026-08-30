@@ -145,6 +145,11 @@ impl Environment {
         self.completion_state.input_preferences.status_line = enabled;
     }
 
+    /// Enable or disable the proactive hint after a failed command.
+    pub fn set_failure_hint_enabled(&mut self, enabled: bool) {
+        self.completion_state.input_preferences.failure_hint = enabled;
+    }
+
     /// Get the current input preferences.
     pub fn input_preferences(&self) -> InputPreferences {
         self.completion_state.input_preferences

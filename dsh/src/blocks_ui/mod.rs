@@ -8,7 +8,6 @@
 //!
 //! [`CommandBlock`]: dsh_types::command_block::CommandBlock
 
-pub mod ansi;
 pub mod model;
 mod render;
 

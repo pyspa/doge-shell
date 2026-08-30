@@ -47,6 +47,14 @@ pub struct InputPreferences {
     /// Off by default: it reserves a scroll region with DECSTBM, which not
     /// every terminal handles well.
     pub status_line: bool,
+    /// When enabled, show a one-line proactive hint after a command fails
+    /// (deterministic quick fix, or a pointer to Alt-f/Alt-d). On by default:
+    /// the automatic path costs no AI request unless `auto_fix` is also on.
+    ///
+    /// This gates the whole automatic post-failure path, `auto_fix` included,
+    /// because every part of it surfaces as that one hint. The manual Alt-f
+    /// and Alt-d bindings are unaffected.
+    pub failure_hint: bool,
 }
 
 impl Default for InputPreferences {
@@ -62,6 +70,7 @@ impl Default for InputPreferences {
             auto_pair: false,
             ai_explanation: false,
             status_line: false,
+            failure_hint: true,
         }
     }
 }

@@ -1,0 +1,24 @@
+{
+  "command": "ls",
+  "outputs": [
+    {
+      "when": { "args_include": ["-l"] },
+      "text": {
+        "separator": "whitespace",
+        "header_lines": 0,
+        "skip_prefixes": ["total ", "合計 "],
+        "columns": [
+          { "name": "mode" },
+          { "name": "links", "type": "int" },
+          { "name": "user" },
+          { "name": "group" },
+          { "name": "size", "type": "size" },
+          { "name": "month" },
+          { "name": "day" },
+          { "name": "time" },
+          { "name": "name", "rest": true }
+        ]
+      }
+    }
+  ]
+}

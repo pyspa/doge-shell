@@ -1,5 +1,5 @@
-use super::AiEvent;
 use super::Repl;
+use super::{AiEvent, AutoFixKind, AutoFixSuggestion};
 
 use crate::completion::shell_token::{self, SeparatorMode};
 use dsh_types::quick_fix::{DeterministicQuickFixProvider, QuickFixProvider};
@@ -40,6 +40,45 @@ pub fn get_directory_listing_content(path: &std::path::Path) -> Vec<String> {
 }
 
 impl<'a> Repl<'a> {
+    /// Automatic hint path, called after a failed command.
+    ///
+    /// The noise gate covers everything automatic, AI included: an interrupt
+    /// or a `grep` miss is not a failure worth spending a request on. The
+    /// manual Alt-f binding calls `trigger_auto_fix` directly and bypasses all
+    /// of this.
+    pub(crate) fn maybe_auto_fix_on_failure(&mut self) {
+        if !self.ai_ui.input_preferences.failure_hint {
+            return;
+        }
+        let command = self.state.last_command_string.clone();
+        let status = self.state.last_status;
+        if !super::failure_hint::should_offer_hint(
+            &command,
+            status,
+            self.state.last_hinted_failure.as_ref(),
+        ) {
+            return;
+        }
+        self.state.last_hinted_failure = Some((command, status));
+        self.trigger_auto_fix();
+    }
+
+    /// Point at the manual AI actions, when they are opted in and available.
+    ///
+    /// Replaces the line `execute_shell_command` used to print after every
+    /// failure; it has to fire on every path that produces no applicable fix,
+    /// including a blocked or failed AI request.
+    fn send_diagnose_hint(&self, command_time: Option<Instant>) {
+        if self.ai_ui.input_preferences.auto_diagnose && self.services.ai.is_some() {
+            let _ = self.ai_ui.ai_tx.send(AiEvent::AutoFix(AutoFixSuggestion {
+                replacement: String::new(),
+                title: None,
+                kind: AutoFixKind::DiagnoseHintOnly,
+                command_time,
+            }));
+        }
+    }
+
     pub(crate) fn trigger_auto_fix(&self) {
         if self.state.last_status == 0 || self.state.last_command_string.is_empty() {
             return;
@@ -70,33 +109,62 @@ impl<'a> Repl<'a> {
                     .unwrap_or_default()
             });
 
+        let command_time = self.state.last_command_time;
         if let Some(fix) = DeterministicQuickFixProvider
             .suggest(&command, status, &output)
             .into_iter()
             .next()
         {
-            let _ = self.ai_ui.ai_tx.send(AiEvent::AutoFix(fix.replacement));
+            let _ = self.ai_ui.ai_tx.send(AiEvent::AutoFix(AutoFixSuggestion {
+                replacement: fix.replacement,
+                title: Some(fix.title),
+                kind: AutoFixKind::QuickFix,
+                command_time,
+            }));
             return;
         }
 
         if self.ai_ui.input_preferences.auto_fix
             && let Some(service) = &self.services.ai
+            && !is_auto_fix_blocked(&command)
         {
-            if is_auto_fix_blocked(&command) {
-                return;
-            }
             let service = service.clone();
             let tx = self.ai_ui.ai_tx.clone();
+            let diagnose_hint = self.ai_ui.input_preferences.auto_diagnose;
 
             tokio::spawn(async move {
-                if let Ok(fixed) =
-                    crate::ai_features::fix_command(service.as_ref(), &command, status, &output)
-                        .await
+                match crate::ai_features::fix_command(service.as_ref(), &command, status, &output)
+                    .await
                 {
-                    let _ = tx.send(AiEvent::AutoFix(fixed));
+                    Ok(fixed) => {
+                        let _ = tx.send(AiEvent::AutoFix(AutoFixSuggestion {
+                            replacement: fixed,
+                            title: None,
+                            kind: AutoFixKind::AiFix,
+                            command_time,
+                        }));
+                    }
+                    // The request failed (offline, rate limited). Fall back to
+                    // the manual-action hint rather than saying nothing.
+                    Err(err) => {
+                        tracing::debug!("auto fix request failed: {err}");
+                        if diagnose_hint {
+                            let _ = tx.send(AiEvent::AutoFix(AutoFixSuggestion {
+                                replacement: String::new(),
+                                title: None,
+                                kind: AutoFixKind::DiagnoseHintOnly,
+                                command_time,
+                            }));
+                        }
+                    }
                 }
             });
+            return;
         }
+
+        // No deterministic fix and no automatic AI fix on the way — including
+        // a blocklisted command or auto-fix being off.
+        self.send_diagnose_hint(command_time);
     }
 
     pub(crate) fn refresh_inline_suggestion(&mut self) -> bool {

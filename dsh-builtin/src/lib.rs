@@ -59,6 +59,7 @@ pub mod procs;
 pub mod project;
 pub mod project_context;
 mod read;
+mod runbook;
 pub mod sched;
 pub mod shell_capabilities;
 #[cfg(test)]

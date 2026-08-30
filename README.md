@@ -111,6 +111,26 @@ Seamlessly handle structured data (JSON, CSV, Tables) within the shell pipeline.
   ```
   The command output is bound to the `$_` variable in the Lisp expression.
 
+- **Declarative Output Schemas**: For known commands (`ps`, `ls -l`, `df`,
+  `free`, `docker ps`/`images`, `git log`/`status`, `kubectl get`), `|:`
+  parses the output into a typed table automatically — no hand-written
+  parsing. Column types are declared in `output-schemas/*.json` (embedded;
+  `~/.config/dsh/output-schemas/` overrides, meta schema in
+  `command-output-schema.json`), so `%CPU` is a number and `-h` sizes are
+  bytes (unsuffixed `df`/`free` columns keep their native units and say so in
+  the column name, e.g. `avail_1k`, `total_kib`):
+  ```bash
+  # $_ is already a table with typed columns
+  ps aux |: (table-where-cmp $_ "cpu" ">" 50)
+  ls -l |: (table-order-by $_ "size" :desc)
+  docker ps |: (table-where-contains $_ "Status" "Up")
+  ```
+  Where a machine-readable mode exists, the schema injects it (`docker ps`
+  runs with `--format '{{json .}}'`, `kubectl get` with `-o json`) so parsing
+  is exact. The raw text stays available as `$RAW`, `(output-parse "ps aux"
+  text)` applies a schema explicitly, and anything without a schema — or any
+  parse failure — falls back to the plain string in `$_` exactly as before.
+
 - **Supported Formats**:
   - **JSON**: `json-parse`, `json-stringify`
   - **CSV**: `csv-parse`, `csv-stringify`
@@ -295,6 +315,7 @@ The embedded Lisp interpreter includes many built-in functions:
 - `pref-auto-notify` - Configure automatic notification
 - `pref-ai-explanation` - Configure AI-powered command explanations
 - `pref-status-line` - Enable the bottom-row [status line](#status-line) (off by default)
+- `pref-failure-hint` - Show a one-line proactive hint after a failed command (on by default; off also disables automatic AI fixes)
 - `set-auto-fix-enabled` - Enable or disable AI auto-fix
 - `safety-level` - Configure safety level (`loose`, `normal`, `strict`)
 - `set-notify-config` - Configure notification behavior
@@ -667,7 +688,30 @@ blocks --scope persistent --json
 
 # Browse them full-screen (same as Ctrl+O)
 blocks tui
+
+# Export blocks as an executable Markdown runbook
+blocks export --range 1..5 -o runbook.md
+blocks export --ids 3,7 --title "Deploy" --ai   # AI adds one-line step notes
+notebook-play runbook.md                        # replay it step by step
 ```
+
+#### Runbooks
+
+`blocks export` turns recorded blocks into a Markdown runbook: each command is
+a ```` ```sh ```` block, output excerpts are quoted (never re-executed), and
+metadata such as exit codes rides in HTML comments. The result plays back with
+`notebook-play`, which confirms each step before running it — record a
+procedure once, then replay or share it.
+
+Runbooks can be parameterized with the same `{{name}}` / `{{name:default}}`
+markers snippets use: `notebook-play` prompts for each placeholder once (or
+takes `--var name=value` for non-interactive use). Only identifier-shaped
+names count as placeholders, so Go-template syntax in recorded commands
+(`docker ps --format '{{json .}}'`) replays verbatim. Select blocks by display
+index (`--range 1..5`, `--last 3`) or by stable id (`--ids`); steps are always
+written oldest-first. `--ai` asks the configured model for a one-line
+description per step, and the export still succeeds without them if the
+request fails.
 
 #### Block Browser
 
@@ -685,6 +729,7 @@ so those blocks start folded.
 - `c` / `y` - copy the command / the output
 - `Enter` - put the command in the input buffer · `r` - re-run it · `d` - `cd` to where it ran
 - `e` - explain it with AI · `?` - key help · `q` / `Esc` - close
+- `m` - mark for export · `x` - export marked (or selected) blocks as a runbook
 
 Copying uses the system clipboard, falling back to OSC 52 so it still works over
 SSH. Blocks remain session-local by default. `blocks --scope persistent` reads
@@ -1181,6 +1226,17 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    # Press Alt+f, command input becomes:
    git status
    ```
+
+   **Proactive failure hints** (on by default): when a command fails, dsh
+   automatically shows the deterministic quick-fix as ghost text with a short
+   reason next to the prompt — accept it with `Tab` or `Alt+f`. No AI request
+   is sent unless `set-auto-fix-enabled` is on. Interrupted commands
+   (`Ctrl-C`), "no match" exits from `grep`/`diff`-style commands, and the
+   same failure repeating stay quiet; for a pipeline the exit status belongs
+   to its last segment, so `cat f | grep x` finding nothing stays quiet too.
+   `(pref-failure-hint nil)` in `config.lisp` turns off the whole automatic
+   path, automatic AI fixes included — `Alt+f` and `Alt+d` keep working on
+   demand.
 
 5. **Smart Git Commit (`Alt+c`)**:
    Stage your changes, then press `Alt+c` to invoke the `aic` command, which analyzes the diff and generates a conventional commit message.

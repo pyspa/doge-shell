@@ -4,8 +4,8 @@
 //! Side effects the driver must perform (clipboard writes) come back as
 //! [`BrowserAction`] values rather than being done inline.
 
-use super::ansi;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use dsh_types::ansi;
 use dsh_types::command_block::CommandBlock;
 use std::collections::HashSet;
 
@@ -89,6 +89,8 @@ pub struct BlockBrowser {
     wrap: bool,
     /// Block indices whose output is collapsed.
     folded: HashSet<usize>,
+    /// Block indices marked for `x` (runbook export).
+    marked: HashSet<usize>,
     output_scroll: usize,
     /// Rendered output for one block, keyed by the inputs that produced it, so
     /// a 1 MiB block is not re-split on every frame.
@@ -132,6 +134,7 @@ impl BlockBrowser {
             stream: OutputStream::Both,
             wrap: false,
             folded,
+            marked: HashSet::new(),
             output_scroll: 0,
             output_cache: None,
             show_help: false,
@@ -515,8 +518,62 @@ impl BlockBrowser {
                 None => BrowserAction::Noop,
             },
 
+            (KeyCode::Char('m'), _) => self.toggle_mark(),
+            (KeyCode::Char('x'), _) => match self.export_command() {
+                // Routed back through the shell like `e`: file writing and the
+                // optional AI pass live in the `blocks` builtin.
+                Some(command) => BrowserAction::Finish(BrowserOutcome::Run(command)),
+                None => BrowserAction::Noop,
+            },
+
             _ => BrowserAction::Noop,
         }
+    }
+
+    fn toggle_mark(&mut self) -> BrowserAction {
+        let Some(&index) = self.filtered.get(self.selected) else {
+            return BrowserAction::Noop;
+        };
+        if !self.marked.remove(&index) {
+            self.marked.insert(index);
+        }
+        self.status = Some(format!("{} marked for export", self.marked.len()));
+        BrowserAction::Redraw
+    }
+
+    /// Whether the block at this position in the filtered list is marked.
+    pub fn is_marked(&self, filtered_pos: usize) -> bool {
+        self.filtered
+            .get(filtered_pos)
+            .is_some_and(|index| self.marked.contains(index))
+    }
+
+    pub fn marked_count(&self) -> usize {
+        self.marked.len()
+    }
+
+    /// `blocks export --ids … -o runbook-<timestamp>.md` for the marked
+    /// blocks, or the selected one when nothing is marked.
+    ///
+    /// Ids rather than display indices: this command runs after the browser
+    /// closes, and the export itself shifts every display index by one.
+    fn export_command(&self) -> Option<String> {
+        let mut ids: Vec<u64> = if self.marked.is_empty() {
+            vec![self.selected_block()?.id]
+        } else {
+            self.marked
+                .iter()
+                .filter_map(|&index| self.blocks.get(index))
+                .map(|block| block.id)
+                .collect()
+        };
+        ids.sort_unstable();
+        let ids = ids.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
+        let file = format!(
+            "runbook-{}.md",
+            chrono::Local::now().format("%Y%m%d-%H%M%S")
+        );
+        Some(format!("blocks export --ids {ids} -o {file}"))
     }
 
     /// `blocks explain N`, where N is the 1-based index `blocks list` shows.
@@ -587,6 +644,64 @@ mod tests {
             .into_iter()
             .map(|b| b.command.clone())
             .collect()
+    }
+
+    #[test]
+    fn mark_toggles_and_reports_count() {
+        let mut b = sample();
+        assert_eq!(b.marked_count(), 0);
+        assert_eq!(b.on_key(key(KeyCode::Char('m'))), BrowserAction::Redraw);
+        assert!(b.is_marked(0));
+        assert_eq!(b.marked_count(), 1);
+        assert_eq!(b.status(), Some("1 marked for export"));
+
+        b.on_key(key(KeyCode::Char('m')));
+        assert!(!b.is_marked(0));
+        assert_eq!(b.marked_count(), 0);
+    }
+
+    #[test]
+    fn export_uses_marked_ids_sorted_or_falls_back_to_selection() {
+        let mut b = sample();
+        // Mark "git status" (id 3) and "cargo build" (id 1).
+        b.on_key(key(KeyCode::Char('m')));
+        b.on_key(key(KeyCode::Char('G')));
+        b.on_key(key(KeyCode::Char('m')));
+
+        let action = b.on_key(key(KeyCode::Char('x')));
+        let BrowserAction::Finish(BrowserOutcome::Run(command)) = action else {
+            panic!("expected export command, got {action:?}");
+        };
+        assert!(command.starts_with("blocks export --ids 1,3 -o runbook-"));
+        assert!(command.ends_with(".md"));
+
+        // No marks: export the selected block by its stable id.
+        let mut b = sample();
+        b.on_key(key(KeyCode::Char('j')));
+        let action = b.on_key(key(KeyCode::Char('x')));
+        let BrowserAction::Finish(BrowserOutcome::Run(command)) = action else {
+            panic!("expected export command, got {action:?}");
+        };
+        assert!(command.starts_with("blocks export --ids 2 -o runbook-"));
+    }
+
+    #[test]
+    fn export_ids_survive_an_active_filter() {
+        let mut b = sample();
+        b.on_key(key(KeyCode::Char('/')));
+        for ch in "cargo build".chars() {
+            b.on_key(key(KeyCode::Char(ch)));
+        }
+        b.on_key(key(KeyCode::Enter));
+        assert_eq!(commands(&b), vec!["cargo build"]);
+
+        b.on_key(key(KeyCode::Char('m')));
+        let action = b.on_key(key(KeyCode::Char('x')));
+        let BrowserAction::Finish(BrowserOutcome::Run(command)) = action else {
+            panic!("expected export command, got {action:?}");
+        };
+        // "cargo build" has stable id 1, not its filtered position.
+        assert!(command.starts_with("blocks export --ids 1 -o runbook-"));
     }
 
     #[test]

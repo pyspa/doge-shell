@@ -205,12 +205,19 @@ mod tests {
             LoopEvent::Scheduler(SchedulerEvent { id: 1, .. })
         ));
 
-        ai_tx.send(AiEvent::AutoFix("fix".to_string())).unwrap();
+        ai_tx
+            .send(AiEvent::AutoFix(crate::repl::AutoFixSuggestion {
+                replacement: "fix".to_string(),
+                title: None,
+                kind: crate::repl::AutoFixKind::QuickFix,
+                command_time: None,
+            }))
+            .unwrap();
         assert!(matches!(
             timeout(Duration::from_millis(50), event_loop.next_event())
                 .await
                 .unwrap(),
-            LoopEvent::Ai(AiEvent::AutoFix(fix)) if fix == "fix"
+            LoopEvent::Ai(AiEvent::AutoFix(fix)) if fix.replacement == "fix"
         ));
 
         background_io_tx

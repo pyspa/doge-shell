@@ -96,6 +96,32 @@ pub struct Table {
 /// Reference-counted table for use in Value enum.
 pub type TableRc = Rc<RefCell<Table>>;
 
+/// Right-hand side of a [`Table::where_cmp`] comparison.
+///
+/// Keeping the integer case separate preserves exact comparison for values
+/// past a float's precision (ids, byte counts) instead of rounding both sides
+/// to the nearest representable float.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CmpValue {
+    Int(super::IntType),
+    Float(super::FloatType),
+}
+
+impl CmpValue {
+    /// The comparison value behind a numeric `Value`, or `None` for anything
+    /// else.
+    // `IntType` is `BigInt` under the `bigint` feature, where this clone is
+    // real work rather than a copy.
+    #[allow(clippy::clone_on_copy)]
+    pub fn from_value(value: &Value) -> Option<Self> {
+        match value {
+            Value::Int(n) => Some(CmpValue::Int(n.clone())),
+            Value::Float(f) => Some(CmpValue::Float(*f)),
+            _ => None,
+        }
+    }
+}
+
 impl Table {
     /// Creates a new empty table with the given columns.
     pub fn new(columns: Vec<String>) -> Self {
@@ -427,22 +453,39 @@ impl Table {
 
     /// Filters rows where the numeric column matches a comparison.
     /// op can be: ">" "<" ">=" "<=" "=" "!="
-    pub fn where_cmp(&self, column: &str, op: &str, value: super::IntType) -> Self {
+    ///
+    /// Both `Int` and `Float` cells participate (a `%CPU` of `3.5` must be
+    /// comparable); non-numeric cells never match. Two integers are compared
+    /// as integers, so ids and byte counts past 2^53 stay exact.
+    pub fn where_cmp(&self, column: &str, op: &str, value: &CmpValue) -> Self {
         let mut new_table = Self::new(self.columns.clone());
         for record in &self.rows {
-            if let Some(Value::Int(n)) = record.get(column) {
-                let matches = match op {
-                    ">" => *n > value,
-                    "<" => *n < value,
-                    ">=" => *n >= value,
-                    "<=" => *n <= value,
-                    "=" | "==" => *n == value,
-                    "!=" => *n != value,
-                    _ => false,
-                };
-                if matches {
-                    new_table.rows.push(record.clone());
+            let ordering = match (record.get(column), value) {
+                (Some(Value::Int(cell)), CmpValue::Int(value)) => Some(cell.cmp(value)),
+                (Some(Value::Int(cell)), CmpValue::Float(value)) => {
+                    super::value::int_type_to_float_type(cell).partial_cmp(value)
                 }
+                (Some(Value::Float(cell)), CmpValue::Int(value)) => {
+                    cell.partial_cmp(&super::value::int_type_to_float_type(value))
+                }
+                (Some(Value::Float(cell)), CmpValue::Float(value)) => cell.partial_cmp(value),
+                _ => None,
+            };
+            // `None` also covers NaN, which matches no comparison.
+            let Some(ordering) = ordering else {
+                continue;
+            };
+            let matches = match op {
+                ">" => ordering.is_gt(),
+                "<" => ordering.is_lt(),
+                ">=" => ordering.is_ge(),
+                "<=" => ordering.is_le(),
+                "=" | "==" => ordering.is_eq(),
+                "!=" => ordering.is_ne(),
+                _ => false,
+            };
+            if matches {
+                new_table.rows.push(record.clone());
             }
         }
         new_table
@@ -799,11 +842,35 @@ mod tests {
         let json = r#"[{"val": 10}, {"val": 20}, {"val": 30}, {"val": 5}]"#;
         let table = Table::from_json(json).unwrap();
 
-        let gt_15 = table.where_cmp("val", ">", IntType::from(15));
+        let gt_15 = table.where_cmp("val", ">", &CmpValue::Int(IntType::from(15)));
         assert_eq!(gt_15.len(), 2);
 
-        let le_10 = table.where_cmp("val", "<=", IntType::from(10));
+        let le_10 = table.where_cmp("val", "<=", &CmpValue::Int(IntType::from(10)));
         assert_eq!(le_10.len(), 2);
+    }
+
+    #[test]
+    fn test_table_where_cmp_matches_float_cells() {
+        let json = r#"[{"cpu": 3.5}, {"cpu": 55.0}, {"cpu": 12}]"#;
+        let table = Table::from_json(json).unwrap();
+
+        let hot = table.where_cmp("cpu", ">", &CmpValue::Float(10.0));
+        assert_eq!(hot.len(), 2);
+        let cool = table.where_cmp("cpu", "<=", &CmpValue::Float(3.5));
+        assert_eq!(cool.len(), 1);
+    }
+
+    #[test]
+    fn test_table_where_cmp_keeps_large_integers_exact() {
+        // Both values round to the same f64, so comparing as floats would
+        // wrongly report them equal.
+        let json = r#"[{"id": 9007199254740993}]"#;
+        let table = Table::from_json(json).unwrap();
+        let needle = CmpValue::Int(IntType::from(9007199254740992i64));
+
+        assert_eq!(table.where_cmp("id", "=", &needle).len(), 0);
+        assert_eq!(table.where_cmp("id", "!=", &needle).len(), 1);
+        assert_eq!(table.where_cmp("id", ">", &needle).len(), 1);
     }
 
     #[test]

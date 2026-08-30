@@ -1,5 +1,4 @@
 use super::command::{ArgumentType, CommandCompletion, CommandCompletionDatabase};
-use crate::shell::APP_NAME;
 use anyhow::{Context, Result};
 use rust_embed::RustEmbed;
 use serde_json::Value;
@@ -54,20 +53,7 @@ impl JsonCompletionLoader {
     }
 
     fn get_default_override_dirs() -> Vec<PathBuf> {
-        let mut dirs = Vec::new();
-
-        if let Some(config_dir) = dirs::config_dir() {
-            let user_dir = config_dir.join(APP_NAME).join("completions");
-            debug!("Adding user config completion dir: {:?}", user_dir);
-            dirs.push(user_dir);
-        }
-
-        if let Some(home_dir) = dirs::home_dir() {
-            let home_config_dir = home_dir.join(".config").join(APP_NAME).join("completions");
-            debug!("Adding home config completion dir: {:?}", home_config_dir);
-            dirs.push(home_config_dir);
-        }
-
+        let dirs = crate::environment::user_asset_override_dirs("completions");
         debug!("Initialized override completion directories: {:?}", dirs);
         dirs
     }

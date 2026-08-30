@@ -206,7 +206,12 @@ pub(crate) async fn handle_key_event(
         cursor_at_end: repl.input.cursor() == repl.input.len(),
         input_empty: repl.input.is_empty(),
         has_suggestion: repl.ai_ui.suggestion_manager.active.is_some()
-            || (repl.input.is_empty() && repl.ai_ui.auto_fix_suggestion.is_some()),
+            || (repl.input.is_empty()
+                && repl
+                    .ai_ui
+                    .auto_fix_suggestion
+                    .as_ref()
+                    .is_some_and(|fix| fix.has_fix())),
         has_completion: repl.input.completion.is_some(),
         completion_mode: repl.completion_ui.completion.completion_mode(),
         cursor_at_start: repl.input.cursor() == 0,

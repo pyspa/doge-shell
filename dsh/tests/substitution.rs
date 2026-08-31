@@ -159,3 +159,37 @@ fn a_variable_exported_inside_a_substitution_stays_inside_it() {
         "the substitution leaked a variable: {stdout:?}"
     );
 }
+
+/// The body of a substitution is a command line, so it gets the same expansion
+/// as any other. It used to be handed to the parser verbatim, which meant
+/// nothing inside it was expanded at all.
+#[test]
+fn the_body_of_a_substitution_is_expanded() {
+    let home = std::env::var("HOME").expect("HOME");
+
+    for command in [
+        "/bin/echo $(/bin/echo $HOME)",
+        "/bin/echo $(/bin/echo ~)",
+        "/bin/echo \"$(/bin/echo $HOME)\"",
+    ] {
+        let stdout = stdout_of(command);
+        assert!(
+            stdout.lines().any(|line| line.trim() == home),
+            "{command:?} did not expand its body: {stdout:?}"
+        );
+    }
+}
+
+/// Expanding the body must not cost it its operators.
+#[test]
+fn an_expanded_substitution_body_keeps_its_pipeline() {
+    let stdout = stdout_of("/bin/echo $(/bin/echo $HOME | /usr/bin/tr a A)");
+    assert!(
+        stdout.contains('A'),
+        "the pipeline inside the substitution did not run: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("tr"),
+        "the pipe was lost and `tr` became an argument: {stdout:?}"
+    );
+}

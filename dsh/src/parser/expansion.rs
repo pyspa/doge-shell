@@ -404,11 +404,11 @@ pub fn expand_alias_tilde(pair: Pair<Rule>, cx: &ExpandCtx<'_>) -> Result<Vec<St
         Rule::span => match expand_span(&pair, cx) {
             Some(values) => argv.extend(values.iter().map(|value| shell_escape_single(value))),
             None => {
-                // Contains a substitution. Those are handed on as markers that
-                // `shell/parse.rs` recognises, so emit them the way the
-                // pre-span code did rather than recursing into their bodies --
-                // dropping the parentheses would turn a subshell into a plain
-                // command list.
+                // Contains a substitution. The markers `shell/parse.rs`
+                // recognises have to survive, so the parentheses are re-emitted
+                // around a body that is itself expanded -- dropping them would
+                // turn a subshell into a plain command list, and skipping the
+                // body left everything inside it unexpanded.
                 for inner_pair in pair.into_inner() {
                     match inner_pair.as_rule() {
                         Rule::subshell => {
@@ -425,7 +425,6 @@ pub fn expand_alias_tilde(pair: Pair<Rule>, cx: &ExpandCtx<'_>) -> Result<Vec<St
                             }
                             argv.push(")".to_string());
                         }
-                        Rule::command_subst => argv.push(inner_pair.as_str().to_string()),
                         _ => argv.append(&mut expand_alias_tilde(inner_pair, cx)?),
                     }
                 }
@@ -483,7 +482,7 @@ pub fn expand_alias_tilde(pair: Pair<Rule>, cx: &ExpandCtx<'_>) -> Result<Vec<St
             let mut inner = pair.clone().into_inner();
             match (inner.next(), inner.next()) {
                 (Some(only), None) if only.as_rule() == Rule::command_subst => {
-                    argv.push(only.as_str().to_string());
+                    argv.append(&mut expand_alias_tilde(only, cx)?);
                 }
                 _ => argv.push(shellexpand::tilde(pair.as_str()).to_string()),
             }
@@ -501,9 +500,23 @@ pub fn expand_alias_tilde(pair: Pair<Rule>, cx: &ExpandCtx<'_>) -> Result<Vec<St
         | Rule::stderr_redirect_direction
         | Rule::stdouterr_redirect_direction
         | Rule::stdin_redirect_direction
-        | Rule::stdin_redirect_direction_in
-        | Rule::command_subst => {
+        | Rule::stdin_redirect_direction_in => {
             argv.push(shellexpand::tilde(pair.as_str()).to_string());
+        }
+        // The body of a substitution is a command line like any other, so it
+        // gets the same expansion. Passing it through verbatim meant nothing
+        // inside it was ever expanded: `echo $(echo $HOME)` printed `$HOME`,
+        // `$(echo ~)` printed `~`, and an alias in there was never resolved.
+        // Only the markers are re-emitted; the body itself is recursed into,
+        // the way `subshell` and `proc_subst` already are.
+        Rule::command_subst => {
+            debug!("expand command_subst {}", pair.as_str());
+            argv.push("$(".to_string());
+            for inner_pair in pair.into_inner() {
+                let mut v = expand_alias_tilde(inner_pair, cx)?;
+                argv.append(&mut v);
+            }
+            argv.push(")".to_string());
         }
         Rule::argv0 => argv.append(&mut expand_argv0(pair, cx)?),
         // Operators are re-serialized as they were written. Every one of these
@@ -558,10 +571,6 @@ pub fn expand_alias_tilde(pair: Pair<Rule>, cx: &ExpandCtx<'_>) -> Result<Vec<St
                         }
                         argv.push(")".to_string());
                     }
-                    Rule::command_subst => {
-                        debug!("expand command_subst {}", inner_pair.as_str());
-                        argv.push(inner_pair.as_str().to_string());
-                    }
                     Rule::subshell => {
                         debug!("expand subshell {}", inner_pair.as_str());
                         argv.push("(".to_string());
@@ -593,6 +602,7 @@ pub fn expand_alias_tilde(pair: Pair<Rule>, cx: &ExpandCtx<'_>) -> Result<Vec<St
                     // inner match at all -- stepping into either here dropped
                     // it from the re-serialized line.
                     Rule::assignment_list
+                    | Rule::command_subst
                     | Rule::background_op
                     | Rule::pipeline_op
                     | Rule::capture_op

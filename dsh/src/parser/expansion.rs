@@ -506,9 +506,24 @@ pub fn expand_alias_tilde(pair: Pair<Rule>, cx: &ExpandCtx<'_>) -> Result<Vec<St
             argv.push(shellexpand::tilde(pair.as_str()).to_string());
         }
         Rule::argv0 => argv.append(&mut expand_argv0(pair, cx)?),
+        // Operators are re-serialized as they were written. Every one of these
+        // used to fall through to the catch-all below, which iterates children
+        // and drops anything it does not recognise, so `a | b &` came back as
+        // `a | b` and ran in the foreground, and `(a; b)` came back as `(a b)`.
+        Rule::background_op
+        | Rule::pipeline_op
+        | Rule::capture_op
+        | Rule::struct_pipe_op
+        | Rule::sequential_op
+        | Rule::and_op
+        | Rule::or_op
+        | Rule::command_list_sep
+        | Rule::capture_suffix
+        | Rule::struct_pipe_command => {
+            argv.push(pair.as_str().to_string());
+        }
         Rule::pipe_command => {
             debug!("expand pipe_command {}", pair.as_str());
-            // Pipe character is added by expand_alias function, so don't add it here
             for inner_pair in pair.into_inner() {
                 let mut v = expand_alias_tilde(inner_pair, cx)?;
                 argv.append(&mut v);
@@ -578,6 +593,16 @@ pub fn expand_alias_tilde(pair: Pair<Rule>, cx: &ExpandCtx<'_>) -> Result<Vec<St
                     // inner match at all -- stepping into either here dropped
                     // it from the re-serialized line.
                     Rule::assignment_list
+                    | Rule::background_op
+                    | Rule::pipeline_op
+                    | Rule::capture_op
+                    | Rule::struct_pipe_op
+                    | Rule::sequential_op
+                    | Rule::and_op
+                    | Rule::or_op
+                    | Rule::command_list_sep
+                    | Rule::capture_suffix
+                    | Rule::struct_pipe_command
                     | Rule::fd_dup
                     | Rule::span
                     | Rule::word
@@ -777,13 +802,10 @@ fn expand_command_alias(
                     let args = expand_alias_tilde(inner_pair, &cx)?;
                     expand_var_args(args, &env_guard, &mut buf);
                 }
-                Rule::simple_command_bg => {
-                    let args = expand_alias_tilde(inner_pair, &cx)?;
-                    expand_var_args(args, &env_guard, &mut buf);
-                    buf.push("&".to_string());
-                }
-                Rule::pipe_command => {
-                    buf.push("|".to_string());
+                // `&` and `|` come back from the expander itself now, so that
+                // a nested `(a | b &)` keeps them too. Adding them here as well
+                // would double them.
+                Rule::simple_command_bg | Rule::pipe_command => {
                     let args = expand_alias_tilde(inner_pair, &cx)?;
                     expand_var_args(args, &env_guard, &mut buf);
                 }

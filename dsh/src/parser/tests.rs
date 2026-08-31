@@ -471,6 +471,44 @@ fn test_get_pos_word2() -> Result<()> {
     Ok(())
 }
 
+/// Every operator has to come back from the expansion round trip.
+///
+/// The expander re-serializes the line and the shell parses that, so an
+/// operator its match did not name simply disappeared: `a | b &` ran in the
+/// foreground and `(a; b)` collapsed into one command.
+#[test]
+fn expand_alias_preserves_operators() -> Result<()> {
+    init();
+    let env = crate::environment::Environment::new();
+    env.write()
+        .variable_state
+        .variables
+        .insert("$FOO".to_string(), "bar".to_string());
+
+    // `$FOO` forces the expansion path; without a variable the line is passed
+    // through untouched and proves nothing.
+    for (input, operator) in [
+        ("echo $FOO | cat &", "&"),
+        ("echo $FOO | cat", "|"),
+        ("echo $FOO ; echo b", ";"),
+        ("echo $FOO && echo b", "&&"),
+        ("echo $FOO || echo b", "||"),
+        ("echo $FOO |>", "|>"),
+        ("(echo $FOO | cat)", "|"),
+        ("(echo $FOO ; echo b)", ";"),
+        ("(echo $FOO && echo b)", "&&"),
+        ("(echo $FOO | cat &)", "&"),
+    ] {
+        let replaced = expand_alias(input.to_string(), Arc::clone(&env))?;
+        assert!(
+            replaced.contains(operator),
+            "{input:?} lost {operator:?}: {replaced:?}"
+        );
+    }
+
+    Ok(())
+}
+
 #[test]
 fn test_expand_alias() -> Result<()> {
     init();
@@ -502,18 +540,20 @@ fn test_expand_alias() -> Result<()> {
         r#"echo 'test' | sk abc ' test' -vvv --foo &"#.to_string()
     );
 
+    // The trailing `&` belongs to the last pipeline stage and has to survive
+    // the round trip: dropping it ran the pipeline in the foreground.
     let input = r#"alias | abc " test" '-vvv' --foo &"#.to_string();
     let replaced = expand_alias(input, Arc::clone(&env))?;
     assert_eq!(
         replaced,
-        r#"echo 'test' | sk | abc ' test' -vvv --foo"#.to_string()
+        r#"echo 'test' | sk | abc ' test' -vvv --foo &"#.to_string()
     );
 
     let input = r#"sh -c | alias " test" '-vvv' --foo &"#.to_string();
     let replaced = expand_alias(input, Arc::clone(&env))?;
     assert_eq!(
         replaced,
-        r#"sh -c | echo 'test' | sk ' test' -vvv --foo"#.to_string()
+        r#"sh -c | echo 'test' | sk ' test' -vvv --foo &"#.to_string()
     );
 
     let input = r#"echo (alias " test" '-vvv' --foo) "#.to_string();

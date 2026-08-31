@@ -89,7 +89,13 @@ impl SafetyGuard {
             "pwsh",
             "powershell",
         ] {
-            guard.register_checker(cmd, Self::check_string_eval);
+            // The checker only sees the arguments, but which flag means "here
+            // is some code" depends on the interpreter, so capture its name.
+            let program = cmd.to_string();
+            guard.register_checker(cmd, move |args| {
+                dsh_types::safety_policy::string_eval_flag(&program, args)
+                    .map(|flag| format!("`{flag}` hands {program} a string to execute. Proceed?"))
+            });
         }
         //guard.register_checker("systemctl", Self::check_system_modification);
         //guard.register_checker("service", Self::check_system_modification);
@@ -652,16 +658,6 @@ impl SafetyGuard {
         None
     }
 
-    fn check_string_eval(args: &[String]) -> Option<String> {
-        if args.iter().any(|arg| {
-            arg == "-c" || arg == "-lc" || arg == "-e" || arg.eq_ignore_ascii_case("-command")
-        }) {
-            Some("String-eval command flag detected. Proceed?".to_string())
-        } else {
-            None
-        }
-    }
-
     pub fn check_system_modification(_args: &[String]) -> Option<String> {
         // systemctl/service are usually privileged.
         // Warn always.
@@ -964,20 +960,33 @@ mod tests {
         ));
     }
 
+    /// Combined short options are the same flag: matching whole tokens let
+    /// `bash -ic '...'` past the confirmation that `bash -lc '...'` triggers.
     #[test]
     fn test_string_eval_flags_are_confirmed() {
         let guard = SafetyGuard::new();
         let level = SafetyLevel::Normal;
 
-        assert!(matches!(
-            guard.check_command(
-                &level,
-                "bash",
-                &["-lc".to_string(), "echo hi".to_string()],
-                &[]
-            ),
-            SafetyResult::Confirm(msg) if msg.contains("String-eval")
-        ));
+        for args in [
+            vec!["-lc", "echo hi"],
+            vec!["-ic", "echo hi"],
+            vec!["-o", "pipefail", "-c", "echo hi"],
+        ] {
+            let args: Vec<String> = args.into_iter().map(str::to_string).collect();
+            assert!(
+                matches!(
+                    guard.check_command(&level, "bash", &args, &[]),
+                    SafetyResult::Confirm(msg) if msg.contains("string to execute")
+                ),
+                "bash {args:?} was not confirmed"
+            );
+        }
+
+        // A script is not a string of code.
+        assert_eq!(
+            guard.check_command(&level, "bash", &["script.sh".to_string()], &[]),
+            SafetyResult::Allowed
+        );
     }
 
     #[test]

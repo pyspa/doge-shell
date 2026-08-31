@@ -15,6 +15,7 @@ use xdg::BaseDirectories;
 
 use crate::ShellProxy;
 use anyhow::Result;
+use dsh_types::safety_policy::string_eval_flag;
 
 pub(crate) const NAME: &str = "execute";
 
@@ -96,10 +97,10 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
     let program = tokens[0].clone();
     let args = tokens[1..].to_vec();
 
-    if invokes_string_eval(&program, &args) {
+    if let Some(flag) = string_eval_flag(&program, &args) {
         return Err(format!(
-            "chat: execute tool blocked `{}` because string-eval flags (-c/-e/-command) are not allowed",
-            program
+            "chat: execute tool blocked `{program}` because `{flag}` hands it a string to execute; \
+             write the steps as separate commands instead"
         ));
     }
 
@@ -459,22 +460,6 @@ fn is_path_qualified(program: &str) -> bool {
     program.contains('/') || program.contains('\\') || Path::new(program).is_absolute()
 }
 
-fn invokes_string_eval(program: &str, args: &[String]) -> bool {
-    let name = program_name(program);
-    match name.as_str() {
-        "sh" | "bash" | "zsh" | "fish" | "ksh" => {
-            args.iter().any(|arg| arg == "-c" || arg == "-lc")
-        }
-        "python" | "python3" | "perl" | "ruby" | "node" => {
-            args.iter().any(|arg| arg == "-c" || arg == "-e")
-        }
-        "pwsh" | "powershell" => args
-            .iter()
-            .any(|arg| arg.eq_ignore_ascii_case("-c") || arg.eq_ignore_ascii_case("-command")),
-        _ => false,
-    }
-}
-
 fn allowlist_program_matches(entry_program: &str, program: &str) -> bool {
     let entry_name = program_name(entry_program);
     let target_name = program_name(program);
@@ -721,9 +706,73 @@ pub(crate) mod tests {
             ..TestProxy::default()
         };
 
-        let result = run("{\"command\":\"bash -lc 'echo hi'\"}", &mut proxy);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("string-eval flags"));
+        // A combined cluster is the same flag wearing a hat.
+        for command in ["bash -lc 'echo hi'", "bash -ic 'echo hi'"] {
+            let arguments = format!("{{\"command\":\"{command}\"}}");
+            let result = run(&arguments, &mut proxy);
+            assert!(result.is_err(), "{command} was allowed through");
+            assert!(
+                result.unwrap_err().contains("hands it a string to execute"),
+                "unexpected refusal for {command}"
+            );
+        }
+    }
+
+    /// Every spelling of "here is some code" has to be caught, and nothing else.
+    #[test]
+    fn string_eval_flags_are_recognised_in_every_spelling() {
+        let eval = [
+            ("bash", vec!["-c", "echo hi"]),
+            ("bash", vec!["-lc", "echo hi"]),
+            ("bash", vec!["-ic", "echo hi"]),
+            ("sh", vec!["-euc", "echo hi"]),
+            ("bash", vec!["-o", "pipefail", "-c", "echo hi"]),
+            ("zsh", vec!["-ic", "echo hi"]),
+            ("fish", vec!["--command", "echo hi"]),
+            ("fish", vec!["-C", "echo hi"]),
+            ("python3", vec!["-Ec", "print(1)"]),
+            ("python3", vec!["-c", "print(1)"]),
+            ("perl", vec!["-E", "say 1"]),
+            ("perl", vec!["-lne", "print"]),
+            ("ruby", vec!["-e", "puts 1"]),
+            ("node", vec!["--eval", "1"]),
+            ("node", vec!["-pe", "1"]),
+            ("pwsh", vec!["-EncodedCommand", "AAA"]),
+            ("powershell", vec!["-Comm", "dir"]),
+        ];
+        for (program, args) in eval {
+            let args: Vec<String> = args.into_iter().map(str::to_string).collect();
+            assert!(
+                string_eval_flag(program, &args).is_some(),
+                "{program} {args:?} should have been recognised"
+            );
+        }
+
+        let plain = [
+            // A script is not a string, even when its own arguments look like
+            // eval flags.
+            ("bash", vec!["script.sh"]),
+            ("bash", vec!["script.sh", "-c"]),
+            ("bash", vec!["--", "-c"]),
+            // Options whose value merely contains an eval letter.
+            ("python3", vec!["-Wonce", "script.py"]),
+            ("python3", vec!["-m", "http.server"]),
+            ("perl", vec!["-Mencoding", "script.pl"]),
+            ("ruby", vec!["-E", "utf-8", "script.rb"]),
+            ("node", vec!["server.js"]),
+            ("node", vec!["-r", "esm", "server.js"]),
+            // Not an interpreter at all.
+            ("git", vec!["-c", "user.name=x", "status"]),
+            ("ls", vec!["-c"]),
+        ];
+        for (program, args) in plain {
+            let args: Vec<String> = args.into_iter().map(str::to_string).collect();
+            assert_eq!(
+                string_eval_flag(program, &args),
+                None,
+                "{program} {args:?} should have been left alone"
+            );
+        }
     }
 
     #[test]

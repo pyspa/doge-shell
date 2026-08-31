@@ -214,6 +214,132 @@ pub fn mask_env_value(key: &str, value: &str) -> String {
     }
 }
 
+/// The program itself, without the directory it was found in.
+fn program_name(program: &str) -> String {
+    Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(program)
+        .to_string()
+}
+
+/// Which short letters and long names hand an interpreter code to run.
+///
+/// Matching whole tokens was not enough: short options combine, so `bash -ic`
+/// and `python3 -Ec` are `-c` wearing a hat, and every interpreter spells the
+/// long form differently. `value` lists the letters that swallow the rest of
+/// the token as their argument, which is what keeps `perl -Mencoding` from
+/// looking like `-e`.
+pub struct EvalFlags {
+    eval: &'static [char],
+    value: &'static [char],
+    long: &'static [&'static str],
+}
+
+fn eval_flags(name: &str) -> Option<EvalFlags> {
+    let flags = match name {
+        "sh" | "bash" | "zsh" | "ksh" | "dash" => EvalFlags {
+            eval: &['c'],
+            value: &['o'],
+            long: &["command"],
+        },
+        // `-C`/`--init-command` runs commands before the shell starts.
+        "fish" => EvalFlags {
+            eval: &['c', 'C'],
+            value: &[],
+            long: &["command", "init-command"],
+        },
+        "python" | "python3" => EvalFlags {
+            eval: &['c'],
+            value: &['m', 'W', 'X', 'Q'],
+            long: &[],
+        },
+        // `-l` and `-n` combine with `-e`, so only the letters that always take
+        // a value stop the scan.
+        "perl" => EvalFlags {
+            eval: &['e', 'E'],
+            value: &['M', 'I', 'F'],
+            long: &[],
+        },
+        // Lowercase `-e` evaluates; uppercase `-E` sets the encoding.
+        "ruby" => EvalFlags {
+            eval: &['e'],
+            value: &['I', 'r', 'E', 'C', 'F'],
+            long: &[],
+        },
+        // `-p` is `-e` with the result printed.
+        "node" | "nodejs" | "deno" | "bun" => EvalFlags {
+            eval: &['e', 'p'],
+            value: &['r'],
+            long: &["eval", "print"],
+        },
+        _ => return None,
+    };
+    Some(flags)
+}
+
+/// PowerShell accepts any unambiguous prefix of an option name, so `-Comm` is
+/// `-Command`.
+fn is_powershell_eval_option(option: &str) -> bool {
+    let option = option.to_ascii_lowercase();
+    !option.is_empty()
+        && (["command", "encodedcommand"]
+            .iter()
+            .any(|name| name.starts_with(&option)))
+}
+
+/// The flag that hands `program` a string to execute, if the arguments carry
+/// one. Returned rather than a bare `bool` so the refusal can say which.
+pub fn string_eval_flag(program: &str, args: &[String]) -> Option<String> {
+    let name = program_name(program);
+
+    if matches!(name.as_str(), "pwsh" | "powershell") {
+        return args
+            .iter()
+            .find(|arg| arg.strip_prefix('-').is_some_and(is_powershell_eval_option))
+            .cloned();
+    }
+
+    let flags = eval_flags(&name)?;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        // Everything past `--` is an argument, however it is spelled.
+        if arg == "--" {
+            return None;
+        }
+
+        if let Some(long) = arg.strip_prefix("--") {
+            let long = long.split('=').next().unwrap_or(long);
+            if flags.long.contains(&long) {
+                return Some(arg.clone());
+            }
+            continue;
+        }
+
+        // A word that is not an option is the script to run, and its own
+        // arguments follow: `bash script.sh -c` evaluates nothing.
+        let cluster = arg
+            .strip_prefix(['-', '+'])
+            .filter(|cluster| !cluster.is_empty())?;
+
+        for (index, letter) in cluster.char_indices() {
+            if flags.eval.contains(&letter) {
+                return Some(arg.clone());
+            }
+            if flags.value.contains(&letter) {
+                // The rest of this token is the option's value; if the token
+                // ends here, the next word is.
+                if index + letter.len_utf8() == cluster.len() {
+                    args.next();
+                }
+                break;
+            }
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

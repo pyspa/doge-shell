@@ -250,11 +250,13 @@ fn deterministic_command_warning(command: &str) -> Option<&'static str> {
     if lower.contains("mkfs") || lower.contains("dd if=") {
         return Some("low-level destructive disk operation detected");
     }
-    if lower.contains("bash -c")
-        || lower.contains("bash -lc")
-        || lower.contains("sh -c")
-        || lower.contains("python -c")
-        || lower.contains("node -e")
+    // Substring matching missed every spelling it had not been told about
+    // (`bash -ic`, `zsh -c`, `python3 -c`, `perl -e`), so ask the shared
+    // detector instead. Tokenizing can fail on a half-written line; that is the
+    // AI review's job to catch, not this deterministic pre-check.
+    if let Ok(tokens) = shell_words::split(command)
+        && let Some((program, args)) = tokens.split_first()
+        && dsh_types::safety_policy::string_eval_flag(program, args).is_some()
     {
         return Some("string-eval command flag detected");
     }
@@ -304,10 +306,21 @@ mod tests {
 
     #[test]
     fn deterministic_warning_detects_string_eval() {
-        assert_eq!(
-            deterministic_command_warning("bash -lc 'echo hi'"),
-            Some("string-eval command flag detected")
-        );
+        for command in [
+            "bash -lc 'echo hi'",
+            "bash -ic 'echo hi'",
+            "zsh -c 'echo hi'",
+            "python3 -c 'print(1)'",
+            "perl -E 'say 1'",
+        ] {
+            assert_eq!(
+                deterministic_command_warning(command),
+                Some("string-eval command flag detected"),
+                "{command} was not flagged"
+            );
+        }
+
+        assert_eq!(deterministic_command_warning("bash script.sh"), None);
     }
 }
 

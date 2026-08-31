@@ -112,17 +112,18 @@ fn load_processes() -> Vec<CompletionCandidate> {
 
 /// macOS has no procfs, so go through sysinfo's `sysctl(KERN_PROC)` wrapper.
 ///
-/// Only the process list is refreshed -- CPU and memory would cost a second
-/// sample each, and completion shows neither. The caller's one-second cache
-/// keeps the call off consecutive keystrokes.
+/// `refresh_processes_specifics` with an empty `ProcessRefreshKind`, not the
+/// shorter `refresh_processes`: that one ignores the kind given to the
+/// constructor and samples memory, CPU, disk usage, the executable path and
+/// the task list for every process. Completion shows the pid and the name,
+/// both of which come with the base entry, and it runs on the keystroke path
+/// behind only a one-second cache.
 #[cfg(target_os = "macos")]
 fn load_processes() -> Vec<CompletionCandidate> {
-    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
 
-    let mut system = System::new_with_specifics(
-        RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
-    );
-    system.refresh_processes(ProcessesToUpdate::All, true);
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
 
     system
         .processes()
@@ -134,6 +135,25 @@ fn load_processes() -> Vec<CompletionCandidate> {
                 Some(name).filter(|n| !n.is_empty()),
             )
         })
+        .collect()
+}
+
+/// Just the pids, for callers that want values rather than candidates.
+///
+/// Shared so the `system.process_pid` provider in `completion::dynamic` and
+/// this generator cannot disagree about where the process list comes from.
+pub(crate) fn process_ids() -> Vec<String> {
+    load_processes()
+        .into_iter()
+        .map(|candidate| candidate.text)
+        .collect()
+}
+
+/// Just the process names. See [`process_ids`].
+pub(crate) fn process_names() -> Vec<String> {
+    load_processes()
+        .into_iter()
+        .filter_map(|candidate| candidate.description)
         .collect()
 }
 

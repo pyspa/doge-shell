@@ -208,6 +208,18 @@ fn load_users(include_system_users: bool) -> Vec<CompletionCandidate> {
     candidates
 }
 
+/// Just the account names, for callers that want values rather than candidates.
+///
+/// Shared so the `chown`/`chgrp` owner provider in `completion::dynamic` reads
+/// the same database this generator does; parsing `/etc/passwd` a second time
+/// there produced only service accounts on macOS.
+pub(crate) fn user_names(include_system_users: bool) -> Vec<String> {
+    load_users(include_system_users)
+        .into_iter()
+        .map(|candidate| candidate.text)
+        .collect()
+}
+
 impl Default for UserGenerator {
     fn default() -> Self {
         Self::new()
@@ -220,6 +232,7 @@ mod tests {
 
     /// The name of the account running this test, straight from the same
     /// database the generator reads.
+    #[cfg(target_os = "macos")]
     fn current_username() -> String {
         // SAFETY: `getpwuid` returns a pointer into a static buffer that stays
         // valid until the next call in this thread; the name is copied out
@@ -239,6 +252,12 @@ mod tests {
     ///
     /// Asking for system users too keeps the assertion about *finding* the
     /// account rather than about where this platform draws its UID cutoff.
+    ///
+    /// macOS only, because it is only true there: the other branch reads
+    /// `/etc/passwd` by choice, so on a host whose accounts come from LDAP or
+    /// SSSD the running user is legitimately absent from the list while
+    /// `getpwuid`, which goes through NSS, still names them.
+    #[cfg(target_os = "macos")]
     #[test]
     fn the_account_running_the_test_is_offered() {
         let me = current_username();

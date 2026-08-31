@@ -229,7 +229,11 @@ mod tests {
         );
     }
 
-    /// The description tells the two branches apart in the same words.
+    /// Both branches describe an interface as `type (state)`.
+    ///
+    /// Only the type is asserted: the state is whatever the platform reports,
+    /// and Linux answers `unknown` for loopback because the kernel never sets
+    /// an operstate on it.
     #[test]
     fn a_loopback_interface_is_described_as_one() {
         let generator = InterfaceGenerator::new();
@@ -240,10 +244,10 @@ mod tests {
             .find(|c| c.text.starts_with("lo"))
             .expect("a loopback interface");
 
-        assert_eq!(
-            loopback.description.as_deref(),
-            Some("loopback (up)"),
-            "unexpected description for {}",
+        let description = loopback.description.as_deref().unwrap_or_default();
+        assert!(
+            description.starts_with("loopback ("),
+            "unexpected description for {}: {description:?}",
             loopback.text
         );
     }

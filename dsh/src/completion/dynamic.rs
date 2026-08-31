@@ -4568,14 +4568,20 @@ fn man_page_name_from_file(file_name: &str) -> Option<&str> {
     (!page.is_empty() && !section.is_empty()).then_some(page)
 }
 
+/// `user` and `user:group` values for `chown` and `chgrp`.
+///
+/// Owners come from the user generator, which reads `/etc/passwd` on Linux and
+/// Open Directory on macOS; parsing the file here too offered nothing but
+/// service accounts on macOS. Service accounts are wanted in this list -- both
+/// `chown www-data` and `chown _www` are ordinary -- so nothing is filtered
+/// out. Groups still come from `/etc/group`, which macOS does populate.
 fn load_owner_group_values() -> Vec<String> {
     let mut values = Vec::new();
-    if let Ok(contents) = fs::read_to_string("/etc/passwd") {
-        values.extend(contents.lines().filter_map(|line| {
-            let name = line.split(':').next()?;
-            (!name.is_empty() && !name.starts_with('#')).then(|| format!("u:{name}"))
-        }));
-    }
+    values.extend(
+        crate::completion::generators::user::user_names(true)
+            .into_iter()
+            .map(|name| format!("u:{name}")),
+    );
     if let Ok(contents) = fs::read_to_string("/etc/group") {
         values.extend(contents.lines().filter_map(|line| {
             let name = line.split(':').next()?;
@@ -4697,45 +4703,18 @@ fn parse_screen_sessions(lines: &[String]) -> Vec<String> {
     )
 }
 
+/// Running process names, for `pkill`/`killall`-style completion.
+///
+/// Delegates to the process generator for the same reason
+/// [`load_network_interfaces`] does: this walked `/proc` itself and so came
+/// back empty on macOS while the generator had a working source.
 fn load_process_names() -> Vec<String> {
-    let mut values = Vec::new();
-    if let Ok(entries) = fs::read_dir("/proc") {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if !file_name.chars().all(|ch| ch.is_ascii_digit()) {
-                continue;
-            }
-            if let Ok(comm) = fs::read_to_string(path.join("comm")) {
-                values.push(comm.trim().to_string());
-            }
-        }
-    }
-    dedup_sorted(values)
+    dedup_sorted(crate::completion::generators::process::process_names())
 }
 
+/// Running pids. See [`load_process_names`].
 fn load_process_ids() -> Vec<String> {
-    let mut values = Vec::new();
-    if let Ok(entries) = fs::read_dir("/proc") {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if file_name.chars().all(|ch| ch.is_ascii_digit()) {
-                values.push(file_name.to_string());
-            }
-        }
-    }
-    dedup_sorted(values)
+    dedup_sorted(crate::completion::generators::process::process_ids())
 }
 
 fn parse_pip_freeze_packages(lines: &[String]) -> Vec<String> {
@@ -5144,6 +5123,65 @@ mod tests {
     /// These three used to read Linux-only paths, so on macOS every one of
     /// them returned an empty list and the completions they back went silent.
     /// The values asserted here exist on both platforms.
+    /// `chown <TAB>` offered only service accounts on macOS while the user
+    /// generator already knew better; both halves of the `user:group` value
+    /// have to come from a source that platform actually populates.
+    #[test]
+    fn an_owner_and_a_group_are_offered_for_chown() {
+        let values = load_owner_group_values();
+
+        assert!(
+            values.iter().any(|value| value == "u:root"),
+            "root is missing from the owner list"
+        );
+        assert!(
+            values.iter().any(|value| value.starts_with("g:")),
+            "no groups among {} values",
+            values.len()
+        );
+
+        // The account running the test is the one a person is most likely to
+        // type, and it is the one /etc/passwd omits on macOS.
+        //
+        // macOS only, for the reason `user::tests` gives: on Linux the owner
+        // list deliberately stops at /etc/passwd, so an LDAP- or SSSD-provided
+        // account is legitimately absent from it while `getpwuid`, which goes
+        // through NSS, still names it.
+        #[cfg(target_os = "macos")]
+        // SAFETY: `getpwuid` returns a pointer into a static buffer valid until
+        // the next call on this thread; the name is copied out immediately.
+        let me = unsafe {
+            let entry = libc::getpwuid(libc::getuid());
+            assert!(!entry.is_null(), "no passwd entry for the current uid");
+            std::ffi::CStr::from_ptr((*entry).pw_name)
+                .to_string_lossy()
+                .into_owned()
+        };
+        #[cfg(target_os = "macos")]
+        {
+            let expected = format!("u:{me}");
+            assert!(
+                values.contains(&expected),
+                "{expected} is missing from {} values",
+                values.len()
+            );
+        }
+    }
+
+    #[test]
+    fn the_running_process_is_offered_for_pkill() {
+        let ids = load_process_ids();
+        let names = load_process_names();
+        let me = std::process::id().to_string();
+
+        assert!(
+            ids.contains(&me),
+            "the running test process ({me}) is missing from {} pids",
+            ids.len()
+        );
+        assert!(!names.is_empty(), "no process names at all");
+    }
+
     #[test]
     fn the_loopback_interface_is_offered_for_tcpdump() {
         let interfaces = load_network_interfaces();
@@ -5154,16 +5192,24 @@ mod tests {
         );
     }
 
+    /// Naming a type here would be host-dependent -- `/proc/filesystems` lists
+    /// only the modules this kernel registered, so a btrfs-rooted container
+    /// need not have ext4 -- so assert the shape instead: a non-empty list of
+    /// bare type tokens, which is what `mount -t` takes and what both readers
+    /// are supposed to produce.
     #[test]
     fn a_local_filesystem_type_is_offered_for_mount() {
         let types = load_filesystem_types();
 
-        // apfs is macOS's, ext4 Linux's; every host has at least one of them.
-        assert!(
-            types.iter().any(|name| name == "apfs" || name == "ext4"),
-            "no native filesystem type among {} entries: {types:?}",
-            types.len()
-        );
+        assert!(!types.is_empty(), "no filesystem types at all");
+        for name in &types {
+            assert!(
+                !name.contains(char::is_whitespace)
+                    && !name.contains('/')
+                    && !name.ends_with(".fs"),
+                "{name:?} is not a bare filesystem type"
+            );
+        }
     }
 
     #[test]

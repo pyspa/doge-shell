@@ -112,7 +112,10 @@ impl Environment {
             .map(|s| s.to_string())
             .collect();
 
-        if let Some(val) = self.variable_state.system_env_vars.get("PATH") {
+        // Resolve `PATH` the way a child would see it, exported shell variable
+        // included: otherwise `export PATH=...` moved the children and left the
+        // shell's own lookup behind.
+        if let Some(val) = self.effective_env_var("PATH").map(str::to_string) {
             paths = val.split(':').map(|s| s.to_string()).collect();
         }
 
@@ -131,8 +134,10 @@ impl Environment {
 
     /// Reload Z_EXCLUDE from the environment.
     pub fn reload_z_exclude(&mut self) {
-        self.variable_state.z_exclude =
-            super::parse_z_exclude_from_vars(&self.variable_state.system_env_vars);
+        self.variable_state.z_exclude = self
+            .effective_env_var("Z_EXCLUDE")
+            .map(|val| val.split(':').map(|s| s.to_string()).collect())
+            .unwrap_or_default();
     }
 
     /// Clear the command lookup cache.

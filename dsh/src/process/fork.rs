@@ -118,6 +118,14 @@ pub(crate) fn fork_process(
 
     debug!("🍴 FORK: About to fork external process");
 
+    // Resolve the program here rather than while the line was parsed: by now
+    // every earlier command on the line has run, so this sees the directory and
+    // the `PATH` the command is actually about to run with.
+    let not_found = resolve_program(process, shell);
+    // Where the diagnostic goes if it cannot: the descriptor this command was
+    // given, not the shell's own, so `typo 2>/dev/null` is quiet.
+    let not_found_fd = process.stderr;
+
     // Prepare execution data BEFORE forking to avoid allocation/locks in child
     let prepared = process.prepare_execution(shell.environment.clone())?;
 
@@ -135,6 +143,22 @@ pub(crate) fn fork_process(
         ForkResult::Child => {
             // This is the child process
             // SAFETY: Avoid accessing any locks (like tracing/malloc) after fork in multi-threaded env
+
+            // An unresolved command is a command that fails, the way every
+            // other shell reports it: the message goes to *this* process's
+            // stderr, so `typo 2>/dev/null` is quiet, and 127 is a status the
+            // rest of the line can branch on.
+            if let Some(message) = not_found {
+                unsafe {
+                    libc::write(
+                        not_found_fd,
+                        message.as_ptr() as *const libc::c_void,
+                        message.len(),
+                    );
+                    libc::_exit(127);
+                }
+            }
+
             let pid = getpid();
             let pgid = job_pgid.unwrap_or(pid);
 
@@ -149,4 +173,51 @@ pub(crate) fn fork_process(
             std::process::exit(1);
         }
     }
+}
+
+/// Point `process.cmd` at the program to execute, or describe why it cannot be.
+///
+/// Returns the message the child should print before exiting 127. Everything
+/// that needs the shell's state — the command-not-found hooks and the
+/// "did you mean" list — happens here, in the parent, because the child cannot
+/// safely take a lock after `fork`.
+fn resolve_program(process: &mut Process, shell: &mut Shell) -> Option<Vec<u8>> {
+    let name = process.cmd.clone();
+    if let Some(path) = shell.environment.read().lookup(&name) {
+        process.cmd = path;
+        return None;
+    }
+
+    shell.exec_command_not_found_hooks(&name);
+
+    let mut message = format!("dsh: {name}: command not found\r\n");
+
+    let paths = shell.environment.read().variable_state.paths.clone();
+    let builtins: Vec<String> = dsh_builtin::get_all_commands()
+        .iter()
+        .map(|(name, _)| name.to_string())
+        .collect();
+    let suggestions = crate::command_suggestion::find_similar_commands(&name, &paths, &builtins);
+    if let Some(suggestion_msg) = crate::command_suggestion::format_suggestions(&suggestions) {
+        message.push_str(&suggestion_msg);
+    }
+
+    let task_suggestions = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| dsh_builtin::task::list_tasks_in_dir(&cwd).ok())
+        .map(|tasks| {
+            let task_names: Vec<String> = tasks.into_iter().map(|task| task.name).collect();
+            crate::command_suggestion::find_similar_candidates(&name, &task_names)
+        })
+        .unwrap_or_default();
+    if !task_suggestions.is_empty() {
+        let commands = task_suggestions
+            .iter()
+            .map(|suggestion| format!("task {}", suggestion.command))
+            .collect::<Vec<_>>()
+            .join(", ");
+        message.push_str(&format!("\rProject tasks: {commands}\r\n"));
+    }
+
+    Some(message.into_bytes())
 }

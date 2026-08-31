@@ -2,7 +2,7 @@ use crate::dirs;
 use crate::parser::{self, Rule};
 use crate::process::{self, Job, JobProcess, Redirect, SubshellType};
 use crate::shell::Shell;
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
 use dsh_types::Context;
 use nix::libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::sys::termios::tcgetattr;
@@ -53,7 +53,7 @@ fn apply_standalone_assignments(shell: &mut Shell, assignments: &mut Vec<(String
     }
     let mut env = shell.environment.write();
     for (name, value) in assignments.drain(..) {
-        env.variable_state.variables.insert(name, value);
+        env.set_shell_var(name, value);
     }
 }
 
@@ -524,73 +524,41 @@ pub fn parse_command(
             &mut redirects,
             &mut env_overrides,
         );
-    } else {
-        let cmd_lookup = shell.environment.read().lookup(cmd);
-        if let Some(cmd) = cmd_lookup {
-            let process = process::Process::new(cmd, argv);
+    } else if shell.environment.read().lookup(cmd).is_none() && dirs::is_dir(cmd) {
+        // A bare directory name means `cd` there. Only when the name is not a
+        // command: a directory called `test` next to `/usr/bin/test` is not what
+        // the user meant.
+        if let Some(handler) = dsh_builtin::get_handler("cd") {
+            let builtin = process::BuiltinProcess::new_handler(
+                cmd.to_string(),
+                handler,
+                vec!["cd".to_string(), cmd.to_string()],
+            );
             attach_process(
                 current_job,
-                JobProcess::Command(process),
+                JobProcess::Builtin(builtin),
                 &mut redirects,
                 &mut env_overrides,
             );
-            current_job.foreground = ctx.foreground;
-        } else if dirs::is_dir(cmd) {
-            if let Some(handler) = dsh_builtin::get_handler("cd") {
-                let builtin = process::BuiltinProcess::new_handler(
-                    cmd.to_string(),
-                    handler,
-                    vec!["cd".to_string(), cmd.to_string()],
-                );
-                attach_process(
-                    current_job,
-                    JobProcess::Builtin(builtin),
-                    &mut redirects,
-                    &mut env_overrides,
-                );
-            }
-        } else {
-            // Execute command-not-found hooks before showing error
-            // Hooks can perform side effects like suggesting package installation
-            shell.exec_command_not_found_hooks(cmd);
-
-            // Try to find similar commands for suggestion
-            let paths = shell.environment.read().variable_state.paths.clone();
-            let builtins: Vec<String> = dsh_builtin::get_all_commands()
-                .iter()
-                .map(|(name, _)| name.to_string())
-                .collect();
-
-            let suggestions =
-                crate::command_suggestion::find_similar_commands(cmd, &paths, &builtins);
-            let task_suggestions = std::env::current_dir()
-                .ok()
-                .and_then(|cwd| dsh_builtin::task::list_tasks_in_dir(&cwd).ok())
-                .map(|tasks| {
-                    let task_names: Vec<String> = tasks.into_iter().map(|task| task.name).collect();
-                    crate::command_suggestion::find_similar_candidates(cmd, &task_names)
-                })
-                .unwrap_or_default();
-
-            let suggestion_msg =
-                crate::command_suggestion::format_suggestions(&suggestions).unwrap_or_default();
-            let task_msg = if task_suggestions.is_empty() {
-                String::new()
-            } else {
-                let commands = task_suggestions
-                    .iter()
-                    .map(|suggestion| format!("task {}", suggestion.command))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("\rProject tasks: {commands}\r\n")
-            };
-
-            if !suggestion_msg.is_empty() || !task_msg.is_empty() {
-                bail!("unknown command: {}\n{}{}", cmd, suggestion_msg, task_msg);
-            }
-
-            bail!("unknown command: {}", cmd);
         }
+    } else {
+        // Keep the name, not a path resolved against *this* moment. Parsing
+        // happens before a single command on the line has run, so resolving
+        // here answered with the wrong directory and the wrong `PATH`:
+        // `cd dir && ./script` and `export PATH=...:$PATH; tool` both said
+        // `command not found` for something that was about to exist. A name
+        // that still does not resolve when the command runs is a command that
+        // fails with 127, which is a result the rest of the line can react to —
+        // bailing here threw the whole line away, so `echo a; typo` printed
+        // nothing at all and `typo || fallback` never reached the fallback.
+        let process = process::Process::new(cmd.to_string(), argv);
+        attach_process(
+            current_job,
+            JobProcess::Command(process),
+            &mut redirects,
+            &mut env_overrides,
+        );
+        current_job.foreground = ctx.foreground;
     }
     Ok(())
 }

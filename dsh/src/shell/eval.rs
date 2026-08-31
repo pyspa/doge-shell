@@ -764,6 +764,10 @@ pub fn capture_subshell_stdout(shell: &mut Shell, ctx: &Context, jobs: Vec<Job>)
         let mut environment = shell.environment.write();
         environment.variable_state.variables = entry_vars.0;
         environment.variable_state.exported_vars = entry_vars.1;
+        // Putting the maps back by hand skips the setters, so anything derived
+        // from a variable the substitution touched has to be rebuilt.
+        environment.refresh_derived_state("PATH");
+        environment.refresh_derived_state("Z_EXCLUDE");
     }
 
     if was_raw {

@@ -87,22 +87,65 @@ impl Environment {
             .system_env_vars
             .insert(key.clone(), value);
 
-        match key.as_str() {
+        self.refresh_derived_state(&key);
+    }
+
+    /// Remove a process-visible environment variable from the shell snapshot.
+    pub fn unset_system_env_var(&mut self, key: &str) {
+        self.variable_state.system_env_vars.remove(key);
+        self.refresh_derived_state(key);
+    }
+
+    /// Set a shell variable, keeping anything derived from its value in step.
+    ///
+    /// `PATH` is the reason this exists: writing straight into the map left the
+    /// shell looking commands up in the old list while the children it spawned
+    /// saw the new one, so `export PATH=...:$PATH; mytool` reported
+    /// `command not found` for a tool that was right there.
+    pub fn set_shell_var(&mut self, key: String, value: String) {
+        self.variable_state.variables.insert(key.clone(), value);
+        self.refresh_derived_state(&key);
+    }
+
+    /// Mark a shell variable as exported. Exporting changes which value is the
+    /// effective one, so the derived state has to be rebuilt as well.
+    pub fn export_shell_var(&mut self, key: String) {
+        self.variable_state.exported_vars.insert(key.clone());
+        self.refresh_derived_state(&key);
+    }
+
+    /// Set and export in one step, the way `export NAME=value` does.
+    pub fn set_and_export_shell_var(&mut self, key: String, value: String) {
+        self.variable_state.variables.insert(key.clone(), value);
+        self.variable_state.exported_vars.insert(key.clone());
+        self.refresh_derived_state(&key);
+    }
+
+    /// Rebuild whatever the shell caches from `key`'s value.
+    pub fn refresh_derived_state(&mut self, key: &str) {
+        match key {
             "PATH" => self.reload_path(),
             "Z_EXCLUDE" => self.reload_z_exclude(),
             _ => {}
         }
     }
 
-    /// Remove a process-visible environment variable from the shell snapshot.
-    pub fn unset_system_env_var(&mut self, key: &str) {
-        self.variable_state.system_env_vars.remove(key);
-
-        match key {
-            "PATH" => self.reload_path(),
-            "Z_EXCLUDE" => self.reload_z_exclude(),
-            _ => {}
+    /// The value a child process would be given for `name`.
+    ///
+    /// An exported shell variable shadows the snapshot the shell started from —
+    /// that is what `child_process_env` builds — so anything that reacts to a
+    /// variable's *value* has to resolve it the same way, or the shell disagrees
+    /// with the processes it launches.
+    pub fn effective_env_var(&self, name: &str) -> Option<&str> {
+        if self.variable_state.exported_vars.contains(name)
+            && let Some(value) = self.variable_state.variables.get(name)
+        {
+            return Some(value.as_str());
         }
+        self.variable_state
+            .system_env_vars
+            .get(name)
+            .map(String::as_str)
     }
 
     /// Build the effective environment for child processes.

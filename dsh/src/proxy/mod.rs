@@ -281,11 +281,7 @@ impl ShellProxy for Shell {
     }
 
     fn set_var(&mut self, key: String, value: String) {
-        self.environment
-            .write()
-            .variable_state
-            .variables
-            .insert(key, value);
+        self.environment.write().set_shell_var(key, value);
     }
 
     fn set_env_var(&mut self, key: String, value: String) {
@@ -453,20 +449,17 @@ impl ShellProxy for Shell {
 
     fn export_var(&mut self, key: &str) -> bool {
         let mut env = self.environment.write();
-        if env.variable_state.variables.contains_key(key) {
-            env.variable_state.exported_vars.insert(key.to_string());
-            true
-        } else {
-            // Also allow exporting non-existent variables, they will be exported if set later.
-            env.variable_state.exported_vars.insert(key.to_string());
-            false
-        }
+        // Exporting a name that has no value yet is allowed: it takes effect
+        // when the value arrives.
+        let existed = env.variable_state.variables.contains_key(key);
+        env.export_shell_var(key.to_string());
+        existed
     }
 
     fn set_and_export_var(&mut self, key: String, value: String) {
-        let mut env = self.environment.write();
-        env.variable_state.variables.insert(key.clone(), value);
-        env.variable_state.exported_vars.insert(key);
+        self.environment
+            .write()
+            .set_and_export_shell_var(key, value);
     }
 
     fn get_current_dir(&self) -> Result<std::path::PathBuf> {

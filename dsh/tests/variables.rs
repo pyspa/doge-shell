@@ -184,3 +184,33 @@ fn refusing_a_builtin_prefix_does_not_abandon_the_line() {
         "the rest of the line should still run: {stdout:?}"
     );
 }
+
+/// The shell has to look commands up in the `PATH` it hands its children.
+/// `export PATH=...` only wrote the variable, so the child of the very next
+/// command saw the new directory while the shell searching for that command did
+/// not, and reported `command not found` for a tool that was right there.
+#[test]
+fn exporting_path_changes_where_the_shell_looks_for_commands() {
+    let dir = tempfile::tempdir().expect("failed to create temp dir");
+    let script = dir.path().join("dsh_path_probe");
+    std::fs::write(&script, "#!/bin/sh\necho found-on-new-path\n").expect("failed to write probe");
+    let mut permissions = std::fs::metadata(&script)
+        .expect("failed to stat probe")
+        .permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&script, permissions).expect("failed to chmod probe");
+
+    let output = run_interactive(&[
+        &format!("export PATH={}:$PATH", dir.path().display()),
+        "dsh_path_probe",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim() == "found-on-new-path"),
+        "the shell did not pick up the exported PATH: {stdout:?}\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

@@ -1,6 +1,6 @@
 use anyhow::{Context as _, Result};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
-use nix::unistd::{isatty, pipe2};
+use nix::unistd::isatty;
 use std::io::{Read, Write};
 use std::os::fd::BorrowedFd;
 use std::os::fd::OwnedFd;
@@ -434,8 +434,14 @@ impl PtyMonitor {
 /// still work. Without this the *other* end leaked into every child: `yes |
 /// head -1` left `yes` holding the read end of its own output pipe, so it never
 /// got EPIPE and blocked forever after the shell had moved on.
-pub(crate) fn cloexec_pipe() -> nix::Result<(OwnedFd, OwnedFd)> {
-    pipe2(OFlag::O_CLOEXEC)
+///
+/// `std::io::pipe` is used rather than `pipe2` directly because `pipe2` does not
+/// exist on macOS: std reaches for it where the platform has it and falls back
+/// to `pipe` plus an explicit `FD_CLOEXEC` everywhere else, so the flag is set
+/// on both targets and stays atomic on Linux.
+pub(crate) fn cloexec_pipe() -> std::io::Result<(OwnedFd, OwnedFd)> {
+    let (reader, writer) = std::io::pipe()?;
+    Ok((reader.into(), writer.into()))
 }
 
 pub(crate) fn create_pipe(ctx: &mut Context) -> Result<Option<RawFd>> {

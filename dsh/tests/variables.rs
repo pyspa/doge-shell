@@ -123,7 +123,10 @@ fn an_override_replaces_the_inherited_value() {
 /// The prefix must not leak into the shell's own variables.
 #[test]
 fn a_prefix_does_not_outlive_the_command() {
-    let output = run_interactive(&["FOO=temporary /bin/true", "echo \"after=$FOO\""]);
+    let output = run_interactive(&[
+        &format!("FOO=temporary {}", common::true_path()),
+        "echo \"after=$FOO\"",
+    ]);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(

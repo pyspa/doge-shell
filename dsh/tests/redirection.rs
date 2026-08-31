@@ -67,7 +67,8 @@ fn every_redirect_on_the_line_applies() {
     let err = dir.path().join("err.txt");
 
     let output = common::run_command(&format!(
-        "/bin/ls /nonexistent_dsh_path /etc/hostname > {} 2> {}",
+        // /etc/hosts rather than /etc/hostname: both Linux and macOS ship it.
+        "/bin/ls /nonexistent_dsh_path /etc/hosts > {} 2> {}",
         out.display(),
         err.display()
     ));
@@ -80,7 +81,7 @@ fn every_redirect_on_the_line_applies() {
     assert!(
         fs::read_to_string(&out)
             .expect("stdout file")
-            .contains("hostname"),
+            .contains("hosts"),
         "stdout file should hold the listing"
     );
     assert!(

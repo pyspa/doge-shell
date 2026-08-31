@@ -77,7 +77,11 @@ fn an_unknown_command_lets_the_fallback_run() {
 /// And `$?` reports it, the way it reports any other failure.
 #[test]
 fn an_unknown_command_sets_the_exit_status_to_127() {
-    let output = run_interactive(&["/bin/true", "definitely-not-a-command-xyz", "echo rc=$?"]);
+    let output = run_interactive(&[
+        common::true_path(),
+        "definitely-not-a-command-xyz",
+        "echo rc=$?",
+    ]);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(

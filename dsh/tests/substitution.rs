@@ -116,19 +116,28 @@ fn every_command_in_a_substitution_contributes_its_output() {
 /// top-level line.
 #[test]
 fn a_substitution_honours_and_or_gating() {
-    let skipped = stdout_of("/bin/echo [$(/bin/false && /bin/echo X)]");
+    let skipped = stdout_of(&format!(
+        "/bin/echo [$({} && /bin/echo X)]",
+        common::false_path()
+    ));
     assert!(
         !skipped.contains('X'),
         "`&&` ran the second command anyway: {skipped:?}"
     );
 
-    let run = stdout_of("/bin/echo [$(/bin/true && /bin/echo X)]");
+    let run = stdout_of(&format!(
+        "/bin/echo [$({} && /bin/echo X)]",
+        common::true_path()
+    ));
     assert!(
         run.contains('X'),
         "`&&` skipped the second command: {run:?}"
     );
 
-    let short_circuited = stdout_of("/bin/echo [$(/bin/true || /bin/echo X)]");
+    let short_circuited = stdout_of(&format!(
+        "/bin/echo [$({} || /bin/echo X)]",
+        common::true_path()
+    ));
     assert!(
         !short_circuited.contains('X'),
         "`||` ran the second command anyway: {short_circuited:?}"
@@ -142,8 +151,13 @@ fn a_directory_change_inside_a_substitution_stays_inside_it() {
     let output = common::run_interactive(&["cd /tmp", "echo [$(cd /)]", "pwd"]);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
+    // `/tmp` is a symlink to `/private/tmp` on macOS, and the shell reports the
+    // resolved path, so compare against whatever `/tmp` resolves to here.
+    let tmp = std::fs::canonicalize("/tmp").expect("canonical /tmp");
+    let tmp = tmp.to_string_lossy();
+
     assert!(
-        stdout.lines().any(|line| line.trim() == "/tmp"),
+        stdout.lines().any(|line| line.trim() == tmp),
         "the substitution moved the shell: {stdout:?}"
     );
 }

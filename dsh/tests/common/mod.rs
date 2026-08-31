@@ -3,6 +3,7 @@
 use std::ffi::OsStr;
 use std::io::Write;
 use std::os::unix::process::CommandExt;
+use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -80,6 +81,29 @@ where
     child
         .wait_with_output()
         .expect("failed to collect dsh output")
+}
+
+/// Absolute path to an external `true`.
+///
+/// The tests spell these out absolutely so the shell resolves a real external
+/// command instead of a builtin, but the location differs by platform: macOS
+/// ships them only under `/usr/bin`, while some Linux layouts have them only
+/// under `/bin`.
+pub fn true_path() -> &'static str {
+    first_existing(&["/bin/true", "/usr/bin/true"])
+}
+
+/// Absolute path to an external `false`. See [`true_path`].
+pub fn false_path() -> &'static str {
+    first_existing(&["/bin/false", "/usr/bin/false"])
+}
+
+fn first_existing(candidates: &'static [&'static str]) -> &'static str {
+    candidates
+        .iter()
+        .copied()
+        .find(|path| Path::new(path).exists())
+        .unwrap_or_else(|| panic!("none of {candidates:?} exist on this system"))
 }
 
 pub fn run_command(command: &str) -> Output {

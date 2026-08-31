@@ -8,9 +8,7 @@ use nix::libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::sys::termios::tcgetattr;
 use nix::unistd::pipe;
 use pest::iterators::Pair;
-use std::fs::File;
-use std::io::Read;
-use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, RawFd};
+use std::os::fd::{AsRawFd, BorrowedFd, IntoRawFd, RawFd};
 use tracing::{debug, warn};
 
 #[derive(Debug)]
@@ -446,24 +444,13 @@ pub fn parse_command(
 
             match subshell_type {
                 SubshellType::Subshell => {
-                    let mut ctx = Context::new(shell.pid, shell.pgid, tmode.clone(), false);
-                    ctx.foreground = true;
-                    // make pipe
-                    let (pout, pin) = pipe().context("failed pipe")?;
-                    ctx.outfile = pin.as_raw_fd();
-                    shell.launch_subshell(&mut ctx, jobs)?;
-                    drop(pin); // Close write end
-                    let output = read_fd(pout.into_raw_fd())?;
+                    let ctx = Context::new(shell.pid, shell.pgid, tmode.clone(), false);
+                    let output = shell.capture_subshell_stdout(&ctx, jobs)?;
                     output.lines().for_each(|x| argv.push(x.to_owned()));
                 }
                 SubshellType::CommandSubstitution => {
-                    let mut ctx = Context::new(shell.pid, shell.pgid, tmode.clone(), false);
-                    ctx.foreground = true;
-                    let (pout, pin) = pipe().context("failed pipe")?;
-                    ctx.outfile = pin.as_raw_fd();
-                    shell.launch_subshell(&mut ctx, jobs)?;
-                    drop(pin); // Close write end
-                    let output = read_fd(pout.into_raw_fd())?;
+                    let ctx = Context::new(shell.pid, shell.pgid, tmode.clone(), false);
+                    let output = shell.capture_subshell_stdout(&ctx, jobs)?;
                     for part in output.split_whitespace() {
                         if !part.is_empty() {
                             argv.push(part.to_owned());
@@ -473,7 +460,8 @@ pub fn parse_command(
                 SubshellType::ProcessSubstitution => {
                     let mut ctx = Context::new(shell.pid, shell.pgid, tmode.clone(), false);
                     ctx.foreground = true;
-                    // make pipe
+                    // Deliberately NOT `cloexec_pipe`: the read end is handed to
+                    // the command as `/dev/fd/N`, so it has to survive its exec.
                     let (pout, pin) = pipe().context("failed pipe")?;
                     ctx.outfile = pin.as_raw_fd();
                     shell.launch_subshell(&mut ctx, jobs)?;
@@ -723,18 +711,4 @@ fn parse_jobs(
         }
     }
     Ok(())
-}
-
-fn read_fd(fd: RawFd) -> Result<String> {
-    let mut raw_stdout = Vec::new();
-    unsafe {
-        File::from_raw_fd(fd)
-            .read_to_end(&mut raw_stdout)
-            .context("failed to read from fd")?;
-    };
-
-    let output = String::from_utf8_lossy(&raw_stdout)
-        .trim_end_matches('\n')
-        .to_owned();
-    Ok(output)
 }

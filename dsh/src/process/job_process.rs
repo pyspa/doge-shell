@@ -1,14 +1,14 @@
 use anyhow::{Context as _, Result};
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::sys::signal::Signal;
-use nix::unistd::{Pid, close, getpid, pipe};
+use nix::unistd::{Pid, close, getpid};
 use std::os::fd::IntoRawFd;
 use std::os::unix::io::RawFd;
 use tracing::debug;
 
 use super::builtin::BuiltinProcess;
 use super::fork::{fork_builtin_process, fork_process};
-use super::io::{create_pipe, default_output_wiring};
+use super::io::{cloexec_pipe, create_pipe, default_output_wiring};
 use super::process::Process;
 use super::pty::{PtyChildConfig, PtyMode};
 use super::redirect::{self, AppliedRedirects, Redirect};
@@ -357,7 +357,7 @@ impl JobProcess {
                     && ctx.captured_out.is_none())
                     || observe_foreground_external
                 {
-                    let (pout, pin) = pipe().context("failed pipe")?;
+                    let (pout, pin) = cloexec_pipe().context("failed pipe")?;
                     ctx.outfile = pin.into_raw_fd();
                     let pout_raw = pout.into_raw_fd();
                     match self {
@@ -373,7 +373,7 @@ impl JobProcess {
         };
 
         if observe_foreground_external && ctx.errfile == STDERR_FILENO {
-            let (pout, pin) = pipe().context("failed stderr pipe")?;
+            let (pout, pin) = cloexec_pipe().context("failed stderr pipe")?;
             ctx.errfile = pin.into_raw_fd();
             let pout_raw = pout.into_raw_fd();
             if let JobProcess::Command(p) = self {

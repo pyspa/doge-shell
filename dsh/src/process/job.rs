@@ -211,6 +211,30 @@ impl Job {
     }
 
     pub async fn launch(&mut self, ctx: &mut Context, shell: &mut Shell) -> Result<ProcessState> {
+        // Record the descriptors the caller handed us. They belong to the
+        // caller — `execute_with_capture` and `$( )` both pass a pipe they read
+        // themselves — so the pipeline default restores to them and the
+        // per-process cleanup below must never close them. Closing the caller's
+        // stderr is what broke `a | b |>`, and closing the caller's stdout is
+        // what made `$(a; b)` lose everything after the first command.
+        self.stdin = ctx.infile;
+        self.stdout = ctx.outfile;
+        self.stderr = ctx.errfile;
+
+        let result = self.launch_inner(ctx, shell).await;
+
+        // Launching rewires `ctx` (pipes, capture, redirections) and nothing put
+        // it back. Script mode reuses one `ctx` for every line, so the next line
+        // inherited a descriptor this job had already closed and `2>&1` failed
+        // with `failed to duplicate file descriptor`.
+        ctx.infile = self.stdin;
+        ctx.outfile = self.stdout;
+        ctx.errfile = self.stderr;
+
+        result
+    }
+
+    async fn launch_inner(&mut self, ctx: &mut Context, shell: &mut Shell) -> Result<ProcessState> {
         debug!(
             "JOB_LAUNCH_START: Starting job {} launch (cmd: '{}', foreground: {}, pid: {:?})",
             self.job_id, self.cmd, self.foreground, self.pid
@@ -414,9 +438,25 @@ impl Job {
                 // Don't error out here, just log (avoid crash if EBADF)
             }
         }
+        // A `< file` on a pipeline stage takes over the stdin slot, so the read
+        // end of the previous stage's pipe never reaches the check above and
+        // nobody closed it. The writer then never saw EOF: `yes | wc -l < f`
+        // left `yes` blocked forever with the shell still holding the pipe.
+        if applied_stdin.changed_stdin()
+            && previous_infile != self.stdin
+            && previous_infile != ctx.infile
+            && pty_slave != Some(previous_infile)
+            && !applied_stdin.owns(previous_infile)
+            && let Err(e) = close(previous_infile)
+        {
+            debug!("failed close inherited pipe read end: {}", e);
+        }
         // A redirection's file is owned by `applied_output` and closed when it
-        // drops; closing it here as well would be a double close.
+        // drops; closing it here as well would be a double close. `captured_out`
+        // is the caller's pipe (`execute_with_capture`, `$( )`), which the
+        // caller closes once every stage has been launched.
         if stdout != self.stdout
+            && Some(stdout) != ctx.captured_out
             && pty_slave != Some(stdout)
             && !applied_output.owns(stdout)
             && let Err(e) = close(stdout)

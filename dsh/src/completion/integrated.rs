@@ -4680,18 +4680,11 @@ fi
         let mut engine = IntegratedCompletionEngine::new(environment);
         engine.initialize_command_completion().unwrap();
 
+        // `sysctl.key` goes through the cached-value path, whose first call
+        // always returns empty and only schedules the background refresh, so
+        // the candidate has to be waited for rather than asserted on directly.
         let input = "sysctl net.ipv4.ip_for";
-        let result = engine
-            .complete(input, input.len(), dir.path(), 50, None)
-            .await;
-        assert!(
-            result
-                .candidates
-                .iter()
-                .any(|candidate| candidate.text == "net.ipv4.ip_forward"),
-            "expected sysctl key completion in {:?}",
-            result.candidates
-        );
+        wait_for_candidate(&engine, input, dir.path(), "net.ipv4.ip_forward").await;
 
         let value_input = "sysctl net.ipv4.ip_forward=1";
         let value_result = engine

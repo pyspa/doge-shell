@@ -198,6 +198,11 @@ impl Shell {
         eval::launch_subshell(self, ctx, jobs)
     }
 
+    /// Run `jobs` in-process and collect their stdout, for `$(...)` and `(...)`.
+    fn capture_subshell_stdout(&mut self, ctx: &Context, jobs: Vec<Job>) -> Result<String> {
+        eval::capture_subshell_stdout(self, ctx, jobs)
+    }
+
     pub fn exit(&mut self) {
         self.exited = Some(ExitStatus::ExitedWith(0));
     }

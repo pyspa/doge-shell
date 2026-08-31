@@ -293,6 +293,14 @@ mod tests {
     fn execute_tool_call_returns_parseable_json_after_the_global_cap() {
         // The global cap runs after the tool, so it must not corrupt a
         // structured result on its way back to the model.
+        //
+        // `EXECUTE_TOOL_ENV_ALLOWLIST` is process-global and wins over the
+        // proxy's list, so this has to hold the same lock as the tests that set
+        // it or `ls` stops being allowed halfway through the run.
+        let _lock = super::execute::tests::ENV_LOCK.lock().unwrap();
+        let _env_guard =
+            super::execute::tests::EnvGuard::set(super::execute::EXECUTE_TOOL_ENV_ALLOWLIST, "ls");
+
         let dir = tempdir().unwrap();
         for index in 0..400 {
             std::fs::write(dir.path().join(format!("f-{index:0>50}")), b"x").unwrap();

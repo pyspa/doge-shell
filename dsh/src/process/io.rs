@@ -1,8 +1,9 @@
 use anyhow::{Context as _, Result};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
-use nix::unistd::{isatty, pipe};
+use nix::unistd::{isatty, pipe2};
 use std::io::{Read, Write};
 use std::os::fd::BorrowedFd;
+use std::os::fd::OwnedFd;
 use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
 use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
@@ -426,8 +427,19 @@ impl PtyMonitor {
     }
 }
 
+/// A pipe whose ends do not survive `exec`.
+///
+/// Only the descriptors a child is given as its stdin/stdout/stderr should
+/// reach the new program, and `dup2` clears `FD_CLOEXEC` on the copy, so those
+/// still work. Without this the *other* end leaked into every child: `yes |
+/// head -1` left `yes` holding the read end of its own output pipe, so it never
+/// got EPIPE and blocked forever after the shell had moved on.
+pub(crate) fn cloexec_pipe() -> nix::Result<(OwnedFd, OwnedFd)> {
+    pipe2(OFlag::O_CLOEXEC)
+}
+
 pub(crate) fn create_pipe(ctx: &mut Context) -> Result<Option<RawFd>> {
-    let (pout, pin) = pipe().context("failed pipe")?;
+    let (pout, pin) = cloexec_pipe().context("failed pipe")?;
     ctx.outfile = pin.into_raw_fd();
     Ok(Some(pout.into_raw_fd()))
 }
@@ -436,6 +448,10 @@ pub(crate) fn create_pipe(ctx: &mut Context) -> Result<Option<RawFd>> {
 ///
 /// Redirections are applied separately, straight onto the opened file, so all
 /// that is left here is the pipeline/capture default.
+///
+/// `ctx.captured_out` is checked first: command substitution and
+/// `execute_with_capture` hand the job a pipe that way, and it must win over
+/// the pipeline default below.
 pub(crate) fn default_output_wiring(ctx: &mut Context, stdout: RawFd) {
     if let Some(out) = ctx.captured_out {
         ctx.outfile = out;

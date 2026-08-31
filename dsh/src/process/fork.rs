@@ -1,3 +1,4 @@
+use crate::process::io::cloexec_pipe;
 use anyhow::{Context as _, Result};
 use nix::unistd::{ForkResult, Pid, fork, getpid, setpgid};
 use tracing::debug;
@@ -8,7 +9,6 @@ use super::pty::PtyChildConfig;
 use crate::shell::Shell;
 use dsh_types::Context;
 use libc::{STDERR_FILENO, STDOUT_FILENO};
-use nix::unistd::pipe;
 use std::os::fd::IntoRawFd;
 
 pub(crate) fn fork_builtin_process(
@@ -79,7 +79,7 @@ pub(crate) fn fork_process(
     // capture
     if ctx.outfile == STDOUT_FILENO && !ctx.foreground && pty.is_none() {
         debug!("🍴 FORK: Creating capture pipe for stdout (background process)");
-        let (pout, pin) = pipe().context("failed pipe")?;
+        let (pout, pin) = cloexec_pipe().context("failed pipe")?;
         process.stdout = pin.into_raw_fd();
         let pout_raw = pout.into_raw_fd();
         process.cap_stdout = Some(pout_raw);
@@ -96,7 +96,7 @@ pub(crate) fn fork_process(
 
     if ctx.errfile == STDERR_FILENO && !ctx.foreground && pty.is_none() {
         debug!("🍴 FORK: Creating capture pipe for stderr (background process)");
-        let (pout, pin) = pipe().context("failed pipe")?;
+        let (pout, pin) = cloexec_pipe().context("failed pipe")?;
         process.stderr = pin.into_raw_fd();
         let pout_raw = pout.into_raw_fd();
         process.cap_stderr = Some(pout_raw);

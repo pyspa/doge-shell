@@ -1,13 +1,15 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 use shell_words::split;
+use std::collections::VecDeque;
 use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use xdg::BaseDirectories;
 
@@ -17,7 +19,7 @@ use anyhow::Result;
 pub(crate) const NAME: &str = "execute";
 
 const EXECUTE_TOOL_CONFIG_FILE: &str = "openai-execute-tool.json";
-const EXECUTE_TOOL_ENV_ALLOWLIST: &str = "AI_CHAT_EXECUTE_ALLOWLIST";
+pub(crate) const EXECUTE_TOOL_ENV_ALLOWLIST: &str = "AI_CHAT_EXECUTE_ALLOWLIST";
 const EXECUTE_TOOL_CONFIG_OVERRIDE_ENV: &str = "DSH_EXECUTE_TOOL_CONFIG";
 const CONFIG_DIR_PREFIX: &str = "dsh";
 
@@ -38,6 +40,12 @@ const MIN_STREAM_CHARS: usize = 256;
 /// open, so waiting for EOF can never finish; that would defeat the timeout
 /// this whole path exists for.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
+/// How often the drain wait re-checks whether the readers are still making
+/// progress.
+const DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// Hard ceiling on what one stream may buffer. `render_result` trims to a few
+/// kilobytes anyway, so anything beyond this could only cost memory.
+const MAX_CAPTURED_BYTES: usize = 1 << 20;
 
 pub(crate) fn definition() -> Value {
     json!({
@@ -152,9 +160,19 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
         .and_then(|status| status.code())
         .unwrap_or(-1);
 
-    let note = run_result.timed_out.then(|| {
-        format!("command exceeded timeout_ms={timeout_ms} and was killed; output below is partial")
-    });
+    let note = match (run_result.timed_out, run_result.drain_incomplete) {
+        (true, _) => Some(format!(
+            "command exceeded timeout_ms={timeout_ms} and was killed; output below is partial"
+        )),
+        // Saying nothing here would present a truncated capture as the whole
+        // output, which is exactly the mistake the timeout note exists to avoid.
+        (false, true) => Some(
+            "output capture stopped early; a background process still holds the pipe, so the \
+             output below may be incomplete"
+                .to_string(),
+        ),
+        (false, false) => None,
+    };
 
     Ok(render_result(exit_code, &stdout_text, &stderr_text, note))
 }
@@ -194,26 +212,131 @@ struct CapturedRun {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
     timed_out: bool,
+    /// The readers never reached end of stream, so what follows is whatever had
+    /// arrived when the grace period ran out.
+    drain_incomplete: bool,
 }
 
-/// Drain a child pipe on its own thread.
+/// Drain a child pipe on its own thread, into a buffer the caller can read at
+/// any time.
 ///
 /// Polling only for exit deadlocks as soon as the child fills a pipe buffer, so
-/// both streams have to be read while we wait. The result arrives over a
-/// channel rather than a join handle so that the caller can stop waiting.
-fn drain_pipe<R>(pipe: Option<R>) -> mpsc::Receiver<Vec<u8>>
+/// both streams have to be read while we wait. The buffer is shared rather than
+/// sent once at EOF: a surviving grandchild holds the write end open, so EOF may
+/// never arrive, and waiting for a single end-of-stream message meant giving up
+/// with *nothing* — a command whose output had already been read in full still
+/// reported an empty stdout.
+///
+/// The pipe keeps being drained past `MAX_CAPTURED_BYTES`, so a chatty child
+/// never blocks on a full pipe while memory stays bounded.
+fn drain_pipe<R>(pipe: Option<R>) -> DrainedPipe
 where
     R: Read + Send + 'static,
 {
-    let (tx, rx) = mpsc::channel();
+    let drained = DrainedPipe {
+        buffer: Arc::new(Mutex::new(CappedCapture::default())),
+        at_eof: Arc::new(AtomicBool::new(false)),
+    };
+    let writer = Arc::clone(&drained.buffer);
+    let at_eof = Arc::clone(&drained.at_eof);
+
     std::thread::spawn(move || {
-        let mut buffer = Vec::new();
         if let Some(mut pipe) = pipe {
-            let _ = pipe.read_to_end(&mut buffer);
+            let mut chunk = [0_u8; 8192];
+            loop {
+                match pipe.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(read) => {
+                        // A panic elsewhere must not cost us the output we
+                        // already have: the buffer is a plain byte log, so a
+                        // poisoned lock has nothing broken to protect.
+                        let mut buffer = writer
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        buffer.push(&chunk[..read]);
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                    Err(_) => break,
+                }
+            }
         }
-        let _ = tx.send(buffer);
+        at_eof.store(true, Ordering::Release);
     });
-    rx
+
+    drained
+}
+
+/// A bounded byte log that keeps both ends of what it was given.
+///
+/// Compiler errors, test failures and stack traces live at the *end* of a
+/// command's output — the same reason `truncate_middle` cuts the middle — so a
+/// cap that keeps the first N bytes and throws the rest away hides the very
+/// thing the model has to react to.
+#[derive(Default)]
+struct CappedCapture {
+    head: Vec<u8>,
+    tail: VecDeque<u8>,
+    dropped: usize,
+}
+
+impl CappedCapture {
+    const HEAD_BYTES: usize = MAX_CAPTURED_BYTES / 2;
+    const TAIL_BYTES: usize = MAX_CAPTURED_BYTES - Self::HEAD_BYTES;
+
+    fn push(&mut self, mut bytes: &[u8]) {
+        let head_room = Self::HEAD_BYTES.saturating_sub(self.head.len());
+        if head_room > 0 {
+            let take = head_room.min(bytes.len());
+            self.head.extend_from_slice(&bytes[..take]);
+            bytes = &bytes[take..];
+        }
+
+        self.tail.extend(bytes);
+        while self.tail.len() > Self::TAIL_BYTES {
+            self.tail.pop_front();
+            self.dropped += 1;
+        }
+    }
+
+    fn snapshot(&self) -> Vec<u8> {
+        let mut out = self.head.clone();
+        if self.dropped > 0 {
+            out.extend_from_slice(
+                format!(
+                    "\n... (dropped {} bytes from the middle of the capture) ...\n",
+                    self.dropped
+                )
+                .as_bytes(),
+            );
+        }
+        out.extend(self.tail.iter().copied());
+        out
+    }
+}
+
+/// A pipe being drained in the background: what has been read so far, and
+/// whether the reader reached the end of the stream.
+struct DrainedPipe {
+    buffer: Arc<Mutex<CappedCapture>>,
+    at_eof: Arc<AtomicBool>,
+}
+
+impl DrainedPipe {
+    fn at_eof(&self) -> bool {
+        self.at_eof.load(Ordering::Acquire)
+    }
+
+    /// Whatever the drain thread has collected so far.
+    ///
+    /// Called once the child is gone (or the deadline passed): the reader may
+    /// still be blocked on a grandchild's copy of the write end, and its
+    /// progress is worth more than the EOF that is never coming.
+    fn snapshot(&self) -> Vec<u8> {
+        self.buffer
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .snapshot()
+    }
 }
 
 fn run_with_timeout(
@@ -256,23 +379,38 @@ fn run_with_timeout(
     };
 
     // Bounded: a surviving grandchild still holds the write end of the pipe, so
-    // EOF may never arrive. Give up on the tail rather than on the shell. Both
-    // readers share one deadline so the wait cannot add up.
-    let drain_deadline = Instant::now() + DRAIN_GRACE;
-    let stdout = recv_until(&stdout_reader, drain_deadline);
-    let stderr = recv_until(&stderr_reader, drain_deadline);
+    // EOF may never arrive. Give the readers a moment to catch up with what the
+    // child already wrote, then take whatever they have.
+    let drained = wait_for_drain(&[&stdout_reader, &stderr_reader], DRAIN_GRACE);
+    let stdout = stdout_reader.snapshot();
+    let stderr = stderr_reader.snapshot();
 
     Ok(CapturedRun {
         status,
         stdout,
         stderr,
         timed_out,
+        drain_incomplete: !drained,
     })
 }
 
-fn recv_until(reader: &mpsc::Receiver<Vec<u8>>, deadline: Instant) -> Vec<u8> {
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    reader.recv_timeout(remaining).unwrap_or_default()
+/// Wait for the readers to reach end of stream, or for `grace` to run out.
+///
+/// A normal command hits EOF within microseconds of exiting; only a surviving
+/// grandchild holding the write end open runs the clock down, and that is
+/// exactly the case the grace period bounds.
+///
+/// Returns whether every reader got there, so the caller can say so when the
+/// output it hands back is only as much as had arrived.
+fn wait_for_drain(readers: &[&DrainedPipe], grace: Duration) -> bool {
+    let deadline = Instant::now() + grace;
+    while Instant::now() < deadline {
+        if readers.iter().all(|reader| reader.at_eof()) {
+            return true;
+        }
+        std::thread::sleep(DRAIN_POLL_INTERVAL);
+    }
+    readers.iter().all(|reader| reader.at_eof())
 }
 
 /// Signal the whole group the child leads, so background grandchildren die too.
@@ -465,12 +603,15 @@ fn resolve_allowlist_path() -> Result<Option<PathBuf>, String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::{LazyLock, Mutex};
     use tempfile::tempdir;
 
-    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+    /// Serializes every test that touches `EXECUTE_TOOL_ENV_ALLOWLIST`: the env
+    /// var is process-global and overrides the proxy's allowlist, so a test that
+    /// sets it would otherwise decide what an unrelated concurrent test may run.
+    pub(crate) static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     use crate::test_support::TestShellProxy;
     type TestProxy = TestShellProxy;
@@ -771,6 +912,76 @@ mod tests {
             elapsed < DRAIN_GRACE + Duration::from_secs(1),
             "waited for the grandchild: {elapsed:?}"
         );
+        // Returning is not enough: the script's own output has to survive the
+        // grace period. Waiting for a single end-of-stream message meant giving
+        // up with an empty stdout even though the line had already been read.
+        assert!(
+            parsed["stdout"].as_str().unwrap().contains("started"),
+            "the script's output was dropped: {result}"
+        );
+    }
+
+    /// The end of a long output is where the compiler error is, so a capture
+    /// that overflows its cap has to keep the tail, not just the head.
+    #[test]
+    fn a_capture_over_the_cap_keeps_the_tail() {
+        let mut capture = CappedCapture::default();
+        capture.push(b"HEAD-MARKER");
+        capture.push(&vec![b'x'; MAX_CAPTURED_BYTES * 2]);
+        capture.push(b"TAIL-MARKER");
+
+        let snapshot = String::from_utf8_lossy(&capture.snapshot()).into_owned();
+        assert!(snapshot.starts_with("HEAD-MARKER"), "lost the head");
+        assert!(snapshot.ends_with("TAIL-MARKER"), "lost the tail");
+        assert!(
+            snapshot.contains("dropped"),
+            "the omission is not reported: {}",
+            &snapshot[..80.min(snapshot.len())]
+        );
+    }
+
+    /// Under the cap nothing is rewritten, marker included.
+    #[test]
+    fn a_capture_under_the_cap_is_verbatim() {
+        let mut capture = CappedCapture::default();
+        capture.push(b"one\n");
+        capture.push(b"two\n");
+
+        assert_eq!(capture.snapshot(), b"one\ntwo\n");
+    }
+
+    #[test]
+    fn output_written_before_a_grandchild_outlives_the_command_is_kept() {
+        // Same shape as above with more to lose: every line the script itself
+        // printed must come back, not just the first.
+        let _lock = ENV_LOCK.lock().unwrap();
+
+        let dir = tempdir().unwrap();
+        let script = dir.path().join("chatty-spawner.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nsleep 5 &\ni=0\nwhile [ $i -lt 200 ]; do echo \"line-$i\"; i=$((i+1)); done\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+        std::fs::set_permissions(&script, permissions).unwrap();
+
+        let allowlist = script.to_string_lossy().to_string();
+        let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, &allowlist);
+        let mut proxy = TestProxy {
+            execute_allowlist: vec![allowlist.clone()],
+            current_dir: std::env::current_dir().unwrap(),
+            confirm_result: true,
+            ..TestProxy::default()
+        };
+
+        let result = run(&format!("{{\"command\":\"{allowlist}\"}}"), &mut proxy).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        let stdout = parsed["stdout"].as_str().unwrap();
+
+        assert!(stdout.contains("line-0"), "lost the head: {result}");
+        assert!(stdout.contains("line-199"), "lost the tail: {result}");
     }
 
     #[test]
@@ -808,13 +1019,13 @@ mod tests {
         assert_ne!(parsed["exit_code"].as_i64().unwrap(), 0);
     }
 
-    struct EnvGuard {
+    pub(crate) struct EnvGuard {
         key: &'static str,
         previous: Option<String>,
     }
 
     impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
+        pub(crate) fn set(key: &'static str, value: &str) -> Self {
             let previous = env::var(key).ok();
             unsafe {
                 env::set_var(key, value);

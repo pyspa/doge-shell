@@ -1,7 +1,15 @@
 use crate::completion::command::CompletionCandidate;
 use anyhow::Result;
 
-/// Standard POSIX signals with their numbers and descriptions
+/// Signals as *this* platform numbers them.
+///
+/// Only 1-15 are fixed across Unixes; past that Linux and macOS diverge
+/// completely -- `SIGUSR1` is 10 on Linux and 30 on macOS, `SIGCHLD` 17 versus
+/// 20 -- and each has signals the other lacks (`SIGSTKFLT`/`SIGPWR` against
+/// `SIGEMT`/`SIGINFO`). `kill -<number>` completion is only useful if it offers
+/// the numbers the running kernel actually accepts, so the table is per target.
+/// `the_table_uses_this_platforms_signal_numbers` holds each entry to `libc`.
+#[cfg(not(target_os = "macos"))]
 const SIGNALS: &[(&str, i32, &str)] = &[
     ("SIGHUP", 1, "Hangup"),
     ("SIGINT", 2, "Interrupt"),
@@ -34,6 +42,42 @@ const SIGNALS: &[(&str, i32, &str)] = &[
     ("SIGIO", 29, "I/O possible"),
     ("SIGPWR", 30, "Power failure"),
     ("SIGSYS", 31, "Bad system call"),
+];
+
+/// See the Linux table above. Mirrors `kill -l` on macOS.
+#[cfg(target_os = "macos")]
+const SIGNALS: &[(&str, i32, &str)] = &[
+    ("SIGHUP", 1, "Hangup"),
+    ("SIGINT", 2, "Interrupt"),
+    ("SIGQUIT", 3, "Quit"),
+    ("SIGILL", 4, "Illegal instruction"),
+    ("SIGTRAP", 5, "Trace trap"),
+    ("SIGABRT", 6, "Abort"),
+    ("SIGEMT", 7, "Emulator trap"),
+    ("SIGFPE", 8, "Floating point exception"),
+    ("SIGKILL", 9, "Kill (cannot be caught)"),
+    ("SIGBUS", 10, "Bus error"),
+    ("SIGSEGV", 11, "Segmentation violation"),
+    ("SIGSYS", 12, "Bad system call"),
+    ("SIGPIPE", 13, "Broken pipe"),
+    ("SIGALRM", 14, "Alarm clock"),
+    ("SIGTERM", 15, "Termination"),
+    ("SIGURG", 16, "Urgent I/O condition"),
+    ("SIGSTOP", 17, "Stop (cannot be caught)"),
+    ("SIGTSTP", 18, "Terminal stop"),
+    ("SIGCONT", 19, "Continue"),
+    ("SIGCHLD", 20, "Child status changed"),
+    ("SIGTTIN", 21, "Background read from tty"),
+    ("SIGTTOU", 22, "Background write to tty"),
+    ("SIGIO", 23, "I/O possible"),
+    ("SIGXCPU", 24, "CPU time limit exceeded"),
+    ("SIGXFSZ", 25, "File size limit exceeded"),
+    ("SIGVTALRM", 26, "Virtual timer expired"),
+    ("SIGPROF", 27, "Profiling timer expired"),
+    ("SIGWINCH", 28, "Window size changed"),
+    ("SIGINFO", 29, "Status request"),
+    ("SIGUSR1", 30, "User defined signal 1"),
+    ("SIGUSR2", 31, "User defined signal 2"),
 ];
 
 /// Generator for signal name completion
@@ -110,6 +154,80 @@ impl Default for SignalGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The number `libc` gives this platform for `name`, or `None` when the
+    /// platform has no such signal.
+    fn libc_number(name: &str) -> Option<i32> {
+        Some(match name {
+            "SIGHUP" => libc::SIGHUP,
+            "SIGINT" => libc::SIGINT,
+            "SIGQUIT" => libc::SIGQUIT,
+            "SIGILL" => libc::SIGILL,
+            "SIGTRAP" => libc::SIGTRAP,
+            "SIGABRT" => libc::SIGABRT,
+            "SIGBUS" => libc::SIGBUS,
+            "SIGFPE" => libc::SIGFPE,
+            "SIGKILL" => libc::SIGKILL,
+            "SIGUSR1" => libc::SIGUSR1,
+            "SIGSEGV" => libc::SIGSEGV,
+            "SIGUSR2" => libc::SIGUSR2,
+            "SIGPIPE" => libc::SIGPIPE,
+            "SIGALRM" => libc::SIGALRM,
+            "SIGTERM" => libc::SIGTERM,
+            "SIGCHLD" => libc::SIGCHLD,
+            "SIGCONT" => libc::SIGCONT,
+            "SIGSTOP" => libc::SIGSTOP,
+            "SIGTSTP" => libc::SIGTSTP,
+            "SIGTTIN" => libc::SIGTTIN,
+            "SIGTTOU" => libc::SIGTTOU,
+            "SIGURG" => libc::SIGURG,
+            "SIGXCPU" => libc::SIGXCPU,
+            "SIGXFSZ" => libc::SIGXFSZ,
+            "SIGVTALRM" => libc::SIGVTALRM,
+            "SIGPROF" => libc::SIGPROF,
+            "SIGWINCH" => libc::SIGWINCH,
+            "SIGIO" => libc::SIGIO,
+            "SIGSYS" => libc::SIGSYS,
+            #[cfg(target_os = "macos")]
+            "SIGEMT" => libc::SIGEMT,
+            #[cfg(target_os = "macos")]
+            "SIGINFO" => libc::SIGINFO,
+            #[cfg(not(target_os = "macos"))]
+            "SIGSTKFLT" => libc::SIGSTKFLT,
+            #[cfg(not(target_os = "macos"))]
+            "SIGPWR" => libc::SIGPWR,
+            _ => return None,
+        })
+    }
+
+    /// The whole point of splitting the table per target: offering `kill -17`
+    /// as `SIGCHLD` on macOS (where it stops the process) would be worse than
+    /// offering nothing.
+    #[test]
+    fn the_table_uses_this_platforms_signal_numbers() {
+        for (name, number, _) in SIGNALS {
+            let expected = libc_number(name)
+                .unwrap_or_else(|| panic!("{name} is in the table but unknown to libc here"));
+            assert_eq!(
+                *number, expected,
+                "{name} is {number} in the table but {expected} on this platform"
+            );
+        }
+    }
+
+    /// Numbers have to be unique, or filtering by one offers two signals.
+    #[test]
+    fn the_table_has_no_duplicate_numbers() {
+        let mut numbers: Vec<i32> = SIGNALS.iter().map(|(_, number, _)| *number).collect();
+        numbers.sort_unstable();
+        let count = numbers.len();
+        numbers.dedup();
+        assert_eq!(
+            numbers.len(),
+            count,
+            "duplicate signal numbers in the table"
+        );
+    }
 
     #[test]
     fn test_signal_generator_creates() {

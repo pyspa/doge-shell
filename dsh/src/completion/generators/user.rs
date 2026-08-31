@@ -1,7 +1,6 @@
 use crate::completion::cache::CompletionCache;
 use crate::completion::command::CompletionCandidate;
 use anyhow::Result;
-use std::fs;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -23,7 +22,9 @@ impl UserGenerator {
         }
     }
 
-    /// Create a generator that includes system users (UID < 1000)
+    /// Create a generator that also offers the service accounts the default
+    /// generator hides (below UID 1000 on Linux, below 500 or `_`-prefixed on
+    /// macOS)
     pub fn with_system_users() -> Self {
         Self {
             include_system_users: true,
@@ -43,36 +44,7 @@ impl UserGenerator {
             return Ok(self.filter_candidates(&cached, current_token));
         }
 
-        // Parse /etc/passwd for user names
-        let mut candidates = Vec::new();
-
-        if let Ok(content) = fs::read_to_string("/etc/passwd") {
-            for line in content.lines() {
-                if line.starts_with('#') || line.is_empty() {
-                    continue;
-                }
-                // Format: username:x:uid:gid:gecos:home:shell
-                let parts: Vec<&str> = line.split(':').collect();
-                if parts.len() >= 5 {
-                    let username = parts[0].to_string();
-                    let gecos = parts.get(4).map(|s| s.to_string());
-
-                    // Filter out system users (UID < 1000) unless requested
-                    // but always include root
-                    if let Ok(uid) = parts.get(2).unwrap_or(&"0").parse::<u32>() {
-                        let include =
-                            self.include_system_users || uid >= 1000 || username == "root";
-
-                        if include {
-                            candidates.push(CompletionCandidate::argument(
-                                username,
-                                gecos.filter(|s| !s.is_empty()),
-                            ));
-                        }
-                    }
-                }
-            }
-        }
+        let mut candidates = load_users(self.include_system_users);
 
         // Sort alphabetically
         candidates.sort_by(|a, b| a.text.cmp(&b.text));
@@ -101,6 +73,141 @@ impl UserGenerator {
     }
 }
 
+/// Whether an account belongs in the default (non-`--all`) candidate list.
+///
+/// `root` is always offered: it is the account most often typed after `su`,
+/// `chown` or `sudo -u`, and it sits below every "first real user" cutoff.
+fn is_offered(
+    username: &str,
+    uid: u32,
+    include_system_users: bool,
+    first_regular_uid: u32,
+) -> bool {
+    include_system_users || uid >= first_regular_uid || username == "root"
+}
+
+/// The accounts to offer, unsorted.
+///
+/// `/etc/passwd` is the whole story on a stock Linux box, and reading it costs
+/// one `open` where enumerating through NSS would fan out to every configured
+/// backend on each keystroke.
+#[cfg(not(target_os = "macos"))]
+fn load_users(include_system_users: bool) -> Vec<CompletionCandidate> {
+    use std::fs;
+
+    // Linux hands the first interactive account UID 1000.
+    const FIRST_REGULAR_UID: u32 = 1000;
+
+    let mut candidates = Vec::new();
+
+    if let Ok(content) = fs::read_to_string("/etc/passwd") {
+        for line in content.lines() {
+            if line.starts_with('#') || line.is_empty() {
+                continue;
+            }
+            // Format: username:x:uid:gid:gecos:home:shell
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() >= 5 {
+                let username = parts[0].to_string();
+                let gecos = parts.get(4).map(|s| s.to_string());
+
+                if let Ok(uid) = parts.get(2).unwrap_or(&"0").parse::<u32>()
+                    && is_offered(&username, uid, include_system_users, FIRST_REGULAR_UID)
+                {
+                    candidates.push(CompletionCandidate::argument(
+                        username,
+                        gecos.filter(|s| !s.is_empty()),
+                    ));
+                }
+            }
+        }
+    }
+
+    candidates
+}
+
+/// macOS keeps interactive accounts in Open Directory, not in `/etc/passwd`.
+///
+/// That file is only consulted in single-user mode -- it says so in its own
+/// header -- and holds nothing but the `_`-prefixed service accounts, so
+/// parsing it offered `root` and nothing else. `getpwent` asks Directory
+/// Service and returns the accounts a person would actually type.
+#[cfg(target_os = "macos")]
+fn load_users(include_system_users: bool) -> Vec<CompletionCandidate> {
+    use std::collections::HashSet;
+    use std::ffi::CStr;
+    use std::sync::Mutex;
+
+    // macOS numbers its service accounts below 500 and gives the first real
+    // account 501, so Linux's 1000 would hide every human on the machine.
+    const FIRST_REGULAR_UID: u32 = 500;
+
+    /// `getpwent` walks a process-wide cursor and returns a pointer into a
+    /// static buffer, so only one caller may be inside the loop at a time.
+    static ENUMERATION: Mutex<()> = Mutex::new(());
+
+    let _guard = ENUMERATION
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+
+    // SAFETY: the lock above serialises the cursor, every pointer is read
+    // before the next `getpwent` call invalidates the buffer it points into,
+    // and `endpwent` closes the cursor on every path out of the loop.
+    unsafe {
+        libc::setpwent();
+
+        loop {
+            let entry = libc::getpwent();
+            if entry.is_null() {
+                break;
+            }
+
+            let username = CStr::from_ptr((*entry).pw_name)
+                .to_string_lossy()
+                .into_owned();
+            let uid = (*entry).pw_uid;
+
+            // Directory Service can serve the same account from more than one
+            // node; `nobody` in particular comes back twice.
+            if !seen.insert(username.clone()) {
+                continue;
+            }
+
+            // Service accounts are `_`-prefixed by convention here, and a
+            // handful of them sit above the UID cutoff.
+            if !include_system_users && username.starts_with('_') {
+                continue;
+            }
+
+            if !is_offered(&username, uid, include_system_users, FIRST_REGULAR_UID) {
+                continue;
+            }
+
+            let gecos = if (*entry).pw_gecos.is_null() {
+                None
+            } else {
+                Some(
+                    CStr::from_ptr((*entry).pw_gecos)
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+            };
+
+            candidates.push(CompletionCandidate::argument(
+                username,
+                gecos.filter(|s| !s.is_empty()),
+            ));
+        }
+
+        libc::endpwent();
+    }
+
+    candidates
+}
+
 impl Default for UserGenerator {
     fn default() -> Self {
         Self::new()
@@ -110,6 +217,58 @@ impl Default for UserGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The name of the account running this test, straight from the same
+    /// database the generator reads.
+    fn current_username() -> String {
+        // SAFETY: `getpwuid` returns a pointer into a static buffer that stays
+        // valid until the next call in this thread; the name is copied out
+        // before anything else can call it.
+        unsafe {
+            let entry = libc::getpwuid(libc::getuid());
+            assert!(!entry.is_null(), "no passwd entry for the current uid");
+            std::ffi::CStr::from_ptr((*entry).pw_name)
+                .to_string_lossy()
+                .into_owned()
+        }
+    }
+
+    /// The regression this guards is macOS-shaped: interactive accounts live in
+    /// Open Directory there, so reading `/etc/passwd` offered `root` and the
+    /// service accounts and left out every human on the machine.
+    ///
+    /// Asking for system users too keeps the assertion about *finding* the
+    /// account rather than about where this platform draws its UID cutoff.
+    #[test]
+    fn the_account_running_the_test_is_offered() {
+        let me = current_username();
+        let candidates = load_users(true);
+
+        assert!(
+            candidates.iter().any(|c| c.text == me),
+            "{me} is missing from {} candidates",
+            candidates.len()
+        );
+    }
+
+    /// root has no gecos on either platform, but a real account usually does,
+    /// and the description is what tells two similar names apart.
+    #[test]
+    fn the_list_survives_both_cutoffs() {
+        let all = load_users(true);
+        let default = load_users(false);
+
+        assert!(
+            default.len() <= all.len(),
+            "the default list ({}) is larger than the full one ({})",
+            default.len(),
+            all.len()
+        );
+        assert!(
+            default.iter().any(|c| c.text == "root"),
+            "root is always offered"
+        );
+    }
 
     #[test]
     fn test_user_generator_creates() {

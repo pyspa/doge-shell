@@ -1105,6 +1105,7 @@ dependencies = [
  "shell-words",
  "shellexpand",
  "skim",
+ "sysinfo",
  "tabled",
  "tempfile",
  "term_size",
@@ -2528,6 +2529,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases 0.2.2",
  "libc",
+ "memoffset",
 ]
 
 [[package]]

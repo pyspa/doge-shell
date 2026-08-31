@@ -1,7 +1,6 @@
 use crate::completion::cache::CompletionCache;
 use crate::completion::command::CompletionCandidate;
 use anyhow::Result;
-use std::fs;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -30,32 +29,8 @@ impl ProcessGenerator {
             candidates_arc = hit;
             candidates_arc.iter()
         } else {
-            // 2. If not in cache, scan /proc
-            let mut candidates = Vec::new();
-
-            if let Ok(entries) = fs::read_dir("/proc") {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir()
-                        && let Some(file_name) = path.file_name().and_then(|n| n.to_str())
-                    {
-                        // Check if it's a PID (all digits)
-                        if let Ok(pid) = file_name.parse::<u32>() {
-                            let pid_str = pid.to_string();
-
-                            // Read process name from /proc/<pid>/comm
-                            let comm_path = path.join("comm");
-                            let description = if let Ok(comm) = fs::read_to_string(comm_path) {
-                                Some(comm.trim().to_string())
-                            } else {
-                                None
-                            };
-
-                            candidates.push(CompletionCandidate::process(pid_str, description));
-                        }
-                    }
-                }
-            }
+            // 2. If not in cache, ask the platform
+            let mut candidates = load_processes();
 
             // Sort by PID
             candidates.sort_by(|a, b| {
@@ -98,8 +73,123 @@ impl ProcessGenerator {
     }
 }
 
+/// Every running process as `(pid, name)`, unsorted.
+///
+/// `/proc/<pid>/comm` is the cheap answer where procfs exists: one readdir plus
+/// one small read per process, no library state to carry.
+#[cfg(not(target_os = "macos"))]
+fn load_processes() -> Vec<CompletionCandidate> {
+    use std::fs;
+
+    let mut candidates = Vec::new();
+
+    if let Ok(entries) = fs::read_dir("/proc") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir()
+                && let Some(file_name) = path.file_name().and_then(|n| n.to_str())
+            {
+                // Check if it's a PID (all digits)
+                if let Ok(pid) = file_name.parse::<u32>() {
+                    let pid_str = pid.to_string();
+
+                    // Read process name from /proc/<pid>/comm
+                    let comm_path = path.join("comm");
+                    let description = if let Ok(comm) = fs::read_to_string(comm_path) {
+                        Some(comm.trim().to_string())
+                    } else {
+                        None
+                    };
+
+                    candidates.push(CompletionCandidate::process(pid_str, description));
+                }
+            }
+        }
+    }
+
+    candidates
+}
+
+/// macOS has no procfs, so go through sysinfo's `sysctl(KERN_PROC)` wrapper.
+///
+/// Only the process list is refreshed -- CPU and memory would cost a second
+/// sample each, and completion shows neither. The caller's one-second cache
+/// keeps the call off consecutive keystrokes.
+#[cfg(target_os = "macos")]
+fn load_processes() -> Vec<CompletionCandidate> {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
+
+    let mut system = System::new_with_specifics(
+        RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
+    );
+    system.refresh_processes(ProcessesToUpdate::All, true);
+
+    system
+        .processes()
+        .iter()
+        .map(|(pid, process)| {
+            let name = process.name().to_string_lossy().into_owned();
+            CompletionCandidate::process(
+                pid.as_u32().to_string(),
+                Some(name).filter(|n| !n.is_empty()),
+            )
+        })
+        .collect()
+}
+
 impl Default for ProcessGenerator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The generator was silently empty on macOS for as long as it read /proc.
+    #[test]
+    fn the_platform_reports_at_least_this_process() {
+        let candidates = load_processes();
+        let me = std::process::id().to_string();
+
+        assert!(
+            candidates.iter().any(|c| c.text == me),
+            "the running test process ({me}) is missing from {} candidates",
+            candidates.len()
+        );
+    }
+
+    /// Descriptions carry the process name, which is what the name filter below
+    /// matches against.
+    #[test]
+    fn candidates_are_named() {
+        let candidates = load_processes();
+
+        assert!(
+            candidates
+                .iter()
+                .any(|c| c.description.as_ref().is_some_and(|d| !d.is_empty())),
+            "no candidate carried a process name"
+        );
+    }
+
+    #[test]
+    fn a_pid_prefix_filters_the_list() {
+        let generator = ProcessGenerator::new();
+        let candidates = generator.generate_candidates("1").unwrap();
+
+        for candidate in &candidates {
+            let matched_pid = candidate.text.starts_with('1');
+            let matched_name = candidate
+                .description
+                .as_ref()
+                .is_some_and(|d| d.to_lowercase().contains('1'));
+            assert!(
+                matched_pid || matched_name,
+                "{} matched neither the pid nor the name",
+                candidate.text
+            );
+        }
     }
 }

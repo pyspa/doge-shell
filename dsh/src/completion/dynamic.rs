@@ -4870,6 +4870,8 @@ fn parse_lsblk_devices(lines: &[String]) -> Vec<String> {
     )
 }
 
+/// Filesystem types this kernel can mount, for `mount -t`.
+#[cfg(not(target_os = "macos"))]
 fn load_filesystem_types() -> Vec<String> {
     fs::read_to_string("/proc/filesystems")
         .map(|contents| {
@@ -4877,6 +4879,30 @@ fn load_filesystem_types() -> Vec<String> {
                 contents
                     .lines()
                     .filter_map(|line| line.split_whitespace().last().map(str::to_string))
+                    .collect(),
+            )
+        })
+        .unwrap_or_default()
+}
+
+/// macOS keeps one bundle per filesystem under `/System/Library/Filesystems`,
+/// named `<type>.fs` -- `apfs.fs`, `msdos.fs`, `smbfs.fs` -- which is the same
+/// vocabulary `mount -t` accepts. Entries without the suffix are helper
+/// directories, not types.
+#[cfg(target_os = "macos")]
+fn load_filesystem_types() -> Vec<String> {
+    fs::read_dir("/System/Library/Filesystems")
+        .map(|entries| {
+            dedup_sorted(
+                entries
+                    .flatten()
+                    .filter_map(|entry| {
+                        entry
+                            .file_name()
+                            .to_str()
+                            .and_then(|name| name.strip_suffix(".fs"))
+                            .map(str::to_string)
+                    })
                     .collect(),
             )
         })
@@ -4934,17 +4960,13 @@ fn load_package_json_dependencies(package_json: &Path) -> Vec<String> {
     dedup_sorted(values)
 }
 
+/// Interface names for `tcpdump -i` and friends.
+///
+/// Delegates to the interface generator, which reads `/sys/class/net` where it
+/// exists and `getifaddrs` on macOS. This used to read sysfs itself and so
+/// returned nothing on macOS while the generator returned the real list.
 fn load_network_interfaces() -> Vec<String> {
-    fs::read_dir("/sys/class/net")
-        .map(|entries| {
-            dedup_sorted(
-                entries
-                    .flatten()
-                    .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
-                    .collect(),
-            )
-        })
-        .unwrap_or_default()
+    dedup_sorted(crate::completion::generators::interface::interface_names())
 }
 
 fn load_swap_devices() -> Vec<String> {
@@ -4961,6 +4983,11 @@ fn load_swap_devices() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Every tunable `sysctl` accepts.
+///
+/// `/proc/sys` is the same namespace with slashes for dots, so walking it
+/// avoids spawning anything.
+#[cfg(not(target_os = "macos"))]
 fn load_sysctl_keys() -> Vec<String> {
     let root = Path::new("/proc/sys");
     let mut values = Vec::new();
@@ -4968,6 +4995,18 @@ fn load_sysctl_keys() -> Vec<String> {
     dedup_sorted(values)
 }
 
+/// macOS exposes the same namespace only through the tool itself: there is no
+/// procfs to walk, and `sysctl -aN` prints the names without their values in a
+/// few milliseconds. Failures fall back to an empty list, as everywhere else
+/// here.
+#[cfg(target_os = "macos")]
+fn load_sysctl_keys() -> Vec<String> {
+    run_command_lines("sysctl", &["-aN"], Path::new("/"))
+        .map(dedup_sorted)
+        .unwrap_or_default()
+}
+
+#[cfg(not(target_os = "macos"))]
 fn collect_sysctl_keys(root: &Path, dir: &Path, values: &mut Vec<String>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -5100,6 +5139,44 @@ mod tests {
 
     fn parsed(input: &str) -> ParsedCommandLine {
         CommandLineParser::new().parse(input, input.len())
+    }
+
+    /// These three used to read Linux-only paths, so on macOS every one of
+    /// them returned an empty list and the completions they back went silent.
+    /// The values asserted here exist on both platforms.
+    #[test]
+    fn the_loopback_interface_is_offered_for_tcpdump() {
+        let interfaces = load_network_interfaces();
+
+        assert!(
+            interfaces.iter().any(|name| name.starts_with("lo")),
+            "no loopback interface among {interfaces:?}"
+        );
+    }
+
+    #[test]
+    fn a_local_filesystem_type_is_offered_for_mount() {
+        let types = load_filesystem_types();
+
+        // apfs is macOS's, ext4 Linux's; every host has at least one of them.
+        assert!(
+            types.iter().any(|name| name == "apfs" || name == "ext4"),
+            "no native filesystem type among {} entries: {types:?}",
+            types.len()
+        );
+    }
+
+    #[test]
+    fn a_well_known_sysctl_key_is_offered() {
+        let keys = load_sysctl_keys();
+
+        // kern.hostname on macOS, kernel.hostname on Linux.
+        assert!(
+            keys.iter()
+                .any(|key| key == "kern.hostname" || key == "kernel.hostname"),
+            "no hostname key among {} sysctl keys",
+            keys.len()
+        );
     }
 
     fn write_executable_script(path: &Path, content: &str) {

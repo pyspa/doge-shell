@@ -89,4 +89,13 @@ glob = "0.3"
 toml = "1"
 
 
+# macOS has neither /proc nor /sys, so the process and network-interface
+# completion generators need other sources there: sysinfo for the process list
+# (dsh-builtin already builds it) and nix's getifaddrs binding, which the `net`
+# feature gates, for the interfaces. Both are scoped to macOS so no other
+# target pays for them.
+[target.'cfg(target_os = "macos")'.dependencies]
+sysinfo = { workspace = true }
+nix = { workspace = true, features = ["net"] }
+
 [dev-dependencies]

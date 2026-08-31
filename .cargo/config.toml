@@ -1,7 +1,11 @@
 # mold cuts link time noticeably here: the workspace links a bin, a bench, a lib
 # test binary and ten integration test binaries against skim/ratatui/tokio/axum.
 # Requires mold on PATH (https://github.com/rui314/mold).
-[build]
+#
+# Scoped to Linux: macOS links through ld64 and rejects -fuse-ld=mold, so a
+# plain [build] section here broke every macOS build. The cfg() form covers the
+# gnu, musl and arm Linux triples alike.
+[target.'cfg(target_os = "linux")']
 rustflags = ["-Clink-arg=-fuse-ld=mold"]
 
 # Intentionally left out of the line above: it pins the build to this machine's

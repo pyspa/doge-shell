@@ -5,6 +5,9 @@ readme = "README.md"
 license = "MIT/Apache-2.0"
 edition = "2024"
 version = "0.0.1"
+# The real floor: str::{floor,ceil}_char_boundary (dsh-openai) landed in 1.91,
+# and std::io::pipe, which gives cloexec pipes on every platform, in 1.87.
+rust-version = "1.91"
 
 [workspace]
 resolver = "2"
@@ -55,6 +58,11 @@ lto = false
 incremental = true
 opt-level = 0
 debug = 0
+# `debug = 0` makes cargo default to `strip = "debuginfo"`, which on macOS shells
+# out to the toolchain's `rust-objcopy`. That binary needs libLLVM.dylib from the
+# optional `llvm-tools` component, so a stock rustup install warns on every
+# build. There is no debug info to strip here anyway.
+strip = "none"
 
 [profile.release]
 lto = true

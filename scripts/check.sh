@@ -21,6 +21,7 @@ merge_base=$(git merge-base "$base_ref" HEAD)
 cargo fmt --all -- --check
 scripts/check-ai-guidance.sh
 scripts/check-shell-proxy-capabilities.py
+scripts/check-portability.py
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 

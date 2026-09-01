@@ -1,3 +1,9 @@
+// doge-shell targets exactly two platforms. `#[cfg(not(target_os = "macos"))]`
+// arms across the tree are written to mean "Linux"; this is what makes that
+// reading true instead of merely usual.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+compile_error!("doge-shell supports Linux and macOS only");
+
 use anyhow::Result;
 use dsh_types::{
     Context, ExitStatus, command_block::CommandBlock, mcp::McpServerConfig,

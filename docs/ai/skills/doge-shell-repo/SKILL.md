@@ -12,6 +12,7 @@ description: Use when working in the doge-shell repository or doge-shell リポ�
 - Read [references/module-map.md](references/module-map.md) only when ownership is unclear.
 - Read [references/invariants.md](references/invariants.md) before editing cwd changes, `Environment` state, key dispatch, terminal drawing, output history, or the scheduler.
 - Read [references/test-scope.md](references/test-scope.md) before choosing cargo commands.
+- Read [references/platform-support.md](references/platform-support.md) before adding a `target_os` arm, reading an OS-specific source (`/proc`, `/etc/passwd`, `sysctl`), or calling an external command by absolute path from a test.
 - Read [references/env-vars.md](references/env-vars.md) when you need a debug switch (`DSH_LOG`, PTY/terminal/completion toggles) instead of editing code.
 - Open `README.md` only for user-facing docs, config examples, or feature behavior that is described there.
 - Prefer the smallest test or check that proves the change.

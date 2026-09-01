@@ -41,6 +41,7 @@
       "Bash(scripts/check.sh)",
       "Bash(scripts/check-ai-guidance.sh)",
       "Bash(scripts/check-shell-proxy-capabilities.py)",
+      "Bash(scripts/check-portability.py)",
       "Bash(scripts/claude-post-edit.sh)",
       "Bash(scripts/install-runtime-skills.sh --list:*)",
       "Bash(scripts/install-runtime-skills.sh --status:*)",

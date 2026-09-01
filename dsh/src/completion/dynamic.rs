@@ -4570,11 +4570,12 @@ fn man_page_name_from_file(file_name: &str) -> Option<&str> {
 
 /// `user` and `user:group` values for `chown` and `chgrp`.
 ///
-/// Owners come from the user generator, which reads `/etc/passwd` on Linux and
-/// Open Directory on macOS; parsing the file here too offered nothing but
-/// service accounts on macOS. Service accounts are wanted in this list -- both
-/// `chown www-data` and `chown _www` are ordinary -- so nothing is filtered
-/// out. Groups still come from `/etc/group`, which macOS does populate.
+/// Both sides come from the generators, which read `/etc/passwd` and
+/// `/etc/group` on Linux and Open Directory on macOS; parsing the files here
+/// too offered nothing but service accounts on macOS for owners, and missed
+/// every directory-managed group for groups. Service accounts are wanted in
+/// this list -- both `chown www-data` and `chown _www` are ordinary -- so
+/// nothing is filtered out.
 fn load_owner_group_values() -> Vec<String> {
     let mut values = Vec::new();
     values.extend(
@@ -4582,12 +4583,11 @@ fn load_owner_group_values() -> Vec<String> {
             .into_iter()
             .map(|name| format!("u:{name}")),
     );
-    if let Ok(contents) = fs::read_to_string("/etc/group") {
-        values.extend(contents.lines().filter_map(|line| {
-            let name = line.split(':').next()?;
-            (!name.is_empty() && !name.starts_with('#')).then(|| format!("g:{name}"))
-        }));
-    }
+    values.extend(
+        crate::completion::generators::group::group_names()
+            .into_iter()
+            .map(|name| format!("g:{name}")),
+    );
     dedup_sorted(values)
 }
 

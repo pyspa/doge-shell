@@ -1,3 +1,18 @@
+//! Completion for Linux system administration: systemd, netfilter, SELinux,
+//! audit, pacman and snapper.
+//!
+//! This module and the Linux loaders in `dynamic.rs` are the only places
+//! allowed to read a source that exists on one platform only, and
+//! `scripts/portability-allowlist.txt` pins every such literal. Nothing here is
+//! compiled out on macOS: `registry::collector_for` dispatches
+//! `ProviderFamily::Linux` unconditionally, and each collector finds its file
+//! or command missing and returns no candidates. That silence is the intended
+//! behaviour -- these are completions for tools macOS does not have -- and it is
+//! the one place in the tree where "empty on the other platform" is correct
+//! rather than a porting gap.
+//!
+//! See docs/ai/skills/doge-shell-repo/references/platform-support.md.
+
 use super::{
     CachePolicy, CompletionContext, DynamicCompletionProvider, ParsedCommandLine, SystemdUnitQuery,
     completion_words, dedup_sorted, parse_non_empty_lines, run_command_lines, run_command_stdout,

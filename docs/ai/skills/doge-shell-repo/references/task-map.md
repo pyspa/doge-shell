@@ -73,6 +73,9 @@
 - validation command selection / changed-file checks
   - Read: `dsh-builtin/src/doctor.rs`, `docs/ai/skills/doge-shell-repo/references/test-scope.md`
   - Validate: `cargo test -p dsh-builtin`; run proposed commands from `doctor validate` when available
+- プラットフォーム分岐 / macOS 移植 / OS 固有のソース
+  - Read: `docs/ai/skills/doge-shell-repo/references/platform-support.md`, `dsh/src/completion/generators/`, `dsh/src/process/`
+  - Validate: `scripts/check-portability.py`; 触った package の `cargo test`; macOS 側の腕の実証は CI の macos ジョブ（Linux からのクロスコンパイルは Apple SDK が要るので不可）
 - cross-crate integration
   - Read: affected crate entry points from `module-map.md`
   - Validate: `cargo test` or `cargo check --workspace` only when the behavior spans crates

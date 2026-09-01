@@ -4,6 +4,7 @@
 
 ## 基本方針
 - チャットは日本語で行う。
+- 対応 OS は Linux と macOS の 2 つ。片方でしか動かない変更を入れない。`/proc` や `/etc/passwd` のような OS 固有のソースを読むときは、必ずもう一方の OS の腕も書く。
 - 補助スクリプトは shell / Python のどちらを使ってもよい。repo-tracked な生成・整形は、目的が明確なときだけ行う。
 - `Cargo.toml` と必要なら task map で範囲を絞り、`rg --files` / `rg -n` で当たりを付けてから必要なファイルだけ読む。
 - 該当する Skill がある場合は先に使い、詳細は必要になってから `references/` を読む。
@@ -29,12 +30,15 @@
 - `dsh` 本体を触ったとき: `cargo test -p doge-shell`
 - 複数クレートを跨いだときだけ: `cargo test`
 - 広いビルド確認が必要なら: `cargo check --workspace`
+- OS 依存のコード・テスト・ビルド設定を触ったとき: `scripts/check-portability.py`
 - 段階的な設計変更の完了時とリリース前: `./scripts/check.sh`
 
 ## 設計境界
 - 動的補完 provider は `dsh/src/completion/dynamic/registry.rs` の `DynamicProviderId` へ一度だけ登録し、family collector と `CachePolicy` 経路を使う。cached 専用 dispatch を増やさない。
 - `ShellProxy` は互換レイヤーとして固定し、新規メソッドを追加しない。builtin の新しい依存は `dsh-builtin/src/shell_capabilities.rs` の能力 trait へ追加する。
 - `ShellProxy` または能力 trait を変更したら `scripts/check-shell-proxy-capabilities.py` を実行する。
+- プラットフォーム分岐は `#[cfg(not(target_os = "macos"))]` と `#[cfg(target_os = "macos")]` の対で書き、共通ロジックは cfg の外の純粋関数に置く（`dsh/src/completion/generators/user.rs`）。片方だけ書くと、もう一方の OS ではその項目が消えるだけでコンパイルもテストも通る。
+- OS ごとに違う定数表には `libc` と突き合わせるテストを付ける（`dsh/src/completion/generators/signal.rs`）。`cargo clippy` はそのホストの腕しか見ないので、macOS 側の実証は CI の macos ジョブだけ。
 
 ## 参照の使い分け
 - `task-map.md`: タスクごとの最初の読みに行く先と最小検証を決める。
@@ -42,6 +46,7 @@
 - `module-map.md`: crate や主要ディレクトリの ownership を確認する。
 - `read-boundaries.md`: README や workspace 全体 test を開く条件を確認する。
 - `invariants.md`: cwd 変更、`Environment` の状態、キー入力、端末描画、出力履歴、スケジューラを触る前に読む。
+- `platform-support.md`: 対応 OS、プラットフォーム分岐の書き方、macOS 側の腕を Linux ホストで確認する手順。
 
 ## Skill 運用
 - canonical source は `docs/ai/skills/` に置く。

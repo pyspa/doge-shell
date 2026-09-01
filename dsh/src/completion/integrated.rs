@@ -4669,11 +4669,35 @@ fi
         );
     }
 
+    /// A prefix and the key it must reach, for whichever kernel is running.
+    ///
+    /// The two `load_sysctl_keys` branches read different sources -- a walk of
+    /// `/proc/sys` on Linux, `sysctl -aN` on macOS -- so a shared key would
+    /// leave one of them untested. This used to be Linux's key alone behind a
+    /// bare existence check, which made the whole test pass silently on macOS
+    /// and left the `sysctl -aN` path unexercised.
+    #[cfg(not(target_os = "macos"))]
+    fn sysctl_probe() -> Option<(&'static str, &'static str)> {
+        // A container can be built without the ipv4 sysctl tree, and nothing
+        // else under /proc/sys is both universal and nested deeply enough to
+        // exercise the dotted-prefix path.
+        Path::new("/proc/sys/net/ipv4/ip_forward")
+            .exists()
+            .then_some(("net.ipv4.ip_for", "net.ipv4.ip_forward"))
+    }
+
+    /// See the Linux probe above. `kern.ostype` is in every macOS kernel, so
+    /// there is nothing to skip on.
+    #[cfg(target_os = "macos")]
+    fn sysctl_probe() -> Option<(&'static str, &'static str)> {
+        Some(("kern.ostyp", "kern.ostype"))
+    }
+
     #[tokio::test]
-    async fn sysctl_key_completion_uses_proc_sys_keys_without_value_side() {
-        if !Path::new("/proc/sys/net/ipv4/ip_forward").exists() {
+    async fn sysctl_key_completion_uses_this_platforms_keys_without_value_side() {
+        let Some((prefix, key)) = sysctl_probe() else {
             return;
-        }
+        };
 
         let dir = tempdir().unwrap();
         let environment = Environment::new();
@@ -4683,18 +4707,18 @@ fi
         // `sysctl.key` goes through the cached-value path, whose first call
         // always returns empty and only schedules the background refresh, so
         // the candidate has to be waited for rather than asserted on directly.
-        let input = "sysctl net.ipv4.ip_for";
-        wait_for_candidate(&engine, input, dir.path(), "net.ipv4.ip_forward").await;
+        let input = format!("sysctl {prefix}");
+        wait_for_candidate(&engine, &input, dir.path(), key).await;
 
-        let value_input = "sysctl net.ipv4.ip_forward=1";
+        let value_input = format!("sysctl {key}=1");
         let value_result = engine
-            .complete(value_input, value_input.len(), dir.path(), 50, None)
+            .complete(&value_input, value_input.len(), dir.path(), 50, None)
             .await;
         assert!(
             !value_result
                 .candidates
                 .iter()
-                .any(|candidate| candidate.text == "net.ipv4.ip_forward"),
+                .any(|candidate| candidate.text == key),
             "sysctl key provider must not complete the value side"
         );
     }

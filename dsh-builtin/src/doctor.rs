@@ -1421,6 +1421,7 @@ fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
     let mut needs_workspace_check = false;
     let mut needs_ai_guidance = false;
     let mut has_rust = false;
+    let mut needs_portability = false;
 
     for path in paths {
         let text = path.to_string_lossy().replace('\\', "/");
@@ -1429,6 +1430,11 @@ fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
         }
         if text == "Cargo.toml" || text == "Cargo.lock" {
             needs_workspace_check = true;
+        }
+        // Linker tuning has to stay scoped to the target that accepts it, and
+        // the workflow is where the macOS side is actually proven.
+        if text.starts_with(".cargo/") || text.starts_with(".github/workflows/") {
+            needs_portability = true;
         }
         if text == "AGENTS.md"
             || text == "CLAUDE.md"
@@ -1465,6 +1471,12 @@ fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
 
     if has_rust {
         add_command(&mut commands, "cargo fmt --check");
+    }
+    // Every Rust edit is a chance to add a one-armed `#[cfg(target_os = ..)]` or
+    // an unported `/proc` read, and neither fails a build on the host that wrote
+    // it. The lint scans the whole tree either way, so it costs one line.
+    if has_rust || needs_portability {
+        add_command(&mut commands, "scripts/check-portability.py");
     }
     for package in [
         "dsh-builtin",
@@ -1945,6 +1957,40 @@ mod tests {
         assert!(commands.iter().any(|cmd| {
             cmd == "scripts/install-runtime-skills.sh --status --target codex --profile codex-core"
         }));
+        assert!(
+            commands
+                .iter()
+                .any(|cmd| cmd == "scripts/check-portability.py"),
+            "a Rust edit must propose the portability lint: {commands:?}"
+        );
+    }
+
+    /// The linker flags and the CI matrix are the two non-Rust inputs the
+    /// portability lint covers, so they have to reach it without a `.rs` change.
+    #[test]
+    fn build_and_ci_paths_request_the_portability_check() {
+        for path in [".cargo/config.toml", ".github/workflows/ci.yml"] {
+            let commands = validation_commands_for_paths(&[PathBuf::from(path)]);
+            assert!(
+                commands
+                    .iter()
+                    .any(|cmd| cmd == "scripts/check-portability.py"),
+                "{path} must propose the portability lint: {commands:?}"
+            );
+        }
+    }
+
+    /// Editing a completion definition is not a portability question, and the
+    /// suggestion list is only useful while it stays short.
+    #[test]
+    fn completion_definitions_do_not_request_the_portability_check() {
+        let commands = validation_commands_for_paths(&[PathBuf::from("completions/git.json")]);
+        assert!(
+            !commands
+                .iter()
+                .any(|cmd| cmd == "scripts/check-portability.py"),
+            "{commands:?}"
+        );
     }
 
     #[test]

@@ -9,6 +9,7 @@
 - `cargo test -p dsh-frecency`: frecency scoring or store changes
 - `cargo test`: cross-crate changes only
 - `cargo check --workspace`: broad compile check when behavior spans many crates
+- `scripts/check-portability.py`: `target_os` arms, OS-specific paths, absolute command paths in tests, or `.cargo/config.toml` changes
 - `scripts/check-ai-guidance.sh`: AGENTS, docs/ai, Skill, or runtime skill installer guidance changes
 - `scripts/install-runtime-skills.sh --dry-run --target codex --profile codex-core`: Codex runtime profile changes
 - `scripts/install-runtime-skills.sh --status --target codex --profile codex-core`: canonical/runtime drift checks

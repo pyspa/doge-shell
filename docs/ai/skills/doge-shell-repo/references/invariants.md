@@ -53,6 +53,14 @@
 - JSON を**新規追加**しただけでは release ビルドが再実行されない（rust-embed は `include_bytes!` でファイル単位に依存を張るのでディレクトリの変化を追わない）。出荷前に `touch dsh/src/completion/json_loader.rs`。`output-schemas/` も同じ仕組み（`dsh/src/output_schema/loader.rs`）なので、スキーマ追加時は同様に loader を touch する。
 - `completions/` はクレートディレクトリの外なので `cargo package -p doge-shell` には入らない。path 依存があり現状 publish できないため実害は無いが、crates.io 公開が必要になったら `dsh/` 配下へ戻す。
 
+## プラットフォーム
+- `nix` の Linux 拡張を使わない。`pipe2` は nix が macOS に出しておらず、これで `doge-shell` crate 全体がコンパイル不能だった（`a846e3c`）。cloexec な pipe は `std::io::pipe` が両 OS でくれる。
+- `rustflags` は `[target.'cfg(target_os = "linux")']` の下に置く。`[build]` に書くと macOS の clang が `-fuse-ld=mold` を `invalid linker name` で拒否し、**リンクが全部落ちる**（`f866418`）。
+- `/bin/true` と `/bin/false` は macOS に無い（`/usr/bin` にしかない）。テストからの絶対パス起動は `dsh/tests/common/mod.rs` の `true_path()` / `false_path()` / `first_existing()` を通す。`/etc/hostname` も macOS に無いので `/etc/hosts` を使う。`/tmp` は macOS で `/private/tmp` に解決されるので `canonicalize` して比べる（`ae2f192`）。
+- macOS の `/etc/passwd` は**実在するのに実質空**。単一ユーザーモード用で、対話ユーザーは Open Directory にいる。ファイルの有無で分岐すると「読めたのに `root` しか出ない」になる（`f45fcc2`）。`/etc/group` は逆に macOS でも埋まっているが、Open Directory が足すグループは持たない。
+- シグナル番号は 1-15 しか共通でない。`SIGUSR1` は Linux 10 / macOS 30、`SIGCHLD` は 17 / 20。番号表を共有せず per-OS に持ち、`libc` と突き合わせるテストを付ける（`59855e1`、`generators/signal.rs`）。
+- 片肺の `#[cfg]` は**何も落とさない**。もう一方の OS でその項目が存在しなくなるだけで、コンパイルもテストも通る。`scripts/check-portability.py` がファイル単位で見るのが唯一の自動防波堤で、関数単位は CI の macos ジョブが担う。
+
 ## 二重化しているもの（多数派が正解とは限らない）
 - builtin の能力 trait は `dsh-builtin/src/shell_capabilities.rs` が**正**（`scripts/check-shell-proxy-capabilities.py` の検査対象）。`dsh-builtin/src/capability.rs` は旧世代で、利用ファイル数だけは多い。新しい依存は前者へ足す。
 - `dsh` と `dsh-builtin` は互いに依存できないので、両方で要る純粋なテキスト処理は `dsh-types` に置く。ANSI ストリップは `dsh-types/src/ansi.rs`、`{{name:default}}` の走査は `dsh-types/src/placeholder.rs` が**正**。以前これを各クレートで書いていて、名前検証のある側と無い側に分かれ、`docker ps --format '{{json .}}'` が片方だけ壊れた。コピーを作らない。

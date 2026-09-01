@@ -1,0 +1,73 @@
+# OS-specific path literals this repository accepts, as path<TAB>literal.
+#
+# An entry means: this file reads a source that only one platform has, and
+# that is the intended behaviour there -- either the file is a documented
+# Linux-only provider whose candidates are meant to be empty elsewhere, or
+# the literal is test data that is never opened.
+#
+# scripts/check-portability.py fails on any pair not listed here, so adding a
+# new Linux-only source is a reviewable diff rather than a silent macOS gap.
+# Regenerate with: scripts/check-portability.py --update
+#
+# See docs/ai/skills/doge-shell-repo/references/platform-support.md
+dsh-builtin/src/chatgpt/mcp/mod.rs	/usr/bin/node
+dsh-builtin/src/chatgpt/tool/execute.rs	/usr/bin/env
+dsh-builtin/src/chatgpt/tool/read.rs	/etc/passwd
+dsh-builtin/src/completion_generation.rs	/bin/git
+dsh/src/command_timing.rs	/usr/bin/ls
+dsh/src/completion/commands.rs	/usr/bin/ls
+dsh/src/completion/dynamic.rs	/System/Library/Filesystems
+dsh/src/completion/dynamic.rs	/etc/firewalld/zones
+dsh/src/completion/dynamic.rs	/etc/fstab
+dsh/src/completion/dynamic.rs	/etc/ipset.conf
+dsh/src/completion/dynamic.rs	/etc/wireguard
+dsh/src/completion/dynamic.rs	/lib/modules
+dsh/src/completion/dynamic.rs	/proc
+dsh/src/completion/dynamic.rs	/proc/filesystems
+dsh/src/completion/dynamic.rs	/proc/modules
+dsh/src/completion/dynamic.rs	/proc/swaps
+dsh/src/completion/dynamic.rs	/proc/sys
+dsh/src/completion/dynamic.rs	/run/blkid
+dsh/src/completion/dynamic.rs	/run/dbus
+dsh/src/completion/dynamic.rs	/run/systemd/seats
+dsh/src/completion/dynamic.rs	/run/systemd/sessions
+dsh/src/completion/dynamic.rs	/sys/block
+dsh/src/completion/dynamic.rs	/sys/class/net
+dsh/src/completion/dynamic.rs	/usr/share/kbd/keymaps
+dsh/src/completion/dynamic.rs	/var/log/journal
+dsh/src/completion/dynamic/linux.rs	/etc/audit/rules.d
+dsh/src/completion/dynamic/linux.rs	/etc/iproute2/rt_tables
+dsh/src/completion/dynamic/linux.rs	/etc/mkinitcpio.d
+dsh/src/completion/dynamic/linux.rs	/etc/pacman.conf
+dsh/src/completion/dynamic/linux.rs	/etc/selinux
+dsh/src/completion/dynamic/linux.rs	/etc/shells
+dsh/src/completion/dynamic/linux.rs	/etc/snapper/configs
+dsh/src/completion/dynamic/linux.rs	/proc/mdstat
+dsh/src/completion/dynamic/linux.rs	/sys/class
+dsh/src/completion/dynamic/linux.rs	/usr/bin/fish
+dsh/src/completion/generators/group.rs	/etc/group
+dsh/src/completion/generators/interface.rs	/sys/class/net
+dsh/src/completion/generators/process.rs	/proc
+dsh/src/completion/generators/user.rs	/etc/passwd
+dsh/src/completion/integrated.rs	/proc/sys/net/ipv4/ip_forward
+dsh/src/lisp/stdlib_tests.rs	/sbin/init
+dsh/src/output_schema/loader.rs	/usr/bin/ps
+dsh/src/output_schema/text_parser.rs	/sbin/init
+dsh/src/process/job.rs	/usr/bin/touch
+dsh/src/process/wait.rs	/usr/bin/touch
+dsh/src/safety/mod.rs	/etc/passwd
+dsh/src/safety/mod.rs	/etc/shadow
+dsh/src/terminal/title.rs	/usr/bin/nvim
+dsh/tests/common/mod.rs	/bin/false
+dsh/tests/common/mod.rs	/bin/true
+dsh/tests/common/mod.rs	/usr/bin/false
+dsh/tests/common/mod.rs	/usr/bin/true
+dsh/tests/export.rs	/usr/bin/env
+dsh/tests/fd_ownership.rs	/usr/bin/wc
+dsh/tests/non_interactive.rs	/bin/sleep
+dsh/tests/quoting.rs	/usr/bin/printf
+dsh/tests/redirection.rs	/usr/bin/grep
+dsh/tests/redirection.rs	/usr/bin/wc
+dsh/tests/substitution.rs	/usr/bin/printf
+dsh/tests/substitution.rs	/usr/bin/tr
+dsh/tests/variables.rs	/usr/bin/env

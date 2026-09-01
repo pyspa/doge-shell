@@ -388,7 +388,7 @@ mod tests {
             eval(engine.borrow().env.clone(), &val).unwrap();
         };
 
-        run("(mcp-add-stdio \"initial\" \"/bin/true\" '() '() '() '())");
+        run("(mcp-add-stdio \"initial\" \"/bin/echo\" '() '() '() '())");
         run("(mcp-clear)");
         run("(mcp-add-sse \"after\" \"https://example.com/sse\" \"Docs\")");
 

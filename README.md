@@ -6,6 +6,16 @@ A modern, feature-rich shell written in Rust with an integrated Lisp interpreter
 
 doge-shell (dsh) is a simple yet powerful shell that combines traditional shell capabilities with modern features like AI-assisted command completion, frecency-based history, and an embedded Lisp scripting environment.
 
+## 💻 Supported Platforms
+
+dsh targets **Linux** (x86_64 / aarch64) and **macOS** (Apple Silicon / Intel). Both are
+first-class: the shell, its tests and its host-aware completions are expected to behave the
+same on either. Windows is not supported.
+
+Completion definitions for platform-specific tools (`systemctl`, `journalctl`, `pacman`,
+`brew`, …) ship on every platform and simply produce no candidates where the tool is
+absent, so a Linux-only definition never gets in the way on macOS.
+
 ## ✨ Features
 
 ### Core Shell Features

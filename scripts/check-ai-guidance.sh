@@ -110,15 +110,15 @@ EOF
     done < <(find "$repo_root/docs/ai" -name '*.md' -type f | sort)
 }
 
+# Tracked AI guidance AND per-tool guidance (.serena memories), so drift cannot
+# hide in a tool config that agents load and act on.
+guidance_targets="$repo_root/AGENTS.md $repo_root/docs/ai"
+if [ -d "$repo_root/.serena/memories" ]; then
+    guidance_targets="$guidance_targets $repo_root/.serena/memories"
+fi
+
 check_bad_guidance() {
     # The dsh/ directory is the Cargo package `doge-shell`; `-p dsh` matches no package.
-    # Scan tracked AI guidance AND per-tool guidance (.serena memories) so command drift
-    # cannot hide in a tool config that agents load and act on.
-    guidance_targets="$repo_root/AGENTS.md $repo_root/docs/ai"
-    if [ -d "$repo_root/.serena/memories" ]; then
-        guidance_targets="$guidance_targets $repo_root/.serena/memories"
-    fi
-
     bad_cargo=$(grep -RInE 'cargo (test|run|build|check|clippy) -p dsh([[:space:]`;,.:]|$)' $guidance_targets 2>/dev/null | grep -vE 'Never (use|run)' || true)
     if [ -n "$bad_cargo" ]; then
         echo "$bad_cargo" >&2
@@ -129,6 +129,39 @@ check_bad_guidance() {
     if [ -n "$bad_readme" ]; then
         echo "$bad_readme" >&2
         fail "README.md must not be the first exploration target"
+    fi
+}
+
+check_platform_guidance() {
+    # doge-shell supports Linux and macOS. Guidance that says otherwise sends an
+    # agent down a single-platform path, and it already happened once: a tool
+    # config carried "OS: Linux 想定" long after the macOS port landed. Both the
+    # positive statement and the absence of the stale one are checked, so the
+    # rule cannot be quietly deleted either.
+    spec="docs/ai/skills/doge-shell-repo/references/platform-support.md"
+
+    if [ ! -f "$repo_root/$spec" ]; then
+        fail "missing platform support spec: $spec"
+        return
+    fi
+
+    for token in Linux macOS; do
+        if ! grep -q "$token" "$repo_root/AGENTS.md"; then
+            fail "AGENTS.md does not mention the supported platform: $token"
+        fi
+    done
+
+    if ! grep -q "platform-support.md" "$repo_root/AGENTS.md"; then
+        fail "AGENTS.md does not point at $spec"
+    fi
+
+    # Deliberately narrow: "Linux 専用" and "mold は Linux のみ" describe a
+    # subsystem and stay legal. Only claims about the project's own reach match.
+    bad_platform=$(grep -RInE 'Linux 想定|Linux ?前提|Linux[ -]only|Linux のみ対応' \
+        $guidance_targets 2>/dev/null || true)
+    if [ -n "$bad_platform" ]; then
+        echo "$bad_platform" >&2
+        fail "guidance claims a single supported OS; doge-shell targets Linux and macOS ($spec)"
     fi
 }
 
@@ -263,6 +296,7 @@ if [ -d "$source_root" ]; then
     check_skill_references
     check_markdown_links
     check_bad_guidance
+    check_platform_guidance
     check_readme_skill_names
     check_repo_skill_paths
     check_installer_profiles

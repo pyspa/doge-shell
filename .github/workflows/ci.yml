@@ -1,0 +1,80 @@
+# doge-shell supports Linux and macOS, and a macOS host is the only thing that
+# can prove the `#[cfg(target_os = "macos")]` arms even compile: `cargo check`
+# only ever sees the host's arm, and cross-compiling to Darwin from Linux is out
+# (rusqlite bundles SQLite and mac-notification-sys builds Objective-C, so both
+# want the Apple SDK). That is what the macos-latest leg of the matrix is for.
+#
+# See docs/ai/skills/doge-shell-repo/references/platform-support.md.
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # A backtrace on a CI-only failure is usually the whole investigation.
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      # Never let one platform's failure hide the other's; which of the two
+      # broke is the first thing worth knowing.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+
+      # .cargo/config.toml points the Linux linker at mold unconditionally, so
+      # without this every link on this leg fails with "cannot find -fuse-ld=mold".
+      - name: Install mold
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y mold
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # dsh/tests/ launch the shell as a child process, and a test binary
+      # inherits fd 0. There is no tty on a runner, but closing it keeps the
+      # suite honest about never reading one.
+      - name: Test
+        run: cargo test --workspace < /dev/null
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: AI guidance
+        run: scripts/check-ai-guidance.sh
+
+      - name: ShellProxy capability coverage
+        run: scripts/check-shell-proxy-capabilities.py
+
+      - name: Portability
+        run: scripts/check-portability.py

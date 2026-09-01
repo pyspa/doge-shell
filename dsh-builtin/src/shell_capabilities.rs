@@ -438,6 +438,73 @@ impl<T: ShellProxy + ?Sized> ShellAiIntegration for T {
     }
 }
 
+/// What the shell's safety policy says about a command the agent wants to run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentCommandVerdict {
+    /// Run it without asking.
+    Allowed,
+    /// Ask the user first; the string explains why.
+    Confirm(String),
+    /// Refuse; the string explains why.
+    Denied(String),
+}
+
+/// What the user chose when asked to approve a command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalDecision {
+    Allow,
+    /// Allow, and stop asking about this command for the rest of the session.
+    AllowAlways,
+    Deny,
+}
+
+/// The shell's command policy, as the chat agent's `execute` tool needs it.
+///
+/// Deliberately outside [`ShellProxy`]: that facade is frozen as a
+/// compatibility layer, and this is a new dependency rather than an old one.
+/// The agent needs three things the facade cannot express - a verdict on a full
+/// command line including its pipeline, a three-way answer from the user
+/// (`ShellProxy::confirm_action` only returns a bool, so "always" was
+/// unreachable), and a permission set that is the agent's own rather than the
+/// user's.
+pub trait AgentCommandPolicy {
+    /// Judge a whole command line - pipelines included - against the shell's
+    /// safety guard at the current safety level.
+    fn evaluate_agent_command(&mut self, command: &str) -> AgentCommandVerdict;
+
+    /// Ask the user, offering "always".
+    ///
+    /// Without it a twenty-step agent run is twenty prompts, which is how a
+    /// safety gate turns into a key people hold down.
+    fn request_agent_approval(&mut self, message: &str) -> Result<ApprovalDecision>;
+
+    /// Remember `command` as approved for the rest of this session.
+    ///
+    /// Stored and matched as the exact line the user saw, never as a prefix:
+    /// approving `rm -rf target` must not also approve
+    /// `rm -rf target ~/documents`.
+    fn remember_agent_approval(&mut self, command: &str);
+
+    /// Command lines approved with "always" this session, matched exactly.
+    fn agent_session_approvals(&mut self) -> Vec<String>;
+
+    /// Commands the agent may run without asking, matched by token prefix.
+    ///
+    /// Configured entries only - `(chat-execute-add ...)`, the JSON config and
+    /// the environment variable - because those are written by a person who
+    /// meant the prefix.
+    fn agent_allowlist(&mut self) -> Vec<String>;
+}
+
+/// Everything a chat tool needs from its host.
+///
+/// A bundle rather than a new [`ShellProxy`] method, so the frozen facade stays
+/// the size it is. Trait upcasting lets a `&mut dyn ChatToolHost` be passed
+/// wherever a `&mut dyn ShellProxy` is expected.
+pub trait ChatToolHost: ShellProxy + AgentCommandPolicy {}
+
+impl<T: ShellProxy + AgentCommandPolicy + ?Sized> ChatToolHost for T {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

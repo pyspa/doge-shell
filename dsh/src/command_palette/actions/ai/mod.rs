@@ -21,31 +21,12 @@ pub fn get_ai_service(shell: &Shell) -> Option<Arc<dyn AiService + Send + Sync>>
 
 /// Helper to get directory listing for AI context
 pub fn get_directory_listing() -> String {
-    match std::fs::read_dir(".") {
-        Ok(entries) => {
-            let mut filestats: Vec<(String, bool)> = entries
-                .filter_map(|e| e.ok())
-                .take(30)
-                .map(|e| {
-                    let name = e.file_name().to_string_lossy().to_string();
-                    let is_dir = e.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
-                    (name, is_dir)
-                })
-                .collect();
-            filestats.sort_by(|a, b| a.0.cmp(&b.0));
-
-            let mut lines = Vec::new();
-            for (name, is_dir) in filestats {
-                if is_dir {
-                    lines.push(format!("{}/", name));
-                } else {
-                    lines.push(name);
-                }
-            }
-            lines.join("\n")
-        }
-        Err(_) => "Unable to read directory".to_string(),
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let entries = crate::ai_features::directory_listing_entries(&cwd);
+    if entries.is_empty() {
+        return "Unable to read directory".to_string();
     }
+    entries.join("\n")
 }
 
 /// Helper to get recent commands from history

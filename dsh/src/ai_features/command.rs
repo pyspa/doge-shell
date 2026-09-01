@@ -11,7 +11,14 @@ use anyhow::Result;
 fn command_json_options() -> AiRequestOptions {
     // No token cap: on a reasoning model `max_completion_tokens` also budgets
     // hidden reasoning, so a small cap yields finish_reason=length and no JSON.
-    AiRequestOptions::new(Some(0.1)).as_json_object()
+    //
+    // No tools either: these three write a command line from what the user
+    // already typed. Offering the MCP schemas here only bought the chance of a
+    // tool call the caller has no way to confirm.
+    AiRequestOptions::new(Some(0.1))
+        .as_json_object()
+        .without_tools()
+        .with_prompt_cache_key("dsh-command-json")
 }
 use serde_json::json;
 
@@ -32,10 +39,14 @@ pub async fn expand_smart_pipe<S: AiService + ?Sized>(service: &S, query: &str) 
     // Sanitize input
     let sanitized_query = SafetyGuard::sanitize_ai_input(query, 2000);
 
-    let system_prompt = "You are a shell command expert. The user wants to extend a shell pipeline. \
+    let system_prompt = format!(
+        "You are a shell command expert. The user wants to extend a shell pipeline. \
+    Target platform: {}. \
     Given the user's natural language query, output the next command in the pipeline as a JSON object. \
-    Format: {\"command\": \"grep\", \"args\": [\"-r\", \"pattern\"]}. \
-    Do not output the pipe symbol '|'. Do not output markdown code blocks. Output ONLY the JSON object.";
+    Format: {{\"command\": \"grep\", \"args\": [\"-r\", \"pattern\"]}}. \
+    Do not output the pipe symbol '|'. Do not output markdown code blocks. Output ONLY the JSON object.",
+        target_platform_description()
+    );
 
     let messages = vec![
         json!({"role": "system", "content": system_prompt}),
@@ -78,11 +89,17 @@ pub async fn run_generative_command<S: AiService + ?Sized>(
     // Sanitize input
     let sanitized_query = SafetyGuard::sanitize_ai_input(query, 5000);
 
-    let system_prompt = "You are a shell command expert. Convert the following natural language request into a single-line shell command. \
-    Target platform: Linux with bash/zsh. \
+    // Naming the wrong platform is worse than naming none: on macOS a Linux
+    // prompt produces GNU-only flags (`sed -i` without an argument, `ls
+    // --color`) that fail on the BSD tools actually installed.
+    let system_prompt = format!(
+        "You are a shell command expert. Convert the following natural language request into a single-line shell command. \
+    Target platform: {}. \
     Output the result as a JSON object. \
-    Format: {\"command\": \"rm\", \"args\": [\"-rf\", \"/\"]}. \
-    Do not output markdown code blocks. Output ONLY the JSON object.";
+    Format: {{\"command\": \"rm\", \"args\": [\"-rf\", \"/\"]}}. \
+    Do not output markdown code blocks. Output ONLY the JSON object.",
+        target_platform_description()
+    );
 
     let messages = vec![
         json!({"role": "system", "content": system_prompt}),
@@ -130,12 +147,16 @@ pub async fn fix_command<S: AiService + ?Sized>(
     // Output can be large and contain anything, sanitize it but allow standard chars
     let sanitized_output = SafetyGuard::sanitize_ai_input(output, 2000);
 
-    let system_prompt = "You are a shell command expert. The user executed a command that failed. \
+    let system_prompt = format!(
+        "You are a shell command expert. The user executed a command that failed. \
+    Target platform: {}. \
     Given the failed command, its exit code, and its output (including potential error messages), \
     output the corrected command as a JSON object. \
-    Format: {\"command\": \"grep\", \"args\": [\"-r\", \"pattern\"]}. \
+    Format: {{\"command\": \"grep\", \"args\": [\"-r\", \"pattern\"]}}. \
     Do not output markdown code blocks. Output ONLY the JSON object. \
-    If you cannot determine a fix, output the original command inside the JSON.";
+    If you cannot determine a fix, output the original command inside the JSON.",
+        target_platform_description()
+    );
 
     let query = format!(
         "Failed command: `{}`\nExit code: {}\nOutput:\n```\n{}\n```",
@@ -202,5 +223,20 @@ fn finalize_command<S: AiService + ?Sized>(
                 msg
             ))
         }
+    }
+}
+
+/// Describe the host so generated commands use tools that exist here.
+///
+/// doge-shell supports Linux and macOS, and their coreutils differ enough that
+/// a command written for one regularly fails on the other.
+pub(crate) fn target_platform_description() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "macOS with BSD coreutils, POSIX sh/zsh"
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "Linux with GNU coreutils, POSIX sh/bash"
     }
 }

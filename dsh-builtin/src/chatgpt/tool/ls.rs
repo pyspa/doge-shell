@@ -5,6 +5,13 @@ use std::fs;
 
 pub(crate) const NAME: &str = "ls";
 
+/// Entries listed before the rest are reported as a count.
+///
+/// A `node_modules` or a build output directory holds thousands of names. With
+/// no local limit the shared tool-output cap took the *middle* out, so the
+/// model saw a listing that looked complete and was not.
+const MAX_ENTRIES: usize = 200;
+
 pub(crate) fn definition() -> Value {
     json!({
         "type": "function",
@@ -83,7 +90,8 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
     if entries.is_empty() {
         output.push_str("(empty directory)");
     } else {
-        for entry in entries {
+        let total = entries.len();
+        for entry in entries.into_iter().take(MAX_ENTRIES) {
             let file_name = entry.file_name();
             let name = file_name.to_string_lossy();
             let metadata = entry.metadata().ok();
@@ -105,6 +113,12 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
             };
 
             output.push_str(&format!("{} {:>8} {}\n", type_char, size, name));
+        }
+        if total > MAX_ENTRIES {
+            output.push_str(&format!(
+                "... (+{} more entries; use `search` with a glob to narrow this)\n",
+                total - MAX_ENTRIES
+            ));
         }
         if hidden_sensitive > 0 {
             output.push_str(&format!(
@@ -156,11 +170,24 @@ mod tests {
         assert!(result.contains("file.txt"));
     }
 
+    /// A directory outside the enclosing project stays out of reach.
+    ///
+    /// This used to assert that `..` is always refused, which stopped being
+    /// true once a workspace member gained access to its workspace. The rule
+    /// it was really guarding - "nothing beyond the project" - is unchanged, so
+    /// the test now builds a parent that is not part of any project.
     #[test]
     fn test_ls_outside_workspace() {
-        let mut proxy = proxy(PathBuf::from("."));
+        let outside = tempdir().unwrap();
+        let project = outside.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("Cargo.toml"), "[package]\n").unwrap();
+        fs::write(outside.path().join("secret.txt"), "no").unwrap();
+
+        let mut proxy = proxy(project);
         let result = run(r#"{"path": ".."}"#, &mut proxy);
-        assert!(result.is_err());
+
+        assert!(result.is_err(), "{result:?}");
     }
 
     #[cfg(unix)]

@@ -36,36 +36,28 @@ impl Action for DiagnoseErrorAction {
             return Ok(());
         };
 
-        // Get last output from environment
-        let output = shell.environment.read().get_var("OUT").unwrap_or_default();
+        // The palette has no REPL state, so the session's command blocks are
+        // the only place the real command, exit code and both output streams
+        // live. Reading `$OUT` and assuming exit code 1 - what this did before
+        // - diagnosed the wrong thing whenever the error went to stderr.
+        let failure = crate::ai_features::resolve_last_failure(&shell.environment.read(), None);
 
-        // We need history to get the last command string
-        let history = if let Some(ref history_arc) = shell.cmd_history {
-            if let Some(history) = history_arc.try_lock() {
-                history
-                    .get_recent_context(1)
-                    .first()
-                    .cloned()
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        };
-
-        if history.is_empty() {
+        let Some(failure) = failure.filter(|failure| !failure.command.is_empty()) else {
             println!("\r\nNo recent command found to diagnose.\r\n");
             return Ok(());
-        }
+        };
 
         let mut renderer = TerminalRenderer::new();
         queue!(renderer, Print("\r\n🔄 Processing...\r\n")).ok();
         renderer.flush().ok();
 
-        // We don't have exit code easily in Shell, assume failing if diagnosing?
-        // Actually Repl had it. For now pass 1.
-        let result = ai_features::diagnose_output(service.as_ref(), &history, &output, 1).await;
+        let result = ai_features::diagnose_output(
+            service.as_ref(),
+            &failure.command,
+            &failure.output,
+            failure.exit_code,
+        )
+        .await;
 
         match result {
             Ok(response) => {

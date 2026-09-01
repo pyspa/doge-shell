@@ -100,15 +100,31 @@ pub(crate) fn clear() {
     }
 }
 
+/// Serializes every test that touches the process-wide cache.
+///
+/// The cache tests below and the feature tests in `tests.rs` share one global
+/// store, and the feature tests call `clear()`. While only one of the two
+/// groups took a lock, a `clear()` from the other could land between a
+/// `store` and its `lookup`, so the suite failed a few runs in ten.
+///
+/// A `tokio` mutex, because the feature tests are async and hold this across
+/// an `.await`; it also has no poisoning, so one failing test cannot cascade.
+#[cfg(test)]
+pub(super) static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Take that lock from a synchronous test.
+#[cfg(test)]
+pub(super) fn blocking_test_guard() -> tokio::sync::MutexGuard<'static, ()> {
+    TEST_LOCK.blocking_lock()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
-
     #[test]
     fn an_answer_is_returned_for_an_identical_request() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = blocking_test_guard();
         clear();
 
         assert!(lookup("explain", &["git status"]).is_none());
@@ -121,7 +137,7 @@ mod tests {
 
     #[test]
     fn a_different_input_or_kind_misses() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = blocking_test_guard();
         clear();
 
         store("explain", &["git status"], "answer");
@@ -131,7 +147,7 @@ mod tests {
 
     #[test]
     fn empty_answers_are_not_stored() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = blocking_test_guard();
         clear();
 
         store("explain", &["x"], "   ");
@@ -140,7 +156,7 @@ mod tests {
 
     #[test]
     fn a_changed_model_or_language_misses() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = blocking_test_guard();
         clear();
 
         store("explain", &["ls"], "english answer");
@@ -156,7 +172,7 @@ mod tests {
 
     #[test]
     fn the_cache_stays_bounded() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = blocking_test_guard();
         clear();
 
         for index in 0..MAX_ENTRIES * 2 {

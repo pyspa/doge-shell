@@ -137,6 +137,46 @@ fn collect_text_segments(value: &Value, out: &mut Vec<String>) {
     }
 }
 
+/// Limits both agent loops must agree on.
+///
+/// The `!` chat runtime and the shell-side AI service each drive their own
+/// loop - one synchronous over the builtin tools, one asynchronous over MCP -
+/// because their execution models genuinely differ. What must *not* differ is
+/// the policy: they used to allow 100 versus 10 iterations and 8192 versus 4096
+/// characters of tool output, which meant the same conversation behaved
+/// differently depending on which entry point the user reached it through.
+pub mod limits {
+    /// Tool round trips one request may make before it is abandoned.
+    pub const MAX_TOOL_ITERATIONS: usize = 100;
+    /// Iterations allowed to a shell-side feature, which asks a bounded
+    /// question and should not be able to run away.
+    pub const MAX_ASSIST_ITERATIONS: usize = 10;
+    /// Ceiling on a single tool result handed back to the model.
+    pub const MAX_TOOL_OUTPUT_CHARS: usize = 8192;
+}
+
+/// What to do about a turn that produced neither a tool call nor an answer.
+pub enum StallAction {
+    /// Push this as a user message and ask again.
+    Nudge(&'static str),
+    /// Stop; the model has now failed twice in a row.
+    GiveUp(&'static str),
+}
+
+/// Decide how to handle a stall, given how many have happened in a row.
+///
+/// Resending an identical request only burns the budget, so there is exactly
+/// one retry. Shared so the two loops cannot drift on the count or the wording.
+pub fn handle_stall(stalled_rounds: usize) -> StallAction {
+    if stalled_rounds > 1 {
+        StallAction::GiveUp("the model returned neither a tool call nor an answer twice in a row")
+    } else {
+        StallAction::Nudge(
+            "Your last reply contained neither a tool call nor an answer. Either call a tool or answer the question now.",
+        )
+    }
+}
+
 /// Smallest budget worth splitting into a head and a tail.
 const MIN_MIDDLE_TRUNCATION_BUDGET: usize = 64;
 

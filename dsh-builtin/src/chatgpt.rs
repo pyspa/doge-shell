@@ -1,5 +1,6 @@
 use super::ShellProxy;
 use crate::markdown::render_markdown_with_fallback;
+use crate::shell_capabilities::ChatToolHost;
 use dsh_openai::turn::{self, TurnOutcome, extract_message_content, interpret_response};
 use dsh_openai::{
     CANCELLED_MESSAGE, ChatGptClient, ChatRequestOptions, OpenAiConfig, is_ctrl_c_cancelled, usage,
@@ -18,8 +19,9 @@ const PROMPT_KEY: &str = "CHAT_PROMPT";
 const MODEL_KEY: &str = "AI_CHAT_MODEL";
 /// Environment variable key for storing the AI response language
 const LANGUAGE_KEY: &str = "AI_MESSAGE_LANG";
-/// Maximum number of iterations to satisfy tool calls before aborting
-const MAX_TOOL_ITERATIONS: usize = 100;
+/// Maximum number of iterations to satisfy tool calls before aborting.
+/// Shared with the shell-side loop so the two cannot drift apart.
+use dsh_openai::turn::limits::MAX_TOOL_ITERATIONS;
 /// Threshold of characters in the buffer to trigger summarization (~3k-12k tokens)
 const MAX_BUFFER_CHARS: usize = 96000;
 /// Environment variable key to override the model used for summarization
@@ -28,31 +30,44 @@ const SUMMARY_MODEL_KEY: &str = "AI_SUMMARY_MODEL";
 const CONTEXT_TOKEN_BUDGET_KEY: &str = "AI_CHAT_CONTEXT_TOKEN_BUDGET";
 /// Default prompt-token ceiling before the conversation is summarized.
 const DEFAULT_CONTEXT_TOKEN_BUDGET: u64 = 100_000;
+/// Environment key capping what one `!` turn may spend, in total tokens.
+const TURN_TOKEN_BUDGET_KEY: &str = "AI_CHAT_TURN_TOKEN_BUDGET";
 /// Summarization attempts allowed before one turn gives up and proceeds.
 const MAX_SUMMARY_ROUNDS: usize = 3;
 /// Per-tool-result budget inside the text handed to the summarizer.
 const MAX_SUMMARY_TOOL_CHARS: usize = 500;
+/// Buffer *messages* kept verbatim by the deterministic compaction pass.
+///
+/// Counted in messages because that is what `retain_boundary` takes, and a
+/// tool result always follows the assistant message that asked for it - so
+/// this preserves roughly half as many results as its value suggests.
+const RECENT_BUFFER_MESSAGES_KEPT: usize = 8;
+/// A tool result this small is not worth a stub: the replacement text costs
+/// about as much as the result did.
+const MIN_ELIDABLE_TOOL_CHARS: usize = 400;
 /// Cache-routing hint for providers that support it.
 const PROMPT_CACHE_KEY: &str = "dsh-chat-agent";
-const MAX_VISIBLE_FILES: usize = 12;
-const MAX_VISIBLE_ALIASES: usize = 8;
 
 /// System prompt that explains how to use the builtin tools
 const TOOL_SYSTEM_PROMPT: &str = r#"You are DogeShell Assistant, an autonomous software engineering agent running inside doge-shell.
 
 Rules:
 1. Briefly plan before using tools.
-2. Explore cheaply first: prefer `search` and `ls`; use `read_file` only after locating the exact target.
-3. Verify every change. After editing, read the file back. After `execute`, check exit code, stdout, and stderr.
-4. If a tool fails, analyze the error before asking the user. Respect the `execute` allowlist.
+2. When the user refers to something that already happened - "the error just now", "why did that fail" - read it with `shell_history` instead of running the command again.
+3. Explore cheaply first: prefer `search` and `ls`; use `read_file` only after locating the exact target.
+4. Ask `shell_context` for the project's build and test commands rather than guessing them.
+5. Verify every change. After editing, read the file back. After `execute`, check exit code, stdout, and stderr.
+6. If a tool fails, analyze the error before asking the user.
 
 Tools:
+- `shell_history`: what the user recently ran, with exit codes and output
+- `shell_context`: project root, runtimes, defined tasks, aliases
 - `search`: find files or matching text
 - `ls`: inspect directories
 - `read_file`: read a line-numbered window of a file; it is paged, so continue with `offset`
 - `str_replace`: change part of a file by exact match; use this for edits
 - `edit`: create a file, or replace an existing one in full
-- `execute`: run an allowlisted command without shell evaluation
+- `execute`: run a shell command; pipes, redirection and `&&` all work
 
 Respond in Markdown. Be concise and avoid unnecessary repetition.
 "#;
@@ -114,6 +129,80 @@ impl ConversationManager {
     fn should_summarize(&self) -> bool {
         self.buffer_size_chars() > MAX_BUFFER_CHARS
             || self.last_prompt_tokens > self.prompt_token_budget
+    }
+
+    /// Shrink the buffer without paying a model to do it.
+    ///
+    /// Summarizing costs a whole extra request, and most of what makes a long
+    /// agent conversation large is not conversation at all: it is tool output
+    /// the model has already acted on, and files it read more than once. Both
+    /// can be dropped by rule.
+    ///
+    /// Only the `content` of a `tool` message is replaced, never the message
+    /// itself. A `tool` message is only valid directly after the assistant
+    /// message that asked for it, so removing one would leave the request
+    /// dangling and the API answers that with a 400.
+    ///
+    /// Returns the number of characters reclaimed.
+    fn compact_buffer(&mut self) -> usize {
+        let before = self.buffer_chars;
+
+        for index in self.superseded_tool_indices() {
+            // The stub is not free. Replacing a two-byte "ok" with a sentence
+            // naming the call makes the buffer *larger*, which is the opposite
+            // of the job.
+            if message_serialized_len(&self.buffer[index]) <= MIN_ELIDABLE_TOOL_CHARS {
+                continue;
+            }
+            let label = tool_call_label(&self.buffer, index)
+                .unwrap_or_else(|| "identical call".to_string());
+            replace_tool_content(
+                &mut self.buffer[index],
+                &format!("(superseded by a later {label}; its newer result is below)"),
+            );
+        }
+
+        // Everything before the last few exchanges is history the model has
+        // already folded into what it did next.
+        let keep_from = retain_boundary(&self.buffer, RECENT_BUFFER_MESSAGES_KEPT);
+        for index in 0..keep_from {
+            if message_role(&self.buffer[index]) != Some("tool") {
+                continue;
+            }
+            let size = message_serialized_len(&self.buffer[index]);
+            if size <= MIN_ELIDABLE_TOOL_CHARS {
+                continue;
+            }
+            let label =
+                tool_call_label(&self.buffer, index).unwrap_or_else(|| "tool result".to_string());
+            replace_tool_content(
+                &mut self.buffer[index],
+                &format!("(elided: {label}, {size} bytes; call it again if you need it)"),
+            );
+        }
+
+        self.buffer_chars = sum_message_lengths(&self.buffer);
+        before.saturating_sub(self.buffer_chars)
+    }
+
+    /// Indices of tool results that a later identical call has replaced.
+    ///
+    /// Reading the same file twice used to keep both copies in the request for
+    /// the rest of the conversation.
+    fn superseded_tool_indices(&self) -> Vec<usize> {
+        let mut latest: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut superseded = Vec::new();
+
+        for index in 0..self.buffer.len() {
+            let Some(key) = tool_call_signature(&self.buffer, index) else {
+                continue;
+            };
+            if let Some(previous) = latest.insert(key, index) {
+                superseded.push(previous);
+            }
+        }
+
+        superseded
     }
 
     fn perform_summary(
@@ -298,6 +387,68 @@ fn retain_boundary(buffer: &[Value], retain: usize) -> usize {
     start
 }
 
+/// The call a `tool` message answers: its function name and its arguments.
+///
+/// Derived from the assistant message that requested it rather than stored on
+/// the tool message, because everything on that message is sent to the
+/// provider and an unknown field is something an endpoint may reject.
+fn tool_call_target(buffer: &[Value], index: usize) -> Option<(String, String)> {
+    let message = buffer.get(index)?;
+    if message_role(message)? != "tool" {
+        return None;
+    }
+    let call_id = message.get("tool_call_id").and_then(Value::as_str)?;
+
+    // The request sits in the nearest preceding assistant message.
+    buffer[..index].iter().rev().find_map(|candidate| {
+        let calls = candidate.get("tool_calls")?.as_array()?;
+        let call = calls
+            .iter()
+            .find(|call| call.get("id").and_then(Value::as_str) == Some(call_id))?;
+        let function = call.get("function")?;
+        let name = function.get("name")?.as_str()?.to_string();
+        let arguments = function
+            .get("arguments")
+            .and_then(Value::as_str)
+            .unwrap_or("{}")
+            .to_string();
+        Some((name, arguments))
+    })
+}
+
+/// Two calls with the same name and arguments return the same thing, so only
+/// the newer one is worth carrying.
+fn tool_call_signature(buffer: &[Value], index: usize) -> Option<String> {
+    tool_call_target(buffer, index).map(|(name, arguments)| format!("{name}({arguments})"))
+}
+
+/// A short label for the stub left where a result used to be.
+///
+/// The stub has to name the call, or the model cannot judge whether re-running
+/// it is worth a turn.
+fn tool_call_label(buffer: &[Value], index: usize) -> Option<String> {
+    let (name, arguments) = tool_call_target(buffer, index)?;
+    Some(format!("{name}({})", shorten_arguments(&arguments)))
+}
+
+/// Enough of the arguments to identify the call, and no more.
+fn shorten_arguments(arguments: &str) -> String {
+    const MAX: usize = 80;
+    let trimmed = arguments.trim();
+    if trimmed.len() <= MAX {
+        return trimmed.to_string();
+    }
+    let end = trimmed.floor_char_boundary(MAX);
+    format!("{}...", &trimmed[..end])
+}
+
+/// Swap a tool result's content for a stub, leaving the message in place.
+fn replace_tool_content(message: &mut Value, stub: &str) {
+    if let Some(map) = message.as_object_mut() {
+        map.insert("content".into(), Value::String(stub.to_string()));
+    }
+}
+
 fn message_role(message: &Value) -> Option<&str> {
     message.get("role").and_then(|role| role.as_str())
 }
@@ -311,6 +462,18 @@ fn resolve_setting(proxy: &mut dyn ShellProxy, key: &str) -> Option<String> {
         .get_var(key)
         .or_else(|| std::env::var(key).ok())
         .filter(|value| !value.trim().is_empty())
+}
+
+/// Ceiling on what one turn may spend, or `None` when unset.
+///
+/// `MAX_TOOL_ITERATIONS` bounds the number of steps, not their cost: a hundred
+/// iterations over a large context is a bill, not a guard rail. Off by default,
+/// because the right number depends on the model and on what the user is
+/// willing to spend.
+fn resolve_turn_token_budget(proxy: &mut dyn ShellProxy) -> Option<u64> {
+    resolve_setting(proxy, TURN_TOKEN_BUDGET_KEY)
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|budget| *budget > 0)
 }
 
 /// Prompt-token ceiling that forces a summary regardless of buffer bytes.
@@ -336,7 +499,7 @@ pub fn load_openai_config(proxy: &mut dyn ShellProxy) -> OpenAiConfig {
 /// Execute a chat request using the configured OpenAI client
 pub fn execute_chat_message(
     ctx: &Context,
-    proxy: &mut dyn ShellProxy,
+    proxy: &mut dyn ChatToolHost,
     message: &str,
     model_override: Option<&str>,
 ) -> ExitStatus {
@@ -489,7 +652,7 @@ fn chat_with_tools(
     temperature: Option<f64>,
     model_override: Option<String>,
     mcp_manager: &McpManager,
-    proxy: &mut dyn ShellProxy,
+    proxy: &mut dyn ChatToolHost,
 ) -> Result<String, String> {
     // Build System Prompt (fixed for the session)
     let system_prompt_text = build_system_prompt(operator_prompt, language, mcp_manager);
@@ -512,6 +675,7 @@ fn chat_with_tools(
     };
     manager.set_prompt_token_budget(resolve_prompt_token_budget(proxy));
     manager.begin_turn();
+    let turn_token_budget = resolve_turn_token_budget(proxy);
 
     let mut tools = build_tools();
     if !mcp_manager.is_empty() {
@@ -526,6 +690,30 @@ fn chat_with_tools(
         iterations += 1;
         if iterations > MAX_TOOL_ITERATIONS {
             break Err("chat: exceeded maximum number of tool interactions".to_string());
+        }
+
+        // Checked before the request, not after: stopping once the bill is
+        // already over the line would let a single expensive turn blow through
+        // whatever number the user set.
+        if let Some(budget) = turn_token_budget
+            && manager.turn_usage.total_tokens() >= budget
+        {
+            break Err(format!(
+                "chat: stopped after {} tokens, at the {TURN_TOKEN_BUDGET_KEY} of {budget}. \
+                 Raise it, or ask a narrower question.",
+                manager.turn_usage.total_tokens()
+            ));
+        }
+
+        // Compact by rule before paying a model to summarize. Superseded and
+        // stale tool output is most of what makes a long run large, and
+        // dropping it costs nothing; on the runs where this is enough, the
+        // summarization request below never happens.
+        if manager.should_summarize() {
+            let reclaimed = manager.compact_buffer();
+            if reclaimed > 0 {
+                tracing::debug!("compacted {reclaimed} chars of tool output out of the buffer");
+            }
         }
 
         // Check for Summarization (may need multiple rounds if buffer is huge).
@@ -625,17 +813,12 @@ fn chat_with_tools(
                 // Nudge once, then stop instead of resending the same request
                 // until the iteration cap burns through the budget.
                 stalled_rounds += 1;
-                if stalled_rounds > 1 {
-                    break Err(
-                        "chat: the model returned neither a tool call nor an answer twice in a row"
-                            .to_string(),
-                    );
+                match turn::handle_stall(stalled_rounds) {
+                    turn::StallAction::GiveUp(reason) => break Err(format!("chat: {reason}")),
+                    turn::StallAction::Nudge(prompt) => {
+                        manager.add_message(json!({ "role": "user", "content": prompt }));
+                    }
                 }
-
-                manager.add_message(json!({
-                    "role": "user",
-                    "content": "Your last reply contained neither a tool call nor an answer. Either call a tool or answer the question now.",
-                }));
             }
         }
     };
@@ -736,12 +919,15 @@ struct DynamicContext {
     rendered: String,
 }
 
+/// What the snapshot depends on.
+///
+/// Only the directory and the repository state now: the file list and the
+/// alias table moved out of the snapshot, and with them the reasons to watch
+/// the directory mtime and count aliases on every iteration.
 #[derive(PartialEq, Eq)]
 struct EnvironmentSignature {
     cwd: PathBuf,
-    cwd_modified_ms: u128,
     git_head_modified_ms: u128,
-    alias_count: usize,
 }
 
 impl DynamicContext {
@@ -763,11 +949,9 @@ fn environment_signature(proxy: &mut dyn ShellProxy) -> EnvironmentSignature {
         .unwrap_or_default();
 
     EnvironmentSignature {
-        cwd_modified_ms: modified_ms(&cwd),
         git_head_modified_ms: git_head_path(&cwd)
             .map(|head| modified_ms(&head))
             .unwrap_or(0),
-        alias_count: proxy.list_aliases().len(),
         cwd,
     }
 }
@@ -808,109 +992,26 @@ fn build_dynamic_context(proxy: &mut dyn ShellProxy) -> String {
     )
 }
 
+/// The few facts worth paying for on every single request.
+///
+/// The file list and the alias table used to live here too. Both are answers to
+/// questions the model asks occasionally, and both were being re-sent on every
+/// iteration of a hundred-step run; `ls` and `shell_context` now serve them on
+/// demand instead.
 fn environment_snapshot(proxy: &mut dyn ShellProxy) -> String {
-    let os_family = std::env::consts::FAMILY;
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
 
-    let current_dir = proxy
+    let cwd = proxy
         .get_current_dir()
         .or_else(|_| std::env::current_dir())
-        .ok();
-    let cwd = current_dir
-        .as_ref()
         .map(|path| path.display().to_string())
-        .unwrap_or_else(|| "(failed to resolve current directory)".to_string());
-
-    let alias_str = summarize_aliases(proxy.list_aliases().into_iter().collect());
-
-    let mut files_str = String::new();
-    if let Some(current_dir) = &current_dir
-        && let Ok(entries) = fs::read_dir(current_dir)
-    {
-        let (visible_entries, total_entries) = collect_visible_entries_preview(entries);
-        let summarized = summarize_visible_entries(visible_entries, total_entries);
-        if !summarized.is_empty() {
-            files_str = format!("\n- Visible files: {summarized}");
-        }
-    }
+        .unwrap_or_else(|_| "(failed to resolve current directory)".to_string());
 
     format!(
-        "- OS family: {os_family}\n- OS: {os}\n- Architecture: {arch}\n- Current directory: {cwd}\n- Git: {}{}- Aliases: {alias_str}",
-        describe_git_state(),
-        files_str
+        "- OS: {os} ({arch})\n- Current directory: {cwd}\n- Git: {}",
+        describe_git_state()
     )
-}
-
-fn summarize_aliases(mut aliases: Vec<(String, String)>) -> String {
-    aliases.sort_by(|a, b| a.0.cmp(&b.0));
-    let total = aliases.len();
-
-    if total == 0 {
-        return "none".to_string();
-    }
-
-    let mut rendered = aliases
-        .into_iter()
-        .take(MAX_VISIBLE_ALIASES)
-        .map(|(name, cmd)| format!("{name}='{cmd}'"))
-        .collect::<Vec<_>>();
-
-    if total > MAX_VISIBLE_ALIASES {
-        rendered.push(format!("(+{} more)", total - MAX_VISIBLE_ALIASES));
-    }
-
-    rendered.join(", ")
-}
-
-fn collect_visible_entries_preview(entries: fs::ReadDir) -> (Vec<(String, bool)>, usize) {
-    let mut preview = Vec::new();
-    let mut total = 0;
-
-    for entry in entries.filter_map(|e| e.ok()) {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        total += 1;
-        insert_visible_entry_preview(&mut preview, (name, is_dir), MAX_VISIBLE_FILES);
-    }
-
-    (preview, total)
-}
-
-fn insert_visible_entry_preview(
-    preview: &mut Vec<(String, bool)>,
-    entry: (String, bool),
-    limit: usize,
-) {
-    let insert_at = preview
-        .binary_search_by(|(current, _)| current.cmp(&entry.0))
-        .unwrap_or_else(|idx| idx);
-
-    if preview.len() < limit {
-        preview.insert(insert_at, entry);
-    } else if insert_at < limit {
-        preview.insert(insert_at, entry);
-        preview.truncate(limit);
-    }
-}
-
-fn summarize_visible_entries(entries: Vec<(String, bool)>, total: usize) -> String {
-    let shown = entries.len();
-
-    if total == 0 {
-        return String::new();
-    }
-
-    let mut rendered = entries
-        .into_iter()
-        .map(|(name, is_dir)| if is_dir { format!("{name}/") } else { name })
-        .collect::<Vec<_>>();
-
-    if total > shown {
-        rendered.push(format!("(+{} more)", total - shown));
-    }
-
-    rendered.join(", ")
 }
 
 fn describe_git_state() -> String {
@@ -990,16 +1091,123 @@ fn git_state_details() -> Option<(Option<String>, String)> {
 }
 
 #[cfg(test)]
-fn summarize_visible_entries_for_test(mut entries: Vec<(String, bool)>) -> String {
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
-    let total = entries.len();
-    summarize_visible_entries(entries.into_iter().take(MAX_VISIBLE_FILES).collect(), total)
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn assistant_call(id: &str, name: &str, arguments: &str) -> Value {
+        json!({
+            "role": "assistant",
+            "tool_calls": [{
+                "id": id,
+                "type": "function",
+                "function": { "name": name, "arguments": arguments }
+            }]
+        })
+    }
+
+    fn tool_reply(id: &str, content: &str) -> Value {
+        json!({ "role": "tool", "tool_call_id": id, "content": content })
+    }
+
+    fn manager_with(buffer: Vec<Value>) -> ConversationManager {
+        let mut manager = ConversationManager::new(
+            json!({ "role": "system", "content": "sys" }),
+            json!({ "role": "user", "content": "goal" }),
+        );
+        for message in buffer {
+            manager.add_message(message);
+        }
+        manager
+    }
+
+    /// Reading the same file twice used to keep both copies in every later
+    /// request for the rest of the conversation.
+    #[test]
+    fn compaction_drops_a_result_a_later_identical_call_replaced() {
+        let payload = "x".repeat(2000);
+        let mut manager = manager_with(vec![
+            assistant_call("a", "read_file", r#"{"path":"src/main.rs"}"#),
+            tool_reply("a", &payload),
+            assistant_call("b", "read_file", r#"{"path":"src/main.rs"}"#),
+            tool_reply("b", &payload),
+        ]);
+
+        let reclaimed = manager.compact_buffer();
+
+        assert!(reclaimed > 1500, "reclaimed {reclaimed}");
+        let first = extract_message_content(&manager.buffer[1]).unwrap();
+        assert!(first.contains("superseded"), "{first}");
+        assert!(first.contains("read_file"), "{first}");
+        // The newer copy is untouched.
+        assert_eq!(
+            extract_message_content(&manager.buffer[3]).unwrap(),
+            payload
+        );
+    }
+
+    /// Old tool output becomes a stub that still names the call, so the model
+    /// can decide whether fetching it again is worth a turn.
+    #[test]
+    fn compaction_elides_stale_output_but_says_what_it_was() {
+        let mut buffer = Vec::new();
+        for index in 0..8 {
+            let id = format!("c{index}");
+            buffer.push(assistant_call(
+                &id,
+                "search",
+                &format!(r#"{{"query":"q{index}"}}"#),
+            ));
+            buffer.push(tool_reply(&id, &"y".repeat(2000)));
+        }
+        let mut manager = manager_with(buffer);
+
+        manager.compact_buffer();
+
+        let oldest = extract_message_content(&manager.buffer[1]).unwrap();
+        assert!(oldest.contains("elided"), "{oldest}");
+        assert!(oldest.contains("search("), "{oldest}");
+
+        let newest = extract_message_content(manager.buffer.last().unwrap()).unwrap();
+        assert_eq!(newest.len(), 2000, "the recent window must survive intact");
+    }
+
+    /// Every tool message has to keep its place, or the API rejects the request:
+    /// a `tool` message is only valid right after the call that asked for it.
+    #[test]
+    fn compaction_never_removes_a_message() {
+        let mut buffer = Vec::new();
+        for index in 0..8 {
+            let id = format!("c{index}");
+            buffer.push(assistant_call(&id, "ls", r#"{"path":"."}"#));
+            buffer.push(tool_reply(&id, &"z".repeat(2000)));
+        }
+        let mut manager = manager_with(buffer);
+        let before = manager.buffer.len();
+
+        manager.compact_buffer();
+
+        assert_eq!(manager.buffer.len(), before);
+        for (index, message) in manager.buffer.iter().enumerate() {
+            let expected = if index % 2 == 0 { "assistant" } else { "tool" };
+            assert_eq!(message_role(message), Some(expected));
+        }
+    }
+
+    /// A stub costs about as much as a short result, so short results stay.
+    #[test]
+    fn compaction_leaves_small_results_alone() {
+        let mut buffer = Vec::new();
+        for index in 0..8 {
+            let id = format!("c{index}");
+            buffer.push(assistant_call(&id, "ls", r#"{"path":"."}"#));
+            buffer.push(tool_reply(&id, "ok"));
+        }
+        let mut manager = manager_with(buffer);
+
+        assert_eq!(manager.compact_buffer(), 0);
+        assert_eq!(extract_message_content(&manager.buffer[1]).unwrap(), "ok");
+    }
 
     #[test]
     fn extract_plain_string_content() {
@@ -1088,30 +1296,6 @@ mod tests {
         assert!(TOOL_SYSTEM_PROMPT.contains("- `read_file`: read a line-numbered window"));
         assert!(TOOL_SYSTEM_PROMPT.contains("- `str_replace`:"));
         assert!(!TOOL_SYSTEM_PROMPT.contains("- `read`:"));
-    }
-
-    #[test]
-    fn summarize_aliases_limits_output() {
-        let aliases = (0..10)
-            .map(|idx| (format!("a{idx}"), format!("cmd{idx}")))
-            .collect::<Vec<_>>();
-
-        let summary = summarize_aliases(aliases);
-
-        assert!(summary.contains("(+2 more)"));
-        assert!(summary.contains("a0='cmd0'"));
-    }
-
-    #[test]
-    fn summarize_visible_entries_limits_output() {
-        let entries = (0..14)
-            .map(|idx| (format!("file{idx}"), idx % 2 == 0))
-            .collect::<Vec<_>>();
-
-        let summary = summarize_visible_entries_for_test(entries);
-
-        assert!(summary.contains("(+2 more)"));
-        assert!(summary.contains("file0/"));
     }
 
     #[test]

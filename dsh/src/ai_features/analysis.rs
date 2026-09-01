@@ -4,10 +4,43 @@
 //! suggesting improvements, and diagnosing command output.
 
 use super::cache;
-use super::service::AiService;
+use super::service::{AiRequestOptions, AiService};
 use crate::safety::{PromptInjectionResult, SafetyGuard};
 use anyhow::Result;
 use serde_json::json;
+
+/// Bound captured output without throwing away the end of it.
+///
+/// `sanitize_ai_input` truncates from the head, and a failing build explains
+/// itself in its *last* lines - so the diagnosis prompts were being handed the
+/// compiler's progress messages with the error cut off. Trimming the middle
+/// first keeps both ends; the sanitiser then only has the control characters
+/// and the invisible ones left to do.
+fn bounded_output(output: &str, budget: usize) -> String {
+    let bounded = dsh_openai::turn::truncate_middle(output, budget);
+    // Headroom for the marker `truncate_middle` inserts, so the sanitiser does
+    // not immediately cut the head off again.
+    SafetyGuard::sanitize_ai_input(&bounded, budget + 256)
+}
+
+/// Cap for the single-line inline explanation.
+const INLINE_ANSWER_TOKENS: u64 = 120;
+
+/// Options for a request that only reasons about text it was handed.
+///
+/// No tools - these features have nothing to look up, and attaching the MCP
+/// schemas made a 140-token question cost thousands. A cache key per feature,
+/// so the provider can reuse each one's stable system prompt.
+fn read_only_options(
+    temperature: f64,
+    cache_key: &str,
+    max_tokens: Option<u64>,
+) -> AiRequestOptions {
+    AiRequestOptions::new(Some(temperature))
+        .without_tools()
+        .with_prompt_cache_key(&format!("dsh-{cache_key}"))
+        .with_max_tokens(max_tokens)
+}
 
 /// Explain a shell command in natural language.
 pub async fn explain_command<S: AiService + ?Sized>(service: &S, command: &str) -> Result<String> {
@@ -36,7 +69,9 @@ pub async fn explain_command<S: AiService + ?Sized>(service: &S, command: &str) 
         json!({"role": "user", "content": format!("Explain this command:\n```\n{}\n```", sanitized_command)}),
     ];
 
-    let answer = service.send_request(messages, Some(0.2)).await?;
+    let answer = service
+        .send_request_with(messages, read_only_options(0.2, "explain", None))
+        .await?;
     cache::store("explain", &[&sanitized_command], &answer);
     Ok(answer)
 }
@@ -70,7 +105,13 @@ pub async fn explain_command_inline<S: AiService + ?Sized>(
         return Ok(cached);
     }
 
-    let answer = service.send_request(messages, Some(0.1)).await?;
+    let answer = service
+        // One line of output, so a cap here cannot cut anything the caller uses.
+        .send_request_with(
+            messages,
+            read_only_options(0.1, "explain-inline", Some(INLINE_ANSWER_TOKENS)),
+        )
+        .await?;
     cache::store("explain_inline", &[&sanitized_command], &answer);
     Ok(answer)
 }
@@ -100,7 +141,12 @@ pub async fn suggest_improvement<S: AiService + ?Sized>(
         json!({"role": "user", "content": format!("Suggest improvements for:\n```\n{}\n```", sanitized_command)}),
     ];
 
-    service.send_request(messages, Some(0.3)).await
+    service
+        .send_request_with(
+            messages,
+            read_only_options(0.3, "suggest-improvement", None),
+        )
+        .await
 }
 
 /// Check if a command is potentially dangerous.
@@ -122,7 +168,9 @@ pub async fn check_safety<S: AiService + ?Sized>(service: &S, command: &str) -> 
         json!({"role": "user", "content": format!("Check safety of:\n```\n{}\n```", sanitized_command)}),
     ];
 
-    let answer = service.send_request(messages, Some(0.1)).await?;
+    let answer = service
+        .send_request_with(messages, read_only_options(0.1, "check-safety", None))
+        .await?;
     cache::store("check_safety", &[&sanitized_command], &answer);
     Ok(answer)
 }
@@ -135,19 +183,16 @@ pub async fn diagnose_output<S: AiService + ?Sized>(
     exit_code: i32,
 ) -> Result<String> {
     let sanitized_command = SafetyGuard::sanitize_ai_input(command, 1000);
-    // Output can be huge, sanitize and truncate
-    let sanitized_output = SafetyGuard::sanitize_ai_input(output, 2000);
+    // Bounded below by `bounded_output`, which keeps the tail; this pass is
+    // here for the control characters, not for the length.
+    let sanitized_output = SafetyGuard::sanitize_ai_input(output, 64_000);
 
     let system_prompt = "You are a debugging expert. Analyze the command output and diagnose any issues. \
     Focus on error messages and their root causes. Provide clear, actionable solutions. \
     Respond in the same language as the user's environment if possible, or match the language of their request.";
 
     // Truncate output if too long
-    let truncated_output = if sanitized_output.len() > 4000 {
-        format!("{}...(truncated)", &sanitized_output[..4000])
-    } else {
-        sanitized_output.to_string()
-    };
+    let truncated_output = bounded_output(&sanitized_output, 4000);
 
     let query = format!(
         "Command: `{}`\nExit code: {}\nOutput:\n```\n{}\n```",
@@ -176,8 +221,9 @@ pub async fn diagnose_output_with_history<S: AiService + ?Sized>(
     exit_code: i32,
 ) -> Result<(String, Vec<serde_json::Value>)> {
     let sanitized_command = SafetyGuard::sanitize_ai_input(command, 1000);
-    // Output can be huge, sanitize and truncate
-    let sanitized_output = SafetyGuard::sanitize_ai_input(output, 2000);
+    // Bounded below by `bounded_output`, which keeps the tail; this pass is
+    // here for the control characters, not for the length.
+    let sanitized_output = SafetyGuard::sanitize_ai_input(output, 64_000);
 
     let system_prompt = "You are a debugging expert. Analyze the command output and diagnose any issues. \
     Focus on error messages and their root causes. Provide clear, actionable solutions. \
@@ -186,11 +232,7 @@ pub async fn diagnose_output_with_history<S: AiService + ?Sized>(
     so the user can easily copy or apply them.";
 
     // Truncate output if too long
-    let truncated_output = if sanitized_output.len() > 4000 {
-        format!("{}...(truncated)", &sanitized_output[..4000])
-    } else {
-        sanitized_output.to_string()
-    };
+    let truncated_output = bounded_output(&sanitized_output, 4000);
 
     let query = format!(
         "Command: `{}`\nExit code: {}\nOutput:\n```\n{}\n```",
@@ -231,50 +273,7 @@ pub async fn send_followup_question<S: AiService + ?Sized>(
     Ok(response)
 }
 
-/// Analyze command output with AI based on a user query.
-pub async fn analyze_output<S: AiService + ?Sized>(
-    service: &S,
-    command: &str,
-    output: &str,
-    query: &str,
-) -> Result<String> {
-    if let PromptInjectionResult::Suspicious(warnings) = SafetyGuard::check_prompt_injection(query)
-    {
-        tracing::warn!(
-            "Potential prompt injection in analyze_output: {:?}",
-            warnings
-        );
-    }
-    let sanitized_query = SafetyGuard::sanitize_ai_input(query, 1000);
-    let sanitized_command = SafetyGuard::sanitize_ai_input(command, 1000);
-    let sanitized_output = SafetyGuard::sanitize_ai_input(output, 2000);
-
-    let system_prompt = "You are a shell output analyst. \
-    Analyze the following command output and respond to the user's query. \
-    Be concise and practical. Use markdown formatting for clarity. \
-    Respond in the same language as the user's query.";
-
-    // Truncate output if too long to avoid token limits
-    let truncated_output = if sanitized_output.len() > 8000 {
-        format!("{}...(truncated)", &sanitized_output[..8000])
-    } else {
-        sanitized_output.to_string()
-    };
-
-    let user_message = format!(
-        "Command: `{}`\n\nOutput:\n```\n{}\n```\n\nQuery: {}",
-        sanitized_command, truncated_output, sanitized_query
-    );
-
-    let messages = vec![
-        json!({"role": "system", "content": system_prompt}),
-        json!({"role": "user", "content": user_message}),
-    ];
-
-    service.send_request(messages, Some(0.2)).await
-}
-
-/// Summarize an explicitly watched command execution.
+/// Summarize a watched command's output for the `ai-watch` block record.
 pub async fn summarize_watch<S: AiService + ?Sized>(
     service: &S,
     command: &str,
@@ -285,12 +284,8 @@ pub async fn summarize_watch<S: AiService + ?Sized>(
 ) -> Result<String> {
     let sanitized_command = SafetyGuard::sanitize_ai_input(command, 1000);
     let sanitized_goal = goal.map(|goal| SafetyGuard::sanitize_ai_input(goal, 1000));
-    let sanitized_output = SafetyGuard::sanitize_ai_input(output, 5000);
-    let truncated_output = if sanitized_output.len() > 5000 {
-        format!("{}...(truncated)", &sanitized_output[..5000])
-    } else {
-        sanitized_output.to_string()
-    };
+    let sanitized_output = SafetyGuard::sanitize_ai_input(output, 40000);
+    let truncated_output = bounded_output(&sanitized_output, 5000);
 
     let system_prompt = "You are an ai-watch assistant embedded in a shell. \
     Summarize the watched command execution concisely. \
@@ -312,5 +307,7 @@ pub async fn summarize_watch<S: AiService + ?Sized>(
         json!({"role": "user", "content": query}),
     ];
 
-    service.send_request(messages, Some(0.2)).await
+    service
+        .send_request_with(messages, read_only_options(0.2, "watch-summary", None))
+        .await
 }

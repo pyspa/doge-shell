@@ -65,8 +65,8 @@ The Safety Guard protects against unintended execution of potentially destructiv
   - `Loose`: No restrictions.
   - `Normal` (Default): Requires confirmation for common dangerous commands (`rm`, `mv`, `cp`, `dd`, `mkfs`, `format`).
   - `Strict`: Requires confirmation for **all** commands.
-- **AI Tool Integration**: Automatically intercepts AI-generated commands and file modifications, requiring explicit user approval. Chat tools keep workspace-root and path-traversal protections even in loose mode.
-- **Sensitive File Policy**: Chat `read_file`, `search`, `ls`, and `edit` respect `.gitignore`, fail closed when ignore policy cannot be evaluated, hide common secret paths, and redact secret-like content in search results.
+- **AI Tool Integration**: Automatically intercepts AI-generated commands and file modifications, requiring explicit user approval. Commands the chat agent wants to run go through the same `SafetyGuard` as commands you type, including pipeline checks such as `curl | sh`, with wrappers like `sudo` looked through so the real command is the one judged. Chat tools keep workspace-root and path-traversal protections even in loose mode; the agent can read and write within the project root and the runtime skills directory, and nowhere else.
+- **Sensitive File Policy**: Chat `read_file`, `search`, `ls`, and `edit` respect `.gitignore` (nested files, `.git/info/exclude` and global excludes included), fail closed when ignore policy cannot be evaluated, hide common secret paths, and redact secret-like content in search results.
 - **Lisp Configuration**: Dynamically change the safety level at any time.
   ```lisp
   (safety-level "strict") ; Enable confirmation for everything
@@ -483,7 +483,16 @@ Create a `~/.config/dsh/config.lisp` file to configure your shell:
   "SSE-based MCP service"             ; description
 )
 
-;; Chat execute allowlist - commands that can be executed by AI assistant
+;; Chat execute allowlist - commands the AI assistant may run WITHOUT asking.
+;; Anything not listed here is not refused: it is judged by the same safety
+;; guard that covers commands you type, so at the default `normal` safety level
+;; an ordinary command runs after one confirmation (answer `a` to stop being
+;; asked about it for the rest of the session) and a risky one is refused.
+;; An entry matches by prefix, so "cargo test" also covers "cargo test -p foo".
+;;
+;; This list is separate from the commands you approve with `a` at your own
+;; safety prompts: approving a command for yourself does not approve it for
+;; the AI.
 (chat-execute-clear)
 ;; You can add multiple commands in a single call:
 (chat-execute-add "ls" "cat" "echo" "grep" "find")
@@ -1211,7 +1220,8 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    | `AI_CHAT_TIMEOUT_SECS` | `180` | Total per-request timeout |
    | `AI_CHAT_SESSION_TTL_SECS` | `1800` | How long consecutive `!` turns share a conversation; `0` disables it |
    | `AI_CHAT_CONTEXT_TOKEN_BUDGET` | `100000` | Prompt tokens before the conversation is summarized |
-   | `AI_CHAT_EXECUTE_ALLOWLIST` | unset | Overrides the `execute` tool allowlist |
+   | `AI_CHAT_TURN_TOKEN_BUDGET` | unset | Stop one `!` turn once it has spent this many tokens |
+   | `AI_CHAT_EXECUTE_ALLOWLIST` | unset | Extra entries for the `execute` tool allowlist, merged with `config.lisp` and the JSON config |
    | `AI_MESSAGE_LANG` | unset | Language for AI responses |
 
    Transient failures (429, 5xx, timeouts) are retried with backoff, honouring
@@ -1294,18 +1304,42 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     Press `Alt+w` to wrap the current input as `ai-watch -- <current input>` without executing it.
 
 9. **Agent tools**:
-    Inside `!` chat the assistant can call `search`, `ls`, `read_file`, `str_replace`, `edit`
-    and `execute`.
+    Inside `!` chat the assistant can call `shell_history`, `shell_context`, `search`,
+    `ls`, `read_file`, `str_replace`, `edit` and `execute`.
 
+    - `shell_history` shows what you recently ran, with the working directory, the exit
+      code and both output streams. Ask "why did that fail" and the assistant reads the
+      failure instead of running the command again to reproduce it.
+    - `shell_context` reports the project root, its runtimes, the build/test tasks it
+      defines, and your aliases - so the assistant looks the test command up rather than
+      guessing it.
     - `read_file` returns a line-numbered window and is paged: the assistant continues
       with `offset` instead of losing everything past the first few KB.
+    - `search` matches a substring by default, or a regular expression with
+      `regex: true`; `ignore_case` and a `glob` file filter are available, and binary
+      files are skipped.
     - `str_replace` changes part of a file by exact match. `edit` still exists for
       creating a file or replacing one in full.
-    - `execute` runs an allowlisted command with no shell evaluation and kills it after
-      `timeout_ms` (120s by default), so a build or a dev server cannot wedge the shell.
+    - `execute` runs a shell command - pipes, redirection and `&&` included - and kills
+      it after `timeout_ms` (120s by default), so a build or a dev server cannot wedge
+      the shell. Command substitution (`$(...)`, backticks, `<(...)`) and subshells are
+      refused, because evaluating them is what a safety check must not do.
+    - The command is checked by the same `SafetyGuard` that covers what you type, and
+      wrappers are looked through, so `sudo rm -rf ...` is judged as `rm`. At the
+      default `normal` safety level that means the destructive commands the guard knows
+      about ask first and everything else runs; set `(safety-level 'strict)` to be asked
+      about every command the allowlist does not already cover. Anything that writes to
+      a file by redirection asks as well.
+    - An allowlisted command skips the question entirely - that is what putting it on
+      the list means - so keep `(chat-execute-add ...)` to commands you are content for
+      the AI to run unattended. Entries match by token prefix (`cargo test` covers
+      `cargo test -p foo`); an "always" answer given at a prompt matches only that exact
+      command line.
+    - Tools can read and write within the project root and the runtime skills directory.
+      `.gitignore` is honoured the way git honours it, nested files included.
     - Long tool output is truncated in the middle, so the end of a build or test log -
       where the error is - still reaches the model.
-    - File writes and skill scripts always ask for confirmation.
+    - `edit`, `str_replace` and skill scripts always ask for confirmation.
 
 10. **Conversation continuity**:
     Consecutive `!` turns continue the same conversation, so follow-up questions work and

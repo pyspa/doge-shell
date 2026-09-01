@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// Environment key overriding the total per-request timeout, in seconds.
@@ -121,10 +122,39 @@ fn sanitize_base_url(base_url: Option<String>) -> String {
         .unwrap_or_else(|| DEFAULT_BASE_URL.trim_end_matches('/').to_string());
 
     if allow_insecure_http || sanitized.starts_with("https://") {
-        sanitized
-    } else {
-        DEFAULT_BASE_URL.trim_end_matches('/').to_string()
+        return sanitized;
     }
+
+    let fallback = DEFAULT_BASE_URL.trim_end_matches('/').to_string();
+    // Replacing the configured endpoint in silence is how a local `http://`
+    // server turns into requests against api.openai.com: the key is accepted,
+    // the answers come back, and nothing says the traffic left the machine.
+    if sanitized != fallback {
+        warn_insecure_base_url_replaced(&sanitized);
+    }
+    fallback
+}
+
+/// Announce the replacement once per process, on stderr and in the log.
+///
+/// This runs on every config load - once per agent turn - so repeating it would
+/// bury the shell's own output.
+fn warn_insecure_base_url_replaced(configured: &str) {
+    static WARNED: AtomicBool = AtomicBool::new(false);
+
+    tracing::warn!(
+        configured_base_url = %configured,
+        "base URL is not https; falling back to {DEFAULT_BASE_URL}"
+    );
+
+    if WARNED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+
+    eprintln!(
+        "dsh: AI base URL `{configured}` is not https, so requests go to {DEFAULT_BASE_URL} instead. \
+         Set {ALLOW_INSECURE_HTTP_ENV}=1 to use it as configured."
+    );
 }
 
 fn build_chat_endpoint(base_url: &str) -> String {

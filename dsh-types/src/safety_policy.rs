@@ -378,3 +378,90 @@ mod tests {
         assert!(!redacted.contains("CUSTOM=value"));
     }
 }
+
+/// Name the substitution construct in `command`, if it has one.
+///
+/// Deliberately textual and deliberately blunt: this runs *before* the parser,
+/// so it cannot ask the parser what it is looking at, and a false positive
+/// costs the agent one phrasing while a false negative costs an unreviewed
+/// execution.
+pub fn substitution_construct(command: &str) -> Option<&'static str> {
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut chars = command.char_indices().peekable();
+
+    while let Some((index, ch)) = chars.next() {
+        // Inside single quotes the shell expands nothing at all, backslash
+        // included, so the only character that matters is the closing quote.
+        if in_single {
+            if ch == '\'' {
+                in_single = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '\\' => {
+                chars.next();
+            }
+            // An apostrophe inside double quotes is a literal. Treating it as
+            // an opening quote made everything after it look quoted, so
+            // `echo "it's $(whoami)"` slipped past this check and was executed
+            // by the parser during the safety evaluation.
+            '\'' if !in_double => in_single = true,
+            '"' => in_double = !in_double,
+            // Double quotes do not suppress these two.
+            '`' => return Some("backtick command substitution"),
+            '$' if command[index + 1..].starts_with('(') => {
+                return Some("`$(...)` command substitution");
+            }
+            // These are only syntax outside quotes.
+            '<' | '>' if !in_double && command[index + 1..].starts_with('(') => {
+                return Some("process substitution");
+            }
+            '(' if !in_double => return Some("subshells"),
+            _ => {}
+        }
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod substitution_tests {
+    use super::substitution_construct;
+
+    /// The shell's parser evaluates these while building its job list, so a
+    /// safety check that parsed one would run it. Detection happens before the
+    /// parser and therefore has to read the quoting rules itself.
+    #[test]
+    fn every_evaluating_construct_is_named() {
+        assert!(substitution_construct("echo $(date)").is_some());
+        assert!(substitution_construct("echo `date`").is_some());
+        assert!(substitution_construct("diff <(a) <(b)").is_some());
+        assert!(substitution_construct("(cd /tmp && ls)").is_some());
+    }
+
+    #[test]
+    fn plain_command_lines_are_left_alone() {
+        for command in [
+            "cargo test -p dsh-builtin 2>&1 | tail -40",
+            "grep -r 'needle' src && echo done",
+            "printf 'a\nb\n' | sort -u > /tmp/out",
+            "echo \"it's fine\"",
+        ] {
+            assert!(
+                substitution_construct(command).is_none(),
+                "{command} was refused"
+            );
+        }
+    }
+
+    /// Double quotes do not suppress a substitution, and the apostrophe inside
+    /// them is a literal - reading it as an opening quote hid everything after.
+    #[test]
+    fn an_apostrophe_in_double_quotes_does_not_hide_a_substitution() {
+        assert!(substitution_construct(r#"echo "it's $(whoami)""#).is_some());
+        assert!(substitution_construct(r#"echo "it's `whoami`""#).is_some());
+    }
+}

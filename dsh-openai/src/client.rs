@@ -26,6 +26,9 @@ const DROPPABLE_FIELDS: &[&str] = &[
     "max_completion_tokens",
     "response_format",
     "prompt_cache_key",
+    // A fixed-temperature model that this build does not recognise still
+    // rejects the field. Dropping it costs one retry instead of the whole turn.
+    "temperature",
 ];
 
 #[derive(Debug)]
@@ -448,7 +451,9 @@ impl ChatGptClient {
             .as_object_mut()
             .expect("chat request body is a JSON object");
 
-        if let Some(temperature) = final_temperature {
+        if let Some(temperature) = final_temperature
+            && supported("temperature")
+        {
             map.insert("temperature".into(), json!(temperature));
         }
         if let Some(tools) = &options.tools
@@ -496,9 +501,32 @@ impl ChatGptClient {
     }
 }
 
-/// `gpt-5-mini` rejects any temperature other than the default.
+/// Model families that reject any temperature other than the default.
+///
+/// The reasoning models sample at a fixed temperature and answer a request that
+/// sets one with a 400. Matching on a prefix rather than one exact id is what
+/// keeps a new point release - `gpt-5.1`, `o3-mini` - from failing every turn
+/// the moment it becomes the configured model.
+const FIXED_TEMPERATURE_MODEL_PREFIXES: &[&str] = &["gpt-5", "o1", "o3", "o4"];
+
 fn model_requires_default_temperature(model: &str) -> bool {
-    model == "gpt-5-mini"
+    // A provider route (`openai/gpt-5-mini`) names the same model.
+    let model = model.rsplit('/').next().unwrap_or(model);
+    FIXED_TEMPERATURE_MODEL_PREFIXES
+        .iter()
+        .any(|prefix| family_matches(model, prefix))
+}
+
+/// Whether `model` is `prefix` or a variant of it.
+///
+/// Only `-` and `.` end a family name, so `gpt-5.1-codex` and `o3-mini` match
+/// `gpt-5` and `o3` while `gpt-51` and `o1x-turbo` - different models that
+/// merely share a leading substring - do not.
+fn family_matches(model: &str, prefix: &str) -> bool {
+    let Some(rest) = model.strip_prefix(prefix) else {
+        return false;
+    };
+    rest.is_empty() || rest.starts_with('-') || rest.starts_with('.')
 }
 
 async fn sleep_with_cancel(delay: Duration, cancel_check: Option<&dyn Fn() -> bool>) -> Result<()> {
@@ -721,6 +749,50 @@ mod tests {
         );
 
         assert_eq!(body["temperature"], 1.0);
+    }
+
+    /// The exact-match version of this check let every reasoning model other
+    /// than `gpt-5-mini` receive a temperature it answers with a 400.
+    #[test]
+    fn fixed_temperature_models_are_matched_by_family() {
+        for model in [
+            "gpt-5",
+            "gpt-5-mini",
+            "gpt-5.1-codex",
+            "o1-preview",
+            "o3",
+            "o3-mini",
+            "o4-mini",
+            "openai/gpt-5-mini",
+        ] {
+            assert!(
+                model_requires_default_temperature(model),
+                "{model} should use the default temperature"
+            );
+        }
+
+        for model in ["gpt-4.1-mini", "gpt-4o", "o1x-turbo", "gpt-51", "llama3"] {
+            assert!(
+                !model_requires_default_temperature(model),
+                "{model} should keep the caller's temperature"
+            );
+        }
+    }
+
+    /// An endpoint that rejects `temperature` must cost one retry, not the turn.
+    #[test]
+    fn build_body_drops_temperature_once_the_endpoint_rejects_it() {
+        let client = client();
+        client.remember_unsupported("temperature");
+
+        let body = client.build_body(
+            &[json!({ "role": "user", "content": "hi" })],
+            &ChatRequestOptions::new()
+                .with_temperature(Some(0.2))
+                .with_model(Some("gpt-4.1-mini".to_string())),
+        );
+
+        assert!(body.get("temperature").is_none());
     }
 
     #[test]

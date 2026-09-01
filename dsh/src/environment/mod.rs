@@ -74,7 +74,21 @@ pub(crate) struct VariableState {
 }
 
 pub(crate) struct PolicyState {
+    /// Commands the operator configured, via `(chat-execute-add ...)` or the
+    /// `execute` tool's JSON config. Both the shell's own safety check and the
+    /// chat agent honour these.
     pub(crate) execute_allowlist: Arc<RwLock<Vec<String>>>,
+    /// Commands the user waved through with "always" at an interactive safety
+    /// prompt.
+    ///
+    /// Kept apart from `execute_allowlist` because that list is also the chat
+    /// agent's permission set: while the two shared one store, approving your
+    /// own `rm -rf build` at the prompt silently handed the same command to the
+    /// AI for the rest of the session.
+    pub(crate) shell_always_allowlist: Arc<RwLock<Vec<String>>>,
+    /// Commands the user approved with "always" for the *agent*, this session.
+    /// Never consulted for commands the user types.
+    pub(crate) agent_session_allowlist: Arc<RwLock<Vec<String>>>,
     pub(crate) safety_level: Arc<RwLock<crate::safety::SafetyLevel>>,
     pub(crate) secret_manager: SecretManager,
 }
@@ -190,6 +204,8 @@ impl Environment {
             },
             policy_state: PolicyState {
                 execute_allowlist: Arc::new(RwLock::new(Vec::new())),
+                shell_always_allowlist: Arc::new(RwLock::new(Vec::new())),
+                agent_session_allowlist: Arc::new(RwLock::new(Vec::new())),
                 safety_level: Arc::new(RwLock::new(crate::safety::SafetyLevel::Normal)),
                 secret_manager: SecretManager::new(),
             },
@@ -251,6 +267,8 @@ impl Environment {
                 },
                 PolicyState {
                     execute_allowlist: parent.policy_state.execute_allowlist.clone(),
+                    shell_always_allowlist: parent.policy_state.shell_always_allowlist.clone(),
+                    agent_session_allowlist: parent.policy_state.agent_session_allowlist.clone(),
                     safety_level: parent.policy_state.safety_level.clone(),
                     secret_manager: SecretManager::new(),
                 },

@@ -49,7 +49,14 @@ pub async fn suggest_next_commands<S: AiService + ?Sized>(
         json!({"role": "user", "content": query}),
     ];
 
-    service.send_request(messages, Some(0.4)).await
+    service
+        .send_request_with(
+            messages,
+            AiRequestOptions::new(Some(0.4))
+                .without_tools()
+                .with_prompt_cache_key("dsh-suggest-commands"),
+        )
+        .await
 }
 
 /// Generate a completion JSON definition for a command.
@@ -118,7 +125,13 @@ CRITICAL RULES:
 
     // The prompt demands a bare JSON document; let the provider enforce it.
     let content = service
-        .send_request_with(messages, AiRequestOptions::new(Some(0.1)).as_json_object())
+        .send_request_with(
+            messages,
+            AiRequestOptions::new(Some(0.1))
+                .as_json_object()
+                .without_tools()
+                .with_prompt_cache_key("dsh-comp-gen"),
+        )
         .await?;
     // sanitize just in case the AI adds markdown despite instructions
     Ok(sanitize_code_block(&content))

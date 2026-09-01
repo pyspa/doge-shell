@@ -95,6 +95,14 @@ pub fn find_project_root(current_dir: &Path) -> PathBuf {
     cwd
 }
 
+/// Whether `dir` looks like the root of a project.
+///
+/// Exposed so the chat tools can widen their sandbox from a workspace member
+/// out to the workspace itself.
+pub fn has_project_marker(dir: &Path) -> bool {
+    has_any_marker(dir)
+}
+
 fn has_any_marker(dir: &Path) -> bool {
     PROJECT_MARKERS
         .iter()

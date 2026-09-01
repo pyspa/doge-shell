@@ -134,21 +134,27 @@ async fn test_fix_command_with_code_block() {
 
 #[tokio::test]
 async fn test_diagnose_output_truncation() {
+    let _cache_guard = super::cache::TEST_LOCK.lock().await;
     super::cache::clear();
     let service = MockAiService::new("Output was truncated due to length");
-    let long_output = "x".repeat(5000);
+    // A failing build says what went wrong in its *last* lines, so the marker
+    // has to be in the middle and the tail has to survive: cutting from the
+    // head handed the model the progress log with the error removed.
+    let long_output = format!("{}error[E0308]: mismatched types", "x".repeat(5000));
     let result = diagnose_output(&service, "cat file", &long_output, 0).await;
 
     assert!(result.is_ok());
 
     let messages = service.last_messages.lock().unwrap();
     let content = messages[1]["content"].as_str().unwrap();
-    // Output should be truncated at 4000 chars
-    assert!(content.contains("...(truncated)"));
+    assert!(content.contains("truncated"), "{content}");
+    assert!(content.contains("error[E0308]"), "the tail must survive");
+    assert!(content.len() < long_output.len());
 }
 
 #[tokio::test]
 async fn test_explain_command() {
+    let _cache_guard = super::cache::TEST_LOCK.lock().await;
     super::cache::clear();
     let service = MockAiService::new("This command lists files");
     let result = explain_command(&service, "ls -la").await.unwrap();
@@ -161,6 +167,7 @@ async fn test_explain_command() {
 
 #[tokio::test]
 async fn test_check_safety() {
+    let _cache_guard = super::cache::TEST_LOCK.lock().await;
     super::cache::clear();
     let service = MockAiService::new("**Dangerous**: This command will delete all files");
     let result = check_safety(&service, "rm -rf /").await.unwrap();
@@ -177,6 +184,7 @@ async fn test_check_safety() {
 
 #[tokio::test]
 async fn test_diagnose_output() {
+    let _cache_guard = super::cache::TEST_LOCK.lock().await;
     super::cache::clear();
     let service = MockAiService::new("Command not found. Try installing git.");
     let result = diagnose_output(&service, "gti status", "command not found: gti", 127)
@@ -190,98 +198,6 @@ async fn test_diagnose_output() {
             .as_str()
             .unwrap()
             .contains("Exit code: 127")
-    );
-}
-
-#[tokio::test]
-async fn test_analyze_output() {
-    let service =
-        MockAiService::new("The connection was refused because the server is not running.");
-    let result = analyze_output(
-        &service,
-        "curl http://localhost:8080",
-        "curl: (7) Failed to connect to localhost port 8080: Connection refused",
-        "何が問題か教えて",
-    )
-    .await
-    .unwrap();
-    assert!(result.contains("refused"));
-
-    let messages = service.last_messages.lock().unwrap();
-    assert_eq!(messages[0]["role"], "system");
-    assert!(
-        messages[1]["content"]
-            .as_str()
-            .unwrap()
-            .contains("curl http://localhost:8080")
-    );
-    assert!(
-        messages[1]["content"]
-            .as_str()
-            .unwrap()
-            .contains("Connection refused")
-    );
-    assert!(
-        messages[1]["content"]
-            .as_str()
-            .unwrap()
-            .contains("何が問題か教えて")
-    );
-}
-
-#[tokio::test]
-async fn test_analyze_output_truncation() {
-    let service = MockAiService::new("Output was truncated due to length");
-
-    // Create a very long output > 8000 chars
-    let long_output = "x".repeat(10000);
-    let result = analyze_output(&service, "cat largefile", &long_output, "summarize").await;
-
-    assert!(result.is_ok());
-
-    // Verify that the output was truncated in the request
-    let messages = service.last_messages.lock().unwrap();
-    let content = messages[1]["content"].as_str().unwrap();
-    assert!(content.contains("...(truncated)"));
-    // Should be shorter than original
-    assert!(content.len() < 10000);
-}
-
-#[tokio::test]
-async fn test_analyze_output_empty() {
-    let service = MockAiService::new("The command produced no output");
-    let result = analyze_output(&service, "true", "", "why is there no output?").await;
-
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap(), "The command produced no output");
-
-    let messages = service.last_messages.lock().unwrap();
-    assert!(
-        messages[1]["content"]
-            .as_str()
-            .unwrap()
-            .contains("why is there no output?")
-    );
-}
-
-#[tokio::test]
-async fn test_analyze_output_with_stderr() {
-    let service = MockAiService::new("The error suggests a permission problem with /etc/hosts");
-    let result = analyze_output(
-        &service,
-        "cat /etc/shadow",
-        "cat: /etc/shadow: Permission denied",
-        "what went wrong?",
-    )
-    .await;
-
-    assert!(result.is_ok());
-    let messages = service.last_messages.lock().unwrap();
-    assert!(
-        messages[1]["content"]
-            .as_str()
-            .unwrap()
-            .contains("Permission denied")
     );
 }
 
@@ -338,6 +254,7 @@ async fn test_send_followup_question() {
 
 #[tokio::test]
 async fn test_explain_command_inline_basic() {
+    let _cache_guard = super::cache::TEST_LOCK.lock().await;
     super::cache::clear();
     let service = MockAiService::new("Lists files in long format including hidden");
     let result = explain_command_inline(&service, "ls -la").await.unwrap();
@@ -356,6 +273,7 @@ async fn test_explain_command_inline_basic() {
 
 #[tokio::test]
 async fn test_explain_command_inline_uses_low_temperature() {
+    let _cache_guard = super::cache::TEST_LOCK.lock().await;
     super::cache::clear();
     let service = MockAiService::new("Prints text to stdout");
     // send_request is called with temperature=Some(0.1) internally;
@@ -366,6 +284,7 @@ async fn test_explain_command_inline_uses_low_temperature() {
 
 #[tokio::test]
 async fn test_explain_command_inline_long_input_is_sanitized() {
+    let _cache_guard = super::cache::TEST_LOCK.lock().await;
     super::cache::clear();
     // Input longer than the 200-char sanitization limit must still work.
     // "echo " (5 chars) + 300 "a"s = 305 chars total
@@ -389,6 +308,7 @@ async fn test_explain_command_inline_long_input_is_sanitized() {
 
 #[tokio::test]
 async fn test_explain_command_inline_prompt_injection_warning() {
+    let _cache_guard = super::cache::TEST_LOCK.lock().await;
     super::cache::clear();
     // A command that looks like prompt injection should still return a result
     // (the function logs a warning but does not abort).
@@ -401,6 +321,7 @@ async fn test_explain_command_inline_prompt_injection_warning() {
 
 #[tokio::test]
 async fn test_explain_command_inline_empty_input() {
+    let _cache_guard = super::cache::TEST_LOCK.lock().await;
     super::cache::clear();
     // Empty command: still valid from the function's perspective.
     let service = MockAiService::new("");

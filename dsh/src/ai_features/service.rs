@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 /// Shape of one AI request beyond the messages themselves.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AiRequestOptions {
     pub temperature: Option<f64>,
     /// Cap on generated tokens.
@@ -27,14 +27,47 @@ pub struct AiRequestOptions {
     /// Ask the provider to guarantee a JSON object, instead of hoping the
     /// prompt is obeyed and then stripping code fences.
     pub json_object: bool,
+    /// Whether the MCP tools may be offered for this request.
+    ///
+    /// They used to be attached unconditionally, so a one-line "explain this
+    /// command" - about 140 tokens of actual content - also carried the full
+    /// JSON schema of every tool on every connected MCP server. A request that
+    /// has nothing to look up should not pay for the ability.
+    pub allow_tools: bool,
+    /// Routing hint for the provider's prefix cache.
+    pub prompt_cache_key: Option<String>,
+}
+
+impl Default for AiRequestOptions {
+    fn default() -> Self {
+        Self {
+            temperature: None,
+            max_tokens: None,
+            json_object: false,
+            allow_tools: true,
+            prompt_cache_key: None,
+        }
+    }
 }
 
 impl AiRequestOptions {
     pub fn new(temperature: Option<f64>) -> Self {
         Self {
             temperature,
+            allow_tools: true,
             ..Self::default()
         }
+    }
+
+    /// For a request that only reasons about text it was already given.
+    pub fn without_tools(mut self) -> Self {
+        self.allow_tools = false;
+        self
+    }
+
+    pub fn with_prompt_cache_key(mut self, key: &str) -> Self {
+        self.prompt_cache_key = Some(key.to_string());
+        self
     }
 
     pub fn with_max_tokens(mut self, max_tokens: Option<u64>) -> Self {
@@ -50,8 +83,9 @@ impl AiRequestOptions {
     fn to_chat_options(&self, tools: Option<Vec<Value>>) -> ChatRequestOptions {
         let mut options = ChatRequestOptions::new()
             .with_temperature(self.temperature)
-            .with_tools(tools)
-            .with_max_tokens(self.max_tokens);
+            .with_tools(self.allow_tools.then_some(tools).flatten())
+            .with_max_tokens(self.max_tokens)
+            .with_prompt_cache_key(self.prompt_cache_key.clone());
         if self.json_object {
             options = options.with_response_format(Some(dsh_openai::json_object_format()));
         }
@@ -60,7 +94,10 @@ impl AiRequestOptions {
 }
 
 /// Cap for a single MCP tool result fed back into the conversation.
-const MAX_TOOL_OUTPUT_CHARS: usize = 4096;
+///
+/// The same number the `!` chat runtime uses. Half of it here meant one tool
+/// returned a different amount depending on which loop invoked it.
+use dsh_openai::turn::limits::MAX_TOOL_OUTPUT_CHARS;
 
 /// Response structure for AI-generated commands
 #[derive(Debug, Deserialize)]
@@ -198,11 +235,10 @@ impl LiveAiService {
         let mut iterations = 0;
         // Rounds where the model produced neither a tool call nor an answer.
         let mut stalled_rounds = 0usize;
-        const MAX_ITERATIONS: usize = 10;
 
         loop {
             iterations += 1;
-            if iterations > MAX_ITERATIONS {
+            if iterations > turn::limits::MAX_ASSIST_ITERATIONS {
                 anyhow::bail!("AI request exceeded maximum number of tool interactions");
             }
 
@@ -227,16 +263,15 @@ impl LiveAiService {
                 TurnOutcome::Stalled => {
                     // Resending the identical request only burns the budget.
                     stalled_rounds += 1;
-                    if stalled_rounds > 1 {
-                        anyhow::bail!(
-                            "AI request returned neither a tool call nor an answer twice in a row"
-                        );
+                    match turn::handle_stall(stalled_rounds) {
+                        turn::StallAction::GiveUp(reason) => {
+                            anyhow::bail!("AI request {reason}")
+                        }
+                        turn::StallAction::Nudge(prompt) => {
+                            messages.push(json!({ "role": "user", "content": prompt }));
+                            continue;
+                        }
                     }
-                    messages.push(json!({
-                        "role": "user",
-                        "content": "Your last reply contained neither a tool call nor an answer. Either call a tool or answer the question now."
-                    }));
-                    continue;
                 }
             };
 

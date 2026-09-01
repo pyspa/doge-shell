@@ -137,11 +137,20 @@ pub async fn eval_str(
         {
             let environment = shell.environment.read();
             let safety_level_guard = environment.policy_state.safety_level.read();
+            // What the user types is judged against the configured list *and*
+            // whatever they waved through earlier in this session. The agent
+            // sees only the first of the two.
             let allowlist_guard = environment.policy_state.execute_allowlist.read();
+            let always_guard = environment.policy_state.shell_always_allowlist.read();
+            let allowlist: Vec<String> = allowlist_guard
+                .iter()
+                .chain(always_guard.iter())
+                .cloned()
+                .collect();
 
             match shell
                 .safety_guard
-                .check_jobs(&jobs, &safety_level_guard, &allowlist_guard)
+                .check_jobs(&jobs, &safety_level_guard, &allowlist)
             {
                 SafetyResult::Allowed => {
                     // Proceed
@@ -152,6 +161,7 @@ pub async fn eval_str(
                 SafetyResult::Confirm(reason) => {
                     // Release locks before confirmation to avoid holding them during user input
                     drop(allowlist_guard);
+                    drop(always_guard);
                     drop(safety_level_guard);
                     drop(environment);
 
@@ -160,14 +170,17 @@ pub async fn eval_str(
                             // Proceed
                         }
                         Ok(ConfirmationAction::AlwaysAllow) => {
-                            // Proceed and mark for add
+                            // Proceed and mark for add.
                             // We allow the *exact matching command strings* of all jobs in this approved pipeline.
-
+                            //
+                            // This goes to the shell's own store, not the list
+                            // the chat agent reads: approving a command for
+                            // yourself is not approving it for the AI.
                             shell
                                 .environment
                                 .read()
                                 .policy_state
-                                .execute_allowlist
+                                .shell_always_allowlist
                                 .write()
                                 .extend(jobs.iter().map(|j| j.cmd.clone()));
                         }

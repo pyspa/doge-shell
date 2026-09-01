@@ -85,17 +85,18 @@ pub(crate) async fn handle_ai_diagnose(repl: &mut Repl<'_>) -> Result<()> {
         return Ok(());
     }
 
-    let command = repl.state.last_command_string.clone();
-    let output = repl
-        .shell
-        .environment
-        .read()
-        .session_output_state
-        .output_history
-        .get_stderr(1)
-        .map(|s| s.to_string())
-        .unwrap_or_default();
-    let exit_code = repl.state.last_status;
+    // Reading only stderr here left every build tool that reports on stdout
+    // diagnosed from an empty string.
+    let hint_command = repl.state.last_command_string.clone();
+    let hint_status = repl.state.last_status;
+    let failure = crate::ai_features::resolve_last_failure(
+        &repl.shell.environment.read(),
+        Some((hint_command.as_str(), hint_status)),
+    );
+    let (command, output, exit_code) = match failure {
+        Some(failure) => (failure.command, failure.output, failure.exit_code),
+        None => (hint_command, String::new(), hint_status),
+    };
 
     if let Some(service) = &repl.services.ai {
         let context = DiagnosticContext {

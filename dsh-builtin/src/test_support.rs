@@ -1,4 +1,5 @@
 use crate::ShellProxy;
+use crate::shell_capabilities::{AgentCommandPolicy, AgentCommandVerdict, ApprovalDecision};
 use anyhow::Result;
 use dsh_types::{Context, mcp::McpServerConfig};
 use std::collections::HashMap;
@@ -25,6 +26,13 @@ pub(crate) struct TestShellProxy {
     pub confirm_calls: usize,
     pub confirm_counter: Option<Arc<AtomicUsize>>,
     pub execute_allowlist: Vec<String>,
+    /// What `evaluate_agent_command` answers. Fail-closed like the rest of this
+    /// double: without an opt-in every command needs confirmation, and
+    /// `confirm_result` then decides.
+    pub agent_verdict: AgentCommandVerdict,
+    pub agent_session_allowlist: Vec<String>,
+    /// Overrides `confirm_result` so a test can exercise the "always" answer.
+    pub approval_decision: Option<ApprovalDecision>,
     pub vars: HashMap<String, String>,
     pub aliases: HashMap<String, String>,
     pub abbrs: HashMap<String, String>,
@@ -43,6 +51,11 @@ impl Default for TestShellProxy {
             confirm_calls: 0,
             confirm_counter: None,
             execute_allowlist: Vec::new(),
+            agent_verdict: AgentCommandVerdict::Confirm(
+                "test policy requires confirmation".to_string(),
+            ),
+            agent_session_allowlist: Vec::new(),
+            approval_decision: None,
             vars: HashMap::new(),
             aliases: HashMap::new(),
             abbrs: HashMap::new(),
@@ -176,6 +189,38 @@ impl ShellProxy for TestShellProxy {
             counter.fetch_add(1, Ordering::SeqCst);
         }
         Ok(self.confirm_result)
+    }
+}
+
+impl AgentCommandPolicy for TestShellProxy {
+    fn evaluate_agent_command(&mut self, _command: &str) -> AgentCommandVerdict {
+        self.agent_verdict.clone()
+    }
+
+    fn request_agent_approval(&mut self, _message: &str) -> Result<ApprovalDecision> {
+        self.confirm_calls += 1;
+        if let Some(counter) = &self.confirm_counter {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(self.approval_decision.unwrap_or({
+            if self.confirm_result {
+                ApprovalDecision::Allow
+            } else {
+                ApprovalDecision::Deny
+            }
+        }))
+    }
+
+    fn remember_agent_approval(&mut self, command: &str) {
+        self.agent_session_allowlist.push(command.to_string());
+    }
+
+    fn agent_session_approvals(&mut self) -> Vec<String> {
+        self.agent_session_allowlist.clone()
+    }
+
+    fn agent_allowlist(&mut self) -> Vec<String> {
+        self.execute_allowlist.clone()
     }
 }
 

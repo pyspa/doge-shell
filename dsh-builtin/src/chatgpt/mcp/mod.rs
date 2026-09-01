@@ -171,7 +171,10 @@ pub struct McpRuntimeStateSnapshot {
 /// MCP Manager with session caching support
 pub struct McpManager {
     servers: Vec<McpServer>,
-    bindings: HashMap<String, ToolBinding>,
+    /// A `BTreeMap`, not a `HashMap`: `tool_definitions` walks it to build the
+    /// `tools` array, and a hash order that changes between processes means the
+    /// provider's prefix cache misses on every fresh shell.
+    bindings: BTreeMap<String, ToolBinding>,
     warnings: Vec<String>,
     /// Metadata for connected sessions
     session_meta: RwLock<HashMap<String, SessionMeta>>,
@@ -183,7 +186,7 @@ impl Default for McpManager {
     fn default() -> Self {
         Self {
             servers: Vec::new(),
-            bindings: HashMap::new(),
+            bindings: BTreeMap::new(),
             warnings: Vec::new(),
             session_meta: RwLock::new(HashMap::new()),
             connection_errors: RwLock::new(HashMap::new()),
@@ -529,10 +532,7 @@ impl McpManager {
         })
         .map_err(|err| format!("failed to call MCP tool: {err}"))?;
 
-        let json = serde_json::to_value(&result)
-            .map_err(|err| format!("failed to serialize MCP tool result: {err}"))?;
-
-        Ok(Some(json.to_string()))
+        Ok(Some(render_tool_result(&result)?))
     }
 
     pub(crate) fn has_tool_binding(&self, function_name: &str) -> bool {
@@ -674,7 +674,7 @@ impl McpManager {
             cache.save();
         }
 
-        let mut bindings = HashMap::new();
+        let mut bindings = BTreeMap::new();
         let mut used_names = HashSet::new();
 
         for server in &servers {
@@ -1112,6 +1112,46 @@ fn sanitized_command_name(command: &str) -> String {
     } else {
         sanitized
     }
+}
+
+/// Budget for one MCP tool result, applied before the shared tool-output cap.
+const MAX_TOOL_RESULT_CHARS: usize = 6144;
+
+/// Turn a `CallToolResult` into what the model should actually read.
+///
+/// The whole struct used to be serialized and handed on as JSON, which the
+/// shared cap then truncated *from the middle* - so a large result reached the
+/// model as a JSON document with a hole in it, unparseable and impossible to
+/// act on. Almost all of the value is in the text content anyway; the wrapper
+/// was paid for on every call and read by nobody.
+fn render_tool_result(result: &rmcp::model::CallToolResult) -> Result<String, String> {
+    let mut text = String::new();
+
+    for content in &result.content {
+        if let Some(raw) = content.as_text() {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&raw.text);
+        }
+    }
+
+    if text.trim().is_empty() {
+        // No text at all - an image, a resource link, or a structured payload.
+        // Fall back to JSON rather than reporting an empty result.
+        let json = serde_json::to_value(result)
+            .map_err(|err| format!("failed to serialize MCP tool result: {err}"))?;
+        text = json.to_string();
+    }
+
+    if result.is_error.unwrap_or(false) {
+        text = format!("The tool reported an error:\n{text}");
+    }
+
+    Ok(dsh_openai::turn::truncate_middle(
+        &text,
+        MAX_TOOL_RESULT_CHARS,
+    ))
 }
 
 #[cfg(test)]

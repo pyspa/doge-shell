@@ -6,8 +6,11 @@
 mod builtin;
 mod external;
 
+use crate::repl::confirmation::ConfirmationAction;
+use crate::safety::SafetyResult;
 use crate::shell::Shell;
 use anyhow::{Context as _, Result};
+use dsh_builtin::shell_capabilities::{AgentCommandPolicy, AgentCommandVerdict, ApprovalDecision};
 use dsh_builtin::{CoreShellAction, ShellProxy};
 use dsh_types::{Context, mcp::McpServerConfig};
 use globmatch;
@@ -51,6 +54,90 @@ fn should_read_confirmation_from_tty(stdin_is_terminal: bool) -> bool {
 
 fn confirmation_is_yes(input: &str) -> bool {
     input.trim().to_lowercase() == "y"
+}
+
+impl Shell {
+    /// The commands the chat agent may run without asking.
+    ///
+    /// Only the operator's configured list. Deliberately *not* the list the
+    /// user's own interactive approvals feed - see
+    /// `PolicyState::shell_always_allowlist` - and not this session's "always"
+    /// answers either, which are matched exactly rather than by prefix.
+    fn agent_allowlist_snapshot(&self) -> Vec<String> {
+        self.environment
+            .read()
+            .policy_state
+            .execute_allowlist
+            .read()
+            .clone()
+    }
+}
+
+impl AgentCommandPolicy for Shell {
+    fn evaluate_agent_command(&mut self, command: &str) -> AgentCommandVerdict {
+        // `get_jobs` parses *and evaluates*: `shell::parse::parse_command` calls
+        // `capture_subshell_stdout` for `$(...)`, `(...)` and `<(...)`, so
+        // handing one of those to a safety check would run it before anyone
+        // approved it. The `execute` tool refuses them for that reason; this
+        // repeats the refusal here so the trait cannot become a way to run a
+        // command by asking whether it is safe.
+        if let Some(construct) = dsh_types::safety_policy::substitution_construct(command) {
+            return AgentCommandVerdict::Denied(format!("{construct} cannot be evaluated safely"));
+        }
+
+        // Parse the whole line, so a pipeline is judged as a pipeline. This is
+        // the same path the user's own input takes.
+        let jobs = match crate::shell::eval::get_jobs(self, command) {
+            Ok(jobs) if !jobs.is_empty() => jobs,
+            Ok(_) => {
+                return AgentCommandVerdict::Denied("command is empty".to_string());
+            }
+            Err(err) => {
+                return AgentCommandVerdict::Denied(format!("command could not be parsed: {err}"));
+            }
+        };
+
+        let allowlist = self.agent_allowlist_snapshot();
+        let environment = self.environment.read();
+        let level = environment.policy_state.safety_level.read().clone();
+        drop(environment);
+
+        match self.safety_guard.check_jobs(&jobs, &level, &allowlist) {
+            SafetyResult::Allowed => AgentCommandVerdict::Allowed,
+            SafetyResult::Confirm(reason) => AgentCommandVerdict::Confirm(reason),
+            SafetyResult::Denied(reason) => AgentCommandVerdict::Denied(reason),
+        }
+    }
+
+    fn request_agent_approval(&mut self, message: &str) -> Result<ApprovalDecision> {
+        Ok(match crate::repl::confirmation::confirm_action(message)? {
+            ConfirmationAction::Yes => ApprovalDecision::Allow,
+            ConfirmationAction::AlwaysAllow => ApprovalDecision::AllowAlways,
+            ConfirmationAction::No => ApprovalDecision::Deny,
+        })
+    }
+
+    fn remember_agent_approval(&mut self, command: &str) {
+        let environment = self.environment.read();
+        let mut session = environment.policy_state.agent_session_allowlist.write();
+        let entry = command.trim().to_string();
+        if !entry.is_empty() && !session.contains(&entry) {
+            session.push(entry);
+        }
+    }
+
+    fn agent_session_approvals(&mut self) -> Vec<String> {
+        self.environment
+            .read()
+            .policy_state
+            .agent_session_allowlist
+            .read()
+            .clone()
+    }
+
+    fn agent_allowlist(&mut self) -> Vec<String> {
+        self.agent_allowlist_snapshot()
+    }
 }
 
 impl ShellProxy for Shell {

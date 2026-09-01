@@ -12,31 +12,7 @@ const AUTO_FIX_BLOCKLIST: &[&str] = &["gco"];
 const AI_BACKFILL_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(400);
 
 pub fn get_directory_listing_content(path: &std::path::Path) -> Vec<String> {
-    let mut files = Vec::new();
-    if let Ok(dir) = std::fs::read_dir(path) {
-        let mut entries: Vec<_> = dir
-            .filter_map(|e| e.ok())
-            .map(|e| {
-                let name = e.file_name().to_string_lossy().to_string();
-                let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                (name, is_dir)
-            })
-            .filter(|(name, _)| !name.starts_with('.'))
-            .collect();
-
-        entries.sort_by(|a, b| match (a.1, b.1) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => a.0.cmp(&b.0),
-        });
-
-        files = entries
-            .into_iter()
-            .take(30)
-            .map(|(name, is_dir)| if is_dir { format!("{}/", name) } else { name })
-            .collect();
-    }
-    files
+    crate::ai_features::directory_listing_entries(path)
 }
 
 impl<'a> Repl<'a> {
@@ -86,28 +62,15 @@ impl<'a> Repl<'a> {
 
         let command = self.state.last_command_string.clone();
         let status = self.state.last_status;
-        let output = self
-            .shell
-            .environment
-            .read()
-            .session_output_state
-            .command_blocks
-            .iter()
-            .find(|block| block.command == command && block.exit_code == status)
-            .map(|block| {
-                if block.stderr.is_empty() {
-                    block.stdout.clone()
-                } else {
-                    block.stderr.clone()
-                }
-            })
-            .unwrap_or_else(|| {
-                self.shell
-                    .environment
-                    .read()
-                    .get_var("OUT")
-                    .unwrap_or_default()
-            });
+        // Both streams, not just whichever one happened to be non-empty: a
+        // command that logs progress on stdout and the error on stderr used to
+        // reach the fixer with the progress log alone.
+        let output = crate::ai_features::resolve_last_failure(
+            &self.shell.environment.read(),
+            Some((command.as_str(), status)),
+        )
+        .map(|failure| failure.output)
+        .unwrap_or_default();
 
         let command_time = self.state.last_command_time;
         if let Some(fix) = DeterministicQuickFixProvider

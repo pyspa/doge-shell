@@ -47,6 +47,23 @@ pub fn confirm_action(message: &str) -> Result<ConfirmationAction> {
         if let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
         {
+            // Raw mode has already turned ISIG off, so Ctrl-C arrives as a key
+            // rather than a signal, and without this the prompt could not be
+            // escaped at all. It is answered before the plain-letter arms
+            // because those ignore modifiers: Ctrl-A - a reflexive
+            // "beginning of line" - was being read as "always allow", which
+            // now permanently grants the command to the AI as well.
+            if key
+                .modifiers
+                .intersects(event::KeyModifiers::CONTROL | event::KeyModifiers::ALT)
+            {
+                if matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C')) {
+                    queue!(stdout, Print("No\r\n"))?;
+                    break;
+                }
+                continue;
+            }
+
             match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
                     action = ConfirmationAction::Yes;

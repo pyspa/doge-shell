@@ -1,5 +1,5 @@
-use crate::ShellProxy;
 use crate::safety_policy;
+use crate::shell_capabilities::ChatToolHost;
 use serde_json::{Value, json};
 use std::fs;
 
@@ -102,7 +102,7 @@ fn render_window(path_label: &str, contents: &str, offset: usize, limit: usize) 
     out
 }
 
-pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String, String> {
+pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<String, String> {
     let parsed: Value = serde_json::from_str(arguments)
         .map_err(|err| format!("chat: invalid JSON arguments for read_file tool: {err}"))?;
 
@@ -127,7 +127,13 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
     super::reject_gitignored_path(&normalized_abs_path, &normalized_current_dir, path_value)?;
 
     if let Some(reason) = super::sensitive_path_reason(&normalized_abs_path)
-        && !super::confirm_sensitive_access(_proxy, "read", path_value, reason)?
+        && !super::confirm_sensitive_access(
+            _proxy,
+            "read",
+            path_value,
+            &normalized_abs_path,
+            reason,
+        )?
     {
         return Ok("read_file cancelled by user.".to_string());
     }
@@ -136,7 +142,13 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
         .map_err(|err| format!("chat: failed to read file `{path_value}`: {err}"))?;
 
     if safety_policy::contains_sensitive_text(&contents)
-        && !super::confirm_sensitive_access(_proxy, "read", path_value, "sensitive content")?
+        && !super::confirm_sensitive_access(
+            _proxy,
+            "read",
+            path_value,
+            &normalized_abs_path,
+            "sensitive content",
+        )?
     {
         return Ok("read_file cancelled by user.".to_string());
     }

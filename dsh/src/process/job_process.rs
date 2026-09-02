@@ -271,10 +271,6 @@ impl JobProcess {
             .check_command(&level, cmd, argv, &allowlist)
         {
             crate::safety::SafetyResult::Allowed => {}
-            crate::safety::SafetyResult::Denied(reason) => {
-                shell.print_error(format!("Safety Guard: Execution denied: {}", reason));
-                return Ok(false);
-            }
             crate::safety::SafetyResult::Confirm(message) => {
                 if !shell.confirm_action(&message)? {
                     return Ok(false);

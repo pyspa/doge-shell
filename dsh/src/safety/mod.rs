@@ -2,9 +2,15 @@ use crate::process::Job;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
+/// What the guard decided about a command or a tool call.
+///
+/// Two values, not three: the guard runs where a person is present to answer,
+/// so its strongest verdict is a question. Refusal is a separate decision, made
+/// by the agent path in `AgentCommandVerdict::Denied` for the lines it cannot
+/// read before they run - a `Denied` here was constructed nowhere and left nine
+/// unreachable handlers behind it.
 pub enum SafetyResult {
     Allowed,
-    Denied(String),
     Confirm(String),
 }
 
@@ -32,7 +38,6 @@ impl SafetyGuard {
         guard.register_checker("chmod", Self::check_recursive);
         guard.register_checker("chown", Self::check_recursive);
         guard.register_checker("cp", Self::check_cp);
-        guard.register_checker("mv", Self::check_mv);
         guard.register_checker("curl", Self::check_data_exfiltration);
         guard.register_checker("wget", Self::check_data_exfiltration);
 
@@ -40,15 +45,12 @@ impl SafetyGuard {
         for cmd in &["cat", "less", "more", "head", "tail", "grep", "awk", "sed"] {
             guard.register_checker(cmd, Self::check_sensitive_file_access);
         }
-        guard.register_checker("npm", Self::check_package_manager);
-        guard.register_checker("pip", Self::check_package_manager);
-        guard.register_checker("pip3", Self::check_package_manager);
-        guard.register_checker("cargo", Self::check_package_manager);
-        guard.register_checker("gem", Self::check_package_manager);
-        guard.register_checker("apt", Self::check_package_manager);
-        guard.register_checker("apt-get", Self::check_package_manager);
-        guard.register_checker("yum", Self::check_package_manager);
-        guard.register_checker("brew", Self::check_package_manager);
+        // `mv`, the package managers and `systemctl` used to be registered here
+        // with checkers that returned `None` for every input. A registered
+        // checker that always allows is indistinguishable from no checker, and
+        // the empty ones made the README claim confirmations that never
+        // happened. Register a checker when it can say no; `strict` is what
+        // covers everything else.
         for cmd in &[
             "sh",
             "bash",
@@ -71,9 +73,6 @@ impl SafetyGuard {
                     .map(|flag| format!("`{flag}` hands {program} a string to execute. Proceed?"))
             });
         }
-        //guard.register_checker("systemctl", Self::check_system_modification);
-        //guard.register_checker("service", Self::check_system_modification);
-
         guard
     }
 
@@ -252,8 +251,20 @@ impl SafetyGuard {
     }
 
     /// Check MCP tool execution
+    /// Judge one MCP tool call.
+    ///
+    /// `function_name` is the namespaced name the model called
+    /// (`mcp__<label>__<tool>`); it identifies the call in the allowlist and in
+    /// what the user is asked. `tool_name` is the tool's own name on its
+    /// server, and it is what the classification below reads: matching
+    /// `"bash"` against `mcp__ops__bash` never held, so a server's shell tool
+    /// reached the user as a generic "may have side effects" question instead
+    /// of being judged as the command it was about to run. Pass
+    /// `function_name` for both when the binding cannot be resolved, which
+    /// only loses the classification the old code never had.
     pub fn check_mcp_tool(
         &self,
+        function_name: &str,
         tool_name: &str,
         args_json: &str,
         level: &SafetyLevel,
@@ -263,7 +274,7 @@ impl SafetyGuard {
             return SafetyResult::Allowed;
         }
 
-        if Self::is_allowlisted_mcp_call(tool_name, args_json, allowlist) {
+        if Self::is_allowlisted_mcp_call(function_name, args_json, allowlist) {
             return SafetyResult::Allowed;
         }
 
@@ -275,7 +286,7 @@ impl SafetyGuard {
                     Err(_) => {
                         return SafetyResult::Confirm(format!(
                             "MCP tool '{}' requested command execution, but arguments could not be parsed safely. Proceed?",
-                            tool_name
+                            function_name
                         ));
                     }
                 };
@@ -286,14 +297,14 @@ impl SafetyGuard {
             }
             return SafetyResult::Confirm(format!(
                 "MCP tool '{}' requested command execution, but arguments could not be validated safely. Proceed?",
-                tool_name
+                function_name
             ));
         }
 
         if matches!(level, SafetyLevel::Strict) {
             return SafetyResult::Confirm(format!(
                 "MCP tool '{}' execution requested in Strict mode. Proceed?",
-                tool_name
+                function_name
             ));
         }
 
@@ -302,7 +313,7 @@ impl SafetyGuard {
         } else {
             SafetyResult::Confirm(format!(
                 "MCP tool '{}' may have side effects. Proceed?",
-                tool_name
+                function_name
             ))
         }
     }
@@ -501,23 +512,8 @@ impl SafetyGuard {
                 "Potentially dangerous copy (recursive + force) detected. Proceed?".to_string(),
             );
         }
-        // Normal cp -r is common, we allow it in Normal mode implicitly (because this returns None if just recursive)
-        // Wait, if we return None, it's allowed.
-        // Previous impl returned Some("Recursive copy...").
-        // Let's relax for Normal mode:
-        // Only warn if force AND recursive.
-        None
-    }
-
-    fn check_mv(args: &[String]) -> Option<String> {
-        let mut _force = false;
-        for arg in args {
-            if arg == "-f" || arg == "--force" {
-                _force = true;
-            }
-        }
-        // mv -f is common in scripts but maybe interaction?
-        // Let's allow it in Normal mode to improve DX.
+        // A plain `cp -r` is ordinary work and passes. Only the combination
+        // with `--force`, which overwrites without a word, is worth a question.
         None
     }
 
@@ -581,26 +577,6 @@ impl SafetyGuard {
             }
         }
         None
-    }
-
-    fn check_package_manager(args: &[String]) -> Option<String> {
-        // Check for install commands
-        if let Some(subcmd) = args.first()
-            && matches!(subcmd.as_str(), "install" | "add" | "i")
-        {
-            // In Normal mode, we might want to allow this for DX.
-            // Strict mode handles everything via confirm.
-            // So here we return None (Allowed) for Normal mode.
-            // If the user wants to be warned about installs, they should use Strict.
-            return None;
-        }
-        None
-    }
-
-    pub fn check_system_modification(_args: &[String]) -> Option<String> {
-        // systemctl/service are usually privileged.
-        // Warn always.
-        Some("System service modification detected. Proceed?".to_string())
     }
 
     /// Check if modifying an environment variable is safe
@@ -1006,7 +982,13 @@ mod tests {
 
         // Safe read-only tool
         assert_eq!(
-            guard.check_mcp_tool("list_files", "{}", &SafetyLevel::Normal, &[]),
+            guard.check_mcp_tool(
+                "mcp__files__list_files",
+                "list_files",
+                "{}",
+                &SafetyLevel::Normal,
+                &[]
+            ),
             SafetyResult::Allowed
         );
 
@@ -1016,16 +998,91 @@ mod tests {
         })
         .to_string();
 
-        match guard.check_mcp_tool("bash", &args, &SafetyLevel::Normal, &[]) {
+        match guard.check_mcp_tool("mcp__ops__bash", "bash", &args, &SafetyLevel::Normal, &[]) {
             SafetyResult::Confirm(msg) => assert!(msg.contains("High Risk")),
             _ => panic!("Should have detected dangerous command in MCP tool"),
         }
 
         // Non-read-only tools require confirmation in Normal mode
         assert!(matches!(
-            guard.check_mcp_tool("delete_file", "{}", &SafetyLevel::Normal, &[]),
+            guard.check_mcp_tool(
+                "mcp__files__delete_file",
+                "delete_file",
+                "{}",
+                &SafetyLevel::Normal,
+                &[]
+            ),
             SafetyResult::Confirm(msg) if msg.contains("may have side effects")
         ));
+    }
+
+    /// The name the model calls is namespaced; the classification is not.
+    ///
+    /// Matching the namespaced name against the command-execution table never
+    /// held, so an MCP server's shell tool asked "may have side effects"
+    /// instead of being judged as `rm`.
+    #[test]
+    fn a_namespaced_shell_tool_is_judged_as_its_command() {
+        let guard = SafetyGuard::new();
+        let args = serde_json::json!({ "command": "rm -rf /" }).to_string();
+
+        match guard.check_mcp_tool("mcp__ops__bash", "bash", &args, &SafetyLevel::Normal, &[]) {
+            SafetyResult::Confirm(msg) => {
+                assert!(msg.contains("High Risk"), "{msg}");
+                assert!(!msg.contains("may have side effects"), "{msg}");
+            }
+            other => panic!("expected a command-level verdict, got {other:?}"),
+        }
+    }
+
+    /// Read-only classification reads the tool, not the server nickname.
+    ///
+    /// It used to see the whole namespaced name, so a server labelled
+    /// `runner` made every one of its tools look mutating ("run"), and a
+    /// server labelled `search` made them all look read-only. The label is a
+    /// nickname; only the tool says what the call does.
+    #[test]
+    fn read_only_classification_ignores_the_server_label() {
+        let guard = SafetyGuard::new();
+
+        assert_eq!(
+            guard.check_mcp_tool(
+                "mcp__runner__get_logs",
+                "get_logs",
+                "{}",
+                &SafetyLevel::Normal,
+                &[]
+            ),
+            SafetyResult::Allowed
+        );
+
+        assert!(matches!(
+            guard.check_mcp_tool(
+                "mcp__search__deploy",
+                "deploy",
+                "{}",
+                &SafetyLevel::Normal,
+                &[]
+            ),
+            SafetyResult::Confirm(_)
+        ));
+    }
+
+    /// The user is asked about the call the model actually made.
+    #[test]
+    fn an_mcp_prompt_names_the_function_the_model_called() {
+        let guard = SafetyGuard::new();
+
+        match guard.check_mcp_tool(
+            "mcp__files__delete_file",
+            "delete_file",
+            "{}",
+            &SafetyLevel::Strict,
+            &[],
+        ) {
+            SafetyResult::Confirm(msg) => assert!(msg.contains("mcp__files__delete_file"), "{msg}"),
+            other => panic!("expected a confirmation, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1035,14 +1092,30 @@ mod tests {
 
         // Strict mode asks confirmation even for read-only tools by default
         assert!(matches!(
-            guard.check_mcp_tool("read_file", &args, &SafetyLevel::Strict, &[]),
+            guard.check_mcp_tool(
+                "mcp__docs__read_file",
+                "read_file",
+                &args,
+                &SafetyLevel::Strict,
+                &[]
+            ),
             SafetyResult::Confirm(_)
         ));
 
-        // Exact MCP allowlist entry bypasses confirmation
-        let allow = vec![SafetyGuard::mcp_allowlist_entry("read_file", &args)];
+        // An allowlist entry is keyed by the name the model called, not by the
+        // tool's own name: that is what the user saw and approved.
+        let allow = vec![SafetyGuard::mcp_allowlist_entry(
+            "mcp__docs__read_file",
+            &args,
+        )];
         assert_eq!(
-            guard.check_mcp_tool("read_file", &args, &SafetyLevel::Strict, &allow),
+            guard.check_mcp_tool(
+                "mcp__docs__read_file",
+                "read_file",
+                &args,
+                &SafetyLevel::Strict,
+                &allow
+            ),
             SafetyResult::Allowed
         );
     }

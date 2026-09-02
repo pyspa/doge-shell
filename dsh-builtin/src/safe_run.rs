@@ -1,7 +1,7 @@
 use super::ShellProxy;
 use crate::chatgpt::load_openai_config;
-use dsh_openai::apply_language;
-use dsh_openai::turn::answer_text;
+use dsh_openai::apply_language_to_field;
+use dsh_openai::turn::{answer_text, truncate_middle};
 use dsh_openai::{ChatGptClient, ChatRequestOptions, json_object_format, strip_code_fence};
 use dsh_types::safety_policy;
 use dsh_types::{Context, ExitStatus};
@@ -91,9 +91,15 @@ Format your response as valid JSON:
 }
 "#;
 
+    // Scoped to the one field a person reads. The blanket instruction reached
+    // `risk_level` too, and a verdict answered as "危険" matches none of the
+    // three values the code below compares against.
     let language = crate::chatgpt::response_language(proxy);
     let messages = vec![
-        json!({"role": "system", "content": apply_language(system_prompt, language.as_deref())}),
+        json!({
+            "role": "system",
+            "content": apply_language_to_field(system_prompt, "explanation", language.as_deref())
+        }),
         json!({"role": "user", "content": format!("Check safety of:\n```\n{}\n```", full_command)}),
     ];
 
@@ -306,6 +312,39 @@ fn deterministic_command_warning(command: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
 
+    /// The preview used to be a byte slice, so an 8000th byte inside a
+    /// multi-byte character panicked the shell mid-audit.
+    #[test]
+    fn a_multibyte_preview_does_not_panic() {
+        let japanese = "危".repeat(4000);
+        assert!(japanese.len() > 8000);
+
+        let preview = truncate_middle(&japanese, 8000);
+        assert!(preview.contains("truncated"));
+        // Every retained byte still forms whole characters.
+        assert!(preview.chars().count() > 0);
+
+        let squeezed = truncate_middle(&preview, 2000);
+        assert!(squeezed.contains("truncated"));
+    }
+
+    /// A verdict is compared against `SAFE` / `CAUTION` / `DANGEROUS`, so the
+    /// language instruction may only reach the prose field.
+    #[test]
+    fn the_language_instruction_names_the_prose_field_only() {
+        let prompt = apply_language_to_field("Return JSON.", "explanation", Some("Japanese"));
+
+        assert!(
+            prompt.contains("\"explanation\" value in Japanese"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("field name"), "{prompt}");
+        assert_eq!(
+            apply_language_to_field("Return JSON.", "explanation", None),
+            "Return JSON."
+        );
+    }
+
     #[test]
     fn safe_run_request_splits_normal_argv() {
         let argv = vec![
@@ -495,16 +534,12 @@ fn inspect_and_run(
             }
         }
 
-        let preview_limit = 8000;
-        let preview = if stdout.len() > preview_limit {
-            format!(
-                "{}... (truncated, total length: {})",
-                &stdout[..preview_limit],
-                stdout.len()
-            )
-        } else {
-            stdout.clone()
-        };
+        // Byte slicing here panicked on any captured output whose 8000th byte
+        // landed inside a multi-byte character - a Japanese install script was
+        // enough. `truncate_middle` also keeps the tail, which is where a
+        // script hides what it actually does.
+        const PREVIEW_LIMIT: usize = 8000;
+        let preview = truncate_middle(&stdout, PREVIEW_LIMIT);
 
         if !static_warnings.is_empty() {
             ctx.write_stderr(&format!(
@@ -528,7 +563,10 @@ Format your response as valid JSON:
 "#;
         let language = crate::chatgpt::response_language(proxy);
         let messages = vec![
-            json!({"role": "system", "content": apply_language(system_prompt, language.as_deref())}),
+            json!({
+                "role": "system",
+                "content": apply_language_to_field(system_prompt, "explanation", language.as_deref())
+            }),
             json!({"role": "user", "content": format!("Analyze this content:\n```\n{}\n```", preview)}),
         ];
 
@@ -578,7 +616,7 @@ Format your response as valid JSON:
         ctx.write_stderr(&format!(
             "\n{cyan}--- Content Preview ({} chars) ---{reset}\n{}\n{cyan}--- End Preview ---{reset}\n",
              preview.len(),
-             if preview.len() > 2000 { format!("{}... (preview truncated to 2kb)", &preview[..2000]) } else { preview.clone() },
+             truncate_middle(&preview, 2000),
              cyan=cyan, reset=reset
         )).ok();
 

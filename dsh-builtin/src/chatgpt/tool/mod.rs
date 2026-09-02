@@ -110,7 +110,7 @@ fn authorize_mcp_tool(
             Err(format!("chat: MCP tool `{name}` refused: {reason}"))
         }
         AgentCommandVerdict::Confirm(reason) => {
-            let message = format!("AI wants to call MCP tool: `{name}` ({reason}). \r\nProceed?");
+            let message = format!("AI wants to call MCP tool: `{name}` ({reason})");
             match proxy
                 .request_agent_approval(&message)
                 .map_err(|err: anyhow::Error| err.to_string())?
@@ -199,7 +199,15 @@ fn resolve_with_existing_ancestor(path: &Path) -> Result<PathBuf, String> {
                 path.to_string_lossy()
             )
         })?;
-        suffix = PathBuf::from(name).join(suffix);
+        // `Path::join` on an empty path appends a separator, so building the
+        // suffix from an empty `PathBuf` produced `notes.txt/` - a directory
+        // name. `fs::write` then failed with ENOENT and the `edit` tool could
+        // not create a file at all, which is half of what it is for.
+        suffix = if suffix.as_os_str().is_empty() {
+            PathBuf::from(name)
+        } else {
+            PathBuf::from(name).join(&suffix)
+        };
 
         if !current.pop() {
             return Err(format!(
@@ -325,20 +333,71 @@ pub(crate) fn reject_gitignored_path(
 }
 
 pub(crate) fn confirm_sensitive_access(
-    proxy: &mut dyn ShellProxy,
+    proxy: &mut dyn ChatToolHost,
     action: &str,
     path_label: &str,
+    resolved: &Path,
     reason: &str,
 ) -> Result<bool, String> {
     if !safety_level(proxy).requires_confirmation_for_sensitive_access() {
         return Ok(true);
     }
 
-    let message =
-        format!("AI wants to {action} sensitive content `{path_label}` ({reason}). \r\nProceed?");
-    proxy
-        .confirm_action(&message)
-        .map_err(|err| format!("chat: confirmation failed: {err}"))
+    confirm_agent_action(
+        proxy,
+        &sensitive_approval_key(action, resolved),
+        &format!("AI wants to {action} sensitive content `{path_label}` ({reason})"),
+    )
+}
+
+/// Ask the user about an action the agent wants to take, offering "always".
+///
+/// The three-way answer already existed for `execute` and for MCP calls; the
+/// file tools were left on `ShellProxy::confirm_action`, whose bool cannot say
+/// "always". A twenty-step edit was twenty prompts, which is how a safety gate
+/// turns into a key people hold down.
+///
+/// `approval_key` is what an "always" answer remembers, matched exactly and
+/// stored beside the command lines and `mcp:` entries in the same session list.
+/// It is deliberately coarser than the message: the question names the change,
+/// the key names the file, so approving one edit of a file does not have to be
+/// re-answered for the next one.
+pub(crate) fn confirm_agent_action(
+    proxy: &mut dyn ChatToolHost,
+    approval_key: &str,
+    message: &str,
+) -> Result<bool, String> {
+    if proxy
+        .agent_session_approvals()
+        .iter()
+        .any(|approved| approved == approval_key)
+    {
+        return Ok(true);
+    }
+
+    match proxy
+        .request_agent_approval(message)
+        .map_err(|err: anyhow::Error| format!("chat: confirmation failed: {err}"))?
+    {
+        ApprovalDecision::Allow => Ok(true),
+        ApprovalDecision::AllowAlways => {
+            proxy.remember_agent_approval(approval_key);
+            Ok(true)
+        }
+        ApprovalDecision::Deny => Ok(false),
+    }
+}
+
+/// What "always" remembers for a file the agent wants to change.
+///
+/// One key for `edit` and `str_replace` alike: the user is deciding about the
+/// file, not about which tool happens to write it.
+pub(crate) fn write_approval_key(resolved: &Path) -> String {
+    format!("write:{}", resolved.display())
+}
+
+fn sensitive_approval_key(action: &str, resolved: &Path) -> String {
+    format!("sensitive:{action}:{}", resolved.display())
 }
 
 pub(crate) fn sensitive_path_reason(path: &Path) -> Option<&'static str> {
@@ -599,6 +658,26 @@ mod tests {
     }
 
     type CwdProxy = TestShellProxy;
+
+    #[test]
+    fn a_new_file_resolves_without_a_trailing_separator() {
+        let dir = tempdir().unwrap();
+        let mut proxy = CwdProxy {
+            current_dir: dir.path().to_path_buf(),
+            ..CwdProxy::default()
+        };
+
+        // `Path::join` on an empty path appends a separator, so this used to
+        // come back as `notes.txt/` and every `edit` that created a file
+        // failed with ENOENT.
+        let resolved = resolve_tool_path("notes.txt", &mut proxy).unwrap();
+        assert_eq!(resolved.file_name().unwrap(), "notes.txt");
+        assert!(!resolved.to_string_lossy().ends_with('/'));
+
+        let nested = resolve_tool_path("a/b/notes.txt", &mut proxy).unwrap();
+        assert!(nested.ends_with("a/b/notes.txt"));
+        assert!(!nested.to_string_lossy().ends_with('/'));
+    }
 
     #[test]
     fn resolve_tool_path_rejects_parent_traversal() {

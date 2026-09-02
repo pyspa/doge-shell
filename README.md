@@ -62,10 +62,19 @@ absent, so a Linux-only definition never gets in the way on macOS.
 The Safety Guard protects against unintended execution of potentially destructive commands.
 
 - **Safety Levels**:
-  - `Loose`: No restrictions.
-  - `Normal` (Default): Requires confirmation for common dangerous commands (`rm`, `mv`, `cp`, `dd`, `mkfs`, `format`).
+  - `Loose`: Commands, MCP tool calls and sensitive-file reads run unasked. File
+    writes are the exception - see below.
+  - `Normal` (Default): Requires confirmation for destructive commands the guard
+    recognises - `rm` with a recursive/force combination, `dd`, `mkfs`, `format`,
+    disk and power commands, `chmod -R`/`chown -R`, `cp -rf`, `curl`/`wget` used
+    to send data, remote-script pipelines such as `curl | sh`, and reads of
+    sensitive files. `mv` and package-manager installs are not questioned;
+    use `Strict` if you want to be asked about everything.
   - `Strict`: Requires confirmation for **all** commands.
-- **AI Tool Integration**: Automatically intercepts AI-generated commands and file modifications, requiring explicit user approval. Commands the chat agent wants to run go through the same `SafetyGuard` as commands you type, including pipeline checks such as `curl | sh`, with wrappers like `sudo` looked through so the real command is the one judged. Chat tools keep workspace-root and path-traversal protections even in loose mode; the agent can read and write within the project root and the runtime skills directory, and nowhere else.
+- **File writes always confirm**: the chat agent's `edit` and `str_replace`, and
+  running a skill script, ask at every safety level, `loose` included. Answering
+  "always" remembers that file for the session.
+- **AI Tool Integration**: Automatically intercepts AI-generated commands and file modifications, requiring explicit user approval. Commands the chat agent wants to run go through the same `SafetyGuard` as commands you type, including pipeline checks such as `curl | sh`, with wrappers like `sudo` looked through so the real command is the one judged. Chat tools keep workspace-root and path-traversal protections even in loose mode: `read_file`, `ls`, `search`, `edit` and `str_replace` reach the project root and the runtime skills directory, and nowhere else. `execute` runs a real shell command, so it is bounded by the safety guard and your confirmation rather than by that path sandbox.
 - **Sensitive File Policy**: Chat `read_file`, `search`, `ls`, and `edit` respect `.gitignore` (nested files, `.git/info/exclude` and global excludes included), fail closed when ignore policy cannot be evaluated, hide common secret paths, and redact secret-like content in search results.
 - **Lisp Configuration**: Dynamically change the safety level at any time.
   ```lisp
@@ -626,7 +635,8 @@ Example:
 
 ### Security & Safety
 
-- **Execution Confirmation**: MCP tool calls are judged by the same `SafetyGuard` as everything else, whether they come from `!` chat or from a shell-side AI action. At `loose` they run unasked; at `normal` a tool that only reads runs unasked and anything else asks; at `strict` every MCP call asks. A tool whose arguments carry a command line is judged as that command. Answering "always" remembers that exact call for the session.
+- **Execution Confirmation**: MCP tool calls are judged by the same `SafetyGuard` as everything else, whether they come from `!` chat or from a shell-side AI action, and both share one set of approvals. At `loose` they run unasked; at `normal` a tool that only reads runs unasked and anything else asks; at `strict` every MCP call asks. A tool whose arguments carry a command line is judged as that command - the tool's own name on its server is what decides, not the namespaced `mcp__<server>__<tool>` name the model calls. Answering "always" remembers that exact call for the session.
+- **Disconnecting takes effect**: `mcp disconnect <label>` removes that server's tools from what the agent is offered and refuses a call to them until `mcp connect <label>`.
 
 ### MCP CLI Management
 
@@ -1365,7 +1375,10 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
       `.gitignore` is honoured the way git honours it, nested files included.
     - Long tool output is truncated in the middle, so the end of a build or test log -
       where the error is - still reaches the model.
-    - `edit`, `str_replace` and skill scripts always ask for confirmation.
+    - `edit`, `str_replace` and skill scripts always ask for confirmation, at every
+      safety level. Answering "always" applies to that file for the rest of the
+      session, so a long editing run is one question per file rather than one per
+      edit.
 
 10. **Conversation continuity**:
     Consecutive `!` turns continue the same conversation, so follow-up questions work and

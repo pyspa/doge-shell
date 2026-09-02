@@ -187,51 +187,12 @@ impl ChatGptClient {
         Ok(client)
     }
 
-    pub fn send_message(
-        &self,
-        input: &str,
-        prompt: Option<String>,
-        temperature: Option<f64>,
-        cancel_check: Option<&dyn Fn() -> bool>,
-    ) -> Result<String> {
-        self.send_message_with_model(input, prompt, temperature, None, cancel_check)
-    }
-
-    pub fn send_message_with_model(
-        &self,
-        input: &str,
-        prompt: Option<String>,
-        temperature: Option<f64>,
-        model: Option<String>,
-        cancel_check: Option<&dyn Fn() -> bool>,
-    ) -> Result<String> {
-        let messages = Self::build_messages(input, prompt);
-        let options = ChatRequestOptions::new()
-            .with_temperature(temperature)
-            .with_model(model);
-        let data = self.send_chat(&messages, &options, cancel_check)?;
-
-        let output = data["choices"][0]["message"]["content"]
-            .as_str()
-            .ok_or_else(|| anyhow!("Unexpected response {data}"))?;
-
-        Ok(output.to_string())
-    }
-
-    pub fn send_chat_request(
-        &self,
-        messages: &[Value],
-        temperature: Option<f64>,
-        model: Option<String>,
-        tools: Option<&[Value]>,
-        cancel_check: Option<&dyn Fn() -> bool>,
-    ) -> Result<Value> {
-        let options = ChatRequestOptions::new()
-            .with_temperature(temperature)
-            .with_model(model)
-            .with_tools(tools.map(|items| items.to_vec()));
-        self.send_chat(messages, &options, cancel_check)
-    }
+    // `send_message`, `send_message_with_model` and the positional
+    // `send_chat_request` used to live here. Nothing outside this file called
+    // any of them, and `send_message_with_model` held the last
+    // `choices[0]["message"]["content"]` in the repository - the exact read
+    // `turn::answer_text` exists to replace, kept alive as an example to copy.
+    // `send_chat` plus `ChatRequestOptions` is the whole surface.
 
     /// Send a chat completion request, retrying transient failures.
     pub fn send_chat(
@@ -488,17 +449,6 @@ impl ChatGptClient {
 
         body
     }
-
-    fn build_messages(content: &str, prompt: Option<String>) -> Vec<Value> {
-        let mut messages = Vec::new();
-        if let Some(prompt) = prompt
-            && !prompt.trim().is_empty()
-        {
-            messages.push(json!({ "role": "system", "content": prompt.trim() }));
-        }
-        messages.push(json!({ "role": "user", "content": content }));
-        messages
-    }
 }
 
 /// Model families that reject any temperature other than the default.
@@ -694,28 +644,19 @@ mod tests {
         assert!(is_ctrl_c_cancelled(&result.unwrap_err()));
     }
 
+    /// The blocking entry point is called from inside the REPL's runtime, so
+    /// it must hand the worker over rather than start a nested one.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn sync_send_chat_request_inside_runtime_does_not_panic() {
+    async fn sync_send_chat_inside_runtime_does_not_panic() {
         let client = client();
         let messages = vec![json!({ "role": "user", "content": "hello" })];
+        let options = ChatRequestOptions::new().with_temperature(Some(0.0));
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.send_chat_request(&messages, Some(0.0), None, None, Some(&|| true))
+            client.send_chat(&messages, &options, Some(&|| true))
         }));
 
-        assert!(result.is_ok(), "send_chat_request panicked inside runtime");
-        assert!(result.expect("panic check").is_err());
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn sync_send_message_inside_runtime_does_not_panic() {
-        let client = client();
-
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.send_message("hello", None, Some(0.0), Some(&|| true))
-        }));
-
-        assert!(result.is_ok(), "send_message panicked inside runtime");
+        assert!(result.is_ok(), "send_chat panicked inside runtime");
         assert!(result.expect("panic check").is_err());
     }
 

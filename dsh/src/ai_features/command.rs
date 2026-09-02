@@ -215,14 +215,6 @@ fn finalize_command<S: AiService + ?Sized>(
             tracing::info!("AI {what} needs confirmation before it runs: {msg}");
             Ok(rendered)
         }
-        SafetyResult::Denied(msg) => {
-            tracing::warn!("Blocked dangerous AI {what}: {msg}");
-            Err(anyhow::anyhow!(
-                "AI {what} was blocked by the safety policy: `{}`. {}",
-                response.command,
-                msg
-            ))
-        }
     }
 }
 

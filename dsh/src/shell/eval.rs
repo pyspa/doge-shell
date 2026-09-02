@@ -131,7 +131,6 @@ pub async fn eval_str(
         use crate::safety::SafetyResult;
 
         let _allowlist_add_cmd: Option<String> = None;
-        let mut denied_reason: Option<String> = None;
         let mut user_cancelled = false;
 
         {
@@ -154,9 +153,6 @@ pub async fn eval_str(
             {
                 SafetyResult::Allowed => {
                     // Proceed
-                }
-                SafetyResult::Denied(reason) => {
-                    denied_reason = Some(reason);
                 }
                 SafetyResult::Confirm(reason) => {
                     // Release locks before confirmation to avoid holding them during user input
@@ -190,13 +186,6 @@ pub async fn eval_str(
                     }
                 }
             }
-        }
-
-        if let Some(reason) = denied_reason {
-            tracing::warn!("Command execution denied by SafetyGuard: {}", reason);
-            eprintln!("🚫 Access Denied: {}", reason);
-            publish_exit_status(shell, 1);
-            return Ok(1);
         }
 
         if user_cancelled {

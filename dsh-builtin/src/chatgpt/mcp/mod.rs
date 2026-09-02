@@ -180,6 +180,14 @@ pub struct McpManager {
     session_meta: RwLock<HashMap<String, SessionMeta>>,
     /// Connection errors for status reporting
     connection_errors: RwLock<HashMap<String, String>>,
+    /// Servers the user disconnected with `mcp disconnect`.
+    ///
+    /// Kept apart from `session_meta`, which only ever holds servers an
+    /// explicit `mcp connect` validated: gating tool calls on that would hide
+    /// every server the shell loaded at startup. `disconnect` used to clear
+    /// metadata alone, so `mcp status` said "disconnected" while the agent
+    /// carried on calling the tools.
+    disabled: RwLock<HashSet<String>>,
 }
 
 impl Default for McpManager {
@@ -190,6 +198,7 @@ impl Default for McpManager {
             warnings: Vec::new(),
             session_meta: RwLock::new(HashMap::new()),
             connection_errors: RwLock::new(HashMap::new()),
+            disabled: RwLock::new(HashSet::new()),
         }
     }
 }
@@ -217,6 +226,25 @@ impl McpManager {
             warn!("session metadata lock poisoned; recovering write access");
             poisoned.into_inner()
         })
+    }
+
+    fn disabled_read(&self) -> std::sync::RwLockReadGuard<'_, HashSet<String>> {
+        self.disabled.read().unwrap_or_else(|poisoned| {
+            warn!("disabled server lock poisoned; recovering read access");
+            poisoned.into_inner()
+        })
+    }
+
+    fn disabled_write(&self) -> std::sync::RwLockWriteGuard<'_, HashSet<String>> {
+        self.disabled.write().unwrap_or_else(|poisoned| {
+            warn!("disabled server lock poisoned; recovering write access");
+            poisoned.into_inner()
+        })
+    }
+
+    /// Whether `mcp disconnect` has taken this server out of service.
+    pub fn is_disabled(&self, label: &str) -> bool {
+        self.disabled_read().contains(label)
     }
 
     fn connection_errors_read(&self) -> std::sync::RwLockReadGuard<'_, HashMap<String, String>> {
@@ -371,6 +399,7 @@ impl McpManager {
         ) {
             Ok(()) => {
                 info!(server = label, "validated MCP server connection");
+                self.disabled_write().remove(&label_owned);
                 self.session_meta_write().insert(
                     label_owned.clone(),
                     SessionMeta {
@@ -389,25 +418,45 @@ impl McpManager {
         }
     }
 
-    /// Disconnect from a specific MCP server (clears metadata)
+    /// Disconnect from a specific MCP server.
+    ///
+    /// Its tools leave `tool_definitions`, so the model stops being offered
+    /// them, and `execute_tool` refuses a call the model made before the
+    /// disconnect landed. Clearing the session metadata alone left `mcp status`
+    /// saying "disconnected" while the agent kept calling the same tools.
     pub fn disconnect(&self, label: &str) -> Result<(), String> {
+        if !self.servers.iter().any(|server| server.label == label) {
+            return Err(format!("MCP server '{label}' not found"));
+        }
         self.session_meta_write().remove(label);
+        self.disabled_write().insert(label.to_string());
         info!(server = label, "disconnected from MCP server");
         Ok(())
     }
 
     /// Disconnect from all MCP servers
     pub fn disconnect_all(&self) {
-        let count = self.session_meta_write().drain().count();
+        self.session_meta_write().clear();
+        let mut disabled = self.disabled_write();
+        let mut count = 0usize;
+        for server in &self.servers {
+            if disabled.insert(server.label.clone()) {
+                count += 1;
+            }
+        }
         if count > 0 {
             info!(count, "disconnected from all MCP servers");
         }
     }
 
     pub fn tool_definitions(&self) -> Vec<Value> {
+        let disabled = self.disabled_read();
         self.bindings
             .values()
             .filter_map(|binding| {
+                if disabled.contains(&binding.server_label) {
+                    return None;
+                }
                 let server = self
                     .servers
                     .iter()
@@ -449,7 +498,12 @@ impl McpManager {
     }
 
     pub fn system_prompt_fragment(&self) -> Option<String> {
-        if self.servers.is_empty() {
+        let disabled = self.disabled_read();
+        if self
+            .servers
+            .iter()
+            .all(|server| disabled.contains(&server.label))
+        {
             return None;
         }
 
@@ -474,6 +528,9 @@ impl McpManager {
         // through the `tools` array with its own name, description and schema;
         // repeating them in the prompt paid for the same text twice.
         for server in &self.servers {
+            if disabled.contains(&server.label) {
+                continue;
+            }
             let mut header = format!("- Server `{}`", server.label);
             if let Some(desc) = &server.description
                 && !desc.trim().is_empty()
@@ -496,6 +553,13 @@ impl McpManager {
             Some(binding) => binding,
             None => return Ok(None),
         };
+
+        if self.disabled_read().contains(&binding.server_label) {
+            return Err(format!(
+                "MCP server '{}' is disconnected; run `mcp connect {}` to use its tools",
+                binding.server_label, binding.server_label
+            ));
+        }
 
         let args_value: Value = if arguments.trim().is_empty() {
             Value::Null
@@ -537,6 +601,18 @@ impl McpManager {
 
     pub(crate) fn has_tool_binding(&self, function_name: &str) -> bool {
         self.bindings.contains_key(function_name)
+    }
+
+    /// The tool's own name behind the `mcp__<label>__<tool>` function name.
+    ///
+    /// The safety guard classifies a tool by its name, and the name the model
+    /// calls is namespaced: matching `"bash"` against `mcp__ops__bash` never
+    /// held, so a server's shell tool was judged as a generic side effect
+    /// rather than as the command it was about to run.
+    pub fn tool_name_for(&self, function_name: &str) -> Option<String> {
+        self.bindings
+            .get(function_name)
+            .map(|binding| binding.tool_name.clone())
     }
 
     #[cfg(test)]
@@ -702,6 +778,7 @@ impl McpManager {
             warnings,
             session_meta: RwLock::new(HashMap::new()),
             connection_errors: RwLock::new(HashMap::new()),
+            disabled: RwLock::new(HashSet::new()),
         })
     }
 
@@ -730,6 +807,7 @@ impl McpManager {
                 .retain(|_, binding| binding.server_label != label);
             self.session_meta_write().remove(label);
             self.connection_errors_write().remove(label);
+            self.disabled_write().remove(label);
         }
         removed
     }
@@ -872,6 +950,9 @@ impl McpManager {
             );
         }
 
+        // A re-registered label starts in service again: the disconnect the
+        // user asked for applied to the server that has just been replaced.
+        self.disabled_write().remove(&server.label);
         self.servers.push(server);
         Ok(())
     }
@@ -1206,6 +1287,77 @@ mod tests {
                 url: format!("https://example.com/{label}"),
             },
         }
+    }
+
+    /// A tool's own name is what the safety guard classifies.
+    #[test]
+    fn a_binding_reports_the_tool_name_behind_the_namespaced_one() {
+        let mut manager = McpManager::default();
+        manager.servers.push(mock_server("ops"));
+        manager.bindings.insert(
+            "mcp__ops__bash".to_string(),
+            ToolBinding {
+                server_label: "ops".to_string(),
+                tool_name: "bash".to_string(),
+                function_name: "mcp__ops__bash".to_string(),
+            },
+        );
+
+        assert_eq!(
+            manager.tool_name_for("mcp__ops__bash").as_deref(),
+            Some("bash")
+        );
+        assert_eq!(manager.tool_name_for("mcp__ops__missing"), None);
+    }
+
+    /// `disconnect` used to clear metadata only, so `mcp status` said the
+    /// server was disconnected while the agent kept calling its tools.
+    #[test]
+    fn a_disconnected_server_stops_offering_its_tools() {
+        let mut manager = McpManager::default();
+        let mut server = mock_server("ops");
+        server.tools.push(Tool::new(
+            "bash",
+            "run a command",
+            Arc::new(serde_json::Map::new()),
+        ));
+        manager.servers.push(server);
+        manager.bindings.insert(
+            "mcp__ops__bash".to_string(),
+            ToolBinding {
+                server_label: "ops".to_string(),
+                tool_name: "bash".to_string(),
+                function_name: "mcp__ops__bash".to_string(),
+            },
+        );
+
+        assert_eq!(manager.tool_definitions().len(), 1);
+        assert!(manager.system_prompt_fragment().is_some());
+
+        manager.disconnect("ops").unwrap();
+
+        assert!(manager.is_disabled("ops"));
+        assert!(manager.tool_definitions().is_empty());
+        assert!(manager.system_prompt_fragment().is_none());
+        let err = manager
+            .execute_tool("mcp__ops__bash", "{}")
+            .expect_err("a disconnected server must not run tools");
+        assert!(err.contains("disconnected"), "{err}");
+
+        // An unknown server is a mistake worth reporting, not a silent no-op.
+        assert!(manager.disconnect("nope").is_err());
+    }
+
+    #[test]
+    fn disconnect_all_takes_every_server_out_of_service() {
+        let mut manager = McpManager::default();
+        manager.servers.push(mock_server("alpha"));
+        manager.servers.push(mock_server("beta"));
+
+        manager.disconnect_all();
+
+        assert!(manager.is_disabled("alpha"));
+        assert!(manager.is_disabled("beta"));
     }
 
     #[test]

@@ -159,14 +159,36 @@ impl ChatClient for ChatGptClient {
     }
 }
 
+/// The shell's permission state, as the AI service reads it.
+///
+/// A struct rather than four more parameters: two of the handles are
+/// `Arc<RwLock<Vec<String>>>` and mean opposite things, so passing them
+/// positionally makes swapping them a silent change of policy - which is the
+/// bug this grouping exists to prevent.
+#[derive(Clone)]
+pub struct AgentPolicyHandles {
+    pub safety_level: Arc<RwLock<SafetyLevel>>,
+    pub safety_guard: Arc<SafetyGuard>,
+    /// The operator's configured list - `(chat-execute-add ...)`, the JSON
+    /// config, the environment variable. Read, never written.
+    pub execute_allowlist: Arc<RwLock<Vec<String>>>,
+    /// What the user waved through with "always" for the agent, this session.
+    ///
+    /// The same store the `!` runtime writes through
+    /// `AgentCommandPolicy::remember_agent_approval`, so an "always" answer
+    /// means the same thing whichever entry point asked. This used to push the
+    /// entry into `execute_allowlist`, which is the operator's configuration:
+    /// a session answer ended up in the list a person had written by hand, and
+    /// the two loops disagreed about what was already approved.
+    pub agent_session_allowlist: Arc<RwLock<Vec<String>>>,
+}
+
 /// Live implementation of AiService using OpenAI API and MCP tools.
 pub struct LiveAiService {
     client: Arc<dyn ChatClient>,
     mcp_manager: Arc<RwLock<McpManager>>,
-    safety_level: Arc<RwLock<SafetyLevel>>,
-    safety_guard: Arc<SafetyGuard>,
+    policy: AgentPolicyHandles,
     confirmation_handler: Option<Arc<dyn ConfirmationHandler>>,
-    execute_allowlist: Arc<RwLock<Vec<String>>>,
     /// `AI_MESSAGE_LANG`. Applied here rather than at each of the twenty-odd
     /// call sites, which is why the setting used to reach `!` and nothing else.
     response_language: Arc<RwLock<Option<String>>>,
@@ -177,36 +199,46 @@ impl LiveAiService {
     pub fn new(
         client: impl ChatClient + 'static,
         mcp_manager: Arc<RwLock<McpManager>>,
-        safety_level: Arc<RwLock<SafetyLevel>>,
-        safety_guard: Arc<SafetyGuard>,
+        policy: AgentPolicyHandles,
         confirmation_handler: Option<Arc<dyn ConfirmationHandler>>,
-        execute_allowlist: Arc<RwLock<Vec<String>>>,
         response_language: Arc<RwLock<Option<String>>>,
     ) -> Self {
         Self {
             client: Arc::new(client),
             mcp_manager,
-            safety_level,
-            safety_guard,
+            policy,
             confirmation_handler,
-            execute_allowlist,
             response_language,
         }
+    }
+
+    /// Everything the agent may act on without being asked again.
+    ///
+    /// Configured entries plus this session's "always" answers - the same set
+    /// `AgentCommandPolicy::evaluate_agent_tool` builds for the `!` runtime, so
+    /// one MCP call is not approved through one entry point and questioned
+    /// through the other.
+    fn agent_allowlist(&self) -> Vec<String> {
+        let mut allowlist = self.policy.execute_allowlist.read().clone();
+        allowlist.extend(self.policy.agent_session_allowlist.read().iter().cloned());
+        allowlist
     }
 }
 
 #[async_trait]
 impl AiService for LiveAiService {
     fn get_safety_guard(&self) -> Option<Arc<SafetyGuard>> {
-        Some(self.safety_guard.clone())
+        Some(self.policy.safety_guard.clone())
     }
 
     fn get_safety_level(&self) -> Option<SafetyLevel> {
-        Some(*self.safety_level.read())
+        Some(*self.policy.safety_level.read())
     }
 
     fn get_allowlist(&self) -> Option<Vec<String>> {
-        Some(self.execute_allowlist.read().clone())
+        // The same set the MCP check uses, so one entry point does not treat a
+        // session approval as unknown while the other honours it.
+        Some(self.agent_allowlist())
     }
 
     async fn send_request(
@@ -334,22 +366,20 @@ impl LiveAiService {
                         .unwrap_or_default();
 
                     // Check safety
-                    let allowlist = self.execute_allowlist.read().clone();
-                    let level = *self.safety_level.read();
+                    let allowlist = self.agent_allowlist();
+                    let level = *self.policy.safety_level.read();
+                    let tool_name = self
+                        .mcp_manager
+                        .read()
+                        .tool_name_for(name)
+                        .unwrap_or_else(|| name.to_string());
 
                     let result = self
+                        .policy
                         .safety_guard
-                        .check_mcp_tool(name, args, &level, &allowlist);
+                        .check_mcp_tool(name, &tool_name, args, &level, &allowlist);
                     match result {
                         SafetyResult::Allowed => {}
-                        SafetyResult::Denied(msg) => {
-                            messages.push(json!({
-                                "role": "tool",
-                                "tool_call_id": id,
-                                "content": format!("Tool execution denied by safety policy: {}", msg)
-                            }));
-                            continue;
-                        }
                         SafetyResult::Confirm(msg) => {
                             let Some(handler) = &self.confirmation_handler else {
                                 messages.push(json!({
@@ -365,7 +395,7 @@ impl LiveAiService {
                                     // Proceed
                                 }
                                 ConfirmationAction::AlwaysAllow => {
-                                    let mut list = self.execute_allowlist.write();
+                                    let mut list = self.policy.agent_session_allowlist.write();
                                     let entry = SafetyGuard::mcp_allowlist_entry(name, args);
                                     if !list.contains(&entry) {
                                         list.push(entry);
@@ -451,14 +481,21 @@ mod tests {
         }
     }
 
+    fn test_policy(level: SafetyLevel) -> AgentPolicyHandles {
+        AgentPolicyHandles {
+            safety_level: Arc::new(RwLock::new(level)),
+            safety_guard: Arc::new(SafetyGuard::new()),
+            execute_allowlist: Arc::new(RwLock::new(Vec::new())),
+            agent_session_allowlist: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
+
     fn service(client: impl ChatClient + 'static) -> LiveAiService {
         LiveAiService::new(
             client,
             Arc::new(RwLock::new(McpManager::default())),
-            Arc::new(RwLock::new(SafetyLevel::Normal)),
-            Arc::new(SafetyGuard::new()),
+            test_policy(SafetyLevel::Normal),
             None,
-            Arc::new(RwLock::new(Vec::new())),
             Arc::new(RwLock::new(None)),
         )
     }
@@ -500,10 +537,8 @@ mod tests {
         LiveAiService::new(
             client,
             Arc::new(RwLock::new(McpManager::default())),
-            Arc::new(RwLock::new(SafetyLevel::Normal)),
-            Arc::new(SafetyGuard::new()),
+            test_policy(SafetyLevel::Normal),
             None,
-            Arc::new(RwLock::new(Vec::new())),
             Arc::new(RwLock::new(Some(language.to_string()))),
         )
     }
@@ -576,5 +611,86 @@ mod tests {
             .unwrap();
 
         assert_eq!(answer, "cap=None json=false");
+    }
+
+    /// Answers one tool call, then stops.
+    struct OneToolCallClient {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ChatClient for OneToolCallClient {
+        fn send_chat_request(
+            &self,
+            _messages: &[Value],
+            _options: &ChatRequestOptions,
+        ) -> Result<Value> {
+            let first = self.calls.fetch_add(1, Ordering::SeqCst) == 0;
+            if first {
+                Ok(json!({
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [{
+                                "id": "1",
+                                "function": {"name": "mcp__ops__deploy", "arguments": "{}"}
+                            }]
+                        },
+                        "finish_reason": "tool_calls"
+                    }]
+                }))
+            } else {
+                Ok(json!({
+                    "choices": [{"message": {"role": "assistant", "content": "done"},
+                                 "finish_reason": "stop"}]
+                }))
+            }
+        }
+    }
+
+    struct AlwaysAllowHandler;
+
+    #[async_trait]
+    impl ConfirmationHandler for AlwaysAllowHandler {
+        async fn confirm(&self, _message: &str) -> Result<ConfirmationAction> {
+            Ok(ConfirmationAction::AlwaysAllow)
+        }
+    }
+
+    /// "always" is a session answer, not a line in the operator's config.
+    ///
+    /// This used to push the entry into `execute_allowlist` - the list
+    /// `(chat-execute-add ...)` writes and `list_execute_allowlist` shows - so
+    /// the two agent loops kept their session approvals in different boxes.
+    #[tokio::test]
+    async fn an_always_answer_lands_in_the_session_store() {
+        let policy = test_policy(SafetyLevel::Strict);
+        let configured = policy.execute_allowlist.clone();
+        let session = policy.agent_session_allowlist.clone();
+
+        let service = LiveAiService::new(
+            OneToolCallClient {
+                calls: Arc::new(AtomicUsize::new(0)),
+            },
+            Arc::new(RwLock::new(McpManager::default())),
+            policy,
+            Some(Arc::new(AlwaysAllowHandler)),
+            Arc::new(RwLock::new(None)),
+        );
+
+        service
+            .send_request(
+                vec![json!({"role": "user", "content": "deploy"})],
+                Some(0.1),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            configured.read().is_empty(),
+            "the operator's list must not collect session answers: {:?}",
+            configured.read()
+        );
+        assert_eq!(session.read().len(), 1);
+        assert!(session.read()[0].starts_with("mcp:mcp__ops__deploy"));
     }
 }

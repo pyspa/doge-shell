@@ -1,5 +1,5 @@
-use crate::ShellProxy;
 use crate::safety_policy;
+use crate::shell_capabilities::ChatToolHost;
 use serde_json::{Value, json};
 use std::fs;
 
@@ -33,7 +33,7 @@ pub(crate) fn definition() -> Value {
     })
 }
 
-pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String, String> {
+pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<String, String> {
     let parsed: Value = serde_json::from_str(arguments)
         .map_err(|err| format!("chat: invalid JSON arguments for ls tool: {err}"))?;
 
@@ -57,7 +57,13 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ShellProxy) -> Result<String
     super::reject_gitignored_path(&normalized_abs_path, &normalized_current_dir, path_value)?;
 
     if let Some(reason) = super::sensitive_path_reason(&normalized_abs_path)
-        && !super::confirm_sensitive_access(_proxy, "list", path_value, reason)?
+        && !super::confirm_sensitive_access(
+            _proxy,
+            "list",
+            path_value,
+            &normalized_abs_path,
+            reason,
+        )?
     {
         return Ok("ls cancelled by user.".to_string());
     }

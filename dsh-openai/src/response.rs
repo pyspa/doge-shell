@@ -23,6 +23,25 @@ pub fn apply_language(system_prompt: &str, language: Option<&str>) -> String {
     }
 }
 
+/// Ask for one JSON field in the operator's language, leaving the shape alone.
+///
+/// [`apply_language`] must not be attached to a request that asks for JSON: the
+/// blanket "respond in Japanese" reaches the field names and the enumerated
+/// values too, and a `risk_level` of `"危険"` matches nothing the caller
+/// compares against. But some of those documents carry one field that a person
+/// actually reads - `safe-run` prints its `explanation` - and dropping the
+/// instruction entirely answers that person in English. Naming the field is
+/// what separates the prose from the shape.
+pub fn apply_language_to_field(system_prompt: &str, field: &str, language: Option<&str>) -> String {
+    match language.map(str::trim).filter(|lang| !lang.is_empty()) {
+        Some(lang) => format!(
+            "{system_prompt}\n\nIMPORTANT: write the \"{field}\" value in {lang}. \
+             Every other value, and every field name, must stay exactly as specified above."
+        ),
+        None => system_prompt.to_string(),
+    }
+}
+
 /// Strip a markdown code fence from a model answer.
 ///
 /// Models add fences even when told not to. Every caller used to re-implement

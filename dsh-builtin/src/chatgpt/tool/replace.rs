@@ -1,5 +1,5 @@
-use crate::ShellProxy;
 use crate::safety_policy;
+use crate::shell_capabilities::ChatToolHost;
 use serde_json::{Value, json};
 use std::fs;
 
@@ -38,7 +38,7 @@ pub(crate) fn definition() -> Value {
     })
 }
 
-pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String, String> {
+pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<String, String> {
     let parsed: Value = serde_json::from_str(arguments)
         .map_err(|err| format!("chat: invalid JSON arguments for str_replace tool: {err}"))?;
 
@@ -125,13 +125,14 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
         ""
     };
     let confirm_msg = format!(
-        "AI wants to replace {} occurrence(s) in file: `{}`.{} \r\nProceed?",
+        "AI wants to replace {} occurrence(s) in file: `{}`.{}",
         matches, path_value, sensitive_note
     );
-    if !proxy
-        .confirm_action(&confirm_msg)
-        .map_err(|e: anyhow::Error| e.to_string())?
-    {
+    if !super::confirm_agent_action(
+        proxy,
+        &super::write_approval_key(&normalized_abs_path),
+        &confirm_msg,
+    )? {
         return Ok("File modification cancelled by user.".to_string());
     }
 

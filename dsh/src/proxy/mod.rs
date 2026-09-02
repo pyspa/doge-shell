@@ -76,6 +76,20 @@ impl Shell {
     fn safety_level_snapshot(&self) -> dsh_types::safety_policy::SafetyLevel {
         *self.environment.read().policy_state.safety_level.read()
     }
+
+    /// The tool's own name behind the namespaced one the model called.
+    ///
+    /// Falls back to the namespaced name when no binding matches, so an
+    /// unknown call is still judged rather than skipped.
+    fn agent_mcp_tool_name(&self, function_name: &str) -> String {
+        self.environment
+            .read()
+            .integration_state
+            .mcp_manager
+            .read()
+            .tool_name_for(function_name)
+            .unwrap_or_else(|| function_name.to_string())
+    }
 }
 
 impl AgentCommandPolicy for Shell {
@@ -132,7 +146,6 @@ impl AgentCommandPolicy for Shell {
         match self.safety_guard.check_jobs(&jobs, &level, &allowlist) {
             SafetyResult::Allowed => AgentCommandVerdict::Allowed,
             SafetyResult::Confirm(reason) => AgentCommandVerdict::Confirm(reason),
-            SafetyResult::Denied(reason) => AgentCommandVerdict::Denied(reason),
         }
     }
 
@@ -174,14 +187,14 @@ impl AgentCommandPolicy for Shell {
         let mut allowlist = self.agent_allowlist_snapshot();
         allowlist.extend(self.agent_session_approvals());
         let level = self.safety_level_snapshot();
+        let tool_name = self.agent_mcp_tool_name(name);
 
         match self
             .safety_guard
-            .check_mcp_tool(name, arguments, &level, &allowlist)
+            .check_mcp_tool(name, &tool_name, arguments, &level, &allowlist)
         {
             SafetyResult::Allowed => AgentCommandVerdict::Allowed,
             SafetyResult::Confirm(reason) => AgentCommandVerdict::Confirm(reason),
-            SafetyResult::Denied(reason) => AgentCommandVerdict::Denied(reason),
         }
     }
 

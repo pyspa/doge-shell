@@ -412,17 +412,19 @@ pub async fn handle_completion_command(
 
     let mcp_manager = env.read().integration_state.mcp_manager.clone();
     let safety_level = env.read().policy_state.safety_level.clone();
-    let allowlist = env.read().policy_state.execute_allowlist.clone();
-    let safety_guard = Arc::new(crate::safety::SafetyGuard::new());
+    let policy = crate::ai_features::AgentPolicyHandles {
+        safety_level,
+        safety_guard: Arc::new(crate::safety::SafetyGuard::new()),
+        execute_allowlist: env.read().policy_state.execute_allowlist.clone(),
+        agent_session_allowlist: env.read().policy_state.agent_session_allowlist.clone(),
+    };
 
     let response_language = env.read().integration_state.response_language.clone();
     let service = crate::ai_features::LiveAiService::new(
         client,
         mcp_manager,
-        safety_level,
-        safety_guard,
+        policy,
         None,
-        allowlist,
         response_language,
     );
 
@@ -773,7 +775,16 @@ pub async fn execute_command(shell: &mut Shell, _ctx: &mut Context, command: &st
         {
             let mcp_manager = env_handle.read().integration_state.mcp_manager.clone();
             let safety_level = env_handle.read().policy_state.safety_level.clone();
-            let allowlist = env_handle.read().policy_state.execute_allowlist.clone();
+            let policy = crate::ai_features::AgentPolicyHandles {
+                safety_level,
+                safety_guard: shell.safety_guard.clone(),
+                execute_allowlist: env_handle.read().policy_state.execute_allowlist.clone(),
+                agent_session_allowlist: env_handle
+                    .read()
+                    .policy_state
+                    .agent_session_allowlist
+                    .clone(),
+            };
             let response_language = env_handle
                 .read()
                 .integration_state
@@ -782,10 +793,8 @@ pub async fn execute_command(shell: &mut Shell, _ctx: &mut Context, command: &st
             let service = Arc::new(crate::ai_features::LiveAiService::new(
                 client,
                 mcp_manager,
-                safety_level,
-                shell.safety_guard.clone(),
+                policy,
                 None,
-                allowlist,
                 response_language,
             ));
             shell.environment.write().integration_state.ai_service = Some(service);

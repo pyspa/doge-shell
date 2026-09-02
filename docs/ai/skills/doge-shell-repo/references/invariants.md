@@ -68,7 +68,12 @@
 - ラッパーのオプションは値を取る（`timeout 5 ...`、`nice -n 10 ...`、`chroot /new ...`）。「最初の非オプション引数が中身のコマンド」は**その値を拾う**。`command_candidates` は残りの非オプショントークンを全部候補にして fail-safe に倒している。
 - **判定した行と実行する行を一致させる**。`sh -c` は行全体を実行するのに、dsh の文法は grouping・制御構文・heredoc を持たない。`get_jobs` は未消費の末尾を**警告するだけ**なので、安全判定側は `unconsumed_tail` と `compound_statement_keyword` で fail closed にする。`{ rm -rf ~; }` は `{` という名前のコマンドとして完全にパースされてしまう。
 - コマンド置換（`` ` ``、`$(...)`、`<(...)`、`(...)`）は**判定より前に拒否する**。`shell::parse::parse_command` が評価するので、「安全か」を尋ねること自体が実行になる。
-- 文字列をコードとして渡す経路は flag だけではない。stdin から読むシェル（`printf ... | sh`）と `eval` は flag を持たない（`execute.rs` の `hidden_code_source`）。
+- 文字列をコードとして渡す経路は flag だけではない。stdin から読むシェル（`printf ... | sh`）、入力リダイレクト（`bash < script.sh`）、`eval` は flag を持たない（`execute.rs` の `hidden_code_source`）。`shell_words::split` は `<` を独立トークンにするので「全引数が `-` 始まり」では捕まらない。
+- MCP ツール名はモデルから見ると `mcp__<label>__<tool>`。素の名前で `matches!` すると**分岐が一度も成立しない**（`is_mcp_command_execution_tool` が実際そうだった）。判定は `McpManager::tool_name_for` が引いた実ツール名で行い、allowlist entry と質問文は function name のまま使う。
+- `SafetyResult` は `Allowed | Confirm` の 2 値。拒否は `AgentCommandVerdict::Denied`。常に `None` を返す checker を登録しない（登録の有無が挙動と一致しなくなる）。
+- `mcp disconnect` は bindings に効く（`tool_definitions` / `system_prompt_fragment` / `execute_tool` が disabled サーバを外す）。`session_meta` は明示 `mcp connect` でしか埋まらないので、そこをゲートに使うと起動時ロードだけのサーバが全滅する。
+- `turn::truncate_middle` の予算は**バイト数**（引数名は `max_chars`）。日本語では実効が約 1/3。AI へ渡す文字列を自前で `&s[..n]` しない（`safe_run` がそれで panic していた）。
+- `Path::join` は空パスを与えると区切りを足す。`PathBuf::new()` から接尾辞を積むと `notes.txt/` になり、`fs::write` が ENOENT で落ちる（`resolve_with_existing_ancestor`、`edit` が新規ファイルを作れなかった）。
 
 ## 二重化しているもの（多数派が正解とは限らない）
 - builtin の能力 trait は `dsh-builtin/src/shell_capabilities.rs` が**正**（`scripts/check-shell-proxy-capabilities.py` の検査対象）。`dsh-builtin/src/capability.rs` は旧世代で、利用ファイル数だけは多い。新しい依存は前者へ足す。

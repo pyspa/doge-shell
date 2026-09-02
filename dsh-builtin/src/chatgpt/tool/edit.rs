@@ -1,5 +1,5 @@
-use crate::ShellProxy;
 use crate::safety_policy;
+use crate::shell_capabilities::ChatToolHost;
 use anyhow::Result;
 use serde_json::{Value, json};
 use std::fs;
@@ -31,7 +31,7 @@ pub(crate) fn definition() -> Value {
     })
 }
 
-pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String, String> {
+pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<String, String> {
     let parsed: Value = serde_json::from_str(arguments)
         .map_err(|err| format!("chat: invalid JSON arguments for edit tool: {err}"))?;
 
@@ -75,13 +75,14 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String,
         ""
     };
     let confirm_msg = format!(
-        "AI wants to write to file: `{}`.{} \r\nProceed?",
+        "AI wants to write to file: `{}`.{}",
         path_value, sensitive_note
     );
-    if !proxy
-        .confirm_action(&confirm_msg)
-        .map_err(|e: anyhow::Error| e.to_string())?
-    {
+    if !super::confirm_agent_action(
+        proxy,
+        &super::write_approval_key(&normalized_abs_path),
+        &confirm_msg,
+    )? {
         return Ok("File modification cancelled by user.".to_string());
     }
 
@@ -191,5 +192,32 @@ mod tests {
         assert_eq!(result, "File modification cancelled by user.");
         assert_eq!(confirm_calls.load(Ordering::SeqCst), 1);
         assert!(!dir.path().join("config.txt").exists());
+    }
+
+    /// "always" was unreachable here while this path used the bool
+    /// `confirm_action`, so a twenty-step edit was twenty prompts.
+    #[test]
+    fn an_always_answer_covers_later_writes_to_the_same_file() {
+        let dir = tempdir().unwrap();
+        let confirm_calls = Arc::new(AtomicUsize::new(0));
+        let mut proxy = TestProxy {
+            current_dir: dir.path().to_path_buf(),
+            confirm_counter: Some(confirm_calls.clone()),
+            approval_decision: Some(crate::shell_capabilities::ApprovalDecision::AllowAlways),
+            ..TestProxy::default()
+        };
+
+        run(r#"{"path":"notes.txt","contents":"one"}"#, &mut proxy).unwrap();
+        run(r#"{"path":"notes.txt","contents":"two"}"#, &mut proxy).unwrap();
+
+        assert_eq!(confirm_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("notes.txt")).unwrap(),
+            "two"
+        );
+
+        // The approval is remembered per file, so a different one still asks.
+        run(r#"{"path":"other.txt","contents":"three"}"#, &mut proxy).unwrap();
+        assert_eq!(confirm_calls.load(Ordering::SeqCst), 2);
     }
 }

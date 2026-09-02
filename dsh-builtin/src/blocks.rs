@@ -1,5 +1,8 @@
 use super::{BuiltinFuture, ShellProxy};
 use crate::capability::AiCapability;
+// A head-only cut used to hide exactly what these prompts are for: a failure
+// explains itself in the *last* lines of a build or test log.
+use dsh_openai::turn::truncate_middle;
 use dsh_types::command_block::CommandBlock;
 use dsh_types::quick_fix::{DeterministicQuickFixProvider, QuickFix, QuickFixProvider};
 use dsh_types::{Context, ExitStatus};
@@ -749,7 +752,7 @@ async fn export_blocks_ai(
                 index + 1,
                 block.command,
                 block.exit_code,
-                truncate_for_ai(
+                truncate_middle(
                     if block.stdout.is_empty() {
                         &block.stderr
                     } else {
@@ -892,7 +895,7 @@ async fn fix_block_ai(
         }),
         json!({
             "role": "user",
-            "content": format!("Command: {}\nExit code: {}\nOutput:\n{}", block.command, block.exit_code, truncate_for_ai(output, 4000))
+            "content": format!("Command: {}\nExit code: {}\nOutput:\n{}", block.command, block.exit_code, truncate_middle(output, 4000))
         }),
     ];
     match proxy.ask(messages).await {
@@ -938,7 +941,7 @@ async fn explain_block_async(
     } else {
         block.stdout.as_str()
     };
-    let output = truncate_for_ai(output, 4000);
+    let output = truncate_middle(output, 4000);
 
     let messages = vec![
         json!({
@@ -1038,17 +1041,6 @@ fn format_block(index: usize, block: &CommandBlock) -> String {
     }
 
     lines.join("\n")
-}
-
-fn truncate_for_ai(input: &str, max_bytes: usize) -> String {
-    if input.len() <= max_bytes {
-        return input.to_string();
-    }
-    let mut end = max_bytes;
-    while !input.is_char_boundary(end) {
-        end = end.saturating_sub(1);
-    }
-    format!("{}...(truncated)", &input[..end])
 }
 
 fn help_text() -> &'static str {

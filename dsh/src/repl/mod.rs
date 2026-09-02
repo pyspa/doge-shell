@@ -1,4 +1,4 @@
-use crate::ai_features::{self, AiService, LiveAiService};
+use crate::ai_features::{self, AgentPolicyHandles, AiService, LiveAiService};
 use crate::command_timing;
 use crate::completion::integrated::IntegratedCompletionEngine;
 use crate::completion::{self as completion_lib, Completion};
@@ -345,7 +345,16 @@ impl<'a> Repl<'a> {
 
             // ... (in Repl::new)
 
-            let allowlist = envronment.read().policy_state.execute_allowlist.clone();
+            let policy = AgentPolicyHandles {
+                safety_level: envronment.read().policy_state.safety_level.clone(),
+                safety_guard: shell.safety_guard.clone(),
+                execute_allowlist: envronment.read().policy_state.execute_allowlist.clone(),
+                agent_session_allowlist: envronment
+                    .read()
+                    .policy_state
+                    .agent_session_allowlist
+                    .clone(),
+            };
             let response_language = envronment
                 .read()
                 .integration_state
@@ -354,10 +363,8 @@ impl<'a> Repl<'a> {
             let service = Arc::new(LiveAiService::new(
                 client,
                 envronment.read().integration_state.mcp_manager.clone(),
-                envronment.read().policy_state.safety_level.clone(),
-                shell.safety_guard.clone(),
+                policy,
                 Some(confirmation::ReplConfirmationHandler::new()),
-                allowlist,
                 response_language,
             ));
 

@@ -59,9 +59,6 @@ pub fn set_env(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtime
                 SafetyResult::Confirm(msg) => {
                     return Err(RuntimeError::new(&format!("SafetyGuard Blocked: {}", msg)));
                 }
-                SafetyResult::Denied(msg) => {
-                    return Err(RuntimeError::new(&format!("SafetyGuard Denied: {}", msg)));
-                }
             }
         }
     }
@@ -113,9 +110,6 @@ pub fn set_variable(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
             SafetyResult::Allowed => {}
             SafetyResult::Confirm(msg) => {
                 return Err(RuntimeError::new(&format!("SafetyGuard Blocked: {}", msg)));
-            }
-            SafetyResult::Denied(msg) => {
-                return Err(RuntimeError::new(&format!("SafetyGuard Denied: {}", msg)));
             }
         }
     }
@@ -264,9 +258,6 @@ pub fn command(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtime
                     "SafetyGuard Blocked: {} (You can change safety-level to 'loose' to bypass)",
                     msg
                 )));
-            }
-            SafetyResult::Denied(msg) => {
-                return Err(RuntimeError::new(&format!("SafetyGuard Denied: {}", msg)));
             }
         }
     }

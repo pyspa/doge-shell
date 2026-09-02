@@ -305,18 +305,7 @@ impl ConversationManager {
             .map_err(|e| format!("Summarization failed: {e}"))?;
         self.turn_usage.add_response(&response);
 
-        let choice = response
-            .get("choices")
-            .and_then(|choices| choices.get(0))
-            .ok_or_else(|| "Summarization response missing choices".to_string())?;
-
-        let message = choice
-            .get("message")
-            .cloned()
-            .ok_or_else(|| "Summarization response missing message".to_string())?;
-
-        let new_summary = extract_message_content(&message)
-            .ok_or_else(|| "Summarization returned empty content".to_string())?;
+        let new_summary = summary_from_response(&response)?;
 
         // Update state: keep most recent messages to maintain tool_call/result continuity
         const RETAIN_AFTER_SUMMARY: usize = 6; // Keep last ~3 exchanges (assistant+tool pairs)
@@ -993,6 +982,18 @@ fn git_head_path(start: &Path) -> Option<PathBuf> {
     None
 }
 
+/// The summary text, or why there is none.
+///
+/// Through `turn`, like every other answer. Reading `choices[0].message` by
+/// hand accepted a summary the provider had cut short
+/// (`finish_reason=length`), and because the caller drops the buffer this
+/// summary replaces, that loss is not recoverable. Returning `Err` leaves the
+/// conversation as it was and only skips the compaction.
+fn summary_from_response(response: &Value) -> Result<String, String> {
+    turn::answer_text(response)
+        .map_err(|err| format!("Summarization returned no usable summary: {err}"))
+}
+
 fn build_dynamic_context(proxy: &mut dyn ShellProxy) -> String {
     format!(
         "Environment snapshot (reference only; the task is stated in the first user message):\n{}",
@@ -1273,6 +1274,30 @@ mod tests {
         });
 
         assert_eq!(extract_message_content(&message), None);
+    }
+
+    #[test]
+    fn a_truncated_summary_is_not_accepted_as_one() {
+        let cut = json!({
+            "choices": [{
+                "message": {"role": "assistant", "content": "The user asked about the pa"},
+                "finish_reason": "length"
+            }]
+        });
+
+        let err = summary_from_response(&cut).expect_err("a cut summary is not a summary");
+        assert!(err.contains("cut off"), "{err}");
+
+        let complete = json!({
+            "choices": [{
+                "message": {"role": "assistant", "content": "The user asked about the parser."},
+                "finish_reason": "stop"
+            }]
+        });
+        assert_eq!(
+            summary_from_response(&complete).unwrap(),
+            "The user asked about the parser."
+        );
     }
 
     #[test]

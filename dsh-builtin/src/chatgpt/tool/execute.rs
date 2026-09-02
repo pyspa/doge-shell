@@ -322,7 +322,29 @@ fn hidden_code_source(program: &str, args: &[String]) -> Option<&'static str> {
         return Some("it reads the code to run from standard input");
     }
 
+    // `bash < script.sh` is the same hole with a redirection instead of a pipe:
+    // every argument the guard reads is a flag or a filename, the interpreter
+    // is classified as itself, and the file it executes is never looked at.
+    // `all(starts_with('-'))` above does not hold here because `<` and the
+    // filename are ordinary tokens.
+    if dsh_types::safety_policy::is_code_execution_command(&name)
+        && name != "sudo"
+        && args.iter().any(|arg| reads_stdin_from_file(arg))
+    {
+        return Some("it reads the code to run from a redirected file");
+    }
+
     None
+}
+
+/// Whether this token opens standard input from a file.
+///
+/// `shell_words::split` leaves the redirection as its own token (`<`) when it
+/// is spaced and glued to the path (`<script.sh`) when it is not, and a
+/// descriptor may lead it (`0<`).
+fn reads_stdin_from_file(token: &str) -> bool {
+    let rest = token.strip_prefix('0').unwrap_or(token);
+    rest.starts_with('<')
 }
 
 /// Whether the line redirects output into a file.
@@ -424,17 +446,17 @@ fn authorize(
             return Err(format!("chat: execute tool refused `{command}`: {reason}"));
         }
         _ if skill_script => {
-            format!("AI wants to run a skill script: `{command}`. \r\nProceed?")
+            format!("AI wants to run a skill script: `{command}`")
         }
         // The `edit` and `str_replace` tools confirm every write; a write
         // spelled as a redirection is the same act and gets the same question.
         _ if redirects_a_write && !allowlisted => {
-            format!("AI wants to run `{command}`, which writes to a file. \r\nProceed?")
+            format!("AI wants to run `{command}`, which writes to a file")
         }
         AgentCommandVerdict::Allowed => return Ok(Authorization::Run),
         AgentCommandVerdict::Confirm(_) if allowlisted => return Ok(Authorization::Run),
         AgentCommandVerdict::Confirm(reason) => {
-            format!("AI wants to run `{command}`. {reason} \r\nProceed?")
+            format!("AI wants to run `{command}`. {reason}")
         }
     };
 
@@ -908,6 +930,33 @@ pub(crate) mod tests {
         // `sudo` is a wrapper; the stage for what it wraps is judged separately.
         assert!(hidden_code_source("sudo", &args(&["-u", "nobody"])).is_none());
         assert!(hidden_code_source("cargo", &args(&["test"])).is_none());
+    }
+
+    /// `bash < script.sh` is the stdin hole written with a redirection.
+    ///
+    /// `string_eval_flag` returns nothing (there is no `-c`), and the
+    /// "every argument is a flag" rule does not hold either, so the line used
+    /// to reach `sh -c` with the guard having classified `bash` alone.
+    #[test]
+    fn a_redirected_script_is_refused() {
+        let args = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+
+        assert!(hidden_code_source("bash", &args(&["<", "evil.sh"])).is_some());
+        assert!(hidden_code_source("sh", &args(&["<evil.sh"])).is_some());
+        assert!(hidden_code_source("bash", &args(&["0<", "evil.sh"])).is_some());
+        assert!(hidden_code_source("python3", &args(&["<", "evil.py"])).is_some());
+
+        // Input redirection into something that is not an interpreter is
+        // ordinary work.
+        assert!(hidden_code_source("sort", &args(&["<", "names.txt"])).is_none());
+    }
+
+    #[test]
+    fn a_redirected_script_is_refused_end_to_end() {
+        let mut proxy = TestProxy::default();
+        let err = run("{\"command\":\"bash < evil.sh\"}", &mut proxy)
+            .expect_err("a redirected script must not run");
+        assert!(err.contains("redirected file"), "{err}");
     }
 
     /// A backslash is literal inside single quotes, so treating it as an escape
